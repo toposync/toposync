@@ -5,4 +5,369 @@ sidebar_position: 3
 
 # Extension authoring {/* #extension-authoring */}
 
-This page is under construction.
+Toposync extensions are installable Python packages that can add backend routes, services, pipeline operators, settings, frontend UI, static assets, and runtime data. The core discovers them through Python entry points, reads an `extension.json` manifest from package resources, and serves any bundled frontend assets from the installed wheel.
+
+This page documents the current extension contract. It is already used by first-party extensions, but third-party extensions have not been validated as a public ecosystem yet. Treat external extension authoring as an intended direction that still needs real third-party package testing, sharper tooling, and compatibility hardening.
+
+## Current status {/* #current-status */}
+
+The extension runtime is real and powers the first-party product today:
+
+- `toposync-ext-structural`;
+- `toposync-ext-models`;
+- `toposync-ext-images`;
+- `toposync-ext-home-assistant`;
+- `toposync-ext-cameras`;
+- `toposync-ext-vision`;
+- optional extensions such as streaming, AI, and spatial video.
+
+The missing piece is ecosystem validation. Toposync does not yet have a proven set of independently maintained third-party extensions installed from outside this monorepo. Before considering the contract stable for a broader marketplace, we still need to validate packaging, upgrade behavior, frontend shared dependencies, version constraints, extension management UX, and security expectations with real external packages.
+
+## Runtime model {/* #runtime-model */}
+
+At startup, the backend:
+
+1. discovers Python entry points in the `toposync.extensions` group;
+2. imports and instantiates each plugin;
+3. reads `extension.json` through `importlib.resources`;
+4. rejects disabled, duplicate, or incompatible extensions;
+5. registers extension auth metadata;
+6. runs `setup(app, bus, services)` for compatible extensions;
+7. exposes public extension metadata from `GET /api/extensions`;
+8. serves bundled static files from `/extensions/<extension_id>/<path>`.
+
+The frontend host then calls `GET /api/extensions`, loads each Module Federation remote entry, gets the configured module, and calls `activate(host)`.
+
+```text
+Python wheel
+    -> entry point: toposync.extensions
+    -> plugin object
+    -> extension.json
+    -> optional FastAPI routes and pipeline operators
+    -> optional static/remoteEntry.js
+        -> frontend host loads activate(host)
+```
+
+## Package shape {/* #package-shape */}
+
+A typical extension should look like this:
+
+```text
+toposync-ext-example/
+  pyproject.toml
+  README.md
+  LICENSE
+  src/
+    toposync_ext_example/
+      __init__.py
+      plugin.py
+      extension.json
+      static/
+        remoteEntry.js
+        ...
+      data/
+        ...
+  ui/
+    package.json
+    webpack.config.js
+    src/
+      activate.tsx
+      entry.ts
+```
+
+The Python package is the installable unit. The frontend bundle, manifests, templates, runtime data, and licenses must be included inside the wheel. Installed extensions must not depend on paths that only exist in the source checkout.
+
+## Python wheel metadata {/* #python-wheel-metadata */}
+
+Declare the package as a normal Python project and expose a `toposync.extensions` entry point.
+
+```toml
+[project]
+name = "toposync-ext-example"
+version = "0.1.0"
+description = "Example Toposync extension."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+  "toposync-core>=0.3.0",
+]
+
+[project.entry-points."toposync.extensions"]
+example = "toposync_ext_example.plugin:ExampleExtension"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/toposync_ext_example"]
+```
+
+If the extension depends on another Toposync extension, declare that as a Python dependency and also declare runtime compatibility in `extension.json`.
+
+## Plugin class {/* #plugin-class */}
+
+Most extensions can inherit from `BaseExtension`.
+
+```py
+from __future__ import annotations
+
+from fastapi import FastAPI
+
+from toposync.extensions import BaseExtension, register_extension_shutdown_callback
+from toposync.runtime.event_bus import EventBus
+from toposync.runtime.services import ServiceRegistry
+
+
+class ExampleExtension(BaseExtension):
+    def __init__(self) -> None:
+        super().__init__(package="toposync_ext_example")
+
+    async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:
+        @app.get("/api/example/ping")
+        async def ping() -> dict[str, str]:
+            return {"status": "ok"}
+
+        services.register("example.ping", lambda: {"status": "ok"})
+        register_extension_shutdown_callback(app, self.shutdown)
+
+    async def shutdown(self) -> None:
+        return None
+
+    def capabilities(self) -> dict[str, object]:
+        return {
+            "auth": {
+                "api_prefixes": ["/api/example"],
+                "action": "core:extension:use",
+                "resource_type": "core:extension",
+            }
+        }
+```
+
+Use `setup()` for runtime registration:
+
+- FastAPI routes;
+- event bus handlers;
+- service registry entries;
+- pipeline operators;
+- background resources that need shutdown callbacks.
+
+Use `capabilities()` when the core needs metadata about your extension. Today this is used for extension API authorization prefixes.
+
+## Manifest {/* #manifest */}
+
+Every extension must ship `extension.json` inside the Python package.
+
+```json
+{
+  "schema_version": 1,
+  "id": "com.example.demo",
+  "name": "Example",
+  "version": "0.1.0",
+  "requires_core_version": ">=0.7,<0.8",
+  "requires_extensions": ["com.toposync.cameras>=0.1.0"],
+  "frontend": {
+    "kind": "module-federation",
+    "remote_entry": "remoteEntry.js",
+    "scope": "example",
+    "module": "./activate"
+  }
+}
+```
+
+Fields:
+
+- `schema_version`: manifest schema version, currently `1`;
+- `id`: stable extension id, preferably reverse-DNS style;
+- `name`: user-facing name;
+- `version`: extension runtime version;
+- `requires_core_version`: optional PEP 440 specifier checked against `toposync-core`;
+- `requires_extensions`: optional list of required extension ids, with optional version specifiers;
+- `frontend`: optional Module Federation remote description.
+
+Compatibility is enforced before `setup()`. If the core version or required extension versions do not match, the extension is skipped instead of partially loaded.
+
+## Static assets {/* #static-assets */}
+
+If the package contains a `static/` directory, the backend serves it at:
+
+```text
+/extensions/<extension_id>/<path>
+```
+
+For a frontend extension, `static/remoteEntry.js` is the important file. Additional chunks, images, CSS, manifests, templates, model descriptors, and license files must also be included in the wheel if the extension needs them at runtime.
+
+The asset route rejects absolute paths and `..` traversal. Assets are protected by the same auth layer as the rest of the app.
+
+## Frontend remote {/* #frontend-remote */}
+
+Frontend extensions use Module Federation. The remote must expose the module declared by `frontend.module`, usually `./activate`.
+
+```ts
+import type { ToposyncHost } from "@toposync/plugin-api";
+
+export function activate(host: ToposyncHost): void {
+  host.i18n.registerTranslations({
+    en: {
+      "example.settings.name": "Example",
+    },
+    "pt-BR": {
+      "example.settings.name": "Exemplo",
+    },
+  });
+
+  host.registerSettingsPanel({
+    id: "com.example.demo.settings",
+    name: { key: "example.settings.name", fallback: "Example" },
+    render: () => null,
+  });
+}
+```
+
+The host passes a `ToposyncHost` from `@toposync/plugin-api`. Use `import type` whenever possible because `@toposync/plugin-api` is mostly a contract package.
+
+For a third-party webpack build, share the host-level dependencies as singletons:
+
+```js
+new container.ModuleFederationPlugin({
+  name: "example",
+  filename: "remoteEntry.js",
+  exposes: {
+    "./activate": "./src/activate.tsx",
+  },
+  shared: {
+    "@toposync/plugin-api": {
+      singleton: true,
+      requiredVersion: "^0.3.0",
+    },
+    react: {
+      singleton: true,
+      requiredVersion: false,
+    },
+    "react-dom": {
+      singleton: true,
+      requiredVersion: false,
+    },
+    three: {
+      singleton: true,
+      requiredVersion: false,
+    },
+  },
+});
+```
+
+The exact shared dependency policy still needs third-party validation. First-party extensions use the monorepo helper `createSharedDeps()`, but external packages should not rely on that helper unless they intentionally build inside this repository.
+
+## Pipeline operators {/* #pipeline-operators */}
+
+Extensions can register domain-specific pipeline operators during backend setup.
+
+```py
+from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+
+
+async def setup(self, app, *, bus, services) -> None:
+    registry = getattr(app.state, "pipeline_operator_registry", None)
+    if isinstance(registry, OperatorRegistry):
+        registry.register_operator(
+            operator_id="example.detect_condition",
+            description="Example condition detector.",
+            inputs=[{"name": "in", "required": True}],
+            outputs=[{"name": "out"}],
+            owner="com.example.demo",
+            share_strategy="by_signature",
+        )
+```
+
+For deeper pipeline runtime rules, see [Pipelines](./pipelines.mdx).
+
+## Packaging outside the monorepo {/* #packaging-outside-the-monorepo */}
+
+The release artifact must work after a clean `pip install`, without the source tree.
+
+Checklist:
+
+- the Python wheel declares the `toposync.extensions` entry point;
+- `extension.json` is inside the importable Python package;
+- `static/remoteEntry.js` and all JS chunks are inside the importable Python package;
+- runtime data files are included with the wheel;
+- licenses for bundled code and assets are included;
+- `requires_core_version` reflects the host versions you tested;
+- `requires_extensions` reflects runtime extension dependencies;
+- the frontend remote does not use absolute `/main.js`-style asset paths;
+- the extension does not read from `extensions/<name>/...` source checkout paths at runtime.
+
+Build and inspect locally:
+
+```bash
+uv build
+python -m zipfile -l dist/toposync_ext_example-0.1.0-py3-none-any.whl
+```
+
+Install into a clean environment:
+
+```bash
+uv venv /tmp/toposync-extension-test --python 3.12
+source /tmp/toposync-extension-test/bin/activate
+uv pip install toposync dist/toposync_ext_example-0.1.0-py3-none-any.whl
+toposync serve
+```
+
+Then verify:
+
+```bash
+curl http://127.0.0.1:8000/api/extensions
+```
+
+The response should include your extension id and, if you ship frontend assets, a `frontend.remote_entry_url`.
+
+## Development workflow {/* #development-workflow */}
+
+Inside this repository, first-party extension development usually follows this loop:
+
+```bash
+uv sync
+npm install
+npm run build:extensions
+TOPOSYNC_AUTH_MODE=bypass npm run dev
+```
+
+For an external extension repository, use a clean Toposync install plus an editable install of your package:
+
+```bash
+uv venv .venv --python 3.12
+source .venv/bin/activate
+uv pip install toposync
+uv pip install -e .
+npm install
+npm run build
+toposync serve
+```
+
+That external workflow is the one Toposync still needs to validate more thoroughly.
+
+## What not to do {/* #what-not-to-do */}
+
+Avoid these patterns:
+
+- depending on source checkout paths;
+- registering routes outside `/api/<extension-name>` without a clear reason;
+- using frontend absolute paths that ignore Home Assistant ingress or reverse proxies;
+- shipping model weights, binaries, or datasets without license review;
+- adding vendor-specific behavior to the core instead of a separate extension;
+- assuming private monorepo helpers are available to external packages;
+- broad version requirements that allow untested future host versions.
+
+## Stabilization roadmap {/* #stabilization-roadmap */}
+
+Before Toposync can call third-party extensions fully supported, the next steps are:
+
+- publish and version `@toposync/plugin-api` as the public frontend contract;
+- provide an external extension template repository;
+- add distribution tests that install a sample third-party wheel outside the monorepo;
+- document supported webpack/Vite patterns for remotes;
+- define a clearer compatibility policy for `requires_core_version` and plugin API versions;
+- improve extension management UX for installing, upgrading, disabling, and diagnosing external extensions;
+- add security guidance for API routes, credentials, filesystem access, and bundled assets.

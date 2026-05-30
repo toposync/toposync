@@ -70,21 +70,9 @@ Cada guia de cenário deve seguir esta ordem:
 8. Como desinstalar.
 9. Troubleshooting curto.
 
-## Compatibilidade Resumida
+## Compatibilidade
 
-| Ambiente | Status |
-| --- | --- |
-| Linux `amd64` | Suportado |
-| Linux `aarch64` / `arm64` | Suportado para CPU |
-| macOS Apple Silicon | Suportado para CPU |
-| macOS Intel | Suportado para CPU |
-| Windows `amd64` | Suportado, recomendado com Python 3.12 |
-| Home Assistant OS `aarch64` | Suportado pelo add-on |
-| Home Assistant OS `amd64` | Suportado pelo add-on |
-| Docker CPU `amd64` | Suportado |
-| Docker CPU `arm64` | Suportado |
-| Docker CUDA | Linux com NVIDIA |
-| `armv7`, `armhf`, `i386` | Fora do alvo de suporte |
+Consulte [Compatibilidade](architecture-support.md) para a matriz de sistemas, arquiteturas, GPU, Docker, Home Assistant OS e Raspberry Pi.
 
 ## Recomendação Inicial
 

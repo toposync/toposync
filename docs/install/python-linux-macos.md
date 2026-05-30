@@ -4,14 +4,11 @@ Instalação direta para quem quer rodar o Toposync no próprio sistema, sem Doc
 
 ## Para Quem É
 
-Use este caminho em:
-
-- Linux `amd64`;
-- Linux `aarch64` / `arm64`;
-- macOS Apple Silicon;
-- macOS Intel.
+Use este caminho em Linux ou macOS.
 
 Este guia instala o bundle padrão em CPU.
+
+Para suporte por arquitetura e GPU, consulte [Compatibilidade](architecture-support.md).
 
 ## Pré-requisitos
 

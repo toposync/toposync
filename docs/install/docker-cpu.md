@@ -8,6 +8,8 @@ Use este caminho quando quiser rodar o Toposync isolado em container.
 
 Este guia usa build local do repositório. Ainda não assume imagem pública em registry.
 
+Para suporte por arquitetura, consulte [Compatibilidade](architecture-support.md).
+
 ## Pré-requisitos
 
 - Docker.

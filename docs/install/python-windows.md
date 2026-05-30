@@ -4,13 +4,15 @@ Instalação direta para Windows usando PowerShell, `uv` e Python 3.12.
 
 ## Para Quem É
 
-Use este caminho em Windows `amd64` quando quiser rodar o Toposync sem Docker.
+Use este caminho em Windows quando quiser rodar o Toposync sem Docker.
 
 Este guia começa pelo bundle padrão em CPU. GPU e streaming entram como upgrades depois que a instalação básica funciona.
 
+Para suporte por arquitetura e GPU, consulte [Compatibilidade](architecture-support.md).
+
 ## Pré-requisitos
 
-- Windows 10/11 `amd64`.
+- Windows 10/11.
 - PowerShell.
 - Python 3.12 via `uv`.
 

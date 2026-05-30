@@ -14,18 +14,13 @@ Use este caminho quando quiser:
 
 O add-on é CPU-only.
 
+Para suporte por arquitetura, HAOS e Raspberry Pi, consulte [Compatibilidade](architecture-support.md).
+
 ## Pré-requisitos
 
 - Home Assistant OS ou ambiente com Supervisor.
 - Usuário administrador no Home Assistant.
 - Acesso ao Add-on Store.
-
-Arquiteturas suportadas pelo add-on:
-
-- `amd64`;
-- `aarch64` / `linux/arm64`.
-
-`armv7`, `armhf` e `i386` ficam fora do alvo de suporte.
 
 ## Instalação
 
@@ -181,4 +176,4 @@ Comece com HLS pela porta `18756/tcp`. Só habilite RTSP ou WebRTC se precisar d
 
 ### Raspberry Pi está lento
 
-Raspberry Pi 5 com 8 GB e NVMe é a referência prática para uso moderno. Para múltiplas câmeras, OpenCV pesado ou vision em CPU, use um processing server remoto.
+Para cargas com múltiplas câmeras, OpenCV pesado ou vision em CPU, use um processing server remoto. Consulte [Compatibilidade](architecture-support.md) para a recomendação de hardware.

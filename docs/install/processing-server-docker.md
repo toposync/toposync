@@ -1,0 +1,236 @@
+# Processing Server Em Docker
+
+Instalação de um servidor de processamento em container.
+
+## Para Quem É
+
+Use este caminho quando quiser rodar um processing server isolado em Docker.
+
+Este guia usa a imagem local já construída pelo repositório. Ainda não assume imagem pública em registry.
+
+Para suporte por arquitetura e GPU, consulte [Compatibilidade](architecture-support.md).
+
+## Pré-requisitos
+
+- Docker.
+- Docker Compose.
+- Checkout do repositório Toposync.
+- Porta TCP liberada entre origin e processing server. O padrão é `49321`.
+
+## Instalação
+
+Primeiro construa a imagem local CPU:
+
+```bash
+docker compose build
+```
+
+Para CUDA, construa com o override CUDA:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml build
+```
+
+## Como Rodar
+
+### Docker Run
+
+Sem Basic Auth:
+
+```bash
+docker run --rm -d \
+  --name toposync-processing \
+  --no-healthcheck \
+  -p 49321:49321 \
+  -v "$PWD/toposync-processing-data:/data" \
+  toposync:local \
+  toposync processing-serve --host 0.0.0.0 --port 49321 --data-dir /data
+```
+
+Com Basic Auth:
+
+```bash
+docker run --rm -d \
+  --name toposync-processing \
+  --no-healthcheck \
+  -e TOPOSYNC_PROCESSING_USERNAME=toposync \
+  -e TOPOSYNC_PROCESSING_PASSWORD='<senha-forte>' \
+  -p 49321:49321 \
+  -v "$PWD/toposync-processing-data:/data" \
+  toposync:local \
+  toposync processing-serve --host 0.0.0.0 --port 49321 --data-dir /data
+```
+
+`--no-healthcheck` é intencional aqui: a imagem local tem healthcheck padrão de origin em `/api/health`, mas o processing server responde em `/api/processing/status`.
+
+### Docker Compose Override
+
+Crie um arquivo `docker-compose.processing.yml` na sua pasta de deploy:
+
+```yaml
+services:
+  toposync-processing:
+    image: toposync:local
+    command:
+      - toposync
+      - processing-serve
+      - --host
+      - 0.0.0.0
+      - --port
+      - "49321"
+      - --data-dir
+      - /data
+    ports:
+      - "49321:49321"
+    volumes:
+      - ./toposync-processing-data:/data
+    environment:
+      TOPOSYNC_PROCESSING_USERNAME: toposync
+      TOPOSYNC_PROCESSING_PASSWORD: "<senha-forte>"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          python -c "import base64, os, sys, urllib.request;
+          req=urllib.request.Request('http://127.0.0.1:49321/api/processing/status');
+          user=os.getenv('TOPOSYNC_PROCESSING_USERNAME','');
+          password=os.getenv('TOPOSYNC_PROCESSING_PASSWORD','');
+          req.add_header('Authorization','Basic '+base64.b64encode(f'{user}:{password}'.encode()).decode());
+          sys.exit(0 if urllib.request.urlopen(req, timeout=3).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    restart: unless-stopped
+```
+
+Suba o serviço:
+
+```bash
+docker compose -f docker-compose.processing.yml up -d
+```
+
+Para CUDA, garanta que a imagem `toposync:local` foi construída com `docker-compose.cuda.yml` antes de subir esse serviço.
+
+## Como Acessar
+
+O origin precisa alcançar:
+
+```text
+http://<ip-do-processing-server>:49321
+```
+
+O processing server não serve a UI principal.
+
+## Como Verificar
+
+Sem Basic Auth:
+
+```bash
+curl http://127.0.0.1:49321/api/processing/status
+```
+
+Com Basic Auth:
+
+```bash
+curl -u toposync:'<senha-forte>' http://127.0.0.1:49321/api/processing/status
+```
+
+Ver logs:
+
+```bash
+docker logs -f toposync-processing
+```
+
+ou, com Compose:
+
+```bash
+docker compose -f docker-compose.processing.yml logs -f toposync-processing
+```
+
+## Registrar No Origin
+
+No servidor origin:
+
+```bash
+curl -X PUT http://127.0.0.1:8000/api/processing-servers/docker_processing \
+  -H 'content-type: application/json' \
+  -d '{
+    "id": "docker_processing",
+    "name": "Docker Processing",
+    "kind": "http",
+    "url": "http://<ip-do-processing-server>:49321",
+    "username": "toposync",
+    "password": "<senha-forte>"
+  }'
+```
+
+Depois valide pelo origin:
+
+```bash
+curl http://127.0.0.1:8000/api/processing-servers/docker_processing/status
+```
+
+## Como Atualizar
+
+Recrie a imagem local:
+
+```bash
+git pull
+docker compose build
+```
+
+Para CUDA:
+
+```bash
+git pull
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml build
+```
+
+Reinicie o processing server:
+
+```bash
+docker compose -f docker-compose.processing.yml up -d
+```
+
+## Como Desinstalar
+
+Com `docker run`:
+
+```bash
+docker stop toposync-processing
+rm -rf ./toposync-processing-data
+```
+
+Com Compose:
+
+```bash
+docker compose -f docker-compose.processing.yml down
+rm -rf ./toposync-processing-data
+```
+
+Remova também o processing server registrado no origin.
+
+## Troubleshooting
+
+### Container aparece `unhealthy`
+
+Não use o healthcheck padrão da imagem de origin. O processing server deve verificar:
+
+```text
+/api/processing/status
+```
+
+Se usar `docker run`, passe `--no-healthcheck` ou crie um healthcheck customizado.
+
+### `401 Unauthorized`
+
+O usuário ou senha no origin não bate com `TOPOSYNC_PROCESSING_USERNAME` e `TOPOSYNC_PROCESSING_PASSWORD`.
+
+### `Connection refused`
+
+Confirme o mapeamento `49321:49321`, o comando `--host 0.0.0.0` e o firewall do host.
+
+### Pipeline continua local
+
+O pipeline ainda está usando `processing_server_id: "local"`. Altere para o id registrado no origin.

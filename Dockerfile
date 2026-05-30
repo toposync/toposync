@@ -19,6 +19,7 @@ COPY --from=frontend-build /src /src
 RUN mkdir -p /wheelhouse \
  && uv build --wheel --out-dir /wheelhouse . \
  && uv build --wheel --out-dir /wheelhouse packages/toposync \
+ && uv build --wheel --out-dir /wheelhouse packages/toposync-streaming \
  && uv build --wheel --out-dir /wheelhouse packages/toposync-vision-cuda \
  && uv build --wheel --out-dir /wheelhouse extensions/structural \
  && uv build --wheel --out-dir /wheelhouse extensions/models \

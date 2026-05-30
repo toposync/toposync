@@ -77,6 +77,8 @@ Por padrão, o Dockerfile do add-on instala:
 
 - `toposync-streaming==0.7.2`
 
+O add-on tem versionamento próprio no Home Assistant. A linha pública atual pode aparecer como `0.7.3` no Add-on Store enquanto instala o pacote Python `toposync-streaming==0.7.2`.
+
 Para testar contra outro índice, ajuste os build args:
 
 - `TOPOSYNC_PIP_INDEX_URL`
@@ -115,7 +117,7 @@ Para expor streaming na rede local, configure a seção `Network` do add-on e ma
 18762/udp: 18762  # WebRTC media transport
 ```
 
-A porta `18759/tcp` continua declarada como HLS direto avançado/diagnóstico, mas não é necessária para o app móvel quando `18756/tcp` está mapeada. A faixa recomendada do add-on é `18756-18762` quando as portas são habilitadas: `18756` para acesso direto e HLS proxied, `18757` para ingress/backend interno, `18758` para RTSP, `18759` para HLS direto avançado, `18760` para WHEP, `18761` para a API interna do MediaMTX e `18762/udp` para mídia WebRTC. A API do MediaMTX permanece interna e não é declarada em `ports`.
+`18759/tcp` é o HLS direto avançado/diagnóstico do MediaMTX e não faz parte do contrato público padrão do add-on. A faixa reservada do add-on é `18756-18762`: `18756` para acesso direto e HLS proxied, `18757` para ingress/backend interno, `18758` para RTSP, `18759` para HLS direto interno/diagnóstico, `18760` para WHEP, `18761` para a API interna do MediaMTX e `18762/udp` para mídia WebRTC. As portas `18759` e `18761` permanecem internas e não são declaradas em `ports` por padrão.
 
 Para WebRTC na LAN, `18760/tcp` cobre só a sinalização WHEP; o transporte de mídia ainda precisa de `18762/udp` mapeado, salvo uma configuração futura com TURN/TCP/TLS.
 
@@ -153,7 +155,11 @@ WebRTC nativo HA só deve ser habilitado depois de validar TURN/ICE/Cloud em amb
 
 ## Escopo atual
 
-O add-on atual cobre o caminho CPU.
+O add-on atual cobre o caminho CPU em `amd64` e `aarch64`.
+
+Para HAOS em Raspberry Pi e dispositivos ARM similares, o alvo suportado é 64-bit `aarch64` / `linux/arm64`. `armv7`, `armhf` e `i386` ficam fora de suporte.
+
+Raspberry Pi 5 8GB com NVMe é a referência mínima para uma experiência moderna. Pi 4 e instalações em SD card são best-effort para compatibilidade, não baseline de performance. Use processing servers remotos para múltiplas câmeras, OpenCV pesado e ONNX em CPU.
 
 CUDA continua devendo ficar separado. O motivo é operacional:
 

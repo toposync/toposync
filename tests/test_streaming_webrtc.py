@@ -302,14 +302,14 @@ def test_signed_hls_urls_can_extend_media_token_ttl(
         transmission_id = str(created_res.json()["id"])
 
         urls_res = client.get(
-            f"/api/streams/transmissions/{transmission_id}/urls?media_token_ttl_seconds=1800"
+            f"/api/streams/transmissions/{transmission_id}/urls?media_token_ttl_seconds=21600"
         )
 
     assert urls_res.status_code == 200
     output = urls_res.json()["outputs"][0]
     assert output["media_auth_type"] == "signed_url"
-    assert output["url_expires_at_unix"] == 1_700_001_800.0
-    assert output["renew_after_unix"] == 1_700_001_740.0
+    assert output["url_expires_at_unix"] == 1_700_021_600.0
+    assert output["renew_after_unix"] == 1_700_021_540.0
 
 
 def test_hls_output_is_omitted_when_direct_hls_port_mismatches_in_fail_mode(

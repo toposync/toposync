@@ -7,8 +7,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
-from toposync.runtime.config_store import AppSettings, ConfigStore, Pipeline, UserDataPaths
+from toposync.runtime.config_store import AppSettings, ConfigStore, Pipeline, ProcessingServer, UserDataPaths
 from toposync.runtime.pipelines.templates import safe_pipeline_name
+from toposync_ext_streaming.api import routes as streaming_routes
 from toposync_ext_streaming.api.models import (
     EXTENSION_ID,
     CameraLiveView,
@@ -92,6 +93,86 @@ def _create_client(tmp_path: Path, *, direct_main: bool = False) -> TestClient:
     app.state.streaming_publisher_manager = PublisherManager(data_dir=paths.data_dir)
     app.include_router(create_streaming_router())
     return TestClient(app)
+
+
+async def _set_transmissions_host_server(
+    client: TestClient,
+    *,
+    host_server_id: str,
+    server_url: str | None = None,
+    server_kind: str = "http",
+) -> None:
+    config_store: ConfigStore = client.app.state.config_store
+    if server_url is not None or server_kind != "http":
+        await config_store.upsert_processing_server(
+            ProcessingServer(
+                id=host_server_id,
+                name="Remote ARM",
+                kind=server_kind,  # type: ignore[arg-type]
+                url=server_url or "",
+            )
+        )
+    settings = await config_store.get_settings()
+    extension = StreamingExtensionSettings.model_validate(settings.extensions[EXTENSION_ID])
+    payload = extension.model_dump(mode="python")
+    for transmission in payload["transmissions"]:
+        transmission["host_server_id"] = host_server_id
+    await config_store.replace_settings(
+        AppSettings(
+            core=dict(settings.core),
+            extensions={
+                **dict(settings.extensions),
+                EXTENSION_ID: StreamingExtensionSettings.model_validate(payload).model_dump(mode="json"),
+            },
+        )
+    )
+
+
+def _remote_urls_payload(
+    *,
+    transmission_id: str,
+    host: str = "192.168.1.50",
+    rtsp_port: int | None = 18758,
+) -> dict:
+    expected_ports: dict[str, int] = {}
+    actual_ports: dict[str, int] = {}
+    if rtsp_port is not None:
+        expected_ports["rtsp"] = rtsp_port
+        actual_ports["rtsp"] = rtsp_port
+    return {
+        "transmission_id": transmission_id,
+        "engine_running": True,
+        "outputs": [
+            {
+                "output_id": "hls_stable_apple_tv",
+                "protocol": "hls",
+                "resolved_engine_path": f"{transmission_id}/hls_stable_apple_tv",
+                "url": f"http://{host}:18756/api/streams/media/hls/{transmission_id}/index.m3u8",
+                "requires_auth": False,
+                "media_auth_type": "none",
+                "quality_profile_id": "stable_apple_tv",
+            }
+        ],
+        "network_contract": {
+            "environment": "generic",
+            "mode": "proxy",
+            "expected_ports": expected_ports,
+            "actual_ports": actual_ports,
+            "status": "ok",
+            "public_hls_mode": "proxy",
+            "webrtc_additional_hosts": [],
+            "warnings": [],
+            "blocking_errors": [],
+            "public_base_path": "/",
+            "media_url_origin": None,
+        },
+        "warnings": [],
+        "hls_warnings": [],
+        "webrtc_warnings": [],
+        "blocking_errors": [],
+        "public_base_path": "/",
+        "media_url_origin": None,
+    }
 
 
 def test_camera_live_view_model_roundtrips_multiple_variants() -> None:
@@ -621,6 +702,230 @@ def test_home_assistant_camera_manifest_preserves_live_view_stream_variants(tmp_
     assert {item["variant_id"] for item in camera["variants"]} == {"main", "sub", "zoom"}
     assert "10.0.0.10" not in camera["rtsp_url"]
     assert "secret" not in res.text
+
+
+def test_home_assistant_camera_manifest_resolves_remote_transmission_rtsp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _create_client(tmp_path)
+    generated = client.post("/api/streams/camera-live-views/generate", json={"camera_id": "front"}).json()
+    live_view = generated["camera_live_views"][0]
+    transmission_id = next(item for item in live_view["variants"] if item["id"] == "sub")["transmission_id"]
+    asyncio.run(
+        _set_transmissions_host_server(
+            client,
+            host_server_id="remote_arm",
+            server_url="http://192.168.1.50:49321",
+        )
+    )
+
+    async def _fake_fetch_json(**_kwargs: object) -> dict:
+        return _remote_urls_payload(transmission_id=transmission_id)
+
+    monkeypatch.setattr(streaming_routes, "_fetch_json", _fake_fetch_json)
+
+    res = client.get("/api/streams/home-assistant/cameras")
+
+    assert res.status_code == 200, res.text
+    camera = next(item for item in res.json()["cameras"] if item["live_view_id"] == live_view["id"])
+    assert camera["blocking_errors"] == []
+    assert camera["rtsp_url"].startswith("rtsp://192.168.1.50:18758/")
+    assert camera["capabilities"]["rtsp"] is True
+    assert any("Resolved via processing server 'remote_arm'" in item for item in camera["warnings"])
+
+
+def test_home_assistant_camera_manifest_reports_unknown_remote_server(tmp_path: Path) -> None:
+    client = _create_client(tmp_path)
+    generated = client.post("/api/streams/camera-live-views/generate", json={"camera_id": "front"}).json()
+    live_view = generated["camera_live_views"][0]
+    asyncio.run(_set_transmissions_host_server(client, host_server_id="missing"))
+
+    res = client.get("/api/streams/home-assistant/cameras")
+
+    assert res.status_code == 200, res.text
+    camera = next(item for item in res.json()["cameras"] if item["live_view_id"] == live_view["id"])
+    assert camera["rtsp_url"] is None
+    assert "Unknown host_server_id: missing" in " ".join(camera["blocking_errors"])
+
+
+def test_home_assistant_camera_manifest_reports_remote_server_without_http_url(tmp_path: Path) -> None:
+    client = _create_client(tmp_path)
+    generated = client.post("/api/streams/camera-live-views/generate", json={"camera_id": "front"}).json()
+    live_view = generated["camera_live_views"][0]
+    asyncio.run(
+        _set_transmissions_host_server(
+            client,
+            host_server_id="remote_arm",
+            server_url="",
+            server_kind="inprocess",
+        )
+    )
+
+    res = client.get("/api/streams/home-assistant/cameras")
+
+    assert res.status_code == 200, res.text
+    camera = next(item for item in res.json()["cameras"] if item["live_view_id"] == live_view["id"])
+    assert camera["rtsp_url"] is None
+    assert "does not support remote HTTP URL resolution" in " ".join(camera["blocking_errors"])
+
+
+def test_home_assistant_camera_manifest_blocks_remote_loopback_rtsp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _create_client(tmp_path)
+    generated = client.post("/api/streams/camera-live-views/generate", json={"camera_id": "front"}).json()
+    live_view = generated["camera_live_views"][0]
+    transmission_id = next(item for item in live_view["variants"] if item["id"] == "sub")["transmission_id"]
+    asyncio.run(
+        _set_transmissions_host_server(
+            client,
+            host_server_id="remote_arm",
+            server_url="http://127.0.0.1:49321",
+        )
+    )
+
+    async def _fake_fetch_json(**_kwargs: object) -> dict:
+        return _remote_urls_payload(transmission_id=transmission_id, host="127.0.0.1")
+
+    monkeypatch.setattr(streaming_routes, "_fetch_json", _fake_fetch_json)
+
+    res = client.get("/api/streams/home-assistant/cameras")
+
+    assert res.status_code == 200, res.text
+    camera = next(item for item in res.json()["cameras"] if item["live_view_id"] == live_view["id"])
+    assert camera["rtsp_url"] is None
+    assert "loopback RTSP URL" in " ".join(camera["blocking_errors"])
+
+
+def test_remote_home_assistant_entity_heartbeat_is_forwarded_to_processing_server(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _create_client(tmp_path)
+    generated = client.post("/api/streams/camera-live-views/generate", json={"camera_id": "front"}).json()
+    live_view = generated["camera_live_views"][0]
+    transmission_id = next(item for item in live_view["variants"] if item["id"] == "sub")["transmission_id"]
+    asyncio.run(
+        _set_transmissions_host_server(
+            client,
+            host_server_id="remote_arm",
+            server_url="http://192.168.1.50:49321",
+        )
+    )
+    calls: list[dict] = []
+
+    async def _fake_post_json(**kwargs: object) -> dict:
+        calls.append(dict(kwargs))
+        return {
+            "transmission_id": transmission_id,
+            "playback_session_id": "ha_entity:front",
+            "renewed": True,
+            "renewed_outputs": 1,
+            "lease_seconds": 90.0,
+        }
+
+    monkeypatch.setattr(streaming_routes, "_post_json", _fake_post_json)
+
+    res = client.post(
+        f"/api/streams/transmissions/{transmission_id}/demand/heartbeat",
+        json={
+            "playback_session_id": "ha_entity:front",
+            "output_id": "hls_stable_apple_tv",
+            "quality_profile_id": "stable_apple_tv",
+            "transport": "rtsp",
+            "source": "home_assistant_entity",
+            "ttl_seconds": 90,
+        },
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["renewed"] is True
+    assert calls
+    assert calls[0]["url"] == f"http://192.168.1.50:49321/api/streams/transmissions/{transmission_id}/demand/heartbeat"
+    assert calls[0]["body"]["output_id"] == "hls_stable_apple_tv"
+
+
+def test_remote_home_assistant_still_is_forwarded_to_processing_server(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _create_client(tmp_path)
+    generated = client.post("/api/streams/camera-live-views/generate", json={"camera_id": "front"}).json()
+    live_view = generated["camera_live_views"][0]
+    transmission_id = next(item for item in live_view["variants"] if item["id"] == "sub")["transmission_id"]
+    asyncio.run(
+        _set_transmissions_host_server(
+            client,
+            host_server_id="remote_arm",
+            server_url="http://192.168.1.50:49321",
+        )
+    )
+    calls: list[dict] = []
+
+    async def _fake_fetch_bytes(**kwargs: object) -> tuple[bytes, str]:
+        calls.append(dict(kwargs))
+        return b"jpeg-bytes", "image/jpeg"
+
+    monkeypatch.setattr(streaming_routes, "_fetch_bytes", _fake_fetch_bytes)
+
+    res = client.get(
+        f"/api/streams/transmissions/{transmission_id}/still.jpg"
+        "?output_id=hls_stable_apple_tv&quality_profile_id=stable_apple_tv"
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.content == b"jpeg-bytes"
+    assert calls
+    assert calls[0]["url"] == (
+        f"http://192.168.1.50:49321/api/streams/transmissions/{transmission_id}/still.jpg"
+        "?output_id=hls_stable_apple_tv&quality_profile_id=stable_apple_tv"
+    )
+
+
+def test_remote_home_assistant_webrtc_offer_is_forwarded_to_processing_server(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _create_client(tmp_path)
+    generated = client.post("/api/streams/camera-live-views/generate", json={"camera_id": "front"}).json()
+    live_view = generated["camera_live_views"][0]
+    transmission_id = next(item for item in live_view["variants"] if item["id"] == "zoom")["transmission_id"]
+    asyncio.run(
+        _set_transmissions_host_server(
+            client,
+            host_server_id="remote_arm",
+            server_url="http://192.168.1.50:49321",
+        )
+    )
+    calls: list[dict] = []
+
+    async def _fake_post_json(**kwargs: object) -> dict:
+        calls.append(dict(kwargs))
+        return {
+            "transmission_id": transmission_id,
+            "output_id": "webrtc_low_latency",
+            "answer_sdp": "v=0\r\n",
+        }
+
+    monkeypatch.setenv("TOPOSYNC_HOME_ASSISTANT_NATIVE_WEBRTC_ENABLED", "1")
+    monkeypatch.setattr(streaming_routes, "_post_json", _fake_post_json)
+
+    res = client.post(
+        f"/api/streams/transmissions/{transmission_id}/webrtc/offer"
+        "?output_id=webrtc_low_latency",
+        json={"sdp": "v=0\r\n"},
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["answer_sdp"] == "v=0\r\n"
+    assert calls
+    assert calls[0]["url"] == (
+        f"http://192.168.1.50:49321/api/streams/transmissions/{transmission_id}/webrtc/offer"
+        "?output_id=webrtc_low_latency"
+    )
+    assert calls[0]["body"]["sdp"] == "v=0\r\n"
 
 
 def test_home_assistant_camera_manifest_matches_native_webrtc_profile(

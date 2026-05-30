@@ -13,3 +13,4 @@
 - `docs/EXTENSIONS_FIRST_PARTY.md` — extensões inclusas no repo
 - `docs/PIPELINES.md` — pipelines globais (DAG) para automações/visão
 - `docs/toposync-streaming-dossier-solid-priorities.md` — dossiê consolidado de streaming, Home Assistant, playback e UX de câmeras publicáveis
+- `docs/HAOS_ARM64.md` — validação e limites de suporte para Home Assistant OS em `aarch64` / `linux/arm64`

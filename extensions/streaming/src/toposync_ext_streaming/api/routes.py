@@ -518,7 +518,7 @@ def _hls_proxy_public_base_path(request: Request) -> str:
 
 MEDIA_TOKEN_SCOPE = "stream:media:read"
 LEGACY_HLS_MEDIA_TOKEN_SCOPE = "stream:hls:read"
-MAX_MEDIA_TOKEN_TTL_OVERRIDE_SECONDS = 1800.0
+MAX_MEDIA_TOKEN_TTL_OVERRIDE_SECONDS = 21600.0
 
 
 def _hls_proxy_url(
@@ -1068,6 +1068,70 @@ async def _fetch_json(
             reason = str(getattr(exc, "reason", "") or exc)
             raise RuntimeError(f"Connection failed: {reason}") from exc
 
+        try:
+            parsed_payload = json.loads(payload)
+        except Exception as exc:
+            raise RuntimeError("Invalid JSON response") from exc
+        if not isinstance(parsed_payload, dict):
+            raise RuntimeError("Invalid JSON payload")
+        return parsed_payload
+
+    return await asyncio.to_thread(_do_request)
+
+
+async def _fetch_bytes(
+    *,
+    url: str,
+    timeout_s: float = 6.0,
+    username: str = "",
+    password: str = "",
+    accept: str = "*/*",
+) -> tuple[bytes, str | None]:
+    def _do_request() -> tuple[bytes, str | None]:
+        headers = {"accept": accept}
+        if username or password:
+            headers["authorization"] = _build_basic_authorization(username, password)
+        req = urllib_request.Request(url=url, headers=headers, method="GET")
+        try:
+            with urllib_request.urlopen(req, timeout=max(1.0, float(timeout_s))) as response:
+                return response.read(), response.headers.get("content-type")
+        except urllib_error.HTTPError as exc:
+            body = _read_http_error(exc)
+            raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
+        except urllib_error.URLError as exc:
+            reason = str(getattr(exc, "reason", "") or exc)
+            raise RuntimeError(f"Connection failed: {reason}") from exc
+
+    return await asyncio.to_thread(_do_request)
+
+
+async def _post_json(
+    *,
+    url: str,
+    body: dict[str, Any],
+    timeout_s: float = 6.0,
+    username: str = "",
+    password: str = "",
+) -> dict[str, Any]:
+    def _do_request() -> dict[str, Any]:
+        headers = {"accept": "application/json", "content-type": "application/json"}
+        if username or password:
+            headers["authorization"] = _build_basic_authorization(username, password)
+        req = urllib_request.Request(
+            url=url,
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(req, timeout=max(1.0, float(timeout_s))) as response:
+                payload = response.read().decode("utf-8", errors="replace")
+        except urllib_error.HTTPError as exc:
+            detail = _read_http_error(exc)
+            raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+        except urllib_error.URLError as exc:
+            reason = str(getattr(exc, "reason", "") or exc)
+            raise RuntimeError(f"Connection failed: {reason}") from exc
         try:
             parsed_payload = json.loads(payload)
         except Exception as exc:
@@ -2390,6 +2454,139 @@ def _redact_url_credentials(url: str | None) -> str | None:
     return urllib_parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
+def _url_has_loopback_host(url: str | None) -> bool:
+    try:
+        host = str(urllib_parse.urlsplit(str(url or "")).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in {"localhost", "::1"} or host.startswith("127.")
+
+
+def _url_host_for_rtsp(url: str | None) -> str:
+    try:
+        parsed = urllib_parse.urlsplit(str(url or ""))
+    except Exception:
+        return ""
+    host = str(parsed.hostname or "").strip()
+    if not host:
+        return ""
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
+
+
+def _rtsp_port_from_urls_response(urls: TransmissionUrlsResponse) -> int | None:
+    contract = urls.network_contract
+    if contract is None:
+        return None
+    for ports in (contract.actual_ports, contract.expected_ports):
+        value = getattr(ports, "rtsp", None)
+        if value is not None:
+            return int(value)
+    return None
+
+
+def _rtsp_url_with_output_auth(url: str, output: TransmissionOutput | None) -> str:
+    raw = str(url or "").strip()
+    if not raw or output is None:
+        return raw
+    auth = output.authentication
+    if auth is None or not auth.enabled:
+        return raw
+    username = str(auth.username or "").strip()
+    password = str(auth.password or "").strip()
+    if not username or not password:
+        return raw
+    try:
+        parsed = urllib_parse.urlsplit(raw)
+    except Exception:
+        return raw
+    if parsed.username or parsed.password:
+        return raw
+    host = _url_host_for_rtsp(raw)
+    if not host:
+        return raw
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    user = urllib_parse.quote(username, safe="")
+    pwd = urllib_parse.quote(password, safe="")
+    return urllib_parse.urlunsplit(
+        (
+            parsed.scheme,
+            f"{user}:{pwd}@{host}{port}",
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+
+def _remote_rtsp_url_for_home_assistant(
+    *,
+    urls: TransmissionUrlsResponse,
+    transmission: Transmission,
+    output: TransmissionOutput,
+) -> str | None:
+    selected = next(
+        (
+            item
+            for item in urls.outputs
+            if item.protocol == "rtsp" and item.output_id == output.id
+        ),
+        None,
+    ) or next((item for item in urls.outputs if item.protocol == "rtsp"), None)
+    if selected is not None:
+        return _rtsp_url_with_output_auth(selected.url, output)
+
+    host = ""
+    for candidate in urls.outputs:
+        host = _url_host_for_rtsp(candidate.url)
+        if host:
+            break
+    port = _rtsp_port_from_urls_response(urls)
+    if not host or port is None:
+        return None
+    engine_path = resolve_output_engine_path(transmission, output)
+    return _rtsp_url_with_output_auth(_rtsp_url(host, port, engine_path), output)
+
+
+async def _remote_transmission_server(
+    *,
+    config_store: ConfigStore,
+    transmission: Transmission,
+) -> ProcessingServer:
+    servers_by_id = await _processing_servers_by_id(config_store)
+    host_server_id = normalize_server_id(transmission.host_server_id, fallback="local")
+    server = servers_by_id.get(host_server_id)
+    if server is None:
+        raise HTTPException(status_code=400, detail=f"Unknown host_server_id: {host_server_id}")
+    if str(server.kind) != "http":
+        raise HTTPException(
+            status_code=400,
+            detail=f"host_server_id '{host_server_id}' does not support remote HTTP access.",
+        )
+    if not str(server.url or "").strip():
+        raise HTTPException(status_code=400, detail=f"host_server_id '{host_server_id}' has an empty URL.")
+    return server
+
+
+def _remote_transmission_endpoint(
+    server: ProcessingServer,
+    *,
+    transmission_id: str,
+    suffix: str,
+    query: dict[str, str | None] | None = None,
+) -> str:
+    base_url = str(server.url or "").strip().rstrip("/")
+    encoded_id = urllib_parse.quote(str(transmission_id or ""), safe="")
+    url = f"{base_url}/api/streams/transmissions/{encoded_id}/{suffix.lstrip('/')}"
+    query_params = {
+        key: value
+        for key, value in (query or {}).items()
+        if value is not None and str(value).strip()
+    }
+    if query_params:
+        url = f"{url}?{urllib_parse.urlencode(query_params)}"
+    return url
+
+
 def _home_assistant_still_url_path(
     *,
     transmission_id: str,
@@ -2545,7 +2742,35 @@ async def _build_home_assistant_camera_item(
     if output is None:
         blocking_errors.append("No enabled output is available for Home Assistant camera playback.")
     elif transmission_host != current_server_id:
-        blocking_errors.append("Transmission is hosted on another processing server; Home Assistant entity export is local-only in this version.")
+        try:
+            remote_urls = await _resolve_remote_transmission_urls(
+                config_store=_config_store(request),
+                transmission=transmission,
+                output_id=output_id,
+                quality_profile_id=quality_profile_id,
+            )
+            warnings.extend(remote_urls.warnings)
+            blocking_errors.extend(remote_urls.blocking_errors)
+            rtsp_url = _remote_rtsp_url_for_home_assistant(
+                urls=remote_urls,
+                transmission=transmission,
+                output=output,
+            )
+            if not rtsp_url:
+                blocking_errors.append(
+                    "Remote processing server did not expose an RTSP URL for Home Assistant camera playback."
+                )
+            elif _url_has_loopback_host(rtsp_url):
+                blocking_errors.append(
+                    "Remote processing server returned a loopback RTSP URL; configure it with a LAN-reachable URL or expose the RTSP port."
+                )
+                rtsp_url = None
+            redacted_rtsp_url = _redact_url_credentials(rtsp_url)
+        except HTTPException as exc:
+            detail = str(exc.detail or exc)
+            blocking_errors.append(detail)
+        except Exception as exc:
+            blocking_errors.append(f"Failed to resolve remote Home Assistant camera playback: {exc}")
     else:
         engine_path = resolve_output_engine_path(transmission, output)
         rtsp_url = await _engine_manager(request).get_read_url_for_path(
@@ -7410,7 +7635,36 @@ def create_streaming_router() -> APIRouter:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
         if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
-            raise HTTPException(status_code=409, detail="Still image is only available on the transmission host server.")
+            server = await _remote_transmission_server(
+                config_store=config_store,
+                transmission=transmission,
+            )
+            remote_url = _remote_transmission_endpoint(
+                server,
+                transmission_id=transmission.id,
+                suffix="still.jpg",
+                query={
+                    "output_id": output_id,
+                    "quality_profile_id": quality_profile_id,
+                },
+            )
+            try:
+                body, media_type = await _fetch_bytes(
+                    url=remote_url,
+                    username=str(server.username or "").strip(),
+                    password=str(server.password or "").strip(),
+                    accept="image/jpeg,*/*",
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Failed to resolve still image from processing server '{transmission.host_server_id}': {exc}",
+                ) from exc
+            return Response(
+                content=body,
+                media_type=media_type or "image/jpeg",
+                headers={"cache-control": "no-store, max-age=0", "pragma": "no-cache"},
+            )
 
         output = _best_transmission_output_for_home_assistant(
             transmission,
@@ -7576,7 +7830,34 @@ def create_streaming_router() -> APIRouter:
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
         if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
-            raise HTTPException(status_code=409, detail="WebRTC offer handling is only available on the transmission host server.")
+            server = await _remote_transmission_server(
+                config_store=config_store,
+                transmission=transmission,
+            )
+            remote_url = _remote_transmission_endpoint(
+                server,
+                transmission_id=transmission.id,
+                suffix="webrtc/offer",
+                query={
+                    "output_id": body.output_id or output_id,
+                    "quality_profile_id": body.quality_profile_id or quality_profile_id,
+                },
+            )
+            try:
+                payload = await _post_json(
+                    url=remote_url,
+                    body=body.model_dump(mode="json"),
+                    username=str(server.username or "").strip(),
+                    password=str(server.password or "").strip(),
+                )
+                return StreamingHomeAssistantWebRtcOfferResponse.model_validate(payload)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Failed to negotiate WebRTC offer with processing server '{transmission.host_server_id}': {exc}",
+                ) from exc
 
         selected_output_id = str(body.output_id or output_id or "").strip() or None
         selected_profile_id = body.quality_profile_id or quality_profile_id
@@ -8161,11 +8442,31 @@ def create_streaming_router() -> APIRouter:
         if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(
             request
         ):
-            return {
-                "transmission_id": transmission_id,
-                "primed": False,
-                "primed_outputs": 0,
-            }
+            server = await _remote_transmission_server(
+                config_store=config_store,
+                transmission=transmission,
+            )
+            remote_url = _remote_transmission_endpoint(
+                server,
+                transmission_id=transmission.id,
+                suffix="demand/prime",
+                query={
+                    "output_id": output_id,
+                    "quality_profile_id": quality_profile_id,
+                },
+            )
+            try:
+                return await _post_json(
+                    url=remote_url,
+                    body={},
+                    username=str(server.username or "").strip(),
+                    password=str(server.password or "").strip(),
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Failed to prime demand on processing server '{transmission.host_server_id}': {exc}",
+                ) from exc
 
         bridge = _writer_bridge(request)
         prime_demand = getattr(bridge, "prime_transmission_demand", None)
@@ -8219,13 +8520,28 @@ def create_streaming_router() -> APIRouter:
         default_lease_seconds = 90.0 if payload.source == "home_assistant_entity" else 45.0
         lease_seconds = float(payload.ttl_seconds or default_lease_seconds)
         if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
-            return TransmissionDemandHeartbeatResponse(
-                transmission_id=transmission_id,
-                playback_session_id=payload.playback_session_id,
-                renewed=False,
-                renewed_outputs=0,
-                lease_seconds=lease_seconds,
+            server = await _remote_transmission_server(
+                config_store=config_store,
+                transmission=transmission,
             )
+            remote_url = _remote_transmission_endpoint(
+                server,
+                transmission_id=transmission.id,
+                suffix="demand/heartbeat",
+            )
+            try:
+                remote_payload = await _post_json(
+                    url=remote_url,
+                    body=payload.model_dump(mode="json"),
+                    username=str(server.username or "").strip(),
+                    password=str(server.password or "").strip(),
+                )
+                return TransmissionDemandHeartbeatResponse.model_validate(remote_payload)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Failed to renew demand on processing server '{transmission.host_server_id}': {exc}",
+                ) from exc
 
         bridge = _writer_bridge(request)
         prime_demand = getattr(bridge, "prime_transmission_demand", None)

@@ -1,0 +1,168 @@
+---
+title: Docker CPU
+sidebar_position: 3
+---
+
+# Docker CPU {/* #docker-cpu */}
+
+Docker Compose installation without GPU acceleration.
+
+## Who this is for
+
+Use this path when you want to run Toposync isolated in a container.
+
+This guide builds from a local repository checkout. It does not assume a public container image yet.
+
+For architecture support, see [Compatibility](architecture-support.mdx).
+
+## Prerequisites
+
+- Docker.
+- Docker Compose.
+- A Toposync repository checkout.
+
+## Installation
+
+From the repository root:
+
+```bash
+docker compose up -d --build
+```
+
+This builds the local `toposync:local` image and starts the `toposync` service.
+
+By default:
+
+- public port: `8000`;
+- data directory on the host: `./toposync-data`;
+- data directory in the container: `/data`.
+
+## How to run
+
+Start:
+
+```bash
+docker compose up -d
+```
+
+Stop:
+
+```bash
+docker compose stop
+```
+
+View logs:
+
+```bash
+docker compose logs -f toposync
+```
+
+Change the public port:
+
+```bash
+TOPOSYNC_PORT=8080 docker compose up -d --build
+```
+
+Change the data directory:
+
+```bash
+TOPOSYNC_DATA_VOLUME=/path/to/toposync-data docker compose up -d --build
+```
+
+## How to access
+
+On the host:
+
+```text
+http://127.0.0.1:8000/
+```
+
+On the local network:
+
+```text
+http://<server-ip>:8000/
+```
+
+## How to verify
+
+```bash
+curl -I http://127.0.0.1:8000/
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/auth/status
+```
+
+Expected result:
+
+- `/` returns `200`;
+- `/api/health` returns `200`;
+- `/api/auth/status` returns JSON and may report `requires_setup: true` on first access.
+
+After you complete setup or login in the UI, authenticated API routes such as `/api/extensions` become available.
+
+## Optional streaming
+
+To include the streaming extension in the CPU image:
+
+```bash
+TOPOSYNC_APT_PACKAGES=ffmpeg \
+TOPOSYNC_EXTRA_WHEELS="/wheelhouse/toposync_ext_streaming-*.whl" \
+docker compose up -d --build
+```
+
+In this mode:
+
+- FFmpeg is installed as a system package;
+- `toposync-ext-streaming` is installed as an extra wheel;
+- data and runtime still use `/data`.
+
+## How to update
+
+Update the repository checkout and rebuild the image:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+## How to uninstall
+
+Stop and remove the container:
+
+```bash
+docker compose down
+```
+
+Also remove the local data:
+
+```bash
+rm -rf ./toposync-data
+```
+
+## Troubleshooting
+
+### Port 8000 is already in use
+
+Use another host port:
+
+```bash
+TOPOSYNC_PORT=8080 docker compose up -d
+```
+
+### The container does not become healthy
+
+Check the logs:
+
+```bash
+docker compose logs -f toposync
+```
+
+Test the health endpoints:
+
+```bash
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/auth/status
+```
+
+### I need GPU acceleration
+
+This guide is CPU-only. For NVIDIA in Docker, use the Docker CUDA guide.

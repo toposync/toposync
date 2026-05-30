@@ -1,0 +1,65 @@
+---
+title: Compatibility
+sidebar_position: 13
+---
+
+# Compatibility {/* #architecture-support */}
+
+Support matrix for choosing a Toposync installation path.
+
+## Systems
+
+| System | Status | Recommended path |
+| --- | --- | --- |
+| Linux | Supported | Python, Docker CPU, Docker CUDA, or processing server |
+| macOS | Supported for CPU | Python or processing server |
+| Windows | Supported | Python or processing server as a Windows service |
+| Home Assistant OS | Supported through the add-on | Home Assistant add-on |
+
+## Architectures
+
+| Architecture | Status | Notes |
+| --- | --- | --- |
+| `amd64` / `x86_64` | Supported | Main path for Linux, Windows, Docker, and HAOS |
+| `aarch64` / `arm64` | Supported for CPU | Supported path for Docker CPU and Home Assistant OS |
+| Apple Silicon | Supported for CPU | Use the Python installation on macOS |
+| Intel macOS | Supported for CPU | Use the Python installation on macOS |
+| `armv7`, `armhf`, `i386` | Outside the support target | Use a 64-bit system |
+
+## Installation scenarios
+
+| Scenario | Status | Notes |
+| --- | --- | --- |
+| Python on Linux and macOS | Supported | Recommended with Python 3.12 |
+| Python on Windows | Supported | Recommended with Python 3.12 |
+| Docker CPU | Supported | Validated for `amd64` and `arm64` |
+| Docker CUDA | Linux + NVIDIA | Requires NVIDIA driver and NVIDIA Container Toolkit |
+| Home Assistant add-on | Supported | CPU-only on `amd64` and `aarch64` |
+| Processing server on Linux and macOS | Supported | CPU on macOS; CPU or CUDA on Linux |
+| Processing server on Windows | Supported | CPU, DirectML, or native CUDA |
+| Processing server on Docker | Supported | CPU; CUDA when the local image was built with the CUDA target |
+
+## GPU
+
+| Acceleration | Status | Use when |
+| --- | --- | --- |
+| CPU | Default | First install, light usage, and broad compatibility |
+| CUDA on Linux | Supported | Linux host with an NVIDIA GPU |
+| CUDA in Docker | Supported on Linux | Linux host with an NVIDIA GPU and NVIDIA Container Toolkit |
+| Native CUDA on Windows | Supported as a Python bundle | Windows machine with compatible NVIDIA driver and runtime |
+| DirectML on Windows | Supported | Windows GPU compatible with DirectML |
+| CUDA in the Home Assistant add-on | Outside the current scope | Use an external processing server if you need GPU acceleration |
+
+## Raspberry Pi and HAOS
+
+| Environment | Status | Recommendation |
+| --- | --- | --- |
+| Raspberry Pi with 64-bit HAOS | Supported through the add-on | Use `aarch64` |
+| Raspberry Pi 5 8 GB + NVMe | Practical reference | Better baseline for modern usage |
+| Raspberry Pi 4 | Best-effort | Suitable for light usage and compatibility testing |
+| SD card storage | Best-effort | Avoid it for many cameras or write-heavy workloads |
+| Heavy vision/OpenCV on ARM CPU | Limited | Delegate to a remote processing server |
+
+## Practical rule
+
+Start with CPU. Add GPU acceleration or a processing server only when you hit a real bottleneck in vision, OpenCV, multiple cameras, or ONNX inference.

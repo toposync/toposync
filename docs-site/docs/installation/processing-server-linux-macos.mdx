@@ -1,0 +1,194 @@
+---
+title: Processing server on Linux and macOS
+sidebar_position: 10
+---
+
+# Processing server on Linux and macOS {/* #processing-server-linux-macos */}
+
+Install a remote processing server directly on the host system.
+
+## Who this is for
+
+Use this path when you want to move heavier work away from the origin server or Home Assistant.
+
+The processing server runs distributed pipelines and responds to the origin through an HTTP API.
+
+For system, architecture, and GPU support, see [Compatibility](architecture-support.mdx).
+
+## Prerequisites
+
+- Linux or macOS.
+- Python 3.12 recommended.
+- `uv`.
+- TCP access between the origin and the processing server. The default port is `49321`.
+
+Install `uv` if you do not have it yet:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+## Installation
+
+Create a directory for the processing server:
+
+```bash
+mkdir -p ~/toposync-processing
+cd ~/toposync-processing
+```
+
+Create the virtual environment:
+
+```bash
+uv python install 3.12
+uv venv .venv --python 3.12
+source .venv/bin/activate
+```
+
+Install the default CPU bundle:
+
+```bash
+uv pip install --upgrade --refresh toposync
+```
+
+If you need to reproduce a specific version:
+
+```bash
+uv pip install --upgrade --refresh "toposync==0.7.2"
+```
+
+## Optional GPU and streaming
+
+For Linux with NVIDIA CUDA:
+
+```bash
+uv pip install --upgrade --refresh toposync-vision-cuda
+```
+
+For CPU streaming:
+
+```bash
+uv pip install --upgrade --refresh toposync-streaming
+```
+
+For CUDA + streaming on the same processing server:
+
+```bash
+uv pip install --upgrade --refresh toposync-vision-cuda toposync-ext-streaming
+```
+
+Streaming may require FFmpeg to be available on the system.
+
+## How to run
+
+Without authentication, only for trusted networks:
+
+```bash
+toposync processing-serve --host 0.0.0.0 --port 49321 --data-dir ./toposync-processing-data
+```
+
+With Basic Auth:
+
+```bash
+TOPOSYNC_PROCESSING_USERNAME=toposync \
+TOPOSYNC_PROCESSING_PASSWORD='<strong-password>' \
+toposync processing-serve --host 0.0.0.0 --port 49321 --data-dir ./toposync-processing-data
+```
+
+## How to access
+
+The origin must be able to reach:
+
+```text
+http://<processing-server-ip>:49321
+```
+
+The processing server does not serve the main UI. It serves processing endpoints for the origin.
+
+## How to verify
+
+Without Basic Auth:
+
+```bash
+curl http://127.0.0.1:49321/api/processing/status
+```
+
+With Basic Auth:
+
+```bash
+curl -u toposync:'<strong-password>' http://127.0.0.1:49321/api/processing/status
+```
+
+Expected result: a JSON status response. `active: false` is normal until the origin sends a pipeline configuration.
+
+## Register on the origin
+
+On the origin server, register the processing server:
+
+```bash
+curl -X PUT http://127.0.0.1:8000/api/processing-servers/remote_gpu \
+  -H 'content-type: application/json' \
+  -d '{
+    "id": "remote_gpu",
+    "name": "Remote GPU",
+    "kind": "http",
+    "url": "http://<processing-server-ip>:49321",
+    "username": "toposync",
+    "password": "<strong-password>"
+  }'
+```
+
+Then test through the origin:
+
+```bash
+curl http://127.0.0.1:8000/api/processing-servers/remote_gpu/status
+```
+
+In pipelines, set `processing_server_id` to the registered id, for example `remote_gpu`.
+
+## How to update
+
+With the virtual environment active:
+
+```bash
+uv pip install --upgrade --refresh toposync
+```
+
+If you installed upgrades, update only the packages you use:
+
+```bash
+uv pip install --upgrade --refresh toposync-vision-cuda
+uv pip install --upgrade --refresh toposync-streaming
+uv pip install --upgrade --refresh toposync-ext-streaming
+```
+
+Then restart the `toposync processing-serve` process.
+
+## How to uninstall
+
+Stop the process and remove the directory:
+
+```bash
+deactivate 2>/dev/null || true
+rm -rf ~/toposync-processing
+```
+
+Also remove the registered processing server from the origin.
+
+## Troubleshooting
+
+### `401 Unauthorized`
+
+The username or password configured on the origin does not match `TOPOSYNC_PROCESSING_USERNAME` and `TOPOSYNC_PROCESSING_PASSWORD`.
+
+### `Connection refused`
+
+Confirm that the processing server is running with `--host 0.0.0.0` and that port `49321` is allowed by the firewall.
+
+### Processing server is always idle
+
+The pipeline is still using `processing_server_id: "local"`. Change the pipeline to the remote server id.
+
+### Vision does not use the GPU
+
+Confirm that `toposync-vision-cuda` is installed and check the providers returned by `/api/processing/status`.

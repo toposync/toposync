@@ -1,0 +1,186 @@
+---
+title: Docker CUDA
+sidebar_position: 4
+---
+
+# Docker CUDA {/* #docker-cuda */}
+
+Docker Compose installation for Linux with an NVIDIA GPU.
+
+## Who this is for
+
+Use this path when you want to run Toposync in a container with NVIDIA CUDA acceleration for vision.
+
+This guide builds from a local repository checkout. It does not assume a public container image yet.
+
+For architecture support and Windows alternatives, see [Compatibility](architecture-support.mdx).
+
+## Prerequisites
+
+- Linux with an NVIDIA GPU.
+- NVIDIA driver installed on the host.
+- Docker.
+- Docker Compose.
+- NVIDIA Container Toolkit configured.
+- A Toposync repository checkout.
+
+Verify that Docker can see the GPU:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi
+```
+
+If this command fails, fix the NVIDIA driver or NVIDIA Container Toolkit before starting Toposync.
+
+## Installation
+
+From the repository root:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+```
+
+This builds the local `toposync:local` image with the `runtime-cuda` target.
+
+By default:
+
+- public port: `8000`;
+- data directory on the host: `./toposync-data`;
+- data directory in the container: `/data`;
+- installed bundle: `toposync-vision-cuda`.
+
+## How to run
+
+Start:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
+```
+
+Stop:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml stop
+```
+
+View logs:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml logs -f toposync
+```
+
+Change the public port:
+
+```bash
+TOPOSYNC_PORT=8080 \
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+```
+
+## How to access
+
+On the host:
+
+```text
+http://127.0.0.1:8000/
+```
+
+On the local network:
+
+```text
+http://<server-ip>:8000/
+```
+
+## How to verify
+
+Verify the API:
+
+```bash
+curl -I http://127.0.0.1:8000/
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/auth/status
+```
+
+Verify the GPU from inside the container:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml exec toposync nvidia-smi
+```
+
+Expected result:
+
+- `/` returns `200`;
+- `/api/health` returns `200`;
+- `/api/auth/status` returns JSON and may report `requires_setup: true` on first access;
+- `nvidia-smi` shows the GPU inside the container.
+
+After you complete setup or login in the UI, authenticated API routes such as `/api/extensions` become available.
+
+## Optional streaming
+
+To include streaming in the CUDA image:
+
+```bash
+TOPOSYNC_APT_PACKAGES=ffmpeg \
+TOPOSYNC_EXTRA_WHEELS="/wheelhouse/toposync_ext_streaming-*.whl" \
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+```
+
+In this mode:
+
+- FFmpeg is installed as a system package;
+- `toposync-ext-streaming` is installed as an extra wheel;
+- data and runtime still use `/data`.
+
+## How to update
+
+Update the repository checkout and rebuild the image:
+
+```bash
+git pull
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+```
+
+## How to uninstall
+
+Stop and remove the container:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml down
+```
+
+Also remove the local data:
+
+```bash
+rm -rf ./toposync-data
+```
+
+## Troubleshooting
+
+### Docker cannot see the GPU
+
+Test:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi
+```
+
+If this fails, the problem is on the host: NVIDIA driver, Docker, or NVIDIA Container Toolkit.
+
+### The container does not become healthy
+
+Check the logs:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml logs -f toposync
+```
+
+Test the health endpoints:
+
+```bash
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/auth/status
+```
+
+### I am on Windows
+
+On Windows, prefer the native installation with `toposync-vision-directml` or the processing server as a Windows service. Docker CUDA is documented here as a Linux + NVIDIA path.

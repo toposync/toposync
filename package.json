@@ -17,7 +17,7 @@
     "pack:plugin-api": "npm --workspace @toposync/plugin-api run pack:dry-run",
     "build:extensions": "npm --workspace @toposync/extension-structural-ui run build && npm --workspace @toposync/extension-models-ui run build && npm --workspace @toposync/extension-home-assistant-ui run build && npm --workspace @toposync/extension-cameras-ui run build && npm --workspace @toposync/extension-images-ui run build && npm --workspace @toposync/extension-streaming-ui run build && npm --workspace @toposync/extension-ai-ui run build && npm --workspace @toposync/extension-spatial-video-ui run build",
     "docs:start": "npm --workspace docs-site run start",
-    "docs:start:pt-BR": "npm --workspace docs-site run start -- --locale pt-BR",
+    "docs:start:pt-BR": "npm --workspace docs-site run start:pt-BR",
     "docs:build": "npm --workspace docs-site run build",
     "docs:build:en": "npm --workspace docs-site run build -- --locale en",
     "docs:build:pt-BR": "npm --workspace docs-site run build -- --locale pt-BR",

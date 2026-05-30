@@ -1,0 +1,168 @@
+---
+title: Docker CPU
+sidebar_position: 3
+---
+
+# Docker CPU {/* #docker-cpu */}
+
+Instalação com Docker Compose, sem GPU.
+
+## Para Quem É
+
+Use este caminho quando quiser rodar o Toposync isolado em container.
+
+Este guia usa build local do repositório. Ainda não assume imagem pública em registry.
+
+Para suporte por arquitetura, consulte [Compatibilidade](architecture-support.mdx).
+
+## Pré-requisitos
+
+- Docker.
+- Docker Compose.
+- Checkout do repositório Toposync.
+
+## Instalação
+
+Na raiz do repositório:
+
+```bash
+docker compose up -d --build
+```
+
+Isso cria a imagem local `toposync:local` e sobe o serviço `toposync`.
+
+Por padrão:
+
+- porta pública: `8000`;
+- pasta de dados no host: `./toposync-data`;
+- pasta de dados no container: `/data`.
+
+## Como Rodar
+
+Subir:
+
+```bash
+docker compose up -d
+```
+
+Parar:
+
+```bash
+docker compose stop
+```
+
+Ver logs:
+
+```bash
+docker compose logs -f toposync
+```
+
+Alterar porta pública:
+
+```bash
+TOPOSYNC_PORT=8080 docker compose up -d --build
+```
+
+Alterar pasta de dados:
+
+```bash
+TOPOSYNC_DATA_VOLUME=/caminho/para/toposync-data docker compose up -d --build
+```
+
+## Como Acessar
+
+No host:
+
+```text
+http://127.0.0.1:8000/
+```
+
+Na rede local:
+
+```text
+http://<ip-do-servidor>:8000/
+```
+
+## Como Verificar
+
+```bash
+curl -I http://127.0.0.1:8000/
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/auth/status
+```
+
+O esperado:
+
+- `/` responde `200`;
+- `/api/health` responde `200`;
+- `/api/auth/status` responde JSON e pode indicar `requires_setup: true` no primeiro acesso.
+
+Depois de concluir o setup/login pela UI, a API autenticada passa a responder as rotas protegidas, como `/api/extensions`.
+
+## Streaming Opcional
+
+Para incluir a extensão de streaming na imagem CPU:
+
+```bash
+TOPOSYNC_APT_PACKAGES=ffmpeg \
+TOPOSYNC_EXTRA_WHEELS="/wheelhouse/toposync_ext_streaming-*.whl" \
+docker compose up -d --build
+```
+
+Nesse modo:
+
+- FFmpeg entra como pacote do sistema;
+- a extensão `toposync-ext-streaming` entra como wheel adicional;
+- dados e runtime continuam em `/data`.
+
+## Como Atualizar
+
+Atualize o checkout do repositório e recrie a imagem:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+## Como Desinstalar
+
+Parar e remover o container:
+
+```bash
+docker compose down
+```
+
+Remover também os dados locais:
+
+```bash
+rm -rf ./toposync-data
+```
+
+## Troubleshooting
+
+### Porta 8000 ocupada
+
+Use outra porta no host:
+
+```bash
+TOPOSYNC_PORT=8080 docker compose up -d
+```
+
+### Container não fica saudável
+
+Veja os logs:
+
+```bash
+docker compose logs -f toposync
+```
+
+Teste o healthcheck:
+
+```bash
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/auth/status
+```
+
+### Quero GPU
+
+Este guia é CPU-only. Para NVIDIA em Docker, use o guia Docker CUDA.

@@ -1,0 +1,184 @@
+---
+title: Home Assistant add-on
+sidebar_position: 9
+---
+
+# Home Assistant add-on {/* #home-assistant-addon */}
+
+Install Toposync inside Home Assistant.
+
+## Who this is for
+
+Use this path when you want:
+
+- Toposync in the Home Assistant sidebar;
+- UI and API access through ingress;
+- supervised execution;
+- automatic access to the Home Assistant Core API;
+- integration with Home Assistant cameras and entities.
+
+The add-on is CPU-only.
+
+For architecture, HAOS, and Raspberry Pi support, see [Compatibility](architecture-support.mdx).
+
+## Prerequisites
+
+- Home Assistant OS or another Supervisor-based environment.
+- An administrator user in Home Assistant.
+- Access to the Add-on Store.
+
+## Installation
+
+In Home Assistant:
+
+1. Open `Settings`.
+2. Open `Add-ons`.
+3. Open `Add-on Store`.
+4. Open the repository menu.
+5. Add:
+
+```text
+https://github.com/toposync/toposync-homeassistant-addon
+```
+
+Then:
+
+1. Open the `Toposync` add-on.
+2. Click `Install`.
+3. Click `Start`.
+4. Enable `Start on boot` if you want it to start with Home Assistant.
+5. Open `Toposync` from the sidebar.
+
+## How to run
+
+The Supervisor runs the add-on.
+
+Use the add-on page to:
+
+- start;
+- stop;
+- restart;
+- view logs;
+- update.
+
+## How to access
+
+### From the sidebar
+
+Open `Toposync` in the Home Assistant sidebar.
+
+This is the default path. The UI and API go through Home Assistant ingress.
+
+### From the local network
+
+Direct access is disabled by default.
+
+To enable direct access from a browser or mobile app, open the add-on `Network` section and map:
+
+```yaml
+18756/tcp: 18756
+```
+
+Then open:
+
+```text
+http://homeassistant.local:18756/
+```
+
+or:
+
+```text
+http://<home-assistant-ip>:18756/
+```
+
+Direct access uses Toposync local authentication. In hybrid mode, the initial local user setup is not shown on the first direct access; create local users from inside Toposync through the sidebar.
+
+## How to verify
+
+From the sidebar:
+
+- the Toposync home screen should open;
+- `Settings` should load;
+- Home Assistant and camera extensions should appear when installed.
+
+From the direct port, if enabled:
+
+```bash
+curl http://<home-assistant-ip>:18756/api/health
+```
+
+Expected result: `200`.
+
+## Optional streaming
+
+HLS for the web UI and mobile app uses the Toposync direct port when that port is mapped:
+
+```text
+18756/tcp
+```
+
+For RTSP or WebRTC/WHEP on the local network, map only the protocols you need:
+
+```yaml
+18758/tcp: 18758  # RTSP
+18760/tcp: 18760  # WebRTC/WHEP signaling
+18762/udp: 18762  # WebRTC media transport
+```
+
+Notes:
+
+- `18757` is the internal ingress/backend port.
+- `18759` is the internal/diagnostic direct HLS port and is not part of the default public contract.
+- `18761` is the internal MediaMTX API and should not be published by default.
+
+## How to update
+
+In Home Assistant:
+
+1. Open `Settings`.
+2. Open `Add-ons`.
+3. Open `Toposync`.
+4. Click `Update` when available.
+5. Restart the add-on after the update.
+
+If the update does not appear, open the Add-on Store menu and reload repositories.
+
+## How to uninstall
+
+In Home Assistant:
+
+1. Open `Settings`.
+2. Open `Add-ons`.
+3. Open `Toposync`.
+4. Stop the add-on.
+5. Click `Uninstall`.
+
+Toposync data lives in `/data` inside the add-on container, managed by the Supervisor.
+
+## Troubleshooting
+
+### The add-on does not appear
+
+Check that the repository was added exactly as:
+
+```text
+https://github.com/toposync/toposync-homeassistant-addon
+```
+
+Then reload the Add-on Store.
+
+### Build or update fails
+
+Open the Supervisor logs and the add-on logs. The error usually appears during image build or during `pip install` inside the add-on.
+
+### The direct port refuses connections
+
+Confirm that `18756/tcp` is mapped in the add-on `Network` section. Declaring the port in the add-on does not automatically publish it on the host.
+
+### Streaming does not open outside the sidebar
+
+Start with HLS through `18756/tcp`. Enable RTSP or WebRTC only if you need those protocols.
+
+### Raspberry Pi is slow
+
+For multiple cameras, heavy OpenCV, or CPU vision workloads, use a remote processing server. See [Compatibility](architecture-support.mdx) for hardware guidance.

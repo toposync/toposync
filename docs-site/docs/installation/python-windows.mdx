@@ -1,0 +1,205 @@
+---
+title: Python on Windows
+sidebar_position: 7
+---
+
+# Python on Windows {/* #python-windows */}
+
+Install Toposync directly on Windows with PowerShell, `uv`, and Python 3.12.
+
+## Who this is for
+
+Use this path on Windows when you want to run Toposync without Docker.
+
+This guide starts with the default CPU bundle. GPU and streaming are upgrades you add after the basic installation works.
+
+For architecture and GPU support, see [Compatibility](architecture-support.mdx).
+
+## Prerequisites
+
+- Windows 10/11.
+- PowerShell.
+- Python 3.12 through `uv`.
+
+## Installation
+
+Install `uv`:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Close and reopen PowerShell if the `uv` command is still not available.
+
+Create a directory for Toposync:
+
+```powershell
+mkdir $env:USERPROFILE\toposync
+cd $env:USERPROFILE\toposync
+```
+
+Install Python 3.12 and create the virtual environment:
+
+```powershell
+uv python install 3.12
+uv venv .venv --python 3.12
+.venv\Scripts\Activate.ps1
+```
+
+Install Toposync:
+
+```powershell
+uv pip install --upgrade --refresh toposync
+```
+
+If you need to reproduce a specific version:
+
+```powershell
+uv pip install --upgrade --refresh "toposync==0.7.2"
+```
+
+## How to run
+
+For local use:
+
+```powershell
+toposync serve
+```
+
+To access it from the local network:
+
+```powershell
+toposync serve --host 0.0.0.0 --port 8000
+```
+
+To choose the data directory:
+
+```powershell
+toposync serve --data-dir .\toposync-data
+```
+
+## How to access
+
+On the same computer:
+
+```text
+http://127.0.0.1:8000/
+```
+
+From another device on the same network, use the Windows machine IP:
+
+```text
+http://<windows-ip>:8000/
+```
+
+## How to verify
+
+In another PowerShell window:
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:8000/
+Invoke-RestMethod http://127.0.0.1:8000/api/health
+Invoke-RestMethod http://127.0.0.1:8000/api/auth/status
+```
+
+Expected result:
+
+- `/` returns the UI;
+- `/api/health` responds;
+- `/api/auth/status` returns JSON and may report `requires_setup: true` on first access.
+
+After you complete setup or login in the UI, authenticated API routes such as `/api/extensions` become available.
+
+## Optional upgrades
+
+### Windows GPU through DirectML
+
+Use this on Windows machines with a DirectML-compatible GPU:
+
+```powershell
+uv pip install --upgrade --refresh toposync-vision-directml
+```
+
+### NVIDIA CUDA
+
+Use this only if the machine has compatible NVIDIA hardware, driver, and runtime:
+
+```powershell
+uv pip install --upgrade --refresh toposync-vision-cuda
+```
+
+### Streaming
+
+To add streaming:
+
+```powershell
+uv pip install --upgrade --refresh toposync-streaming
+```
+
+MediaMTX and go2rtc are downloaded on demand by the streaming runtime. FFmpeg must be available on the system or configured through an environment variable.
+
+## How to update
+
+With the virtual environment active:
+
+```powershell
+uv pip install --upgrade --refresh toposync
+```
+
+If you installed upgrades, update only the packages you use:
+
+```powershell
+uv pip install --upgrade --refresh toposync-vision-directml
+uv pip install --upgrade --refresh toposync-vision-cuda
+uv pip install --upgrade --refresh toposync-streaming
+```
+
+Then restart the `toposync serve` process.
+
+## How to uninstall
+
+Stop the server, leave the virtual environment, and remove the directory:
+
+```powershell
+deactivate
+cd $env:USERPROFILE
+Remove-Item -Recurse -Force .\toposync
+```
+
+If you used another data directory, remove that directory too.
+
+## Troubleshooting
+
+### `toposync` is not recognized
+
+Activate the virtual environment:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+### PowerShell blocked the activation script
+
+Open PowerShell as a regular user and run:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Then try to activate the environment again.
+
+### Error asks for Microsoft Visual C++ Build Tools
+
+This usually means a native dependency tried to compile locally.
+
+Try this first:
+
+```powershell
+deactivate
+Remove-Item -Recurse -Force .venv
+uv venv .venv --python 3.12
+.venv\Scripts\Activate.ps1
+uv pip install --upgrade --refresh toposync
+```
+
+Installing Visual C++ Build Tools should be an advanced fallback, not the default path.

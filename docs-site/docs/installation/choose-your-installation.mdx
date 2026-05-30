@@ -1,0 +1,91 @@
+---
+title: Toposync installation
+sidebar_position: 1
+---
+
+# Toposync installation {/* #choose-your-installation */}
+
+Choose the guide based on where Toposync will run.
+
+## Quick choice
+
+| I want to... | Use this guide |
+| --- | --- |
+| Run directly on Linux or macOS with Python | [Python on Linux and macOS](python-linux-macos.mdx) |
+| Run directly on Windows with Python | [Python on Windows](python-windows.mdx) |
+| Run in Docker without GPU acceleration | [Docker CPU](docker-cpu.mdx) |
+| Run in Docker with an NVIDIA GPU | [Docker CUDA](docker-cuda.mdx) |
+| Install inside Home Assistant | [Home Assistant add-on](home-assistant-addon.mdx) |
+| Use another computer for heavier processing | [Processing server on Linux and macOS](processing-server-linux-macos.mdx) |
+| Use Windows as a persistent processing server | [Processing server as a Windows service](processing-server-windows-service.mdx) |
+| Run a processing server in a container | [Processing server on Docker](processing-server-docker.mdx) |
+| Check system, CPU, GPU, and architecture support | [Compatibility](architecture-support.mdx) |
+
+## What each installation provides
+
+### Default bundle
+
+The `toposync` package installs the default CPU product:
+
+- frontend and API on the same port;
+- the main first-party extensions;
+- vision through ONNX Runtime CPU;
+- no streaming stack by default.
+
+Use this when you want to install Toposync and start with the simplest path.
+
+### Streaming
+
+The `toposync-streaming` package installs the default Toposync product plus the streaming extension.
+
+Use it when you need to publish or consume camera streams inside Toposync.
+
+### GPU
+
+Acceleration is an upgrade, not an initial requirement:
+
+- `toposync-vision-cuda` for NVIDIA CUDA;
+- `toposync-vision-directml` for Windows GPUs through DirectML.
+
+Use GPU acceleration when CPU vision is no longer enough.
+
+### Home Assistant
+
+The Home Assistant add-on is the path for:
+
+- a Toposync app in the Home Assistant sidebar;
+- ingress;
+- supervised execution;
+- internal access to the Home Assistant Core API;
+- integration with Home Assistant entities and cameras.
+
+On Raspberry Pi and HAOS, treat the add-on as a lightweight origin server. Delegate vision, OpenCV, and multiple-camera workloads to a remote processing server when needed.
+
+## Guide format
+
+Each scenario guide follows this order:
+
+1. Who this scenario is for.
+2. Prerequisites.
+3. Installation.
+4. How to run.
+5. How to access.
+6. How to verify.
+7. How to update.
+8. How to uninstall.
+9. Short troubleshooting.
+
+## Compatibility
+
+See [Compatibility](architecture-support.mdx) for the system, architecture, GPU, Docker, Home Assistant OS, and Raspberry Pi support matrix.
+
+## Initial recommendation
+
+For a regular server, start with:
+
+- [Python on Linux and macOS](python-linux-macos.mdx), if you want to install directly on the host system;
+- [Python on Windows](python-windows.mdx), if you want to run on Windows;
+- [Docker CPU](docker-cpu.mdx), if you want isolation and more predictable operation;
+- [Home Assistant add-on](home-assistant-addon.mdx), if Toposync should live inside Home Assistant.
+
+Add GPU acceleration, streaming, or a processing server later when there is a real need.

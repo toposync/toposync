@@ -1,0 +1,161 @@
+---
+title: Python on Linux and macOS
+sidebar_position: 6
+---
+
+# Python on Linux and macOS {/* #python-linux-macos */}
+
+Install Toposync directly on the host system without Docker.
+
+## Who this is for
+
+Use this path on Linux or macOS.
+
+This guide installs the default CPU bundle.
+
+For architecture and GPU support, see [Compatibility](architecture-support.mdx).
+
+## Prerequisites
+
+- Python 3.12 recommended.
+- `uv`.
+- Terminal access.
+
+Install `uv` if you do not have it yet:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Close and reopen the terminal if the `uv` command is still not on your `PATH`.
+
+## Installation
+
+Create a directory for Toposync:
+
+```bash
+mkdir -p ~/toposync
+cd ~/toposync
+```
+
+Install the recommended Python version and create the virtual environment:
+
+```bash
+uv python install 3.12
+uv venv .venv --python 3.12
+source .venv/bin/activate
+```
+
+Install Toposync:
+
+```bash
+uv pip install --upgrade --refresh toposync
+```
+
+If you need to reproduce a specific version:
+
+```bash
+uv pip install --upgrade --refresh "toposync==0.7.2"
+```
+
+## How to run
+
+For local use:
+
+```bash
+toposync serve
+```
+
+To access it from the local network:
+
+```bash
+toposync serve --host 0.0.0.0 --port 8000
+```
+
+To choose the data directory:
+
+```bash
+toposync serve --data-dir ./toposync-data
+```
+
+## How to access
+
+On the same computer:
+
+```text
+http://127.0.0.1:8000/
+```
+
+From another device on the same network, use the server IP:
+
+```text
+http://<server-ip>:8000/
+```
+
+## How to verify
+
+In another terminal:
+
+```bash
+curl -I http://127.0.0.1:8000/
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/auth/status
+```
+
+Expected result:
+
+- `/` returns `200`;
+- `/api/health` returns `200`;
+- `/api/auth/status` returns JSON and may report `requires_setup: true` on first access.
+
+After you complete setup or login in the UI, authenticated API routes such as `/api/extensions` become available.
+
+## How to update
+
+With the virtual environment active:
+
+```bash
+uv pip install --upgrade --refresh toposync
+```
+
+Then restart the `toposync serve` process.
+
+## How to uninstall
+
+Stop the server and remove the directory where you created the environment:
+
+```bash
+deactivate 2>/dev/null || true
+rm -rf ~/toposync
+```
+
+If you used another data directory, remove that directory too.
+
+## Troubleshooting
+
+### `toposync: command not found`
+
+Activate the virtual environment:
+
+```bash
+source .venv/bin/activate
+```
+
+### The UI does not open
+
+Confirm that the server is running and that `/api/health` responds:
+
+```bash
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/auth/status
+```
+
+### I need streaming
+
+Install the streaming bundle:
+
+```bash
+uv pip install --upgrade --refresh toposync-streaming
+```
+
+Streaming may require FFmpeg to be available on the system.

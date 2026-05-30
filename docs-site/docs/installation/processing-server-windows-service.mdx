@@ -1,0 +1,211 @@
+---
+title: Processing server as a Windows service
+sidebar_position: 11
+---
+
+# Processing server as a Windows service {/* #processing-server-windows-service */}
+
+Install a persistent processing server on Windows.
+
+## Who this is for
+
+Use this path when you want to use a Windows machine as a remote Toposync processing server.
+
+The script creates a Windows service named `ToposyncProcessingServer`.
+
+For Windows architecture and GPU support, see [Compatibility](architecture-support.mdx).
+
+## Prerequisites
+
+- Windows 10/11.
+- PowerShell.
+- Administrator permission.
+- A Toposync repository checkout.
+- Network access between the origin and the Windows machine.
+
+The script installs `uv` and Python 3.12 if needed.
+
+## Installation
+
+Open PowerShell as Administrator from the repository root.
+
+Automatic installation:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle auto -Version latest -PreferLocalPackages:$false
+```
+
+The `auto` mode chooses:
+
+- `cuda`, if it finds `nvidia-smi`;
+- `directml`, otherwise.
+
+To force CPU:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle cpu -Version latest -PreferLocalPackages:$false
+```
+
+To force DirectML:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle directml -Version latest -PreferLocalPackages:$false
+```
+
+To force CUDA:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle cuda -Version latest -PreferLocalPackages:$false
+```
+
+If you need to advertise a specific IP address to the origin:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle auto -Version latest -PreferLocalPackages:$false -AdvertiseHost 192.168.1.50
+```
+
+## How to run
+
+The script creates and starts the service automatically.
+
+Check status:
+
+```powershell
+Get-Service ToposyncProcessingServer
+```
+
+Restart:
+
+```powershell
+Restart-Service ToposyncProcessingServer
+```
+
+Stop:
+
+```powershell
+Stop-Service ToposyncProcessingServer
+```
+
+## How to access
+
+By default, the service listens on:
+
+```text
+http://<windows-ip>:49321
+```
+
+The script stores data in:
+
+```text
+%ProgramData%\Toposync\ProcessingServer
+```
+
+The registration payload is saved at:
+
+```text
+%ProgramData%\Toposync\ProcessingServer\processing-server-registration.json
+```
+
+## How to verify
+
+View the registration JSON:
+
+```powershell
+Get-Content "$env:ProgramData\Toposync\ProcessingServer\processing-server-registration.json"
+```
+
+If you installed with `-NoAuth`, test the local status:
+
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:49321/api/processing/status
+```
+
+By default, the script generates Basic Auth credentials. Use the username and password saved in the JSON:
+
+```powershell
+$pair = "toposync:<password-from-json>"
+$token = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
+Invoke-RestMethod -Uri http://127.0.0.1:49321/api/processing/status -Headers @{ Authorization = "Basic $token" }
+```
+
+## Register on the origin
+
+Use the payload saved at:
+
+```text
+%ProgramData%\Toposync\ProcessingServer\processing-server-registration.json
+```
+
+The script also prints an `Invoke-RestMethod` example for registering the server on the origin.
+
+Then validate through the origin:
+
+```powershell
+Invoke-RestMethod http://ORIGIN_HOST:8000/api/processing-servers/<server-id>/status
+```
+
+In pipelines, set `processing_server_id` to the registered id.
+
+## How to update
+
+Run the installer again:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle auto -Version latest -PreferLocalPackages:$false
+```
+
+To recreate the virtual environment:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle auto -Version latest -PreferLocalPackages:$false -RecreateVenv
+```
+
+## How to uninstall
+
+Remove the service and runtime files while preserving data and logs:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_windows_processing_server.ps1
+```
+
+Also remove data and logs:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_windows_processing_server.ps1 -RemoveData
+```
+
+If the service is stuck:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_windows_processing_server.ps1 -Force
+```
+
+Also remove the registered processing server from the origin.
+
+## Troubleshooting
+
+### The service does not start
+
+Check the logs at:
+
+```text
+%ProgramData%\Toposync\ProcessingServer\logs
+```
+
+Also check:
+
+```powershell
+Get-Service ToposyncProcessingServer
+```
+
+### Port is already in use
+
+The installer tries to choose the next free port when `-AutoSelectPort` is active. Check the final port in `processing-server-registration.json`.
+
+### The origin cannot connect
+
+Confirm the IP address in the JSON `url`, the selected port, and the firewall rule created by the installer.
+
+### Wrong bundle was selected
+
+Run the installer again with `-Bundle cpu`, `-Bundle directml`, or `-Bundle cuda`.

@@ -4,12 +4,13 @@
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",
-    "start": "docusaurus start",
+    "start": "docusaurus start --host 127.0.0.1 --port 18763 --no-open",
+    "start:pt-BR": "docusaurus start --host 127.0.0.1 --port 18763 --no-open --locale pt-BR",
     "build": "docusaurus build",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
-    "serve": "docusaurus serve",
+    "serve": "docusaurus serve --host 127.0.0.1 --port 18763 --no-open",
     "write-translations": "docusaurus write-translations",
     "write-heading-ids": "docusaurus write-heading-ids",
     "typecheck": "tsc"

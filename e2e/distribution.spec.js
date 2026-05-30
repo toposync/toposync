@@ -58,7 +58,7 @@ test("bundled host loads installed extension remotes", async ({ page, request })
   await page.getByRole("button", { name: "Edit", exact: true }).click();
 
   await expect(page.getByRole("button", { name: /^Wall\b/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Import 3D model\b/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Overlay image\b/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^3D model\b/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Image\b/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Camera\b/ })).toBeVisible();
 });

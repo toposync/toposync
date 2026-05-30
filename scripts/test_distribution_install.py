@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -18,14 +19,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
-DEFAULT_EXTENSION_NAMES = ("structural", "models", "images", "home_assistant", "cameras", "vision")
-DEFAULT_EXTENSION_UI_WORKSPACES = (
-    "@toposync/extension-structural-ui",
-    "@toposync/extension-models-ui",
-    "@toposync/extension-images-ui",
-    "@toposync/extension-home-assistant-ui",
-    "@toposync/extension-cameras-ui",
-)
 
 
 def _load_project(path: Path) -> dict[str, object]:
@@ -36,6 +29,40 @@ def _load_project(path: Path) -> dict[str, object]:
 CORE_PROJECT = _load_project(ROOT / "pyproject.toml")
 APP_PROJECT = _load_project(ROOT / "packages" / "toposync" / "pyproject.toml")
 APP_VERSION = str(APP_PROJECT["version"])
+
+
+def _distribution_extension_names() -> tuple[str, ...]:
+    extension_prefix = "toposync-ext-"
+    extension_names: list[str] = []
+    for dependency in APP_PROJECT.get("dependencies", []):
+        match = re.match(r"\s*([A-Za-z0-9_.-]+)", str(dependency))
+        if not match:
+            continue
+        package_name = match.group(1).lower().replace("_", "-")
+        if package_name.startswith(extension_prefix):
+            extension_names.append(package_name[len(extension_prefix) :].replace("-", "_"))
+    return tuple(extension_names)
+
+
+DEFAULT_EXTENSION_NAMES = _distribution_extension_names()
+
+
+def _load_extension_ui_workspace(extension_name: str) -> str | None:
+    package_json_path = ROOT / "extensions" / extension_name / "ui" / "package.json"
+    if not package_json_path.is_file():
+        return None
+    package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+    workspace = str(package_json.get("name") or "").strip()
+    if not workspace:
+        raise RuntimeError(f"Extension UI package is missing a workspace name: {package_json_path}")
+    return workspace
+
+
+DEFAULT_EXTENSION_UI_WORKSPACES = tuple(
+    workspace
+    for extension_name in DEFAULT_EXTENSION_NAMES
+    if (workspace := _load_extension_ui_workspace(extension_name)) is not None
+)
 
 
 def _load_extension_manifest(extension_name: str) -> dict[str, object]:
@@ -192,18 +219,33 @@ def _assert_vision_wheel_publishable(wheelhouse_dir: Path) -> None:
         raise RuntimeError(f"Vision wheel unexpectedly packaged model artifacts: {vision_wheel.name}")
 
 
+def _wheel_for_project(wheelhouse_dir: Path, project_name: object) -> Path:
+    wheel_prefix = str(project_name).replace("-", "_").replace(".", "_")
+    wheels = sorted(wheelhouse_dir.glob(f"{wheel_prefix}-*.whl"))
+    if len(wheels) != 1:
+        raise RuntimeError(
+            f"Expected exactly one {project_name} wheel in wheelhouse, found {len(wheels)}"
+        )
+    return wheels[0]
+
+
 def _install_distribution(*, wheelhouse_dir: Path, venv_dir: Path, constraints_path: Path) -> None:
     _print_step("Creating clean virtual environment")
     _run(["uv", "venv", "--seed", venv_dir])
     python = _venv_python(venv_dir)
     _run([python, "-m", "pip", "install", "--upgrade", "pip"])
 
+    first_party_wheels = [
+        _wheel_for_project(wheelhouse_dir, CORE_PROJECT["name"]),
+        _wheel_for_project(wheelhouse_dir, APP_PROJECT["name"]),
+    ]
     constraints = [
         f"{CORE_PROJECT['name']}=={CORE_PROJECT['version']}",
         f"{APP_PROJECT['name']}=={APP_PROJECT['version']}",
     ]
     for extension_name in DEFAULT_EXTENSION_NAMES:
         project = _load_project(ROOT / "extensions" / extension_name / "pyproject.toml")
+        first_party_wheels.append(_wheel_for_project(wheelhouse_dir, project["name"]))
         constraints.append(f"{project['name']}=={project['version']}")
     constraints_path.write_text("\n".join(constraints) + "\n", encoding="utf-8")
 
@@ -219,7 +261,7 @@ def _install_distribution(*, wheelhouse_dir: Path, venv_dir: Path, constraints_p
             "--constraint",
             constraints_path,
             "--prefer-binary",
-            f"toposync=={APP_VERSION}",
+            *first_party_wheels,
         ]
     )
 

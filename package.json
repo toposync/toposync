@@ -5,7 +5,8 @@
   "workspaces": [
     "frontend",
     "frontend/packages/*",
-    "extensions/*/ui"
+    "extensions/*/ui",
+    "docs-site"
   ],
   "scripts": {
     "dev": "node scripts/dev.js",
@@ -15,11 +16,17 @@
     "typecheck:plugin-api": "npm --workspace @toposync/plugin-api run typecheck",
     "pack:plugin-api": "npm --workspace @toposync/plugin-api run pack:dry-run",
     "build:extensions": "npm --workspace @toposync/extension-structural-ui run build && npm --workspace @toposync/extension-models-ui run build && npm --workspace @toposync/extension-home-assistant-ui run build && npm --workspace @toposync/extension-cameras-ui run build && npm --workspace @toposync/extension-images-ui run build && npm --workspace @toposync/extension-streaming-ui run build && npm --workspace @toposync/extension-ai-ui run build && npm --workspace @toposync/extension-spatial-video-ui run build",
+    "docs:start": "npm --workspace docs-site run start",
+    "docs:start:pt-BR": "npm --workspace docs-site run start -- --locale pt-BR",
+    "docs:build": "npm --workspace docs-site run build",
+    "docs:build:en": "npm --workspace docs-site run build -- --locale en",
+    "docs:build:pt-BR": "npm --workspace docs-site run build -- --locale pt-BR",
+    "docs:serve": "npm --workspace docs-site run serve",
     "test:stream-frames": "node scripts/check_stream_transport_frames.mjs",
     "test:e2e": "playwright test"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1"
   },
-  "packageManager": "yarn@4.4.1+sha512.f825273d0689cc9ead3259c14998037662f1dcd06912637b21a450e8da7cfeb4b1965bbee73d16927baa1201054126bc385c6f43ff4aa705c8631d26e12460f1"
+  "packageManager": "npm@10.8.2"
 }

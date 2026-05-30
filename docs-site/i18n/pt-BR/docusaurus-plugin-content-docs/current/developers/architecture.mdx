@@ -5,4 +5,143 @@ sidebar_position: 1
 
 # Arquitetura {/* #architecture */}
 
-Esta página está em construção.
+O Toposync é uma plataforma local-first para contexto residencial, câmeras, dados espaciais, automação e processamento extensível. O produto atual é construído em torno de um backend Python/FastAPI, um host de frontend React/ThreeJS, pacotes Python instaláveis de extensões e um runtime de pipelines que pode rodar localmente ou delegar trabalho pesado para servidores de processamento.
+
+Esta página é um mapa de alto nível do sistema. Ela não tenta documentar cada rota de API, operador de pipeline, contrato de extensão ou comando de deploy. Esses assuntos pertencem a páginas de referência focadas.
+
+## Visão geral do sistema {/* #system-at-a-glance */}
+
+```text
+Navegador / App
+    -> Backend principal do Toposync
+        -> Runtime core
+        -> APIs e assets de extensões
+        -> Orquestrador de pipelines
+            -> Runtime local
+            -> Servidor de processamento remoto
+```
+
+O backend principal é o servidor Toposync central. Ele é dono da UI, API pública, configuração, carregamento de extensões, arquivos, estado da composição, notificações e orquestração de pipelines. Normalmente, o usuário se conecta a esse servidor pelo navegador, pela sidebar do Home Assistant ou por um futuro aplicativo móvel.
+
+Servidores de processamento são workers opcionais. Eles expõem endpoints de processamento, recebem configuração de pipelines do servidor principal e executam cargas de trabalho que não deveriam ficar na máquina principal, como processamento de câmeras, OpenCV ou inferência de vision com ONNX.
+
+## Backend core {/* #core-backend */}
+
+O comando `toposync serve` inicia o backend principal. O backend é uma aplicação FastAPI que fornece:
+
+- autenticação, setup, sessões, pareamento, usuários e concessões de acesso;
+- armazenamento local de configuração e settings;
+- APIs de composição para casas, elementos, arquivos e composições ativas;
+- descoberta de extensões, validação de compatibilidade, setup, assets estáticos e APIs de gerenciamento;
+- APIs de notificações e event streams;
+- autoria, compilação, preview, telemetria, armazenamento, status de runtime e orquestração de pipelines;
+- registro e diagnóstico de servidores de processamento;
+- o host de frontend de produção vindo do wheel empacotado.
+
+O backend é deliberadamente o centro estável do produto. Comportamentos específicos de domínio devem viver em extensões sempre que possível. O core fornece primitivas genéricas como arquivos, settings, eventos, serviços, controle de acesso, estado de composição e infraestrutura de pipelines.
+
+## Host do frontend {/* #frontend-host */}
+
+O host do frontend é uma aplicação React e ThreeJS. Em produção, o frontend compilado é embutido no wheel Python do core e servido pelo backend, então a UI e a API podem rodar a partir do mesmo processo e da mesma porta.
+
+Em desenvolvimento, o frontend pode rodar separadamente pelo servidor de desenvolvimento Node. Isso mantém o ciclo de edição rápido, mas não é o formato de produção.
+
+O host do frontend também é um host de extensões. Ele carrega bundles de UI de extensões em runtime via Module Federation:
+
+1. o host chama `/api/extensions`;
+2. cada extensão pode expor um `remoteEntry.js`;
+3. o host carrega o remote entry de `/extensions/<extension_id>/...`;
+4. o módulo remoto é ativado contra a API do host.
+
+O contrato compartilhado do frontend vive em `@toposync/plugin-api`. Veja [Plugin API](plugin-api.mdx) para a superfície de extensão voltada a desenvolvedores.
+
+## Sistema de extensões {/* #extension-system */}
+
+Uma extensão é um pacote Python instalável. O backend descobre extensões por entry points Python no grupo `toposync.extensions` e lê o manifesto `extension.json` de cada pacote a partir dos recursos do pacote.
+
+O manifesto descreve a identidade da extensão, versão, requisitos de compatibilidade, prefixos opcionais de API e frontend remote opcional. O loader valida compatibilidade antes do setup, então extensões incompatíveis podem ser ignoradas em vez de carregadas parcialmente.
+
+Em runtime, uma extensão pode:
+
+- registrar rotas backend com FastAPI;
+- registrar operadores de pipeline por meio dos serviços core;
+- expor assets estáticos de frontend;
+- contribuir UI de frontend via Module Federation;
+- usar serviços core como event bus, service registry, settings, arquivos e infraestrutura de pipelines.
+
+Assets estáticos de extensões são servidos em `/extensions/<extension_id>/<path>`. Metadados públicos de extensões são expostos por `/api/extensions`.
+
+Para detalhes de autoria de extensões, veja [Autoria de extensões](extension-authoring.mdx).
+
+## Bundles de produto e extensões first-party {/* #product-bundles-and-first-party-extensions */}
+
+O pacote padrão `toposync` é um bundle de aplicação. Ele depende de `toposync-core` e das principais extensões first-party necessárias para a experiência padrão do produto:
+
+- Structural: paredes, áreas e estrutura espacial.
+- Models: importação GLB/GLTF e posicionamento 2D/3D.
+- Images: overlays, decals e assets de imagem.
+- Home Assistant: integração com servidor Home Assistant e contexto de entidades.
+- Cameras: registro de câmeras, utilitários RTSP/ONVIF, snapshots, calibração e operadores de pipeline para câmeras.
+- Vision: gerenciamento de modelos baseado em ONNX e operadores de pipeline de vision.
+- Spatial Video: superfície da extensão de vídeo espacial.
+
+Streaming e AI são caminhos de extensão, não pressupostos embutidos na arquitetura core. Streaming é distribuído como bundle opcional porque traz preocupações externas de runtime de mídia. AI também é modelado como extensão para manter comportamento específico de provedores fora do core.
+
+## Pipelines e processamento {/* #pipelines-and-processing */}
+
+Pipelines são o sistema de grafos de automação e processamento de mídia em runtime do Toposync. O core é dono do registro de operadores, compilação de grafos, preview, telemetria, status de runtime, armazenamento e orquestração.
+
+Operadores podem vir do core ou de extensões. Recursos de câmeras e vision, por exemplo, são em grande parte contribuídos por extensões, em vez de codificados diretamente no core.
+
+O servidor principal pode executar pipelines localmente. Ele também pode registrar servidores de processamento remotos e enviar configuração de pipelines para eles. O comando `toposync processing-serve` inicia um servidor de processamento com sua própria aplicação FastAPI e endpoints de processamento:
+
+- status;
+- configuração;
+- event streams e acknowledgements de processamento;
+- endpoints de modelos e vision necessários para a UI do servidor principal.
+
+Use processamento remoto quando o servidor principal deve permanecer leve, quando o Home Assistant roda em hardware limitado ou quando cargas de vision e câmeras precisam de outra máquina.
+
+## Runtime de vision e aceleração {/* #vision-runtime-and-acceleration */}
+
+O runtime oficial first-party de vision é ONNX Runtime. O caminho padrão é CPU, porque é a instalação mais simples e funciona amplamente nos sistemas suportados.
+
+Aceleração por GPU é um upgrade explícito:
+
+- `toposync-vision-cuda` para NVIDIA CUDA;
+- `toposync-vision-directml` para aceleração GPU no Windows via DirectML.
+
+CUDA e DirectML são escolhas de empacotamento/runtime, não arquiteturas de produto separadas. O mesmo modelo de extensão e pipelines permanece em vigor.
+
+## Formatos de deploy {/* #deployment-shapes */}
+
+O Toposync foi desenhado para rodar em vários formatos sem mudar a arquitetura core:
+
+- instalação Python/pip em Linux, macOS ou Windows;
+- Docker CPU ou Docker CUDA a partir do repositório;
+- add-on Home Assistant com ingress e execução supervisionada;
+- servidor de processamento Windows instalado como serviço persistente;
+- servidor de processamento remoto em outro host Linux, macOS, Windows ou Docker.
+
+Use o [guia de instalação](../installation/choose-your-installation.mdx) para escolher o caminho adequado, e [compatibilidade](../installation/architecture-support.mdx) para suporte de sistema, arquitetura e GPU.
+
+## Limites de dados {/* #data-boundaries */}
+
+O Toposync é local-first por padrão. O backend principal é dono do diretório de dados configurado, que contém configuração local, arquivos gerenciados pelo usuário, artefatos gerados, armazenamento de pipelines e dados de extensões.
+
+Recursos de cloud são futuros e opcionais. Eles não devem ser necessários para o produto local iniciar, gerenciar uma casa, carregar extensões, rodar pipelines locais ou integrar com o Home Assistant na mesma rede.
+
+## O que pertence a documentos separados {/* #what-belongs-in-separate-docs */}
+
+Esta página de arquitetura deve permanecer pequena o suficiente para ser útil como mapa. Estes assuntos precisam de páginas próprias:
+
+- autoria e empacotamento de extensões;
+- plugin API de frontend;
+- modelo de grafo de pipelines, operadores, armazenamento e telemetria;
+- registro, segurança e operação de servidores de processamento;
+- internals do add-on Home Assistant;
+- arquitetura de streaming e transporte de mídia;
+- release, distribuição e publicação de wheels;
+- modelo de dados e detalhes de persistência.
+
+Para setup de desenvolvimento local, veja [Ambiente de desenvolvimento](development-setup.mdx).

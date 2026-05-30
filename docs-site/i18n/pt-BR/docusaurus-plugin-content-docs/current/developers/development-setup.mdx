@@ -5,4 +5,313 @@ sidebar_position: 2
 
 # Ambiente de desenvolvimento {/* #development-setup */}
 
-Esta página está em construção.
+Este guia é para pessoas trabalhando no repositório do Toposync. Ele cobre o fluxo local usado para desenvolvimento do backend core, frontend, extensões first-party, documentação, testes e verificações de distribuição.
+
+O Toposync é um monorepo misto de Python e Node:
+
+- o backend e runtime Python ficam em `src/toposync`;
+- o host do frontend fica em `frontend`;
+- extensões first-party ficam em `extensions/*`;
+- bundles de frontend das extensões ficam em `extensions/*/ui`;
+- o site público de documentação fica em `docs-site`.
+
+## Pré-requisitos {/* #prerequisites */}
+
+Instale:
+
+- Python 3.12 recomendado;
+- `uv`;
+- Node 20 ou mais recente;
+- npm. O repositório usa `package-lock.json` e npm workspaces.
+
+Instale `uv` se necessário:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Instale Node pelo gerenciador de versões de sua preferência. O repositório atualmente usa npm workspaces, não Yarn nem pnpm.
+
+## Primeiro setup {/* #first-setup */}
+
+A partir da raiz do repositório:
+
+```bash
+uv sync
+npm install
+```
+
+`uv sync` instala o core Python, dependências de desenvolvimento e extensões first-party em modo editable por meio do grupo de dependências `extensions`.
+
+`npm install` instala o host do frontend, o pacote plugin API, workspaces de UI das extensões, o site de documentação e ferramentas de teste.
+
+Compile os bundles de frontend das extensões uma vez:
+
+```bash
+npm run build:extensions
+```
+
+Builds de UI de extensões geram assets estáticos como `remoteEntry.js`, que são servidos pelos pacotes Python das extensões.
+
+## Rodando o app local {/* #running-the-local-app */}
+
+Para o desenvolvimento diário, rode backend e frontend juntos:
+
+```bash
+TOPOSYNC_AUTH_MODE=bypass npm run dev
+```
+
+Depois abra:
+
+```text
+http://127.0.0.1:5173/
+```
+
+Isso inicia:
+
+- o backend Python via `uv run --group extensions python -m toposync serve`;
+- o host do frontend via `npm --workspace @toposync/frontend run dev`;
+- um diretório de dados local em `.toposync-data`, a menos que seja sobrescrito.
+
+Use `TOPOSYNC_AUTH_MODE=bypass` para desenvolvimento local e validação visual. Sem isso, a UI entra no fluxo normal de autenticação e chamadas de API podem retornar `401` até o setup ou login ser concluído.
+
+## Rodando backend e frontend separadamente {/* #running-backend-and-frontend-separately */}
+
+Rode o backend:
+
+```bash
+TOPOSYNC_AUTH_MODE=bypass uv run --group extensions python -m toposync serve --data-dir .toposync-data
+```
+
+Rode o host do frontend:
+
+```bash
+npm --workspace @toposync/frontend run dev
+```
+
+Use o fluxo separado quando quiser reiniciar apenas um lado.
+
+Comportamento típico:
+
+- mudanças no backend Python geralmente exigem reiniciar o processo backend;
+- mudanças no frontend host são tratadas pelo webpack dev server e hot reload;
+- mudanças no frontend de extensões exigem rebuild do bundle de UI da extensão e refresh do navegador.
+
+## Portas e ambiente local {/* #local-ports-and-environment */}
+
+Portas padrão de desenvolvimento:
+
+| Serviço | Porta padrão |
+| --- | --- |
+| Backend | `8000` |
+| Servidor de desenvolvimento do frontend | `5173` |
+| Servidor de processamento | `49321` |
+| Site de documentação | `18763` |
+
+Variáveis de ambiente úteis:
+
+| Variável | Uso |
+| --- | --- |
+| `TOPOSYNC_BACKEND_PORT` | Sobrescreve a porta usada por `toposync serve` |
+| `TOPOSYNC_FRONTEND_PORT` | Sobrescreve a porta do servidor de desenvolvimento do frontend |
+| `TOPOSYNC_PROCESSING_PORT` | Sobrescreve a porta do servidor de processamento |
+| `TOPOSYNC_DATA_DIR` | Escolhe o diretório de dados de runtime |
+| `TOPOSYNC_AUTH_MODE` | Use `bypass` em desenvolvimento local; o padrão é autenticação enforced |
+| `TOPOSYNC_ENV_FILE` | Carrega outro arquivo de ambiente em `npm run dev` |
+
+Exemplo de segunda instância local:
+
+```bash
+TOPOSYNC_BACKEND_PORT=8100 \
+TOPOSYNC_FRONTEND_PORT=5174 \
+TOPOSYNC_DATA_DIR=.toposync-data-2 \
+TOPOSYNC_AUTH_MODE=bypass \
+npm run dev
+```
+
+Depois abra:
+
+```text
+http://127.0.0.1:5174/
+```
+
+Você também pode copiar o arquivo de ambiente de exemplo:
+
+```bash
+cp .env.example .env
+npm run dev
+```
+
+## Trabalhando com extensões {/* #working-with-extensions */}
+
+O código backend das extensões é instalado por `uv sync` em modo editable. Reinicie o backend depois de alterar código Python de extensões.
+
+O código frontend das extensões é compilado a partir de cada workspace `extensions/*/ui`. Compile todas as UIs de extensões:
+
+```bash
+npm run build:extensions
+```
+
+Compile uma UI de extensão específica:
+
+```bash
+npm --workspace @toposync/extension-cameras-ui run build
+```
+
+A maioria dos pacotes de UI de extensão atualmente expõe apenas um script `build`. Se você alterar código de UI de extensão com o app rodando, recompile a extensão relevante e atualize o navegador.
+
+Extensões são descobertas por entry points Python e expostas ao frontend por `/api/extensions`. O frontend carrega remotes de extensões com Module Federation a partir de `/extensions/<extension_id>/...`.
+
+## Desenvolvimento de servidor de processamento {/* #processing-server-development */}
+
+Rode um servidor de processamento local ao trabalhar em pipelines distribuídos ou execução remota:
+
+```bash
+TOPOSYNC_AUTH_MODE=bypass uv run --group extensions toposync processing-serve --data-dir .toposync-processing-data --host 0.0.0.0 --port 49321
+```
+
+Confira o status:
+
+```bash
+curl http://127.0.0.1:49321/api/processing/status
+```
+
+Depois registre esse servidor pela UI do Toposync ou pela API do servidor principal. Use um diretório de dados separado para o servidor de processamento para que ele não compartilhe estado de runtime com o servidor principal.
+
+## Site de documentação {/* #documentation-site */}
+
+Rode o site de documentação em inglês:
+
+```bash
+npm run docs:start
+```
+
+Rode o locale em português:
+
+```bash
+npm run docs:start:pt-BR
+```
+
+Compile todos os locales:
+
+```bash
+npm run docs:build
+```
+
+O site local de documentação usa:
+
+```text
+http://127.0.0.1:18763/
+```
+
+O Docusaurus serve um locale por vez no modo de desenvolvimento. Use `npm run docs:serve` depois de um build completo quando quiser navegar pela saída estática em inglês e português ao mesmo tempo.
+
+## Checks e testes {/* #checks-and-tests */}
+
+Use o menor check que cobre sua mudança.
+
+Testes unitários Python:
+
+```bash
+uv run pytest
+```
+
+Arquivo específico de teste Python:
+
+```bash
+uv run pytest tests/test_extension_manager_compatibility.py
+```
+
+Typecheck do frontend host:
+
+```bash
+npm --workspace @toposync/frontend run typecheck
+```
+
+Typecheck e dry-run de pacote da plugin API:
+
+```bash
+npm run typecheck:plugin-api
+npm run pack:plugin-api
+```
+
+Builds de UI de extensões:
+
+```bash
+npm run build:extensions
+```
+
+Testes end-to-end:
+
+```bash
+npx playwright install chromium
+npm run test:e2e
+```
+
+Smoke test de distribuição:
+
+```bash
+python scripts/test_distribution_install.py
+```
+
+Check de distribuição ARM64:
+
+```bash
+python scripts/check_arm64_distribution.py
+```
+
+Contratos Docker/runtime:
+
+```bash
+uv run pytest tests/test_dockerfile_runtime_contract.py
+```
+
+Build da documentação:
+
+```bash
+npm run docs:build
+```
+
+## Fluxos comuns {/* #common-workflows */}
+
+### Mudança de backend API ou runtime
+
+1. Atualize o código Python.
+2. Rode o teste focado com `uv run pytest ...`.
+3. Reinicie o backend.
+4. Valide com `TOPOSYNC_AUTH_MODE=bypass npm run dev` se houver comportamento de UI envolvido.
+
+### Mudança no frontend host
+
+1. Atualize `frontend`.
+2. Rode `npm --workspace @toposync/frontend run typecheck`.
+3. Use o servidor dev rodando em `http://127.0.0.1:5173/`.
+4. Se rotas, links, chamadas de API, eventos, WebSockets ou URLs de assets estiverem envolvidos, verifique se preservam o base path do Toposync usado pelo ingress do Home Assistant.
+
+### Mudança em extensão
+
+1. Atualize o código Python da extensão ou a UI da extensão.
+2. Para mudanças Python, reinicie o backend.
+3. Para mudanças de UI, recompile a UI da extensão.
+4. Confirme que a extensão aparece em `/api/extensions` e carrega no host.
+
+### Mudança de empacotamento ou instalação
+
+1. Construa os wheels relevantes.
+2. Rode `python scripts/test_distribution_install.py`.
+3. Valide uma instalação limpa em um ambiente virtual novo ao alterar dependências, entry points, empacotamento do frontend ou package data.
+
+## Dados e configuração locais {/* #local-data-and-config */}
+
+O diretório de dados padrão de desenvolvimento é `.toposync-data`.
+
+Edições manuais em `.toposync-data/config.json` são suportadas enquanto o Toposync está rodando: o runtime recarrega o arquivo quando seu tamanho ou hora de modificação muda. Prefira a UI ou a API quando possível, porque elas validam e normalizam dados antes de escrever.
+
+Se editar config manualmente:
+
+- mantenha o JSON válido;
+- mantenha válidos os campos de schema do grafo de pipelines;
+- evite edições concorrentes pela UI e pelo seu editor;
+- espere que arquivos de config inválidos sejam movidos de lado como corrompidos e substituídos pelos padrões.
+
+Use um `TOPOSYNC_DATA_DIR` separado para cada instância local.

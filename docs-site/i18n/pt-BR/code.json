@@ -1,0 +1,17 @@
+{
+  "homepage.description": {
+    "message": "Documentação da plataforma local-first Toposync"
+  },
+  "homepage.heading": {
+    "message": "Documentação do Toposync"
+  },
+  "homepage.openDocs": {
+    "message": "Abrir documentação"
+  },
+  "homepage.subtitle": {
+    "message": "Uma plataforma local-first para automação residencial, câmeras, contexto espacial e processamento extensível."
+  },
+  "homepage.title": {
+    "message": "Documentação do Toposync"
+  }
+}

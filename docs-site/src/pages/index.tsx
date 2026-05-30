@@ -1,14 +1,21 @@
 import Heading from '@theme/Heading';
 import Layout from '@theme/Layout';
 import Link from '@docusaurus/Link';
+import Translate, {translate} from '@docusaurus/Translate';
 
 import styles from './index.module.css';
 
 export default function Home(): JSX.Element {
   return (
     <Layout
-      title="Toposync documentation"
-      description="Documentation for the Toposync local-first home automation platform">
+      title={translate({
+        id: 'homepage.title',
+        message: 'Toposync documentation',
+      })}
+      description={translate({
+        id: 'homepage.description',
+        message: 'Documentation for the Toposync local-first home automation platform',
+      })}>
       <main className={styles.hero}>
         <section className={styles.heroInner}>
           <img
@@ -17,13 +24,17 @@ export default function Home(): JSX.Element {
             alt="Toposync symbol"
           />
           <div>
-            <Heading as="h1">Toposync documentation</Heading>
+            <Heading as="h1">
+              <Translate id="homepage.heading">Toposync documentation</Translate>
+            </Heading>
             <p className={styles.subtitle}>
-              A local-first platform for home automation, cameras, spatial context, and extensible processing.
+              <Translate id="homepage.subtitle">
+                A local-first platform for home automation, cameras, spatial context, and extensible processing.
+              </Translate>
             </p>
             <div className={styles.actions}>
               <Link className="button button--primary button--lg" to="/docs/intro">
-                Open docs
+                <Translate id="homepage.openDocs">Open docs</Translate>
               </Link>
               <Link className="button button--secondary button--lg" to="https://github.com/toposync/toposync">
                 GitHub

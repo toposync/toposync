@@ -32,7 +32,17 @@ const config: Config = {
   // may want to replace "en" with "zh-Hans".
   i18n: {
     defaultLocale: 'en',
-    locales: ['en'],
+    locales: ['en', 'pt-BR'],
+    localeConfigs: {
+      en: {
+        label: 'English',
+        htmlLang: 'en',
+      },
+      'pt-BR': {
+        label: 'Português (Brasil)',
+        htmlLang: 'pt-BR',
+      },
+    },
   },
 
   presets: [
@@ -68,6 +78,10 @@ const config: Config = {
           sidebarId: 'docsSidebar',
           position: 'left',
           label: 'Docs',
+        },
+        {
+          type: 'localeDropdown',
+          position: 'right',
         },
         {
           href: 'https://github.com/toposync/toposync',

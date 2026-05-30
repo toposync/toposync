@@ -1,0 +1,471 @@
+---
+title: Release process
+sidebar_position: 4
+---
+
+# Release process {/* #release-process */}
+
+Toposync releases must be boring, reproducible, and easy for early access users to trust. This page defines the release process for the Python packages, first-party extensions, and the Home Assistant add-on.
+
+The current project is still pre-1.0 alpha, but semantic versioning still matters. A `0.y.z` release may move faster than a stable `1.y.z` release, but every version bump must communicate the real compatibility impact to users and extension authors.
+
+## Goals {/* #goals */}
+
+A release is ready when it satisfies all of these goals:
+
+- the version number matches the user impact;
+- the exact source commit is known and tagged;
+- Python packages are tested on TestPyPI before production PyPI;
+- production PyPI packages are installed back from PyPI in a clean environment;
+- the Home Assistant add-on points to a published package version;
+- the add-on build is smoke-tested before push;
+- release notes describe user-visible changes, compatibility changes, and upgrade steps;
+- no unrelated local work is included in the release commits.
+
+The goal is not only to ship a working build. The goal is to make the build understandable and auditable by contributors and users.
+
+## Release trains {/* #release-trains */}
+
+Toposync currently has three related release trains.
+
+| Train | Repository | Packages or artifacts | Version policy |
+| --- | --- | --- | --- |
+| Core application | `toposync/toposync` | `toposync-core`, `toposync`, `toposync-streaming`, `toposync-vision-cuda`, `toposync-vision-directml` | Move together as one application version |
+| First-party extensions | `toposync/toposync` | `toposync-ext-structural`, `toposync-ext-models`, `toposync-ext-home-assistant`, `toposync-ext-images`, `toposync-ext-cameras`, `toposync-ext-vision`, `toposync-ext-streaming`, `toposync-ext-ai`, `toposync-ext-spatial-video` | Move together as one extension bundle version unless a deliberate split is documented |
+| Home Assistant add-on | `toposync/toposync-homeassistant-addon` | `toposync/config.yaml`, add-on Docker image build inputs | Has its own add-on version and pins a published Toposync package |
+
+The add-on release normally follows the PyPI release. It should not point to a package version that is not already visible on PyPI.
+
+Do not bump every train only to make the numbers match. Bump the train whose public contract, package metadata, dependency pins, or shipped artifact changed. If the add-on only changes its Dockerfile or metadata, the add-on can receive a patch release while Python package versions stay unchanged.
+
+Examples in this page use `X.Y.Z` for the core application train, `E.F.G` for the first-party extension train, and `A.B.C` for the Home Assistant add-on train.
+
+## Semantic versioning {/* #semantic-versioning */}
+
+Use semantic versioning for every public package and user-facing artifact.
+
+### Patch version {/* #patch-version */}
+
+Use a patch bump for fixes that should be safe for existing users:
+
+- bug fixes;
+- packaging fixes;
+- dependency pin corrections that do not remove supported environments;
+- documentation-only changes that are included in a release tag;
+- add-on metadata updates that keep the same runtime contract;
+- small UI or runtime corrections that do not change public behavior contracts.
+
+Examples:
+
+- `0.7.2` to `0.7.3`;
+- `0.4.2` to `0.4.3`.
+
+### Minor version {/* #minor-version */}
+
+Use a minor bump for new capability or meaningful behavior change:
+
+- new pipeline operators;
+- new extension surfaces;
+- new public API fields;
+- new installation shape;
+- new Home Assistant integration behavior;
+- new processing server contract;
+- dependency changes that alter the supported platform matrix;
+- breaking changes while the project is still `0.y.z`.
+
+Before `1.0.0`, SemVer allows breaking changes in minor releases, but Toposync still treats them as compatibility events. Document them in release notes under "Breaking changes" or "Upgrade notes".
+
+Example:
+
+- `0.7.3` to `0.8.0`.
+
+### Major version {/* #major-version */}
+
+Reserve a major bump for the stable post-1.0 line or for an intentional compatibility reset that the project is willing to communicate as a major event.
+
+Example:
+
+- `1.4.2` to `2.0.0`.
+
+### Pre-releases {/* #pre-releases */}
+
+Use PEP 440 compatible pre-release versions for public candidates:
+
+- `0.8.0a1` for alpha snapshots;
+- `0.8.0b1` for beta snapshots;
+- `0.8.0rc1` for release candidates.
+
+Do not upload exploratory builds to production PyPI. Use TestPyPI or private build artifacts for candidates.
+
+## Branches and tags {/* #branches-and-tags */}
+
+Use short-lived release branches:
+
+```bash
+git switch main
+git pull --ff-only
+git switch -c release/toposync-vX.Y.Z
+```
+
+For the add-on repository:
+
+```bash
+git switch main
+git pull --ff-only
+git switch -c release/toposync-addon-vA.B.C
+```
+
+Use annotated tags for releases:
+
+```bash
+git tag -a toposync-vX.Y.Z -m "Toposync X.Y.Z"
+git push origin toposync-vX.Y.Z
+```
+
+For the add-on:
+
+```bash
+git tag -a toposync-addon-vA.B.C -m "Toposync Home Assistant add-on A.B.C"
+git push origin toposync-addon-vA.B.C
+```
+
+If commit signing is configured, sign release tags. Do not move a published release tag. If a release must be corrected after PyPI publication, create a new version.
+
+## Release checklist {/* #release-checklist */}
+
+### 1. Decide the release scope {/* #decide-the-release-scope */}
+
+Write down:
+
+- the target core application version;
+- the target first-party extension version;
+- the target add-on version;
+- whether the release is patch, minor, major, or pre-release;
+- user-visible changes;
+- compatibility changes;
+- migration or rollback notes.
+
+For patch releases, verify that no feature or breaking change is being hidden inside the patch.
+
+### 2. Start from clean repositories {/* #start-from-clean-repositories */}
+
+In the main repository:
+
+```bash
+git status --short --branch
+git log --oneline origin/main..HEAD
+```
+
+In the add-on repository:
+
+```bash
+git status --short --branch
+git log --oneline origin/main..HEAD
+```
+
+If there are unrelated local edits, leave them out of the release commit. Stage explicit files only.
+
+### 3. Update versions {/* #update-versions */}
+
+In the main repository, update:
+
+- `pyproject.toml`;
+- `src/toposync/__init__.py`;
+- package `pyproject.toml` files under `packages/*`;
+- first-party extension `pyproject.toml` files under `extensions/*`;
+- extension `__init__.py` version fallbacks when present;
+- dependency pins in bundle packages;
+- `uv.lock`;
+- user-facing install documentation that includes exact versions.
+
+Regenerate the lockfile:
+
+```bash
+uv lock
+```
+
+In the add-on repository, update:
+
+- `toposync/config.yaml`;
+- `toposync/Dockerfile`;
+- `tests/test_streaming_port_contract.py`.
+
+The add-on must pin the exact published application bundle version, for example:
+
+```dockerfile
+ARG TOPOSYNC_PIP_SPEC=toposync-streaming==X.Y.Z
+```
+
+### 4. Run local validation {/* #run-local-validation */}
+
+Run these checks before publishing anything:
+
+```bash
+npm ci
+npm run build:frontend
+npm run build:extensions
+uv run pytest -q
+git diff --check
+```
+
+For the add-on repository:
+
+```bash
+python -m unittest tests/test_streaming_port_contract.py
+git diff --check
+```
+
+Run additional focused tests when the release touches a risky area:
+
+```bash
+python scripts/test_distribution_install.py
+python scripts/check_arm64_distribution.py
+uv run pytest tests/test_dockerfile_runtime_contract.py
+```
+
+### 5. Commit the release candidate {/* #commit-the-release-candidate */}
+
+Commit only release-related files.
+
+Main repository example:
+
+```bash
+git add pyproject.toml uv.lock src/toposync/__init__.py
+git add packages/*/pyproject.toml
+git add extensions/*/pyproject.toml
+git add extensions/*/src/toposync_ext_*/__init__.py
+git add docs/HOME_ASSISTANT_ADDON.md docs/WINDOWS.md scripts/install_windows_processing_server.ps1
+git diff --cached --name-only
+git commit -m "chore(release): publish X.Y.Z"
+```
+
+Add-on repository example:
+
+```bash
+git add toposync/config.yaml toposync/Dockerfile tests/test_streaming_port_contract.py
+git diff --cached --name-only
+git commit -m "chore(release): use streaming X.Y.Z"
+```
+
+Open a release pull request for community-visible releases. The pull request should include the checklist output, package versions, tests run, and release notes draft.
+
+### 6. Build artifacts from a clean checkout {/* #build-artifacts-from-a-clean-checkout */}
+
+Build from a clean worktree, not from a dirty development directory:
+
+```bash
+git worktree add --detach /tmp/toposync-release-X.Y.Z HEAD
+cd /tmp/toposync-release-X.Y.Z
+npm ci
+mkdir -p /tmp/toposync-dist-X.Y.Z
+```
+
+Build every public package:
+
+```bash
+for project in \
+  . \
+  extensions/structural \
+  extensions/models \
+  extensions/home_assistant \
+  extensions/images \
+  extensions/cameras \
+  extensions/vision \
+  extensions/streaming \
+  extensions/ai \
+  extensions/spatial_video \
+  packages/toposync \
+  packages/toposync-streaming \
+  packages/toposync-vision-cuda \
+  packages/toposync-vision-directml; do
+  uv build --out-dir /tmp/toposync-dist-X.Y.Z "$project"
+done
+```
+
+Confirm the artifact list and sizes:
+
+```bash
+ls -lh /tmp/toposync-dist-X.Y.Z
+```
+
+The source distribution for `toposync-core` must stay well below the PyPI 100 MB limit. If it grows unexpectedly, stop the release and inspect package data before uploading.
+
+### 7. Publish to TestPyPI first {/* #publish-to-testpypi-first */}
+
+Use a TestPyPI token. Do not reuse production credentials for TestPyPI.
+
+```bash
+UV_PUBLISH_TOKEN="$UV_TEST_PUBLISH_TOKEN" \
+uv publish \
+  --publish-url https://test.pypi.org/legacy/ \
+  /tmp/toposync-dist-X.Y.Z/*.whl \
+  /tmp/toposync-dist-X.Y.Z/*.tar.gz
+```
+
+Install back from TestPyPI with PyPI as the dependency fallback:
+
+```bash
+uv venv /tmp/toposync-testpypi-X.Y.Z
+uv pip install \
+  --python /tmp/toposync-testpypi-X.Y.Z/bin/python \
+  --refresh \
+  --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple \
+  toposync-streaming==X.Y.Z
+```
+
+For accelerator bundles:
+
+```bash
+uv pip install \
+  --python /tmp/toposync-testpypi-X.Y.Z/bin/python \
+  --refresh \
+  --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple \
+  --dry-run \
+  --python-platform windows \
+  toposync-vision-directml==X.Y.Z
+
+uv pip install \
+  --python /tmp/toposync-testpypi-X.Y.Z/bin/python \
+  --refresh \
+  --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple \
+  --dry-run \
+  --python-platform x86_64-manylinux_2_28 \
+  toposync-vision-cuda==X.Y.Z
+```
+
+Smoke-test the add-on against TestPyPI before production PyPI:
+
+```bash
+docker build \
+  --build-arg TOPOSYNC_PIP_SPEC=toposync-streaming==X.Y.Z \
+  --build-arg TOPOSYNC_PIP_INDEX_URL=https://test.pypi.org/simple/ \
+  --build-arg TOPOSYNC_EXTRA_INDEX_URL=https://pypi.org/simple \
+  -t toposync-addon:X.Y.Z-testpypi \
+  /path/to/toposync-homeassistant-addon/toposync
+```
+
+If TestPyPI validation fails, fix the release candidate and use a new version if the failed artifact was already uploaded to production PyPI. TestPyPI artifacts may be discarded, but production PyPI artifacts are immutable.
+
+### 8. Merge, tag, and publish to production PyPI {/* #merge-tag-and-publish-to-production-pypi */}
+
+After TestPyPI validation and review, merge the release branch. Prefer a merge method that keeps the tested release commit as the commit on `main`. If the merge creates a new commit, rebuild and repeat TestPyPI validation from that commit.
+
+Tag the exact commit on `main`:
+
+```bash
+git switch main
+git pull --ff-only
+git tag -a toposync-vX.Y.Z -m "Toposync X.Y.Z"
+git push origin main
+git push origin toposync-vX.Y.Z
+```
+
+Build artifacts again from the tag or from a detached worktree at the tag, then publish to production PyPI:
+
+```bash
+uv publish /tmp/toposync-dist-X.Y.Z/*.whl /tmp/toposync-dist-X.Y.Z/*.tar.gz
+```
+
+The production publish token must come from a local secret manager or environment variable. Do not print tokens in logs. Prefer PyPI trusted publishing from CI once the release workflow is automated.
+
+### 9. Verify production PyPI {/* #verify-production-pypi */}
+
+Wait until PyPI JSON and the simple index both expose the new versions.
+
+Install every exact package without dependencies to confirm all artifacts are visible:
+
+```bash
+uv venv /tmp/toposync-verify-X.Y.Z-E.F.G
+uv pip install \
+  --python /tmp/toposync-verify-X.Y.Z-E.F.G/bin/python \
+  --refresh \
+  --no-deps \
+  toposync-core==X.Y.Z \
+  toposync==X.Y.Z \
+  toposync-streaming==X.Y.Z \
+  toposync-vision-cuda==X.Y.Z \
+  toposync-vision-directml==X.Y.Z \
+  toposync-ext-structural==E.F.G \
+  toposync-ext-models==E.F.G \
+  toposync-ext-home-assistant==E.F.G \
+  toposync-ext-images==E.F.G \
+  toposync-ext-cameras==E.F.G \
+  toposync-ext-vision==E.F.G \
+  toposync-ext-streaming==E.F.G \
+  toposync-ext-ai==E.F.G \
+  toposync-ext-spatial-video==E.F.G
+```
+
+Confirm bundle metadata points to the exact extension versions expected for the release.
+
+Run resolver dry-runs:
+
+```bash
+uv pip install --python /tmp/toposync-verify-X.Y.Z-E.F.G/bin/python --refresh --dry-run toposync-streaming==X.Y.Z
+uv pip install --python /tmp/toposync-verify-X.Y.Z-E.F.G/bin/python --refresh --dry-run --python-platform windows toposync-vision-directml==X.Y.Z
+uv pip install --python /tmp/toposync-verify-X.Y.Z-E.F.G/bin/python --refresh --dry-run --python-platform x86_64-manylinux_2_28 toposync-vision-cuda==X.Y.Z
+```
+
+If PyPI JSON has propagated but `uv` still cannot resolve the version, wait and retry with `--refresh`. The simple index can lag behind JSON briefly.
+
+### 10. Release and tag the Home Assistant add-on {/* #release-and-tag-the-home-assistant-add-on */}
+
+Only update the add-on after production PyPI validation succeeds.
+
+In the add-on repository:
+
+```bash
+python -m unittest tests/test_streaming_port_contract.py
+docker build -t toposync-addon:A.B.C-smoke ./toposync
+git push origin main
+git tag -a toposync-addon-vA.B.C -m "Toposync Home Assistant add-on A.B.C"
+git push origin toposync-addon-vA.B.C
+```
+
+The add-on build must show that pip installs the exact published Toposync package version. If Home Assistant still reports an older add-on version after the push, verify the add-on store cache before changing package versions again.
+
+### 11. Publish release notes {/* #publish-release-notes */}
+
+Create a GitHub Release from the release tag.
+
+Release notes should include:
+
+- package versions;
+- add-on version;
+- installation and upgrade commands;
+- user-visible fixes and features;
+- breaking changes or compatibility notes;
+- known issues;
+- validation performed;
+- rollback guidance.
+
+For alpha early access, be explicit about risk. Users should know whether the release changes camera processing, authentication, Home Assistant integration, pipeline runtime, file storage, or processing server behavior.
+
+## Rollback and yanking {/* #rollback-and-yanking */}
+
+PyPI artifacts are immutable. Do not overwrite a bad production release.
+
+If a release is bad:
+
+1. publish a new patch version with the fix;
+2. mark the bad GitHub release as superseded;
+3. consider yanking the bad PyPI release if new installs should avoid it;
+4. document the affected versions and the upgrade path.
+
+Do not delete release tags unless the tag was never announced and no artifact was published from it.
+
+## Automation target {/* #automation-target */}
+
+The manual process should move toward CI automation as early access grows:
+
+- CI builds artifacts from the release tag;
+- CI publishes to TestPyPI on release candidate tags;
+- CI runs clean installation checks against TestPyPI;
+- CI publishes to PyPI through trusted publishing after an approved environment gate;
+- CI builds the add-on image against the published PyPI version;
+- CI creates the GitHub Release from a checked-in release note file.
+
+Automation should enforce this process, not hide it. Every release should remain reproducible from public commits, tags, and logs.

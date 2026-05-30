@@ -2,10 +2,13 @@ import Heading from '@theme/Heading';
 import Layout from '@theme/Layout';
 import Link from '@docusaurus/Link';
 import Translate, {translate} from '@docusaurus/Translate';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 
 import styles from './index.module.css';
 
 export default function Home(): JSX.Element {
+  const symbolUrl = useBaseUrl('img/toposync-symbol.svg');
+
   return (
     <Layout
       title={translate({
@@ -20,7 +23,7 @@ export default function Home(): JSX.Element {
         <section className={styles.heroInner}>
           <img
             className={styles.symbol}
-            src="/img/toposync-symbol.svg"
+            src={symbolUrl}
             alt="Toposync symbol"
           />
           <div>

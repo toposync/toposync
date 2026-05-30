@@ -1,0 +1,52 @@
+---
+title: Próximos passos
+sidebar_position: 8
+---
+
+# Próximos passos {/* #next-steps */}
+
+Depois que a primeira composição, câmera e pipeline simples funcionarem, melhore aos poucos.
+
+## Melhore a composição {/* #improve-the-composition */}
+
+- Refine a escala usando uma distância conhecida.
+- Renomeie áreas para eventos e notificações ficarem fáceis de entender.
+- Adicione paredes faltantes apenas onde ajudarem na orientação.
+- Substitua imagens de decalque rústicas se encontrar uma referência melhor.
+- Adicione modelos 3D leves apenas onde melhorarem o reconhecimento.
+
+## Adicione câmeras com cuidado {/* #add-cameras-carefully */}
+
+- Adicione uma câmera por vez.
+- Valide acesso a snapshot ou stream antes de criar pipelines.
+- Posicione cada câmera na composição.
+- Revise quais áreas ela vê.
+- Evite habilitar muitos fluxos de alta frequência de uma vez.
+
+## Melhore pipelines depois {/* #improve-pipelines-later */}
+
+Quando um pipeline simples funcionar, você pode explorar:
+
+- filtros de área melhores;
+- detecção de objetos;
+- rastreamento;
+- imagens armazenadas e retenção;
+- notificações do Home Assistant;
+- processing servers;
+- aceleração por GPU em hosts compatíveis.
+
+Não adicione tudo isso de uma vez. Cada etapa extra dificulta troubleshooting.
+
+## Mantenha limites de segurança {/* #keep-safety-boundaries */}
+
+Toposync é software alpha. Mantenha um fallback manual para câmeras, notificações, portões, fechaduras, luzes, alarmes e automações.
+
+Use o Toposync para aprender, visualizar e testar fluxos antes de depender deles.
+
+## Documentos relacionados {/* #related-docs */}
+
+- [Instalação](../installation/choose-your-installation.mdx)
+- [Compatibilidade](../installation/architecture-support.mdx)
+- [Pipelines](../developers/pipelines.mdx)
+- [Add-on do Home Assistant](../home-assistant-addon/overview.mdx)
+- [Política de segurança](https://github.com/toposync/toposync/blob/main/SECURITY.md)

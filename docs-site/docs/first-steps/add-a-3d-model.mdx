@@ -1,8 +1,57 @@
 ---
 title: Add a 3D model
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Add a 3D model {/* #add-a-3d-model */}
 
-This page is under construction.
+3D models can make a composition easier to recognize, but they should stay lightweight. Toposync is an operational interface, not a real-time architectural renderer.
+
+Use models as visual references, not as the foundation of the whole composition.
+
+## Supported formats {/* #supported-formats */}
+
+The models extension uses `GLB` and `GLTF` files.
+
+- Prefer `GLB` when possible, because it is usually self-contained.
+- Use `GLTF` when you also include the related `.bin` file and texture files.
+- Texture assets such as `.png`, `.jpg`, `.jpeg`, and `.webp` can be imported with the model when needed.
+
+At least one `.glb` or `.gltf` entry file is required.
+
+## Keep models light {/* #keep-models-light */}
+
+Large models can slow down the browser, the Home Assistant sidebar, and low-power devices.
+
+Avoid using:
+
+- full architectural scenes with too many objects;
+- very high polygon models;
+- 4K or 8K textures;
+- heavy animated models;
+- furniture packs with many unused assets;
+- exported files that include an entire building when you only need one object.
+
+For a first test, use small objects such as a couch, table, appliance, vehicle, or simple room reference.
+
+## When to add a model {/* #when-to-add-a-model */}
+
+Add a model when it improves orientation:
+
+- a car in the garage;
+- a couch in the living room;
+- a pool or outdoor object;
+- a large appliance;
+- a gate or entrance reference.
+
+Do not add models just to make the scene realistic. Add them when they help you understand the space.
+
+## Placement tips {/* #placement-tips */}
+
+- Place the model after the tracing image and main areas are roughly correct.
+- Adjust scale before adding many copies.
+- Disable animations unless they are useful.
+- Keep the floor height, middle height, or ceiling height setting consistent with the object.
+- Test the scene in both 2D and 3D after importing.
+
+Next: [Connect Home Assistant](connect-home-assistant.mdx), or continue with [Add your first camera](add-your-first-camera.mdx).

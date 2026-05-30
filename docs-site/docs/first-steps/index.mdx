@@ -1,0 +1,46 @@
+---
+title: First steps
+sidebar_position: 1
+---
+
+# First steps {/* #first-steps */}
+
+This section is a practical path for using Toposync for the first time. It is intentionally simple: create a composition, add a visual base, draw the main structure, add one camera, then create the first basic pipeline.
+
+Toposync is still alpha software. Use contained networks, test devices, non-critical Home Assistant entities, and the safety guidance in the [Security Policy](https://github.com/toposync/toposync/blob/main/SECURITY.md) when evaluating the product.
+
+## Recommended order {/* #recommended-order */}
+
+1. [Create your first composition](create-your-first-composition.mdx).
+2. Add a tracing image, such as a floor plan or robot vacuum map.
+3. [Add walls and areas](add-walls-and-areas.mdx).
+4. [Add a lightweight 3D model](add-a-3d-model.mdx), if it helps the spatial view.
+5. [Connect Home Assistant](connect-home-assistant.mdx), if you want entities and states in the composition.
+6. [Add your first camera](add-your-first-camera.mdx).
+7. [Create your first pipelines](first-pipelines.mdx).
+8. Review [next steps](next-steps.mdx) when the first loop works.
+
+## Start small {/* #start-small */}
+
+Do not start by importing everything you own. A good first test is:
+
+- one composition;
+- one floor or area of the home;
+- one tracing image;
+- a few walls or areas;
+- one camera;
+- one simple pipeline.
+
+After that works, add more rooms, cameras, entities, and flows gradually.
+
+## What matters first {/* #what-matters-first */}
+
+The first goal is not visual perfection. The first goal is spatial meaning:
+
+- where each area is;
+- where a camera is;
+- what the camera can see;
+- which events belong to which area;
+- which Home Assistant entities are useful in that context.
+
+Once this is clear, the interface becomes easier to improve.

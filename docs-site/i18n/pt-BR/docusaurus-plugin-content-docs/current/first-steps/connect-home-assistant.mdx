@@ -1,8 +1,46 @@
 ---
 title: Conecte o Home Assistant
-sidebar_position: 4
+sidebar_position: 5
 ---
 
 # Conecte o Home Assistant {/* #connect-home-assistant */}
 
-Esta página está em construção.
+Home Assistant é opcional. O Toposync pode ser usado de forma independente, mas conectar o Home Assistant permite posicionar entidades e estados dentro da composição.
+
+Durante o alpha, comece com entidades não críticas e teste em um ambiente contido. Não use o Toposync como único caminho de controle para fechaduras, alarmes, portões, fluxos de emergência ou automações críticas.
+
+## Para que a integração é útil {/* #what-the-integration-is-useful-for */}
+
+Use a integração com Home Assistant quando quiser:
+
+- ver luzes, interruptores, sensores, covers e outras entidades na visualização espacial;
+- controlar dispositivos relacionados enquanto olha uma câmera ou área;
+- usar eventos visuais como contexto para notificações ou automações;
+- conectar inteligência de câmera com dispositivos já existentes no Home Assistant.
+
+## Comece com poucas entidades {/* #start-with-a-small-set */}
+
+Para o primeiro teste, adicione apenas algumas entidades:
+
+- uma luz;
+- um interruptor;
+- um sensor;
+- um cover, portão ou garagem, se for seguro testar;
+- uma entidade relacionada a câmera, se houver.
+
+Isso facilita validar nomes, posicionamento e comportamento antes de adicionar uma instalação completa do Home Assistant.
+
+## Dicas de posicionamento {/* #placement-tips */}
+
+- Posicione entidades perto do objeto ou área real que elas representam.
+- Use nomes claros que batam com o que você vê no Home Assistant.
+- Mantenha controles de dispositivos arriscados separados de testes casuais.
+- Verifique o comportamento diretamente no Home Assistant antes de confiar em um controle pelo Toposync.
+
+## Add-on do Home Assistant {/* #home-assistant-add-on */}
+
+Se você roda o Toposync como add-on do Home Assistant, o add-on pode usar execução supervisionada, ingress na sidebar e acesso interno à Home Assistant Core API.
+
+Veja [instalação do add-on do Home Assistant](../installation/home-assistant-addon.mdx) para detalhes de configuração.
+
+Próximo: [Adicione sua primeira câmera](add-your-first-camera.mdx).

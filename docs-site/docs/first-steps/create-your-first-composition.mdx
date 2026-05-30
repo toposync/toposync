@@ -1,0 +1,72 @@
+---
+title: Create your first composition
+sidebar_position: 2
+---
+
+# Create your first composition {/* #create-your-first-composition */}
+
+A composition is the workspace where Toposync connects the visual model of a place with cameras, areas, files, Home Assistant entities, and pipeline results.
+
+Think of it as a practical map of the home, not as a perfect architectural model.
+
+## What you can add {/* #what-you-can-add */}
+
+The default product can add several kinds of elements to a composition:
+
+- **Images**: floor-plan overlays, tracing references, screenshots, and visual guides.
+- **Walls**: simple 2D wall segments that help define the structure.
+- **Areas**: named regions such as entrance, pool, garage, living room, backyard, sidewalk, or gate.
+- **3D models**: lightweight `GLB` or `GLTF` objects placed in the scene.
+- **Cameras**: positioned cameras that can later be used with streams, snapshots, and pipelines.
+- **Home Assistant entities**: lights, switches, sensors, covers, and other entities when Home Assistant is connected.
+
+Start with only the layers that help you understand the space.
+
+## Start with a tracing image {/* #start-with-a-tracing-image */}
+
+The easiest way to create a useful first composition is to place a tracing image on the floor and build on top of it.
+
+Good tracing images include:
+
+- a floor plan of the home;
+- a screenshot from a robot vacuum map;
+- a simple drawing made in any drawing tool;
+- a screenshot from a mapping or layout platform;
+- a rough sketch with the main rooms and walls.
+
+This image does not need to be beautiful. It only needs to be good enough to help you place walls, areas, cameras, and entities.
+
+## Use scale early {/* #use-scale-early */}
+
+If possible, use a known distance to scale the image:
+
+- the width of a room;
+- the length of a hallway;
+- the width of a garage door;
+- the distance between two visible walls.
+
+Approximate scale is usually enough for the first version. You can refine it later.
+
+## Suggested first composition {/* #suggested-first-composition */}
+
+For the first pass:
+
+1. Create a new composition.
+2. Add a tracing image on the floor.
+3. Adjust size, rotation, and opacity until it is easy to draw over.
+4. Add only the most important walls.
+5. Add a few named areas.
+6. Add one camera and place it near its real location.
+7. Save and test navigation in both 2D and 3D.
+
+Avoid trying to model every detail immediately. A rough map with correct areas is more useful than a detailed scene that is hard to maintain.
+
+## Practical tips {/* #practical-tips */}
+
+- Use names that you will recognize later, such as `Front gate`, `Garage`, `Pool`, or `Kitchen`.
+- Prefer larger meaningful areas over many tiny areas at the beginning.
+- Keep tracing images private and avoid committing them to the repository.
+- If you use a screenshot from another platform, treat it as a local reference image for your own setup.
+- Revisit the composition after adding the first camera, because the camera view often reveals which areas matter.
+
+Next: [Add walls and areas](add-walls-and-areas.mdx).

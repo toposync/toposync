@@ -1,8 +1,67 @@
 ---
 title: Add your first camera
-sidebar_position: 5
+sidebar_position: 6
 ---
 
 # Add your first camera {/* #add-your-first-camera */}
 
-This page is under construction.
+Add cameras gradually. A single working camera is more useful than many half-configured cameras.
+
+Start with one camera, validate snapshot or stream access, place it in the composition, then connect it to a simple pipeline.
+
+## Before you start {/* #before-you-start */}
+
+Have this information available when possible:
+
+- camera name;
+- IP address or hostname;
+- RTSP URL, if you already know it;
+- ONVIF username and password, if the camera supports ONVIF;
+- whether the camera supports PTZ;
+- where the camera is physically installed.
+
+Use a contained network and avoid exposing camera credentials publicly.
+
+## Discovery or manual setup {/* #discovery-or-manual-setup */}
+
+Toposync can work with cameras added manually and, when supported by the camera and network, ONVIF discovery.
+
+Use discovery when it works, but do not depend on it for every camera. Some devices, VLANs, Wi-Fi networks, routers, or camera settings can block discovery even when the camera itself works.
+
+If discovery does not find the camera, add it manually with the information you already have.
+
+## First validation {/* #first-validation */}
+
+Before building pipelines, confirm the basics:
+
+1. The camera is saved with a clear name.
+2. Snapshot or image access works.
+3. Stream access works if you installed streaming support.
+4. PTZ controls work only if the camera supports PTZ and credentials allow it.
+5. The camera is placed near its real location in the composition.
+
+Do not tune advanced settings until this first loop works.
+
+## Place the camera in the composition {/* #place-the-camera-in-the-composition */}
+
+Placement does not need to be exact on the first day. It should be good enough to answer:
+
+- where is this camera installed?
+- what area does it mainly see?
+- which rooms, gates, doors, or outdoor zones are visible?
+- which events should belong to this camera?
+
+After the camera is placed, revisit your areas. You may need to split or rename areas based on what the camera actually sees.
+
+## Start with one camera flow {/* #start-with-one-camera-flow */}
+
+When the camera page offers presets or flow creation, start from the simplest option.
+
+A good first flow is:
+
+- camera input;
+- motion or detection;
+- optional area filter;
+- optional notification or stored image.
+
+Use [Create your first pipelines](first-pipelines.mdx) for the next step.

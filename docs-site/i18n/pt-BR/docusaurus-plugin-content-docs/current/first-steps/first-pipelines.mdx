@@ -1,0 +1,66 @@
+---
+title: Crie seus primeiros pipelines
+sidebar_position: 7
+---
+
+# Crie seus primeiros pipelines {/* #create-your-first-pipelines */}
+
+Um pipeline é um fluxo que recebe uma entrada, processa e produz uma saída. Em termos de primeiro uso, é como uma imagem de câmera vira evento, notificação, imagem armazenada ou ação no Home Assistant.
+
+Esta página é apenas uma primeira passada. A referência completa de pipelines fica em [Pipelines](../developers/pipelines.mdx).
+
+## Comece pela câmera {/* #start-from-the-camera */}
+
+O primeiro pipeline mais fácil normalmente começa por uma câmera. Telas de câmera podem oferecer presets ou assistentes que geram um pipeline para casos comuns.
+
+Use esses assistentes quando disponíveis. Eles mantêm o primeiro grafo mais simples e reduzem erros de configuração.
+
+## Um primeiro grafo simples {/* #a-simple-first-graph */}
+
+Um primeiro pipeline útil pode ser:
+
+1. Ler uma imagem ou frame de stream da câmera.
+2. Detectar movimento ou objetos.
+3. Restringir o resultado a uma ou mais áreas.
+4. Armazenar uma imagem ou recorte útil.
+5. Enviar uma notificação ou expor um resultado.
+
+Não comece com muitos ramos, muitas câmeras ou modelos customizados. Valide um resultado simples primeiro.
+
+## Use áreas para reduzir ruído {/* #use-areas-to-reduce-noise */}
+
+Áreas são uma das melhores formas de tornar pipelines úteis.
+
+Exemplos:
+
+- pessoa em `Calçada` pode ser normal;
+- pessoa em `Quintal` pode ser importante;
+- veículo em `Garagem` talvez importe apenas se parou;
+- movimento perto de `Piscina` pode precisar de outra regra.
+
+Se o pipeline estiver ruidoso, melhore as áreas antes de adicionar mais lógica.
+
+## Mantenha saídas modestas {/* #keep-outputs-modest */}
+
+Para o primeiro teste, escolha uma saída:
+
+- armazenar uma imagem;
+- enviar uma notificação;
+- mostrar um evento;
+- atualizar uma entidade ou automação do Home Assistant depois.
+
+Evite armazenar imagens demais ou rodar muitos fluxos de alta frequência antes de entender uso de armazenamento e CPU.
+
+## Quando usar um processing server {/* #when-to-use-a-processing-server */}
+
+Use a instância principal do Toposync para o primeiro fluxo simples. Considere um processing server depois quando:
+
+- o uso de CPU estiver alto;
+- você rodar múltiplas câmeras;
+- você adicionar modelos de visão;
+- o add-on do Home Assistant estiver rodando em hardware de baixa potência;
+- você quiser uma máquina mais forte para lidar com câmera ou IA.
+
+Veja [Processing server no Linux e macOS](../installation/processing-server-linux-macos.mdx) quando estiver pronto.
+
+Próximo: [Próximos passos](next-steps.mdx).

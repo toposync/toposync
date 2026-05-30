@@ -1,8 +1,57 @@
 ---
 title: Adicione um modelo 3D
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Adicione um modelo 3D {/* #add-a-3d-model */}
 
-Esta página está em construção.
+Modelos 3D podem tornar uma composição mais fácil de reconhecer, mas devem continuar leves. O Toposync é uma interface operacional, não um renderizador arquitetônico em tempo real.
+
+Use modelos como referências visuais, não como a base de toda a composição.
+
+## Formatos suportados {/* #supported-formats */}
+
+A extensão de modelos usa arquivos `GLB` e `GLTF`.
+
+- Prefira `GLB` quando possível, porque normalmente é autocontido.
+- Use `GLTF` quando também incluir o arquivo `.bin` e as texturas relacionadas.
+- Assets de textura como `.png`, `.jpg`, `.jpeg` e `.webp` podem ser importados junto do modelo quando necessário.
+
+Pelo menos um arquivo de entrada `.glb` ou `.gltf` é obrigatório.
+
+## Mantenha modelos leves {/* #keep-models-light */}
+
+Modelos grandes podem deixar o navegador, a sidebar do Home Assistant e dispositivos de baixa potência mais lentos.
+
+Evite usar:
+
+- cenas arquitetônicas completas com objetos demais;
+- modelos com polígonos demais;
+- texturas 4K ou 8K;
+- modelos animados pesados;
+- pacotes de móveis com muitos assets não usados;
+- exports que incluem um prédio inteiro quando você só precisa de um objeto.
+
+Para um primeiro teste, use objetos pequenos como sofá, mesa, eletrodoméstico, veículo ou uma referência simples de cômodo.
+
+## Quando adicionar um modelo {/* #when-to-add-a-model */}
+
+Adicione um modelo quando ele melhorar a orientação:
+
+- um carro na garagem;
+- um sofá na sala;
+- uma piscina ou objeto externo;
+- um eletrodoméstico grande;
+- uma referência de portão ou entrada.
+
+Não adicione modelos só para deixar a cena realista. Adicione quando eles ajudarem a entender o espaço.
+
+## Dicas de posicionamento {/* #placement-tips */}
+
+- Posicione o modelo depois que a imagem de decalque e as áreas principais estiverem aproximadamente corretas.
+- Ajuste a escala antes de adicionar muitas cópias.
+- Desative animações, exceto quando forem úteis.
+- Mantenha a configuração de chão, meio ou teto coerente com o objeto.
+- Teste a cena em 2D e 3D depois de importar.
+
+Próximo: [Conecte o Home Assistant](connect-home-assistant.mdx), ou continue em [Adicione sua primeira câmera](add-your-first-camera.mdx).

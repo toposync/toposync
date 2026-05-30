@@ -1,8 +1,63 @@
 ---
 title: Adicione paredes e áreas
-sidebar_position: 2
+sidebar_position: 3
 ---
 
 # Adicione paredes e áreas {/* #add-walls-and-areas */}
 
-Esta página está em construção.
+Paredes e áreas tornam a composição útil. Paredes ajudam o espaço a parecer um lugar real. Áreas dão nome às partes da casa onde eventos, câmeras e automações acontecem.
+
+Você não precisa desenhar uma planta arquitetônica perfeita. Comece com a estrutura que ajuda o Toposync a entender onde as coisas estão.
+
+## Camadas estruturais disponíveis {/* #available-structural-layers */}
+
+A extensão estrutural oferece hoje:
+
+- **Parede**: um segmento simples em 2D.
+- **Abertura**: um recorte em uma parede.
+- **Porta**: um recorte de porta em uma parede.
+- **Janela**: um recorte de janela em uma parede.
+- **Área retangular**: um retângulo rápido para regiões simples.
+- **Área livre**: um polígono para regiões irregulares.
+- **Ambiente retangular**: um retângulo que também cria paredes ao redor.
+- **Ambiente livre**: uma região livre que também cria paredes.
+
+Use a ferramenta mais simples que representa bem o espaço.
+
+## Áreas são importantes {/* #areas-are-important */}
+
+Áreas não são apenas visuais. Elas ficam úteis depois para:
+
+- filtrar detecções por localização;
+- nomear eventos;
+- decidir qual notificação é relevante;
+- conectar a visão de uma câmera a regiões reais;
+- acionar ações do Home Assistant com contexto.
+
+Por exemplo, uma pessoa na calçada pode ser normal. Uma pessoa no quintal à noite pode ser importante. A área dá contexto ao evento.
+
+## Primeira passada sugerida {/* #suggested-first-pass */}
+
+Comece com:
+
+1. O contorno externo da casa ou da área que importa.
+2. Os principais cômodos ou zonas externas.
+3. Algumas áreas importantes como entrada, garagem, piscina, quintal ou portão.
+4. Portas e janelas apenas quando ajudarem na orientação.
+
+Não gaste a primeira sessão desenhando cada detalhe.
+
+## Dicas de nomes {/* #naming-tips */}
+
+Escolha nomes que façam sentido em eventos e notificações:
+
+- `Portão`
+- `Garagem`
+- `Piscina`
+- `Quintal`
+- `Sala`
+- `Cozinha`
+
+Nomes curtos e estáveis são mais fáceis de usar em pipelines.
+
+Próximo: [Adicione um modelo 3D](add-a-3d-model.mdx), ou pule para [Adicione sua primeira câmera](add-your-first-camera.mdx).

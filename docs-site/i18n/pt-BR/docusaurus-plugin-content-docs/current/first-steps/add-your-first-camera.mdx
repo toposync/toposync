@@ -1,8 +1,67 @@
 ---
 title: Adicione sua primeira câmera
-sidebar_position: 5
+sidebar_position: 6
 ---
 
 # Adicione sua primeira câmera {/* #add-your-first-camera */}
 
-Esta página está em construção.
+Adicione câmeras aos poucos. Uma câmera funcionando bem é mais útil que muitas câmeras configuradas pela metade.
+
+Comece com uma câmera, valide acesso a snapshot ou stream, posicione na composição e depois conecte a um pipeline simples.
+
+## Antes de começar {/* #before-you-start */}
+
+Tenha estas informações disponíveis quando possível:
+
+- nome da câmera;
+- endereço IP ou hostname;
+- URL RTSP, se você já souber;
+- usuário e senha ONVIF, se a câmera suportar ONVIF;
+- se a câmera suporta PTZ;
+- onde a câmera está instalada fisicamente.
+
+Use uma rede contida e evite expor credenciais de câmeras publicamente.
+
+## Descoberta ou configuração manual {/* #discovery-or-manual-setup */}
+
+O Toposync pode trabalhar com câmeras adicionadas manualmente e, quando suportado pela câmera e pela rede, descoberta ONVIF.
+
+Use descoberta quando funcionar, mas não dependa dela para toda câmera. Alguns dispositivos, VLANs, redes Wi-Fi, roteadores ou configurações de câmera podem bloquear descoberta mesmo quando a câmera em si funciona.
+
+Se a descoberta não encontrar a câmera, adicione manualmente com as informações que você já tem.
+
+## Primeira validação {/* #first-validation */}
+
+Antes de criar pipelines, confirme o básico:
+
+1. A câmera foi salva com um nome claro.
+2. Snapshot ou acesso à imagem funciona.
+3. Stream funciona se você instalou suporte a streaming.
+4. Controles PTZ funcionam apenas se a câmera suporta PTZ e as credenciais permitem.
+5. A câmera está posicionada perto do local real na composição.
+
+Não ajuste configurações avançadas até esse primeiro ciclo funcionar.
+
+## Posicione a câmera na composição {/* #place-the-camera-in-the-composition */}
+
+O posicionamento não precisa ser exato no primeiro dia. Ele deve ser bom o bastante para responder:
+
+- onde essa câmera está instalada?
+- qual área ela vê principalmente?
+- quais cômodos, portões, portas ou zonas externas aparecem?
+- quais eventos deveriam pertencer a essa câmera?
+
+Depois de posicionar a câmera, revise suas áreas. Talvez você precise dividir ou renomear áreas com base no que a câmera realmente vê.
+
+## Comece com um fluxo de câmera {/* #start-with-one-camera-flow */}
+
+Quando a tela da câmera oferecer presets ou criação de fluxo, comece pela opção mais simples.
+
+Um bom primeiro fluxo é:
+
+- entrada da câmera;
+- movimento ou detecção;
+- filtro opcional por área;
+- notificação ou imagem armazenada opcional.
+
+Use [Crie seus primeiros pipelines](first-pipelines.mdx) para o próximo passo.

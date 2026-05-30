@@ -1,8 +1,46 @@
 ---
 title: Connect Home Assistant
-sidebar_position: 4
+sidebar_position: 5
 ---
 
 # Connect Home Assistant {/* #connect-home-assistant */}
 
-This page is under construction.
+Home Assistant is optional. Toposync can be used independently, but connecting Home Assistant lets you place entities and states inside the composition.
+
+During alpha, start with non-critical entities and test in a contained environment. Do not use Toposync as the only control path for locks, alarms, gates, emergency workflows, or safety-critical automations.
+
+## What the integration is useful for {/* #what-the-integration-is-useful-for */}
+
+Use Home Assistant integration when you want to:
+
+- see lights, switches, sensors, covers, and other entities in the spatial view;
+- control related devices while looking at a camera or area;
+- use visual events as context for notifications or automations;
+- connect camera intelligence with existing Home Assistant devices.
+
+## Start with a small set {/* #start-with-a-small-set */}
+
+For the first test, add only a few entities:
+
+- one light;
+- one switch;
+- one sensor;
+- one cover, gate, or garage entity if it is safe to test;
+- one camera-related entity, if available.
+
+This makes it easier to validate names, placement, and behavior before adding a full Home Assistant installation.
+
+## Placement tips {/* #placement-tips */}
+
+- Place entities near the real object or area they represent.
+- Use clear names that match what you see in Home Assistant.
+- Keep controls for risky devices separate from casual testing.
+- Verify behavior in Home Assistant directly before trusting a control from Toposync.
+
+## Home Assistant add-on {/* #home-assistant-add-on */}
+
+If you run Toposync as a Home Assistant add-on, the add-on can use supervised execution, sidebar ingress, and internal access to the Home Assistant Core API.
+
+See [Home Assistant add-on installation](../installation/home-assistant-addon.mdx) for setup details.
+
+Next: [Add your first camera](add-your-first-camera.mdx).

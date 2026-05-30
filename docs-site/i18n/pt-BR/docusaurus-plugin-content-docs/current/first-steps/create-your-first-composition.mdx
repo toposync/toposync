@@ -1,0 +1,72 @@
+---
+title: Crie sua primeira composição
+sidebar_position: 2
+---
+
+# Crie sua primeira composição {/* #create-your-first-composition */}
+
+Uma composição é o workspace onde o Toposync conecta o modelo visual de um lugar com câmeras, áreas, arquivos, entidades do Home Assistant e resultados de pipelines.
+
+Pense nela como um mapa prático da casa, não como um modelo arquitetônico perfeito.
+
+## O que você pode adicionar {/* #what-you-can-add */}
+
+O produto padrão pode adicionar vários tipos de elemento a uma composição:
+
+- **Imagens**: sobreposições de planta, referências de decalque, screenshots e guias visuais.
+- **Paredes**: segmentos simples de parede em 2D que ajudam a definir a estrutura.
+- **Áreas**: regiões nomeadas como entrada, piscina, garagem, sala, quintal, calçada ou portão.
+- **Modelos 3D**: objetos leves `GLB` ou `GLTF` posicionados na cena.
+- **Câmeras**: câmeras posicionadas que depois podem ser usadas com streams, snapshots e pipelines.
+- **Entidades do Home Assistant**: luzes, interruptores, sensores, covers e outras entidades quando o Home Assistant está conectado.
+
+Comece apenas com as camadas que ajudam você a entender o espaço.
+
+## Comece com uma imagem de decalque {/* #start-with-a-tracing-image */}
+
+A forma mais fácil de criar uma primeira composição útil é posicionar uma imagem de decalque no chão e construir por cima dela.
+
+Boas imagens de decalque incluem:
+
+- uma planta baixa da casa;
+- um screenshot do mapa do robô aspirador;
+- um desenho simples feito em qualquer ferramenta;
+- um screenshot de uma plataforma de mapa ou layout;
+- um rascunho com os principais cômodos e paredes.
+
+Essa imagem não precisa ser bonita. Ela só precisa ser boa o bastante para ajudar você a posicionar paredes, áreas, câmeras e entidades.
+
+## Use escala cedo {/* #use-scale-early */}
+
+Se possível, use uma distância conhecida para escalar a imagem:
+
+- a largura de um cômodo;
+- o comprimento de um corredor;
+- a largura do portão da garagem;
+- a distância entre duas paredes visíveis.
+
+Uma escala aproximada normalmente é suficiente para a primeira versão. Você pode refinar depois.
+
+## Primeira composição sugerida {/* #suggested-first-composition */}
+
+Para a primeira passada:
+
+1. Crie uma nova composição.
+2. Adicione uma imagem de decalque no chão.
+3. Ajuste tamanho, rotação e opacidade até ficar fácil desenhar por cima.
+4. Adicione apenas as paredes mais importantes.
+5. Adicione algumas áreas nomeadas.
+6. Adicione uma câmera e posicione perto do local real.
+7. Salve e teste a navegação em 2D e 3D.
+
+Evite tentar modelar cada detalhe imediatamente. Um mapa rústico com áreas corretas é mais útil que uma cena detalhada difícil de manter.
+
+## Dicas práticas {/* #practical-tips */}
+
+- Use nomes que você reconheça depois, como `Portão`, `Garagem`, `Piscina` ou `Cozinha`.
+- Prefira áreas maiores e significativas no começo, em vez de muitas áreas pequenas.
+- Mantenha imagens de decalque privadas e não as commite no repositório.
+- Se usar um screenshot de outra plataforma, trate como uma referência local para a sua própria configuração.
+- Revise a composição depois de adicionar a primeira câmera, porque a visão da câmera costuma mostrar quais áreas importam.
+
+Próximo: [Adicione paredes e áreas](add-walls-and-areas.mdx).

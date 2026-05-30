@@ -1,0 +1,66 @@
+---
+title: Create your first pipelines
+sidebar_position: 7
+---
+
+# Create your first pipelines {/* #create-your-first-pipelines */}
+
+A pipeline is a flow that takes input, processes it, and produces an output. In first-use terms, it is how a camera image becomes an event, notification, stored image, or Home Assistant action.
+
+This page is only a first pass. The full pipeline reference lives in [Pipelines](../developers/pipelines.mdx).
+
+## Start from the camera {/* #start-from-the-camera */}
+
+The easiest first pipeline usually starts from a camera. Camera screens may offer presets or helpers that generate a pipeline for common cases.
+
+Use those helpers when available. They keep the first graph simpler and reduce configuration mistakes.
+
+## A simple first graph {/* #a-simple-first-graph */}
+
+A useful first pipeline can be:
+
+1. Read a camera image or stream frame.
+2. Detect motion or objects.
+3. Restrict the result to one or more areas.
+4. Store a useful image or crop.
+5. Send a notification or expose a result.
+
+Do not start with many branches, many cameras, or custom models. Validate one simple result first.
+
+## Use areas to reduce noise {/* #use-areas-to-reduce-noise */}
+
+Areas are one of the best ways to make pipelines useful.
+
+Examples:
+
+- person in `Sidewalk` may be normal;
+- person in `Backyard` may be important;
+- vehicle in `Driveway` may matter only if it stopped;
+- motion near `Pool` may need a different rule.
+
+If your pipeline is noisy, improve areas before adding more logic.
+
+## Keep outputs modest {/* #keep-outputs-modest */}
+
+For the first test, choose one output:
+
+- store an image;
+- send a notification;
+- show an event;
+- update a Home Assistant entity or automation later.
+
+Avoid storing too many images or running many high-frequency flows until you understand storage and CPU usage.
+
+## When to use a processing server {/* #when-to-use-a-processing-server */}
+
+Use the main Toposync instance for the first simple flow. Consider a processing server later when:
+
+- CPU usage is high;
+- you run multiple cameras;
+- you add vision models;
+- the Home Assistant add-on runs on low-power hardware;
+- you want a stronger machine to handle camera or AI work.
+
+See [Processing server on Linux and macOS](../installation/processing-server-linux-macos.mdx) when you are ready.
+
+Next: [Next steps](next-steps.mdx).

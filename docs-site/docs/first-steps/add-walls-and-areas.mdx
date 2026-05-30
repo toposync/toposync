@@ -1,8 +1,64 @@
 ---
 title: Add walls and areas
-sidebar_position: 2
+sidebar_position: 3
 ---
 
 # Add walls and areas {/* #add-walls-and-areas */}
 
-This page is under construction.
+Walls and areas make the composition useful. Walls help the space look like a real place. Areas give names to the parts of the home where events, cameras, and automations happen.
+
+You do not need to draw a perfect architectural plan. Start with the structure that helps Toposync understand where things are.
+
+## Available structural layers {/* #available-structural-layers */}
+
+The structural extension currently provides:
+
+- **Wall**: a simple line segment in 2D.
+- **Opening**: a cutout on a wall.
+- **Door**: a door cutout on a wall.
+- **Window**: a window cutout on a wall.
+- **Rectangular area**: a quick rectangle for simple regions.
+- **Freeform area**: a polygon for irregular regions.
+- **Rectangular room**: a rectangle that also creates surrounding walls.
+- **Freeform room**: a freeform region that also creates walls.
+
+Use the simplest tool that fits the space.
+
+## Areas are important {/* #areas-are-important */}
+
+Areas are not only visual. They become useful later for:
+
+- filtering detections by location;
+- naming events;
+- deciding which notification is relevant;
+- connecting a camera view to real-world regions;
+- triggering Home Assistant actions by context.
+
+For example, a person on the sidewalk may be normal. A person in the backyard at night may be important. The area gives the event context.
+
+## Suggested first pass {/* #suggested-first-pass */}
+
+Start with:
+
+1. The outside outline of the home or area you care about.
+2. The main rooms or outdoor zones.
+3. A few important areas such as entrance, driveway, garage, pool, backyard, or gate.
+4. Doors and windows only when they help orientation.
+
+Do not spend the first session drawing every detail.
+
+## Naming tips {/* #naming-tips */}
+
+Choose names that will make sense in events and notifications:
+
+- `Front gate`
+- `Driveway`
+- `Garage`
+- `Pool`
+- `Backyard`
+- `Living room`
+- `Kitchen`
+
+Short, stable names are easier to use in pipelines.
+
+Next: [Add a 3D model](add-a-3d-model.mdx), or skip to [Add your first camera](add-your-first-camera.mdx).

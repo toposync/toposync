@@ -5,4 +5,29 @@ sidebar_position: 8
 
 # Windows {/* #windows */}
 
-Esta página está em construção.
+Use esta página para escolher o caminho certo de instalação no Windows.
+
+## Escolha Um Caminho Windows
+
+| Cenário | Guia recomendado |
+| --- | --- |
+| Rodar a UI e a API completas do Toposync no Windows | [Python em Windows](python-windows.mdx) |
+| Usar uma máquina Windows apenas para processamento remoto | [Processing server como serviço no Windows](processing-server-windows-service.mdx) |
+
+## Recomendação Padrão
+
+Se esta é sua primeira instalação no Windows, comece por [Python em Windows](python-windows.mdx).
+
+Se você já tem o Toposync rodando em outro lugar e quer usar esta máquina Windows para fornecer capacidade extra de CPU, DirectML ou CUDA, use [Processing server como serviço no Windows](processing-server-windows-service.mdx).
+
+## Opções De GPU
+
+| Opção | Use quando |
+| --- | --- |
+| CPU | Primeiro install e maior compatibilidade |
+| DirectML | Aceleração por GPU no Windows sem exigir NVIDIA CUDA |
+| CUDA | GPU NVIDIA com driver e runtime compatíveis |
+
+Docker CUDA não é o caminho recomendado no Windows. Para aceleração por GPU no Windows, prefira os pacotes Python nativos documentados nos guias Windows.
+
+Para suporte por arquitetura e GPU, consulte [Compatibilidade](architecture-support.mdx).

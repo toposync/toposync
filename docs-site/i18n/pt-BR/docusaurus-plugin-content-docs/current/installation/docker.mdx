@@ -5,4 +5,29 @@ sidebar_position: 2
 
 # Docker {/* #docker */}
 
-Esta página está em construção.
+Use Docker quando quiser rodar o Toposync isolado do sistema host e com operação mais fácil de reconstruir ou mover entre máquinas.
+
+Esta documentação cobre, por enquanto, builds locais a partir do repositório. Imagens públicas em registry serão documentadas separadamente quando estiverem disponíveis.
+
+## Escolha Um Caminho Docker
+
+| Cenário | Guia recomendado |
+| --- | --- |
+| Servidor comum, sem GPU | [Docker CPU](docker-cpu.mdx) |
+| Host Linux com GPU NVIDIA | [Docker CUDA](docker-cuda.mdx) |
+| Processing server remoto em container | [Processing server em Docker](processing-server-docker.mdx) |
+
+## Recomendação Padrão
+
+Comece por [Docker CPU](docker-cpu.mdx).
+
+Vá para [Docker CUDA](docker-cuda.mdx) somente quando tiver um host Linux com GPU NVIDIA e uma carga real de vision que se beneficie de aceleração.
+
+## O Que Docker Muda
+
+- O Toposync roda em um container.
+- Os dados de runtime são montados do host para `/data`.
+- A UI e a API continuam sendo servidas pela mesma porta pública.
+- Suporte a GPU fica em um caminho CUDA separado, não no container CPU padrão.
+
+Para suporte por sistema e arquitetura, consulte [Compatibilidade](architecture-support.mdx).

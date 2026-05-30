@@ -5,4 +5,29 @@ sidebar_position: 8
 
 # Windows {/* #windows */}
 
-This page is under construction.
+Use this page to choose the right Windows installation path.
+
+## Choose a Windows path
+
+| Scenario | Recommended guide |
+| --- | --- |
+| Run the full Toposync UI and API on Windows | [Python on Windows](python-windows.mdx) |
+| Use a Windows machine only for remote processing | [Processing server as a Windows service](processing-server-windows-service.mdx) |
+
+## Default recommendation
+
+If this is your first Windows installation, start with [Python on Windows](python-windows.mdx).
+
+If you already have Toposync running elsewhere and want this Windows machine to provide extra CPU, DirectML, or CUDA processing capacity, use [Processing server as a Windows service](processing-server-windows-service.mdx).
+
+## GPU options
+
+| Option | Use when |
+| --- | --- |
+| CPU | First install and widest compatibility |
+| DirectML | Windows GPU acceleration without requiring NVIDIA CUDA |
+| CUDA | NVIDIA GPU with compatible driver and runtime |
+
+Docker CUDA is not the recommended Windows path. For Windows GPU acceleration, prefer the native Python packages documented in the Windows guides.
+
+For architecture and GPU support, see [Compatibility](architecture-support.mdx).

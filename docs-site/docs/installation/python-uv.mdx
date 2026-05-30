@@ -5,4 +5,39 @@ sidebar_position: 5
 
 # Python and uv {/* #python-and-uv */}
 
-This page is under construction.
+Use the Python installation path when you want Toposync to run directly on the host system instead of Docker.
+
+Toposync documentation uses `uv` because it makes Python version management, virtual environments, and package installation more predictable across Linux, macOS, and Windows.
+
+## Choose a Python path
+
+| System | Recommended guide |
+| --- | --- |
+| Linux or macOS | [Python on Linux and macOS](python-linux-macos.mdx) |
+| Windows desktop or server | [Python on Windows](python-windows.mdx) |
+| Remote processing server on Linux or macOS | [Processing server on Linux and macOS](processing-server-linux-macos.mdx) |
+| Persistent processing server on Windows | [Processing server as a Windows service](processing-server-windows-service.mdx) |
+
+## Default recommendation
+
+Use Python 3.12 through `uv`, create a virtual environment, then install the Toposync package you need:
+
+```bash
+uv python install 3.12
+uv venv .venv --python 3.12
+```
+
+After that, follow the guide for your operating system.
+
+## Package choices
+
+| Package | Use when |
+| --- | --- |
+| `toposync` | You want the default CPU product |
+| `toposync-streaming` | You need the streaming extension |
+| `toposync-vision-directml` | You want Windows GPU acceleration through DirectML |
+| `toposync-vision-cuda` | You want NVIDIA CUDA acceleration |
+
+Start with `toposync`. Add streaming or GPU packages later when there is a concrete need.
+
+For compatibility details, see [Compatibility](architecture-support.mdx).

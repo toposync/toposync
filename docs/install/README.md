@@ -1,0 +1,98 @@
+# Instalação do Toposync
+
+Escolha o guia pelo lugar onde o Toposync vai rodar.
+
+## Escolha Rápida
+
+| Quero... | Use este guia |
+| --- | --- |
+| Rodar em Linux ou macOS direto no Python | [Python em Linux/macOS](python-linux-macos.md) |
+| Rodar em Windows direto no Python | [Python em Windows](python-windows.md) |
+| Rodar em Docker sem GPU | [Docker CPU](docker-cpu.md) |
+| Rodar em Docker com GPU NVIDIA | [Docker CUDA](docker-cuda.md) |
+| Instalar dentro do Home Assistant | [Home Assistant add-on](home-assistant-addon.md) |
+| Usar outro computador para processamento pesado | [Processing server em Linux/macOS](processing-server-linux-macos.md) |
+| Usar Windows como servidor de processamento permanente | [Processing server como serviço no Windows](processing-server-windows-service.md) |
+| Rodar processing server em container | [Processing server em Docker](processing-server-docker.md) |
+| Conferir suporte por sistema, CPU, GPU e arquitetura | [Compatibilidade](architecture-support.md) |
+
+## O Que Cada Instalação Entrega
+
+### Bundle Padrão
+
+O pacote `toposync` instala o produto padrão em CPU:
+
+- frontend e API na mesma porta;
+- extensões first-party principais;
+- vision via ONNX Runtime CPU;
+- sem stack de streaming por padrão.
+
+Use quando quer instalar e começar simples.
+
+### Streaming
+
+O pacote `toposync-streaming` instala o Toposync padrão mais a extensão de streaming.
+
+Use quando precisa publicar ou consumir transmissões de câmera dentro do Toposync.
+
+### GPU
+
+Aceleração é upgrade, não requisito inicial:
+
+- `toposync-vision-cuda` para NVIDIA CUDA;
+- `toposync-vision-directml` para Windows com GPU via DirectML.
+
+Use GPU quando vision em CPU não for suficiente.
+
+### Home Assistant
+
+O add-on do Home Assistant é o caminho para:
+
+- app na sidebar;
+- ingress;
+- execução supervisionada;
+- acesso interno ao Core API;
+- integração com entidades e câmeras do Home Assistant.
+
+Em Raspberry Pi e HAOS, trate o add-on como origin leve. Delegue vision, OpenCV e múltiplas câmeras para um processing server remoto quando necessário.
+
+## Padrão Dos Guias
+
+Cada guia de cenário deve seguir esta ordem:
+
+1. Para quem é este cenário.
+2. Pré-requisitos.
+3. Instalação.
+4. Como rodar.
+5. Como acessar.
+6. Como verificar.
+7. Como atualizar.
+8. Como desinstalar.
+9. Troubleshooting curto.
+
+## Compatibilidade Resumida
+
+| Ambiente | Status |
+| --- | --- |
+| Linux `amd64` | Suportado |
+| Linux `aarch64` / `arm64` | Suportado para CPU |
+| macOS Apple Silicon | Suportado para CPU |
+| macOS Intel | Suportado para CPU |
+| Windows `amd64` | Suportado, recomendado com Python 3.12 |
+| Home Assistant OS `aarch64` | Suportado pelo add-on |
+| Home Assistant OS `amd64` | Suportado pelo add-on |
+| Docker CPU `amd64` | Suportado |
+| Docker CPU `arm64` | Suportado |
+| Docker CUDA | Linux com NVIDIA |
+| `armv7`, `armhf`, `i386` | Fora do alvo de suporte |
+
+## Recomendação Inicial
+
+Para um servidor comum, comece por:
+
+- [Python em Linux/macOS](python-linux-macos.md), se quer instalar direto no sistema;
+- [Python em Windows](python-windows.md), se quer rodar em Windows;
+- [Docker CPU](docker-cpu.md), se quer isolamento e operação mais previsível;
+- [Home Assistant add-on](home-assistant-addon.md), se o Toposync deve viver dentro do Home Assistant.
+
+Depois adicione GPU, streaming ou processing server conforme a necessidade real.

@@ -8,13 +8,14 @@ This repo’s main goal is to solve the “biggest knot”: **extensions with a 
 
 ## Documentation
 
-- Index: `docs/README.md`
-- Self-hosting (production): `docs/SELF_HOSTING.md`
-- Running in dev: `docs/DEVELOPMENT.md`
-- Pipelines (DAG): `docs/PIPELINES.md`
-- Extensions (runtime): `docs/EXTENSIONS_RUNTIME.md`
-- TS contract / plugin API: `docs/PLUGIN_API.md`
-- Creating an extension: `docs/EXTENSION_AUTHORING.md`
+- Install guides: `docs/install/README.md`
+- Compatibility: `docs/install/architecture-support.md`
+- Legacy/context docs: `docs/old/README.md`
+- Running in dev: `docs/old/DEVELOPMENT.md`
+- Pipelines (DAG): `docs/old/PIPELINES.md`
+- Extensions (runtime): `docs/old/EXTENSIONS_RUNTIME.md`
+- TS contract / plugin API: `docs/old/PLUGIN_API.md`
+- Creating an extension: `docs/old/EXTENSION_AUTHORING.md`
 
 ## Quickstart (dev)
 

@@ -164,4 +164,4 @@ Release-related changes must be reproducible, auditable, and validated against c
 
 Do not report vulnerabilities in public issues.
 
-Until a dedicated `SECURITY.md` is added, use a private GitHub security advisory when available or contact the maintainer privately. Do not include credentials, tokens, private network details, or exploit instructions in public discussions.
+Follow [Security Policy](SECURITY.md). Use private GitHub vulnerability reporting or a private GitHub security advisory when available. Do not include credentials, tokens, private network details, or exploit instructions in public discussions.

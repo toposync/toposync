@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-Uninstalls the TopoSync Processing Server Windows service.
+Uninstalls the Toposync Processing Server Windows service.
 
 .DESCRIPTION
 This script is intended for an elevated PowerShell session on Windows.
@@ -18,9 +18,9 @@ powershell -ExecutionPolicy Bypass -File .\uninstall_windows_processing_server.p
 
 [CmdletBinding()]
 param(
-    [string]$InstallRoot = "$env:ProgramData\TopoSync\ProcessingServer",
+    [string]$InstallRoot = "$env:ProgramData\Toposync\ProcessingServer",
 
-    [string]$ServiceName = "TopoSyncProcessingServer",
+    [string]$ServiceName = "ToposyncProcessingServer",
 
     [string]$FirewallRuleName = "",
 
@@ -166,7 +166,7 @@ function Remove-PathIfExists {
 }
 
 if (-not $FirewallRuleName) {
-    $FirewallRuleName = "TopoSync Processing Server ($ServiceName)"
+    $FirewallRuleName = "Toposync Processing Server ($ServiceName)"
 }
 
 Write-Step "Removing Windows service"
@@ -186,8 +186,8 @@ if ($RemoveData) {
         (Join-Path $InstallRoot ".venv"),
         (Join-Path $InstallRoot "uv-python"),
         (Join-Path $InstallRoot "run-processing-server.ps1"),
-        (Join-Path $InstallRoot "TopoSyncProcessingService.exe"),
-        (Join-Path $InstallRoot "TopoSyncProcessingService.cs"),
+        (Join-Path $InstallRoot "ToposyncProcessingService.exe"),
+        (Join-Path $InstallRoot "ToposyncProcessingService.cs"),
         (Join-Path $InstallRoot "processing-server-registration.json")
     )
     foreach ($path in $runtimePaths) {
@@ -207,4 +207,4 @@ if ($RemoveData) {
     Write-Host "Use -RemoveData to delete the full install root."
 }
 Write-Host ""
-Write-Host "If this processing server was registered in an origin TopoSync instance, remove it there as well."
+Write-Host "If this processing server was registered in an origin Toposync instance, remove it there as well."

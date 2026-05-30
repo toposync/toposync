@@ -351,7 +351,7 @@ export function CustomOnnxWizardModal({
             {t(
               "core.ui.vision.custom_onnx_modal.dropzone_hint",
               {},
-              "TopoSync inspects the graph locally on the selected processing server and suggests the right adapter.",
+              "Toposync inspects the graph locally on the selected processing server and suggests the right adapter.",
             )}
           </div>
         </div>

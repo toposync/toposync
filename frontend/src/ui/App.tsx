@@ -12,7 +12,7 @@ import type {
   RenderViewDefinition,
   SettingsPanel,
   ThemeDefinition,
-  TopoSyncHost,
+  ToposyncHost,
   Vector3,
   GraphicsQuality,
   ViewSettings,
@@ -481,8 +481,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     elementTypesStore.notify();
   }, [elementTypesById, elementTypesStore]);
 
-	  const host: TopoSyncHost = useMemo(
-	    () => ({
+  const host: ToposyncHost = useMemo(
+    () => ({
       registerElementType(elementType) {
         setElementTypesById((prev) => ({ ...prev, [elementType.type]: elementType }));
       },
@@ -571,15 +571,15 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         },
       },
     }),
-	    [],
-	  );
+    [],
+  );
 
-	  useEffect(() => {
-	    host.registerElementType(createMeasurementLineElementType());
-	  }, [host]);
+  useEffect(() => {
+    host.registerElementType(createMeasurementLineElementType());
+  }, [host]);
 
-	  useEffect(() => {
-	    let cancelled = false;
+  useEffect(() => {
+    let cancelled = false;
 
     async function hydrate() {
       try {

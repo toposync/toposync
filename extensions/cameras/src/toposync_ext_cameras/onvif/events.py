@@ -617,7 +617,7 @@ def _http_post_soap_http_auth_sync(
     password: str,
 ) -> bytes:
     headers = {
-        "User-Agent": "TopoSync/0.1 (ONVIF)",
+        "User-Agent": "Toposync/0.1 (ONVIF)",
         "Accept": "application/soap+xml, text/xml, */*",
     }
     if soap_version == "1.1":

@@ -1,6 +1,6 @@
 # Home Assistant add-on
 
-TopoSync tem um repositório dedicado para o add-on do Home Assistant:
+Toposync tem um repositório dedicado para o add-on do Home Assistant:
 
 - https://github.com/toposync/toposync-homeassistant-addon
 

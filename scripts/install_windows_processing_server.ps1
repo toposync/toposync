@@ -1,14 +1,14 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-Installs and runs TopoSync Processing Server as a Windows service.
+Installs and runs Toposync Processing Server as a Windows service.
 
 .DESCRIPTION
 This script is intended for an elevated PowerShell session on Windows.
 It installs uv and Python 3.12 if needed, creates a dedicated virtual
-environment under ProgramData, installs the requested TopoSync bundle,
+environment under ProgramData, installs the requested Toposync bundle,
 opens the Windows Firewall port, creates/updates a Windows service, starts
-it, and prints the registration payload for the origin TopoSync server.
+it, and prints the registration payload for the origin Toposync server.
 
 Default port is 49321 instead of 9001. Port 9001 is registered by IANA for
 etlservicemgr, while 49321 is in the dynamic/private range. If the requested
@@ -35,13 +35,13 @@ param(
 
     [bool]$PreferLocalPackages = $true,
 
-    [string]$InstallRoot = "$env:ProgramData\TopoSync\ProcessingServer",
+    [string]$InstallRoot = "$env:ProgramData\Toposync\ProcessingServer",
 
     [string]$DataDir = "",
 
-    [string]$ServiceName = "TopoSyncProcessingServer",
+    [string]$ServiceName = "ToposyncProcessingServer",
 
-    [string]$ServiceDisplayName = "TopoSync Processing Server",
+    [string]$ServiceDisplayName = "Toposync Processing Server",
 
     [string]$HostAddress = "0.0.0.0",
 
@@ -542,7 +542,7 @@ function Initialize-LocalCheckoutBuildDependencies {
 
     $npm = Get-NpmCommand
     if (-not $npm) {
-        throw "Local checkout install requires Node.js/npm to build the TopoSync frontend. Install Node.js LTS or rerun with -PreferLocalPackages `$false to use the published bundle."
+        throw "Local checkout install requires Node.js/npm to build the Toposync frontend. Install Node.js LTS or rerun with -PreferLocalPackages `$false to use the published bundle."
     }
 
     Write-Step "Installing frontend build dependencies for local checkout"
@@ -595,7 +595,7 @@ function Install-ToposyncBundle {
         }
     }
 
-    throw "Installing TopoSync bundle failed with exit code $LASTEXITCODE."
+    throw "Installing Toposync bundle failed with exit code $LASTEXITCODE."
 }
 
 function ConvertTo-PSLiteral {
@@ -666,14 +666,14 @@ using System.IO;
 using System.ServiceProcess;
 using System.Threading;
 
-public sealed class TopoSyncProcessingWindowsService : ServiceBase
+public sealed class ToposyncProcessingWindowsService : ServiceBase
 {
     private readonly string runnerPath;
     private Process runnerProcess;
     private bool stopping;
     private readonly object gate = new object();
 
-    public TopoSyncProcessingWindowsService(string serviceName, string runnerPath)
+    public ToposyncProcessingWindowsService(string serviceName, string runnerPath)
     {
         ServiceName = serviceName;
         CanStop = true;
@@ -689,7 +689,7 @@ public sealed class TopoSyncProcessingWindowsService : ServiceBase
             Environment.Exit(2);
         }
 
-        ServiceBase.Run(new ServiceBase[] { new TopoSyncProcessingWindowsService(args[0], args[1]) });
+        ServiceBase.Run(new ServiceBase[] { new ToposyncProcessingWindowsService(args[0], args[1]) });
     }
 
     protected override void OnStart(string[] args)
@@ -700,7 +700,7 @@ public sealed class TopoSyncProcessingWindowsService : ServiceBase
 
             if (String.IsNullOrWhiteSpace(runnerPath) || !File.Exists(runnerPath))
             {
-                throw new FileNotFoundException("TopoSync service runner was not found.", runnerPath);
+                throw new FileNotFoundException("Toposync service runner was not found.", runnerPath);
             }
 
             string powerShellExe = Path.Combine(
@@ -723,7 +723,7 @@ public sealed class TopoSyncProcessingWindowsService : ServiceBase
             runnerProcess = Process.Start(startInfo);
             if (runnerProcess == null)
             {
-                throw new InvalidOperationException("Failed to start the TopoSync runner process.");
+                throw new InvalidOperationException("Failed to start the Toposync runner process.");
             }
 
             runnerProcess.EnableRaisingEvents = true;
@@ -742,7 +742,7 @@ public sealed class TopoSyncProcessingWindowsService : ServiceBase
         {
             if (runnerProcess == null || runnerProcess.HasExited)
             {
-                throw new InvalidOperationException("TopoSync runner exited during service startup with exit code " + GetProcessExitCode(runnerProcess) + ".");
+                throw new InvalidOperationException("Toposync runner exited during service startup with exit code " + GetProcessExitCode(runnerProcess) + ".");
             }
         }
     }
@@ -848,7 +848,7 @@ public sealed class TopoSyncProcessingWindowsService : ServiceBase
             -OutputAssembly $WrapperExePath `
             -OutputType WindowsApplication
     } catch {
-        throw "Failed to compile the TopoSync Windows service wrapper: $($_.Exception.Message)"
+        throw "Failed to compile the Toposync Windows service wrapper: $($_.Exception.Message)"
     }
 
     if (-not (Test-Path $WrapperExePath)) {
@@ -882,7 +882,7 @@ function Configure-FirewallRule {
         -Protocol TCP `
         -LocalPort $RulePort `
         -Profile $Profiles `
-        -Description "TopoSync Processing Server inbound API/SSE port." | Out-Null
+        -Description "Toposync Processing Server inbound API/SSE port." | Out-Null
 }
 
 function Configure-WindowsService {
@@ -918,7 +918,7 @@ function Configure-WindowsService {
         New-Service -Name $Name -DisplayName $DisplayName -BinaryPathName $binaryPath -StartupType Automatic | Out-Null
     }
 
-    & sc.exe description $Name "Runs TopoSync Processing Server for distributed pipelines." | Out-Null
+    & sc.exe description $Name "Runs Toposync Processing Server for distributed pipelines." | Out-Null
     Assert-LastExitCode "Setting service description for $Name"
     & sc.exe failure $Name reset= 86400 actions= restart/5000/restart/15000/restart/30000 | Out-Null
     Assert-LastExitCode "Setting service restart policy for $Name"
@@ -991,10 +991,10 @@ $venvDir = Join-Path $InstallRoot ".venv"
 $pythonInstallDir = Join-Path $InstallRoot "uv-python"
 $logDir = Join-Path $InstallRoot "logs"
 $runnerPath = Join-Path $InstallRoot "run-processing-server.ps1"
-$wrapperSourcePath = Join-Path $InstallRoot "TopoSyncProcessingService.cs"
-$wrapperExePath = Join-Path $InstallRoot "TopoSyncProcessingService.exe"
+$wrapperSourcePath = Join-Path $InstallRoot "ToposyncProcessingService.cs"
+$wrapperExePath = Join-Path $InstallRoot "ToposyncProcessingService.exe"
 $manifestPath = Join-Path $InstallRoot "processing-server-registration.json"
-$firewallRuleName = "TopoSync Processing Server ($ServiceName)"
+$firewallRuleName = "Toposync Processing Server ($ServiceName)"
 
 Write-Step "Preparing directories"
 New-Item -ItemType Directory -Force -Path $InstallRoot, $DataDir, $pythonInstallDir, $logDir | Out-Null
@@ -1023,7 +1023,7 @@ if (-not (Test-Path $venvPython)) {
     throw "Virtual environment Python was not found at $venvPython"
 }
 
-Write-Step "Installing TopoSync bundle: $packageSpec"
+Write-Step "Installing Toposync bundle: $packageSpec"
 Initialize-LocalCheckoutBuildDependencies -InstallPlan $installPlan
 Install-ToposyncBundle -Uv $uv -Python $venvPython -InstallPlan $installPlan
 
@@ -1157,7 +1157,7 @@ Write-Host "Local status URL: $localBaseUrl/api/processing/status"
 Write-Host "Origin URL to register: $baseUrl"
 Write-Host "Registration JSON saved at: $manifestPath"
 Write-Host ""
-Write-Host "Registration payload for the TopoSync origin:"
+Write-Host "Registration payload for the Toposync origin:"
 ($registration | ConvertTo-Json -Depth 5) | Write-Host
 Write-Host ""
 Write-Host "PowerShell registration example on the origin machine:"

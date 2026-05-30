@@ -136,7 +136,7 @@ def analyze_compiled_pipeline(
     diagnostic_node_keys = ("node_id", "operator_id", "pipeline_name", "upstream_nodes")
     missing_context_value = object()
 
-    # Extension/operator-owned diagnostics. TopoSync aggregates these without
+    # Extension/operator-owned diagnostics. Toposync aggregates these without
     # hard-coding domain-specific requirements in the core analyzer.
     for node_id in pipeline.topological_order:
         node = nodes_by_id.get(node_id)

@@ -1,5 +1,5 @@
 import React from "react";
-import type { TopoSyncHost } from "@toposync/plugin-api";
+import type { ToposyncHost } from "@toposync/plugin-api";
 
 import { SpatialVideo3DView } from "./SpatialVideo3DView";
 import { SpatialVideoView } from "./SpatialVideoView";
@@ -12,7 +12,7 @@ import {
 } from "./spatialSettings";
 import { spatialVideoTranslations } from "./translations";
 
-export function activate(host: TopoSyncHost): void {
+export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(spatialVideoTranslations);
   host.registerRenderView({
     id: SPATIAL_VIDEO_RENDER_VIEW_ID,

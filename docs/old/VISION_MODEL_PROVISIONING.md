@@ -11,7 +11,7 @@ The ONNX artifacts are local machine assets. They are intentionally not versione
 
 Current product policy:
 - RTMDet / RTMDet-Ins stay on `guided_upload`.
-- TopoSync should not offer generic remote auto-download for these built-in manifests.
+- Toposync should not offer generic remote auto-download for these built-in manifests.
 - When a first-party `Baixar nesta máquina` family is introduced officially, the first planned candidate is RF-DETR, after a new license and redistribution review for the exact weights/artifacts we would automate.
 
 ## Where the files must end up
@@ -147,11 +147,11 @@ For a normal user, the practical flow is:
 
 ## Enabling one-click install in the UI
 
-TopoSync does not bundle the official ONNX files in git. To let the UI install recommended models automatically, configure a source on the processing server machine.
+Toposync does not bundle the official ONNX files in git. To let the UI install recommended models automatically, configure a source on the processing server machine.
 
 ### Recommended: local mirror directory
 
-If you already exported or downloaded the ONNX files somewhere else on disk, point TopoSync to that directory:
+If you already exported or downloaded the ONNX files somewhere else on disk, point Toposync to that directory:
 
 ```bash
 export TOPOSYNC_VISION_OFFICIAL_MODEL_SOURCE_DIR=/absolute/path/to/onnx-mirror
@@ -173,7 +173,7 @@ If you host the ONNX files on an internal server or object storage:
 export TOPOSYNC_VISION_OFFICIAL_MODEL_BASE_URL=https://models.example.com/toposync/rtmdet
 ```
 
-TopoSync will try to fetch:
+Toposync will try to fetch:
 - `https://models.example.com/toposync/rtmdet/rtmdet_det_tiny.end2end.onnx`
 - `https://models.example.com/toposync/rtmdet/rtmdet_det_small.end2end.onnx`
 - `https://models.example.com/toposync/rtmdet/rtmdet_det_medium.end2end.onnx`

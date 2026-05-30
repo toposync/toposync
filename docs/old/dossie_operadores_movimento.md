@@ -9,13 +9,13 @@ Este documento consolida o que precisamos saber sobre:
 - pontos de extensao no backend, UI e wizards;
 - implicacoes praticas para desenhar novos operadores de deteccao de movimento.
 
-O foco aqui nao e descrever "tudo do TopoSync", e sim tudo que afeta diretamente a criacao de novos operadores de movimento sem quebrar o modelo atual da plataforma.
+O foco aqui nao e descrever "tudo do Toposync", e sim tudo que afeta diretamente a criacao de novos operadores de movimento sem quebrar o modelo atual da plataforma.
 
 ---
 
 ## 1. Visao geral da aplicacao
 
-TopoSync e um host de extensoes com:
+Toposync e um host de extensoes com:
 
 - backend Python/FastAPI;
 - frontend React carregando extensoes por Module Federation;
@@ -32,7 +32,7 @@ Arquitetura base:
 
 Ponto importante de projeto do repositorio:
 
-- TopoSync deve continuar generico.
+- Toposync deve continuar generico.
 - Comportamentos especificos de dominio devem ficar em extensoes.
 - Nao devemos colocar "gambiarras" no core para acomodar um caso especifico de uma extensao.
 

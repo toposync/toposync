@@ -1,8 +1,8 @@
 # HAOS on ARM64
 
-TopoSync supports Home Assistant OS add-on deployments on `aarch64` / `linux/arm64`.
+Toposync supports Home Assistant OS add-on deployments on `aarch64` / `linux/arm64`.
 
-The supported ARM target is 64-bit Home Assistant OS. The 32-bit architectures `armv7`, `armhf` and `i386` are not supported by Home Assistant Supervisor updates and are outside the TopoSync support target.
+The supported ARM target is 64-bit Home Assistant OS. The 32-bit architectures `armv7`, `armhf` and `i386` are not supported by Home Assistant Supervisor updates and are outside the Toposync support target.
 
 ## Recommended Hardware
 

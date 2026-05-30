@@ -123,13 +123,13 @@ O script:
 
 - exige ou reabre PowerShell como Administrador quando possível;
 - instala `uv` e Python 3.12 se necessário;
-- cria um ambiente em `%ProgramData%\TopoSync\ProcessingServer`;
+- cria um ambiente em `%ProgramData%\Toposync\ProcessingServer`;
 - instala o bundle `toposync`, `toposync-vision-directml` ou `toposync-vision-cuda`;
 - cria regra de firewall para a porta selecionada;
-- cria o serviço Windows `TopoSyncProcessingServer`;
+- cria o serviço Windows `ToposyncProcessingServer`;
 - configura restart automático em caso de falha;
 - gera senha Basic Auth por padrão;
-- salva o payload de registro em `%ProgramData%\TopoSync\ProcessingServer\processing-server-registration.json`.
+- salva o payload de registro em `%ProgramData%\Toposync\ProcessingServer\processing-server-registration.json`.
 
 Por padrão, o script usa a porta `49321`, não `9001`. A porta `9001` é registrada na IANA para outro serviço (`etlservicemgr`), então o instalador evita usá-la como padrão. Se a porta escolhida já estiver ocupada, o script procura a próxima porta livre.
 
@@ -163,7 +163,7 @@ Para remover o serviço, a regra de firewall e os arquivos de runtime, preservan
 powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_windows_processing_server.ps1
 ```
 
-Para remover também `%ProgramData%\TopoSync\ProcessingServer` inteiro:
+Para remover também `%ProgramData%\Toposync\ProcessingServer` inteiro:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_windows_processing_server.ps1 -RemoveData

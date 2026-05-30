@@ -1,6 +1,6 @@
 {
   "domain": "toposync",
-  "name": "TopoSync",
+  "name": "Toposync",
   "codeowners": ["@toposync"],
   "config_flow": true,
   "documentation": "https://github.com/toposync/toposync",

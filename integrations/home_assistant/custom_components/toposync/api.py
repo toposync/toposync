@@ -6,11 +6,11 @@ from urllib.parse import urljoin
 from aiohttp import ClientResponseError, ClientSession
 
 
-class TopoSyncApiError(RuntimeError):
-    """Raised when TopoSync API calls fail."""
+class ToposyncApiError(RuntimeError):
+    """Raised when Toposync API calls fail."""
 
 
-class TopoSyncClient:
+class ToposyncClient:
     def __init__(self, session: ClientSession, *, url: str, token: str = "") -> None:
         self._session = session
         self._base_url = str(url or "").strip().rstrip("/") + "/"
@@ -39,9 +39,9 @@ class TopoSyncClient:
                 response.raise_for_status()
                 return await response.json()
         except ClientResponseError as exc:
-            raise TopoSyncApiError(f"TopoSync API returned HTTP {exc.status}") from exc
+            raise ToposyncApiError(f"Toposync API returned HTTP {exc.status}") from exc
         except Exception as exc:  # noqa: BLE001
-            raise TopoSyncApiError(f"TopoSync API request failed: {exc}") from exc
+            raise ToposyncApiError(f"Toposync API request failed: {exc}") from exc
 
     async def get_cameras_manifest(self) -> dict[str, Any]:
         data = await self._json("GET", "/api/streams/home-assistant/cameras")
@@ -64,23 +64,23 @@ class TopoSyncClient:
     async def get_still(self, camera: dict[str, Any]) -> bytes:
         still_url = str(camera.get("still_url") or "").strip()
         if not still_url:
-            raise TopoSyncApiError("TopoSync camera has no still URL")
+            raise ToposyncApiError("Toposync camera has no still URL")
         headers = self._headers()
         try:
             async with self._session.get(self.url_for(still_url), headers=headers) as response:
                 response.raise_for_status()
                 return await response.read()
         except ClientResponseError as exc:
-            raise TopoSyncApiError(f"TopoSync still returned HTTP {exc.status}") from exc
+            raise ToposyncApiError(f"Toposync still returned HTTP {exc.status}") from exc
         except Exception as exc:  # noqa: BLE001
-            raise TopoSyncApiError(f"TopoSync still request failed: {exc}") from exc
+            raise ToposyncApiError(f"Toposync still request failed: {exc}") from exc
 
     async def webrtc_offer(self, camera: dict[str, Any], offer_sdp: str) -> str:
         offer_url = str(camera.get("webrtc_offer_url") or "").strip()
         if not offer_url:
-            raise TopoSyncApiError("TopoSync camera has no WebRTC offer URL")
+            raise ToposyncApiError("Toposync camera has no WebRTC offer URL")
         data = await self._json("POST", offer_url, json={"sdp": offer_sdp})
         answer = str(data.get("answer_sdp") or "").strip() if isinstance(data, dict) else ""
         if not answer:
-            raise TopoSyncApiError("TopoSync WebRTC answer is empty")
+            raise ToposyncApiError("Toposync WebRTC answer is empty")
         return answer

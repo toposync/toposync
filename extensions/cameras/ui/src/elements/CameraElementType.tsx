@@ -11,7 +11,7 @@ import type {
   EditorToolSession,
   ElementType,
   HostI18n,
-  TopoSyncHost,
+  ToposyncHost,
   Viewport2DContext,
 } from "@toposync/plugin-api";
 
@@ -269,7 +269,7 @@ function resolvePreferredCalibrationPtzSourceId(
   return sorted[0]?.id ?? "";
 }
 
-export function createCameraElementType(host: TopoSyncHost): ElementType {
+export function createCameraElementType(host: ToposyncHost): ElementType {
   const i18n = host.i18n;
   const iconGeometryCache = new Map<string, { geometry: any; scale: number }>();
   const iconTargetSize = 0.14;
@@ -501,7 +501,7 @@ function CameraEditor({
   remove: () => void;
   close: () => void;
   i18n: HostI18n;
-  host: TopoSyncHost;
+  host: ToposyncHost;
 }): React.ReactElement {
   const { t } = i18n.useI18n();
   const props = readRecord(element.props);
@@ -920,7 +920,7 @@ function CameraCalibrationModal({
 }: {
   open: boolean;
   onClose: () => void;
-  host: TopoSyncHost;
+  host: ToposyncHost;
   i18n: HostI18n;
   element: CompositionElement;
   cameraId: string;
@@ -2059,7 +2059,7 @@ function ControlPointsModal({
 }: {
   open: boolean;
   onClose: () => void;
-  host: TopoSyncHost;
+  host: ToposyncHost;
   i18n: HostI18n;
   cameraId: string;
   cameraConnectionType: CameraConnectionType | null;
@@ -3426,7 +3426,7 @@ function normalizePoseReference(poseReference: CameraPoseReference | null | unde
   };
 }
 
-function CameraAction({ element, i18n, host }: { element: CompositionElement; i18n: HostI18n; host: TopoSyncHost }): React.ReactElement {
+function CameraAction({ element, i18n, host }: { element: CompositionElement; i18n: HostI18n; host: ToposyncHost }): React.ReactElement {
   const { t } = i18n.useI18n();
   const props = readRecord(element.props);
   const cameraId = readString(props.camera_id).trim();

@@ -7,7 +7,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import TopoSyncApiError, TopoSyncClient
+from .api import ToposyncApiError, ToposyncClient
 from .const import (
     CONF_ENABLE_NATIVE_WEBRTC,
     CONF_TOKEN,
@@ -18,20 +18,20 @@ from .const import (
 )
 
 
-class TopoSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class ToposyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
         if user_input is not None:
-            client = TopoSyncClient(
+            client = ToposyncClient(
                 async_get_clientsession(self.hass),
                 url=user_input[CONF_URL],
                 token=user_input.get(CONF_TOKEN, ""),
             )
             try:
                 await client.get_cameras_manifest()
-            except TopoSyncApiError:
+            except ToposyncApiError:
                 errors["base"] = "cannot_connect"
             else:
                 await self.async_set_unique_id(str(user_input[CONF_URL]).rstrip("/"))

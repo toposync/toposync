@@ -293,7 +293,7 @@ def _http_post_soap_sync(
     soap_version: Literal["1.1", "1.2"],
 ) -> bytes:
     headers = {
-        "User-Agent": "TopoSync/0.1 (ONVIF)",
+        "User-Agent": "Toposync/0.1 (ONVIF)",
         "Accept": "application/soap+xml, text/xml, */*",
     }
 

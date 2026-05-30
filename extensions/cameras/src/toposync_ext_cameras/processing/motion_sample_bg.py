@@ -82,7 +82,7 @@ class SampleBackgroundMotionDetector:
         if cv2 is None or np is None:
             raise RuntimeError(
                 "OpenCV and NumPy are required for sample-based motion detection. "
-                "Install camera extras and restart TopoSync."
+                "Install camera extras and restart Toposync."
             )
 
         backend_raw = str(backend or "").strip().lower()
@@ -144,7 +144,7 @@ class SampleBackgroundMotionDetector:
         if cv2 is None or np is None:
             raise RuntimeError(
                 "OpenCV and NumPy are required for sample-based motion detection. "
-                "Install camera extras and restart TopoSync."
+                "Install camera extras and restart Toposync."
             )
 
         start_ts = time.time()

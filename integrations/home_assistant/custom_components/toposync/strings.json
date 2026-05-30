@@ -2,17 +2,17 @@
   "config": {
     "step": {
       "user": {
-        "title": "TopoSync",
-        "description": "Connect Home Assistant camera entities to TopoSync streaming.",
+        "title": "Toposync",
+        "description": "Connect Home Assistant camera entities to Toposync streaming.",
         "data": {
-          "url": "TopoSync URL",
+          "url": "Toposync URL",
           "token": "API token",
           "enable_native_webrtc": "Enable native WebRTC (experimental)"
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to TopoSync."
+      "cannot_connect": "Failed to connect to Toposync."
     }
   }
 }

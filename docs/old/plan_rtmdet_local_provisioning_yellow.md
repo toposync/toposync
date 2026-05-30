@@ -3,14 +3,14 @@
 Date: 2026-03-28
 
 Objetivo:
-- Reduzir o atrito para disponibilizar RTMDet no TopoSync sem entrar em redistribuição, mirror, bundle ou conversão hospedada.
+- Reduzir o atrito para disponibilizar RTMDet no Toposync sem entrar em redistribuição, mirror, bundle ou conversão hospedada.
 - Ficar estritamente no cenário "amarelo": assistente local, admin-only, explícito, tudo na máquina do usuário.
 - Reaproveitar ao máximo o que o repositório já tem em manifests, install jobs, upload manual, status do processing server e catálogo de modelos.
 
 Fora de escopo neste plano:
 - bucket/CDN/object storage próprio com checkpoints ou ONNX
 - ONNX/checkpoints embutidos em wheel, Docker image, release ou catálogo hospedado
-- conversão na nuvem do TopoSync
+- conversão na nuvem do Toposync
 - cache compartilhado entre usuários
 - "1 clique" silencioso sem aceite explícito
 
@@ -37,7 +37,7 @@ Fontes:
 
 ### 1.2 O repositório já tem quase toda a superfície de produto necessária
 
-Hoje o TopoSync já possui:
+Hoje o Toposync já possui:
 
 - manifests formais por modelo
 - catálogo por tarefa com status de disponibilidade
@@ -142,7 +142,7 @@ Antes de iniciar o job:
 - mostrar `metafile_url`
 - mostrar `paper_url`
 - mostrar que o download/conversão ocorrerá localmente
-- mostrar que o TopoSync não hospedará os artefatos
+- mostrar que o Toposync não hospedará os artefatos
 - exigir checkbox de aceite
 
 Persistir no log do job:
@@ -237,7 +237,7 @@ Isso reduz o retrabalho na UI porque:
 
 ### 4.3 Builder local como responsabilidade da extensão `vision`
 
-Não empurrar isso para o core do TopoSync.
+Não empurrar isso para o core do Toposync.
 
 Responsabilidades da extensão `vision`:
 
@@ -268,7 +268,7 @@ Decisões obrigatórias:
 
 - sem redistribuição
 - sem cache compartilhado
-- sem nuvem do TopoSync tocando `.pth` ou `end2end.onnx`
+- sem nuvem do Toposync tocando `.pth` ou `end2end.onnx`
 - sem bundle em release/image
 - sem operador vendor-specific público
 
@@ -374,7 +374,7 @@ Comportamento esperado:
 
 Critérios de aceite:
 
-- admin consegue provisionar `RTMDet Small` sem sair do TopoSync
+- admin consegue provisionar `RTMDet Small` sem sair do Toposync
 - usuário comum continua vendo apenas o fluxo seguro já existente
 - o fluxo ainda deixa claro que se trata de build local explícito
 
@@ -486,7 +486,7 @@ Validar:
 - entendimento do usuário admin sobre o aviso
 - clareza de erro
 - clareza de que tudo fica local
-- clareza de que o TopoSync não está hospedando artefatos
+- clareza de que o Toposync não está hospedando artefatos
 
 ### 7.3 Validação de compliance operacional
 
@@ -561,11 +561,11 @@ Motivo:
 O cenário amarelo está pronto quando:
 
 - um admin em Linux consegue preparar `RTMDet Small` localmente no processing server
-- o TopoSync mostra origem upstream e exige aceite explícito
+- o Toposync mostra origem upstream e exige aceite explícito
 - o builder usa fluxo oficial e produz `end2end.onnx`
 - o ONNX final é validado contra hash esperado
 - o arquivo final fica somente na máquina do usuário
-- nenhum artefato é hospedado, espelhado ou compartilhado pelo TopoSync
+- nenhum artefato é hospedado, espelhado ou compartilhado pelo Toposync
 - a UI continua oferecendo upload manual como fallback
 
 ## 11. O que fica explicitamente para depois
@@ -574,7 +574,7 @@ Não incluir agora:
 
 - RTMDet-Ins na primeira entrega
 - Windows/macOS nativos
-- Docker image do TopoSync já contendo o builder embutido por default
+- Docker image do Toposync já contendo o builder embutido por default
 - múltiplos backends de export
 - automação para pesos de terceiros fora do shortlist
 - qualquer coisa que transforme o amarelo em delivery hospedado

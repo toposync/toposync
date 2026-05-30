@@ -427,7 +427,7 @@ class HomeAssistantBooleanStateRuntime(SinkRuntime):
         node_id = str(getattr(context, "node_id", "") or "").strip()
         if pipeline_name and node_id:
             return f"{pipeline_name} {node_id}"
-        return "TopoSync boolean state"
+        return "Toposync boolean state"
 
     def _managed_attributes(self, packet: Packet, context: Any, *, reason: str) -> dict[str, Any]:
         camera_id = _first_non_empty(

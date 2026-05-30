@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-import type { CompositionElement, CompositionElementPatch, HostI18n, TopoSyncHost } from "@toposync/plugin-api";
+import type { CompositionElement, CompositionElementPatch, HostI18n, ToposyncHost } from "@toposync/plugin-api";
 
 import { domainFromEntityId, isToggleDomain } from "../domain";
 import { readHomeAssistantItemRefs, readRecord, readString } from "../parsing";
@@ -12,7 +12,7 @@ type HomeAssistantActionProps = {
   element: CompositionElement;
   update: (patch: CompositionElementPatch) => void;
   close: () => void;
-  api: TopoSyncHost["api"];
+  api: ToposyncHost["api"];
   i18n: HostI18n;
 };
 

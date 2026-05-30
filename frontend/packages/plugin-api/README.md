@@ -4,7 +4,7 @@ Public TypeScript contract for Toposync frontend extensions.
 
 This package contains the stable host-side types used by Module Federation remotes, including:
 
-- `TopoSyncHost`
+- `ToposyncHost`
 - element types
 - editor tools
 - settings panels
@@ -28,9 +28,9 @@ npm install -D typescript @types/react @types/react-dom
 Use `import type` from the package and expose `activate(host)` from your remote entry:
 
 ```ts
-import type { TopoSyncHost } from "@toposync/plugin-api";
+import type { ToposyncHost } from "@toposync/plugin-api";
 
-export function activate(host: TopoSyncHost): void {
+export function activate(host: ToposyncHost): void {
   host.registerSettingsPanel({
     id: "com.example.demo",
     name: { key: "ext.demo.settings.name", fallback: "Demo" },

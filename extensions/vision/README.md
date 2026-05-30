@@ -66,7 +66,7 @@ The public surface is task-based, not vendor-based. The official first-party run
   - keeps manual ONNX upload available as the stable fallback path
   - is prioritized in the operator UI when nothing is installed and the local builder is actually available on that machine
 - Remote download sources are only enabled when the manifest explicitly allows redistribution. The current built-in RTMDet/RTMDet-Ins manifests do not, so the safe first-party flow is local admin-managed copy.
-- Product policy: RTMDet and RTMDet-Ins stay on `guided_upload` for now. RF-DETR is available only through assisted local build in this phase; it is not mirrored, bundled, or redistributed by TopoSync.
+- Product policy: RTMDet and RTMDet-Ins stay on `guided_upload` for now. RF-DETR is available only through assisted local build in this phase; it is not mirrored, bundled, or redistributed by Toposync.
 - Product policy: Ultralytics/YOLO is not part of the official first-party vision runtime path.
 - The extension now also ships a built-in RTMDet-Ins segmentation shortlist:
   - `rtmdet_ins_tiny`

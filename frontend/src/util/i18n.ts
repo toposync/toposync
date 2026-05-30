@@ -297,7 +297,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.access.action.save_user": "Save user",
     "core.ui.access.action.delete_user": "Delete user",
     "core.ui.access.pairing.title": "Pair native app",
-    "core.ui.access.pairing.desc": "Generate a temporary code for this TopoSync user.",
+    "core.ui.access.pairing.desc": "Generate a temporary code for this Toposync user.",
     "core.ui.access.pairing.code_label": "Pairing code",
     "core.ui.access.pairing.action.generate": "Generate code",
     "core.ui.access.pairing.action.regenerate": "Generate new code",
@@ -1462,7 +1462,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
       "Choose the segmentation model. This quick list favors models that fit the selected machine.",
     "core.ui.pipelines.panels.yolo.model_shortlist_hint":
-      "RF-DETR Medium is the default recommendation for object detection because TopoSync can prepare it through assisted local export. RTMDet stays available for the MMDetection/MMDeploy path.",
+      "RF-DETR Medium is the default recommendation for object detection because Toposync can prepare it through assisted local export. RTMDet stays available for the MMDetection/MMDeploy path.",
     "core.ui.pipelines.panels.yolo.segmentation_model_shortlist_hint":
       "RTMDet-Ins Tiny is the lightest option, Small is the default balance, and Medium spends more machine resources for better masks.",
     "core.ui.pipelines.panels.yolo.processing_server_hint":
@@ -1502,7 +1502,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.artifact_modal.intro":
       "Use this flow when the selected machine still does not have the ONNX file for {{model}}.",
     "core.ui.pipelines.panels.yolo.artifact_modal.intro_checkpoint_export":
-      "The official page for {{model}} gives you a checkpoint file like .pth. This step needs the exported .onnx file, and TopoSync handles the validation and placement after you upload it.",
+      "The official page for {{model}} gives you a checkpoint file like .pth. This step needs the exported .onnx file, and Toposync handles the validation and placement after you upload it.",
     "core.ui.pipelines.panels.yolo.artifact_modal.expected_file": "Expected file: {{file}}",
     "core.ui.pipelines.panels.yolo.artifact_modal.steps_intro": "Simple path:",
     "core.ui.pipelines.panels.yolo.artifact_modal.steps_intro_checkpoint_export": "Best path for this model:",
@@ -1511,13 +1511,13 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.artifact_modal.step_download":
       "2. Download or export the ONNX file on your computer. Checkpoint files like .pth do not work here.",
     "core.ui.pipelines.panels.yolo.artifact_modal.step_drop":
-      "3. Drag the file here or choose it manually. TopoSync will verify it and place it correctly.",
+      "3. Drag the file here or choose it manually. Toposync will verify it and place it correctly.",
     "core.ui.pipelines.panels.yolo.artifact_modal.step_checkpoint_page":
       "1. Open the official checkpoint page and download the model checkpoint (.pth).",
     "core.ui.pipelines.panels.yolo.artifact_modal.step_export_onnx":
       "2. Follow the export guide to generate the final .onnx file for this model.",
     "core.ui.pipelines.panels.yolo.artifact_modal.step_upload_exported_onnx":
-      "3. Upload the exported .onnx here. TopoSync verifies it and puts it in the right place automatically.",
+      "3. Upload the exported .onnx here. Toposync verifies it and puts it in the right place automatically.",
     "core.ui.pipelines.panels.yolo.artifact_modal.open_official_page": "Open official model page",
     "core.ui.pipelines.panels.yolo.artifact_modal.open_checkpoint_page": "Open checkpoint page",
     "core.ui.pipelines.panels.yolo.artifact_modal.open_export_guide": "Open export guide",
@@ -1525,9 +1525,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.artifact_modal.drop_title_exported_onnx":
       "Drag the exported .onnx file here or click to choose it",
     "core.ui.pipelines.panels.yolo.artifact_modal.drop_subtitle":
-      "After you select the file, TopoSync checks whether it matches this model before saving it.",
+      "After you select the file, Toposync checks whether it matches this model before saving it.",
     "core.ui.pipelines.panels.yolo.artifact_modal.drop_subtitle_checkpoint_export":
-      "If you only have a .pth checkpoint, use the export guide first. Upload the final .onnx here and TopoSync does the rest on this machine.",
+      "If you only have a .pth checkpoint, use the export guide first. Upload the final .onnx here and Toposync does the rest on this machine.",
     "core.ui.pipelines.panels.yolo.artifact_modal.upload_progress": "Sending file… {{progress}}%",
     "core.ui.pipelines.panels.yolo.artifact_modal.uploading": "Sending…",
     "core.ui.pipelines.panels.yolo.artifact_modal.apply_add": "Save this model file",
@@ -1722,7 +1722,7 @@ const translationsByLocale: Record<Locale, Translations> = {
       "RTMDet-Ins Medium: better mask quality when you can spend more latency per frame.",
     "core.ui.pipelines.panels.yolo.tracker_id": "Tracking method",
     "core.ui.pipelines.panels.yolo.tracker_id_hint":
-      "Choose how TopoSync keeps the same object linked from one frame to the next.",
+      "Choose how Toposync keeps the same object linked from one frame to the next.",
     "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_label": "Default (lightweight)",
     "core.ui.pipelines.panels.yolo.tracker_norfair_label": "More stable (Norfair)",
     "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_hint":
@@ -1858,7 +1858,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.custom_catalog.availability.unknown": "unknown",
     "core.ui.processing_servers.local_build.modal.title": "Confirm assisted local build",
     "core.ui.processing_servers.local_build.modal.intro": "The selected processing server will download the upstream checkpoint for {{model}} and export the ONNX locally.",
-    "core.ui.processing_servers.local_build.modal.local_only": "This phase keeps the model local to that machine. TopoSync does not mirror or bundle the model artifact.",
+    "core.ui.processing_servers.local_build.modal.local_only": "This phase keeps the model local to that machine. Toposync does not mirror or bundle the model artifact.",
     "core.ui.processing_servers.local_build.modal.field.machine": "Machine",
     "core.ui.processing_servers.local_build.modal.field.model": "Model",
     "core.ui.processing_servers.local_build.modal.field.runtime": "Builder runtime",
@@ -1875,7 +1875,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.vision.local_build_modal.intro_update":
       "The selected processing server will download the upstream checkpoint for {{model}} again and replace the current ONNX locally.",
     "core.ui.vision.local_build_modal.local_only":
-      "This phase keeps the model local to that machine. TopoSync does not mirror or bundle the model artifact.",
+      "This phase keeps the model local to that machine. Toposync does not mirror or bundle the model artifact.",
     "core.ui.vision.local_build_modal.field.machine": "Machine",
     "core.ui.vision.local_build_modal.field.model": "Model",
     "core.ui.vision.local_build_modal.field.runtime": "Builder runtime",
@@ -1893,16 +1893,16 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.vision.custom_onnx_modal.title_classification": "Custom ONNX for image classification",
     "core.ui.vision.custom_onnx_modal.title_segmentation": "Custom ONNX for instance segmentation",
     "core.ui.vision.custom_onnx_modal.intro_detection":
-      "Upload an ONNX file, let TopoSync inspect it on the selected processing server, then validate the mapping before saving it into this catalog.",
+      "Upload an ONNX file, let Toposync inspect it on the selected processing server, then validate the mapping before saving it into this catalog.",
     "core.ui.vision.custom_onnx_modal.intro_classification":
-      "Upload an ONNX file, let TopoSync inspect it on the selected processing server, then validate the classification mapping before saving it into this catalog.",
+      "Upload an ONNX file, let Toposync inspect it on the selected processing server, then validate the classification mapping before saving it into this catalog.",
     "core.ui.vision.custom_onnx_modal.intro_segmentation":
-      "Upload an ONNX file, let TopoSync inspect it on the selected processing server, then validate the segmentation mapping before saving it into this catalog.",
+      "Upload an ONNX file, let Toposync inspect it on the selected processing server, then validate the segmentation mapping before saving it into this catalog.",
     "core.ui.vision.custom_onnx_modal.inspecting": "Inspecting ONNX…",
     "core.ui.vision.custom_onnx_modal.inspect_extension_error": "This wizard only accepts .onnx files.",
     "core.ui.vision.custom_onnx_modal.dropzone_title": "Drop an ONNX file here",
     "core.ui.vision.custom_onnx_modal.dropzone_hint":
-      "TopoSync inspects the graph locally on the selected processing server and suggests the right adapter.",
+      "Toposync inspects the graph locally on the selected processing server and suggests the right adapter.",
     "core.ui.vision.custom_onnx_modal.inspect_summary": "{{inputs}} input(s) • {{outputs}} output(s) • target task: {{task}}.",
     "core.ui.vision.custom_onnx_modal.task_detection": "object detection",
     "core.ui.vision.custom_onnx_modal.task_classification": "image classification",
@@ -2303,7 +2303,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.access.action.save_user": "Salvar usuário",
     "core.ui.access.action.delete_user": "Excluir usuário",
     "core.ui.access.pairing.title": "Parear app nativo",
-    "core.ui.access.pairing.desc": "Gere um código temporário para este usuário do TopoSync.",
+    "core.ui.access.pairing.desc": "Gere um código temporário para este usuário do Toposync.",
     "core.ui.access.pairing.code_label": "Código de pareamento",
     "core.ui.access.pairing.action.generate": "Gerar código",
     "core.ui.access.pairing.action.regenerate": "Gerar novo código",
@@ -3479,7 +3479,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
       "Escolha o modelo de segmentação. Esta lista rápida prioriza opções que cabem na máquina selecionada.",
     "core.ui.pipelines.panels.yolo.model_shortlist_hint":
-      "RF-DETR Medium é a recomendação padrão para detecção de objetos porque o TopoSync consegue prepará-lo por exportação local assistida. RTMDet continua disponível para o fluxo MMDetection/MMDeploy.",
+      "RF-DETR Medium é a recomendação padrão para detecção de objetos porque o Toposync consegue prepará-lo por exportação local assistida. RTMDet continua disponível para o fluxo MMDetection/MMDeploy.",
     "core.ui.pipelines.panels.yolo.segmentation_model_shortlist_hint":
       "RTMDet-Ins Tiny é a opção mais leve, Small é o equilíbrio padrão e Medium usa mais máquina para máscaras melhores.",
     "core.ui.pipelines.panels.yolo.processing_server_hint":
@@ -3520,7 +3520,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.artifact_modal.intro":
       "Use este fluxo quando a máquina selecionada ainda não tiver o arquivo ONNX de {{model}}.",
     "core.ui.pipelines.panels.yolo.artifact_modal.intro_checkpoint_export":
-      "A página oficial de {{model}} entrega um arquivo de checkpoint como .pth. Esta etapa precisa do arquivo .onnx exportado, e o TopoSync faz a validação e coloca no lugar certo depois do upload.",
+      "A página oficial de {{model}} entrega um arquivo de checkpoint como .pth. Esta etapa precisa do arquivo .onnx exportado, e o Toposync faz a validação e coloca no lugar certo depois do upload.",
     "core.ui.pipelines.panels.yolo.artifact_modal.expected_file": "Arquivo esperado: {{file}}",
     "core.ui.pipelines.panels.yolo.artifact_modal.steps_intro": "Caminho simples:",
     "core.ui.pipelines.panels.yolo.artifact_modal.steps_intro_checkpoint_export": "Melhor caminho para este modelo:",
@@ -3529,13 +3529,13 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.artifact_modal.step_download":
       "2. Baixe ou exporte o arquivo ONNX no seu computador. Arquivos de checkpoint como .pth não funcionam aqui.",
     "core.ui.pipelines.panels.yolo.artifact_modal.step_drop":
-      "3. Arraste o arquivo aqui ou escolha manualmente. O TopoSync verifica e coloca no lugar certo.",
+      "3. Arraste o arquivo aqui ou escolha manualmente. O Toposync verifica e coloca no lugar certo.",
     "core.ui.pipelines.panels.yolo.artifact_modal.step_checkpoint_page":
       "1. Abra a página oficial do checkpoint e baixe o checkpoint do modelo (.pth).",
     "core.ui.pipelines.panels.yolo.artifact_modal.step_export_onnx":
       "2. Siga o guia de exportação para gerar o arquivo final .onnx deste modelo.",
     "core.ui.pipelines.panels.yolo.artifact_modal.step_upload_exported_onnx":
-      "3. Envie aqui o .onnx exportado. O TopoSync verifica e coloca automaticamente no lugar certo.",
+      "3. Envie aqui o .onnx exportado. O Toposync verifica e coloca automaticamente no lugar certo.",
     "core.ui.pipelines.panels.yolo.artifact_modal.open_official_page": "Abrir página oficial do modelo",
     "core.ui.pipelines.panels.yolo.artifact_modal.open_checkpoint_page": "Abrir página do checkpoint",
     "core.ui.pipelines.panels.yolo.artifact_modal.open_export_guide": "Abrir guia de exportação",
@@ -3543,9 +3543,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.artifact_modal.drop_title_exported_onnx":
       "Arraste o arquivo .onnx exportado aqui ou clique para escolher",
     "core.ui.pipelines.panels.yolo.artifact_modal.drop_subtitle":
-      "Depois que você escolher o arquivo, o TopoSync verifica se ele corresponde a este modelo antes de salvar.",
+      "Depois que você escolher o arquivo, o Toposync verifica se ele corresponde a este modelo antes de salvar.",
     "core.ui.pipelines.panels.yolo.artifact_modal.drop_subtitle_checkpoint_export":
-      "Se você só tem um checkpoint .pth, use primeiro o guia de exportação. Envie aqui o .onnx final e o TopoSync faz o resto nesta máquina.",
+      "Se você só tem um checkpoint .pth, use primeiro o guia de exportação. Envie aqui o .onnx final e o Toposync faz o resto nesta máquina.",
     "core.ui.pipelines.panels.yolo.artifact_modal.upload_progress": "Enviando arquivo… {{progress}}%",
     "core.ui.pipelines.panels.yolo.artifact_modal.uploading": "Enviando…",
     "core.ui.pipelines.panels.yolo.artifact_modal.apply_add": "Salvar este arquivo do modelo",
@@ -3742,7 +3742,7 @@ const translationsByLocale: Record<Locale, Translations> = {
       "RTMDet-Ins Medium: melhor qualidade de máscara quando você pode gastar mais latência por frame.",
     "core.ui.pipelines.panels.yolo.tracker_id": "Método de rastreamento",
     "core.ui.pipelines.panels.yolo.tracker_id_hint":
-      "Escolha como o TopoSync mantém o mesmo objeto ligado de um frame para o outro.",
+      "Escolha como o Toposync mantém o mesmo objeto ligado de um frame para o outro.",
     "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_label": "Padrão (leve)",
     "core.ui.pipelines.panels.yolo.tracker_norfair_label": "Mais estável (Norfair)",
     "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_hint":
@@ -3878,7 +3878,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.custom_catalog.availability.unknown": "desconhecido",
     "core.ui.processing_servers.local_build.modal.title": "Confirmar build local assistido",
     "core.ui.processing_servers.local_build.modal.intro": "O processing server selecionado vai baixar o checkpoint upstream de {{model}} e exportar o ONNX localmente.",
-    "core.ui.processing_servers.local_build.modal.local_only": "Nesta fase o modelo fica local nessa máquina. O TopoSync não espelha nem embute esse artefato.",
+    "core.ui.processing_servers.local_build.modal.local_only": "Nesta fase o modelo fica local nessa máquina. O Toposync não espelha nem embute esse artefato.",
     "core.ui.processing_servers.local_build.modal.field.machine": "Máquina",
     "core.ui.processing_servers.local_build.modal.field.model": "Modelo",
     "core.ui.processing_servers.local_build.modal.field.runtime": "Runtime do builder",
@@ -3895,7 +3895,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.vision.local_build_modal.intro_update":
       "O processing server selecionado vai baixar novamente o checkpoint upstream de {{model}} e substituir o ONNX atual localmente.",
     "core.ui.vision.local_build_modal.local_only":
-      "Nesta fase o modelo fica local nessa máquina. O TopoSync não espelha nem embute esse artefato.",
+      "Nesta fase o modelo fica local nessa máquina. O Toposync não espelha nem embute esse artefato.",
     "core.ui.vision.local_build_modal.field.machine": "Máquina",
     "core.ui.vision.local_build_modal.field.model": "Modelo",
     "core.ui.vision.local_build_modal.field.runtime": "Runtime do builder",
@@ -3913,16 +3913,16 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.vision.custom_onnx_modal.title_classification": "ONNX personalizado para classificação de imagem",
     "core.ui.vision.custom_onnx_modal.title_segmentation": "ONNX personalizado para segmentação de instâncias",
     "core.ui.vision.custom_onnx_modal.intro_detection":
-      "Envie um arquivo ONNX, deixe o TopoSync inspecionar isso no processing server selecionado e valide o mapeamento antes de salvar no catálogo.",
+      "Envie um arquivo ONNX, deixe o Toposync inspecionar isso no processing server selecionado e valide o mapeamento antes de salvar no catálogo.",
     "core.ui.vision.custom_onnx_modal.intro_classification":
-      "Envie um arquivo ONNX, deixe o TopoSync inspecionar isso no processing server selecionado e valide o mapeamento de classificação antes de salvar no catálogo.",
+      "Envie um arquivo ONNX, deixe o Toposync inspecionar isso no processing server selecionado e valide o mapeamento de classificação antes de salvar no catálogo.",
     "core.ui.vision.custom_onnx_modal.intro_segmentation":
-      "Envie um arquivo ONNX, deixe o TopoSync inspecionar isso no processing server selecionado e valide o mapeamento de segmentação antes de salvar no catálogo.",
+      "Envie um arquivo ONNX, deixe o Toposync inspecionar isso no processing server selecionado e valide o mapeamento de segmentação antes de salvar no catálogo.",
     "core.ui.vision.custom_onnx_modal.inspecting": "Inspecionando ONNX…",
     "core.ui.vision.custom_onnx_modal.inspect_extension_error": "Este wizard aceita apenas arquivos .onnx.",
     "core.ui.vision.custom_onnx_modal.dropzone_title": "Solte um arquivo ONNX aqui",
     "core.ui.vision.custom_onnx_modal.dropzone_hint":
-      "O TopoSync inspeciona o grafo localmente no processing server selecionado e sugere o adapter correto.",
+      "O Toposync inspeciona o grafo localmente no processing server selecionado e sugere o adapter correto.",
     "core.ui.vision.custom_onnx_modal.inspect_summary": "{{inputs}} entrada(s) • {{outputs}} saída(s) • tarefa alvo: {{task}}.",
     "core.ui.vision.custom_onnx_modal.task_detection": "detecção de objetos",
     "core.ui.vision.custom_onnx_modal.task_classification": "classificação de imagem",

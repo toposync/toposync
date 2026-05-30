@@ -73,7 +73,7 @@ class AdaptiveBackgroundMotionDetector:
         if cv2 is None or np is None:
             raise RuntimeError(
                 "OpenCV and NumPy are required for adaptive motion detection. "
-                "Install camera extras and restart TopoSync."
+                "Install camera extras and restart Toposync."
             )
 
         self._backend = "knn" if str(backend or "").strip().lower() == "knn" else "mog2"
@@ -124,7 +124,7 @@ class AdaptiveBackgroundMotionDetector:
         if cv2 is None or np is None:
             raise RuntimeError(
                 "OpenCV and NumPy are required for adaptive motion detection. "
-                "Install camera extras and restart TopoSync."
+                "Install camera extras and restart Toposync."
             )
 
         start_ts = time.time()

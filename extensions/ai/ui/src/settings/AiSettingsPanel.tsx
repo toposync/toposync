@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-import type { SettingsPanel, TopoSyncHost } from "@toposync/plugin-api";
+import type { SettingsPanel, ToposyncHost } from "@toposync/plugin-api";
 
 import {
   DEFAULT_OLLAMA_HOST,
@@ -30,7 +30,7 @@ import type {
 } from "../types";
 
 type Props = {
-  i18n: TopoSyncHost["i18n"];
+  i18n: ToposyncHost["i18n"];
   settings: Record<string, unknown>;
   updateSettings: (patch: Record<string, unknown>) => void;
 };
@@ -394,7 +394,7 @@ function OllamaSection({
   onTest,
   onPull,
 }: {
-  t: TopoSyncHost["i18n"]["t"];
+  t: ToposyncHost["i18n"]["t"];
   provider: AiProviderConfig;
   models: OllamaModel[];
   catalog: AiModelCatalogEntry[];
@@ -511,7 +511,7 @@ function ProfilesSection({
   onAddProfile,
   onDeleteProfile,
 }: {
-  t: TopoSyncHost["i18n"]["t"];
+  t: ToposyncHost["i18n"]["t"];
   settings: AiExtensionSettings;
   profiles: AiProfileConfig[];
   providers: AiProviderConfig[];
@@ -685,7 +685,7 @@ function ProvidersSection({
   onToggleKey,
   onTest,
 }: {
-  t: TopoSyncHost["i18n"]["t"];
+  t: ToposyncHost["i18n"]["t"];
   providers: AiProviderConfig[];
   showKeys: Record<string, boolean>;
   busyProviderId: string | null;
@@ -773,7 +773,7 @@ function LimitsSection({
   usage,
   onChange,
 }: {
-  t: TopoSyncHost["i18n"]["t"];
+  t: ToposyncHost["i18n"]["t"];
   limits: AiLimitSettings;
   usage: UsageSnapshot | null;
   onChange: (patch: Partial<AiLimitSettings>) => void;
@@ -953,7 +953,7 @@ function ensureDefaultProfiles(profiles: AiProfileConfig[]): AiProfileConfig[] {
   return HARD_DEFAULTS.profiles.map(normalizeProfile);
 }
 
-function sectionLabel(section: Section, t: TopoSyncHost["i18n"]["t"]): string {
+function sectionLabel(section: Section, t: ToposyncHost["i18n"]["t"]): string {
   if (section === "ollama") return t("ext.ai.settings.ollama", {}, "Ollama");
   if (section === "profiles") return t("ext.ai.settings.profiles", {}, "Perfis");
   if (section === "providers") return t("ext.ai.settings.providers", {}, "Provedores");

@@ -57,9 +57,9 @@ Crie `extensions/minha_ext/ui` com webpack configurado para:
 O `activate.tsx` deve exportar `activate(host)` e registrar coisas:
 
 ```ts
-import type { TopoSyncHost } from "@toposync/plugin-api";
+import type { ToposyncHost } from "@toposync/plugin-api";
 
-export function activate(host: TopoSyncHost) {
+export function activate(host: ToposyncHost) {
   host.registerElementType({
     type: "com.suaorg.minha_ext.meu_elemento",
     name: "Meu Elemento",

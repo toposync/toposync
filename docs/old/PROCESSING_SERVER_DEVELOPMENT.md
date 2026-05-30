@@ -52,7 +52,7 @@ That flow still stays inside the "yellow" boundary:
 - the checkpoint is downloaded directly by the target processing server
 - the ONNX is exported locally on that machine
 - the final artifact is validated against the manifest checksum
-- TopoSync does not mirror, bundle, or host the checkpoint/ONNX for the user
+- Toposync does not mirror, bundle, or host the checkpoint/ONNX for the user
 
 Experimental assisted local build is also available for RF-DETR detection in this phase when all of these are true:
 - the processing server host is `linux`, `darwin`, or `windows`
@@ -63,7 +63,7 @@ Experimental assisted local build is also available for RF-DETR detection in thi
 That RF-DETR flow also stays inside the same "yellow" boundary:
 - the checkpoint is downloaded directly by the target processing server
 - the ONNX is exported locally on that machine through the official RF-DETR Python package
-- TopoSync does not mirror, bundle, or host the checkpoint/ONNX for the user
+- Toposync does not mirror, bundle, or host the checkpoint/ONNX for the user
 
 UI entry points in this phase:
 - pipeline editor recovery card for `vision.detect`

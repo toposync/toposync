@@ -131,7 +131,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Opt-in streaming chaos/soak acceptance harness for a real TopoSync instance.",
+        description="Opt-in streaming chaos/soak acceptance harness for a real Toposync instance.",
         epilog=(
             "Examples:\n"
             "  single stream 2h: scripts/streaming_chaos_acceptance.py "

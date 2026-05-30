@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { resolveToposyncUrl } from "@toposync/plugin-api";
-import type { SettingsPanel, TopoSyncHost } from "@toposync/plugin-api";
+import type { SettingsPanel, ToposyncHost } from "@toposync/plugin-api";
 
 import {
   clearStreamingEncoderQuarantine,
@@ -528,7 +528,7 @@ function StreamingSettingsPanelContent({
   i18n,
   settings,
 }: {
-  i18n: TopoSyncHost["i18n"];
+  i18n: ToposyncHost["i18n"];
   settings: Record<string, unknown>;
 }): React.ReactElement {
   const { t } = i18n.useI18n();

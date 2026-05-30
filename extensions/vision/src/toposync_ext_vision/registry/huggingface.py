@@ -513,7 +513,7 @@ def import_huggingface_onnx_model(
         notes = [
             f"Exported locally from Hugging Face Hub repo '{repo_id}' at revision '{resolved_revision}'.",
             f"Recipe used: '{selected_recipe_id or probe.get('recipe_id') or 'unknown'}'.",
-            "Imported through the TopoSync Hugging Face origin.",
+            "Imported through the Toposync Hugging Face origin.",
         ]
         acquisition_mode = "local_build_assisted"
         artifact_source = "checkpoint_export_required"
@@ -526,7 +526,7 @@ def import_huggingface_onnx_model(
     else:
         notes = [
             f"Downloaded from Hugging Face Hub repo '{repo_id}' at revision '{resolved_revision}'.",
-            "Imported through the TopoSync Hugging Face origin.",
+            "Imported through the Toposync Hugging Face origin.",
         ]
         acquisition_mode = "auto_download"
         artifact_source = "onnx_ready"

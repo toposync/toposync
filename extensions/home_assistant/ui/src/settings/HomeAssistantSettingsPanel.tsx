@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-import type { SettingsPanel, TopoSyncHost } from "@toposync/plugin-api";
+import type { SettingsPanel, ToposyncHost } from "@toposync/plugin-api";
 
 import { HOME_ASSISTANT_EXTENSION_ID } from "../constants";
 import { fetchHomeAssistantServers } from "../api/homeAssistantApi";
@@ -20,7 +20,7 @@ export function createHomeAssistantSettingsPanel(): SettingsPanel {
 }
 
 type HomeAssistantSettingsProps = {
-  i18n: TopoSyncHost["i18n"];
+  i18n: ToposyncHost["i18n"];
   settings: Record<string, unknown>;
   updateSettings: (patch: Record<string, unknown>) => void;
 };

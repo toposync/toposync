@@ -419,7 +419,7 @@ export type EditorTool = {
   createSession: (ctx: EditorToolContext) => EditorToolSession;
 };
 
-export type TopoSyncHost = {
+export type ToposyncHost = {
   registerElementType: (elementType: ElementType) => void;
   registerNotificationRenderer: (renderer: NotificationRenderer) => void;
   registerEditorTool: (tool: EditorTool) => void;

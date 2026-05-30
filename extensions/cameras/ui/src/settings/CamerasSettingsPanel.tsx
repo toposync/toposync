@@ -1176,7 +1176,7 @@ function CamerasSettingsPanelContent({
                               );
                             })}
                             <option value="runtime_local">{t("ext.cameras.settings.ingest.option.runtime_local", {}, "Centralizar onde o fluxo estiver rodando")}</option>
-                            <option value="direct">{t("ext.cameras.settings.ingest.option.direct", {}, "Não centralizar pelo TopoSync")}</option>
+                            <option value="direct">{t("ext.cameras.settings.ingest.option.direct", {}, "Não centralizar pelo Toposync")}</option>
                           </select>
                           <div className="settingsMetricGrid">
                             <div><span className="label">{t("ext.cameras.settings.ingest.summary.mode", {}, "Modo")}</span><div>{ingestModeLabel(activeSource, t)}</div></div>

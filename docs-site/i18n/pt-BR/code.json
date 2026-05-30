@@ -1,15 +1,84 @@
 {
+  "homepage.card.firstSteps.description": {
+    "message": "Comece com uma imagem de decalque, adicione áreas, posicione uma câmera e crie o primeiro fluxo simples."
+  },
+  "homepage.card.firstSteps.kicker": {
+    "message": "Primeiro uso"
+  },
+  "homepage.card.firstSteps.title": {
+    "message": "Crie a primeira composição"
+  },
+  "homepage.card.github.description": {
+    "message": "Reporte issues, inspecione o código, contribua com documentação e ajude a validar setups locais reais."
+  },
+  "homepage.card.github.title": {
+    "message": "Acompanhe o alpha"
+  },
+  "homepage.card.homeAssistant.description": {
+    "message": "Ingress na sidebar, operação supervisionada, acesso por porta direta e integração local com a Core API."
+  },
+  "homepage.card.homeAssistant.kicker": {
+    "message": "Home Assistant"
+  },
+  "homepage.card.homeAssistant.title": {
+    "message": "Rode dentro do seu ambiente HA"
+  },
+  "homepage.card.install.description": {
+    "message": "Python, Docker, CUDA, serviços Windows, add-on do Home Assistant e processing servers."
+  },
+  "homepage.card.install.kicker": {
+    "message": "Instalação"
+  },
+  "homepage.card.install.title": {
+    "message": "Escolha o caminho de implantação certo"
+  },
+  "homepage.cards.label": {
+    "message": "Pontos de entrada da documentação"
+  },
+  "homepage.chooseInstall": {
+    "message": "Escolher instalação"
+  },
   "homepage.description": {
-    "message": "Documentação da plataforma local-first Toposync"
+    "message": "Documentação da plataforma local-first de automação residencial espacial Toposync"
   },
-  "homepage.heading": {
-    "message": "Documentação do Toposync"
+  "homepage.eyebrow": {
+    "message": "Docs alpha · Operações espaciais local-first"
   },
-  "homepage.openDocs": {
-    "message": "Abrir documentação"
+  "homepage.headingLine1": {
+    "message": "Mapeie sua casa."
+  },
+  "homepage.headingLine2": {
+    "message": "Opere com contexto."
+  },
+  "homepage.highlights": {
+    "message": "Destaques"
+  },
+  "homepage.panel.cameras": {
+    "message": "Câmeras"
+  },
+  "homepage.panel.composition": {
+    "message": "Composição"
+  },
+  "homepage.panel.label": {
+    "message": "Visão geral do sistema Toposync"
+  },
+  "homepage.panel.pipelines": {
+    "message": "Pipelines"
+  },
+  "homepage.startFirstSteps": {
+    "message": "Começar pelos primeiros passos"
+  },
+  "homepage.stat.extensions": {
+    "message": "Runtime de extensões"
+  },
+  "homepage.stat.ha": {
+    "message": "Pronto para Home Assistant"
+  },
+  "homepage.stat.localFirst": {
+    "message": "Local-first"
   },
   "homepage.subtitle": {
-    "message": "Uma plataforma local-first para automação residencial, câmeras, contexto espacial e processamento extensível."
+    "message": "Documentação prática para instalar o Toposync, criar sua primeira composição espacial, conectar câmeras e construir fluxos de automação local-first."
   },
   "homepage.title": {
     "message": "Documentação do Toposync"

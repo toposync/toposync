@@ -5,4 +5,177 @@ sidebar_position: 4
 
 # Troubleshooting {/* #home-assistant-addon-troubleshooting */}
 
-This page is under construction.
+Use this page when the Toposync Home Assistant add-on does not install, does not open in the sidebar, cannot be reached through the direct port, or has streaming/network issues.
+
+## Where to look first {/* #where-to-look-first */}
+
+In Home Assistant:
+
+1. Open `Settings`.
+2. Open `Add-ons`.
+3. Open `Toposync`.
+4. Open `Logs`.
+
+Also check:
+
+- Supervisor logs for build and update failures;
+- the browser Network tab for ingress, asset, and streaming URL errors;
+- Toposync `Settings` from the sidebar when the UI opens.
+
+## Add-on does not appear {/* #add-on-does-not-appear */}
+
+Confirm that the repository URL was added exactly:
+
+```text
+https://github.com/toposync/toposync-homeassistant-addon
+```
+
+Then reload the Add-on Store repositories. If it still does not appear, confirm that your Home Assistant installation supports Supervisor add-ons.
+
+## Install or update fails while building the image {/* #install-or-update-fails-while-building-the-image */}
+
+This usually happens during Docker build or `pip install` inside the add-on image.
+
+Check Supervisor logs for:
+
+- package resolution errors;
+- network download failures;
+- insufficient disk space;
+- unsupported architecture;
+- Python package install errors;
+- go2rtc or FFmpeg install errors.
+
+If disk space is low, clean old backups, unused add-ons, old media, and large generated Toposync files before retrying.
+
+## Update does not appear {/* #update-does-not-appear */}
+
+Home Assistant can cache add-on repository metadata.
+
+Try:
+
+1. Open the Add-on Store.
+2. Reload repositories from the menu.
+3. Reopen the Toposync add-on page.
+4. Restart Home Assistant Supervisor if the store still shows stale metadata.
+
+Do not bump package versions only to work around store cache. First verify that the add-on repository has the expected `config.yaml` version.
+
+## Sidebar shows `502 Bad Gateway` {/* #sidebar-shows-502-bad-gateway */}
+
+`502` means Home Assistant ingress cannot reach the Toposync backend inside the add-on.
+
+Common causes:
+
+- the add-on is still starting;
+- the Toposync process crashed;
+- package import failed during startup;
+- the internal backend port is not listening;
+- the add-on image did not finish installing correctly.
+
+Check the add-on logs. The backend should eventually log that it is running on:
+
+```text
+http://0.0.0.0:18757
+```
+
+If it repeatedly crashes, copy the Python traceback from the add-on logs.
+
+## Sidebar opens but assets or routes fail {/* #sidebar-opens-but-assets-or-routes-fail */}
+
+When Toposync runs through Home Assistant ingress, browser-visible paths must preserve the ingress prefix.
+
+Symptoms:
+
+- `GET /main.js 404`;
+- extension remote assets return 404;
+- routes work directly but fail inside Home Assistant;
+- diagnostics links leave the ingress path.
+
+Refresh the browser after updating the add-on. If the problem remains, report the failing URL and whether it is missing the `/api/hassio_ingress/...` prefix.
+
+## Direct port refuses connection {/* #direct-port-refuses-connection */}
+
+Direct access is not enabled just because the add-on declares a port. You must map it in the add-on `Network` section:
+
+```yaml
+18756/tcp: 18756
+```
+
+Then use:
+
+```text
+http://homeassistant.local:18756/
+http://<home-assistant-ip>:18756/
+```
+
+If it still refuses connection:
+
+- restart the add-on;
+- confirm the mapping was saved;
+- check whether another service already uses host port `18756`;
+- check the add-on logs for direct proxy startup errors.
+
+## Direct access opens but login/setup is confusing {/* #direct-access-login-setup-is-confusing */}
+
+The add-on uses hybrid auth.
+
+- Sidebar access uses Home Assistant identity.
+- Direct access uses Toposync local users.
+- The first direct access does not create the initial local user from the public setup screen.
+
+Open Toposync from the sidebar first and create/manage local Toposync users there.
+
+## HLS works in the sidebar but fails from direct access {/* #hls-works-in-the-sidebar-but-fails-from-direct-access */}
+
+For web/mobile playback outside the sidebar, start with proxied HLS through:
+
+```text
+18756/tcp
+```
+
+Do not publish `18759/tcp` as the normal fix. The MediaMTX HLS listener is internal/diagnostic in the default add-on contract.
+
+Check that playback URLs point to the direct Toposync host and port, for example:
+
+```text
+http://<home-assistant-ip>:18756/api/streams/media/hls/...
+```
+
+## WebRTC is black or does not connect {/* #webrtc-is-black-or-does-not-connect */}
+
+WebRTC needs both signaling and media transport.
+
+If you use WebRTC outside the sidebar, map:
+
+```yaml
+18760/tcp: 18760
+18762/udp: 18762
+```
+
+Then make sure the client uses a hostname or IP that the add-on can advertise as a WebRTC host. If this is unreliable, switch dashboard playback to `Auto` or `HLS` unless low latency is required.
+
+## ONVIF discovery finds no cameras {/* #onvif-discovery-finds-no-cameras */}
+
+The add-on uses Supervisor network information and normal ONVIF discovery paths. Discovery can still fail when:
+
+- cameras are on another VLAN/subnet;
+- multicast or broadcast is blocked;
+- the camera does not expose ONVIF;
+- credentials are required before metadata is useful;
+- the Home Assistant host cannot reach the camera network.
+
+Try adding the camera manually by RTSP/ONVIF address if discovery is blocked by the network.
+
+## Raspberry Pi is slow or runs out of disk {/* #raspberry-pi-is-slow-or-runs-out-of-disk */}
+
+The add-on supports `aarch64`, but heavy media workloads are limited on ARM CPU.
+
+Recommended actions:
+
+- use a Raspberry Pi 5 with 8 GB RAM and NVMe for serious testing;
+- avoid SD cards for write-heavy camera/pipeline use;
+- reduce camera count and resolution;
+- delegate vision/OpenCV pipelines to a remote processing server;
+- clean large generated files, pipeline snapshots, and streaming runtime artifacts from the add-on data directory.
+
+See [File locations](../reference/file-locations.mdx) for where data is stored.

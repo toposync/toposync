@@ -5,4 +5,101 @@ sidebar_position: 1
 
 # Home Assistant add-on overview {/* #home-assistant-addon-overview */}
 
-This page is under construction.
+The Toposync Home Assistant add-on runs Toposync inside a Home Assistant Supervisor environment. It gives you a Toposync app in the Home Assistant sidebar, automatic access to the internal Home Assistant Core API, supervised execution, persistent add-on storage, and optional local-network access for browsers and mobile apps.
+
+Use this path when Home Assistant is the natural center of the installation and you want Toposync available from the sidebar without managing a separate Python service.
+
+## What the add-on provides {/* #what-the-add-on-provides */}
+
+- Sidebar access through Home Assistant ingress.
+- Automatic Home Assistant Core API access from inside the add-on.
+- Persistent Toposync data in the add-on data directory.
+- Home Assistant Supervisor lifecycle: install, start, stop, restart, update, logs, watchdog.
+- CPU-only Toposync runtime with the streaming bundle installed.
+- Support for `amd64` and `aarch64` Home Assistant OS.
+- ONVIF LAN discovery support using Supervisor network information, without requiring host networking.
+- Optional direct UI/API access on the local network.
+- Optional RTSP and WebRTC/WHEP streaming outputs.
+
+The add-on is not the CUDA/GPU deployment target. If you need GPU acceleration or heavy camera/vision processing, keep the add-on as the origin and delegate work to a remote processing server.
+
+## Runtime shape {/* #runtime-shape */}
+
+```text
+Home Assistant sidebar
+    -> Home Assistant ingress
+        -> Toposync backend inside the add-on
+            -> Toposync UI and API
+            -> Home Assistant Core API through Supervisor
+            -> Optional streaming engine
+            -> Optional remote processing servers
+```
+
+The internal Toposync backend listens on port `18757` inside the add-on. Home Assistant ingress forwards sidebar traffic to that backend.
+
+When direct access is enabled, the add-on also starts a local proxy on `18756`. That proxy forwards browser/mobile traffic to Toposync while stripping Home Assistant ingress identity headers, so direct access uses Toposync local authentication instead of pretending to be Home Assistant ingress.
+
+## Authentication model {/* #authentication-model */}
+
+The add-on uses hybrid authentication:
+
+- Sidebar access uses Home Assistant ingress identity.
+- Direct local-network access uses Toposync local authentication.
+
+Because of that, the first direct visit does not create a local user from the public setup screen. Create or manage local Toposync users from inside Toposync through the Home Assistant sidebar before relying on direct access from a browser or mobile app.
+
+## Networking model {/* #networking-model */}
+
+The default public path is Home Assistant ingress. Direct LAN ports are optional.
+
+| Port | Role | Published by default |
+| --- | --- | --- |
+| `18756/tcp` | Direct Toposync UI/API and proxied HLS for browsers/mobile apps | No |
+| `18757/tcp` | Internal backend and ingress target | No |
+| `18758/tcp` | RTSP streaming output | No |
+| `18759/tcp` | Internal/diagnostic HLS engine port | No |
+| `18760/tcp` | WebRTC/WHEP signaling | No |
+| `18761/tcp` | Internal MediaMTX API | No |
+| `18762/udp` | WebRTC media transport | No |
+
+For normal web and mobile playback, start with `18756/tcp`. RTSP and WebRTC should only be mapped when you actually need those protocols.
+
+See [Ports](../reference/ports.mdx) for the full port reference.
+
+## Data model {/* #data-model */}
+
+Inside the add-on container, Toposync stores data under:
+
+```text
+/data
+```
+
+Home Assistant Supervisor owns that storage. On the Home Assistant host, add-on data is typically visible under:
+
+```text
+/addon_configs/<add-on-slug>/
+```
+
+The exact slug depends on the installed repository. Look for the Toposync add-on entry under `/addon_configs`.
+
+See [File locations](../reference/file-locations.mdx) for the data layout.
+
+## Performance and architecture {/* #performance-and-architecture */}
+
+The add-on supports `amd64` and `aarch64`. On Raspberry Pi and similar ARM hardware, streaming pass-through and light usage are the realistic baseline. Heavy OpenCV, ONNX Runtime CPU inference, and multiple camera pipelines can saturate the device quickly.
+
+Recommended approach:
+
+- Use the add-on as the origin UI/API and Home Assistant integration point.
+- Keep light camera and dashboard work local.
+- Move heavy camera, vision, and pipeline workloads to a processing server on a stronger host.
+
+See [Compatibility](../installation/architecture-support.mdx) and [Processing server on Linux and macOS](../installation/processing-server-linux-macos.mdx).
+
+## Related pages {/* #related-pages */}
+
+- [Installation](installation.mdx)
+- [Configuration](configuration.mdx)
+- [Troubleshooting](troubleshooting.mdx)
+- [Home Assistant add-on quick install](../installation/home-assistant-addon.mdx)
+- [Architecture](../developers/architecture.mdx)

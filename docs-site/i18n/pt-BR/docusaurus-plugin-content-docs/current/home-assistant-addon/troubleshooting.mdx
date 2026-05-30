@@ -5,4 +5,177 @@ sidebar_position: 4
 
 # Solução de problemas {/* #home-assistant-addon-troubleshooting */}
 
-Esta página está em construção.
+Use esta página quando o add-on Home Assistant do Toposync não instala, não abre na sidebar, não responde pela porta direta ou apresenta problemas de streaming/rede.
+
+## Onde olhar primeiro {/* #where-to-look-first */}
+
+No Home Assistant:
+
+1. Abra `Configurações`.
+2. Abra `Add-ons`.
+3. Abra `Toposync`.
+4. Abra `Logs`.
+
+Confira também:
+
+- logs do Supervisor para falhas de build e atualização;
+- aba Network do navegador para erros de ingress, assets e URLs de streaming;
+- `Settings` do Toposync pela sidebar quando a UI abre.
+
+## Add-on não aparece {/* #add-on-does-not-appear */}
+
+Confirme que a URL do repositório foi adicionada exatamente assim:
+
+```text
+https://github.com/toposync/toposync-homeassistant-addon
+```
+
+Depois recarregue os repositórios da loja de add-ons. Se ainda não aparecer, confirme que sua instalação Home Assistant suporta add-ons do Supervisor.
+
+## Instalação ou atualização falha ao construir a imagem {/* #install-or-update-fails-while-building-the-image */}
+
+Isso normalmente acontece durante o build Docker ou `pip install` dentro da imagem do add-on.
+
+Confira nos logs do Supervisor:
+
+- erros de resolução de pacotes;
+- falhas de download por rede;
+- espaço em disco insuficiente;
+- arquitetura não suportada;
+- erros de instalação de pacotes Python;
+- erros de instalação de go2rtc ou FFmpeg.
+
+Se o espaço em disco estiver baixo, limpe backups antigos, add-ons não usados, mídia antiga e arquivos grandes gerados pelo Toposync antes de tentar novamente.
+
+## Atualização não aparece {/* #update-does-not-appear */}
+
+O Home Assistant pode manter cache de metadata dos repositórios de add-ons.
+
+Tente:
+
+1. Abra a loja de add-ons.
+2. Recarregue os repositórios pelo menu.
+3. Reabra a página do add-on Toposync.
+4. Reinicie o Home Assistant Supervisor se a loja ainda mostrar metadata antiga.
+
+Não faça bump de versões de pacote apenas para contornar cache da loja. Primeiro verifique se o repositório do add-on tem a versão esperada em `config.yaml`.
+
+## Sidebar mostra `502 Bad Gateway` {/* #sidebar-shows-502-bad-gateway */}
+
+`502` significa que o ingress do Home Assistant não consegue chegar ao backend Toposync dentro do add-on.
+
+Causas comuns:
+
+- o add-on ainda está iniciando;
+- o processo Toposync travou;
+- import de pacote falhou durante startup;
+- a porta interna do backend não está escutando;
+- a imagem do add-on não terminou de instalar corretamente.
+
+Confira os logs do add-on. O backend deve eventualmente registrar que está rodando em:
+
+```text
+http://0.0.0.0:18757
+```
+
+Se ele travar repetidamente, copie o traceback Python dos logs do add-on.
+
+## Sidebar abre, mas assets ou rotas falham {/* #sidebar-opens-but-assets-or-routes-fail */}
+
+Quando o Toposync roda pelo ingress do Home Assistant, caminhos visíveis no navegador precisam preservar o prefixo do ingress.
+
+Sintomas:
+
+- `GET /main.js 404`;
+- assets remotos de extensões retornam 404;
+- rotas funcionam diretamente, mas falham dentro do Home Assistant;
+- links de diagnóstico saem do caminho do ingress.
+
+Atualize o navegador depois de atualizar o add-on. Se o problema continuar, reporte a URL que falhou e se ela está sem o prefixo `/api/hassio_ingress/...`.
+
+## Porta direta recusa conexão {/* #direct-port-refuses-connection */}
+
+O acesso direto não fica ativo só porque o add-on declara uma porta. Você precisa mapeá-la na seção `Network` do add-on:
+
+```yaml
+18756/tcp: 18756
+```
+
+Depois use:
+
+```text
+http://homeassistant.local:18756/
+http://<ip-do-home-assistant>:18756/
+```
+
+Se ainda recusar conexão:
+
+- reinicie o add-on;
+- confirme que o mapeamento foi salvo;
+- verifique se outro serviço já usa a porta `18756` no host;
+- confira os logs do add-on por erros de startup do proxy direto.
+
+## Acesso direto abre, mas login/setup é confuso {/* #direct-access-login-setup-is-confusing */}
+
+O add-on usa autenticação híbrida.
+
+- Acesso pela sidebar usa identidade do Home Assistant.
+- Acesso direto usa usuários locais do Toposync.
+- O primeiro acesso direto não cria o usuário local inicial pela tela pública de setup.
+
+Abra o Toposync pela sidebar primeiro e crie/gerencie usuários locais por lá.
+
+## HLS funciona na sidebar, mas falha pelo acesso direto {/* #hls-works-in-the-sidebar-but-fails-from-direct-access */}
+
+Para playback web/móvel fora da sidebar, comece com HLS proxificado por:
+
+```text
+18756/tcp
+```
+
+Não publique `18759/tcp` como correção normal. O listener HLS do MediaMTX é interno/diagnóstico no contrato padrão do add-on.
+
+Verifique se as URLs de playback apontam para o host e porta direta do Toposync, por exemplo:
+
+```text
+http://<ip-do-home-assistant>:18756/api/streams/media/hls/...
+```
+
+## WebRTC fica preto ou não conecta {/* #webrtc-is-black-or-does-not-connect */}
+
+WebRTC precisa de sinalização e transporte de mídia.
+
+Se você usa WebRTC fora da sidebar, mapeie:
+
+```yaml
+18760/tcp: 18760
+18762/udp: 18762
+```
+
+Depois garanta que o cliente usa um hostname ou IP que o add-on consegue anunciar como host WebRTC. Se isso estiver instável, mude o playback do dashboard para `Auto` ou `HLS`, a menos que baixa latência seja necessária.
+
+## Descoberta ONVIF não encontra câmeras {/* #onvif-discovery-finds-no-cameras */}
+
+O add-on usa informações de rede do Supervisor e caminhos normais de descoberta ONVIF. A descoberta ainda pode falhar quando:
+
+- câmeras estão em outra VLAN/sub-rede;
+- multicast ou broadcast está bloqueado;
+- a câmera não expõe ONVIF;
+- credenciais são necessárias antes dos metadados serem úteis;
+- o host Home Assistant não consegue alcançar a rede da câmera.
+
+Tente adicionar a câmera manualmente pelo endereço RTSP/ONVIF se a descoberta estiver bloqueada pela rede.
+
+## Raspberry Pi está lento ou sem espaço {/* #raspberry-pi-is-slow-or-runs-out-of-disk */}
+
+O add-on suporta `aarch64`, mas cargas pesadas de mídia são limitadas em CPU ARM.
+
+Ações recomendadas:
+
+- use Raspberry Pi 5 com 8 GB de RAM e NVMe para testes sérios;
+- evite cartões SD para uso com muita escrita de câmeras/pipelines;
+- reduza quantidade de câmeras e resolução;
+- delegue pipelines de vision/OpenCV para um servidor de processamento remoto;
+- limpe arquivos gerados grandes, snapshots de pipeline e artefatos de runtime de streaming do diretório de dados do add-on.
+
+Veja [Locais de arquivos](../reference/file-locations.mdx) para onde os dados são armazenados.

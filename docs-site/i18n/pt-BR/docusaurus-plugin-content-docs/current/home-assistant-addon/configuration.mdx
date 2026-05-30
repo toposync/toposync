@@ -5,4 +5,110 @@ sidebar_position: 3
 
 # Configuração {/* #home-assistant-addon-configuration */}
 
-Esta página está em construção.
+O add-on Home Assistant tem duas camadas de configuração:
+
+- controles do add-on no Home Assistant, como iniciar/parar, iniciar na inicialização, watchdog, logs, atualizações e mapeamentos de portas de rede;
+- configuração do produto Toposync dentro da UI do Toposync, como usuários, estado da integração Home Assistant, câmeras, streaming, pipelines, modelos e settings.
+
+A maioria dos usuários deve configurar o Toposync pela UI na sidebar. O runtime do add-on em si deve permanecer simples.
+
+## Padrões de runtime do add-on {/* #add-on-runtime-defaults */}
+
+O add-on inicia o Toposync com estes padrões importantes:
+
+| Configuração | Valor |
+| --- | --- |
+| Diretório de dados do Toposync | `/data` |
+| Porta interna do backend | `18757` |
+| Porta opcional do proxy direto | `18756` |
+| Modo de autenticação | Híbrido Home Assistant |
+| Modo de conexão Home Assistant | Supervisor |
+| Auto-instalação de extensões no startup | Ativada |
+| Cache do motor de streaming | `/data/runtime` |
+
+Esses valores são definidos pelo entrypoint do add-on. Não altere, a menos que esteja desenvolvendo o próprio add-on.
+
+## Sidebar e ingress {/* #sidebar-and-ingress */}
+
+O acesso pela sidebar usa ingress do Home Assistant. A identidade do usuário vem do Home Assistant, e o Toposync trata usuários via ingress conforme a configuração de ingress confiável definida pelo add-on.
+
+Implicações importantes:
+
+- a sidebar não exige login separado no Toposync;
+- links, assets e rotas visíveis no navegador precisam preservar o base path do ingress;
+- o acesso direto não deve encaminhar headers de identidade do ingress do Home Assistant.
+
+O proxy direto do add-on remove headers relacionados a ingress antes de encaminhar tráfego direto da LAN para o Toposync.
+
+## Acesso direto {/* #direct-access */}
+
+Para expor o Toposync diretamente na rede local, mapeie:
+
+```yaml
+18756/tcp: 18756
+```
+
+O acesso direto é útil para navegadores e aplicativos móveis, mas usa usuários locais do Toposync, não a identidade do ingress do Home Assistant.
+
+No modo híbrido, a tela pública de primeiro acesso não é usada para criar o primeiro usuário local pela porta direta. Crie ou gerencie usuários locais pela sidebar antes de usar o acesso direto como caminho principal.
+
+## Configuração de streaming {/* #streaming-configuration */}
+
+O add-on configura o streaming para usar portas próprias do Toposync em vez dos defaults comuns do MediaMTX.
+
+| Função | Porta |
+| --- | --- |
+| UI/API direta e HLS proxificado | `18756/tcp` |
+| RTSP | `18758/tcp` |
+| Motor HLS interno | `18759/tcp` |
+| Sinalização WebRTC/WHEP | `18760/tcp` |
+| API interna do MediaMTX | `18761/tcp` |
+| Mídia WebRTC | `18762/udp` |
+
+O modo público padrão do HLS é proxy. Isso significa que URLs HLS para web/app móvel devem passar pela API do Toposync em `18756`, não por uma porta pública `18759`.
+
+Use esse padrão, exceto quando estiver diagnosticando o motor de mídia.
+
+## Hosts WebRTC {/* #webrtc-hosts */}
+
+Para WebRTC, o navegador precisa de candidates que batam com o host ou IP usado pelo cliente. O add-on tenta descobrir endereços LAN a partir das informações de rede do Home Assistant Supervisor e também adiciona `homeassistant.local`.
+
+Se WebRTC funciona por um hostname, mas não por outro, configure hosts públicos adicionais pelo ambiente/runtime do add-on apenas se você mantém um build customizado do add-on. A maioria dos usuários deve usar HLS, a menos que baixa latência seja necessária.
+
+## Delegação para servidor de processamento {/* #processing-server-delegation */}
+
+O add-on é CPU-only. Para cargas mais pesadas:
+
+1. Instale um servidor de processamento em outra máquina.
+2. Inicie com `toposync processing-serve`.
+3. Registre esse servidor no Toposync.
+4. Atribua pipelines pesados de câmera ou vision a esse servidor.
+
+Usos recomendados:
+
+- Raspberry Pi como origin com servidor de processamento x86/Apple Silicon;
+- Home Assistant OS como origin com servidor Windows CUDA ou DirectML;
+- Home Assistant OS como origin com servidor Linux NVIDIA.
+
+Veja [Servidor de processamento em Linux e macOS](../installation/processing-server-linux-macos.mdx), [Servidor de processamento como serviço Windows](../installation/processing-server-windows-service.mdx) e [Servidor de processamento em Docker](../installation/processing-server-docker.mdx).
+
+## Dados e backups {/* #data-and-backups */}
+
+Os dados do Toposync ficam em `/data` dentro do container do add-on e são gerenciados pelo Home Assistant Supervisor.
+
+Faça backup dos dados do add-on quando eles contiverem:
+
+- usuários e estado de autenticação;
+- settings da integração Home Assistant;
+- câmeras e calibração;
+- pipelines;
+- arquivos e modelos enviados;
+- estado de runtime de streaming.
+
+Veja [Locais de arquivos](../reference/file-locations.mdx).
+
+## Variáveis de ambiente avançadas {/* #advanced-environment-variables */}
+
+O add-on define internamente várias variáveis de ambiente, incluindo `TOPOSYNC_DATA_DIR`, `TOPOSYNC_AUTH_MODE`, `TOPOSYNC_HOME_ASSISTANT_CONNECTION_MODE` e variáveis de portas de streaming.
+
+Elas estão documentadas em [Variáveis de ambiente](../reference/environment-variables.mdx) para diagnóstico e builds customizados. Elas não são settings normais de usuário final no Home Assistant.

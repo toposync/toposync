@@ -5,4 +5,101 @@ sidebar_position: 1
 
 # Visão geral do add-on do Home Assistant {/* #home-assistant-addon-overview */}
 
-Esta página está em construção.
+O add-on Home Assistant do Toposync roda o Toposync dentro de um ambiente Home Assistant Supervisor. Ele entrega um app Toposync na sidebar do Home Assistant, acesso automático à API interna do Home Assistant Core, execução supervisionada, armazenamento persistente do add-on e acesso opcional pela rede local para navegadores e aplicativos móveis.
+
+Use este caminho quando o Home Assistant for o centro natural da instalação e você quiser o Toposync disponível pela sidebar sem administrar um serviço Python separado.
+
+## O que o add-on oferece {/* #what-the-add-on-provides */}
+
+- Acesso pela sidebar via ingress do Home Assistant.
+- Acesso automático à API do Home Assistant Core de dentro do add-on.
+- Dados persistentes do Toposync no diretório de dados do add-on.
+- Ciclo de vida pelo Home Assistant Supervisor: instalar, iniciar, parar, reiniciar, atualizar, logs e watchdog.
+- Runtime Toposync CPU-only com o bundle de streaming instalado.
+- Suporte a Home Assistant OS `amd64` e `aarch64`.
+- Suporte à descoberta ONVIF na rede local usando informações de rede do Supervisor, sem exigir host networking.
+- Acesso direto opcional à UI/API pela rede local.
+- Saídas opcionais de streaming RTSP e WebRTC/WHEP.
+
+O add-on não é o alvo de deploy CUDA/GPU. Se você precisar de aceleração GPU ou processamento pesado de câmeras/vision, mantenha o add-on como origin e delegue trabalho para um servidor de processamento remoto.
+
+## Formato de runtime {/* #runtime-shape */}
+
+```text
+Sidebar do Home Assistant
+    -> Ingress do Home Assistant
+        -> Backend Toposync dentro do add-on
+            -> UI e API do Toposync
+            -> API do Home Assistant Core via Supervisor
+            -> Motor de streaming opcional
+            -> Servidores de processamento remotos opcionais
+```
+
+O backend interno do Toposync escuta na porta `18757` dentro do add-on. O ingress do Home Assistant encaminha o tráfego da sidebar para esse backend.
+
+Quando o acesso direto está ativo, o add-on também inicia um proxy local em `18756`. Esse proxy encaminha tráfego de navegador/aplicativo móvel para o Toposync enquanto remove headers de identidade do ingress do Home Assistant, então o acesso direto usa autenticação local do Toposync em vez de fingir ser ingress do Home Assistant.
+
+## Modelo de autenticação {/* #authentication-model */}
+
+O add-on usa autenticação híbrida:
+
+- o acesso pela sidebar usa a identidade do ingress do Home Assistant;
+- o acesso direto pela rede local usa autenticação local do Toposync.
+
+Por isso, a primeira visita direta não cria um usuário local pela tela pública de setup. Crie ou gerencie usuários locais do Toposync por dentro do Toposync na sidebar do Home Assistant antes de depender do acesso direto por navegador ou aplicativo móvel.
+
+## Modelo de rede {/* #networking-model */}
+
+O caminho público padrão é o ingress do Home Assistant. Portas diretas na LAN são opcionais.
+
+| Porta | Função | Publicada por padrão |
+| --- | --- | --- |
+| `18756/tcp` | UI/API direta do Toposync e HLS proxificado para navegador/app móvel | Não |
+| `18757/tcp` | Backend interno e alvo de ingress | Não |
+| `18758/tcp` | Saída RTSP | Não |
+| `18759/tcp` | Porta HLS interna/diagnóstico do motor | Não |
+| `18760/tcp` | Sinalização WebRTC/WHEP | Não |
+| `18761/tcp` | API interna do MediaMTX | Não |
+| `18762/udp` | Transporte de mídia WebRTC | Não |
+
+Para playback web e móvel normal, comece por `18756/tcp`. RTSP e WebRTC devem ser mapeados somente quando você realmente precisar desses protocolos.
+
+Veja [Portas](../reference/ports.mdx) para a referência completa de portas.
+
+## Modelo de dados {/* #data-model */}
+
+Dentro do container do add-on, o Toposync armazena dados em:
+
+```text
+/data
+```
+
+O Home Assistant Supervisor é dono desse armazenamento. No host Home Assistant, os dados de add-ons normalmente aparecem em:
+
+```text
+/addon_configs/<slug-do-add-on>/
+```
+
+O slug exato depende do repositório instalado. Procure a entrada do add-on Toposync dentro de `/addon_configs`.
+
+Veja [Locais de arquivos](../reference/file-locations.mdx) para o layout de dados.
+
+## Performance e arquitetura {/* #performance-and-architecture */}
+
+O add-on suporta `amd64` e `aarch64`. Em Raspberry Pi e hardwares ARM similares, streaming pass-through e uso leve são a referência realista. OpenCV pesado, inferência ONNX Runtime em CPU e múltiplos pipelines de câmeras podem saturar o dispositivo rapidamente.
+
+Abordagem recomendada:
+
+- use o add-on como UI/API origin e ponto de integração com Home Assistant;
+- mantenha trabalho leve de câmeras e dashboards local;
+- mova cargas pesadas de câmeras, vision e pipelines para um servidor de processamento em um host mais forte.
+
+Veja [Compatibilidade](../installation/architecture-support.mdx) e [Servidor de processamento em Linux e macOS](../installation/processing-server-linux-macos.mdx).
+
+## Páginas relacionadas {/* #related-pages */}
+
+- [Instalação](installation.mdx)
+- [Configuração](configuration.mdx)
+- [Solução de problemas](troubleshooting.mdx)
+- [Instalação rápida do add-on Home Assistant](../installation/home-assistant-addon.mdx)
+- [Arquitetura](../developers/architecture.mdx)

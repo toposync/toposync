@@ -1,0 +1,160 @@
+---
+title: Visual identity
+sidebar_position: 6
+---
+
+# Visual identity {/* #visual-identity */}
+
+Toposync’s current visual identity is a **spatial operations interface**: a technical workspace that combines floor plans, 3D scenes, live cameras, automation controls, frosted surfaces, subtle gradients, and operational signals.
+
+This page is a product and contributor reference. It describes the direction already present in the application and the rules that should guide new core UI work and first-party extension UI work. It is not a complete brand manual, and it does not freeze future logo, website, or marketing decisions.
+
+## Concept {/* #concept */}
+
+Toposync sits between a technical map, an interactive architectural plan, a computer-vision monitoring surface, and a home or building automation console.
+
+The strongest metaphor is:
+
+- **Topo Day** is the architect’s table: paper, planning, review, editing, and precise spatial work.
+- **Topo Night** is the control room: monitoring, cameras, alerts, automation, and continuous operation.
+
+The product should not feel like a generic light/dark SaaS dashboard. The interface should feel spatial, layered, operational, and precise.
+
+## Design principles {/* #design-principles */}
+
+| Principle | Meaning |
+| --- | --- |
+| Topographic | Use grids, coordinates, floor plans, layers, and spatial references as real interface structure, not decoration. |
+| Operational | Status, camera feeds, alerts, pipelines, and Home Assistant controls need clear priority and fast readability. |
+| Frosted | Floating panels can use translucent surfaces, blur, saturation, and depth, but the effect must remain controlled. |
+| Precise | Spacing, typography, borders, icons, and motion should be restrained enough for long technical sessions. |
+| Dual-mode | Day and Night are two operating contexts, not just inverted color palettes. |
+
+## Themes {/* #themes */}
+
+The product currently has two built-in themes: `topo-day` and `topo-night`. `topo-night` is the default theme, reflecting the product’s operational-monitoring bias.
+
+Themes are applied through `data-toposync-base-theme` and `data-toposync-theme` on the document root. Extension themes can also contribute variables and CSS through `ThemeDefinition` in `@toposync/plugin-api`, so the visual system is intentionally extensible.
+
+### Topo Day {/* #topo-day */}
+
+Topo Day is the **Paper OS** direction: warm, clear, calm, and technical.
+
+It should be used for planning, editing, configuration, review, and long-form reading. Its base is warm paper rather than pure white, with light frosted surfaces and subtle canvas grids.
+
+Core values already present in the product include:
+
+| Role | Current direction |
+| --- | --- |
+| Application background | Warm paper, currently around `#f6f2ea`. |
+| Secondary background | Soft warm depth, currently around `#eee7dc`. |
+| Primary text | Near black, currently around `#101418`. |
+| Frost surface | Translucent white surfaces. |
+| 2D canvas | Paper-like spatial canvas. |
+| Grid | Dark low-opacity technical lines. |
+
+Day-mode UI should avoid fixed dark-blue surfaces unless they are intentionally used as a strong operational panel. Forms, cards, sidebars, and pipeline controls should prefer theme tokens over hard-coded Night materials.
+
+### Topo Night {/* #topo-night */}
+
+Topo Night is the **Operations OS** direction: dark, focused, active, and signal-oriented.
+
+It should be used for monitoring, streams, camera dashboards, alerts, automation, and continuous operation. Its base is deep navy-black, with dark frosted surfaces and stronger spatial depth.
+
+Core values already present in the product include:
+
+| Role | Current direction |
+| --- | --- |
+| Application background | Deep blue-black, currently around `#060914`. |
+| Secondary background | Dark navy depth, currently around `#0b1020`. |
+| Primary text | High-readability translucent white. |
+| Frost surface | Dark translucent glass. |
+| 2D canvas | Night-map surface. |
+| Grid | White low-opacity technical lines. |
+
+Night-mode UI should reserve vivid color, glow, and animation for meaningful state changes. If every panel is bright, nothing is operationally important.
+
+## Color roles {/* #color-roles */}
+
+Toposync uses both institutional color and operational signal color. Keep these roles distinct.
+
+| Role | Direction | Use |
+| --- | --- | --- |
+| Brand accent | Teal `#0ea5a4` and blue `#3b82f6`. | Product identity, links, axes, technical emphasis, and quiet active states. |
+| Primary action | Amber. | Main actions, active operational controls, and high-priority affordances. |
+| Focus and selection | Blue. | Keyboard focus, selected objects, editing state, and routeable focus rings. |
+| Success | Green. | Healthy state, completed work, connected systems. |
+| Warning | Amber or yellow. | Attention, degraded state, pending action. |
+| Danger | Red. | Destructive actions, failed state, critical alerts. |
+| Spatial signals | Cyan, pink, red, or other extension-specific signals. | Events, tracks, overlays, detections, and notification pins. |
+
+Accent colors should communicate state or identity. Avoid using vivid color as general decoration.
+
+## Materials and surfaces {/* #materials-and-surfaces */}
+
+The product uses a layered material system:
+
+- **Solid surfaces** for dense reading, forms, tables, and settings.
+- **Frosted surfaces** for floating controls, overlays, HUD panels, and contextual tools.
+- **Scrims** for modal isolation and destructive decisions.
+- **Subtle gradients and noise** for spatial depth without a heavy texture.
+- **Rounded panels and pill controls** for approachable technical controls.
+
+Glass effects should support hierarchy. Too much blur, saturation, shadow, or glow reduces readability and weakens the operational signal system.
+
+## Spatial canvas and grid {/* #spatial-canvas-and-grid */}
+
+The grid is a signature product element. It should appear as a functional spatial reference in the 2D canvas, mapping screens, camera alignment, pipeline previews, documentation imagery, and future marketing material.
+
+Grid rules:
+
+- Keep grid contrast low and theme-aware.
+- Use major and minor lines to support scale, not decoration.
+- Prefer spatial alignment over arbitrary card placement when the screen represents a place, camera, map, or sensor.
+- Avoid decorative grids on screens where they compete with dense text or settings.
+
+The 3D viewport currently supports `paper`, `pure`, and `night` background directions. Treat them as spatial environment choices, not generic wallpaper.
+
+## Typography and motion {/* #typography-and-motion */}
+
+The product UI currently favors system sans-serif fonts for performance, readability, and native feel across desktop, browser, Home Assistant ingress, and embedded views. Monospace should be reserved for code, identifiers, logs, payloads, URLs, and technical values.
+
+Future brand or marketing surfaces may use a more distinctive type family, but product UI should remain fast, legible, and resilient first.
+
+Motion should be short and purposeful:
+
+- Use micro-motion for hover, press, focus, selected state, and panel transitions.
+- Use animated signals for live monitoring, pipelines, detections, or events only when the motion carries information.
+- Respect `prefers-reduced-motion`.
+- Avoid decorative loops that compete with cameras, alerts, or spatial editing.
+
+## Extension UI guidance {/* #extension-ui-guidance */}
+
+Extensions should feel native to the Toposync host.
+
+- Use host theme tokens and `@toposync/plugin-api` contracts instead of private source imports.
+- Avoid hard-coded Night-only surfaces, especially in settings and forms.
+- Keep Day and Night contrast readable.
+- Treat bright colors as semantic signals.
+- Package static assets with the extension instead of relying on monorepo paths.
+- Test UI under the embedded production host, not only in extension development mode.
+
+See [Plugin API](./plugin-api.mdx) and [Extension authoring](./extension-authoring.mdx) for the public extension contracts.
+
+## Current risks {/* #current-risks */}
+
+The identity is already visible in the product, but a few areas still need discipline:
+
+- Some components still carry fixed dark materials that can feel out of place in Topo Day.
+- Accent colors need consistent semantics as more extensions add UI.
+- User visual preferences exist in the runtime, but not every preference is fully exposed or equally mature.
+- The product symbol exists, but the complete logo and wordmark system is not finalized here.
+- Third-party extension UI guidelines still need validation with real external extensions.
+
+## Related docs {/* #related-docs */}
+
+- [Architecture](./architecture.mdx)
+- [Development setup](./development-setup.mdx)
+- [Extension authoring](./extension-authoring.mdx)
+- [Plugin API](./plugin-api.mdx)
+- [Choose your installation](../installation/choose-your-installation.mdx)

@@ -1,0 +1,160 @@
+---
+title: Identidade visual
+sidebar_position: 6
+---
+
+# Identidade visual {/* #visual-identity */}
+
+A identidade visual atual do Toposync é a de uma **interface de operações espaciais**: um workspace técnico que combina plantas, cenas 3D, câmeras ao vivo, controles de automação, superfícies foscas, gradientes discretos e sinais operacionais.
+
+Esta página é uma referência de produto e contribuição. Ela descreve a direção que já aparece no aplicativo e as regras que devem orientar novas interfaces do core e de extensões first-party. Ela não é um manual completo de marca e não congela decisões futuras de logo, site ou marketing.
+
+## Conceito {/* #concept */}
+
+O Toposync fica entre um mapa técnico, uma planta arquitetônica interativa, uma superfície de monitoramento com visão computacional e um console de automação residencial ou predial.
+
+A metáfora mais forte é:
+
+- **Topo Day** é a mesa do arquiteto: papel, planejamento, revisão, edição e trabalho espacial preciso.
+- **Topo Night** é a sala de controle: monitoramento, câmeras, alertas, automação e operação contínua.
+
+O produto não deve parecer um dashboard SaaS claro/escuro genérico. A interface deve parecer espacial, em camadas, operacional e precisa.
+
+## Princípios de design {/* #design-principles */}
+
+| Princípio | Significado |
+| --- | --- |
+| Topográfico | Use grades, coordenadas, plantas, camadas e referências espaciais como estrutura real da interface, não como decoração. |
+| Operacional | Status, feeds de câmera, alertas, pipelines e controles do Home Assistant precisam de prioridade clara e leitura rápida. |
+| Fosco | Painéis flutuantes podem usar superfícies translúcidas, blur, saturação e profundidade, mas o efeito precisa ser controlado. |
+| Preciso | Espaçamento, tipografia, bordas, ícones e movimento devem ser contidos o bastante para sessões técnicas longas. |
+| Duplo | Day e Night são dois contextos de operação, não apenas paletas invertidas. |
+
+## Temas {/* #themes */}
+
+O produto tem hoje dois temas nativos: `topo-day` e `topo-night`. `topo-night` é o tema padrão, refletindo a inclinação operacional e de monitoramento do produto.
+
+Os temas são aplicados por `data-toposync-base-theme` e `data-toposync-theme` no root do documento. Temas de extensão também podem contribuir variáveis e CSS por `ThemeDefinition` em `@toposync/plugin-api`, então o sistema visual é intencionalmente extensível.
+
+### Topo Day {/* #topo-day */}
+
+Topo Day segue a direção **Paper OS**: quente, claro, calmo e técnico.
+
+Ele deve ser usado para planejamento, edição, configuração, revisão e leitura prolongada. A base é papel quente em vez de branco puro, com superfícies foscas claras e grades discretas de canvas.
+
+Valores centrais já presentes no produto:
+
+| Papel | Direção atual |
+| --- | --- |
+| Fundo da aplicação | Papel quente, hoje próximo de `#f6f2ea`. |
+| Fundo secundário | Profundidade quente e suave, hoje próxima de `#eee7dc`. |
+| Texto principal | Quase preto, hoje próximo de `#101418`. |
+| Superfície fosca | Superfícies brancas translúcidas. |
+| Canvas 2D | Canvas espacial com aparência de papel. |
+| Grade | Linhas técnicas escuras com baixa opacidade. |
+
+Interfaces em Day devem evitar superfícies azul-escuras fixas, exceto quando forem usadas intencionalmente como painel operacional forte. Formulários, cards, sidebars e controles de pipeline devem preferir tokens de tema em vez de materiais hard-coded de Night.
+
+### Topo Night {/* #topo-night */}
+
+Topo Night segue a direção **Operations OS**: escura, focada, ativa e orientada por sinais.
+
+Ele deve ser usado para monitoramento, streams, dashboards de câmera, alertas, automação e operação contínua. A base é azul-marinho quase preto, com superfícies foscas escuras e profundidade espacial mais forte.
+
+Valores centrais já presentes no produto:
+
+| Papel | Direção atual |
+| --- | --- |
+| Fundo da aplicação | Azul-preto profundo, hoje próximo de `#060914`. |
+| Fundo secundário | Profundidade em navy escuro, hoje próxima de `#0b1020`. |
+| Texto principal | Branco translúcido de alta legibilidade. |
+| Superfície fosca | Vidro escuro translúcido. |
+| Canvas 2D | Superfície de mapa noturno. |
+| Grade | Linhas técnicas brancas com baixa opacidade. |
+
+Interfaces em Night devem reservar cores vivas, brilho e animação para mudanças de estado significativas. Se todo painel é brilhante, nada é operacionalmente importante.
+
+## Papéis de cor {/* #color-roles */}
+
+O Toposync usa tanto cor institucional quanto cor de sinal operacional. Mantenha esses papéis separados.
+
+| Papel | Direção | Uso |
+| --- | --- | --- |
+| Acento de marca | Teal `#0ea5a4` e azul `#3b82f6`. | Identidade do produto, links, eixos, ênfase técnica e estados ativos discretos. |
+| Ação primária | Âmbar. | Ações principais, controles operacionais ativos e affordances de alta prioridade. |
+| Foco e seleção | Azul. | Foco por teclado, objetos selecionados, estado de edição e focus rings navegáveis. |
+| Sucesso | Verde. | Estado saudável, trabalho concluído, sistemas conectados. |
+| Aviso | Âmbar ou amarelo. | Atenção, estado degradado, ação pendente. |
+| Perigo | Vermelho. | Ações destrutivas, falhas e alertas críticos. |
+| Sinais espaciais | Ciano, rosa, vermelho ou outros sinais específicos de extensão. | Eventos, trilhas, overlays, detecções e pins de notificação. |
+
+Cores de acento devem comunicar estado ou identidade. Evite usar cores vivas como decoração geral.
+
+## Materiais e superfícies {/* #materials-and-surfaces */}
+
+O produto usa um sistema de materiais em camadas:
+
+- **Superfícies sólidas** para leitura densa, formulários, tabelas e configurações.
+- **Superfícies foscas** para controles flutuantes, overlays, painéis HUD e ferramentas contextuais.
+- **Scrims** para isolamento modal e decisões destrutivas.
+- **Gradientes e ruído discretos** para profundidade espacial sem textura pesada.
+- **Painéis arredondados e controles em pílula** para controles técnicos mais acessíveis.
+
+Efeitos de vidro devem apoiar a hierarquia. Excesso de blur, saturação, sombra ou brilho reduz a legibilidade e enfraquece o sistema de sinais operacionais.
+
+## Canvas espacial e grade {/* #spatial-canvas-and-grid */}
+
+A grade é um elemento de assinatura do produto. Ela deve aparecer como referência espacial funcional no canvas 2D, telas de mapeamento, alinhamento de câmeras, previews de pipeline, imagens de documentação e materiais futuros de marketing.
+
+Regras para grade:
+
+- Mantenha o contraste baixo e sensível ao tema.
+- Use linhas maiores e menores para apoiar escala, não decoração.
+- Prefira alinhamento espacial em vez de posicionamento arbitrário de cards quando a tela representa um lugar, câmera, mapa ou sensor.
+- Evite grades decorativas em telas onde elas competem com texto denso ou configurações.
+
+O viewport 3D hoje suporta as direções de fundo `paper`, `pure` e `night`. Trate isso como escolhas de ambiente espacial, não como wallpaper genérico.
+
+## Tipografia e movimento {/* #typography-and-motion */}
+
+A interface do produto hoje favorece fontes sans-serif do sistema por performance, legibilidade e sensação nativa em desktop, navegador, ingress do Home Assistant e views embarcadas. Monospace deve ser reservado para código, identificadores, logs, payloads, URLs e valores técnicos.
+
+Superfícies futuras de marca ou marketing podem usar uma família tipográfica mais distinta, mas a UI do produto deve continuar rápida, legível e resiliente primeiro.
+
+Movimento deve ser curto e intencional:
+
+- Use micro-movimento para hover, press, foco, estado selecionado e transições de painel.
+- Use sinais animados para monitoramento ao vivo, pipelines, detecções ou eventos apenas quando o movimento carrega informação.
+- Respeite `prefers-reduced-motion`.
+- Evite loops decorativos que competem com câmeras, alertas ou edição espacial.
+
+## Orientação para UI de extensões {/* #extension-ui-guidance */}
+
+Extensões devem parecer nativas ao host do Toposync.
+
+- Use tokens de tema do host e contratos de `@toposync/plugin-api` em vez de imports privados do código-fonte.
+- Evite superfícies hard-coded exclusivas de Night, especialmente em configurações e formulários.
+- Mantenha contraste legível em Day e Night.
+- Trate cores fortes como sinais semânticos.
+- Empacote assets estáticos junto da extensão em vez de depender de caminhos do monorepo.
+- Teste a UI no host de produção embutido, não só no modo de desenvolvimento da extensão.
+
+Veja [Plugin API](./plugin-api.mdx) e [Autoria de extensões](./extension-authoring.mdx) para os contratos públicos de extensão.
+
+## Riscos atuais {/* #current-risks */}
+
+A identidade já aparece no produto, mas algumas áreas ainda exigem disciplina:
+
+- Alguns componentes ainda carregam materiais escuros fixos que podem parecer deslocados no Topo Day.
+- Cores de acento precisam de semântica consistente conforme mais extensões adicionarem UI.
+- Preferências visuais do usuário existem no runtime, mas nem toda preferência está totalmente exposta ou igualmente madura.
+- O símbolo do produto existe, mas o sistema completo de logo e wordmark não está finalizado aqui.
+- As diretrizes de UI para extensões de terceiros ainda precisam ser validadas com extensões externas reais.
+
+## Documentos relacionados {/* #related-docs */}
+
+- [Arquitetura](./architecture.mdx)
+- [Ambiente de desenvolvimento](./development-setup.mdx)
+- [Autoria de extensões](./extension-authoring.mdx)
+- [Plugin API](./plugin-api.mdx)
+- [Escolha sua instalação](../installation/choose-your-installation.mdx)

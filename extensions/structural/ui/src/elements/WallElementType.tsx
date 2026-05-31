@@ -200,12 +200,26 @@ function openingPreviewStyle(kind: WallOpeningKind): { fill: string; stroke: str
   return { fill: "rgba(251,191,36,0.12)", stroke: "rgba(251,191,36,0.92)", dash: [9, 5] };
 }
 
+function readOpeningTextureForKind(kind: WallOpeningKind, value: unknown): ReturnType<typeof readOpeningTextureId> {
+  const texture = readOpeningTextureId(value, defaultTextureForKind(kind));
+  if (kind !== "window" && texture === "transparent") return defaultTextureForKind(kind);
+  return texture;
+}
+
 function openingVectorStyle(opening: ResolvedWallOpening): { fill: string; stroke: string; accent: string; highlight: string } {
   const fallback = defaultColorForKind(opening.kind) ?? "#cbd5e1";
   const color = opening.color ?? fallback;
-  const texture = readOpeningTextureId(opening.texture, defaultTextureForKind(opening.kind));
+  const texture = readOpeningTextureForKind(opening.kind, opening.texture);
 
   if (opening.kind === "window") {
+    if (texture === "transparent") {
+      return {
+        fill: "rgba(255,255,255,0.02)",
+        stroke: rgbaFromHex(shadeHex(color, -0.08), 0.34),
+        accent: "rgba(255,255,255,0.08)",
+        highlight: "rgba(255,255,255,0.10)",
+      };
+    }
     const glass = texture === "glass" ? color : "#b9d8f4";
     return {
       fill: rgbaFromHex(glass, 0.30),
@@ -249,7 +263,7 @@ function addDoorInsert(
   const frameDepth = thicknessWorld * 0.48;
   const panelDepth = thicknessWorld * 0.34;
 
-  const textureId = readOpeningTextureId(opening.texture, defaultTextureForKind("door"));
+  const textureId = readOpeningTextureForKind("door", opening.texture);
   const textureMap = getOpeningTexture(THREE, textureId);
 
   const frameMaterial = new THREE.MeshStandardMaterial({
@@ -315,7 +329,7 @@ function addWindowInsert(
   const frameDepth = thicknessWorld * 0.35;
   const paneDepth = thicknessWorld * 0.14;
 
-  const textureId = readOpeningTextureId(opening.texture, defaultTextureForKind("window"));
+  const textureId = readOpeningTextureForKind("window", opening.texture);
   const textureMap = getOpeningTexture(THREE, textureId);
 
   const frameMaterial = new THREE.MeshStandardMaterial({
@@ -350,11 +364,13 @@ function addWindowInsert(
 
   const paneWidth = opening.width_m - frameThickness * 2.2;
   const paneHeight = openingHeight - frameThickness * 2.2;
+  if (textureId === "transparent") return;
   if (paneWidth <= 0.08 || paneHeight <= 0.08) return;
 
   const paneGeometry = new THREE.BoxGeometry(paneWidth, paneHeight, paneDepth);
   let paneMaterial: ThreeTypes.Material;
   if (textureId === "glass") {
+    // Glass should tint the scene without hiding projected floor/video content behind it.
     paneMaterial = new THREE.MeshPhysicalMaterial({
       color: opening.color ?? defaultColorForKind("window") ?? "#b9d8f4",
       roughness: 0.1,
@@ -363,6 +379,8 @@ function addWindowInsert(
       thickness: 0.05,
       transparent: true,
       opacity: 0.55,
+      depthWrite: false,
+      side: THREE.DoubleSide,
     });
   } else {
     paneMaterial = new THREE.MeshStandardMaterial({
@@ -376,8 +394,9 @@ function addWindowInsert(
   const pane = new THREE.Mesh(paneGeometry, paneMaterial);
   (pane.userData as any).__toposyncAllowPickWhenGhostWalls = true;
   pane.position.set(opening.center_m, centerY, 0);
+  if (textureId === "glass") pane.renderOrder = 12;
   pane.castShadow = false;
-  pane.receiveShadow = true;
+  pane.receiveShadow = textureId !== "glass";
   group.add(pane);
 }
 
@@ -829,7 +848,7 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
 
       {sortedOpenings.map((opening) => {
         const kind = opening.kind;
-        const openingTexture = readOpeningTextureId(opening.texture, defaultTextureForKind(kind));
+        const openingTexture = readOpeningTextureForKind(kind, opening.texture);
         const openingColor = opening.color ?? defaultColorForKind(kind) ?? "#8f806a";
         const resolved = resolvedOpeningsById.get(opening.id) ?? null;
         const heightLabel =
@@ -943,6 +962,9 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
                     <option value="wood">{t("ext.structural.editor.texture.wood")}</option>
                     <option value="concrete">{t("ext.structural.editor.texture.concrete")}</option>
                     <option value="glass">{t("ext.structural.editor.texture.glass")}</option>
+                    {kind === "window" ? (
+                      <option value="transparent">{t("ext.structural.editor.texture.transparent_cutout")}</option>
+                    ) : null}
                   </select>
                 </div>
               </div>

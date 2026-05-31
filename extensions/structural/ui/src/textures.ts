@@ -3,7 +3,7 @@ type Texture = import("three").Texture;
 
 export type WallTextureId = "none" | "brick" | "concrete";
 export type FloorTextureId = "none" | "grass" | "concrete";
-export type OpeningTextureId = "none" | "wood" | "concrete" | "glass";
+export type OpeningTextureId = "none" | "wood" | "concrete" | "glass" | "transparent";
 export type TextureQuality = "simplified" | "detailed";
 
 function createCanvas(size: number): HTMLCanvasElement {
@@ -250,7 +250,7 @@ export function readFloorTextureId(value: unknown, fallback: FloorTextureId): Fl
 }
 
 export function readOpeningTextureId(value: unknown, fallback: OpeningTextureId): OpeningTextureId {
-  return value === "none" || value === "wood" || value === "concrete" || value === "glass" ? value : fallback;
+  return value === "none" || value === "wood" || value === "concrete" || value === "glass" || value === "transparent" ? value : fallback;
 }
 
 export function getWallTexture(THREE: Three, id: WallTextureId): Texture | null {
@@ -281,7 +281,7 @@ export function getFloorTexture(THREE: Three, id: FloorTextureId, quality: Textu
 }
 
 export function getOpeningTexture(THREE: Three, id: OpeningTextureId): Texture | null {
-  if (id === "none" || id === "glass") return null;
+  if (id === "none" || id === "glass" || id === "transparent") return null;
   if (id === "wood") return getCachedTexture(THREE, "opening:wood", createWoodTextureCanvas, { size: 256, anisotropy: 4 });
   if (id === "concrete") return getCachedTexture(THREE, "opening:concrete", createConcreteTextureCanvas, { size: 256, anisotropy: 4 });
   return null;

@@ -32,7 +32,7 @@ test("render mode selector switches between 3D, snapshot, vector, and streams", 
   await expect(page.locator(".streamsRoot")).toBeVisible();
   await expect(page.getByRole("button", { name: /^Rendering: Streams$/ })).toBeVisible();
 
-  await selectRenderMode(page, "3D (ThreeJS)");
+  await selectRenderMode(page, "3D");
   await expect(page.getByRole("button", { name: /^Rendering: 3D$/ })).toBeVisible();
 
   await selectRenderMode(page, "2D (Vector)");

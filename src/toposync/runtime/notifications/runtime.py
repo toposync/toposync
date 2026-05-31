@@ -36,12 +36,33 @@ class NotificationsRuntime:
         self.store = NotificationStore(data_dir / "notifications" / "notifications.sqlite3")
         self.broadcaster = EventBroadcaster()
 
-    async def list(self, *, before: int | None = None, limit: int = 50) -> tuple[list[dict[str, Any]], int | None]:
+    async def list(
+        self, *, before: int | None = None, limit: int = 50
+    ) -> tuple[list[dict[str, Any]], int | None]:
         records, next_cursor = await asyncio.to_thread(self.store.list, before=before, limit=limit)
         return ([_to_public(r) for r in records], next_cursor)
 
     async def count_by_priority(self) -> dict[str, int]:
         return await asyncio.to_thread(self.store.count_by_priority)
+
+    async def count_summary(self) -> dict[str, Any]:
+        total_by_priority, last_viewed_seq = await asyncio.to_thread(
+            lambda: (self.store.count_by_priority(), self.store.last_viewed_seq())
+        )
+        unread_by_priority = await asyncio.to_thread(
+            self.store.count_by_priority,
+            after_seq=last_viewed_seq,
+        )
+        return {
+            "total": sum(total_by_priority.values()),
+            "by_priority": total_by_priority,
+            "unread_total": sum(unread_by_priority.values()),
+            "unread_by_priority": unread_by_priority,
+        }
+
+    async def mark_all_viewed(self) -> dict[str, Any]:
+        await asyncio.to_thread(self.store.mark_all_viewed)
+        return await self.count_summary()
 
     async def get(self, notification_id: str) -> dict[str, Any] | None:
         rec = await asyncio.to_thread(self.store.get, notification_id)

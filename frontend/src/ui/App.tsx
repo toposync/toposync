@@ -33,6 +33,7 @@ import {
   getSettings,
   listCompositions,
   listNotifications,
+  markNotificationsViewed,
   emitEvent,
   patchExtensionSettings,
   patchAccessUser,
@@ -299,10 +300,13 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [notificationsCount, setNotificationsCount] = useState<NotificationsCount>({
     total: 0,
     by_priority: { low: 0, medium: 0, high: 0 },
+    unread_total: 0,
+    unread_by_priority: { low: 0, medium: 0, high: 0 },
   });
   const [activeNotificationId, setActiveNotificationId] = useState<string | null>(null);
   const lastUserInteractionTsRef = useRef<number>(Date.now());
   const hasManualNotificationSelectionRef = useRef(false);
+  const markNotificationsViewedInFlightRef = useRef<Promise<void> | null>(null);
   const [composition, setComposition] = useState<Composition>(() => defaultComposition());
   const compositionRef = useRef<Composition>(composition);
   const [compositions, setCompositions] = useState<Array<{ id: string; name: string }>>([]);
@@ -737,6 +741,11 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           setNotificationsCount((prev) => ({
             total: prev.total + 1,
             by_priority: { ...prev.by_priority, [bucket]: prev.by_priority[bucket] + 1 },
+            unread_total: prev.unread_total + 1,
+            unread_by_priority: {
+              ...prev.unread_by_priority,
+              [bucket]: prev.unread_by_priority[bucket] + 1,
+            },
           }));
 
           const now = Date.now();
@@ -1122,6 +1131,24 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     }
   }, [backendAvailable, notificationsCursor, notificationsHasMore, notificationsLoading]);
 
+  const markNotificationsAsViewed = useCallback(() => {
+    if (!backendAvailable) return;
+    if (markNotificationsViewedInFlightRef.current) return;
+
+    const promise = (async () => {
+      try {
+        const count = await markNotificationsViewed();
+        setNotificationsCount(count);
+      } catch (err) {
+        console.error("Failed to mark notifications viewed", err);
+      } finally {
+        markNotificationsViewedInFlightRef.current = null;
+      }
+    })();
+
+    markNotificationsViewedInFlightRef.current = promise;
+  }, [backendAvailable]);
+
   const selectNotification = useCallback((notificationId: string) => {
     setActiveNotificationId(notificationId);
     hasManualNotificationSelectionRef.current = true;
@@ -1241,6 +1268,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           renderViews={Object.values(renderViewsById)}
           onSelectNotification={selectNotification}
           onLoadMoreNotifications={loadMoreNotifications}
+          onNotificationsViewed={markNotificationsAsViewed}
           api={host.api}
           updateElement={updateElement}
           onEditComposition={() => setScreen("editor")}

@@ -760,6 +760,8 @@ export type NotificationsPage = {
 export type NotificationsCount = {
   total: number;
   by_priority: { low: number; medium: number; high: number };
+  unread_total: number;
+  unread_by_priority: { low: number; medium: number; high: number };
 };
 
 export type StreamingTransmissionOutput = {
@@ -1624,12 +1626,43 @@ export async function getNotificationsCount(): Promise<NotificationsCount> {
   if (!res.ok) throw new Error(`Failed to count notifications: ${res.status}`);
   const body = (await res.json()) as Partial<NotificationsCount>;
   const by = body.by_priority ?? { low: 0, medium: 0, high: 0 };
+  const unreadBy = body.unread_by_priority ?? by;
+  const total = typeof body.total === "number" ? body.total : 0;
+  const unreadTotal = typeof body.unread_total === "number" ? body.unread_total : total;
+  return {
+    total,
+    by_priority: {
+      low: typeof by.low === "number" ? by.low : 0,
+      medium: typeof by.medium === "number" ? by.medium : 0,
+      high: typeof by.high === "number" ? by.high : 0,
+    },
+    unread_total: unreadTotal,
+    unread_by_priority: {
+      low: typeof unreadBy.low === "number" ? unreadBy.low : 0,
+      medium: typeof unreadBy.medium === "number" ? unreadBy.medium : 0,
+      high: typeof unreadBy.high === "number" ? unreadBy.high : 0,
+    },
+  };
+}
+
+export async function markNotificationsViewed(): Promise<NotificationsCount> {
+  const res = await fetch("/api/notifications/viewed", { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to mark notifications viewed: ${res.status}`);
+  const body = (await res.json()) as Partial<NotificationsCount>;
+  const by = body.by_priority ?? { low: 0, medium: 0, high: 0 };
+  const unreadBy = body.unread_by_priority ?? { low: 0, medium: 0, high: 0 };
   return {
     total: typeof body.total === "number" ? body.total : 0,
     by_priority: {
       low: typeof by.low === "number" ? by.low : 0,
       medium: typeof by.medium === "number" ? by.medium : 0,
       high: typeof by.high === "number" ? by.high : 0,
+    },
+    unread_total: typeof body.unread_total === "number" ? body.unread_total : 0,
+    unread_by_priority: {
+      low: typeof unreadBy.low === "number" ? unreadBy.low : 0,
+      medium: typeof unreadBy.medium === "number" ? unreadBy.medium : 0,
+      high: typeof unreadBy.high === "number" ? unreadBy.high : 0,
     },
   };
 }

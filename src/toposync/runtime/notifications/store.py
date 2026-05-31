@@ -31,7 +31,14 @@ CREATE TABLE IF NOT EXISTS notification (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_dedupe_key ON notification(dedupe_key);
 CREATE INDEX IF NOT EXISTS idx_notification_seq_desc ON notification(seq DESC);
+
+CREATE TABLE IF NOT EXISTS notification_state (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 """
+
+_LAST_VIEWED_SEQ_KEY = "last_viewed_seq"
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -108,6 +115,14 @@ class NotificationStore:
             )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_notification_seq_desc ON notification(seq DESC)"
+            )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS notification_state (
+                  key   TEXT PRIMARY KEY,
+                  value TEXT NOT NULL
+                )
+                """
             )
 
     def _row_to_record(self, row: sqlite3.Row) -> NotificationRecord:
@@ -271,13 +286,67 @@ class NotificationStore:
                 raise RuntimeError("Failed to read notification after insert")
             return rec, True
 
-    def count_by_priority(self) -> dict[str, int]:
+    def _get_state_int_unlocked(self, key: str, default: int = 0) -> int:
+        cur = self._conn.execute(
+            "SELECT value FROM notification_state WHERE key = ? LIMIT 1",
+            (key,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return default
+        try:
+            return int(row["value"])
+        except Exception:
+            return default
+
+    def _set_state_int_unlocked(self, key: str, value: int) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO notification_state(key, value)
+            VALUES(?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, str(int(value))),
+        )
+
+    def _max_seq_unlocked(self) -> int:
+        cur = self._conn.execute("SELECT COALESCE(MAX(seq), 0) AS max_seq FROM notification")
+        row = cur.fetchone()
+        if row is None:
+            return 0
+        try:
+            return int(row["max_seq"] or 0)
+        except Exception:
+            return 0
+
+    def last_viewed_seq(self) -> int:
+        with self._lock:
+            return self._get_state_int_unlocked(_LAST_VIEWED_SEQ_KEY, 0)
+
+    def mark_all_viewed(self) -> int:
+        with self._lock:
+            seq = max(
+                self._max_seq_unlocked(),
+                self._get_state_int_unlocked(_LAST_VIEWED_SEQ_KEY, 0),
+            )
+            self._set_state_int_unlocked(_LAST_VIEWED_SEQ_KEY, seq)
+            return seq
+
+    def count_by_priority(self, *, after_seq: int | None = None) -> dict[str, int]:
         """Aggregate counts per priority bucket. Buckets match the frontend
         normalization: anything that is not exactly "low", "medium", or "high"
         is bucketed as "medium" so totals always sum to total."""
+        params: tuple[Any, ...]
+        where_sql = ""
+        if after_seq is not None:
+            where_sql = "WHERE seq > ?"
+            params = (int(after_seq),)
+        else:
+            params = ()
+
         with self._lock:
             cur = self._conn.execute(
-                """
+                f"""
                 SELECT
                   CASE LOWER(COALESCE(json_extract(payload_json, '$.priority'), ''))
                     WHEN 'low' THEN 'low'
@@ -286,8 +355,10 @@ class NotificationStore:
                   END AS bucket,
                   COUNT(*) AS n
                 FROM notification
+                {where_sql}
                 GROUP BY bucket
                 """,
+                params,
             )
             rows = cur.fetchall()
         out = {"low": 0, "medium": 0, "high": 0}

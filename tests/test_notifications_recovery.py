@@ -3,6 +3,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+import pytest
+
+from toposync.app import create_app
+import toposync.extensions.manager as ext_manager_mod
 from toposync.runtime.notifications import NotificationsRuntime
 
 
@@ -120,3 +125,90 @@ def test_notifications_upsert_archives_closed_dedupe_before_new_open(tmp_path: P
         assert by_id[second["id"]]["payload"]["status"] == "closed"
 
     asyncio.run(scenario())
+
+
+def test_notifications_unviewed_count_resets_after_mark_viewed(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+
+        await notifications.upsert(
+            type="pipelines.event",
+            title="High priority",
+            payload={"priority": "high"},
+        )
+        await notifications.upsert(
+            type="pipelines.event",
+            title="Low priority",
+            payload={"priority": "low"},
+        )
+
+        counts = await notifications.count_summary()
+        assert counts["total"] == 2
+        assert counts["unread_total"] == 2
+        assert counts["by_priority"] == {"low": 1, "medium": 0, "high": 1}
+        assert counts["unread_by_priority"] == {"low": 1, "medium": 0, "high": 1}
+
+        viewed_counts = await notifications.mark_all_viewed()
+        assert viewed_counts["total"] == 2
+        assert viewed_counts["unread_total"] == 0
+        assert viewed_counts["unread_by_priority"] == {"low": 0, "medium": 0, "high": 0}
+
+        await notifications.upsert(
+            type="pipelines.event",
+            title="Next priority",
+            payload={"priority": "medium"},
+        )
+
+        next_counts = await notifications.count_summary()
+        assert next_counts["total"] == 3
+        assert next_counts["unread_total"] == 1
+        assert next_counts["by_priority"] == {"low": 1, "medium": 1, "high": 1}
+        assert next_counts["unread_by_priority"] == {"low": 0, "medium": 1, "high": 0}
+
+    asyncio.run(scenario())
+
+
+def test_notifications_viewed_endpoint_does_not_reset_on_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
+    monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: [])
+
+    with TestClient(create_app()) as client:
+        notifications: NotificationsRuntime = client.app.state.notifications
+        asyncio.run(
+            notifications.upsert(
+                type="pipelines.event",
+                title="Initial",
+                payload={"priority": "high"},
+            )
+        )
+
+        listed = client.get("/api/notifications")
+        assert listed.status_code == 200
+        assert listed.json()["notifications"]
+
+        count = client.get("/api/notifications/count")
+        assert count.status_code == 200
+        assert count.json()["unread_total"] == 1
+
+        viewed = client.post("/api/notifications/viewed")
+        assert viewed.status_code == 200
+        assert viewed.json()["total"] == 1
+        assert viewed.json()["unread_total"] == 0
+
+        asyncio.run(
+            notifications.upsert(
+                type="pipelines.event",
+                title="After view",
+                payload={"priority": "low"},
+            )
+        )
+
+        next_count = client.get("/api/notifications/count")
+        assert next_count.status_code == 200
+        assert next_count.json()["total"] == 2
+        assert next_count.json()["unread_total"] == 1
+        assert next_count.json()["unread_by_priority"] == {"low": 1, "medium": 0, "high": 0}

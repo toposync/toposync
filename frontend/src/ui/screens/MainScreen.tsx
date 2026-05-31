@@ -47,6 +47,7 @@ type Props = {
   renderViews: RenderViewDefinition[];
   onSelectNotification: (notificationId: string) => void;
   onLoadMoreNotifications: () => void;
+  onNotificationsViewed: () => void;
   api: HostApi;
   updateElement: (elementId: string, patch: CompositionElementPatch) => void;
   onEditComposition: () => void;
@@ -209,16 +210,6 @@ function isFilterRestrictive(filter: NotificationsFilter): boolean {
   return false;
 }
 
-function expectedFilteredCount(filter: NotificationsFilter, count: NotificationsCount): number | null {
-  // We can compute an exact expected count from server counts only when the
-  // type/query filters are inactive — otherwise we have to fall back to
-  // counting loaded matches.
-  if (filter.types.length > 0 || filter.query.trim().length > 0) return null;
-  let total = 0;
-  for (const p of filter.priorities) total += count.by_priority[p] ?? 0;
-  return total;
-}
-
 type BuiltinRenderMode = "3d" | "2d" | "vector2d" | "streams";
 type RenderMode = BuiltinRenderMode | string;
 
@@ -249,6 +240,7 @@ export function MainScreen({
   renderViews,
   onSelectNotification,
   onLoadMoreNotifications,
+  onNotificationsViewed,
   api,
   updateElement,
   onEditComposition,
@@ -492,6 +484,12 @@ export function MainScreen({
   }, [notificationsOpen]);
 
   useEffect(() => {
+    if (!notificationsOpen) return;
+    if (notificationsCount.unread_total <= 0) return;
+    onNotificationsViewed();
+  }, [notificationsOpen, notificationsCount.unread_total, onNotificationsViewed]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(NOTIFICATIONS_FILTER_STORAGE_KEY, JSON.stringify(filter));
     } catch {
@@ -616,21 +614,14 @@ export function MainScreen({
     [notifications, matchesFilter],
   );
 
-  // Server-side total for the current filter when it's expressible there
-  // (priorities only). Otherwise null and we display the loaded-matches
-  // figure with a "+" suffix when more pages remain.
-  const expectedTotal = useMemo(() => expectedFilteredCount(filter, notificationsCount), [filter, notificationsCount]);
-
   const badgeLabel = useMemo(() => {
-    if (expectedTotal != null) {
-      if (expectedTotal <= 0) return null;
-      return expectedTotal > 999 ? "999+" : String(expectedTotal);
-    }
-    if (filteredLoadedCount <= 0) return null;
-    const suffix = notificationsHasMore ? "+" : "";
-    const cap = filteredLoadedCount > 999 ? "999+" : `${filteredLoadedCount}${suffix}`;
-    return cap;
-  }, [expectedTotal, filteredLoadedCount, notificationsHasMore]);
+    const unreadCount = filter.priorities.reduce(
+      (acc, prio) => acc + (notificationsCount.unread_by_priority[prio] ?? 0),
+      0,
+    );
+    if (unreadCount <= 0) return null;
+    return unreadCount > 999 ? "999+" : String(unreadCount);
+  }, [filter, notificationsCount]);
 
   const hiddenByFilterCount = useMemo(() => {
     if (!filterRestrictive) return 0;

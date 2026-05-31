@@ -244,6 +244,7 @@ export type CameraContextArea = {
   id: string;
   name: string;
   vertices_count: number;
+  vertices?: { x: number; z: number }[];
 };
 
 export type CameraContextCameraElement = {
@@ -266,7 +267,7 @@ export type CameraContextsResponse = {
   compositions: CameraContextComposition[];
 };
 
-export type CameraPipelinePreset = "people_detection" | "people_mapping";
+export type CameraPipelinePreset = "people_detection" | "people_mapping" | "vehicle_stopped";
 
 export type CameraPipelineSummary = {
   name: string;
@@ -288,6 +289,8 @@ export type CameraPipelinePresetRequest = {
   enabled?: boolean;
   processing_server_id?: string;
   composition_id?: string;
+  area_id?: string;
+  stopped_speed_threshold?: number;
   notification_title?: string;
   notification_description?: string;
 };

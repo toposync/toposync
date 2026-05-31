@@ -132,6 +132,48 @@ function sourceResolutionLabel(source: CameraSourceConfig): string {
   return parts.join(" / ") || "n/a";
 }
 
+const CAMERA_PIPELINE_PRESET_CARDS: {
+  id: CameraPipelinePreset;
+  requiresMapping: boolean;
+  titleKey: string;
+  titleFallback: string;
+  descriptionKey: string;
+  descriptionFallback: string;
+  stepsKey: string;
+  stepsFallback: string;
+}[] = [
+  {
+    id: "people_detection",
+    requiresMapping: false,
+    titleKey: "ext.cameras.pipeline_preset.people_detection.title",
+    titleFallback: "Detecção simples de pessoas",
+    descriptionKey: "ext.cameras.pipeline_preset.people_detection.card_desc",
+    descriptionFallback: "Detecta pessoas na imagem e abre notificações com recortes.",
+    stepsKey: "ext.cameras.pipeline_preset.people_detection.steps",
+    stepsFallback: "Movimento -> pessoas -> recorte -> notificação",
+  },
+  {
+    id: "people_mapping",
+    requiresMapping: true,
+    titleKey: "ext.cameras.pipeline_preset.people_mapping.title",
+    titleFallback: "Detecção e mapeamento de pessoas",
+    descriptionKey: "ext.cameras.pipeline_preset.people_mapping.card_desc",
+    descriptionFallback: "Detecta pessoas, projeta na composição e calcula velocidade.",
+    stepsKey: "ext.cameras.pipeline_preset.people_mapping.steps",
+    stepsFallback: "Movimento -> pessoas -> mapeamento -> velocidade",
+  },
+  {
+    id: "vehicle_stopped",
+    requiresMapping: true,
+    titleKey: "ext.cameras.pipeline_preset.vehicle_stopped.title",
+    titleFallback: "Veículo parou",
+    descriptionKey: "ext.cameras.pipeline_preset.vehicle_stopped.card_desc",
+    descriptionFallback: "Detecta veículos, estima velocidade e notifica quando o veículo para.",
+    stepsKey: "ext.cameras.pipeline_preset.vehicle_stopped.steps",
+    stepsFallback: "Movimento -> veículos -> velocidade -> imagem -> notificação",
+  },
+];
+
 function sourceHealthFor(
   health: CameraSourceHealthResponse | null,
   cameraId: string,
@@ -1341,29 +1383,48 @@ function CamerasSettingsPanelContent({
                     ) : null}
 
                     <div className="sectionDivider">
-                      <div className="rowWrap">
-                        <button
-                          className="primaryButton"
-                          type="button"
-                          disabled={!activeCamera.sources.some((source) => source.kind === "video" && source.enabled)}
-                          onClick={() => setPipelinePresetOpen("people_detection")}
-                        >
-                          {t("ext.cameras.pipeline_preset.people_detection.add", {}, "Adicionar detecção simples de pessoas")}
-                        </button>
-                        <button
-                          className="chipButton"
-                          type="button"
-                          disabled={!activeCamera.sources.some((source) => source.kind === "video" && source.enabled) || !hasMappedComposition}
-                          onClick={() => setPipelinePresetOpen("people_mapping")}
-                        >
-                          {t("ext.cameras.pipeline_preset.people_mapping.add", {}, "Adicionar detecção e mapeamento de pessoas")}
-                        </button>
+                      <div className="cameraPipelinePresetGrid">
+                        {CAMERA_PIPELINE_PRESET_CARDS.map((presetCard) => {
+                          const hasVideoSource = activeCamera.sources.some((source) => source.kind === "video" && source.enabled);
+                          const disabledReason = !hasVideoSource
+                            ? t("ext.cameras.pipelines.no_video_source", {}, "Adicione uma fonte de vídeo ativa antes de criar um fluxo.")
+                            : presetCard.requiresMapping && !hasMappedComposition
+                              ? t(
+                                  "ext.cameras.pipelines.mapping_required_for_preset",
+                                  {},
+                                  "Mapeie esta câmera em uma composição para usar este preset.",
+                                )
+                              : "";
+                          const disabled = Boolean(disabledReason);
+                          return (
+                            <button
+                              className="cameraPipelinePresetCard"
+                              key={presetCard.id}
+                              type="button"
+                              disabled={disabled}
+                              onClick={() => setPipelinePresetOpen(presetCard.id)}
+                            >
+                              <span className="cameraPipelinePresetTop">
+                                <span className="cameraPipelinePresetTitle">
+                                  {t(presetCard.titleKey, {}, presetCard.titleFallback)}
+                                </span>
+                                <span className={disabled ? "cameraPipelinePresetState isDisabled" : "cameraPipelinePresetState"}>
+                                  {disabled
+                                    ? t("ext.cameras.pipeline_preset.state.unavailable", {}, "Indisponível")
+                                    : t("ext.cameras.pipeline_preset.state.ready", {}, "Pronto")}
+                                </span>
+                              </span>
+                              <span className="cameraPipelinePresetDescription">
+                                {t(presetCard.descriptionKey, {}, presetCard.descriptionFallback)}
+                              </span>
+                              <span className="cameraPipelinePresetSteps">
+                                {t(presetCard.stepsKey, {}, presetCard.stepsFallback)}
+                              </span>
+                              {disabledReason ? <span className="cameraPipelinePresetDisabledReason">{disabledReason}</span> : null}
+                            </button>
+                          );
+                        })}
                       </div>
-                      {!hasMappedComposition ? (
-                        <div className="settingsStatusMuted">
-                          {t("ext.cameras.pipelines.mapping_required", {}, "Mapeie esta câmera em uma composição para criar o fluxo com mapeamento.")}
-                        </div>
-                      ) : null}
                     </div>
                   </div>
                 </div>

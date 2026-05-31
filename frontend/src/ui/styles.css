@@ -5247,6 +5247,99 @@ video {
   padding-top: 12px;
 }
 
+.settingsPanel .cameraPipelinePresetGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.settingsPanel .cameraPipelinePresetCard {
+  width: 100%;
+  min-width: 0;
+  min-height: 154px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+  text-align: left;
+  color: var(--color-text-primary);
+  background: var(--color-surface-frost);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+  cursor: pointer;
+}
+
+.settingsPanel .cameraPipelinePresetCard:hover:not(:disabled) {
+  border-color: var(--color-accent-border);
+  background: rgba(20, 31, 57, 0.72);
+}
+
+.settingsPanel .cameraPipelinePresetCard:disabled {
+  cursor: not-allowed;
+  opacity: 0.74;
+}
+
+.settingsPanel .cameraPipelinePresetTop {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.settingsPanel .cameraPipelinePresetTitle {
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.settingsPanel .cameraPipelinePresetState {
+  flex: 0 0 auto;
+  max-width: 44%;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--color-accent-text);
+  background: var(--color-accent-background);
+  border: 1px solid var(--color-accent-border);
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settingsPanel .cameraPipelinePresetState.isDisabled {
+  color: var(--color-text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--color-border-subtle);
+}
+
+.settingsPanel .cameraPipelinePresetDescription,
+.settingsPanel .cameraPipelinePresetSteps,
+.settingsPanel .cameraPipelinePresetDisabledReason {
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settingsPanel .cameraPipelinePresetSteps {
+  color: var(--color-text-secondary);
+}
+
+.settingsPanel .cameraPipelinePresetDisabledReason {
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
 .settingsPanel .cardBody {
   margin-top: 0;
   display: grid;

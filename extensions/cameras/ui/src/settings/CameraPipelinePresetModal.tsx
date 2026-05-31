@@ -72,7 +72,9 @@ function pipelineNamePart(value: string, fallback: string): string {
 }
 
 function presetNamePart(preset: CameraPipelinePreset): string {
-  return preset === "people_mapping" ? "deteccao_e_mapeamento_de_pessoas" : "deteccao_simples_de_pessoas";
+  if (preset === "people_mapping") return "deteccao_e_mapeamento_de_pessoas";
+  if (preset === "vehicle_stopped") return "veiculo_parou";
+  return "deteccao_simples_de_pessoas";
 }
 
 function defaultPipelineName(camera: CameraConfig, preset: CameraPipelinePreset): string {
@@ -94,6 +96,19 @@ function serverLabel(server: ProcessingServer): string {
   const id = normalizeServerId(server.id);
   const name = String(server.name || "").trim();
   return name ? `${name} (${id})` : id;
+}
+
+const VEHICLE_STOPPED_DEFAULT_SPEED_KMH = 1.0;
+
+function compositionIdForArea(compositions: CameraContextComposition[], areaId: string): string {
+  const normalizedAreaId = String(areaId || "").trim();
+  if (!normalizedAreaId) return "";
+  for (const composition of compositions) {
+    if ((composition.areas ?? []).some((area) => area.id === normalizedAreaId)) {
+      return composition.id;
+    }
+  }
+  return "";
 }
 
 export function CameraPipelinePresetModal({
@@ -124,6 +139,8 @@ export function CameraPipelinePresetModal({
   const [pipelineName, setPipelineName] = useState("");
   const [suggestedName, setSuggestedName] = useState("");
   const [compositionId, setCompositionId] = useState("");
+  const [areaId, setAreaId] = useState("");
+  const [stoppedSpeedKmh, setStoppedSpeedKmh] = useState(VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
   const [enabled, setEnabled] = useState(true);
   const [processingServerId, setProcessingServerId] = useState("local");
   const [creating, setCreating] = useState(false);
@@ -150,6 +167,8 @@ export function CameraPipelinePresetModal({
     setSuggestedName(nextSuggested);
     setPipelineName(nextSuggested);
     setCompositionId(mappedCompositions[0]?.id ?? "");
+    setAreaId("");
+    setStoppedSpeedKmh(VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
     setEnabled(sourceHasVideoOrigin(camera, nextSource));
     setProcessingServerId("local");
     setCreating(false);
@@ -166,6 +185,12 @@ export function CameraPipelinePresetModal({
     if (!pipelineName.trim() || pipelineName === previousSuggested) setPipelineName(nextSuggested);
   }
 
+  function updateArea(nextAreaId: string): void {
+    setAreaId(nextAreaId);
+    const nextCompositionId = compositionIdForArea(mappedCompositions, nextAreaId);
+    if (nextCompositionId) setCompositionId(nextCompositionId);
+  }
+
   async function submit(): Promise<void> {
     if (!preset || creating) return;
     setCreating(true);
@@ -177,7 +202,10 @@ export function CameraPipelinePresetModal({
         pipeline_name: pipelineName.trim() && pipelineName.trim() !== suggestedName ? pipelineName.trim() : "",
         enabled,
         processing_server_id: processingServerId,
-        composition_id: preset === "people_mapping" ? compositionId : "",
+        composition_id: preset === "people_mapping" || preset === "vehicle_stopped" ? compositionId : "",
+        area_id: preset === "vehicle_stopped" ? areaId : "",
+        stopped_speed_threshold:
+          preset === "vehicle_stopped" ? Math.max(0, Number(stoppedSpeedKmh) || 0) / 3.6 : undefined,
       });
       onCreated(response.pipeline_name);
       onClose();
@@ -190,10 +218,14 @@ export function CameraPipelinePresetModal({
 
   if (!open || !preset) return null;
 
-  const isMappingPreset = preset === "people_mapping";
-  const title = isMappingPreset
-    ? t("ext.cameras.pipeline_preset.people_mapping.title", {}, "People detection and mapping")
-    : t("ext.cameras.pipeline_preset.people_detection.title", {}, "Simple people detection");
+  const isMappingPreset = preset === "people_mapping" || preset === "vehicle_stopped";
+  const isVehicleStoppedPreset = preset === "vehicle_stopped";
+  const title =
+    preset === "people_mapping"
+      ? t("ext.cameras.pipeline_preset.people_mapping.title", {}, "People detection and mapping")
+      : preset === "vehicle_stopped"
+        ? t("ext.cameras.pipeline_preset.vehicle_stopped.title", {}, "Vehicle stopped")
+        : t("ext.cameras.pipeline_preset.people_detection.title", {}, "Simple people detection");
   const noSource = videoSources.length === 0;
   const noMapping = isMappingPreset && mappedCompositions.length === 0;
 
@@ -233,7 +265,7 @@ export function CameraPipelinePresetModal({
           </div>
         </div>
 
-        {isMappingPreset ? (
+        {preset === "people_mapping" ? (
           <div className="field">
             <label className="label">{t("ext.cameras.pipeline_preset.composition", {}, "Mapped composition")}</label>
             <select className="input" value={compositionId} onChange={(event) => setCompositionId(event.target.value)} disabled={noMapping || creating}>
@@ -243,6 +275,47 @@ export function CameraPipelinePresetModal({
                 </option>
               ))}
             </select>
+          </div>
+        ) : null}
+
+        {isVehicleStoppedPreset ? (
+          <div className="rowWrap">
+            <div className="field">
+              <label className="label">{t("ext.cameras.pipeline_preset.area", {}, "Optional area")}</label>
+              <select className="input" value={areaId} onChange={(event) => updateArea(event.target.value)} disabled={noMapping || creating}>
+                <option value="">
+                  {t("ext.cameras.pipeline_preset.area.whole_composition", {}, "Whole mapped composition")}
+                </option>
+                {mappedCompositions.map((composition) => {
+                  const areas = (composition.areas ?? []).filter((area) => Number(area.vertices_count || 0) >= 3);
+                  if (!areas.length) return null;
+                  return (
+                    <optgroup key={composition.id} label={composition.name || composition.id}>
+                      {areas.map((area) => (
+                        <option key={`${composition.id}:${area.id}`} value={area.id}>
+                          {area.name || area.id}
+                        </option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
+              </select>
+            </div>
+            <div className="field">
+              <label className="label">{t("ext.cameras.pipeline_preset.stopped_speed", {}, "Stopped sensitivity (km/h)")}</label>
+              <input
+                className="input"
+                type="number"
+                min="0"
+                step="0.1"
+                value={String(stoppedSpeedKmh)}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  setStoppedSpeedKmh(Number.isFinite(next) ? next : VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
+                }}
+                disabled={creating}
+              />
+            </div>
           </div>
         ) : null}
 
@@ -257,12 +330,18 @@ export function CameraPipelinePresetModal({
         </label>
 
         <div className="settingsStatusMuted">
-          {isMappingPreset
+          {preset === "people_mapping"
             ? t(
                 "ext.cameras.pipeline_preset.people_mapping.summary",
                 {},
                 "Uses the camera, motion, person detection, tracking, mapping, speed calculation, 10s throttling, object crops, storage and notifications.",
               )
+            : isVehicleStoppedPreset
+              ? t(
+                  "ext.cameras.pipeline_preset.vehicle_stopped.summary",
+                  {},
+                  "Uses motion, vehicle detection, tracking, mapping, optional area restriction, speed estimation, regular image storage and notification when the vehicle stops.",
+                )
             : t(
                 "ext.cameras.pipeline_preset.people_detection.summary",
                 {},

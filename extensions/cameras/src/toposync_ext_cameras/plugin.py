@@ -66,9 +66,13 @@ from .onvif import (
 EXTENSION_ID = "com.toposync.cameras"
 DEFAULT_CAMERA_DETECTION_MODEL_ID = "rfdetr_det_medium"
 PIPELINE_NAME_MAX_LENGTH = 120
+CAMERA_PIPELINE_PRESETS = ("people_detection", "people_mapping", "vehicle_stopped")
+VEHICLE_STOPPED_OBJECT_CATEGORIES = ["car", "truck", "bus", "motorcycle"]
+VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
 PRESET_PIPELINE_NAME_PARTS = {
     "people_detection": "deteccao_simples_de_pessoas",
     "people_mapping": "deteccao_e_mapeamento_de_pessoas",
+    "vehicle_stopped": "veiculo_parou",
 }
 
 
@@ -358,12 +362,14 @@ class CameraPipelinesResponse(BaseModel):
 
 
 class CameraPipelinePresetRequest(BaseModel):
-    preset: Literal["people_detection", "people_mapping"]
+    preset: Literal["people_detection", "people_mapping", "vehicle_stopped"]
     source_id: str = ""
     pipeline_name: str = ""
     enabled: bool = True
     processing_server_id: str = "local"
     composition_id: str = ""
+    area_id: str = ""
+    stopped_speed_threshold: float | None = Field(default=None, ge=0.0, le=1000.0)
     notification_title: str = ""
     notification_description: str = ""
 
@@ -2178,6 +2184,54 @@ class CamerasExtension(BaseExtension):
                 return False
             return False
 
+        def _area_points_from_element(element: Any) -> list[dict[str, float]]:
+            props = element.props if isinstance(getattr(element, "props", None), dict) else {}
+            vertices = props.get("vertices")
+            if not isinstance(vertices, list):
+                return []
+            points: list[dict[str, float]] = []
+            for vertex in vertices:
+                if not isinstance(vertex, dict):
+                    continue
+                try:
+                    x = float(vertex.get("x"))
+                    z = float(vertex.get("z"))
+                except Exception:
+                    continue
+                if not math.isfinite(x) or not math.isfinite(z):
+                    continue
+                points.append({"x": x, "z": z})
+            return points if len(points) >= 3 else []
+
+        def _resolve_mapped_camera_area(
+            cfg: Any, *, camera_id: str, area_id: str
+        ) -> tuple[str, dict[str, Any]] | None:
+            cid = str(camera_id or "").strip()
+            selected_area_id = str(area_id or "").strip()
+            if not cid or not selected_area_id:
+                return None
+            for composition in getattr(cfg, "compositions", []):
+                comp_id = str(getattr(composition, "id", "") or "").strip()
+                if not comp_id or not _composition_has_camera_mapping(
+                    cfg, camera_id=cid, composition_id=comp_id
+                ):
+                    continue
+                for element in getattr(composition, "elements", []):
+                    if str(getattr(element, "id", "") or "").strip() != selected_area_id:
+                        continue
+                    if str(getattr(element, "type", "") or "").strip() != "com.toposync.structural.area":
+                        continue
+                    points = _area_points_from_element(element)
+                    if not points:
+                        continue
+                    area_name = str(getattr(element, "name", "") or "").strip() or selected_area_id
+                    return comp_id, {
+                        "areas": [{"name": area_name, "points": points}],
+                        "include_area_names": [area_name],
+                        "drop_when_unmapped": True,
+                    }
+            return None
+
         def _pipeline_source_ids_for_camera(
             pipeline: Pipeline, *, camera_id: str
         ) -> tuple[bool, list[str]]:
@@ -2224,9 +2278,14 @@ class CamerasExtension(BaseExtension):
             camera_id: str,
             source_id: str,
             composition_id: str,
+            area_restriction_config: dict[str, Any] | None,
+            stopped_speed_threshold: float | None,
             notification_title: str,
             notification_description: str,
         ) -> dict[str, Any]:
+            detect_categories = (
+                VEHICLE_STOPPED_OBJECT_CATEGORIES if preset == "vehicle_stopped" else ["person"]
+            )
             base_nodes: list[dict[str, Any]] = [
                 {
                     "id": "source",
@@ -2248,7 +2307,7 @@ class CamerasExtension(BaseExtension):
                     "operator": "vision.detect",
                     "config": {
                         "model_id": DEFAULT_CAMERA_DETECTION_MODEL_ID,
-                        "categories": ["person"],
+                        "categories": detect_categories,
                         "confidence_threshold": 0.55,
                         "emit_mode": "annotate",
                     },
@@ -2292,43 +2351,168 @@ class CamerasExtension(BaseExtension):
                 node_ids = [str(node["id"]) for node in nodes]
                 return {"schema_version": 1, "nodes": nodes, "edges": _linear_edges(node_ids)}
 
-            if preset == "people_mapping":
+            if preset in {"people_mapping", "vehicle_stopped"}:
                 if not composition_id:
-                    raise ValueError("composition_id is required for people_mapping")
+                    raise ValueError(f"composition_id is required for {preset}")
                 tail_nodes = [
                     {
                         "id": "map",
                         "operator": "camera.camera_mapping",
                         "config": {"camera_id": camera_id, "composition_id": composition_id},
                     },
+                ]
+
+                if preset == "vehicle_stopped" and area_restriction_config:
+                    tail_nodes.append(
+                        {
+                            "id": "area",
+                            "operator": "camera.area_restriction",
+                            "config": area_restriction_config,
+                        }
+                    )
+
+                speed_threshold = VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
+                if stopped_speed_threshold is not None:
+                    try:
+                        parsed_threshold = float(stopped_speed_threshold)
+                    except Exception:
+                        parsed_threshold = VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
+                    if math.isfinite(parsed_threshold):
+                        speed_threshold = max(0.0, parsed_threshold)
+
+                tail_nodes.append(
                     {
                         "id": "velocity",
                         "operator": "camera.velocity_estimation",
-                        "config": {"filter_mode": "annotate", "min_elapsed_seconds": 0.05},
+                        "config": {
+                            "filter_mode": "annotate",
+                            "min_elapsed_seconds": 0.05,
+                            **(
+                                {"stopped_speed_threshold": speed_threshold}
+                                if preset == "vehicle_stopped"
+                                else {}
+                            ),
+                        },
+                    }
+                )
+
+                if preset == "people_mapping":
+                    tail_nodes.extend(
+                        [
+                            {
+                                "id": "throttle",
+                                "operator": "core.throttle",
+                                "config": {"interval_seconds": 10.0},
+                            },
+                            {"id": "crop", "operator": "vision.crop_objects", "config": {}},
+                            {
+                                "id": "store",
+                                "operator": "core.store_images",
+                                "config": {"format": "webp"},
+                            },
+                            {
+                                "id": "notify",
+                                "operator": "core.notify",
+                                "config": {
+                                    "notification_type": "pipelines.tracking",
+                                    "title": notification_title or "{{camera_name}}: Person mapped",
+                                    "description": notification_description
+                                    or "{{object_category_label}} - {{camera_name}}",
+                                    "priority": "medium",
+                                    "dedupe_key_template": "{{tracking_id}}",
+                                },
+                            },
+                        ]
+                    )
+                    nodes = [*base_nodes, *tail_nodes]
+                    node_ids = [str(node["id"]) for node in nodes]
+                    return {
+                        "schema_version": 1,
+                        "nodes": nodes,
+                        "edges": _linear_edges(node_ids),
+                    }
+
+                storage_nodes = [
+                    {
+                        "id": "storage_throttle",
+                        "operator": "core.velocity_throttle",
+                        "config": {
+                            "key_field": "payload.tracking_id",
+                            "moving_interval_seconds": 2.0,
+                            "stopped_interval_seconds": 10.0,
+                        },
+                    },
+                    {"id": "storage_crop", "operator": "vision.crop_objects", "config": {}},
+                    {
+                        "id": "storage_store",
+                        "operator": "core.store_images",
+                        "config": {"format": "webp"},
+                    },
+                ]
+                notify_nodes = [
+                    {
+                        "id": "stopped_lifecycle",
+                        "operator": "core.lifecycle_from_boolean",
+                        "config": {
+                            "field": "payload.velocity.stopped",
+                            "key_field": "payload.tracking_id",
+                        },
                     },
                     {
-                        "id": "throttle",
-                        "operator": "core.throttle",
-                        "config": {"interval_seconds": 10.0},
+                        "id": "stopped_event_filter",
+                        "operator": "core.filter",
+                        "config": {
+                            "expression": 'payload.velocity.stopped or lifecycle == "close"'
+                        },
                     },
-                    {"id": "crop", "operator": "vision.crop_objects", "config": {}},
-                    {"id": "store", "operator": "core.store_images", "config": {"format": "webp"}},
+                    {
+                        "id": "notify_debounce",
+                        "operator": "core.debounce",
+                        "config": {
+                            "key_field": "payload.tracking_id",
+                            "quiet_period_seconds": 120.0,
+                        },
+                    },
+                    {"id": "notify_crop", "operator": "vision.crop_objects", "config": {}},
+                    {
+                        "id": "notify_store",
+                        "operator": "core.store_images",
+                        "config": {"format": "webp"},
+                    },
                     {
                         "id": "notify",
                         "operator": "core.notify",
                         "config": {
                             "notification_type": "pipelines.tracking",
-                            "title": notification_title or "{{camera_name}}: Person mapped",
+                            "title": notification_title or "{{camera_name}}: veículo parado",
                             "description": notification_description
-                            or "{{object_category_label}} - {{camera_name}}",
+                            or "{{object_category_label}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h",
                             "priority": "medium",
                             "dedupe_key_template": "{{tracking_id}}",
                         },
                     },
                 ]
                 nodes = [*base_nodes, *tail_nodes]
-                node_ids = [str(node["id"]) for node in nodes]
-                return {"schema_version": 1, "nodes": nodes, "edges": _linear_edges(node_ids)}
+                shared_node_ids = [str(node["id"]) for node in nodes]
+                nodes = [*nodes, *storage_nodes, *notify_nodes]
+                edges = _linear_edges(shared_node_ids)
+                edges.extend(
+                    _linear_edges(["velocity", "storage_throttle", "storage_crop", "storage_store"])
+                )
+                edges.extend(
+                    _linear_edges(
+                        [
+                            "velocity",
+                            "stopped_lifecycle",
+                            "stopped_event_filter",
+                            "notify_debounce",
+                            "notify_crop",
+                            "notify_store",
+                            "notify",
+                        ]
+                    )
+                )
+                return {"schema_version": 1, "nodes": nodes, "edges": edges}
 
             raise ValueError("Unknown preset")
 
@@ -2366,7 +2550,7 @@ class CamerasExtension(BaseExtension):
             camera = get_camera_device(ext, camera_id=cid)
             suggested: dict[str, str] = {}
             if camera is not None:
-                for preset in ("people_detection", "people_mapping"):
+                for preset in CAMERA_PIPELINE_PRESETS:
                     suggested[preset] = _unique_pipeline_name(
                         _preset_pipeline_base(camera, camera_id=cid, preset=preset),
                         existing_names=existing_names,
@@ -2393,10 +2577,10 @@ class CamerasExtension(BaseExtension):
                 raise HTTPException(status_code=400, detail="camera_id is required")
 
             preset = str(body.preset or "").strip()
-            if preset not in {"people_detection", "people_mapping"}:
+            if preset not in CAMERA_PIPELINE_PRESETS:
                 raise HTTPException(
                     status_code=400,
-                    detail="preset must be one of: people_detection, people_mapping",
+                    detail=f"preset must be one of: {', '.join(CAMERA_PIPELINE_PRESETS)}",
                 )
 
             store = _config_store(request)
@@ -2419,7 +2603,20 @@ class CamerasExtension(BaseExtension):
             cfg = await store.get_config()
 
             composition_id = str(body.composition_id or "").strip()
-            if preset == "people_mapping":
+            area_restriction_config: dict[str, Any] | None = None
+            if preset in {"people_mapping", "vehicle_stopped"}:
+                if preset == "vehicle_stopped" and str(body.area_id or "").strip():
+                    resolved_area = _resolve_mapped_camera_area(
+                        cfg,
+                        camera_id=cid,
+                        area_id=str(body.area_id or "").strip(),
+                    )
+                    if resolved_area is None:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Selected area must belong to a mapped composition for this camera.",
+                        )
+                    composition_id, area_restriction_config = resolved_area
                 if not composition_id:
                     composition_id = _default_mapped_composition_id(cfg, camera_id=cid) or ""
                 if not _composition_has_camera_mapping(
@@ -2451,6 +2648,8 @@ class CamerasExtension(BaseExtension):
                     camera_id=cid,
                     source_id=source_id,
                     composition_id=composition_id,
+                    area_restriction_config=area_restriction_config,
+                    stopped_speed_threshold=body.stopped_speed_threshold,
                     notification_title=str(body.notification_title or "").strip(),
                     notification_description=str(body.notification_description or "").strip(),
                 )

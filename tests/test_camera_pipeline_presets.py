@@ -63,6 +63,107 @@ def _node_config(pipeline: dict[str, Any], operator_id: str) -> dict[str, Any]:
     return {}
 
 
+def _node_config_by_id(pipeline: dict[str, Any], node_id: str) -> dict[str, Any]:
+    graph = pipeline.get("graph") if isinstance(pipeline.get("graph"), dict) else {}
+    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("id") or "") != node_id:
+            continue
+        config = node.get("config")
+        return config if isinstance(config, dict) else {}
+    return {}
+
+
+def _operator_ids(pipeline: dict[str, Any]) -> list[str]:
+    graph = pipeline.get("graph") if isinstance(pipeline.get("graph"), dict) else {}
+    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    return [str(node.get("operator") or "") for node in nodes if isinstance(node, dict)]
+
+
+def _configure_camera(client: TestClient) -> None:
+    res = client.patch(
+        "/api/settings/extensions/com.toposync.cameras",
+        json={
+            "devices": [
+                {
+                    "id": "cam1",
+                    "name": "Entrada Principal",
+                    "control": {"type": "none"},
+                    "sources": [
+                        {
+                            "id": "main",
+                            "name": "Principal",
+                            "enabled": True,
+                            "is_default": True,
+                            "kind": "video",
+                            "role": "main",
+                            "origin": {"type": "rtsp", "rtsp_url": "rtsp://example.local/front"},
+                            "ingest": {"mode": "direct"},
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    assert res.status_code == 200, res.text
+
+
+def _add_mapped_composition(client: TestClient, *, with_area: bool = False) -> None:
+    elements: list[dict[str, Any]] = [
+        {
+            "id": "cam-element",
+            "type": "com.toposync.cameras.camera",
+            "name": "Front",
+            "position": {"x": 0, "y": 0, "z": 0},
+            "rotation": {"x": 0, "y": 0, "z": 0},
+            "props": {
+                "camera_id": "cam1",
+                "control_point_sets": [
+                    {
+                        "id": "main",
+                        "label": "Main",
+                        "control_points": [
+                            {"id": "A", "image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
+                            {"id": "B", "image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
+                            {"id": "C", "image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+                            {"id": "D", "image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                        ],
+                    }
+                ],
+            },
+        }
+    ]
+    if with_area:
+        elements.append(
+            {
+                "id": "area-1",
+                "type": "com.toposync.structural.area",
+                "name": "Gate",
+                "position": {"x": 0, "y": 0, "z": 0},
+                "rotation": {"x": 0, "y": 0, "z": 0},
+                "props": {
+                    "vertices": [
+                        {"x": 0.0, "z": 0.0},
+                        {"x": 2.0, "z": 0.0},
+                        {"x": 1.0, "z": 2.0},
+                    ]
+                },
+            }
+        )
+
+    res = client.put(
+        "/api/composition",
+        json={
+            "id": "yard",
+            "name": "Yard",
+            "elements": elements,
+        },
+    )
+    assert res.status_code == 200, res.text
+
+
 def test_camera_pipeline_preset_defaults_detection_to_rfdetr_medium(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -120,6 +221,10 @@ def test_camera_pipeline_preset_defaults_detection_to_rfdetr_medium(
         assert (
             overview["suggested_pipeline_names"]["people_mapping"]
             == "entrada_principal_deteccao_e_mapeamento_de_pessoas"
+        )
+        assert (
+            overview["suggested_pipeline_names"]["vehicle_stopped"]
+            == "entrada_principal_veiculo_parou"
         )
 
         res = client.post(
@@ -208,3 +313,124 @@ def test_camera_pipeline_mapping_preset_adds_mapping_and_velocity(
         assert _node_config(pipeline, "camera.camera_mapping").get("composition_id") == "yard"
         assert _node_config(pipeline, "camera.velocity_estimation").get("filter_mode") == "annotate"
         assert _node_config(pipeline, "core.throttle").get("interval_seconds") == 10.0
+
+
+def test_camera_pipeline_vehicle_stopped_requires_mapping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+
+        res = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={"preset": "vehicle_stopped"},
+        )
+        assert res.status_code == 409, res.text
+        assert "Mapping preset requires" in res.json()["detail"]
+
+
+def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client)
+
+        res = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={"preset": "vehicle_stopped"},
+        )
+        assert res.status_code == 200, res.text
+        pipeline_name = res.json()["pipeline_name"]
+        assert pipeline_name == "entrada_principal_veiculo_parou"
+
+        res = client.get(f"/api/pipelines/{pipeline_name}")
+        assert res.status_code == 200
+        pipeline = res.json()
+
+        assert _operator_ids(pipeline) == [
+            "camera.source",
+            "camera.motion_gate",
+            "vision.detect",
+            "vision.track",
+            "camera.camera_mapping",
+            "camera.velocity_estimation",
+            "core.velocity_throttle",
+            "vision.crop_objects",
+            "core.store_images",
+            "core.lifecycle_from_boolean",
+            "core.filter",
+            "core.debounce",
+            "vision.crop_objects",
+            "core.store_images",
+            "core.notify",
+        ]
+        detect = _vision_detect_config(pipeline)
+        assert detect.get("categories") == ["car", "truck", "bus", "motorcycle"]
+        assert detect.get("confidence_threshold") == 0.55
+        assert _node_config(pipeline, "camera.camera_mapping").get("composition_id") == "yard"
+        assert _node_config(pipeline, "camera.area_restriction") == {}
+
+        velocity = _node_config(pipeline, "camera.velocity_estimation")
+        assert velocity.get("filter_mode") == "annotate"
+        assert velocity.get("stopped_speed_threshold") == pytest.approx(1.0 / 3.6)
+
+        throttle = _node_config_by_id(pipeline, "storage_throttle")
+        assert throttle.get("moving_interval_seconds") == 2.0
+        assert throttle.get("stopped_interval_seconds") == 10.0
+
+        lifecycle = _node_config_by_id(pipeline, "stopped_lifecycle")
+        assert lifecycle.get("field") == "payload.velocity.stopped"
+        assert lifecycle.get("key_field") == "payload.tracking_id"
+        assert _node_config_by_id(pipeline, "stopped_event_filter").get("expression") == (
+            'payload.velocity.stopped or lifecycle == "close"'
+        )
+
+        notify = _node_config(pipeline, "core.notify")
+        assert notify.get("dedupe_key_template") == "{{tracking_id}}"
+        assert notify.get("title") == "{{camera_name}}: veículo parado"
+
+
+def test_camera_pipeline_vehicle_stopped_area_uses_area_composition_and_restriction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client, with_area=True)
+
+        res = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={
+                "preset": "vehicle_stopped",
+                "area_id": "area-1",
+                "stopped_speed_threshold": 0.5,
+            },
+        )
+        assert res.status_code == 200, res.text
+        pipeline_name = res.json()["pipeline_name"]
+
+        res = client.get(f"/api/pipelines/{pipeline_name}")
+        assert res.status_code == 200
+        pipeline = res.json()
+
+        assert _node_config(pipeline, "camera.camera_mapping").get("composition_id") == "yard"
+        assert _node_config(pipeline, "camera.velocity_estimation").get(
+            "stopped_speed_threshold"
+        ) == pytest.approx(0.5)
+
+        area = _node_config(pipeline, "camera.area_restriction")
+        assert area.get("include_area_names") == ["Gate"]
+        assert area.get("drop_when_unmapped") is True
+        assert area.get("areas") == [
+            {
+                "name": "Gate",
+                "points": [
+                    {"x": 0.0, "z": 0.0},
+                    {"x": 2.0, "z": 0.0},
+                    {"x": 1.0, "z": 2.0},
+                ],
+            }
+        ]

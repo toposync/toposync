@@ -1,16 +1,37 @@
 import React from "react";
 import type * as ThreeTypes from "three";
 
-import type { BoundsXZ, CompositionElement, CompositionElementPatch, ElementType, HostI18n, PlanePoint } from "@toposync/plugin-api";
+import type {
+  BoundsXZ,
+  CompositionElement,
+  CompositionElementPatch,
+  ElementType,
+  HostI18n,
+  PlanePoint,
+} from "@toposync/plugin-api";
 
 import { rgbaFromHex, shadeHex } from "../colors";
-import { AREA_ELEMENT_TYPE_ID, DEFAULT_AREA_FILL_COLOR, DEFAULT_AREA_OPACITY, FLOOR_EPSILON, GROUND_Y } from "../constants";
-import { readNumber, readPlanePointArray, readString, saveAreaFillColor } from "../parsing";
+import {
+  AREA_ELEMENT_TYPE_ID,
+  DEFAULT_AREA_FILL_COLOR,
+  DEFAULT_AREA_OPACITY,
+  FLOOR_EPSILON,
+  GROUND_Y,
+} from "../constants";
+import {
+  readNumber,
+  readPlanePointArray,
+  readString,
+  saveAreaFillColor,
+} from "../parsing";
 import { getFloorTexture, readFloorTextureId } from "../textures";
+import { snapAreaVerticesToWallNodes } from "../wallGeometry";
 
 let cachedGrassBladeAlphaTexture: ThreeTypes.Texture | null = null;
 
-function getGrassBladeAlphaTexture(THREE: typeof import("three")): ThreeTypes.Texture {
+function getGrassBladeAlphaTexture(
+  THREE: typeof import("three"),
+): ThreeTypes.Texture {
   if (cachedGrassBladeAlphaTexture) return cachedGrassBladeAlphaTexture;
 
   const size = 64;
@@ -32,13 +53,20 @@ function getGrassBladeAlphaTexture(THREE: typeof import("three")): ThreeTypes.Te
     ctx.beginPath();
     ctx.moveTo(size * 0.5, size * 0.02);
     ctx.quadraticCurveTo(size * 0.58, size * 0.45, size * 0.62, size * 0.98);
-    ctx.quadraticCurveTo(size * 0.5, size * 0.90, size * 0.38, size * 0.98);
+    ctx.quadraticCurveTo(size * 0.5, size * 0.9, size * 0.38, size * 0.98);
     ctx.quadraticCurveTo(size * 0.42, size * 0.45, size * 0.5, size * 0.02);
     ctx.closePath();
     ctx.fill();
 
     ctx.globalCompositeOperation = "destination-in";
-    const edge = ctx.createRadialGradient(size * 0.5, size * 0.8, 0, size * 0.5, size * 0.8, size * 0.55);
+    const edge = ctx.createRadialGradient(
+      size * 0.5,
+      size * 0.8,
+      0,
+      size * 0.5,
+      size * 0.8,
+      size * 0.55,
+    );
     edge.addColorStop(0, "rgba(255,255,255,1)");
     edge.addColorStop(1, "rgba(255,255,255,0)");
     ctx.fillStyle = edge;
@@ -50,7 +78,8 @@ function getGrassBladeAlphaTexture(THREE: typeof import("three")): ThreeTypes.Te
   texture.wrapT = THREE.ClampToEdgeWrapping;
   texture.magFilter = THREE.LinearFilter;
   texture.minFilter = THREE.LinearMipmapLinearFilter;
-  (texture as any).colorSpace = (THREE as any).NoColorSpace ?? (THREE as any).LinearSRGBColorSpace;
+  (texture as any).colorSpace =
+    (THREE as any).NoColorSpace ?? (THREE as any).LinearSRGBColorSpace;
   cachedGrassBladeAlphaTexture = texture;
   return texture;
 }
@@ -96,7 +125,11 @@ function svgPolygonPoints(points: PlanePoint[]): string {
   return points.map((point) => `${point.x},${point.z}`).join(" ");
 }
 
-function buildTriangleTable(geometry: ThreeTypes.BufferGeometry): { triangles: TriangleXZ[]; cdf: number[]; totalArea: number } {
+function buildTriangleTable(geometry: ThreeTypes.BufferGeometry): {
+  triangles: TriangleXZ[];
+  cdf: number[];
+  totalArea: number;
+} {
   const pos = geometry.getAttribute("position") as ThreeTypes.BufferAttribute;
   const idx = geometry.getIndex();
   const triangles: TriangleXZ[] = [];
@@ -148,7 +181,10 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
     type: AREA_ELEMENT_TYPE_ID,
     layerGroup: "areas",
     name: { key: "ext.structural.area.name", fallback: "Area" },
-    description: { key: "ext.structural.area.desc", fallback: "Area (polygon) in 2D." },
+    description: {
+      key: "ext.structural.area.desc",
+      fallback: "Area (polygon) in 2D.",
+    },
     defaultProps: {
       fill: DEFAULT_AREA_FILL_COLOR,
       opacity: DEFAULT_AREA_OPACITY,
@@ -160,19 +196,37 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
         { x: -1, z: 1 },
       ],
     },
-    getMain2DBounds: (element) => boundsForPoints(readPlanePointArray(element.props.vertices)),
-    renderMain2DVector: ({ element }) => {
-      const vertices = readPlanePointArray(element.props.vertices);
+    getMain2DBounds: (element) =>
+      boundsForPoints(readPlanePointArray(element.props.vertices)),
+    renderMain2DVector: ({ element, elements }) => {
+      const vertices = snapAreaVerticesToWallNodes(
+        elements,
+        readPlanePointArray(element.props.vertices),
+      );
       if (vertices.length < 3) return null;
       const fill = readString(element.props.fill, DEFAULT_AREA_FILL_COLOR);
-      const opacityRaw = readNumber(element.props.opacity, DEFAULT_AREA_OPACITY);
+      const opacityRaw = readNumber(
+        element.props.opacity,
+        DEFAULT_AREA_OPACITY,
+      );
       const opacity = opacityRaw < 0.001 ? 0 : opacityRaw;
       if (opacity <= 0) return null;
       const textureId = readFloorTextureId(element.props.texture, "none");
       const points = svgPolygonPoints(vertices);
-      const edgeColor = rgbaFromHex(shadeHex(fill, textureId === "grass" ? -0.24 : -0.16), Math.min(0.34, opacity * 0.34));
-      const highlightColor = rgbaFromHex(shadeHex(fill, 0.42), Math.min(0.20, opacity * 0.20));
-      const patternId = textureId === "grass" ? "mainVector2dGrassPattern" : textureId === "concrete" ? "mainVector2dConcretePattern" : "";
+      const edgeColor = rgbaFromHex(
+        shadeHex(fill, textureId === "grass" ? -0.24 : -0.16),
+        Math.min(0.34, opacity * 0.34),
+      );
+      const highlightColor = rgbaFromHex(
+        shadeHex(fill, 0.42),
+        Math.min(0.2, opacity * 0.2),
+      );
+      const patternId =
+        textureId === "grass"
+          ? "mainVector2dGrassPattern"
+          : textureId === "concrete"
+            ? "mainVector2dConcretePattern"
+            : "";
       return (
         <g className="mainVector2dArea">
           <polygon
@@ -183,12 +237,24 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
             vectorEffect="non-scaling-stroke"
             filter="url(#mainVector2dSoftShadow)"
           />
-          {patternId ? <polygon points={points} fill={`url(#${patternId})`} opacity={Math.min(0.42, opacity * 0.38)} /> : null}
-          <polygon points={points} fill="none" stroke={highlightColor} strokeWidth={0.01} vectorEffect="non-scaling-stroke" />
+          {patternId ? (
+            <polygon
+              points={points}
+              fill={`url(#${patternId})`}
+              opacity={Math.min(0.42, opacity * 0.38)}
+            />
+          ) : null}
+          <polygon
+            points={points}
+            fill="none"
+            stroke={highlightColor}
+            strokeWidth={0.01}
+            vectorEffect="non-scaling-stroke"
+          />
         </g>
       );
     },
-    create3D: ({ THREE, view }, element) => {
+    create3D: ({ THREE, view, elements }, element) => {
       const group = new THREE.Group();
 
       const material = new THREE.MeshStandardMaterial({
@@ -216,22 +282,41 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
       let grassBlades: ThreeTypes.InstancedMesh | null = null;
       let grassBladeMaterial: ThreeTypes.MeshStandardMaterial | null = null;
       let lastGrassKey = "";
+      let contextElements = elements;
 
-      function buildGeometry(el: CompositionElement): ThreeTypes.BufferGeometry | null {
-        const vertices = readPlanePointArray(el.props.vertices);
+      function readRenderedVertices(el: CompositionElement): PlanePoint[] {
+        return snapAreaVerticesToWallNodes(
+          contextElements,
+          readPlanePointArray(el.props.vertices),
+        );
+      }
+
+      function buildGeometry(
+        el: CompositionElement,
+      ): ThreeTypes.BufferGeometry | null {
+        const vertices = readRenderedVertices(el);
         if (vertices.length < 3) return null;
 
-        const local = vertices.map((p) => ({ x: p.x - el.position.x, z: p.z - el.position.z }));
+        const local = vertices.map((p) => ({
+          x: p.x - el.position.x,
+          z: p.z - el.position.z,
+        }));
         const shape = new THREE.Shape();
         shape.moveTo(local[0].x, -local[0].z);
-        for (let i = 1; i < local.length; i++) shape.lineTo(local[i].x, -local[i].z);
+        for (let i = 1; i < local.length; i++)
+          shape.lineTo(local[i].x, -local[i].z);
         shape.closePath();
 
         const geometry = new THREE.ShapeGeometry(shape);
         geometry.rotateX(-Math.PI / 2);
 
-        const pos = geometry.getAttribute("position") as ThreeTypes.BufferAttribute;
-        const uv = new THREE.BufferAttribute(new Float32Array(pos.count * 2), 2);
+        const pos = geometry.getAttribute(
+          "position",
+        ) as ThreeTypes.BufferAttribute;
+        const uv = new THREE.BufferAttribute(
+          new Float32Array(pos.count * 2),
+          2,
+        );
         for (let i = 0; i < pos.count; i++) {
           const worldX = pos.getX(i) + el.position.x;
           const worldZ = pos.getZ(i) + el.position.z;
@@ -266,7 +351,10 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
         m.onBeforeCompile = (shader) => {
           shader.uniforms.uTime = { value: 0 };
           shader.vertexShader = shader.vertexShader
-            .replace("#include <common>", "#include <common>\nuniform float uTime;\nattribute float instanceSeed;")
+            .replace(
+              "#include <common>",
+              "#include <common>\nuniform float uTime;\nattribute float instanceSeed;",
+            )
             .replace(
               "#include <begin_vertex>",
               `#include <begin_vertex>
@@ -283,7 +371,11 @@ transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
         return m;
       }
 
-      function rebuildGrassBlades(geometry: ThreeTypes.BufferGeometry, bladeCount: number, fill: string) {
+      function rebuildGrassBlades(
+        geometry: ThreeTypes.BufferGeometry,
+        bladeCount: number,
+        fill: string,
+      ) {
         if (grassBlades) {
           group.remove(grassBlades);
           (grassBlades.geometry as ThreeTypes.BufferGeometry).dispose();
@@ -295,13 +387,20 @@ transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
         const baseGeometry = new THREE.PlaneGeometry(1, 1, 1, 4);
         baseGeometry.translate(0, 0.5, 0);
         const instancedGeometry = baseGeometry;
-        const seeds = new THREE.InstancedBufferAttribute(new Float32Array(bladeCount), 1);
+        const seeds = new THREE.InstancedBufferAttribute(
+          new Float32Array(bladeCount),
+          1,
+        );
         instancedGeometry.setAttribute("instanceSeed", seeds);
 
         const bladesMaterial = ensureGrassBladeMaterial();
         bladesMaterial.color.set(fill);
 
-        const blades = new THREE.InstancedMesh(instancedGeometry, bladesMaterial, bladeCount);
+        const blades = new THREE.InstancedMesh(
+          instancedGeometry,
+          bladesMaterial,
+          bladeCount,
+        );
         blades.frustumCulled = false;
         blades.renderOrder = 5;
 
@@ -332,8 +431,8 @@ transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
           const yaw = Math.random() * Math.PI * 2;
           quat.setFromAxisAngle(axisY, yaw);
 
-          const height = 0.10 + Math.random() * 0.20;
-          const width = height * (0.12 + Math.random() * 0.10);
+          const height = 0.1 + Math.random() * 0.2;
+          const width = height * (0.12 + Math.random() * 0.1);
           scale.set(width, height, 1);
 
           pos.set(point.x, GROUND_Y + FLOOR_EPSILON + 0.002, point.z);
@@ -349,8 +448,12 @@ transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
         group.add(blades);
       }
 
-      function apply(el: CompositionElement) {
-        const vertices = readPlanePointArray(el.props.vertices);
+      function apply(
+        el: CompositionElement,
+        updateContext?: { elements: CompositionElement[] },
+      ) {
+        contextElements = updateContext?.elements ?? contextElements;
+        const vertices = readRenderedVertices(el);
         const localKey = JSON.stringify(
           vertices.map((p) => ({
             x: Math.round((p.x - el.position.x) * 1000) / 1000,
@@ -378,7 +481,10 @@ transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
         }
 
         const fill = readString(el.props.fill, DEFAULT_AREA_FILL_COLOR);
-        const opacityRaw = Math.max(0, Math.min(1, readNumber(el.props.opacity, DEFAULT_AREA_OPACITY)));
+        const opacityRaw = Math.max(
+          0,
+          Math.min(1, readNumber(el.props.opacity, DEFAULT_AREA_OPACITY)),
+        );
         const isHidden = opacityRaw < 0.001;
         const opacity = isHidden ? 0 : 1;
         const textureId = readFloorTextureId(el.props.texture, "none");
@@ -400,7 +506,11 @@ transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
           mesh.position.y = GROUND_Y + FLOOR_EPSILON;
         }
 
-        const wantsGrassBlades = !isHidden && textureId === "grass" && quality === "detailed" && Boolean(mesh && mesh.geometry);
+        const wantsGrassBlades =
+          !isHidden &&
+          textureId === "grass" &&
+          quality === "detailed" &&
+          Boolean(mesh && mesh.geometry);
         if (!wantsGrassBlades) {
           if (grassBlades) grassBlades.visible = false;
           return;
@@ -410,11 +520,18 @@ transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
 
         const area = polygonAreaXZ(vertices);
         const density = 35;
-        const bladeCount = Math.max(240, Math.min(1800, Math.floor(area * density)));
+        const bladeCount = Math.max(
+          240,
+          Math.min(1800, Math.floor(area * density)),
+        );
         const grassKey = `${localKey}:${bladeCount}`;
         if (grassKey !== lastGrassKey && mesh) {
           lastGrassKey = grassKey;
-          rebuildGrassBlades(mesh.geometry as ThreeTypes.BufferGeometry, bladeCount, fill);
+          rebuildGrassBlades(
+            mesh.geometry as ThreeTypes.BufferGeometry,
+            bladeCount,
+            fill,
+          );
         } else if (grassBladeMaterial) {
           grassBladeMaterial.color.set(fill);
         }
@@ -434,17 +551,24 @@ transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
         dispose: () => {
           if (mesh) (mesh.geometry as ThreeTypes.BufferGeometry).dispose();
           material.dispose();
-          if (grassBlades) (grassBlades.geometry as ThreeTypes.BufferGeometry).dispose();
+          if (grassBlades)
+            (grassBlades.geometry as ThreeTypes.BufferGeometry).dispose();
           grassBladeMaterial?.dispose();
         },
       };
     },
-    render2D: ({ ctx: canvasContext, element, viewport }) => {
-      const vertices = readPlanePointArray(element.props.vertices);
+    render2D: ({ ctx: canvasContext, element, elements, viewport }) => {
+      const vertices = snapAreaVerticesToWallNodes(
+        elements,
+        readPlanePointArray(element.props.vertices),
+      );
       if (vertices.length < 3) return;
 
       const fill = readString(element.props.fill, DEFAULT_AREA_FILL_COLOR);
-      const opacityRaw = readNumber(element.props.opacity, DEFAULT_AREA_OPACITY);
+      const opacityRaw = readNumber(
+        element.props.opacity,
+        DEFAULT_AREA_OPACITY,
+      );
       const opacity = opacityRaw < 0.001 ? 0 : 1;
 
       const points = vertices.map((p) => viewport.worldToScreen(p));
@@ -452,7 +576,8 @@ transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
       canvasContext.save();
       canvasContext.beginPath();
       canvasContext.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i++) canvasContext.lineTo(points[i].x, points[i].y);
+      for (let i = 1; i < points.length; i++)
+        canvasContext.lineTo(points[i].x, points[i].y);
       canvasContext.closePath();
 
       canvasContext.fillStyle = rgbaFromHex(fill, opacity);
@@ -464,7 +589,13 @@ transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
       canvasContext.restore();
     },
     renderEditorModal: ({ element, update, remove, close }) => (
-      <AreaEditor element={element} update={update} remove={remove} close={close} i18n={i18n} />
+      <AreaEditor
+        element={element}
+        update={update}
+        remove={remove}
+        close={close}
+        i18n={i18n}
+      />
     ),
   };
 }
@@ -477,7 +608,13 @@ type AreaEditorProps = {
   i18n: HostI18n;
 };
 
-function AreaEditor({ element, update, remove, close, i18n }: AreaEditorProps): React.ReactElement {
+function AreaEditor({
+  element,
+  update,
+  remove,
+  close,
+  i18n,
+}: AreaEditorProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const fill = readString(element.props.fill, DEFAULT_AREA_FILL_COLOR);
   const opacity = readNumber(element.props.opacity, DEFAULT_AREA_OPACITY);
@@ -489,7 +626,11 @@ function AreaEditor({ element, update, remove, close, i18n }: AreaEditorProps): 
     <div>
       <div className="field">
         <div className="label">{t("ext.structural.editor.area_name")}</div>
-        <input className="input" value={element.name} onChange={(e) => update({ name: e.target.value })} />
+        <input
+          className="input"
+          value={element.name}
+          onChange={(e) => update({ name: e.target.value })}
+        />
       </div>
 
       <div className="rowWrap">
@@ -507,7 +648,9 @@ function AreaEditor({ element, update, remove, close, i18n }: AreaEditorProps): 
           />
         </div>
         <div className="field" style={{ flex: 1, minWidth: 160 }}>
-          <div className="label">{t("ext.structural.editor.floor_texture")}</div>
+          <div className="label">
+            {t("ext.structural.editor.floor_texture")}
+          </div>
           <select
             className="input"
             value={texture}
@@ -523,16 +666,29 @@ function AreaEditor({ element, update, remove, close, i18n }: AreaEditorProps): 
               update({ props: { texture: nextTexture, fill: nextFill } });
             }}
           >
-            <option value="none">{t("ext.structural.editor.texture.none")}</option>
-            <option value="grass">{t("ext.structural.editor.texture.grass")}</option>
-            <option value="concrete">{t("ext.structural.editor.texture.concrete")}</option>
+            <option value="none">
+              {t("ext.structural.editor.texture.none")}
+            </option>
+            <option value="grass">
+              {t("ext.structural.editor.texture.grass")}
+            </option>
+            <option value="concrete">
+              {t("ext.structural.editor.texture.concrete")}
+            </option>
           </select>
         </div>
-        <label className="chipButton" style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+        <label
+          className="chipButton"
+          style={{ display: "inline-flex", alignItems: "center", gap: 10 }}
+        >
           <input
             type="checkbox"
             checked={transparent}
-            onChange={(e) => update({ props: { opacity: e.target.checked ? 0 : DEFAULT_AREA_OPACITY } })}
+            onChange={(e) =>
+              update({
+                props: { opacity: e.target.checked ? 0 : DEFAULT_AREA_OPACITY },
+              })
+            }
           />
           <span>{t("ext.structural.editor.transparent")}</span>
         </label>

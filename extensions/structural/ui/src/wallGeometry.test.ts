@@ -1,16 +1,40 @@
 declare const require: any;
 
-import type { CompositionElement, EditorToolContext, EditorToolPointerEvent, EditorToolSession, PlanePoint } from "@toposync/plugin-api";
+import type {
+  CompositionElement,
+  EditorToolContext,
+  EditorToolPointerEvent,
+  EditorToolSession,
+  PlanePoint,
+} from "@toposync/plugin-api";
 
-import { DEFAULT_WALL_COLOR, DEFAULT_WALL_WIDTH, WALL_ELEMENT_TYPE_ID, WALL_TOOL_ID } from "./constants";
+import {
+  AREA_ELEMENT_TYPE_ID,
+  AREA_POLYGON_TOOL_ID,
+  AREA_SQUARE_WITH_WALLS_TOOL_ID,
+  DEFAULT_WALL_COLOR,
+  DEFAULT_WALL_WIDTH,
+  WALL_ELEMENT_TYPE_ID,
+  WALL_TOOL_ID,
+} from "./constants";
 import { distanceBetweenPoints } from "./geometry";
 import { createStructuralTools } from "./tools/structuralTools";
-import { buildWallFootprints, buildWallIntervalFootprint } from "./wallGeometry";
+import {
+  buildWallFootprints,
+  buildWallIntervalFootprint,
+  snapAreaVerticesToWallNodes,
+} from "./wallGeometry";
 
-const test: (name: string, fn: () => void | Promise<void>) => void = require("node:test").test;
+const test: (name: string, fn: () => void | Promise<void>) => void =
+  require("node:test").test;
 const assert: any = require("node:assert/strict");
 
-function wall(id: string, a: PlanePoint, b: PlanePoint, width = DEFAULT_WALL_WIDTH): CompositionElement {
+function wall(
+  id: string,
+  a: PlanePoint,
+  b: PlanePoint,
+  width = DEFAULT_WALL_WIDTH,
+): CompositionElement {
   return {
     id,
     type: WALL_ELEMENT_TYPE_ID,
@@ -42,16 +66,25 @@ function pointer(
 }
 
 function assertClose(actual: number, expected: number, epsilon = 1e-6): void {
-  assert.ok(Math.abs(actual - expected) <= epsilon, `expected ${actual} to be within ${epsilon} of ${expected}`);
+  assert.ok(
+    Math.abs(actual - expected) <= epsilon,
+    `expected ${actual} to be within ${epsilon} of ${expected}`,
+  );
 }
 
-function assertPointClose(actual: PlanePoint, expected: PlanePoint, epsilon = 1e-6): void {
+function assertPointClose(
+  actual: PlanePoint,
+  expected: PlanePoint,
+  epsilon = 1e-6,
+): void {
   assertClose(actual.x, expected.x, epsilon);
   assertClose(actual.z, expected.z, epsilon);
 }
 
 function allFinite(points: PlanePoint[]): boolean {
-  return points.every((point) => Number.isFinite(point.x) && Number.isFinite(point.z));
+  return points.every(
+    (point) => Number.isFinite(point.x) && Number.isFinite(point.z),
+  );
 }
 
 function must<T>(value: T | null | undefined): T {
@@ -94,8 +127,14 @@ test("obtuse angle keeps a finite miter instead of falling back to the straight 
   const obtuse = must(footprints.get("obtuse"));
   assertPointClose(base.endLeft, obtuse.startLeft);
   assertPointClose(base.endRight, obtuse.startRight);
-  assert.ok(base.endLeft.x < -0.005, "expected obtuse miter to move away from the straight cap");
-  assert.ok(distanceBetweenPoints(base.endLeft, { x: 0, z: 0 }) <= DEFAULT_WALL_WIDTH + 1e-6);
+  assert.ok(
+    base.endLeft.x < -0.005,
+    "expected obtuse miter to move away from the straight cap",
+  );
+  assert.ok(
+    distanceBetweenPoints(base.endLeft, { x: 0, z: 0 }) <=
+      DEFAULT_WALL_WIDTH + 1e-6,
+  );
 });
 
 test("colinear connected walls close on the same cap edge", () => {
@@ -150,14 +189,65 @@ test("degree three junction uses local caps and keeps finite coordinates", () =>
   assert.equal(footprints.size, 3);
   for (const footprint of footprints.values()) {
     assert.ok(allFinite(footprint.polygon));
-    assert.equal(footprint.startNode.refs.length === 3 || footprint.endNode.refs.length === 3, true);
+    assert.equal(
+      footprint.startNode.refs.length === 3 ||
+        footprint.endNode.refs.length === 3,
+      true,
+    );
   }
 });
 
-function createWallToolHarness(): { elements: CompositionElement[]; session: EditorToolSession } {
-  const elements: CompositionElement[] = [];
+test("area vertices render snapped to nearby wall nodes without changing distant vertices", () => {
+  const elements = [
+    wall("base", { x: 0, z: 0 }, { x: 1, z: 0 }),
+    wall("north", { x: 1, z: 0 }, { x: 1, z: 1 }),
+  ];
+
+  const snapped = snapAreaVerticesToWallNodes(elements, [
+    { x: 1.04, z: 0.02 },
+    { x: 1, z: 1 },
+    { x: 0.9, z: 1.2 },
+  ]);
+
+  assertPointClose(snapped[0], { x: 1, z: 0 });
+  assertPointClose(snapped[1], { x: 1, z: 1 });
+  assertPointClose(snapped[2], { x: 0.9, z: 1.2 });
+});
+
+test("area render snap follows a moved wall endpoint while persisted area vertices stay unchanged", () => {
+  const movedWall = wall("base", { x: 0, z: 0 }, { x: 1.02, z: 0.01 });
+  const persistedVertices = [{ x: 1, z: 0 }];
+
+  const snapped = snapAreaVerticesToWallNodes([movedWall], persistedVertices);
+
+  assert.deepEqual(persistedVertices[0], { x: 1, z: 0 });
+  assertPointClose(snapped[0], { x: 1.02, z: 0.01 });
+});
+
+test("area vertex snap remains finite for degree three wall nodes", () => {
+  const elements = [
+    wall("west", { x: -1, z: 0 }, { x: 0, z: 0 }),
+    wall("east", { x: 0, z: 0 }, { x: 1, z: 0 }),
+    wall("north", { x: 0, z: 0 }, { x: 0, z: 1 }),
+  ];
+
+  const snapped = snapAreaVerticesToWallNodes(elements, [{ x: 0.02, z: 0.02 }]);
+
+  assert.ok(allFinite(snapped));
+  assertPointClose(snapped[0], { x: 0, z: 0 });
+});
+
+function createToolHarness(
+  toolId: string,
+  initialElements: CompositionElement[] = [],
+): { elements: CompositionElement[]; session: EditorToolSession } {
+  const elements: CompositionElement[] = [...initialElements];
   let nextElementId = 1;
-  const tool = must(createStructuralTools({} as any).find((candidate) => candidate.id === WALL_TOOL_ID));
+  const tool = must(
+    createStructuralTools({} as any).find(
+      (candidate) => candidate.id === toolId,
+    ),
+  );
 
   const context: EditorToolContext = {
     i18n: {} as any,
@@ -192,18 +282,37 @@ function createWallToolHarness(): { elements: CompositionElement[]; session: Edi
   return { elements, session: tool.createSession(context) };
 }
 
+function createWallToolHarness(): {
+  elements: CompositionElement[];
+  session: EditorToolSession;
+} {
+  return createToolHarness(WALL_TOOL_ID);
+}
+
 test("wall tool snaps a new wall start to an existing wall endpoint", () => {
   const { elements, session } = createWallToolHarness();
 
   session.onPointerEvent?.(pointer("down", { x: 0, z: 0 }, { altKey: true }));
-  session.onPointerEvent?.(pointer("down", { x: 1.03, z: 0.02 }, { altKey: true }));
+  session.onPointerEvent?.(
+    pointer("down", { x: 1.03, z: 0.02 }, { altKey: true }),
+  );
   assert.equal(elements.length, 1);
 
   const firstEnd = elements[0].props.b as PlanePoint;
   session.onPointerEvent?.(
-    pointer("down", { x: 1.055, z: 0.04 }, { world: { x: 1.1, z: 0 }, altKey: false }),
+    pointer(
+      "down",
+      { x: 1.055, z: 0.04 },
+      { world: { x: 1.1, z: 0 }, altKey: false },
+    ),
   );
-  session.onPointerEvent?.(pointer("down", { x: 1.03, z: 1.02 }, { world: { x: 1, z: 1 }, altKey: false }));
+  session.onPointerEvent?.(
+    pointer(
+      "down",
+      { x: 1.03, z: 1.02 },
+      { world: { x: 1, z: 1 }, altKey: false },
+    ),
+  );
 
   assert.equal(elements.length, 2);
   assert.deepEqual(elements[1].props.a, firstEnd);
@@ -213,14 +322,71 @@ test("wall tool Alt bypasses endpoint and grid snap", () => {
   const { elements, session } = createWallToolHarness();
 
   session.onPointerEvent?.(pointer("down", { x: 0, z: 0 }, { altKey: true }));
-  session.onPointerEvent?.(pointer("down", { x: 1.03, z: 0.02 }, { altKey: true }));
+  session.onPointerEvent?.(
+    pointer("down", { x: 1.03, z: 0.02 }, { altKey: true }),
+  );
   assert.equal(elements.length, 1);
 
   const rawStart = { x: 1.055, z: 0.04 };
-  session.onPointerEvent?.(pointer("down", rawStart, { world: rawStart, altKey: true }));
-  session.onPointerEvent?.(pointer("down", { x: 1.03, z: 1.02 }, { world: { x: 1.03, z: 1.02 }, altKey: true }));
+  session.onPointerEvent?.(
+    pointer("down", rawStart, { world: rawStart, altKey: true }),
+  );
+  session.onPointerEvent?.(
+    pointer(
+      "down",
+      { x: 1.03, z: 1.02 },
+      { world: { x: 1.03, z: 1.02 }, altKey: true },
+    ),
+  );
 
   assert.equal(elements.length, 2);
   assert.deepEqual(elements[1].props.a, rawStart);
   assert.notDeepEqual(elements[1].props.a, elements[0].props.b);
+});
+
+test("rectangular room tool creates an area and walls with exactly matching vertices", () => {
+  const { elements, session } = createToolHarness(
+    AREA_SQUARE_WITH_WALLS_TOOL_ID,
+  );
+
+  session.onPointerEvent?.(pointer("down", { x: 0, z: 0 }));
+  session.onPointerEvent?.(pointer("down", { x: 2, z: 1 }));
+
+  const area = must(
+    elements.find((element) => element.type === AREA_ELEMENT_TYPE_ID),
+  );
+  const walls = elements.filter(
+    (element) => element.type === WALL_ELEMENT_TYPE_ID,
+  );
+  const vertices = area.props.vertices as PlanePoint[];
+
+  assert.equal(walls.length, 4);
+  for (let index = 0; index < walls.length; index += 1) {
+    assert.deepEqual(walls[index].props.a, vertices[index]);
+    assert.deepEqual(
+      walls[index].props.b,
+      vertices[(index + 1) % vertices.length],
+    );
+  }
+});
+
+test("area polygon tool snaps authored vertices to existing wall nodes", () => {
+  const existingWall = wall("existing", { x: 0, z: 0 }, { x: 1, z: 0 });
+  const { elements, session } = createToolHarness(AREA_POLYGON_TOOL_ID, [
+    existingWall,
+  ]);
+
+  session.onPointerEvent?.(
+    pointer("down", { x: 1.03, z: 0.01 }, { world: { x: 1, z: 0 } }),
+  );
+  session.onPointerEvent?.(pointer("down", { x: 1, z: 1 }));
+  session.onPointerEvent?.(pointer("down", { x: 0, z: 1 }));
+  session.onPointerEvent?.(pointer("dblclick", { x: 0, z: 1 }));
+
+  const area = must(
+    elements.find((element) => element.type === AREA_ELEMENT_TYPE_ID),
+  );
+  const vertices = area.props.vertices as PlanePoint[];
+
+  assert.deepEqual(vertices[0], existingWall.props.b);
 });

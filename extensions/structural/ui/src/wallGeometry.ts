@@ -67,19 +67,34 @@ export type WallEndpointSnap = {
   distance: number;
 };
 
+export type WallNodeSnap = {
+  nodeId: string;
+  point: PlanePoint;
+  distance: number;
+};
+
 const MIN_WALL_LENGTH = 1e-6;
 const MAX_JOIN_EPSILON_METERS = 0.06;
 const MITER_LIMIT_FACTOR = 2;
 
-function endpointKey(wall: ParsedStructuralWall, endpoint: WallEndpointName): string {
+function endpointKey(
+  wall: ParsedStructuralWall,
+  endpoint: WallEndpointName,
+): string {
   return `${wall.elementId}:${endpoint}`;
 }
 
-function endpointPoint(wall: ParsedStructuralWall, endpoint: WallEndpointName): PlanePoint {
+function endpointPoint(
+  wall: ParsedStructuralWall,
+  endpoint: WallEndpointName,
+): PlanePoint {
   return endpoint === "a" ? wall.a : wall.b;
 }
 
-function endpointDirectionAwayFromNode(wall: ParsedStructuralWall, endpoint: WallEndpointName): PlanePoint {
+function endpointDirectionAwayFromNode(
+  wall: ParsedStructuralWall,
+  endpoint: WallEndpointName,
+): PlanePoint {
   return endpoint === "a" ? wall.direction : scalePoint(wall.direction, -1);
 }
 
@@ -118,8 +133,15 @@ function averagePoints(points: PlanePoint[]): PlanePoint {
   return { x: x / points.length, z: z / points.length };
 }
 
-function localCapPoint(nodePoint: PlanePoint, wall: ParsedStructuralWall, normalSign: number): PlanePoint {
-  return addPoints(nodePoint, scalePoint(wall.normal, normalSign * wall.halfWidth));
+function localCapPoint(
+  nodePoint: PlanePoint,
+  wall: ParsedStructuralWall,
+  normalSign: number,
+): PlanePoint {
+  return addPoints(
+    nodePoint,
+    scalePoint(wall.normal, normalSign * wall.halfWidth),
+  );
 }
 
 function miterPointForSide(
@@ -130,18 +152,37 @@ function miterPointForSide(
 ): PlanePoint {
   const currentWall = currentRef.wall;
   const otherWall = otherRef.wall;
-  const currentDirection = endpointDirectionAwayFromNode(currentWall, currentRef.endpoint);
-  const otherDirection = endpointDirectionAwayFromNode(otherWall, otherRef.endpoint);
+  const currentDirection = endpointDirectionAwayFromNode(
+    currentWall,
+    currentRef.endpoint,
+  );
+  const otherDirection = endpointDirectionAwayFromNode(
+    otherWall,
+    otherRef.endpoint,
+  );
 
-  const almostColinear = Math.abs(cross(currentDirection, otherDirection)) < 1e-8;
+  const almostColinear =
+    Math.abs(cross(currentDirection, otherDirection)) < 1e-8;
   if (almostColinear) return localCapPoint(node.point, currentWall, normalSign);
 
   const currentOffsetPoint = localCapPoint(node.point, currentWall, normalSign);
-  const otherOffsetPoint = addPoints(node.point, scalePoint(otherWall.normal, normalSign * otherWall.halfWidth));
-  const intersection = lineIntersection(currentOffsetPoint, currentDirection, otherOffsetPoint, otherDirection);
-  if (!intersection || !isFinitePoint(intersection)) return localCapPoint(node.point, currentWall, normalSign);
+  const otherOffsetPoint = addPoints(
+    node.point,
+    scalePoint(otherWall.normal, normalSign * otherWall.halfWidth),
+  );
+  const intersection = lineIntersection(
+    currentOffsetPoint,
+    currentDirection,
+    otherOffsetPoint,
+    otherDirection,
+  );
+  if (!intersection || !isFinitePoint(intersection))
+    return localCapPoint(node.point, currentWall, normalSign);
 
-  const limit = Math.max(Math.min(currentWall.halfWidth, otherWall.halfWidth) * MITER_LIMIT_FACTOR, 1e-6);
+  const limit = Math.max(
+    Math.min(currentWall.halfWidth, otherWall.halfWidth) * MITER_LIMIT_FACTOR,
+    1e-6,
+  );
   if (distanceBetweenPoints(intersection, node.point) > limit + 1e-9) {
     return localCapPoint(node.point, currentWall, normalSign);
   }
@@ -149,7 +190,10 @@ function miterPointForSide(
   return intersection;
 }
 
-function endpointJoinPoints(node: WallNode, ref: WallNodeRef): { left: PlanePoint; right: PlanePoint } {
+function endpointJoinPoints(
+  node: WallNode,
+  ref: WallNodeRef,
+): { left: PlanePoint; right: PlanePoint } {
   if (node.refs.length !== 2) {
     return {
       left: localCapPoint(node.point, ref.wall, 1),
@@ -164,7 +208,10 @@ function endpointJoinPoints(node: WallNode, ref: WallNodeRef): { left: PlanePoin
   };
 }
 
-function pointAtDistance(wall: ParsedStructuralWall, distanceMeters: number): PlanePoint {
+function pointAtDistance(
+  wall: ParsedStructuralWall,
+  distanceMeters: number,
+): PlanePoint {
   return addPoints(wall.a, scalePoint(wall.direction, distanceMeters));
 }
 
@@ -172,7 +219,10 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function unionFind(size: number): { find: (index: number) => number; union: (a: number, b: number) => void } {
+function unionFind(size: number): {
+  find: (index: number) => number;
+  union: (a: number, b: number) => void;
+} {
   const parent = Array.from({ length: size }, (_, index) => index);
 
   function find(index: number): number {
@@ -193,21 +243,41 @@ function unionFind(size: number): { find: (index: number) => number; union: (a: 
   return { find, union };
 }
 
-export function wallJoinEpsilon(a: ParsedStructuralWall, b: ParsedStructuralWall): number {
+export function wallJoinEpsilon(
+  a: ParsedStructuralWall,
+  b: ParsedStructuralWall,
+): number {
   return Math.min(Math.min(a.width, b.width) / 2, MAX_JOIN_EPSILON_METERS);
 }
 
-export function parseStructuralWalls(elements: CompositionElement[]): ParsedStructuralWall[] {
+function wallNodeSnapRadius(node: WallNode): number {
+  if (node.refs.length === 0) return 0;
+  const minimumWidth = Math.min(...node.refs.map((ref) => ref.wall.width));
+  return Math.min(minimumWidth / 2, MAX_JOIN_EPSILON_METERS);
+}
+
+export function parseStructuralWalls(
+  elements: CompositionElement[],
+): ParsedStructuralWall[] {
   const walls: ParsedStructuralWall[] = [];
   for (const element of elements) {
     if (element.type !== WALL_ELEMENT_TYPE_ID) continue;
 
-    const a = readPlanePoint(element.props.a, { x: element.position.x, z: element.position.z });
-    const b = readPlanePoint(element.props.b, { x: element.position.x + 1, z: element.position.z });
+    const a = readPlanePoint(element.props.a, {
+      x: element.position.x,
+      z: element.position.z,
+    });
+    const b = readPlanePoint(element.props.b, {
+      x: element.position.x + 1,
+      z: element.position.z,
+    });
     const length = distanceBetweenPoints(a, b);
     if (!Number.isFinite(length) || length <= MIN_WALL_LENGTH) continue;
 
-    const width = Math.max(0.04, readNumber(element.props.width, DEFAULT_WALL_WIDTH));
+    const width = Math.max(
+      0.04,
+      readNumber(element.props.width, DEFAULT_WALL_WIDTH),
+    );
     const direction = normalizePoint(subtractPoints(b, a));
     walls.push({
       element,
@@ -224,7 +294,9 @@ export function parseStructuralWalls(elements: CompositionElement[]): ParsedStru
   return walls;
 }
 
-export function buildWallTopology(elements: CompositionElement[]): WallTopology {
+export function buildWallTopology(
+  elements: CompositionElement[],
+): WallTopology {
   const walls = parseStructuralWalls(elements);
   const endpointRefs: WallNodeRef[] = [];
   for (const wall of walls) {
@@ -239,7 +311,8 @@ export function buildWallTopology(elements: CompositionElement[]): WallTopology 
       const b = endpointRefs[j];
       if (a.wall.elementId === b.wall.elementId) continue;
       const tolerance = wallJoinEpsilon(a.wall, b.wall);
-      if (distanceBetweenPoints(a.point, b.point) <= tolerance + 1e-9) groups.union(i, j);
+      if (distanceBetweenPoints(a.point, b.point) <= tolerance + 1e-9)
+        groups.union(i, j);
     }
   }
 
@@ -262,13 +335,16 @@ export function buildWallTopology(elements: CompositionElement[]): WallTopology 
     };
     nodeIndex += 1;
     nodes.push(node);
-    for (const ref of refs) endpointNodes.set(endpointKey(ref.wall, ref.endpoint), node);
+    for (const ref of refs)
+      endpointNodes.set(endpointKey(ref.wall, ref.endpoint), node);
   }
 
   return { walls, nodes, endpointNodes };
 }
 
-export function buildWallFootprints(elements: CompositionElement[]): Map<string, WallFootprint> {
+export function buildWallFootprints(
+  elements: CompositionElement[],
+): Map<string, WallFootprint> {
   const topology = buildWallTopology(elements);
   const footprints = new Map<string, WallFootprint>();
 
@@ -277,8 +353,12 @@ export function buildWallFootprints(elements: CompositionElement[]): Map<string,
     const endNode = topology.endpointNodes.get(endpointKey(wall, "b"));
     if (!startNode || !endNode) continue;
 
-    const startRef = startNode.refs.find((ref) => ref.wall.elementId === wall.elementId && ref.endpoint === "a");
-    const endRef = endNode.refs.find((ref) => ref.wall.elementId === wall.elementId && ref.endpoint === "b");
+    const startRef = startNode.refs.find(
+      (ref) => ref.wall.elementId === wall.elementId && ref.endpoint === "a",
+    );
+    const endRef = endNode.refs.find(
+      (ref) => ref.wall.elementId === wall.elementId && ref.endpoint === "b",
+    );
     if (!startRef || !endRef) continue;
 
     const start = endpointJoinPoints(startNode, startRef);
@@ -301,8 +381,15 @@ export function buildWallFootprints(elements: CompositionElement[]): Map<string,
   return footprints;
 }
 
-export function getWallFootprint(element: CompositionElement, elements: CompositionElement[]): WallFootprint | null {
-  const sourceElements = elements.some((candidate) => candidate.id === element.id) ? elements : [...elements, element];
+export function getWallFootprint(
+  element: CompositionElement,
+  elements: CompositionElement[],
+): WallFootprint | null {
+  const sourceElements = elements.some(
+    (candidate) => candidate.id === element.id,
+  )
+    ? elements
+    : [...elements, element];
   return buildWallFootprints(sourceElements).get(element.id) ?? null;
 }
 
@@ -321,16 +408,27 @@ export function buildWallIntervalFootprint(
   const useJoinedStart = start <= 1e-6;
   const useJoinedEnd = end >= wall.length - 1e-6;
 
-  const startLeft = useJoinedStart ? footprint.startLeft : addPoints(startPoint, scalePoint(wall.normal, wall.halfWidth));
-  const startRight = useJoinedStart ? footprint.startRight : addPoints(startPoint, scalePoint(wall.normal, -wall.halfWidth));
-  const endLeft = useJoinedEnd ? footprint.endLeft : addPoints(endPoint, scalePoint(wall.normal, wall.halfWidth));
-  const endRight = useJoinedEnd ? footprint.endRight : addPoints(endPoint, scalePoint(wall.normal, -wall.halfWidth));
+  const startLeft = useJoinedStart
+    ? footprint.startLeft
+    : addPoints(startPoint, scalePoint(wall.normal, wall.halfWidth));
+  const startRight = useJoinedStart
+    ? footprint.startRight
+    : addPoints(startPoint, scalePoint(wall.normal, -wall.halfWidth));
+  const endLeft = useJoinedEnd
+    ? footprint.endLeft
+    : addPoints(endPoint, scalePoint(wall.normal, wall.halfWidth));
+  const endRight = useJoinedEnd
+    ? footprint.endRight
+    : addPoints(endPoint, scalePoint(wall.normal, -wall.halfWidth));
   const points = [startLeft, endLeft, endRight, startRight];
   if (!points.every(isFinitePoint)) return null;
   return { start, end, points };
 }
 
-export function wallLocalPoint(wall: ParsedStructuralWall, point: PlanePoint): PlanePoint {
+export function wallLocalPoint(
+  wall: ParsedStructuralWall,
+  point: PlanePoint,
+): PlanePoint {
   const delta = subtractPoints(point, wall.a);
   return {
     x: dot(delta, wall.direction),
@@ -348,7 +446,8 @@ export function findNearestWallEndpoint(
   let best: WallEndpointSnap | null = null;
 
   for (const wall of parseStructuralWalls(elements)) {
-    if (options.excludeElementId && wall.elementId === options.excludeElementId) continue;
+    if (options.excludeElementId && wall.elementId === options.excludeElementId)
+      continue;
     for (const endpoint of ["a", "b"] as const) {
       const endpointPosition = endpointPoint(wall, endpoint);
       const distance = distanceBetweenPoints(point, endpointPosition);
@@ -365,4 +464,55 @@ export function findNearestWallEndpoint(
   }
 
   return best;
+}
+
+export function findNearestWallNode(
+  elements: CompositionElement[],
+  point: PlanePoint,
+): WallNodeSnap | null {
+  const topology = buildWallTopology(elements);
+  let best: WallNodeSnap | null = null;
+
+  for (const node of topology.nodes) {
+    const radius = wallNodeSnapRadius(node);
+    if (radius <= 0) continue;
+    const distance = distanceBetweenPoints(point, node.point);
+    if (distance > radius + 1e-9) continue;
+    if (!best || distance < best.distance) {
+      best = {
+        nodeId: node.id,
+        point: node.point,
+        distance,
+      };
+    }
+  }
+
+  return best;
+}
+
+export function snapAreaVerticesToWallNodes(
+  elements: CompositionElement[],
+  vertices: PlanePoint[],
+): PlanePoint[] {
+  if (vertices.length === 0) return vertices;
+  const topology = buildWallTopology(elements);
+  if (topology.nodes.length === 0) return vertices;
+
+  return vertices.map((vertex) => {
+    let best: WallNodeSnap | null = null;
+    for (const node of topology.nodes) {
+      const radius = wallNodeSnapRadius(node);
+      if (radius <= 0) continue;
+      const distance = distanceBetweenPoints(vertex, node.point);
+      if (distance > radius + 1e-9) continue;
+      if (!best || distance < best.distance) {
+        best = {
+          nodeId: node.id,
+          point: node.point,
+          distance,
+        };
+      }
+    }
+    return best?.point ?? vertex;
+  });
 }

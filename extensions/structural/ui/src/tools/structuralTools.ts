@@ -1,4 +1,10 @@
-import type { EditorTool, EditorToolContext, EditorToolPointerEvent, HostI18n, PlanePoint } from "@toposync/plugin-api";
+import type {
+  EditorTool,
+  EditorToolContext,
+  EditorToolPointerEvent,
+  HostI18n,
+  PlanePoint,
+} from "@toposync/plugin-api";
 
 import { rgbaFromHex } from "../colors";
 import {
@@ -22,8 +28,14 @@ import {
 } from "../constants";
 import { centerOfPoints, distanceBetweenPoints } from "../geometry";
 import { loadAreaFillColor, readNumber, readPlanePoint } from "../parsing";
-import { createDefaultOpening, MIN_OPENING_WIDTH_M, openingsToProps, readWallOpenings, type WallOpeningKind } from "../wallOpenings";
-import { findNearestWallEndpoint } from "../wallGeometry";
+import {
+  createDefaultOpening,
+  MIN_OPENING_WIDTH_M,
+  openingsToProps,
+  readWallOpenings,
+  type WallOpeningKind,
+} from "../wallOpenings";
+import { findNearestWallEndpoint, findNearestWallNode } from "../wallGeometry";
 
 const TOOL_GROUP_STRUCTURE: NonNullable<EditorTool["group"]> = {
   id: "structure",
@@ -57,15 +69,27 @@ function createWallElement(
   startPoint: PlanePoint,
   endPoint: PlanePoint,
 ): string | null {
-  const center = { x: (startPoint.x + endPoint.x) / 2, z: (startPoint.z + endPoint.z) / 2 };
+  const center = {
+    x: (startPoint.x + endPoint.x) / 2,
+    z: (startPoint.z + endPoint.z) / 2,
+  };
   return toolContext.createElement(WALL_ELEMENT_TYPE_ID, {
     name: "",
     position: { x: center.x, y: 0, z: center.z },
-    props: { a: startPoint, b: endPoint, color: DEFAULT_WALL_COLOR, width: DEFAULT_WALL_WIDTH, openings: [] },
+    props: {
+      a: startPoint,
+      b: endPoint,
+      color: DEFAULT_WALL_COLOR,
+      width: DEFAULT_WALL_WIDTH,
+      openings: [],
+    },
   });
 }
 
-function createAreaElement(toolContext: EditorToolContext, vertices: PlanePoint[]): string | null {
+function createAreaElement(
+  toolContext: EditorToolContext,
+  vertices: PlanePoint[],
+): string | null {
   const center = centerOfPoints(vertices);
   const fill = loadAreaFillColor();
   return toolContext.createElement(AREA_ELEMENT_TYPE_ID, {
@@ -75,7 +99,10 @@ function createAreaElement(toolContext: EditorToolContext, vertices: PlanePoint[
   });
 }
 
-function createPoolElement(toolContext: EditorToolContext, vertices: PlanePoint[]): string | null {
+function createPoolElement(
+  toolContext: EditorToolContext,
+  vertices: PlanePoint[],
+): string | null {
   const center = centerOfPoints(vertices);
   return toolContext.createElement(POOL_ELEMENT_TYPE_ID, {
     name: "",
@@ -84,7 +111,10 @@ function createPoolElement(toolContext: EditorToolContext, vertices: PlanePoint[
   });
 }
 
-function createWallsForPolygon(toolContext: EditorToolContext, vertices: PlanePoint[]): void {
+function createWallsForPolygon(
+  toolContext: EditorToolContext,
+  vertices: PlanePoint[],
+): void {
   const n = vertices.length;
   if (n < 2) return;
   for (let i = 0; i < n; i++) {
@@ -92,6 +122,18 @@ function createWallsForPolygon(toolContext: EditorToolContext, vertices: PlanePo
     const endPoint = vertices[(i + 1) % n];
     createWallElement(toolContext, startPoint, endPoint);
   }
+}
+
+function snapPointForAreaTool(
+  toolContext: EditorToolContext,
+  event: EditorToolPointerEvent,
+): PlanePoint {
+  if (event.altKey) return event.rawWorld;
+  const nodeSnap = findNearestWallNode(
+    toolContext.getElements(),
+    event.rawWorld,
+  );
+  return nodeSnap?.point ?? event.world;
 }
 
 type WallTarget = {
@@ -125,13 +167,22 @@ function mul(v: PlanePoint, scalar: number): PlanePoint {
   return { x: v.x * scalar, z: v.z * scalar };
 }
 
-function nearestPointOnSegment(point: PlanePoint, a: PlanePoint, dir: PlanePoint, length: number): { point: PlanePoint; scalar: number } {
+function nearestPointOnSegment(
+  point: PlanePoint,
+  a: PlanePoint,
+  dir: PlanePoint,
+  length: number,
+): { point: PlanePoint; scalar: number } {
   const projected = dot(sub(point, a), dir);
   const scalar = Math.max(0, Math.min(length, projected));
   return { point: add(a, mul(dir, scalar)), scalar };
 }
 
-function distancePointToSegment(point: PlanePoint, a: PlanePoint, b: PlanePoint): number {
+function distancePointToSegment(
+  point: PlanePoint,
+  a: PlanePoint,
+  b: PlanePoint,
+): number {
   const len = distanceBetweenPoints(a, b);
   if (len <= 1e-6) return distanceBetweenPoints(point, a);
   const dir = { x: (b.x - a.x) / len, z: (b.z - a.z) / len };
@@ -143,8 +194,14 @@ function readWalls(toolContext: EditorToolContext): WallTarget[] {
   const out: WallTarget[] = [];
   for (const el of toolContext.getElements()) {
     if (el.type !== WALL_ELEMENT_TYPE_ID) continue;
-    const a = readPlanePoint(el.props.a, { x: el.position.x - 0.5, z: el.position.z });
-    const b = readPlanePoint(el.props.b, { x: el.position.x + 0.5, z: el.position.z });
+    const a = readPlanePoint(el.props.a, {
+      x: el.position.x - 0.5,
+      z: el.position.z,
+    });
+    const b = readPlanePoint(el.props.b, {
+      x: el.position.x + 0.5,
+      z: el.position.z,
+    });
     const length = distanceBetweenPoints(a, b);
     if (length <= 1e-6) continue;
     const dir = { x: (b.x - a.x) / length, z: (b.z - a.z) / length };
@@ -163,7 +220,10 @@ function readWalls(toolContext: EditorToolContext): WallTarget[] {
   return out;
 }
 
-function pickWallTarget(walls: WallTarget[], world: PlanePoint): WallTarget | null {
+function pickWallTarget(
+  walls: WallTarget[],
+  world: PlanePoint,
+): WallTarget | null {
   let best: WallTarget | null = null;
   let bestDist = Number.POSITIVE_INFINITY;
   for (const wall of walls) {
@@ -222,13 +282,17 @@ function kindStyle(kind: WallOpeningKind): {
     labelKey: "ext.structural.tools.wall_opening",
     fallback: "Opening",
     descriptionKey: "ext.structural.tools.wall_opening_desc",
-    descriptionFallback: "Hover a wall, click and drag to size. Click to place default width.",
+    descriptionFallback:
+      "Hover a wall, click and drag to size. Click to place default width.",
     icon: "crop-simple",
     order: 40,
   };
 }
 
-function createWallOpeningTool(i18n: HostI18n, options: { kind: WallOpeningKind }): EditorTool {
+function createWallOpeningTool(
+  i18n: HostI18n,
+  options: { kind: WallOpeningKind },
+): EditorTool {
   const style = kindStyle(options.kind);
   const toolId =
     options.kind === "door"
@@ -240,7 +304,10 @@ function createWallOpeningTool(i18n: HostI18n, options: { kind: WallOpeningKind 
   return {
     id: toolId,
     name: { key: style.labelKey, fallback: style.fallback },
-    description: { key: style.descriptionKey, fallback: style.descriptionFallback },
+    description: {
+      key: style.descriptionKey,
+      fallback: style.descriptionFallback,
+    },
     icon: style.icon,
     group: TOOL_GROUP_STRUCTURE,
     order: style.order,
@@ -280,13 +347,21 @@ function createWallOpeningTool(i18n: HostI18n, options: { kind: WallOpeningKind 
           width = delta * 2;
           center = scalarA;
         } else if (delta < 0.04) {
-          width = Math.min(length, Math.max(minWidth, defaultWidthForKind(options.kind)));
+          width = Math.min(
+            length,
+            Math.max(minWidth, defaultWidthForKind(options.kind)),
+          );
           center = scalarA;
         }
 
         width = clamp(width, minWidth, length);
         center = clamp(center, width / 2, length - width / 2);
-        return { start: center - width / 2, end: center + width / 2, center, width };
+        return {
+          start: center - width / 2,
+          end: center + width / 2,
+          center,
+          width,
+        };
       }
 
       function updateHover(world: PlanePoint): void {
@@ -294,23 +369,50 @@ function createWallOpeningTool(i18n: HostI18n, options: { kind: WallOpeningKind 
         const walls = readWalls(toolContext);
         const selected = pickWallTarget(walls, world);
         hoverWall = selected;
-        hoverScalar = selected ? nearestPointOnSegment(world, selected.a, selected.dir, selected.length).scalar : null;
+        hoverScalar = selected
+          ? nearestPointOnSegment(
+              world,
+              selected.a,
+              selected.dir,
+              selected.length,
+            ).scalar
+          : null;
       }
 
       function commit(): void {
-        if (!dragWall || dragStartScalar == null || dragCurrentScalar == null) return;
-        const band = openingBand(dragWall.length, dragStartScalar, dragCurrentScalar, dragSymmetric);
+        if (!dragWall || dragStartScalar == null || dragCurrentScalar == null)
+          return;
+        const band = openingBand(
+          dragWall.length,
+          dragStartScalar,
+          dragCurrentScalar,
+          dragSymmetric,
+        );
 
-        const latest = toolContext.getElements().find((item) => item.id === dragWall?.id);
-        const current = readWallOpenings(latest?.props.openings ?? dragWall.props.openings);
-        const opening = createDefaultOpening({ kind: options.kind, center_m: band.center, width_m: band.width });
+        const latest = toolContext
+          .getElements()
+          .find((item) => item.id === dragWall?.id);
+        const current = readWallOpenings(
+          latest?.props.openings ?? dragWall.props.openings,
+        );
+        const opening = createDefaultOpening({
+          kind: options.kind,
+          center_m: band.center,
+          width_m: band.width,
+        });
         toolContext.updateElement(dragWall.id, {
           props: { openings: openingsToProps([...current, opening]) },
         });
         toolContext.openEditor(dragWall.id);
       }
 
-      function drawWallFocus(canvasContext: CanvasRenderingContext2D, viewport: { worldToScreen: (p: PlanePoint) => { x: number; y: number } }, wall: WallTarget): void {
+      function drawWallFocus(
+        canvasContext: CanvasRenderingContext2D,
+        viewport: {
+          worldToScreen: (p: PlanePoint) => { x: number; y: number };
+        },
+        wall: WallTarget,
+      ): void {
         const wa = viewport.worldToScreen(wall.a);
         const wb = viewport.worldToScreen(wall.b);
         canvasContext.beginPath();
@@ -324,13 +426,21 @@ function createWallOpeningTool(i18n: HostI18n, options: { kind: WallOpeningKind 
 
       function drawOpeningPreview(
         canvasContext: CanvasRenderingContext2D,
-        viewport: { worldToScreen: (p: PlanePoint) => { x: number; y: number }; scale: number },
+        viewport: {
+          worldToScreen: (p: PlanePoint) => { x: number; y: number };
+          scale: number;
+        },
         wall: WallTarget,
         startScalar: number,
         endScalar: number,
         symmetric: boolean,
       ): void {
-        const band = openingBand(wall.length, startScalar, endScalar, symmetric);
+        const band = openingBand(
+          wall.length,
+          startScalar,
+          endScalar,
+          symmetric,
+        );
         const startPoint = add(wall.a, mul(wall.dir, band.start));
         const endPoint = add(wall.a, mul(wall.dir, band.end));
         const halfThickness = Math.max(0.09, wall.width / 2);
@@ -340,10 +450,13 @@ function createWallOpeningTool(i18n: HostI18n, options: { kind: WallOpeningKind 
         const p2 = add(endPoint, mul(wall.normal, -halfThickness));
         const p3 = add(startPoint, mul(wall.normal, -halfThickness));
 
-        const points = [p0, p1, p2, p3].map((point) => viewport.worldToScreen(point));
+        const points = [p0, p1, p2, p3].map((point) =>
+          viewport.worldToScreen(point),
+        );
         canvasContext.beginPath();
         canvasContext.moveTo(points[0].x, points[0].y);
-        for (let i = 1; i < points.length; i++) canvasContext.lineTo(points[i].x, points[i].y);
+        for (let i = 1; i < points.length; i++)
+          canvasContext.lineTo(points[i].x, points[i].y);
         canvasContext.closePath();
         canvasContext.fillStyle = style.fill;
         canvasContext.fill();
@@ -353,14 +466,17 @@ function createWallOpeningTool(i18n: HostI18n, options: { kind: WallOpeningKind 
         canvasContext.stroke();
         canvasContext.setLineDash([]);
 
-        const labelCenter = viewport.worldToScreen(add(wall.a, mul(wall.dir, band.center)));
+        const labelCenter = viewport.worldToScreen(
+          add(wall.a, mul(wall.dir, band.center)),
+        );
         const labelText = `${band.width.toFixed(2)} m`;
         canvasContext.font = "12px ui-sans-serif, system-ui";
         const textWidth = canvasContext.measureText(labelText).width;
         const boxWidth = textWidth + 16;
         const boxHeight = 20;
         const x = labelCenter.x - boxWidth / 2;
-        const y = labelCenter.y - Math.max(28, 24 + 12 / Math.max(1, viewport.scale));
+        const y =
+          labelCenter.y - Math.max(28, 24 + 12 / Math.max(1, viewport.scale));
 
         canvasContext.fillStyle = "rgba(8,12,26,0.86)";
         canvasContext.fillRect(x, y, boxWidth, boxHeight);
@@ -382,7 +498,12 @@ function createWallOpeningTool(i18n: HostI18n, options: { kind: WallOpeningKind 
           if (event.kind === "move") {
             if (dragWall) {
               dragSymmetric = event.shiftKey;
-              dragCurrentScalar = nearestPointOnSegment(event.world, dragWall.a, dragWall.dir, dragWall.length).scalar;
+              dragCurrentScalar = nearestPointOnSegment(
+                event.world,
+                dragWall.a,
+                dragWall.dir,
+                dragWall.length,
+              ).scalar;
               return;
             }
             updateHover(event.world);
@@ -405,7 +526,12 @@ function createWallOpeningTool(i18n: HostI18n, options: { kind: WallOpeningKind 
             if (event.button !== 0) return;
             if (!dragWall || dragStartScalar == null) return;
             dragSymmetric = event.shiftKey;
-            dragCurrentScalar = nearestPointOnSegment(event.world, dragWall.a, dragWall.dir, dragWall.length).scalar;
+            dragCurrentScalar = nearestPointOnSegment(
+              event.world,
+              dragWall.a,
+              dragWall.dir,
+              dragWall.length,
+            ).scalar;
             commit();
             clearDrag();
             updateHover(event.world);
@@ -416,12 +542,30 @@ function createWallOpeningTool(i18n: HostI18n, options: { kind: WallOpeningKind 
         },
         renderOverlay2D: ({ ctx: canvasContext, viewport }) => {
           canvasContext.save();
-          if (dragWall && dragStartScalar != null && dragCurrentScalar != null) {
+          if (
+            dragWall &&
+            dragStartScalar != null &&
+            dragCurrentScalar != null
+          ) {
             drawWallFocus(canvasContext, viewport, dragWall);
-            drawOpeningPreview(canvasContext, viewport, dragWall, dragStartScalar, dragCurrentScalar, dragSymmetric);
+            drawOpeningPreview(
+              canvasContext,
+              viewport,
+              dragWall,
+              dragStartScalar,
+              dragCurrentScalar,
+              dragSymmetric,
+            );
           } else if (hoverWall && hoverScalar != null) {
             drawWallFocus(canvasContext, viewport, hoverWall);
-            drawOpeningPreview(canvasContext, viewport, hoverWall, hoverScalar, hoverScalar, false);
+            drawOpeningPreview(
+              canvasContext,
+              viewport,
+              hoverWall,
+              hoverScalar,
+              hoverScalar,
+              false,
+            );
           }
           canvasContext.restore();
         },
@@ -450,8 +594,15 @@ function createWallTool(i18n: HostI18n): EditorTool {
 
       function snapPointForWallTool(event: EditorToolPointerEvent): PlanePoint {
         if (event.altKey) return event.rawWorld;
-        const radiusMeters = Math.max(0.08, lastViewportScale > 0 ? 12 / lastViewportScale : 0);
-        const endpointSnap = findNearestWallEndpoint(toolContext.getElements(), event.rawWorld, radiusMeters);
+        const radiusMeters = Math.max(
+          0.08,
+          lastViewportScale > 0 ? 12 / lastViewportScale : 0,
+        );
+        const endpointSnap = findNearestWallEndpoint(
+          toolContext.getElements(),
+          event.rawWorld,
+          radiusMeters,
+        );
         return endpointSnap?.point ?? event.world;
       }
 
@@ -513,11 +664,18 @@ function createWallTool(i18n: HostI18n): EditorTool {
   };
 }
 
-function createAreaRectangleTool(i18n: HostI18n, options: { withWalls: boolean }): EditorTool {
+function createAreaRectangleTool(
+  i18n: HostI18n,
+  options: { withWalls: boolean },
+): EditorTool {
   return {
-    id: options.withWalls ? AREA_SQUARE_WITH_WALLS_TOOL_ID : AREA_SQUARE_TOOL_ID,
+    id: options.withWalls
+      ? AREA_SQUARE_WITH_WALLS_TOOL_ID
+      : AREA_SQUARE_TOOL_ID,
     name: {
-      key: options.withWalls ? "ext.structural.tools.area_square_walls" : "ext.structural.tools.area_square",
+      key: options.withWalls
+        ? "ext.structural.tools.area_square_walls"
+        : "ext.structural.tools.area_square",
       fallback: options.withWalls ? "Rectangular room" : "Rectangular area",
     },
     icon: options.withWalls ? "border-all" : "vector-square",
@@ -567,18 +725,20 @@ function createAreaRectangleTool(i18n: HostI18n, options: { withWalls: boolean }
             return;
           }
           if (event.kind === "move") {
-            if (startPoint) currentPoint = event.world;
+            if (startPoint)
+              currentPoint = snapPointForAreaTool(toolContext, event);
             return;
           }
           if (event.kind !== "down") return;
           if (event.button !== 0) return;
 
           if (!startPoint) {
-            startPoint = event.world;
-            currentPoint = event.world;
+            const point = snapPointForAreaTool(toolContext, event);
+            startPoint = point;
+            currentPoint = point;
             return;
           }
-          commit(event.world);
+          commit(snapPointForAreaTool(toolContext, event));
         },
         onKeyDown: (event) => {
           if (event.key === "Escape") reset();
@@ -596,7 +756,8 @@ function createAreaRectangleTool(i18n: HostI18n, options: { withWalls: boolean }
           canvasContext.save();
           canvasContext.beginPath();
           canvasContext.moveTo(pts[0].x, pts[0].y);
-          for (let i = 1; i < pts.length; i++) canvasContext.lineTo(pts[i].x, pts[i].y);
+          for (let i = 1; i < pts.length; i++)
+            canvasContext.lineTo(pts[i].x, pts[i].y);
           canvasContext.closePath();
           canvasContext.fillStyle = rgbaFromHex("#fbbf24", 0.12);
           canvasContext.fill();
@@ -615,7 +776,10 @@ function createAreaRectangleTool(i18n: HostI18n, options: { withWalls: boolean }
 function createPoolSquareTool(i18n: HostI18n): EditorTool {
   return {
     id: POOL_SQUARE_TOOL_ID,
-    name: { key: "ext.structural.tools.pool_square", fallback: "Rectangular pool" },
+    name: {
+      key: "ext.structural.tools.pool_square",
+      fallback: "Rectangular pool",
+    },
     icon: "water-ladder",
     group: TOOL_GROUP_AREAS,
     order: 50,
@@ -689,7 +853,8 @@ function createPoolSquareTool(i18n: HostI18n): EditorTool {
           canvasContext.save();
           canvasContext.beginPath();
           canvasContext.moveTo(points[0].x, points[0].y);
-          for (let i = 1; i < points.length; i++) canvasContext.lineTo(points[i].x, points[i].y);
+          for (let i = 1; i < points.length; i++)
+            canvasContext.lineTo(points[i].x, points[i].y);
           canvasContext.closePath();
           canvasContext.fillStyle = rgbaFromHex("#0ea5e9", 0.12);
           canvasContext.fill();
@@ -705,11 +870,18 @@ function createPoolSquareTool(i18n: HostI18n): EditorTool {
   };
 }
 
-function createAreaPolygonTool(i18n: HostI18n, options: { withWalls: boolean }): EditorTool {
+function createAreaPolygonTool(
+  i18n: HostI18n,
+  options: { withWalls: boolean },
+): EditorTool {
   return {
-    id: options.withWalls ? AREA_POLYGON_WITH_WALLS_TOOL_ID : AREA_POLYGON_TOOL_ID,
+    id: options.withWalls
+      ? AREA_POLYGON_WITH_WALLS_TOOL_ID
+      : AREA_POLYGON_TOOL_ID,
     name: {
-      key: options.withWalls ? "ext.structural.tools.area_polygon_walls" : "ext.structural.tools.area_polygon",
+      key: options.withWalls
+        ? "ext.structural.tools.area_polygon_walls"
+        : "ext.structural.tools.area_polygon",
       fallback: options.withWalls ? "Freeform room" : "Freeform area",
     },
     icon: options.withWalls ? "object-group" : "draw-polygon",
@@ -737,10 +909,10 @@ function createAreaPolygonTool(i18n: HostI18n, options: { withWalls: boolean }):
         reset();
       }
 
-      function shouldCloseByClick(event: EditorToolPointerEvent): boolean {
+      function shouldCloseByClick(point: PlanePoint): boolean {
         if (vertices.length < 3) return false;
         const first = vertices[0];
-        return distanceBetweenPoints(event.world, first) < 0.22;
+        return distanceBetweenPoints(point, first) < 0.22;
       }
 
       return {
@@ -750,7 +922,7 @@ function createAreaPolygonTool(i18n: HostI18n, options: { withWalls: boolean }):
             return;
           }
           if (event.kind === "move") {
-            hoverPoint = event.world;
+            hoverPoint = snapPointForAreaTool(toolContext, event);
             return;
           }
           if (event.kind === "dblclick") {
@@ -760,29 +932,37 @@ function createAreaPolygonTool(i18n: HostI18n, options: { withWalls: boolean }):
           if (event.kind !== "down") return;
           if (event.button !== 0) return;
 
-          if (shouldCloseByClick(event)) {
+          const point = snapPointForAreaTool(toolContext, event);
+          if (shouldCloseByClick(point)) {
             commit();
             return;
           }
-          vertices.push(event.world);
-          hoverPoint = event.world;
+          vertices.push(point);
+          hoverPoint = point;
         },
         onKeyDown: (event) => {
           if (event.key === "Escape") reset();
           if (event.key === "Enter") commit();
-          if ((event.key === "Backspace" || event.key === "Delete") && vertices.length > 0) vertices.pop();
+          if (
+            (event.key === "Backspace" || event.key === "Delete") &&
+            vertices.length > 0
+          )
+            vertices.pop();
         },
         renderOverlay2D: ({ ctx: canvasContext, viewport }) => {
           if (vertices.length === 0) return;
           const pts = vertices.map((p) => viewport.worldToScreen(p));
-          const preview = hoverPoint ? viewport.worldToScreen(hoverPoint) : null;
+          const preview = hoverPoint
+            ? viewport.worldToScreen(hoverPoint)
+            : null;
 
           canvasContext.save();
 
           if (vertices.length >= 2) {
             canvasContext.beginPath();
             canvasContext.moveTo(pts[0].x, pts[0].y);
-            for (let i = 1; i < pts.length; i++) canvasContext.lineTo(pts[i].x, pts[i].y);
+            for (let i = 1; i < pts.length; i++)
+              canvasContext.lineTo(pts[i].x, pts[i].y);
             if (preview) canvasContext.lineTo(preview.x, preview.y);
             canvasContext.strokeStyle = rgbaFromHex("#fbbf24", 0.85);
             canvasContext.lineWidth = 2;
@@ -795,7 +975,9 @@ function createAreaPolygonTool(i18n: HostI18n, options: { withWalls: boolean }):
             const isFirst = i === 0 && vertices.length >= 3;
             canvasContext.beginPath();
             canvasContext.arc(p.x, p.y, isFirst ? 6 : 5, 0, Math.PI * 2);
-            canvasContext.fillStyle = isFirst ? rgbaFromHex("#22c55e", 0.85) : rgbaFromHex("#fbbf24", 0.85);
+            canvasContext.fillStyle = isFirst
+              ? rgbaFromHex("#22c55e", 0.85)
+              : rgbaFromHex("#fbbf24", 0.85);
             canvasContext.fill();
             canvasContext.strokeStyle = "rgba(0,0,0,0.35)";
             canvasContext.lineWidth = 2;
@@ -813,7 +995,10 @@ function createAreaPolygonTool(i18n: HostI18n, options: { withWalls: boolean }):
 function createPoolPolygonTool(i18n: HostI18n): EditorTool {
   return {
     id: POOL_POLYGON_TOOL_ID,
-    name: { key: "ext.structural.tools.pool_polygon", fallback: "Freeform pool" },
+    name: {
+      key: "ext.structural.tools.pool_polygon",
+      fallback: "Freeform pool",
+    },
     icon: "water",
     group: TOOL_GROUP_AREAS,
     order: 60,
@@ -869,19 +1054,26 @@ function createPoolPolygonTool(i18n: HostI18n): EditorTool {
         onKeyDown: (event) => {
           if (event.key === "Escape") reset();
           if (event.key === "Enter") commit();
-          if ((event.key === "Backspace" || event.key === "Delete") && vertices.length > 0) vertices.pop();
+          if (
+            (event.key === "Backspace" || event.key === "Delete") &&
+            vertices.length > 0
+          )
+            vertices.pop();
         },
         renderOverlay2D: ({ ctx: canvasContext, viewport }) => {
           if (vertices.length === 0) return;
           const points = vertices.map((p) => viewport.worldToScreen(p));
-          const preview = hoverPoint ? viewport.worldToScreen(hoverPoint) : null;
+          const preview = hoverPoint
+            ? viewport.worldToScreen(hoverPoint)
+            : null;
 
           canvasContext.save();
 
           if (vertices.length >= 2) {
             canvasContext.beginPath();
             canvasContext.moveTo(points[0].x, points[0].y);
-            for (let i = 1; i < points.length; i++) canvasContext.lineTo(points[i].x, points[i].y);
+            for (let i = 1; i < points.length; i++)
+              canvasContext.lineTo(points[i].x, points[i].y);
             if (preview) canvasContext.lineTo(preview.x, preview.y);
             canvasContext.strokeStyle = rgbaFromHex("#38bdf8", 0.85);
             canvasContext.lineWidth = 2;
@@ -893,8 +1085,16 @@ function createPoolPolygonTool(i18n: HostI18n): EditorTool {
             const point = points[i];
             const isFirst = i === 0 && vertices.length >= 3;
             canvasContext.beginPath();
-            canvasContext.arc(point.x, point.y, isFirst ? 6 : 5, 0, Math.PI * 2);
-            canvasContext.fillStyle = isFirst ? rgbaFromHex("#22c55e", 0.85) : rgbaFromHex("#38bdf8", 0.85);
+            canvasContext.arc(
+              point.x,
+              point.y,
+              isFirst ? 6 : 5,
+              0,
+              Math.PI * 2,
+            );
+            canvasContext.fillStyle = isFirst
+              ? rgbaFromHex("#22c55e", 0.85)
+              : rgbaFromHex("#38bdf8", 0.85);
             canvasContext.fill();
             canvasContext.strokeStyle = "rgba(0,0,0,0.35)";
             canvasContext.lineWidth = 2;

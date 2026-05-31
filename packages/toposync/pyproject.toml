@@ -1,20 +1,20 @@
 [project]
 name = "toposync"
-version = "0.7.2"
+version = "0.7.3"
 description = "Toposync default application bundle."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
-  "toposync-core==0.7.2",
-  "toposync-ext-structural==0.4.2",
-  "toposync-ext-models==0.4.2",
-  "toposync-ext-home-assistant==0.4.2",
-  "toposync-ext-images==0.4.2",
-  "toposync-ext-cameras==0.4.2",
-  "toposync-ext-vision==0.4.2",
-  "toposync-ext-spatial-video==0.4.2",
+  "toposync-core==0.7.3",
+  "toposync-ext-structural==0.4.3",
+  "toposync-ext-models==0.4.3",
+  "toposync-ext-home-assistant==0.4.3",
+  "toposync-ext-images==0.4.3",
+  "toposync-ext-cameras==0.4.3",
+  "toposync-ext-vision==0.4.3",
+  "toposync-ext-spatial-video==0.4.3",
   "onnxruntime>=1.20",
 ]
 

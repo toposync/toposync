@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "webpack --mode production"
+    "build": "webpack --mode production",
+    "test:wall-geometry": "rm -rf .test-dist && tsc -p tsconfig.wall-geometry-test.json && node --test .test-dist/wallGeometry.test.js && rm -rf .test-dist"
   },
   "dependencies": {
     "@toposync/plugin-api": "^0.3.0",

@@ -9,6 +9,11 @@ import { addPoints, distanceBetweenPoints, normalizePoint, perpendicularPoint, s
 import { readNumber, readPlanePoint, readString } from "../parsing";
 import { getOpeningTexture, getWallTexture, readOpeningTextureId, readWallTextureId } from "../textures";
 import {
+  buildWallIntervalFootprint,
+  getWallFootprint,
+  wallLocalPoint,
+} from "../wallGeometry";
+import {
   createDefaultOpening,
   defaultColorForKind,
   defaultTextureForKind,
@@ -128,6 +133,86 @@ function distPointToSegment(point: PlanePoint, a: PlanePoint, b: PlanePoint): nu
   const t = clamp((ap.x * ab.x + ap.z * ab.z) / denom, 0, 1);
   const q = addPoints(a, scalePoint(ab, t));
   return distanceBetweenPoints(point, q);
+}
+
+function fallbackIntervalFootprintPoints(
+  startPoint: PlanePoint,
+  direction: PlanePoint,
+  normal: PlanePoint,
+  halfWidth: number,
+  startMeters: number,
+  endMeters: number,
+): PlanePoint[] {
+  const a = pointAtDistance(startPoint, direction, startMeters);
+  const b = pointAtDistance(startPoint, direction, endMeters);
+  return [
+    addPoints(a, scalePoint(normal, halfWidth)),
+    addPoints(b, scalePoint(normal, halfWidth)),
+    addPoints(b, scalePoint(normal, -halfWidth)),
+    addPoints(a, scalePoint(normal, -halfWidth)),
+  ];
+}
+
+function createWallPrismGeometry(
+  THREE: typeof import("three"),
+  points: PlanePoint[],
+  y0: number,
+  y1: number,
+): ThreeTypes.BufferGeometry {
+  const geometry = new THREE.BufferGeometry();
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  function pushVertex(point: PlanePoint, y: number, u: number, v: number): number {
+    const index = positions.length / 3;
+    positions.push(point.x, y, point.z);
+    uvs.push(u, v);
+    return index;
+  }
+
+  function addVerticalQuad(a: PlanePoint, b: PlanePoint, c: PlanePoint, d: PlanePoint, materialIndex: number): void {
+    const startIndex = indices.length;
+    const ia = pushVertex(a, y0, a.x, y0);
+    const ib = pushVertex(b, y0, b.x, y0);
+    const ic = pushVertex(c, y1, c.x, y1);
+    const id = pushVertex(d, y1, d.x, y1);
+    indices.push(ia, ib, ic, ia, ic, id);
+    geometry.addGroup(startIndex, 6, materialIndex);
+  }
+
+  const [startLeft, endLeft, endRight, startRight] = points;
+  const wallMaterialIndex = 0;
+  const capMaterialIndex = 1;
+
+  addVerticalQuad(startLeft, endLeft, endLeft, startLeft, wallMaterialIndex);
+  addVerticalQuad(endRight, startRight, startRight, endRight, wallMaterialIndex);
+  addVerticalQuad(startRight, startLeft, startLeft, startRight, capMaterialIndex);
+  addVerticalQuad(endLeft, endRight, endRight, endLeft, capMaterialIndex);
+
+  const topStartIndex = indices.length;
+  const top0 = pushVertex(startLeft, y1, startLeft.x, startLeft.z);
+  const top1 = pushVertex(endLeft, y1, endLeft.x, endLeft.z);
+  const top2 = pushVertex(endRight, y1, endRight.x, endRight.z);
+  const top3 = pushVertex(startRight, y1, startRight.x, startRight.z);
+  indices.push(top0, top1, top2, top0, top2, top3);
+  geometry.addGroup(topStartIndex, 6, capMaterialIndex);
+
+  const bottomStartIndex = indices.length;
+  const bottom0 = pushVertex(startRight, y0, startRight.x, startRight.z);
+  const bottom1 = pushVertex(endRight, y0, endRight.x, endRight.z);
+  const bottom2 = pushVertex(endLeft, y0, endLeft.x, endLeft.z);
+  const bottom3 = pushVertex(startLeft, y0, startLeft.x, startLeft.z);
+  indices.push(bottom0, bottom1, bottom2, bottom0, bottom2, bottom3);
+  geometry.addGroup(bottomStartIndex, 6, capMaterialIndex);
+
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
 }
 
 function disposeMaterial(material: ThreeTypes.Material | ThreeTypes.Material[], seen: Set<ThreeTypes.Material>): void {
@@ -415,15 +500,16 @@ export function createWallElementType(i18n: HostI18n): ElementType {
       openings: [],
     },
     getMain2DBounds: wallBounds,
-    renderMain2DVector: ({ element }) => {
+    renderMain2DVector: ({ element, elements }) => {
+      const footprint = getWallFootprint(element, elements);
       const startPoint = readPlanePoint(element.props.a, { x: element.position.x, z: element.position.z });
       const endPoint = readPlanePoint(element.props.b, { x: element.position.x + 1, z: element.position.z });
       const color = readString(element.props.color, DEFAULT_WALL_COLOR);
       const textureId = readWallTextureId(element.props.texture, "none");
-      const widthWorld = Math.max(0.04, readNumber(element.props.width, DEFAULT_WALL_WIDTH));
-      const length = Math.max(0.001, distanceBetweenPoints(startPoint, endPoint));
-      const direction = normalizePoint(subtractPoints(endPoint, startPoint));
-      const normal = perpendicularPoint(direction);
+      const widthWorld = footprint?.wall.width ?? Math.max(0.04, readNumber(element.props.width, DEFAULT_WALL_WIDTH));
+      const length = footprint?.wall.length ?? Math.max(0.001, distanceBetweenPoints(startPoint, endPoint));
+      const direction = footprint?.wall.direction ?? normalizePoint(subtractPoints(endPoint, startPoint));
+      const normal = footprint?.wall.normal ?? perpendicularPoint(direction);
       const openings = resolveWallOpenings(readWallOpenings(element.props.openings), length, 3.2);
       const blocked = openings.map((opening) => ({ start: opening.start_m, end: opening.end_m }));
       const solids = subtractIntervals(length, blocked);
@@ -433,22 +519,20 @@ export function createWallElementType(i18n: HostI18n): ElementType {
           ? rgbaFromHex(shadeHex(color, -0.16), 0.98)
           : textureId === "concrete"
             ? rgbaFromHex(shadeHex(color, -0.10), 0.98)
-            : rgbaFromHex(shadeHex(color, -0.12), 0.98);
+          : rgbaFromHex(shadeHex(color, -0.12), 0.98);
 
       return (
         <g className="mainVector2dWall">
           {solids.map((interval, index) => {
-            const a = pointAtDistance(startPoint, direction, interval.start);
-            const b = pointAtDistance(startPoint, direction, interval.end);
             const halfWidth = Math.max(widthWorld / 2, 0.02);
-            const p0 = addPoints(a, scalePoint(normal, halfWidth));
-            const p1 = addPoints(b, scalePoint(normal, halfWidth));
-            const p2 = addPoints(b, scalePoint(normal, -halfWidth));
-            const p3 = addPoints(a, scalePoint(normal, -halfWidth));
+            const intervalFootprint = footprint ? buildWallIntervalFootprint(footprint, interval.start, interval.end) : null;
+            const points =
+              intervalFootprint?.points ??
+              fallbackIntervalFootprintPoints(startPoint, direction, normal, halfWidth, interval.start, interval.end);
             return (
               <polygon
                 key={`solid:${index}`}
-                points={svgPoints([p0, p1, p2, p3])}
+                points={svgPoints(points)}
                 fill={wallFill}
               />
             );
@@ -499,7 +583,7 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         </g>
       );
     },
-    create3D: ({ THREE, view }, element) => {
+    create3D: ({ THREE, view, elements }, element) => {
       const root = new THREE.Group();
       const wallAxisGroup = new THREE.Group();
       const solidsGroup = new THREE.Group();
@@ -516,6 +600,7 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         roughness: 0.82,
         metalness: 0.05,
         flatShading: true,
+        side: THREE.DoubleSide,
       });
 
       // Untextured material for thickness faces (sides/top/bottom). Mapping the wall texture on thin
@@ -525,6 +610,7 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         roughness: 0.86,
         metalness: 0.04,
         flatShading: true,
+        side: THREE.DoubleSide,
       });
 
       // Invisible mesh used only for raycasting/picking in 3D.
@@ -538,15 +624,19 @@ export function createWallElementType(i18n: HostI18n): ElementType {
       pickMaterial.colorWrite = false;
 
       let lastKey = "";
+      let contextElements = elements;
 
-      function apply(el: CompositionElement) {
-        const startPoint = readPlanePoint(el.props.a, { x: el.position.x - 0.5, z: el.position.z });
-        const endPoint = readPlanePoint(el.props.b, { x: el.position.x + 0.5, z: el.position.z });
-        const direction = normalizePoint(subtractPoints(endPoint, startPoint));
+      function apply(el: CompositionElement, updateContext?: { elements: CompositionElement[] }) {
+        contextElements = updateContext?.elements ?? contextElements;
+        const footprint = getWallFootprint(el, contextElements);
+        const startPoint = footprint?.wall.a ?? readPlanePoint(el.props.a, { x: el.position.x - 0.5, z: el.position.z });
+        const endPoint = footprint?.wall.b ?? readPlanePoint(el.props.b, { x: el.position.x + 0.5, z: el.position.z });
+        const direction = footprint?.wall.direction ?? normalizePoint(subtractPoints(endPoint, startPoint));
+        const normal = footprint?.wall.normal ?? perpendicularPoint(direction);
 
-        const thicknessWorld = Math.max(0.04, readNumber(el.props.width, DEFAULT_WALL_WIDTH));
+        const thicknessWorld = footprint?.wall.width ?? Math.max(0.04, readNumber(el.props.width, DEFAULT_WALL_WIDTH));
         const height = Math.max(0.15, view.wallHeight);
-        const length = Math.max(0.001, distanceBetweenPoints(startPoint, endPoint));
+        const length = footprint?.wall.length ?? Math.max(0.001, distanceBetweenPoints(startPoint, endPoint));
 
         const color = readString(el.props.color, DEFAULT_WALL_COLOR);
         const textureId = readWallTextureId(el.props.texture, "none");
@@ -558,11 +648,36 @@ export function createWallElementType(i18n: HostI18n): ElementType {
 
         const openings = readWallOpenings(el.props.openings);
         const resolvedOpenings = resolveWallOpenings(openings, length, height);
+        const solidRects = buildSolidRects(length, height, resolvedOpenings);
+        const solidSections = solidRects
+          .filter((rect) => rect.x1 - rect.x0 > 1e-6 && rect.y1 - rect.y0 > 1e-6)
+          .map((rect) => {
+            const halfWidth = Math.max(thicknessWorld / 2, 0.02);
+            const intervalFootprint = footprint ? buildWallIntervalFootprint(footprint, rect.x0, rect.x1) : null;
+            const worldPoints =
+              intervalFootprint?.points ??
+              fallbackIntervalFootprintPoints(startPoint, direction, normal, halfWidth, rect.x0, rect.x1);
+            const localPoints = footprint
+              ? worldPoints.map((point) => wallLocalPoint(footprint.wall, point))
+              : [
+                  { x: rect.x0, z: halfWidth },
+                  { x: rect.x1, z: halfWidth },
+                  { x: rect.x1, z: -halfWidth },
+                  { x: rect.x0, z: -halfWidth },
+                ];
+            return { rect, localPoints };
+          });
 
         const key = JSON.stringify({
           length: round3(length),
           thickness: round3(thicknessWorld),
           height: round3(height),
+          footprint: solidSections.map((section) =>
+            section.localPoints.map((point) => ({
+              x: round3(point.x),
+              z: round3(point.z),
+            })),
+          ),
           openings: resolvedOpenings.map((opening) => ({
             id: opening.id,
             kind: opening.kind,
@@ -581,24 +696,12 @@ export function createWallElementType(i18n: HostI18n): ElementType {
           clearMeshGroup(insertsGroup, true);
           clearMeshGroup(picksGroup, false);
 
-          const solidRects = buildSolidRects(length, height, resolvedOpenings);
-          for (const rect of solidRects) {
-            if (rect.x1 - rect.x0 <= 1e-6 || rect.y1 - rect.y0 <= 1e-6) continue;
-            const geometry = new THREE.BoxGeometry(rect.x1 - rect.x0, rect.y1 - rect.y0, thicknessWorld);
-            applyWorldUvToBoxGeometry(geometry, {
-              originX: (rect.x0 + rect.x1) / 2,
-              originY: GROUND_Y + (rect.y0 + rect.y1) / 2,
-              originZ: 0,
-              thicknessWorld,
-            });
-            // Always apply the cap material on thickness faces. Otherwise, walls created with "no texture"
-            // would keep a single-material mesh and later end up stretching textures on thin faces.
-            // BoxGeometry groups: 0 right, 1 left, 2 top, 3 bottom, 4 front, 5 back.
-            const material = [wallCapMaterial, wallCapMaterial, wallCapMaterial, wallCapMaterial, wallMaterial, wallMaterial];
+          for (const section of solidSections) {
+            const geometry = createWallPrismGeometry(THREE, section.localPoints, GROUND_Y + section.rect.y0, GROUND_Y + section.rect.y1);
+            const material = [wallMaterial, wallCapMaterial];
             const mesh = new THREE.Mesh(geometry, material);
             mesh.castShadow = true;
             mesh.receiveShadow = true;
-            mesh.position.set((rect.x0 + rect.x1) / 2, GROUND_Y + (rect.y0 + rect.y1) / 2, 0);
             solidsGroup.add(mesh);
           }
 
@@ -649,43 +752,42 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         },
       };
     },
-    render2D: ({ ctx: canvasContext, element, viewport }) => {
+    render2D: ({ ctx: canvasContext, element, elements, viewport }) => {
+      const footprint = getWallFootprint(element, elements);
       const startPoint = readPlanePoint(element.props.a, { x: element.position.x, z: element.position.z });
       const endPoint = readPlanePoint(element.props.b, { x: element.position.x + 1, z: element.position.z });
       const color = readString(element.props.color, DEFAULT_WALL_COLOR);
-      const widthWorld = Math.max(0.04, readNumber(element.props.width, DEFAULT_WALL_WIDTH));
+      const widthWorld = footprint?.wall.width ?? Math.max(0.04, readNumber(element.props.width, DEFAULT_WALL_WIDTH));
 
-      const length = Math.max(0.001, distanceBetweenPoints(startPoint, endPoint));
-      const direction = normalizePoint(subtractPoints(endPoint, startPoint));
-      const normal = perpendicularPoint(direction);
+      const length = footprint?.wall.length ?? Math.max(0.001, distanceBetweenPoints(startPoint, endPoint));
+      const direction = footprint?.wall.direction ?? normalizePoint(subtractPoints(endPoint, startPoint));
+      const normal = footprint?.wall.normal ?? perpendicularPoint(direction);
 
       const openings = resolveWallOpenings(readWallOpenings(element.props.openings), length, 3.2);
       const blocked = openings.map((opening) => ({ start: opening.start_m, end: opening.end_m }));
       const solids = subtractIntervals(length, blocked);
 
-      const widthPx = Math.max(2, widthWorld * viewport.scale);
-
       canvasContext.save();
-      canvasContext.lineCap = "round";
-      canvasContext.lineJoin = "round";
+      canvasContext.lineJoin = "miter";
 
       for (const interval of solids) {
-        const a = viewport.worldToScreen(pointAtDistance(startPoint, direction, interval.start));
-        const b = viewport.worldToScreen(pointAtDistance(startPoint, direction, interval.end));
+        const halfWidth = Math.max(widthWorld / 2, 0.02);
+        const intervalFootprint = footprint ? buildWallIntervalFootprint(footprint, interval.start, interval.end) : null;
+        const points =
+          intervalFootprint?.points ??
+          fallbackIntervalFootprintPoints(startPoint, direction, normal, halfWidth, interval.start, interval.end);
+        const screenPoints = points.map((point) => viewport.worldToScreen(point));
 
+        canvasContext.beginPath();
+        canvasContext.moveTo(screenPoints[0].x, screenPoints[0].y);
+        for (let i = 1; i < screenPoints.length; i += 1) canvasContext.lineTo(screenPoints[i].x, screenPoints[i].y);
+        canvasContext.closePath();
         canvasContext.strokeStyle = "rgba(0,0,0,0.35)";
-        canvasContext.lineWidth = widthPx + 3;
-        canvasContext.beginPath();
-        canvasContext.moveTo(a.x, a.y);
-        canvasContext.lineTo(b.x, b.y);
+        canvasContext.lineWidth = 3;
         canvasContext.stroke();
 
-        canvasContext.strokeStyle = color;
-        canvasContext.lineWidth = widthPx;
-        canvasContext.beginPath();
-        canvasContext.moveTo(a.x, a.y);
-        canvasContext.lineTo(b.x, b.y);
-        canvasContext.stroke();
+        canvasContext.fillStyle = color;
+        canvasContext.fill();
       }
 
       const openingHalfThickness = Math.max(widthWorld / 2, 0.09);

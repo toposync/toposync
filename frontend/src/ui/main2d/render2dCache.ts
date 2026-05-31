@@ -603,7 +603,7 @@ function createInstances(
   for (const element of elements) {
     const def = elementTypesById[element.type];
     if (!def?.create3D) continue;
-    const instance = def.create3D({ THREE, scene, camera, renderer, view, compositionId }, element);
+    const instance = def.create3D({ THREE, scene, camera, renderer, view, elements, compositionId }, element);
     instances.push({ element, def, instance });
     scene.add(instance.object);
     if (def.layerGroup === "walls") applyGhostWalls(instance.object, Boolean(view.ghostWalls));

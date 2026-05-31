@@ -185,6 +185,7 @@ export type Scene3DContext = {
   camera: import("three").Camera;
   renderer: import("three").WebGLRenderer;
   view: ViewSettings;
+  elements: CompositionElement[];
   compositionId?: string;
   requestRender?: () => void;
 };
@@ -198,7 +199,7 @@ export type Element3DInstance = {
    * that render on demand.
    */
   tick?: (deltaSeconds: number) => boolean | void;
-  update?: (element: CompositionElement) => void;
+  update?: (element: CompositionElement, ctx?: { elements: CompositionElement[] }) => void;
   dispose?: () => void;
 };
 
@@ -218,11 +219,13 @@ export type ElementType = {
   render2D?: (args: {
     ctx: CanvasRenderingContext2D;
     element: CompositionElement;
+    elements: CompositionElement[];
     viewport: Viewport2DContext;
   }) => void;
   getMain2DBounds?: (element: CompositionElement) => BoundsXZ | null;
   renderMain2DVector?: (args: {
     element: CompositionElement;
+    elements: CompositionElement[];
     ctx: Main2DVectorContext;
   }) => import("react").ReactNode;
   getMain2DMarker?: (args: { element: CompositionElement }) => Main2DMarker | null;
@@ -300,6 +303,7 @@ export type Main2DEffectTarget = {
 export type EditorToolPointerEvent = {
   kind: "down" | "move" | "up" | "cancel" | "dblclick";
   world: PlanePoint;
+  rawWorld: PlanePoint;
   screen: Vector2;
   button: number;
   buttons: number;

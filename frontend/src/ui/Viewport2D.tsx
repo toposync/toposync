@@ -81,6 +81,8 @@ function clamp(v: number, min: number, max: number): number {
 }
 
 const SNAP_STEP = 0.1; // meters
+const WALL_ENDPOINT_SNAP_MIN_METERS = 0.08;
+const WALL_ENDPOINT_SNAP_SCREEN_PX = 12;
 
 function snapScalar(v: number, step: number): number {
   const inv = 1 / step;
@@ -856,7 +858,7 @@ export function Viewport2D({
         const def = elementTypesRef.current[el.type];
         if (def?.render2D) {
           try {
-            def.render2D({ ctx: ctx2d, element: el, viewport });
+            def.render2D({ ctx: ctx2d, element: el, elements: elementsRef.current, viewport });
           } catch (err) {
             console.error(`[render2D:${el.type}]`, err);
           }
@@ -1317,6 +1319,7 @@ export function Viewport2D({
       return {
         kind,
         world,
+        rawWorld: worldRaw,
         screen,
         button: e.button,
         buttons: typeof buttonsOverride === "number" ? buttonsOverride : e.buttons,
@@ -1326,6 +1329,46 @@ export function Viewport2D({
         metaKey: e.metaKey,
         ctrlKey: e.ctrlKey,
       };
+    }
+
+    function findNearestWallEndpointSnap(
+      worldRaw: PlanePoint,
+      viewport: Viewport2DContext,
+      excludeElementId?: string,
+    ): PlanePoint | null {
+      const radius = Math.max(WALL_ENDPOINT_SNAP_MIN_METERS, WALL_ENDPOINT_SNAP_SCREEN_PX / Math.max(1, viewport.scale));
+      let best: { point: PlanePoint; distance: number } | null = null;
+
+      for (const el of elementsRef.current) {
+        if (excludeElementId && el.id === excludeElementId) continue;
+        if (hiddenElementIdsRef.current.has(el.id)) continue;
+        const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
+        if (group !== "walls") continue;
+
+        const a = readPlanePoint(el.props.a);
+        const b = readPlanePoint(el.props.b);
+        if (!a || !b) continue;
+
+        for (const point of [a, b]) {
+          const distance = Math.hypot(worldRaw.x - point.x, worldRaw.z - point.z);
+          if (distance > radius) continue;
+          if (!best || distance < best.distance) best = { point, distance };
+        }
+      }
+
+      return best?.point ?? null;
+    }
+
+    function snapWallEndpointEditPoint(
+      worldRaw: PlanePoint,
+      viewport: Viewport2DContext,
+      excludeElementId: string,
+      altKey: boolean,
+    ): PlanePoint {
+      if (altKey) return worldRaw;
+      const endpointSnap = findNearestWallEndpointSnap(worldRaw, viewport, excludeElementId);
+      if (endpointSnap) return endpointSnap;
+      return toolSnapToGridRef.current ? snapPoint(worldRaw, SNAP_STEP) : worldRaw;
     }
 
     function toToolEvent(
@@ -1977,8 +2020,7 @@ export function Viewport2D({
         if (interaction.pointerId !== e.pointerId) return;
         const viewport = makeViewportContext();
         const worldRaw = viewport.screenToWorld(screen);
-        const shouldSnap = toolSnapToGridRef.current && !e.altKey;
-        const world = shouldSnap ? snapPoint(worldRaw, SNAP_STEP) : worldRaw;
+        const world = snapWallEndpointEditPoint(worldRaw, viewport, interaction.elementId, e.altKey);
 
         const nextA = interaction.endpoint === "a" ? world : interaction.startA;
         const nextB = interaction.endpoint === "b" ? world : interaction.startB;
@@ -2342,6 +2384,7 @@ export function Viewport2D({
         session.onPointerEvent({
           kind: "dblclick",
           world,
+          rawWorld: world,
           screen,
           button: 0,
           buttons: 0,

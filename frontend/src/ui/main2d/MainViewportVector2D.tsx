@@ -419,7 +419,7 @@ export function MainViewportVector2D({
         const def = elementTypesById[element.type];
         if (!def?.renderMain2DVector) return renderFallbackVector(element, key);
         try {
-          return <React.Fragment key={key}>{def.renderMain2DVector({ element, ctx: { bounds, scale: 1 } })}</React.Fragment>;
+          return <React.Fragment key={key}>{def.renderMain2DVector({ element, elements, ctx: { bounds, scale: 1 } })}</React.Fragment>;
         } catch (err) {
           console.warn(`[vector2d:renderMain2DVector:${element.type}]`, err);
           return renderFallbackVector(element, key);

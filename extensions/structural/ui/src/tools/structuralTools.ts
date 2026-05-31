@@ -23,6 +23,7 @@ import {
 import { centerOfPoints, distanceBetweenPoints } from "../geometry";
 import { loadAreaFillColor, readNumber, readPlanePoint } from "../parsing";
 import { createDefaultOpening, MIN_OPENING_WIDTH_M, openingsToProps, readWallOpenings, type WallOpeningKind } from "../wallOpenings";
+import { findNearestWallEndpoint } from "../wallGeometry";
 
 const TOOL_GROUP_STRUCTURE: NonNullable<EditorTool["group"]> = {
   id: "structure",
@@ -440,10 +441,18 @@ function createWallTool(i18n: HostI18n): EditorTool {
     createSession: (toolContext) => {
       let startPoint: PlanePoint | null = null;
       let currentPoint: PlanePoint | null = null;
+      let lastViewportScale = 0;
 
       function reset() {
         startPoint = null;
         currentPoint = null;
+      }
+
+      function snapPointForWallTool(event: EditorToolPointerEvent): PlanePoint {
+        if (event.altKey) return event.rawWorld;
+        const radiusMeters = Math.max(0.08, lastViewportScale > 0 ? 12 / lastViewportScale : 0);
+        const endpointSnap = findNearestWallEndpoint(toolContext.getElements(), event.rawWorld, radiusMeters);
+        return endpointSnap?.point ?? event.world;
       }
 
       function commit(endPoint: PlanePoint) {
@@ -463,23 +472,25 @@ function createWallTool(i18n: HostI18n): EditorTool {
             return;
           }
           if (event.kind === "move") {
-            if (startPoint) currentPoint = event.world;
+            if (startPoint) currentPoint = snapPointForWallTool(event);
             return;
           }
           if (event.kind !== "down") return;
           if (event.button !== 0) return;
 
           if (!startPoint) {
-            startPoint = event.world;
-            currentPoint = event.world;
+            const point = snapPointForWallTool(event);
+            startPoint = point;
+            currentPoint = point;
             return;
           }
-          commit(event.world);
+          commit(snapPointForWallTool(event));
         },
         onKeyDown: (event) => {
           if (event.key === "Escape") reset();
         },
         renderOverlay2D: ({ ctx: canvasContext, viewport }) => {
+          lastViewportScale = viewport.scale;
           if (!startPoint || !currentPoint) return;
           const a = viewport.worldToScreen(startPoint);
           const b = viewport.worldToScreen(currentPoint);

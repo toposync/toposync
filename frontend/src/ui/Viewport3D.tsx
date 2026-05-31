@@ -340,6 +340,7 @@ export function Viewport3D({
   const activeNotificationRendererRef = useRef<NotificationRenderer | null>(activeNotificationRenderer ?? null);
   const onOpenImageRef = useRef<Props["onOpenImage"]>(onOpenImage);
   const compositionIdRef = useRef<string | undefined>(compositionId);
+  const lastElementsContextRef = useRef<CompositionElement[] | null>(null);
   const lastAutoFitCompositionIdRef = useRef<string | null>(null);
   const userInteractedWithCameraRef = useRef(false);
   const autoFitUntilRef = useRef<number>(0);
@@ -429,6 +430,7 @@ export function Viewport3D({
           camera,
           renderer,
           view: viewRef.current,
+          elements,
           compositionId: currentCompositionId ?? undefined,
           requestRender: () => requestRenderRef.current?.(),
         },
@@ -943,6 +945,8 @@ export function Viewport3D({
     const viewKey = `${viewSettings.wallHeightPreset}:${viewSettings.wallHeight}:${Boolean(viewSettings.ghostWalls)}:${viewSettings.graphicsQuality ?? "simplified"}`;
     const viewChanged = viewKeyRef.current !== viewKey;
     viewKeyRef.current = viewKey;
+    const elementsContextChanged = lastElementsContextRef.current !== elements;
+    lastElementsContextRef.current = elements;
     const ghostWallsEnabled = Boolean(viewSettings.ghostWalls);
     const shadowsEnabled = ghostWallsEnabled;
     if (renderer.shadowMap.enabled !== shadowsEnabled) {
@@ -989,6 +993,7 @@ export function Viewport3D({
             camera,
             renderer,
             view,
+            elements,
             compositionId: compositionIdRef.current,
             requestRender: () => requestRenderRef.current?.(),
           },
@@ -1021,8 +1026,8 @@ export function Viewport3D({
         changed = true;
       }
 
-      if (viewChanged || !elementsEqual(entry.last, element)) {
-        entry.instance.update?.(element);
+      if (viewChanged || elementsContextChanged || !elementsEqual(entry.last, element)) {
+        entry.instance.update?.(element, { elements });
         entry.last = element;
         changed = true;
       }

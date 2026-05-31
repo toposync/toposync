@@ -136,6 +136,7 @@ function createInstances(args: {
         camera: args.camera,
         renderer: args.renderer,
         view: args.view,
+        elements: args.elements,
         compositionId: args.compositionId,
       },
       element,

@@ -722,6 +722,8 @@ export function MainScreen({
             : activeRenderView
               ? renderViewText(activeRenderView.name, activeRenderView.id)
               : t("core.ui.render_modal.option_loading.title", {}, "Loading view");
+  const renderButtonLabel = renderModeLabel || t("core.ui.rendering");
+  const compositionButtonLabel = compositionName.trim() || t("core.ui.composition");
   const viewportLoadingMessage =
     renderMode === "streams"
       ? null
@@ -820,12 +822,24 @@ export function MainScreen({
           .filter(Boolean)
           .join(" ")}
       >
-        <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
-          {t("core.ui.rendering")}: {renderModeLabel}
+        <button
+          className="chipButton mainSelectorButton"
+          type="button"
+          aria-label={`${t("core.ui.rendering")}: ${renderButtonLabel}`}
+          title={`${t("core.ui.rendering")}: ${renderButtonLabel}`}
+          onClick={() => setIsRenderModalOpen(true)}
+        >
+          <span className="mainSelectorButtonText">{renderButtonLabel}</span>
         </button>
         {renderMode !== "streams" ? (
-          <button className="chipButton" type="button" onClick={() => setIsCompositionModalOpen(true)}>
-            {t("core.ui.composition")}: {compositionName}
+          <button
+            className="chipButton mainSelectorButton"
+            type="button"
+            aria-label={`${t("core.ui.composition")}: ${compositionButtonLabel}`}
+            title={`${t("core.ui.composition")}: ${compositionButtonLabel}`}
+            onClick={() => setIsCompositionModalOpen(true)}
+          >
+            <span className="mainSelectorButtonText">{compositionButtonLabel}</span>
           </button>
         ) : null}
         <button

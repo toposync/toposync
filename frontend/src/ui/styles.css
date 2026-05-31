@@ -2445,7 +2445,9 @@ video {
   right: 14px;
   z-index: 20;
   display: flex;
+  align-items: center;
   gap: 10px;
+  max-width: calc(100vw - 84px);
 }
 
 .emptyHint {
@@ -2479,6 +2481,23 @@ video {
   border-radius: 999px;
   cursor: pointer;
   font-size: 13px;
+}
+
+.mainSelectorButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: min(220px, 28vw);
+}
+
+.mainSelectorButtonText {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chipButton:hover {
@@ -4200,6 +4219,11 @@ video {
     gap: 8px;
     flex-wrap: wrap;
     justify-content: flex-end;
+    max-width: calc(100vw - 76px);
+  }
+
+  .mainSelectorButton {
+    max-width: min(150px, 34vw);
   }
 
   .overlayLeft.isOpen {
@@ -4212,8 +4236,8 @@ video {
   }
 
   .overlayLeft.isCollapsed {
-    top: auto;
-    bottom: 14px;
+    top: 10px;
+    bottom: auto;
     left: 14px;
     height: auto;
     width: auto;

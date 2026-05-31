@@ -363,7 +363,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.access.grants.summary.mixed": "Only: {{include}} · Except: {{exclude}}",
 
     "core.ui.render_modal.title": "Rendering",
-    "core.ui.render_modal.option_3d.title": "3D (ThreeJS)",
+    "core.ui.render_modal.option_3d.title": "3D",
     "core.ui.render_modal.option_3d.desc": "Interactive 3D view.",
     "core.ui.render_modal.option_2d.title": "2D (Snapshot)",
     "core.ui.render_modal.option_2d.desc": "Top-down snapshot with Home Assistant overlays.",
@@ -2369,7 +2369,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.access.grants.summary.mixed": "Somente: {{include}} · Exceto: {{exclude}}",
 
     "core.ui.render_modal.title": "Renderização",
-    "core.ui.render_modal.option_3d.title": "3D (ThreeJS)",
+    "core.ui.render_modal.option_3d.title": "3D",
     "core.ui.render_modal.option_3d.desc": "Visualização 3D interativa.",
     "core.ui.render_modal.option_2d.title": "2D (Captura)",
     "core.ui.render_modal.option_2d.desc": "Captura de cima com overlays do Home Assistant.",

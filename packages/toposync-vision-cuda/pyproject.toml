@@ -1,20 +1,20 @@
 [project]
 name = "toposync-vision-cuda"
-version = "0.7.3"
+version = "0.7.4"
 description = "Toposync application bundle with ONNX Runtime CUDA acceleration."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
-  "toposync-core==0.7.3",
-  "toposync-ext-structural==0.4.3",
-  "toposync-ext-models==0.4.3",
-  "toposync-ext-home-assistant==0.4.3",
-  "toposync-ext-images==0.4.3",
-  "toposync-ext-cameras==0.4.3",
-  "toposync-ext-vision==0.4.3",
-  "toposync-ext-spatial-video==0.4.3",
+  "toposync-core==0.7.4",
+  "toposync-ext-structural==0.4.4",
+  "toposync-ext-models==0.4.4",
+  "toposync-ext-home-assistant==0.4.4",
+  "toposync-ext-images==0.4.4",
+  "toposync-ext-cameras==0.4.4",
+  "toposync-ext-vision==0.4.4",
+  "toposync-ext-spatial-video==0.4.4",
   "onnxruntime-gpu>=1.20",
 ]
 

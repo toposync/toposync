@@ -1,6 +1,6 @@
 [project]
 name = "toposync-ext-cameras"
-version = "0.4.3"
+version = "0.4.4"
 description = "Toposync first-party extension: RTSP cameras and camera pipeline operators."
 readme = "README.md"
 license = "MIT"

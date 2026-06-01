@@ -1,0 +1,4 @@
+# Cloudflare Pages project for https://docs.toposync.com.
+name = "toposync-docs"
+compatibility_date = "2026-05-30"
+pages_build_output_dir = "docs-site/build"

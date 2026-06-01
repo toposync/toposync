@@ -2,14 +2,10 @@ import Heading from '@theme/Heading';
 import Layout from '@theme/Layout';
 import Link from '@docusaurus/Link';
 import Translate, {translate} from '@docusaurus/Translate';
-import useBaseUrl from '@docusaurus/useBaseUrl';
-import type {CSSProperties} from 'react';
 
 import styles from './index.module.css';
 
 export default function Home(): JSX.Element {
-  const symbolUrl = useBaseUrl('img/toposync-symbol.svg');
-
   return (
     <Layout
       title={translate({
@@ -21,128 +17,168 @@ export default function Home(): JSX.Element {
         message: 'Documentation for the Toposync local-first spatial home automation platform',
       })}>
       <main className={styles.home}>
-        <section className={styles.hero}>
-          <div className={styles.heroInner}>
-            <div>
-              <div className={styles.eyebrow}>
-                <span className={styles.eyebrowDot} />
-                <Translate id="homepage.eyebrow">Alpha docs · Local-first spatial operations</Translate>
-              </div>
-              <Heading as="h1" className={styles.title}>
-                <Translate id="homepage.headingLine1">Map your home.</Translate>
-                <span className={styles.titleAccent}>
-                  <Translate id="homepage.headingLine2">Operate with context.</Translate>
-                </span>
-              </Heading>
-              <p className={styles.subtitle}>
-                <Translate id="homepage.subtitle">
-                  Practical documentation for installing Toposync, creating your first spatial composition,
-                  connecting cameras, and building local-first automation workflows.
-                </Translate>
-              </p>
-              <div className={styles.actions}>
-                <Link className="button button--primary button--lg" to="/docs/first-steps/">
-                  <Translate id="homepage.startFirstSteps">Start with first steps</Translate>
-                </Link>
-                <Link className="button button--secondary button--lg" to="/docs/installation/choose-your-installation">
-                  <Translate id="homepage.chooseInstall">Choose installation</Translate>
-                </Link>
-              </div>
-              <ul className={styles.quickStats} aria-label={translate({id: 'homepage.highlights', message: 'Highlights'})}>
-                <li>
-                  <Translate id="homepage.stat.localFirst">Local-first</Translate>
-                </li>
-                <li>
-                  <Translate id="homepage.stat.ha">Home Assistant ready</Translate>
-                </li>
-                <li>
-                  <Translate id="homepage.stat.extensions">Extension runtime</Translate>
-                </li>
-              </ul>
+        <section className={styles.intro}>
+          <div className={styles.container}>
+            <p className={styles.alphaBadge}>
+              <Translate id="homepage.alphaBadge">Alpha documentation</Translate>
+            </p>
+            <Heading as="h1" className={styles.title}>
+              <Translate id="homepage.heading">Toposync documentation</Translate>
+            </Heading>
+            <p className={styles.introText}>
+              <Translate id="homepage.introText">
+                Practical guides for installing Toposync, creating your first spatial composition,
+                connecting cameras, and understanding the current local-first architecture.
+              </Translate>
+            </p>
+            <div className={styles.actions}>
+              <Link className="button button--primary button--lg" to="/docs/installation/choose-your-installation">
+                <Translate id="homepage.chooseInstall">Choose installation</Translate>
+              </Link>
+              <Link className="button button--secondary button--lg" to="/docs/first-steps/">
+                <Translate id="homepage.startFirstSteps">Start with first steps</Translate>
+              </Link>
             </div>
-
-            <aside className={styles.controlPanel} aria-label={translate({id: 'homepage.panel.label', message: 'Toposync system overview'})}>
-              <div className={styles.symbolFrame}>
-                <img className={styles.symbol} src={symbolUrl} alt="Toposync symbol" />
-              </div>
-              <div className={styles.panelRows}>
-                <div className={styles.panelRow} style={{'--row-color': 'var(--topo-teal)'} as CSSProperties}>
-                  <span className={styles.panelDot} />
-                  <span className={styles.panelLabel}>
-                    <Translate id="homepage.panel.composition">Composition</Translate>
-                  </span>
-                  <span className={styles.panelValue}>2D/3D</span>
-                </div>
-                <div className={styles.panelRow} style={{'--row-color': 'var(--topo-blue)'} as CSSProperties}>
-                  <span className={styles.panelDot} />
-                  <span className={styles.panelLabel}>
-                    <Translate id="homepage.panel.cameras">Cameras</Translate>
-                  </span>
-                  <span className={styles.panelValue}>RTSP / ONVIF</span>
-                </div>
-                <div className={styles.panelRow} style={{'--row-color': 'var(--topo-amber)'} as CSSProperties}>
-                  <span className={styles.panelDot} />
-                  <span className={styles.panelLabel}>
-                    <Translate id="homepage.panel.pipelines">Pipelines</Translate>
-                  </span>
-                  <span className={styles.panelValue}>LOCAL CPU</span>
-                </div>
-              </div>
-            </aside>
           </div>
         </section>
 
-        <section className={styles.cards} aria-label={translate({id: 'homepage.cards.label', message: 'Documentation entry points'})}>
-          <Link className={styles.card} to="/docs/installation/choose-your-installation" style={{'--card-color': 'var(--topo-gradient-accent)'} as CSSProperties}>
-            <span className={styles.cardKicker}>
-              <Translate id="homepage.card.install.kicker">Install</Translate>
-            </span>
-            <Heading as="h2" className={styles.cardTitle}>
-              <Translate id="homepage.card.install.title">Pick the right deployment path</Translate>
-            </Heading>
-            <p className={styles.cardDescription}>
-              <Translate id="homepage.card.install.description">
-                Python, Docker, CUDA, Windows services, Home Assistant add-on, and processing servers.
+        <section className={styles.section} aria-labelledby="start-here">
+          <div className={styles.container}>
+            <div className={styles.sectionHeader}>
+              <Heading as="h2" id="start-here">
+                <Translate id="homepage.startHere.title">Start here</Translate>
+              </Heading>
+              <p>
+                <Translate id="homepage.startHere.description">
+                  Pick the guide that matches what you are trying to do right now.
+                </Translate>
+              </p>
+            </div>
+
+            <div className={styles.primaryGrid}>
+              <Link className={styles.guideCard} to="/docs/installation/choose-your-installation">
+                <span className={styles.cardKicker}>
+                  <Translate id="homepage.install.kicker">Installation</Translate>
+                </span>
+                <Heading as="h3">
+                  <Translate id="homepage.install.title">Choose your installation</Translate>
+                </Heading>
+                <p>
+                  <Translate id="homepage.install.description">
+                    Decide between Python, Docker, Home Assistant OS, GPU upgrades, and processing servers.
+                  </Translate>
+                </p>
+              </Link>
+
+              <Link className={styles.guideCard} to="/docs/first-steps/">
+                <span className={styles.cardKicker}>
+                  <Translate id="homepage.firstSteps.kicker">First use</Translate>
+                </span>
+                <Heading as="h3">
+                  <Translate id="homepage.firstSteps.title">Build your first composition</Translate>
+                </Heading>
+                <p>
+                  <Translate id="homepage.firstSteps.description">
+                    Start with a tracing image, add walls and areas, place cameras, and create a simple pipeline.
+                  </Translate>
+                </p>
+              </Link>
+
+              <Link className={styles.guideCard} to="/docs/installation/home-assistant-addon">
+                <span className={styles.cardKicker}>
+                  <Translate id="homepage.homeAssistant.kicker">Home Assistant OS</Translate>
+                </span>
+                <Heading as="h3">
+                  <Translate id="homepage.homeAssistant.title">Install the add-on</Translate>
+                </Heading>
+                <p>
+                  <Translate id="homepage.homeAssistant.description">
+                    Use the supervised add-on path with sidebar ingress, direct access options, and local Home Assistant integration.
+                  </Translate>
+                </p>
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.section} aria-labelledby="browse-by-task">
+          <div className={styles.container}>
+            <div className={styles.sectionHeader}>
+              <Heading as="h2" id="browse-by-task">
+                <Translate id="homepage.browse.title">Browse by task</Translate>
+              </Heading>
+              <p>
+                <Translate id="homepage.browse.description">
+                  Use these entry points when you already know which part of Toposync you need.
+                </Translate>
+              </p>
+            </div>
+
+            <div className={styles.taskGrid}>
+              <Link className={styles.taskLink} to="/docs/cameras/overview">
+                <span>
+                  <Translate id="homepage.task.cameras.title">Cameras</Translate>
+                </span>
+                <small>
+                  <Translate id="homepage.task.cameras.description">RTSP, ONVIF, mapping, and image processing</Translate>
+                </small>
+              </Link>
+              <Link className={styles.taskLink} to="/docs/installation/processing-server-linux-macos">
+                <span>
+                  <Translate id="homepage.task.processing.title">Processing servers</Translate>
+                </span>
+                <small>
+                  <Translate id="homepage.task.processing.description">Move heavier camera and vision workloads to another machine</Translate>
+                </small>
+              </Link>
+              <Link className={styles.taskLink} to="/docs/home-assistant-addon/overview">
+                <span>
+                  <Translate id="homepage.task.homeAssistant.title">Home Assistant add-on details</Translate>
+                </span>
+                <small>
+                  <Translate id="homepage.task.homeAssistant.description">Ingress, operation, configuration, and troubleshooting</Translate>
+                </small>
+              </Link>
+              <Link className={styles.taskLink} to="/docs/reference/configuration">
+                <span>
+                  <Translate id="homepage.task.reference.title">Reference</Translate>
+                </span>
+                <small>
+                  <Translate id="homepage.task.reference.description">Configuration, ports, environment variables, and file locations</Translate>
+                </small>
+              </Link>
+              <Link className={styles.taskLink} to="/docs/developers/architecture">
+                <span>
+                  <Translate id="homepage.task.developers.title">Developers</Translate>
+                </span>
+                <small>
+                  <Translate id="homepage.task.developers.description">Architecture, extension authoring, plugin API, and pipelines</Translate>
+                </small>
+              </Link>
+              <Link className={styles.taskLink} to="/docs/troubleshooting/">
+                <span>
+                  <Translate id="homepage.task.troubleshooting.title">Troubleshooting</Translate>
+                </span>
+                <small>
+                  <Translate id="homepage.task.troubleshooting.description">Known failure modes and practical checks</Translate>
+                </small>
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.noteSection}>
+          <div className={styles.container}>
+            <p className={styles.alphaNote}>
+              <strong>
+                <Translate id="homepage.alphaNote.label">Early access alpha.</Translate>
+              </strong>{' '}
+              <Translate id="homepage.alphaNote.text">
+                Test Toposync in contained environments and follow the security guidance before using cameras,
+                Home Assistant entities, or automation workflows.
               </Translate>
             </p>
-          </Link>
-          <Link className={styles.card} to="/docs/first-steps/" style={{'--card-color': 'var(--topo-amber)'} as CSSProperties}>
-            <span className={styles.cardKicker}>
-              <Translate id="homepage.card.firstSteps.kicker">First run</Translate>
-            </span>
-            <Heading as="h2" className={styles.cardTitle}>
-              <Translate id="homepage.card.firstSteps.title">Create the first composition</Translate>
-            </Heading>
-            <p className={styles.cardDescription}>
-              <Translate id="homepage.card.firstSteps.description">
-                Start with a tracing image, add areas, place a camera, and build the first simple flow.
-              </Translate>
-            </p>
-          </Link>
-          <Link className={styles.card} to="/docs/home-assistant-addon/overview" style={{'--card-color': 'var(--topo-green)'} as CSSProperties}>
-            <span className={styles.cardKicker}>
-              <Translate id="homepage.card.homeAssistant.kicker">Home Assistant</Translate>
-            </span>
-            <Heading as="h2" className={styles.cardTitle}>
-              <Translate id="homepage.card.homeAssistant.title">Run inside your HA environment</Translate>
-            </Heading>
-            <p className={styles.cardDescription}>
-              <Translate id="homepage.card.homeAssistant.description">
-                Sidebar ingress, supervised operation, direct-port access, and local Core API integration.
-              </Translate>
-            </p>
-          </Link>
-          <Link className={styles.card} to="https://github.com/toposync/toposync" style={{'--card-color': 'var(--topo-cyan)'} as CSSProperties}>
-            <span className={styles.cardKicker}>GitHub</span>
-            <Heading as="h2" className={styles.cardTitle}>
-              <Translate id="homepage.card.github.title">Follow the alpha</Translate>
-            </Heading>
-            <p className={styles.cardDescription}>
-              <Translate id="homepage.card.github.description">
-                Report issues, inspect the source, contribute docs, and help validate real local setups.
-              </Translate>
-            </p>
-          </Link>
+          </div>
         </section>
       </main>
     </Layout>

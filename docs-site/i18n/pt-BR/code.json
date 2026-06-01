@@ -1,39 +1,18 @@
 {
-  "homepage.card.firstSteps.description": {
-    "message": "Comece com uma imagem de decalque, adicione áreas, posicione uma câmera e crie o primeiro fluxo simples."
+  "homepage.alphaBadge": {
+    "message": "Documentação alpha"
   },
-  "homepage.card.firstSteps.kicker": {
-    "message": "Primeiro uso"
+  "homepage.alphaNote.label": {
+    "message": "Early access alpha."
   },
-  "homepage.card.firstSteps.title": {
-    "message": "Crie a primeira composição"
+  "homepage.alphaNote.text": {
+    "message": "Teste o Toposync em ambientes contidos e siga as orientações de segurança antes de usar câmeras, entidades do Home Assistant ou fluxos de automação."
   },
-  "homepage.card.github.description": {
-    "message": "Reporte issues, inspecione o código, contribua com documentação e ajude a validar setups locais reais."
+  "homepage.browse.description": {
+    "message": "Use estes pontos de entrada quando você já sabe qual parte do Toposync precisa."
   },
-  "homepage.card.github.title": {
-    "message": "Acompanhe o alpha"
-  },
-  "homepage.card.homeAssistant.description": {
-    "message": "Ingress na sidebar, operação supervisionada, acesso por porta direta e integração local com a Core API."
-  },
-  "homepage.card.homeAssistant.kicker": {
-    "message": "Home Assistant"
-  },
-  "homepage.card.homeAssistant.title": {
-    "message": "Rode dentro do seu ambiente HA"
-  },
-  "homepage.card.install.description": {
-    "message": "Python, Docker, CUDA, serviços Windows, add-on do Home Assistant e processing servers."
-  },
-  "homepage.card.install.kicker": {
-    "message": "Instalação"
-  },
-  "homepage.card.install.title": {
-    "message": "Escolha o caminho de implantação certo"
-  },
-  "homepage.cards.label": {
-    "message": "Pontos de entrada da documentação"
+  "homepage.browse.title": {
+    "message": "Navegue por tarefa"
   },
   "homepage.chooseInstall": {
     "message": "Escolher instalação"
@@ -41,44 +20,83 @@
   "homepage.description": {
     "message": "Documentação da plataforma local-first de automação residencial espacial Toposync"
   },
-  "homepage.eyebrow": {
-    "message": "Docs alpha · Operações espaciais local-first"
+  "homepage.firstSteps.description": {
+    "message": "Comece com uma imagem de decalque, adicione paredes e áreas, posicione câmeras e crie um pipeline simples."
   },
-  "homepage.headingLine1": {
-    "message": "Mapeie sua casa."
+  "homepage.firstSteps.kicker": {
+    "message": "Primeiro uso"
   },
-  "homepage.headingLine2": {
-    "message": "Opere com contexto."
+  "homepage.firstSteps.title": {
+    "message": "Crie sua primeira composição"
   },
-  "homepage.highlights": {
-    "message": "Destaques"
+  "homepage.heading": {
+    "message": "Documentação do Toposync"
   },
-  "homepage.panel.cameras": {
-    "message": "Câmeras"
+  "homepage.homeAssistant.description": {
+    "message": "Use o caminho supervisionado do add-on com ingress na sidebar, opções de acesso direto e integração local com o Home Assistant."
   },
-  "homepage.panel.composition": {
-    "message": "Composição"
+  "homepage.homeAssistant.kicker": {
+    "message": "Home Assistant OS"
   },
-  "homepage.panel.label": {
-    "message": "Visão geral do sistema Toposync"
+  "homepage.homeAssistant.title": {
+    "message": "Instale o add-on"
   },
-  "homepage.panel.pipelines": {
-    "message": "Pipelines"
+  "homepage.install.description": {
+    "message": "Decida entre Python, Docker, Home Assistant OS, upgrades de GPU e processing servers."
+  },
+  "homepage.install.kicker": {
+    "message": "Instalação"
+  },
+  "homepage.install.title": {
+    "message": "Escolha sua instalação"
+  },
+  "homepage.introText": {
+    "message": "Guias práticos para instalar o Toposync, criar sua primeira composição espacial, conectar câmeras e entender a arquitetura local-first atual."
   },
   "homepage.startFirstSteps": {
     "message": "Começar pelos primeiros passos"
   },
-  "homepage.stat.extensions": {
-    "message": "Runtime de extensões"
+  "homepage.startHere.description": {
+    "message": "Escolha o guia que corresponde ao que você está tentando fazer agora."
   },
-  "homepage.stat.ha": {
-    "message": "Pronto para Home Assistant"
+  "homepage.startHere.title": {
+    "message": "Comece por aqui"
   },
-  "homepage.stat.localFirst": {
-    "message": "Local-first"
+  "homepage.task.cameras.description": {
+    "message": "RTSP, ONVIF, mapeamento e processamento de imagens"
   },
-  "homepage.subtitle": {
-    "message": "Documentação prática para instalar o Toposync, criar sua primeira composição espacial, conectar câmeras e construir fluxos de automação local-first."
+  "homepage.task.cameras.title": {
+    "message": "Câmeras"
+  },
+  "homepage.task.developers.description": {
+    "message": "Arquitetura, criação de extensões, plugin API e pipelines"
+  },
+  "homepage.task.developers.title": {
+    "message": "Desenvolvedores"
+  },
+  "homepage.task.homeAssistant.description": {
+    "message": "Ingress, operação, configuração e solução de problemas"
+  },
+  "homepage.task.homeAssistant.title": {
+    "message": "Detalhes do add-on Home Assistant"
+  },
+  "homepage.task.processing.description": {
+    "message": "Mova cargas mais pesadas de câmera e visão para outra máquina"
+  },
+  "homepage.task.processing.title": {
+    "message": "Processing servers"
+  },
+  "homepage.task.reference.description": {
+    "message": "Configuração, portas, variáveis de ambiente e locais de arquivos"
+  },
+  "homepage.task.reference.title": {
+    "message": "Referência"
+  },
+  "homepage.task.troubleshooting.description": {
+    "message": "Falhas conhecidas e verificações práticas"
+  },
+  "homepage.task.troubleshooting.title": {
+    "message": "Solução de problemas"
   },
   "homepage.title": {
     "message": "Documentação do Toposync"

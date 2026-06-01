@@ -21,6 +21,7 @@
     "docs:build": "npm --workspace docs-site run build",
     "docs:build:en": "npm --workspace docs-site run build -- --locale en",
     "docs:build:pt-BR": "npm --workspace docs-site run build -- --locale pt-BR",
+    "docs:deploy:cloudflare": "npm run docs:build && npx wrangler pages deploy docs-site/build --project-name toposync-docs",
     "docs:serve": "npm --workspace docs-site run serve",
     "test:stream-frames": "node scripts/check_stream_transport_frames.mjs",
     "test:e2e": "playwright test"

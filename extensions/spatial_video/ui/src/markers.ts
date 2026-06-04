@@ -3,7 +3,7 @@ import type { CompositionElement, ElementType, Main2DMarker } from "@toposync/pl
 import type { StreamTextureSnapshot } from "./streamTexture";
 
 export type MarkerVideoStatus = {
-  kind: "loading" | "error" | "unmatched";
+  kind: "loading" | "error" | "pose_notice" | "pose_warning" | "unmatched";
   icon: string;
   title: string;
   color: string;
@@ -19,16 +19,6 @@ export function snapshotLabel(snapshot: StreamTextureSnapshot): string {
 }
 
 export function markerVideoStatus(snapshot: StreamTextureSnapshot | null, poseStatus: string | null | undefined): MarkerVideoStatus | null {
-  if (poseStatus === "unmatched") {
-    return {
-      kind: "unmatched",
-      icon: "location-dot",
-      title: "Pose atual sem mapeamento de projeção.",
-      color: "rgb(251,191,36)",
-      background: "rgba(120,53,15,0.92)",
-      border: "rgba(251,191,36,0.72)",
-    };
-  }
   if (snapshot?.status === "error") {
     return {
       kind: "error",
@@ -47,6 +37,46 @@ export function markerVideoStatus(snapshot: StreamTextureSnapshot | null, poseSt
       color: "rgb(186,230,253)",
       background: "rgba(12,74,110,0.94)",
       border: "rgba(125,211,252,0.78)",
+    };
+  }
+  if (poseStatus === "interpolated") {
+    return {
+      kind: "pose_notice",
+      icon: "wand-magic-sparkles",
+      title: "Pose interpolada entre calibrações.",
+      color: "rgb(186,230,253)",
+      background: "rgba(8,47,73,0.92)",
+      border: "rgba(56,189,248,0.7)",
+    };
+  }
+  if (poseStatus === "extrapolated") {
+    return {
+      kind: "pose_warning",
+      icon: "draw-polygon",
+      title: "Pose extrapolada fora da calibração.",
+      color: "rgb(254,240,138)",
+      background: "rgba(113,63,18,0.92)",
+      border: "rgba(250,204,21,0.72)",
+    };
+  }
+  if (poseStatus === "nearest_reference" || poseStatus === "single_reference") {
+    return {
+      kind: "pose_warning",
+      icon: "location-dot",
+      title: "Imagem renderizada na calibração mais próxima; a pose atual pode não estar bem mapeada.",
+      color: "rgb(254,240,138)",
+      background: "rgba(113,63,18,0.92)",
+      border: "rgba(250,204,21,0.72)",
+    };
+  }
+  if (poseStatus === "unmatched") {
+    return {
+      kind: "unmatched",
+      icon: "location-dot",
+      title: "Pose atual sem mapeamento de projeção.",
+      color: "rgb(251,191,36)",
+      background: "rgba(120,53,15,0.92)",
+      border: "rgba(251,191,36,0.72)",
     };
   }
   return null;

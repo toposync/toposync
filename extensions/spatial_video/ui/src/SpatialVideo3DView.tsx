@@ -298,7 +298,8 @@ function createMarkerButton(args: {
 
 function statusColor(status: MarkerVideoStatus): number {
   if (status.kind === "error") return 0xef4444;
-  if (status.kind === "unmatched") return 0xf59e0b;
+  if (status.kind === "pose_warning" || status.kind === "unmatched") return 0xf59e0b;
+  if (status.kind === "pose_notice") return 0x22d3ee;
   return 0x38bdf8;
 }
 

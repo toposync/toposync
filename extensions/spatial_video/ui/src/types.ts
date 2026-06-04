@@ -124,7 +124,7 @@ export type ProjectionCandidate = {
 
 export type ActiveProjectionPose = {
   set: CameraControlPointSet;
-  status: "matched" | "fallback" | "unmatched";
+  status: "matched" | "interpolated" | "extrapolated" | "nearest_reference" | "single_reference" | "fallback" | "unmatched";
   moving: boolean;
 };
 

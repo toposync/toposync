@@ -594,6 +594,7 @@ export function PipelineTelemetryOverviewCard({
   const [error, setError] = useState<string | null>(null);
   const [series, setSeries] = useState<MetricSeries[]>([]);
   const [markers, setMarkers] = useState<PipelineTelemetryImageMarker[]>([]);
+  const [loadingInBackground, setLoadingInBackground] = useState(false);
   const [rangeSeconds, setRangeSeconds] = useState(RANGE_DEFAULT_SECONDS);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
@@ -604,6 +605,8 @@ export function PipelineTelemetryOverviewCard({
   const [fullscreenImageOpen, setFullscreenImageOpen] = useState(false);
   const [fullscreenImageItems, setFullscreenImageItems] = useState<FullscreenImageViewerItem[]>([]);
   const [fullscreenImageIndex, setFullscreenImageIndex] = useState(0);
+  const latestSuccessfulTelemetryRequestKeyRef = useRef<string | null>(null);
+  const hasTelemetryContentRef = useRef(false);
   const eventColorAllocatorRef = useRef<EventColorAllocatorState>({
     colorsByKey: new Map(),
     nextIndexByPipeline: new Map(),
@@ -769,6 +772,17 @@ export function PipelineTelemetryOverviewCard({
     () => selectedPipelineNames.join("|"),
     [selectedPipelineNames],
   );
+  const telemetryRequestKey = useMemo(
+    () =>
+      JSON.stringify({
+        aggregate: isAggregate,
+        metricTargetsKey,
+        pipelineName: pipelineName ?? "",
+        rangeSeconds,
+        selectedPipelineNamesKey,
+      }),
+    [isAggregate, metricTargetsKey, pipelineName, rangeSeconds, selectedPipelineNamesKey],
+  );
 
   useEffect(() => {
     if (!isAggregate) {
@@ -797,6 +811,7 @@ export function PipelineTelemetryOverviewCard({
       setError(null);
       setLastUpdatedAt(null);
       setLoading(false);
+      setLoadingInBackground(false);
       return;
     }
     if (!isAggregate && !pipelineName) {
@@ -805,10 +820,14 @@ export function PipelineTelemetryOverviewCard({
       setError(null);
       setLastUpdatedAt(null);
       setLoading(false);
+      setLoadingInBackground(false);
       return;
     }
 
     const controller = new AbortController();
+    const shouldLoadInBackground =
+      latestSuccessfulTelemetryRequestKeyRef.current === telemetryRequestKey && hasTelemetryContentRef.current;
+    setLoadingInBackground(shouldLoadInBackground);
     setLoading(true);
     setError(null);
 
@@ -876,15 +895,20 @@ export function PipelineTelemetryOverviewCard({
 
         setSeries(nextSeries);
         setMarkers(Array.isArray(markerResponse.markers) ? markerResponse.markers : []);
+        latestSuccessfulTelemetryRequestKeyRef.current = telemetryRequestKey;
         setLastUpdatedAt(Date.now());
       } catch (err: any) {
         if (controller.signal.aborted || isAbortError(err)) return;
-        setSeries([]);
-        setMarkers([]);
+        if (!shouldLoadInBackground) {
+          latestSuccessfulTelemetryRequestKeyRef.current = null;
+          setSeries([]);
+          setMarkers([]);
+        }
         setError(String(err?.message ?? err));
       } finally {
         if (controller.signal.aborted) return;
         setLoading(false);
+        setLoadingInBackground(false);
       }
     };
 
@@ -903,6 +927,7 @@ export function PipelineTelemetryOverviewCard({
     refreshNonce,
     selectedPipelineNames,
     selectedPipelineNamesKey,
+    telemetryRequestKey,
   ]);
 
   useEffect(() => {
@@ -1043,6 +1068,15 @@ export function PipelineTelemetryOverviewCard({
     () => buildMarkerClusters(markerPoints, { baseY: paddingTop + innerHeight + 6 }),
     [markerPoints, paddingTop, innerHeight],
   );
+  const hasTelemetryContent = series.length > 0 || markerClusters.length > 0;
+  const showTelemetryContent = hasTelemetryContent && (!loading || loadingInBackground || Boolean(error));
+  const showLoadingHint = loading && !showTelemetryContent;
+  const showNoTelemetryData = !loading && !error && !hasTelemetryContent;
+
+  useEffect(() => {
+    hasTelemetryContentRef.current = hasTelemetryContent;
+  }, [hasTelemetryContent]);
+
   const markerClustersByKey = useMemo(
     () => new Map(markerClusters.map((cluster) => [cluster.key, cluster])),
     [markerClusters],
@@ -1317,9 +1351,9 @@ export function PipelineTelemetryOverviewCard({
           </div>
         ) : null}
 
-        {loading ? <div className="pipelinesHint">{t("core.ui.pipelines.telemetry.loading", {}, "Loading telemetry…")}</div> : null}
+        {showLoadingHint ? <div className="pipelinesHint">{t("core.ui.pipelines.telemetry.loading", {}, "Loading telemetry…")}</div> : null}
         {error ? <div className="pipelinesInlineError">{t("core.ui.pipelines.telemetry.error", { error }, "Telemetry unavailable: {{error}}")}</div> : null}
-        {!loading && !error && series.length === 0 && markerClusters.length === 0 ? (
+        {showNoTelemetryData ? (
           <div className="pipelinesHint">
             {isAggregate && pipelineOptions.length > 0 && selectedPipelineOptions.length === 0
               ? t(
@@ -1335,7 +1369,7 @@ export function PipelineTelemetryOverviewCard({
           </div>
         ) : null}
 
-        {!loading && !error && (series.length > 0 || markerClusters.length > 0) ? (
+        {showTelemetryContent ? (
           <>
             <div className="pipelinesTelemetryLegend">
               {series.map((item) => {

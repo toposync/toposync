@@ -209,6 +209,7 @@ def test_camera_pipeline_preset_defaults_detection_to_rfdetr_medium(
         assert _vision_detect_config(pipeline).get("model_id") == "rfdetr_det_medium"
         assert _vision_detect_config(pipeline).get("categories") == ["person"]
         assert _node_config(pipeline, "core.throttle").get("interval_seconds") == 10.0
+        assert _node_config(pipeline, "core.notify").get("priority") == "medium"
 
         res = client.get("/api/cameras/cameras/cam1/pipelines")
         assert res.status_code == 200
@@ -340,7 +341,7 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
 
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
-            json={"preset": "vehicle_stopped"},
+            json={"preset": "vehicle_stopped", "notification_priority": "high"},
         )
         assert res.status_code == 200, res.text
         pipeline_name = res.json()["pipeline_name"]
@@ -391,6 +392,7 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
         notify = _node_config(pipeline, "core.notify")
         assert notify.get("dedupe_key_template") == "{{tracking_id}}"
         assert notify.get("title") == "{{camera_name}}: veículo parado"
+        assert notify.get("priority") == "high"
 
 
 def test_camera_pipeline_vehicle_stopped_area_uses_area_composition_and_restriction(

@@ -63,10 +63,13 @@ from .onvif import (
 )
 
 
+NotificationPriority = Literal["low", "medium", "high"]
+
 EXTENSION_ID = "com.toposync.cameras"
 DEFAULT_CAMERA_DETECTION_MODEL_ID = "rfdetr_det_medium"
 PIPELINE_NAME_MAX_LENGTH = 120
 CAMERA_PIPELINE_PRESETS = ("people_detection", "people_mapping", "vehicle_stopped")
+NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
 VEHICLE_STOPPED_OBJECT_CATEGORIES = ["car", "truck", "bus", "motorcycle"]
 VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
 PRESET_PIPELINE_NAME_PARTS = {
@@ -372,6 +375,17 @@ class CameraPipelinePresetRequest(BaseModel):
     stopped_speed_threshold: float | None = Field(default=None, ge=0.0, le=1000.0)
     notification_title: str = ""
     notification_description: str = ""
+    notification_priority: NotificationPriority = "medium"
+
+    @field_validator("notification_priority", mode="before")
+    @classmethod
+    def _normalize_notification_priority(cls, value: Any) -> str:
+        raw = "medium" if value is None else str(value).strip().lower()
+        if not raw:
+            return "medium"
+        if raw not in NOTIFICATION_PRIORITIES:
+            raise ValueError("notification_priority must be one of: low, medium, high")
+        return raw
 
 
 class CameraPipelinePresetResponse(BaseModel):
@@ -2282,6 +2296,7 @@ class CamerasExtension(BaseExtension):
             stopped_speed_threshold: float | None,
             notification_title: str,
             notification_description: str,
+            notification_priority: NotificationPriority,
         ) -> dict[str, Any]:
             detect_categories = (
                 VEHICLE_STOPPED_OBJECT_CATEGORIES if preset == "vehicle_stopped" else ["person"]
@@ -2342,7 +2357,7 @@ class CamerasExtension(BaseExtension):
                             "title": notification_title or "{{camera_name}}: Person detected",
                             "description": notification_description
                             or "{{object_category_label}} - {{camera_name}}",
-                            "priority": "medium",
+                            "priority": notification_priority,
                             "dedupe_key_template": "{{tracking_id}}",
                         },
                     },
@@ -2418,7 +2433,7 @@ class CamerasExtension(BaseExtension):
                                     "title": notification_title or "{{camera_name}}: Person mapped",
                                     "description": notification_description
                                     or "{{object_category_label}} - {{camera_name}}",
-                                    "priority": "medium",
+                                    "priority": notification_priority,
                                     "dedupe_key_template": "{{tracking_id}}",
                                 },
                             },
@@ -2487,7 +2502,7 @@ class CamerasExtension(BaseExtension):
                             "title": notification_title or "{{camera_name}}: veículo parado",
                             "description": notification_description
                             or "{{object_category_label}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h",
-                            "priority": "medium",
+                            "priority": notification_priority,
                             "dedupe_key_template": "{{tracking_id}}",
                         },
                     },
@@ -2652,6 +2667,7 @@ class CamerasExtension(BaseExtension):
                     stopped_speed_threshold=body.stopped_speed_threshold,
                     notification_title=str(body.notification_title or "").strip(),
                     notification_description=str(body.notification_description or "").strip(),
+                    notification_priority=body.notification_priority,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc

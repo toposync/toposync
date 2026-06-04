@@ -6,6 +6,7 @@ import { createCameraPipelinePreset } from "../api/camerasApi";
 import type {
   CameraConfig,
   CameraContextComposition,
+  CameraNotificationPriority,
   CameraPipelinePreset,
   CameraPipelinesResponse,
   CameraSourceConfig,
@@ -99,6 +100,7 @@ function serverLabel(server: ProcessingServer): string {
 }
 
 const VEHICLE_STOPPED_DEFAULT_SPEED_KMH = 1.0;
+const NOTIFICATION_PRIORITIES: CameraNotificationPriority[] = ["low", "medium", "high"];
 
 function compositionIdForArea(compositions: CameraContextComposition[], areaId: string): string {
   const normalizedAreaId = String(areaId || "").trim();
@@ -141,6 +143,7 @@ export function CameraPipelinePresetModal({
   const [compositionId, setCompositionId] = useState("");
   const [areaId, setAreaId] = useState("");
   const [stoppedSpeedKmh, setStoppedSpeedKmh] = useState(VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
+  const [notificationPriority, setNotificationPriority] = useState<CameraNotificationPriority>("medium");
   const [enabled, setEnabled] = useState(true);
   const [processingServerId, setProcessingServerId] = useState("local");
   const [creating, setCreating] = useState(false);
@@ -169,6 +172,7 @@ export function CameraPipelinePresetModal({
     setCompositionId(mappedCompositions[0]?.id ?? "");
     setAreaId("");
     setStoppedSpeedKmh(VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
+    setNotificationPriority("medium");
     setEnabled(sourceHasVideoOrigin(camera, nextSource));
     setProcessingServerId("local");
     setCreating(false);
@@ -206,6 +210,7 @@ export function CameraPipelinePresetModal({
         area_id: preset === "vehicle_stopped" ? areaId : "",
         stopped_speed_threshold:
           preset === "vehicle_stopped" ? Math.max(0, Number(stoppedSpeedKmh) || 0) / 3.6 : undefined,
+        notification_priority: notificationPriority,
       });
       onCreated(response.pipeline_name);
       onClose();
@@ -322,6 +327,22 @@ export function CameraPipelinePresetModal({
         <div className="field">
           <label className="label">{t("ext.cameras.pipeline_preset.pipeline_name", {}, "Pipeline name")}</label>
           <input className="input" value={pipelineName} onChange={(event) => setPipelineName(safePipelineName(event.target.value))} disabled={creating} />
+        </div>
+
+        <div className="field">
+          <label className="label">{t("ext.cameras.pipeline_preset.notification_priority", {}, "Notification priority")}</label>
+          <select
+            className="input"
+            value={notificationPriority}
+            onChange={(event) => setNotificationPriority(event.target.value as CameraNotificationPriority)}
+            disabled={creating}
+          >
+            {NOTIFICATION_PRIORITIES.map((priority) => (
+              <option key={priority} value={priority}>
+                {t(`ext.cameras.pipeline_preset.notification_priority.${priority}`, {}, priority)}
+              </option>
+            ))}
+          </select>
         </div>
 
         <label className="chipButton" style={{ justifyContent: "flex-start" }}>

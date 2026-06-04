@@ -268,6 +268,7 @@ export type CameraContextsResponse = {
 };
 
 export type CameraPipelinePreset = "people_detection" | "people_mapping" | "vehicle_stopped";
+export type CameraNotificationPriority = "low" | "medium" | "high";
 
 export type CameraPipelineSummary = {
   name: string;
@@ -293,6 +294,7 @@ export type CameraPipelinePresetRequest = {
   stopped_speed_threshold?: number;
   notification_title?: string;
   notification_description?: string;
+  notification_priority?: CameraNotificationPriority;
 };
 
 export type CameraPipelinePresetResponse = {

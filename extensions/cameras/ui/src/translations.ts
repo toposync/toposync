@@ -156,6 +156,10 @@ export const camerasTranslations = {
     "ext.cameras.pipeline_preset.area": "Optional area",
     "ext.cameras.pipeline_preset.area.whole_composition": "Whole mapped composition",
     "ext.cameras.pipeline_preset.stopped_speed": "Stopped sensitivity (km/h)",
+    "ext.cameras.pipeline_preset.notification_priority": "Notification priority",
+    "ext.cameras.pipeline_preset.notification_priority.low": "Low",
+    "ext.cameras.pipeline_preset.notification_priority.medium": "Medium",
+    "ext.cameras.pipeline_preset.notification_priority.high": "High",
     "ext.cameras.pipeline_preset.pipeline_name": "Pipeline name",
     "ext.cameras.pipeline_preset.enabled": "Enable after creation",
     "ext.cameras.pipeline_preset.people_detection.summary":
@@ -398,6 +402,10 @@ export const camerasTranslations = {
     "ext.cameras.pipeline_preset.area": "Área opcional",
     "ext.cameras.pipeline_preset.area.whole_composition": "Toda a composição mapeada",
     "ext.cameras.pipeline_preset.stopped_speed": "Sensibilidade de parada (km/h)",
+    "ext.cameras.pipeline_preset.notification_priority": "Prioridade da notificação",
+    "ext.cameras.pipeline_preset.notification_priority.low": "Baixa",
+    "ext.cameras.pipeline_preset.notification_priority.medium": "Média",
+    "ext.cameras.pipeline_preset.notification_priority.high": "Alta",
     "ext.cameras.pipeline_preset.pipeline_name": "Nome do fluxo",
     "ext.cameras.pipeline_preset.enabled": "Ativar após criar",
     "ext.cameras.pipeline_preset.people_detection.summary":

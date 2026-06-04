@@ -172,6 +172,79 @@ def _resolve_subject_string(packet: Packet, field: str) -> str:
     return str(packet.metadata.get(f"subject_{field}") or "").strip()
 
 
+def _normalize_world_point(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    x = _as_finite_float(raw.get("x"))
+    z = _as_finite_float(raw.get("z"))
+    if x is None or z is None:
+        return None
+    point: dict[str, Any] = {"x": float(x), "z": float(z)}
+    composition_id = str(raw.get("composition_id") or raw.get("compositionId") or "").strip()
+    if composition_id:
+        point["composition_id"] = composition_id
+    area_label = raw.get("area_label")
+    if area_label is not None:
+        point["area_label"] = area_label
+    return point
+
+
+def _normalize_world_envelope_center(raw: Any) -> dict[str, Any] | None:
+    envelope = raw if isinstance(raw, dict) else {}
+    center = envelope.get("center") if isinstance(envelope, dict) else None
+    return _normalize_world_point(center)
+
+
+def _mapping_composition_id(packet: Packet) -> str | None:
+    mapping = packet.payload.get("mapping")
+    if not isinstance(mapping, dict):
+        return None
+    composition_id = str(
+        mapping.get("composition_id") or mapping.get("compositionId") or ""
+    ).strip()
+    return composition_id or None
+
+
+def _resolve_packet_world_point(packet: Packet) -> dict[str, Any] | None:
+    payload = packet.payload
+    subject = _resolve_subject(packet)
+    member_subject = payload.get("member_subject")
+    if not isinstance(member_subject, dict):
+        member_subject = {}
+
+    subject_type = str(subject.get("type") or "").strip().lower()
+    if subject_type == "group_event":
+        candidates: list[dict[str, Any] | None] = [
+            _normalize_world_envelope_center(subject.get("world_envelope")),
+            _normalize_world_envelope_center(payload.get("world_envelope")),
+            _normalize_world_point(member_subject.get("world_anchor")),
+            _normalize_world_point(payload.get("world")),
+            _normalize_world_point(payload.get("world_anchor")),
+            _normalize_world_point(subject.get("world_anchor")),
+        ]
+    else:
+        candidates = [
+            _normalize_world_point(subject.get("world_anchor")),
+            _normalize_world_point(payload.get("world")),
+            _normalize_world_point(payload.get("world_anchor")),
+            _normalize_world_envelope_center(subject.get("world_envelope")),
+            _normalize_world_envelope_center(payload.get("world_envelope")),
+            _normalize_world_point(member_subject.get("world_anchor")),
+        ]
+
+    composition_id = _mapping_composition_id(packet)
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        point = dict(candidate)
+        if not point.get("composition_id") and composition_id:
+            point["composition_id"] = composition_id
+        if "area_label" not in point:
+            point["area_label"] = payload.get("area_label")
+        return point
+    return None
+
+
 def _resolve_template_value(packet: Packet, key: str) -> Any:
     key = str(key or "").strip()
     if not key:
@@ -737,46 +810,29 @@ class NotifyRuntime(SinkRuntime):
         self._state.move_to_end(dedupe_key)
 
         changed = False
-        world = packet.payload.get("world")
-        if isinstance(world, dict):
-            try:
-                x = float(world.get("x"))
-                z = float(world.get("z"))
-            except Exception:
-                x = 0.0
-                z = 0.0
-            if math.isfinite(x) and math.isfinite(z):
-                mapping = (
-                    packet.payload.get("mapping")
-                    if isinstance(packet.payload.get("mapping"), dict)
-                    else {}
-                )
-                composition_id = (
-                    str(mapping.get("composition_id") or "").strip()
-                    if isinstance(mapping, dict)
-                    else ""
-                )
-                point = {
-                    "ts": float(ts),
-                    "x": float(x),
-                    "z": float(z),
-                    "composition_id": composition_id or None,
-                    "area_label": packet.payload.get("area_label"),
-                }
-                if state.trail:
-                    prev = state.trail[-1]
-                    try:
-                        dx = float(point["x"]) - float(prev.get("x", 0.0))
-                        dz = float(point["z"]) - float(prev.get("z", 0.0))
-                        if (dx * dx + dz * dz) > 0.000_001:
-                            state.trail.append(point)
-                            changed = True
-                    except Exception:
+        world_point = _resolve_packet_world_point(packet)
+        if world_point is not None:
+            point = {
+                "ts": float(ts),
+                "x": float(world_point["x"]),
+                "z": float(world_point["z"]),
+                "composition_id": world_point.get("composition_id") or None,
+                "area_label": world_point.get("area_label"),
+            }
+            if state.trail:
+                prev = state.trail[-1]
+                try:
+                    dx = float(point["x"]) - float(prev.get("x", 0.0))
+                    dz = float(point["z"]) - float(prev.get("z", 0.0))
+                    if (dx * dx + dz * dz) > 0.000_001:
                         state.trail.append(point)
                         changed = True
-                else:
+                except Exception:
                     state.trail.append(point)
                     changed = True
+            else:
+                state.trail.append(point)
+                changed = True
 
         stored = packet.payload.get("stored_images")
         if isinstance(stored, dict):

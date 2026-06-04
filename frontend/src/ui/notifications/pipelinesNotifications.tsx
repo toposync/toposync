@@ -139,42 +139,116 @@ function asFiniteNumber(value: unknown): number | null {
   return value;
 }
 
-function resolveWorldPoint(notification: Notification): { x: number; z: number; compositionId: string | null } | null {
+type WorldPoint = { x: number; z: number; compositionId: string | null };
+
+function readCompositionId(...records: Record<string, unknown>[]): string | null {
+  for (const rec of records) {
+    const direct = asString(rec.composition_id, "").trim() || asString(rec.compositionId, "").trim();
+    if (direct) return direct;
+    const mapping = asRecord(rec.mapping);
+    const mapped = asString(mapping.composition_id, "").trim() || asString(mapping.compositionId, "").trim();
+    if (mapped) return mapped;
+  }
+  return null;
+}
+
+function normalizeWorldPoint(value: unknown, fallbackCompositionId: string | null): WorldPoint | null {
+  const rec = asRecord(value);
+  const x = asFiniteNumber(rec.x);
+  const z = asFiniteNumber(rec.z);
+  if (x == null || z == null) return null;
+  const compositionId =
+    asString(rec.composition_id, "").trim() ||
+    asString(rec.compositionId, "").trim() ||
+    fallbackCompositionId;
+  return { x, z, compositionId: compositionId || null };
+}
+
+function normalizeWorldEnvelopeCenter(value: unknown, fallbackCompositionId: string | null): WorldPoint | null {
+  const envelope = asRecord(value);
+  const center = asRecord(envelope.center);
+  const compositionId = readCompositionId(envelope) || fallbackCompositionId;
+  return normalizeWorldPoint(center, compositionId);
+}
+
+function resolveOldDataWorldPoint(data: Record<string, unknown>, fallbackCompositionId: string | null): WorldPoint | null {
+  const direct = normalizeWorldPoint(data.world, fallbackCompositionId);
+  if (direct) return direct;
+  for (const value of Object.values(data)) {
+    const candidate = normalizeWorldPoint(value, fallbackCompositionId);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function resolveWorldPoint(notification: Notification): WorldPoint | null {
   const payload = asRecord(notification.payload);
   const data = asRecord(payload.data);
-  const world = asRecord(data.world);
-  let x = asFiniteNumber(world.x);
-  let z = asFiniteNumber(world.z);
-  if (x == null || z == null) {
-    for (const value of Object.values(data)) {
-      const candidate = asRecord(value);
-      const cx = asFiniteNumber(candidate.x);
-      const cz = asFiniteNumber(candidate.z);
-      if (cx == null || cz == null) continue;
-      x = cx;
-      z = cz;
-      break;
-    }
-  }
-  if (x == null || z == null) return null;
+  const subject = asRecord(payload.subject);
+  const dataSubject = asRecord(data.subject);
+  const memberSubject = asRecord(payload.member_subject);
+  const dataMemberSubject = asRecord(data.member_subject);
+  const fallbackCompositionId = readCompositionId(payload, data);
+  const subjectType = (
+    asString(subject.type, "").trim() ||
+    asString(dataSubject.type, "").trim() ||
+    asString(payload.subject_type, "").trim()
+  ).toLowerCase();
 
-  const mapping = asRecord(data.mapping);
-  const comp = asString(mapping.composition_id, "").trim();
-  return { x, z, compositionId: comp || null };
+  const candidates =
+    subjectType === "group_event"
+      ? [
+          normalizeWorldEnvelopeCenter(subject.world_envelope, fallbackCompositionId),
+          normalizeWorldEnvelopeCenter(payload.world_envelope, fallbackCompositionId),
+          normalizeWorldEnvelopeCenter(dataSubject.world_envelope, fallbackCompositionId),
+          normalizeWorldEnvelopeCenter(data.world_envelope, fallbackCompositionId),
+          normalizeWorldPoint(memberSubject.world_anchor, fallbackCompositionId),
+          normalizeWorldPoint(dataMemberSubject.world_anchor, fallbackCompositionId),
+          normalizeWorldPoint(payload.world, fallbackCompositionId),
+          normalizeWorldPoint(payload.world_anchor, fallbackCompositionId),
+          normalizeWorldPoint(subject.world_anchor, fallbackCompositionId),
+          normalizeWorldPoint(data.world_anchor, fallbackCompositionId),
+          resolveOldDataWorldPoint(data, fallbackCompositionId),
+        ]
+      : [
+          normalizeWorldPoint(subject.world_anchor, fallbackCompositionId),
+          normalizeWorldPoint(payload.world, fallbackCompositionId),
+          normalizeWorldPoint(payload.world_anchor, fallbackCompositionId),
+          normalizeWorldPoint(dataSubject.world_anchor, fallbackCompositionId),
+          normalizeWorldPoint(data.world, fallbackCompositionId),
+          normalizeWorldPoint(data.world_anchor, fallbackCompositionId),
+          normalizeWorldEnvelopeCenter(subject.world_envelope, fallbackCompositionId),
+          normalizeWorldEnvelopeCenter(payload.world_envelope, fallbackCompositionId),
+          normalizeWorldEnvelopeCenter(dataSubject.world_envelope, fallbackCompositionId),
+          normalizeWorldEnvelopeCenter(data.world_envelope, fallbackCompositionId),
+          normalizeWorldPoint(memberSubject.world_anchor, fallbackCompositionId),
+          normalizeWorldPoint(dataMemberSubject.world_anchor, fallbackCompositionId),
+          resolveOldDataWorldPoint(data, fallbackCompositionId),
+        ];
+
+  return candidates.find((item): item is WorldPoint => item != null) ?? null;
+}
+
+function resolveTrailEntryPoint(entry: unknown, fallbackCompositionId: string | null): WorldPoint | null {
+  const rec = asRecord(entry);
+  return (
+    normalizeWorldPoint(rec, fallbackCompositionId) ||
+    normalizeWorldPoint(rec.world_anchor, fallbackCompositionId) ||
+    normalizeWorldEnvelopeCenter(rec.world_envelope, fallbackCompositionId)
+  );
 }
 
 function resolveTrailPoints(notification: Notification): Array<{ x: number; z: number; compositionId: string | null }> | null {
   const payload = asRecord(notification.payload);
+  const data = asRecord(payload.data);
+  const fallbackCompositionId = readCompositionId(payload, data);
   const rawTrail = payload.trail;
   if (Array.isArray(rawTrail)) {
     const out: Array<{ x: number; z: number; compositionId: string | null }> = [];
     for (const entry of rawTrail) {
-      const rec = asRecord(entry);
-      const x = asFiniteNumber(rec.x);
-      const z = asFiniteNumber(rec.z);
-      if (x == null || z == null) continue;
-      const comp = asString(rec.composition_id, "").trim();
-      out.push({ x, z, compositionId: comp || null });
+      const point = resolveTrailEntryPoint(entry, fallbackCompositionId);
+      if (!point) continue;
+      out.push(point);
     }
     if (out.length) return out;
   }

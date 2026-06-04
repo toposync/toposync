@@ -492,3 +492,84 @@ def test_core_notify_accumulates_stored_images_for_one_tracking_lifecycle(tmp_pa
         ]
 
     asyncio.run(scenario())
+
+
+def test_core_notify_accumulates_group_event_trail_from_world_envelope(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+        q = notifications.broadcaster.subscribe()
+        deps = PipelineRuntimeDependencies(notifications_upsert=notifications.upsert)
+        notify = NotifyRuntime(
+            {
+                "notification_type": "pipelines.tracking",
+                "title": "group",
+                "dedupe_key_template": "{{subject.id}}",
+                "update_interval_seconds": 0.0,
+            },
+            deps,
+        )
+
+        def payload_for(lifecycle: Lifecycle, x: float, z: float) -> dict[str, object]:
+            lifecycle_value = lifecycle.value
+            return {
+                "frame_ts": 100.0 + x,
+                "camera_id": "camera-main",
+                "mapping": {"composition_id": "composition-main"},
+                "world": {"x": 99.0, "z": 99.0},
+                "world_envelope": {
+                    "center": {"x": x, "z": z},
+                    "radius_meters": 0.4,
+                    "member_count": 2,
+                },
+                "subject": {
+                    "type": "group_event",
+                    "id": "grp:camera:test:1",
+                    "lifecycle": lifecycle_value,
+                    "world_envelope": {
+                        "center": {"x": x, "z": z},
+                        "radius_meters": 0.4,
+                        "member_count": 2,
+                    },
+                },
+            }
+
+        await notify.process_packet(
+            Packet.create(
+                stream_id="group:camera:test:1",
+                lifecycle=Lifecycle.OPEN,
+                payload=payload_for(Lifecycle.OPEN, 1.0, 2.0),
+            ),
+            _NotifyContext(),
+        )
+        await notify.process_packet(
+            Packet.create(
+                stream_id="group:camera:test:1",
+                lifecycle=Lifecycle.UPDATE,
+                payload=payload_for(Lifecycle.UPDATE, 3.0, 4.0),
+            ),
+            _NotifyContext(),
+        )
+
+        items, _cursor = await notifications.list(limit=20)
+        assert len(items) == 1
+        payload = items[0].get("payload")
+        assert isinstance(payload, dict)
+        assert payload.get("status") == "open"
+        trail = payload.get("trail")
+        assert isinstance(trail, list)
+        assert [(item.get("x"), item.get("z")) for item in trail] == [(1.0, 2.0), (3.0, 4.0)]
+        assert {item.get("composition_id") for item in trail} == {"composition-main"}
+
+        events: list[dict[str, object]] = []
+        while True:
+            try:
+                events.append(q.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        notifications.broadcaster.unsubscribe(q)
+        ops = [str(event.get("op") or "") for event in events]
+        assert ops == ["insert", "update"]
+
+    asyncio.run(scenario())

@@ -46,11 +46,19 @@ export type AreaClip = {
 
 export type StreamingTransport = "mse" | "hls" | "jsmpeg" | "webrtc";
 
+export type MediaContentRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export type StreamingOutputUrl = {
   output_id: string;
   protocol: StreamingTransport | "rtsp";
   url: string;
   quality_profile_id?: string | null;
+  content_rect?: MediaContentRect | null;
 };
 
 export type StreamingPlaybackPlanTransport = {

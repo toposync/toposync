@@ -216,7 +216,7 @@ video {
   height: 0;
   pointer-events: none;
   z-index: 14;
-  --notification2d-pin-color: #ff3b81;
+  --notification2d-pin-color: #00d1ff;
 }
 
 .notification2dPinShape {

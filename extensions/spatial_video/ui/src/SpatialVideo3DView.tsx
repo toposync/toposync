@@ -8,6 +8,10 @@ import type {
   Element3DInstance,
   ElementType,
   Main2DMarker,
+  Notification,
+  Notification3DOverlay,
+  NotificationOverlayActions,
+  NotificationRenderer,
   RenderViewContext,
   ViewSettings,
 } from "@toposync/plugin-api";
@@ -16,13 +20,13 @@ import { areaClipSignature, controlPointSetIntersectsAreaClip } from "./areaClip
 import { fetchCameraPtzPresets, fetchCameraPtzStatus, fetchLiveViews } from "./api";
 import { resolveProjectionCandidates } from "./candidates";
 import { markerEntries, markerVideoStatus, type MarkerVideoStatus } from "./markers";
-import { controlPointSetProjectionSignature, type ProjectionMeshDensity, type ProjectionStrategyId } from "./projection";
+import { controlPointSetProjectionSignature, mediaContentRectSignature, type ProjectionMeshDensity, type ProjectionStrategyId } from "./projection";
 import { createProjectionGeometry } from "./projectionGeometry";
 import { resolveActiveProjectionPose } from "./ptzProjection";
 import { readSpatialVideoSettings, SPATIAL_VIDEO_RENDER_VIEW_ID } from "./spatialSettings";
 import { SpatialVideoCompatibilityNotice } from "./SpatialVideoCompatibilityNotice";
 import { StreamTextureSource } from "./streamTexture";
-import type { CameraLiveView, PtzPreset, PtzStatus } from "./types";
+import type { CameraControlPointSet, CameraLiveView, PtzPreset, PtzStatus, WorldPoint } from "./types";
 
 type TrackedElement = {
   type: string;
@@ -36,9 +40,12 @@ type ProjectionEntry = {
   unsubscribe: () => void;
   mesh: THREE.Mesh;
   material: THREE.MeshBasicMaterial;
+  set: CameraControlPointSet;
+  clipPolygon: WorldPoint[] | null;
   setId: string;
   setSignature: string;
   areaClipSignature: string;
+  uvRectSignature: string;
   strategyId: ProjectionStrategyId;
   meshDensity: ProjectionMeshDensity;
 };
@@ -321,7 +328,10 @@ export function SpatialVideo3DView({
   elementTypesById,
   compositionId,
   viewSettings,
+  activeNotification,
+  activeNotificationRenderer,
   onElementActivated,
+  onOpenImage,
 }: RenderViewContext): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -334,6 +344,13 @@ export function SpatialVideo3DView({
   const projectionEntriesRef = useRef<Map<string, ProjectionEntry>>(new Map());
   const markerObjectsRef = useRef<CSS2DObject[]>([]);
   const statusAdornmentsRef = useRef<Map<string, StatusAdornment>>(new Map());
+  const notificationOverlayRef = useRef<Notification3DOverlay | null>(null);
+  const notificationOverlayNotificationIdRef = useRef<string | null>(null);
+  const notificationOverlayRendererIdRef = useRef<string | null>(null);
+  const notificationOverlayCompositionIdRef = useRef<string | null>(null);
+  const activeNotificationRef = useRef<Notification | null>(activeNotification ?? null);
+  const activeNotificationRendererRef = useRef<NotificationRenderer | null>(activeNotificationRenderer ?? null);
+  const onOpenImageRef = useRef(onOpenImage);
   const renderViewSettingsRef = useRef<ViewSettings>(viewForSpatial3D(viewSettings));
   const lastElementsContextRef = useRef<CompositionElement[] | null>(null);
   const userInteractedWithCameraRef = useRef(false);
@@ -358,6 +375,89 @@ export function SpatialVideo3DView({
 
   const bumpVersion = useCallback(() => setVersion((prev) => prev + 1), []);
 
+  function syncNotificationOverlay(): void {
+    const overlay = notificationOverlayRef.current;
+    const scene = sceneRef.current;
+    const renderer = rendererRef.current;
+    const camera = cameraRef.current;
+    if (!scene || !renderer || !camera) return;
+
+    const notification = activeNotificationRef.current;
+    const rendererDef = activeNotificationRendererRef.current;
+    const create3DOverlay = rendererDef?.create3DOverlay;
+    const currentCompositionId = compositionIdRef.current ?? null;
+
+    if (!notification || !rendererDef || !create3DOverlay) {
+      if (overlay) {
+        scene.remove(overlay.object);
+        overlay.dispose?.();
+        notificationOverlayRef.current = null;
+        bumpVersion();
+      }
+      notificationOverlayNotificationIdRef.current = null;
+      notificationOverlayRendererIdRef.current = null;
+      notificationOverlayCompositionIdRef.current = null;
+      return;
+    }
+
+    const needsRecreate =
+      !overlay ||
+      notificationOverlayNotificationIdRef.current !== notification.id ||
+      notificationOverlayRendererIdRef.current !== rendererDef.id ||
+      notificationOverlayCompositionIdRef.current !== currentCompositionId;
+
+    if (!needsRecreate) {
+      overlay.update?.(notification);
+      bumpVersion();
+      return;
+    }
+
+    if (overlay) {
+      scene.remove(overlay.object);
+      overlay.dispose?.();
+      notificationOverlayRef.current = null;
+      bumpVersion();
+    }
+
+    const actions: NotificationOverlayActions = {
+      openImage: (args) => onOpenImageRef.current?.(args),
+    };
+
+    try {
+      const created = create3DOverlay(
+        {
+          THREE,
+          scene,
+          camera,
+          renderer,
+          view: renderViewSettingsRef.current,
+          elements,
+          compositionId: currentCompositionId ?? undefined,
+          requestRender: () => bumpVersion(),
+        },
+        notification,
+        actions,
+      );
+      if (!created) {
+        notificationOverlayNotificationIdRef.current = null;
+        notificationOverlayRendererIdRef.current = null;
+        notificationOverlayCompositionIdRef.current = null;
+        return;
+      }
+      scene.add(created.object);
+      notificationOverlayRef.current = created;
+      notificationOverlayNotificationIdRef.current = notification.id;
+      notificationOverlayRendererIdRef.current = rendererDef.id;
+      notificationOverlayCompositionIdRef.current = currentCompositionId;
+      bumpVersion();
+    } catch (error) {
+      console.warn("[spatial-video-3d:notificationOverlay]", error);
+      notificationOverlayNotificationIdRef.current = null;
+      notificationOverlayRendererIdRef.current = null;
+      notificationOverlayCompositionIdRef.current = null;
+    }
+  }
+
   useEffect(() => {
     const next = viewForSpatial3D(viewSettings);
     renderViewSettingsRef.current.wallHeightPreset = next.wallHeightPreset;
@@ -380,11 +480,26 @@ export function SpatialVideo3DView({
     compositionIdRef.current = compositionId;
     userInteractedWithCameraRef.current = false;
     autoFitUntilRef.current = Date.now() + AUTO_FIT_GRACE_MS;
+    syncNotificationOverlay();
   }, [compositionId]);
 
   useEffect(() => {
     onElementActivatedRef.current = onElementActivated;
   }, [onElementActivated]);
+
+  useEffect(() => {
+    activeNotificationRef.current = activeNotification ?? null;
+    syncNotificationOverlay();
+  }, [activeNotification]);
+
+  useEffect(() => {
+    activeNotificationRendererRef.current = activeNotificationRenderer ?? null;
+    syncNotificationOverlay();
+  }, [activeNotificationRenderer]);
+
+  useEffect(() => {
+    onOpenImageRef.current = onOpenImage;
+  }, [onOpenImage]);
 
   useEffect(() => {
     elementTypesByIdRef.current = elementTypesById;
@@ -528,6 +643,7 @@ export function SpatialVideo3DView({
     controlsRef.current = controls;
     projectionGroupRef.current = projectionGroup;
     markerGroupRef.current = markerGroup;
+    syncNotificationOverlay();
 
     const handleControlsStart = () => {
       userInteractedWithCameraRef.current = true;
@@ -565,6 +681,27 @@ export function SpatialVideo3DView({
       return null;
     };
 
+    const tryHandleNotificationOverlay = (clientX: number, clientY: number): boolean => {
+      const overlay = notificationOverlayRef.current;
+      const notification = activeNotificationRef.current;
+      const handler = overlay?.onPointerEvent;
+      if (!overlay || !notification || !handler) return false;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+      mouse.y = -(((clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1);
+      raycaster.setFromCamera(mouse, camera);
+
+      const hits = raycaster.intersectObject(overlay.object, true);
+      if (!hits.length) return false;
+      try {
+        return Boolean(handler({ kind: "click", intersection: hits[0], notification }));
+      } catch (error) {
+        console.warn("[spatial-video-3d:notificationOverlay.onPointerEvent]", error);
+        return false;
+      }
+    };
+
     const handlePointerDown = (event: PointerEvent) => {
       pointerDown = {
         x: event.clientX,
@@ -575,10 +712,12 @@ export function SpatialVideo3DView({
     const handlePointerUp = (event: PointerEvent) => {
       const down = pointerDown;
       pointerDown = null;
-      if (!down || !down.id) return;
+      if (!down) return;
       const dx = event.clientX - down.x;
       const dy = event.clientY - down.y;
       if (dx * dx + dy * dy > 36) return;
+      if (tryHandleNotificationOverlay(event.clientX, event.clientY)) return;
+      if (!down.id) return;
       const id = pickElementId(event.clientX, event.clientY);
       if (!id || id !== down.id) return;
       onElementActivatedRef.current?.(id, "click");
@@ -618,6 +757,11 @@ export function SpatialVideo3DView({
           adornment.ring.material.opacity = adornment.statusKind === "error" ? 0.86 : 0.74;
           adornment.glow.intensity = adornment.statusKind === "error" ? 0.58 : 0.38;
         }
+      }
+      try {
+        notificationOverlayRef.current?.tick?.(dt);
+      } catch (error) {
+        console.warn("[spatial-video-3d:notificationOverlay.tick]", error);
       }
       for (const entry of projectionEntriesRef.current.values()) {
         const map = entry.material.map;
@@ -661,6 +805,15 @@ export function SpatialVideo3DView({
         tracked.instance.dispose?.();
       }
       trackedRef.current.clear();
+
+      if (notificationOverlayRef.current) {
+        scene.remove(notificationOverlayRef.current.object);
+        notificationOverlayRef.current.dispose?.();
+      }
+      notificationOverlayRef.current = null;
+      notificationOverlayNotificationIdRef.current = null;
+      notificationOverlayRendererIdRef.current = null;
+      notificationOverlayCompositionIdRef.current = null;
 
       renderer.dispose();
       container.removeChild(renderer.domElement);
@@ -800,23 +953,30 @@ export function SpatialVideo3DView({
       const set = pose?.set ?? candidate.initialControlPointSet;
       const setSignature = controlPointSetProjectionSignature(set);
       const clipSignature = areaClipSignature(candidate.areaClip);
+      const clipPolygon = candidate.areaClip?.polygon ?? null;
       const visible = pose?.status !== "unmatched" && controlPointSetIntersectsAreaClip(set, candidate.areaClip);
       const existing = projectionEntriesRef.current.get(candidate.id);
+      const currentContentRect = existing?.source.getSnapshot().contentRect ?? null;
+      const uvRectSignature = mediaContentRectSignature(currentContentRect);
       if (
         existing &&
         (existing.setId !== set.id ||
           existing.setSignature !== setSignature ||
           existing.areaClipSignature !== clipSignature ||
+          existing.uvRectSignature !== uvRectSignature ||
           existing.strategyId !== projectionStrategyId ||
           existing.meshDensity !== meshDensity)
       ) {
-        const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity, { clipPolygon: candidate.areaClip?.polygon ?? null });
+        const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity, { clipPolygon, uvRect: currentContentRect });
         if (geometry) {
           existing.mesh.geometry.dispose();
           existing.mesh.geometry = geometry;
+          existing.set = set;
+          existing.clipPolygon = clipPolygon;
           existing.setId = set.id;
           existing.setSignature = setSignature;
           existing.areaClipSignature = clipSignature;
+          existing.uvRectSignature = uvRectSignature;
           existing.strategyId = projectionStrategyId;
           existing.meshDensity = meshDensity;
         } else {
@@ -830,13 +990,15 @@ export function SpatialVideo3DView({
         }
       }
       if (existing) {
+        existing.set = set;
+        existing.clipPolygon = clipPolygon;
         existing.mesh.userData.spatialPoseVisible = visible;
         existing.mesh.visible = visible && Boolean(existing.material.map);
         existing.material.opacity = pose?.moving ? 0.58 : 0.78;
         continue;
       }
 
-      const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity, { clipPolygon: candidate.areaClip?.polygon ?? null });
+      const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity, { clipPolygon });
       if (!geometry) continue;
       const material = new THREE.MeshBasicMaterial({
         color: 0xffffff,
@@ -857,6 +1019,19 @@ export function SpatialVideo3DView({
       const source = new StreamTextureSource(candidate);
       const unsubscribe = source.subscribe(() => {
         const snapshot = source.getSnapshot();
+        const entry = projectionEntriesRef.current.get(candidate.id);
+        const nextUvRectSignature = mediaContentRectSignature(snapshot.contentRect);
+        if (entry && entry.uvRectSignature !== nextUvRectSignature) {
+          const nextGeometry = createProjectionGeometry(entry.set, entry.strategyId, entry.meshDensity, {
+            clipPolygon: entry.clipPolygon,
+            uvRect: snapshot.contentRect ?? null,
+          });
+          if (nextGeometry) {
+            entry.mesh.geometry.dispose();
+            entry.mesh.geometry = nextGeometry;
+            entry.uvRectSignature = nextUvRectSignature;
+          }
+        }
         material.map = snapshot.texture;
         material.needsUpdate = true;
         mesh.visible = Boolean(mesh.userData.spatialPoseVisible) && Boolean(snapshot.texture);
@@ -868,9 +1043,12 @@ export function SpatialVideo3DView({
         unsubscribe,
         mesh,
         material,
+        set,
+        clipPolygon,
         setId: set.id,
         setSignature,
         areaClipSignature: clipSignature,
+        uvRectSignature: mediaContentRectSignature(source.getSnapshot().contentRect),
         strategyId: projectionStrategyId,
         meshDensity,
       });

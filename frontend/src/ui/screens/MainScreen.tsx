@@ -799,13 +799,13 @@ export function MainScreen({
 
   const renderModeLabel =
     renderMode === "3d"
-      ? "3D"
+      ? t("core.ui.render_modal.option_3d.title", {}, "3D")
       : renderMode === "2d"
-        ? "2D"
+        ? t("core.ui.render_modal.option_2d.title", {}, "2D (Image)")
         : renderMode === "vector2d"
-          ? t("core.ui.render_modal.option_vector2d.title", {}, "2D (Vector)")
+          ? t("core.ui.render_modal.option_vector2d.title", {}, "2D (Plan)")
           : renderMode === "streams"
-            ? t("core.ui.render_modal.option_streams.title", {}, "Streams")
+            ? t("core.ui.render_modal.option_streams.title", {}, "Live Cameras")
             : activeRenderView
               ? renderViewText(activeRenderView.name, activeRenderView.id)
               : t("core.ui.render_modal.option_loading.title", {}, "Loading view");
@@ -1278,9 +1278,9 @@ export function MainScreen({
               }
             }}
           >
-            <div className="choiceTitle">{t("core.ui.render_modal.option_vector2d.title", {}, "2D (Vector)")}</div>
+            <div className="choiceTitle">{t("core.ui.render_modal.option_vector2d.title", {}, "2D (Plan)")}</div>
             <div className="choiceDesc">
-              {t("core.ui.render_modal.option_vector2d.desc", {}, "Lightweight vector plan with live controls and cached effects.")}
+              {t("core.ui.render_modal.option_vector2d.desc", {}, "Use a clean floor-plan view for spaces, icons, and states.")}
             </div>
           </div>
           <div
@@ -1298,9 +1298,9 @@ export function MainScreen({
               }
             }}
           >
-            <div className="choiceTitle">{t("core.ui.render_modal.option_streams.title", {}, "Streams")}</div>
+            <div className="choiceTitle">{t("core.ui.render_modal.option_streams.title", {}, "Live Cameras")}</div>
             <div className="choiceDesc">
-              {t("core.ui.render_modal.option_streams.desc", {}, "Display configured transmissions in a paged live dashboard.")}
+              {t("core.ui.render_modal.option_streams.desc", {}, "Watch enabled cameras in a paged grid.")}
             </div>
           </div>
           {orderedRenderViews.map((view) => {

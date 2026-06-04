@@ -16,10 +16,10 @@ export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(spatialVideoTranslations);
   host.registerRenderView({
     id: SPATIAL_VIDEO_RENDER_VIEW_ID,
-    name: { key: "ext.spatial_video.render.title", fallback: "Visão 360" },
+    name: { key: "ext.spatial_video.render.title", fallback: "Visão 360 2D" },
     description: {
       key: "ext.spatial_video.render.desc",
-      fallback: "Projeta câmeras ao vivo mapeadas sobre a composição.",
+      fallback: "Projeta câmeras mapeadas no ambiente em uma vista plana.",
     },
     icon: "street-view",
     order: 40,
@@ -82,7 +82,7 @@ export function activate(host: ToposyncHost): void {
     name: { key: "ext.spatial_video.render_3d.title", fallback: "Visão 360 3D" },
     description: {
       key: "ext.spatial_video.render_3d.desc",
-      fallback: "Projeta câmeras ao vivo mapeadas em uma cena 3D.",
+      fallback: "Projeta câmeras mapeadas dentro da cena 3D.",
     },
     icon: "cube",
     order: 41,

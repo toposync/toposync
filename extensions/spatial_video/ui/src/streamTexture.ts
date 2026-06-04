@@ -7,7 +7,8 @@ import {
   heartbeatTransmissionDemand,
   primeTransmissionDemand,
 } from "./api";
-import type { ProjectionCandidate, StreamingOutputUrl, StreamingPlaybackResponse, StreamingTransport } from "./types";
+import { sanitizeMediaContentRect } from "./projection";
+import type { MediaContentRect, ProjectionCandidate, StreamingOutputUrl, StreamingPlaybackResponse, StreamingTransport } from "./types";
 
 type StreamTextureStatus = "idle" | "loading" | "playing" | "error";
 
@@ -16,6 +17,7 @@ export type StreamTextureSnapshot = {
   message: string;
   transport: StreamingTransport | null;
   texture: THREE.Texture | null;
+  contentRect?: MediaContentRect | null;
 };
 
 type Listener = () => void;
@@ -25,6 +27,8 @@ const MSE_CODEC_REQUEST = "avc1.640029,avc1.64002A,avc1.640033,avc1.42E01E,mp4a.
 const MSE_INIT_TIMEOUT_MS = 6000;
 const MSE_FIRST_FRAME_TIMEOUT_MS = 7000;
 const FIRST_FRAME_TIMEOUT_MS = 14000;
+const BLACK_PIXEL_THRESHOLD = 14;
+const BLACK_PADDING_SCAN_SIZE = 128;
 
 function asMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -62,10 +66,17 @@ function chooseTransports(playback: StreamingPlaybackResponse): Array<{
     .sort((a, b) => a.rank - b.rank);
 
   for (const item of planned) {
-    const output =
-      (item.url ? ({ output_id: item.output_id || item.transport, protocol: item.transport, url: item.url } as StreamingOutputUrl) : null) ??
+    const matchingOutput =
       (item.output_id ? outputs.find((candidate) => candidate.output_id === item.output_id && candidate.protocol === item.transport) : null) ??
       byTransport.get(item.transport);
+    const output = item.url
+      ? ({
+          ...matchingOutput,
+          output_id: item.output_id || matchingOutput?.output_id || item.transport,
+          protocol: item.transport,
+          url: item.url,
+        } as StreamingOutputUrl)
+      : matchingOutput;
     if (output && (item.transport === "mse" || item.transport === "hls" || item.transport === "jsmpeg")) {
       push(item.transport, output);
     }
@@ -85,6 +96,61 @@ function createMediaSourceMime(raw: string): string | null {
   return null;
 }
 
+function sourcePixelSize(source: HTMLVideoElement | HTMLCanvasElement): { width: number; height: number } | null {
+  const width = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+  const height = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  return { width, height };
+}
+
+function isBlackPixel(data: Uint8ClampedArray, offset: number): boolean {
+  const alpha = data[offset + 3];
+  if (alpha <= 8) return true;
+  return data[offset] <= BLACK_PIXEL_THRESHOLD && data[offset + 1] <= BLACK_PIXEL_THRESHOLD && data[offset + 2] <= BLACK_PIXEL_THRESHOLD;
+}
+
+function detectBlackPaddingContentRect(source: HTMLVideoElement | HTMLCanvasElement): MediaContentRect | null {
+  const size = sourcePixelSize(source);
+  if (!size) return null;
+  const scale = Math.min(1, BLACK_PADDING_SCAN_SIZE / Math.max(size.width, size.height));
+  const width = Math.max(16, Math.round(size.width * scale));
+  const height = Math.max(16, Math.round(size.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+  try {
+    context.drawImage(source, 0, 0, width, height);
+    const { data } = context.getImageData(0, 0, width, height);
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        if (isBlackPixel(data, (y * width + x) * 4)) continue;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    if (maxX < minX || maxY < minY) return null;
+    const rect = sanitizeMediaContentRect({
+      x: minX / width,
+      y: minY / height,
+      width: (maxX - minX + 1) / width,
+      height: (maxY - minY + 1) / height,
+    });
+    if (rect.width > 0.96 && rect.height > 0.96) return null;
+    if (rect.width < 0.2 || rect.height < 0.2) return null;
+    return rect;
+  } catch {
+    return null;
+  }
+}
+
 export class StreamTextureSource {
   private readonly candidate: ProjectionCandidate;
   private readonly listeners = new Set<Listener>();
@@ -102,12 +168,15 @@ export class StreamTextureSource {
   private selectedTransport: StreamingTransport | null = null;
   private selectedOutput: StreamingOutputUrl | null = null;
   private qualityProfileId: string | null = null;
+  private contentRect: MediaContentRect | null = null;
+  private contentRectAuthoritative = false;
   private destroyed = false;
   private snapshot: StreamTextureSnapshot = {
     status: "idle",
     message: "Aguardando transmissão.",
     transport: null,
     texture: null,
+    contentRect: null,
   };
 
   constructor(candidate: ProjectionCandidate) {
@@ -128,7 +197,7 @@ export class StreamTextureSource {
   start(): void {
     if (this.abortController || this.destroyed) return;
     this.abortController = new AbortController();
-    this.setSnapshot({ status: "loading", message: "Preparando transmissão espacial.", transport: null, texture: null });
+    this.setSnapshot({ status: "loading", message: "Preparando transmissão espacial.", transport: null, texture: null, contentRect: null });
     void this.startAsync(this.abortController.signal);
   }
 
@@ -153,7 +222,9 @@ export class StreamTextureSource {
     this.canvas = null;
     this.texture?.dispose();
     this.texture = null;
-    this.setSnapshot({ status: "idle", message: "Transmissão encerrada.", transport: null, texture: null });
+    this.contentRect = null;
+    this.contentRectAuthoritative = false;
+    this.setSnapshot({ status: "idle", message: "Transmissão encerrada.", transport: null, texture: null, contentRect: null });
   }
 
   private resetPlaybackArtifacts(): void {
@@ -181,8 +252,19 @@ export class StreamTextureSource {
   }
 
   private setSnapshot(next: StreamTextureSnapshot): void {
-    this.snapshot = next;
+    this.snapshot = {
+      ...next,
+      contentRect: next.contentRect ?? this.contentRect ?? this.snapshot.contentRect ?? null,
+    };
     this.emit();
+  }
+
+  private updateFallbackContentRect(source: HTMLVideoElement | HTMLCanvasElement): void {
+    if (this.contentRectAuthoritative) return;
+    const detected = detectBlackPaddingContentRect(source);
+    if (!detected) return;
+    this.contentRect = detected;
+    this.setSnapshot({ ...this.snapshot, contentRect: detected });
   }
 
   private async startAsync(signal: AbortSignal): Promise<void> {
@@ -199,11 +281,14 @@ export class StreamTextureSource {
         this.selectedTransport = selection.transport;
         this.selectedOutput = selection.output;
         this.qualityProfileId = selection.output.quality_profile_id ?? playback.variant?.quality_profile_id ?? null;
+        this.contentRectAuthoritative = Boolean(selection.output.content_rect);
+        this.contentRect = sanitizeMediaContentRect(selection.output.content_rect ?? null);
         this.setSnapshot({
           status: "loading",
           message: `Tentando ${selection.transport.toUpperCase()}.`,
           transport: selection.transport,
           texture: null,
+          contentRect: this.contentRect,
         });
 
         try {
@@ -227,6 +312,7 @@ export class StreamTextureSource {
         message: asMessage(error),
         transport: this.selectedTransport,
         texture: null,
+        contentRect: this.contentRect,
       });
     }
   }
@@ -322,7 +408,8 @@ export class StreamTextureSource {
     const texture = this.createVideoTexture(video);
     await video.play().catch(() => undefined);
     await this.waitForVideoFrame(video, signal);
-    this.setSnapshot({ status: "playing", message: "Vídeo HLS projetado.", transport: "hls", texture });
+    this.updateFallbackContentRect(video);
+    this.setSnapshot({ status: "playing", message: "Vídeo HLS projetado.", transport: "hls", texture, contentRect: this.contentRect });
   }
 
   private async startMse(url: string, signal: AbortSignal): Promise<void> {
@@ -435,7 +522,8 @@ export class StreamTextureSource {
 
     await video.play().catch(() => undefined);
     await this.waitForVideoFrame(video, signal, MSE_FIRST_FRAME_TIMEOUT_MS);
-    this.setSnapshot({ status: "playing", message: "Vídeo MSE projetado.", transport: "mse", texture });
+    this.updateFallbackContentRect(video);
+    this.setSnapshot({ status: "playing", message: "Vídeo MSE projetado.", transport: "mse", texture, contentRect: this.contentRect });
   }
 
   private async startJsmpeg(url: string, signal: AbortSignal): Promise<void> {
@@ -485,6 +573,7 @@ export class StreamTextureSource {
       });
     });
 
-    this.setSnapshot({ status: "playing", message: "Vídeo JSMpeg projetado.", transport: "jsmpeg", texture });
+    this.updateFallbackContentRect(canvas);
+    this.setSnapshot({ status: "playing", message: "Vídeo JSMpeg projetado.", transport: "jsmpeg", texture, contentRect: this.contentRect });
   }
 }

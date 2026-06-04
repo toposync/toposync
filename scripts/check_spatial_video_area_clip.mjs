@@ -69,6 +69,19 @@ for (const value of clippedMesh.uvs) {
   assert.ok(Number.isFinite(value), "UV should stay finite after clipping");
 }
 
+const uvRectMesh = projectionStrategies.homography_grid.buildMesh(controlPointSet, {
+  gridDivisions: 34,
+  clipPolygon,
+  uvRect: { x: 0.25, y: 0.1, width: 0.5, height: 0.8 },
+});
+assert.ok(uvRectMesh, "expected clipped projection mesh with UV rect");
+for (let index = 0; index < uvRectMesh.uvs.length; index += 2) {
+  const u = uvRectMesh.uvs[index];
+  const v = uvRectMesh.uvs[index + 1];
+  assert.ok(u >= 0.2499 && u <= 0.5001, `U should stay inside remapped clipped content rect, got ${u}`);
+  assert.ok(v >= 0.0999 && v <= 0.9001, `V should stay inside remapped content rect, got ${v}`);
+}
+
 const outsideMesh = projectionStrategies.homography_grid.buildMesh(controlPointSet, {
   gridDivisions: 34,
   clipPolygon: [

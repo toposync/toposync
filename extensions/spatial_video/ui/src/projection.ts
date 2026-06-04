@@ -1,4 +1,4 @@
-import type { CameraControlPointSet, ProjectionMeshData, Vector2, WorldPoint } from "./types";
+import type { CameraControlPointSet, MediaContentRect, ProjectionMeshData, Vector2, WorldPoint } from "./types";
 
 export type ProjectionStrategyId = "homography_grid" | "constrained_trapezoid";
 export type ProjectionMeshDensity = 34 | 64 | 96;
@@ -6,6 +6,7 @@ export type ProjectionMeshDensity = 34 | 64 | 96;
 export type ProjectionBuildOptions = {
   gridDivisions?: ProjectionMeshDensity;
   clipPolygon?: WorldPoint[] | null;
+  uvRect?: MediaContentRect | null;
 };
 
 export type ProjectionStrategy = {
@@ -27,9 +28,40 @@ const TRAPEZOID_IMAGE_PADDING = 0.04;
 const LOCAL_REFINEMENT_SIGMA_UV = 0.22;
 const LOCAL_REFINEMENT_EDGE_LOW = 0.015;
 const LOCAL_REFINEMENT_EDGE_HIGH = 0.12;
+const MIN_MEDIA_CONTENT_RECT_SIZE = 1e-5;
+const FULL_MEDIA_CONTENT_RECT: MediaContentRect = { x: 0, y: 0, width: 1, height: 1 };
 
 function finiteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+export function sanitizeMediaContentRect(rect: MediaContentRect | null | undefined): MediaContentRect {
+  if (
+    !rect ||
+    !finiteNumber(rect.x) ||
+    !finiteNumber(rect.y) ||
+    !finiteNumber(rect.width) ||
+    !finiteNumber(rect.height) ||
+    rect.width < MIN_MEDIA_CONTENT_RECT_SIZE ||
+    rect.height < MIN_MEDIA_CONTENT_RECT_SIZE
+  ) {
+    return FULL_MEDIA_CONTENT_RECT;
+  }
+  const x = clamp(rect.x, 0, 1);
+  const y = clamp(rect.y, 0, 1);
+  const maxWidth = Math.max(MIN_MEDIA_CONTENT_RECT_SIZE, 1 - x);
+  const maxHeight = Math.max(MIN_MEDIA_CONTENT_RECT_SIZE, 1 - y);
+  return {
+    x,
+    y,
+    width: clamp(rect.width, MIN_MEDIA_CONTENT_RECT_SIZE, maxWidth),
+    height: clamp(rect.height, MIN_MEDIA_CONTENT_RECT_SIZE, maxHeight),
+  };
+}
+
+export function mediaContentRectSignature(rect: MediaContentRect | null | undefined): string {
+  const normalized = sanitizeMediaContentRect(rect);
+  return `${normalized.x.toFixed(6)},${normalized.y.toFixed(6)},${normalized.width.toFixed(6)},${normalized.height.toFixed(6)}`;
 }
 
 function validPairs(set: CameraControlPointSet): Pair[] {
@@ -224,6 +256,26 @@ function applyClipToProjectionMesh(meshData: ProjectionMeshData, polygon: WorldP
     uvs: new Float32Array(uvs),
     indices: new Uint32Array(indices),
   };
+}
+
+function applyUvRectToProjectionMesh(meshData: ProjectionMeshData, rect: MediaContentRect | null | undefined): ProjectionMeshData {
+  const normalized = sanitizeMediaContentRect(rect);
+  if (normalized.x === 0 && normalized.y === 0 && normalized.width === 1 && normalized.height === 1) return meshData;
+  const uvs = new Float32Array(meshData.uvs.length);
+  for (let index = 0; index < meshData.uvs.length; index += 2) {
+    uvs[index] = normalized.x + meshData.uvs[index] * normalized.width;
+    uvs[index + 1] = normalized.y + meshData.uvs[index + 1] * normalized.height;
+  }
+  return {
+    positions: meshData.positions,
+    uvs,
+    indices: meshData.indices,
+  };
+}
+
+function finalizeProjectionMesh(meshData: ProjectionMeshData, options: ProjectionBuildOptions | undefined): ProjectionMeshData | null {
+  const uvMapped = applyUvRectToProjectionMesh(meshData, options?.uvRect);
+  return applyClipToProjectionMesh(uvMapped, options?.clipPolygon);
 }
 
 function solveLinearSystem(matrix: number[][], rhs: number[]): number[] | null {
@@ -632,24 +684,27 @@ export const homographyGridProjectionStrategy: ProjectionStrategy = {
     }
 
     if (indices.length < 3) return null;
-    return applyClipToProjectionMesh({
-      positions: new Float32Array(vertices),
-      uvs: new Float32Array(uvs),
-      indices: new Uint32Array(indices),
-    }, options?.clipPolygon);
+    return finalizeProjectionMesh(
+      {
+        positions: new Float32Array(vertices),
+        uvs: new Float32Array(uvs),
+        indices: new Uint32Array(indices),
+      },
+      options,
+    );
   },
 };
 
 export const constrainedTrapezoidProjectionStrategy: ProjectionStrategy = {
   id: "constrained_trapezoid",
-  buildMesh(set) {
+  buildMesh(set, options) {
     const pairs = validBasePairs(set);
     if (pairs.length < 4) return null;
     const estimate = estimateRobustHomography(pairs);
     if (!estimate) return null;
     const corners = trapezoidCornersFromHomography(estimate);
     const mesh = corners ? buildQuadMesh(corners) : null;
-    return mesh ? applyClipToProjectionMesh(mesh, options?.clipPolygon) : null;
+    return mesh ? finalizeProjectionMesh(mesh, options) : null;
   },
 };
 

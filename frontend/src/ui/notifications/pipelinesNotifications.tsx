@@ -45,6 +45,12 @@ function normalizePriority(value: unknown): Priority {
   return "medium";
 }
 
+function priorityHex(priority: Priority): number {
+  if (priority === "high") return 0xff3b3b;
+  if (priority === "low") return 0x9aa4b2;
+  return 0x00d1ff;
+}
+
 function formatDurationCompact(secondsRaw: unknown): string | null {
   const seconds = Math.floor(asNumber(secondsRaw, 0));
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
@@ -305,7 +311,8 @@ function createPipelines3DOverlay(
   geometry.setAttribute("position", positionAttr);
   geometry.setDrawRange(0, 0);
 
-  const material = new THREE.LineBasicMaterial({ color: 0x00d1ff, transparent: true, opacity: 0.9 });
+  const initialPriorityHex = priorityHex(normalizePriority(asRecord(notification.payload).priority));
+  const material = new THREE.LineBasicMaterial({ color: initialPriorityHex, transparent: true, opacity: 0.9 });
   material.depthTest = false;
   material.depthWrite = false;
   const line = new THREE.Line(geometry, material);
@@ -314,7 +321,6 @@ function createPipelines3DOverlay(
   group.add(line);
 
   // ── Marker: pulse rings on the ground + map-pin shape + soft halo ──
-  const PIN_HEX = 0xff3b81;
   const HEAD_RADIUS = 0.17;
   const CONE_BASE_RADIUS = 0.12;
   const CONE_HEIGHT = 0.40;
@@ -329,7 +335,7 @@ function createPipelines3DOverlay(
   const pulseRings: { mesh: import("three").Mesh; mat: import("three").MeshBasicMaterial; phase: number }[] = [];
   for (let i = 0; i < 2; i += 1) {
     const mat = new THREE.MeshBasicMaterial({
-      color: PIN_HEX,
+      color: initialPriorityHex,
       transparent: true,
       opacity: 0,
       side: THREE.DoubleSide,
@@ -349,7 +355,7 @@ function createPipelines3DOverlay(
   const coneGeom = new THREE.ConeGeometry(CONE_BASE_RADIUS, CONE_HEIGHT, 24, 1);
   coneGeom.rotateX(Math.PI);
   coneGeom.translate(0, CONE_HEIGHT / 2, 0);
-  const coneMat = new THREE.MeshBasicMaterial({ color: PIN_HEX });
+  const coneMat = new THREE.MeshBasicMaterial({ color: initialPriorityHex });
   coneMat.depthTest = false;
   coneMat.depthWrite = false;
   const cone = new THREE.Mesh(coneGeom, coneMat);
@@ -359,7 +365,7 @@ function createPipelines3DOverlay(
 
   const sphereGeom = new THREE.SphereGeometry(HEAD_RADIUS, 24, 24);
   sphereGeom.translate(0, HEAD_CENTER_Y, 0);
-  const sphereMat = new THREE.MeshBasicMaterial({ color: PIN_HEX });
+  const sphereMat = new THREE.MeshBasicMaterial({ color: initialPriorityHex });
   sphereMat.depthTest = false;
   sphereMat.depthWrite = false;
   const sphere = new THREE.Mesh(sphereGeom, sphereMat);
@@ -380,7 +386,7 @@ function createPipelines3DOverlay(
   const haloTex = createHaloTexture(THREE);
   const haloMat = new THREE.SpriteMaterial({
     map: haloTex,
-    color: PIN_HEX,
+    color: initialPriorityHex,
     transparent: true,
     opacity: 0.6,
     depthTest: false,
@@ -462,20 +468,23 @@ function createPipelines3DOverlay(
   function applyStyleFromNotification(next: Notification): void {
     const payload = asRecord(next.payload);
     const prio = normalizePriority(payload.priority);
+    const colorHex = priorityHex(prio);
     const lifecycle = asString(payload.lifecycle, "").trim().toLowerCase();
     const closed = lifecycle === "close" || asString(payload.status, "").trim().toLowerCase() === "closed";
-    if (prio === "high") material.color.setHex(0xff3b3b);
-    else if (prio === "low") material.color.setHex(0x9aa4b2);
-    else material.color.setHex(0x00d1ff);
+    material.color.setHex(colorHex);
     material.opacity = closed ? 0.35 : 0.9;
 
     closedDim = closed ? 0.45 : 1;
     const headOpacity = closed ? 0.5 : 1.0;
+    for (const ring of pulseRings) ring.mat.color.setHex(colorHex);
+    coneMat.color.setHex(colorHex);
     coneMat.transparent = closed;
     coneMat.opacity = headOpacity;
+    sphereMat.color.setHex(colorHex);
     sphereMat.transparent = closed;
     sphereMat.opacity = headOpacity;
     coreMat.opacity = closed ? 0.4 : 0.85;
+    haloMat.color.setHex(colorHex);
     haloMat.opacity = closed ? 0.25 : 0.6;
   }
 

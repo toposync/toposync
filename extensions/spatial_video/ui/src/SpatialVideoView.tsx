@@ -5,6 +5,7 @@ import type {
   BoundsXZ,
   CompositionElement,
   ElementType,
+  Notification2DPin,
   RenderViewContext,
 } from "@toposync/plugin-api";
 
@@ -12,13 +13,13 @@ import { areaClipSignature, controlPointSetIntersectsAreaClip } from "./areaClip
 import { fetchCameraPtzPresets, fetchCameraPtzStatus, fetchLiveViews } from "./api";
 import { resolveProjectionCandidates } from "./candidates";
 import { markerEntries, markerVideoStatus, type MarkerVideoStatus } from "./markers";
-import { controlPointSetProjectionSignature, type ProjectionMeshDensity, type ProjectionStrategyId } from "./projection";
+import { controlPointSetProjectionSignature, mediaContentRectSignature, type ProjectionMeshDensity, type ProjectionStrategyId } from "./projection";
 import { createProjectionGeometry } from "./projectionGeometry";
 import { resolveActiveProjectionPose } from "./ptzProjection";
 import { readSpatialVideoSettings, SPATIAL_VIDEO_RENDER_VIEW_ID } from "./spatialSettings";
 import { SpatialVideoCompatibilityNotice } from "./SpatialVideoCompatibilityNotice";
 import { StreamTextureSource } from "./streamTexture";
-import type { CameraLiveView, PtzPreset, PtzStatus } from "./types";
+import type { CameraControlPointSet, CameraLiveView, PtzPreset, PtzStatus, WorldPoint } from "./types";
 
 type ProjectionEntry = {
   candidateId: string;
@@ -26,15 +27,25 @@ type ProjectionEntry = {
   unsubscribe: () => void;
   mesh: THREE.Mesh;
   material: THREE.MeshBasicMaterial;
+  set: CameraControlPointSet;
+  clipPolygon: WorldPoint[] | null;
   setId: string;
   setSignature: string;
   areaClipSignature: string;
+  uvRectSignature: string;
   strategyId: ProjectionStrategyId;
   meshDensity: ProjectionMeshDensity;
 };
 
 const MAX_PIXEL_RATIO = 2;
 const DEFAULT_WORLD_BOUNDS: BoundsXZ = { minX: -1, maxX: 1, minZ: -1, maxZ: 1 };
+const PIN_PATH = "M 0 0 L -60.62 -105 A 70 70 0 1 1 60.62 -105 Z";
+
+const NOTIFICATION_PRIORITY_COLOR: Record<NonNullable<Notification2DPin["priority"]>, string> = {
+  high: "#ff3b3b",
+  medium: "#00d1ff",
+  low: "#9aa4b2",
+};
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -296,11 +307,76 @@ function worldToScreen(point: { x: number; z: number }, rect: DOMRect, bounds: B
   };
 }
 
+function SpatialNotificationPinView({
+  screenX,
+  screenY,
+  priority,
+  closed,
+  trail,
+}: {
+  screenX: number;
+  screenY: number;
+  priority?: Notification2DPin["priority"];
+  closed?: boolean;
+  trail?: ReadonlyArray<{ x: number; y: number }>;
+}): React.ReactElement {
+  const tone = priority ?? "medium";
+  const color = NOTIFICATION_PRIORITY_COLOR[tone];
+  const reactId = React.useId();
+  const gradId = `spatial-notification-pin-${reactId.replace(/:/g, "")}`;
+  const trailPath =
+    trail && trail.length >= 2
+      ? trail.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ")
+      : null;
+
+  return (
+    <>
+      {trailPath ? (
+        <svg
+          className="notification2dTrail"
+          aria-hidden="true"
+          style={{ ["--notification2d-trail-color" as string]: color }}
+        >
+          <path d={trailPath} />
+        </svg>
+      ) : null}
+      <div
+        className={`notification2dPin${closed ? " isClosed" : ""}`}
+        style={{
+          left: screenX,
+          top: screenY,
+          ["--notification2d-pin-color" as string]: color,
+        }}
+        aria-hidden="true"
+      >
+        <span className="notification2dPinSpot" />
+        <span className="notification2dPinPulse" />
+        <span className="notification2dPinPulse" style={{ animationDelay: "-0.7s" }} />
+        <span className="notification2dPinPulse" style={{ animationDelay: "-1.4s" }} />
+        <svg className="notification2dPinShape" viewBox="-80 -240 160 240" width="32" height="48">
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#ffffff" stopOpacity="0.45" />
+              <stop offset="55%" stopColor="#ffffff" stopOpacity="0" />
+              <stop offset="100%" stopColor="#000000" stopOpacity="0.30" />
+            </linearGradient>
+          </defs>
+          <path d={PIN_PATH} fill="var(--notification2d-pin-color, #00d1ff)" />
+          <path d={PIN_PATH} fill={`url(#${gradId})`} />
+          <circle cx="0" cy="-140" r="20" fill="#ffffff" />
+        </svg>
+      </div>
+    </>
+  );
+}
+
 export function SpatialVideoView({
   elements,
   elementTypesById,
   compositionId,
   viewSettings,
+  activeNotification,
+  activeNotificationRenderer,
   onElementActivated,
 }: RenderViewContext): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -329,6 +405,44 @@ export function SpatialVideoView({
   const meshDensity = spatialSettings.meshDensity;
 
   const requestRender = useCallback(() => setVersion((prev) => prev + 1), []);
+
+  const notificationOverlay = useMemo(() => {
+    if (!activeNotification || !activeNotificationRenderer?.create2DOverlay) return null;
+    try {
+      return activeNotificationRenderer.create2DOverlay(
+        { compositionId },
+        activeNotification,
+        { openImage: () => undefined },
+      );
+    } catch (error) {
+      console.warn(`[spatial-video:create2DOverlay:${activeNotificationRenderer.id}]`, error);
+      return null;
+    }
+  }, [activeNotification, activeNotificationRenderer, compositionId]);
+
+  useEffect(() => {
+    return () => {
+      notificationOverlay?.dispose?.();
+    };
+  }, [notificationOverlay]);
+
+  const notificationPin = useMemo(() => {
+    if (!notificationOverlay) return null;
+    const pinData = notificationOverlay.pin();
+    if (!pinData) return null;
+
+    const { width, height } = lastSizeRef.current;
+    const rect = { width, height } as DOMRect;
+    const head = worldToScreen({ x: pinData.x, z: pinData.z }, rect, viewBounds);
+    const trail = pinData.trail && pinData.trail.length >= 2 ? pinData.trail.map((point) => worldToScreen(point, rect, viewBounds)) : undefined;
+    return {
+      screenX: head.x,
+      screenY: head.y,
+      trail,
+      priority: pinData.priority,
+      closed: pinData.closed,
+    };
+  }, [notificationOverlay, viewBounds]);
 
   useEffect(() => {
     sceneBoundsRef.current = sceneBounds;
@@ -531,23 +645,30 @@ export function SpatialVideoView({
       const set = pose?.set ?? candidate.initialControlPointSet;
       const setSignature = controlPointSetProjectionSignature(set);
       const clipSignature = areaClipSignature(candidate.areaClip);
+      const clipPolygon = candidate.areaClip?.polygon ?? null;
       const visible = pose?.status !== "unmatched" && controlPointSetIntersectsAreaClip(set, candidate.areaClip);
       const existing = projectionEntriesRef.current.get(candidate.id);
+      const currentContentRect = existing?.source.getSnapshot().contentRect ?? null;
+      const uvRectSignature = mediaContentRectSignature(currentContentRect);
       if (
         existing &&
         (existing.setId !== set.id ||
           existing.setSignature !== setSignature ||
           existing.areaClipSignature !== clipSignature ||
+          existing.uvRectSignature !== uvRectSignature ||
           existing.strategyId !== projectionStrategyId ||
           existing.meshDensity !== meshDensity)
       ) {
-        const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity, { clipPolygon: candidate.areaClip?.polygon ?? null });
+        const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity, { clipPolygon, uvRect: currentContentRect });
         if (geometry) {
           existing.mesh.geometry.dispose();
           existing.mesh.geometry = geometry;
+          existing.set = set;
+          existing.clipPolygon = clipPolygon;
           existing.setId = set.id;
           existing.setSignature = setSignature;
           existing.areaClipSignature = clipSignature;
+          existing.uvRectSignature = uvRectSignature;
           existing.strategyId = projectionStrategyId;
           existing.meshDensity = meshDensity;
         } else {
@@ -561,13 +682,15 @@ export function SpatialVideoView({
         }
       }
       if (existing) {
+        existing.set = set;
+        existing.clipPolygon = clipPolygon;
         existing.mesh.userData.spatialPoseVisible = visible;
         existing.mesh.visible = visible && Boolean(existing.material.map);
         existing.material.opacity = pose?.moving ? 0.68 : 0.82;
         continue;
       }
 
-      const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity, { clipPolygon: candidate.areaClip?.polygon ?? null });
+      const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity, { clipPolygon });
       if (!geometry) continue;
       const material = new THREE.MeshBasicMaterial({
         color: 0xffffff,
@@ -587,6 +710,19 @@ export function SpatialVideoView({
       const source = new StreamTextureSource(candidate);
       const unsubscribe = source.subscribe(() => {
         const snapshot = source.getSnapshot();
+        const entry = projectionEntriesRef.current.get(candidate.id);
+        const nextUvRectSignature = mediaContentRectSignature(snapshot.contentRect);
+        if (entry && entry.uvRectSignature !== nextUvRectSignature) {
+          const nextGeometry = createProjectionGeometry(entry.set, entry.strategyId, entry.meshDensity, {
+            clipPolygon: entry.clipPolygon,
+            uvRect: snapshot.contentRect ?? null,
+          });
+          if (nextGeometry) {
+            entry.mesh.geometry.dispose();
+            entry.mesh.geometry = nextGeometry;
+            entry.uvRectSignature = nextUvRectSignature;
+          }
+        }
         material.map = snapshot.texture;
         material.needsUpdate = true;
         mesh.visible = Boolean(mesh.userData.spatialPoseVisible) && Boolean(snapshot.texture);
@@ -598,9 +734,12 @@ export function SpatialVideoView({
         unsubscribe,
         mesh,
         material,
+        set,
+        clipPolygon,
         setId: set.id,
         setSignature,
         areaClipSignature: clipSignature,
+        uvRectSignature: mediaContentRectSignature(source.getSnapshot().contentRect),
         strategyId: projectionStrategyId,
         meshDensity,
       });
@@ -748,6 +887,15 @@ export function SpatialVideoView({
         `}
       </style>
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 3 }}>
+        {notificationPin ? (
+          <SpatialNotificationPinView
+            screenX={notificationPin.screenX}
+            screenY={notificationPin.screenY}
+            priority={notificationPin.priority}
+            closed={notificationPin.closed}
+            trail={notificationPin.trail}
+          />
+        ) : null}
         {markerButtons.map(({ elementId, marker, status, index, x, y }) => (
           <button
             key={`${elementId}:${marker.id || index}`}

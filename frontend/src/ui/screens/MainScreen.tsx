@@ -286,6 +286,7 @@ export function MainScreen({
   const notificationSentinelRef = useRef<HTMLDivElement | null>(null);
   const streamsOverlayTimerRef = useRef<number | null>(null);
   const autoFilteredPageRequestedRef = useRef(false);
+  const notificationPaginationUserEngagedRef = useRef(false);
 
   const clearStreamsOverlayTimer = useCallback(() => {
     const timerId = streamsOverlayTimerRef.current;
@@ -508,6 +509,7 @@ export function MainScreen({
 
   useEffect(() => {
     autoFilteredPageRequestedRef.current = false;
+    notificationPaginationUserEngagedRef.current = false;
   }, [filter]);
 
   useEffect(() => {
@@ -553,6 +555,7 @@ export function MainScreen({
       (entries) => {
         const entry = entries[0];
         if (!entry?.isIntersecting) return;
+        if (!notificationPaginationUserEngagedRef.current) return;
         onLoadMoreNotifications();
       },
       { root, rootMargin: "220px" },
@@ -700,6 +703,9 @@ export function MainScreen({
   }, []);
 
   const clearFilter = useCallback(() => setFilter({ ...DEFAULT_FILTER }), []);
+  const noteNotificationPaginationUserEngagement = useCallback(() => {
+    notificationPaginationUserEngagedRef.current = true;
+  }, []);
 
   const orderedRenderViews = useMemo(
     () =>
@@ -1036,7 +1042,13 @@ export function MainScreen({
               </div>
             </div>
 
-            <div className="railScroll" ref={notificationScrollRef}>
+            <div
+              className="railScroll"
+              ref={notificationScrollRef}
+              onPointerDown={noteNotificationPaginationUserEngagement}
+              onTouchStart={noteNotificationPaginationUserEngagement}
+              onWheel={noteNotificationPaginationUserEngagement}
+            >
               {visibleNotifications.length === 0 ? (
                 <div className="card">
                   <div className="cardBody">

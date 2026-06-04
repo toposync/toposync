@@ -340,6 +340,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const hasManualNotificationSelectionRef = useRef(false);
   const markNotificationsViewedInFlightRef = useRef<Promise<void> | null>(null);
   const notificationsInitialLoadStartedRef = useRef(false);
+  const mainViewportReadyMarkedRef = useRef(false);
   const extensionRecordsPromiseRef = useRef<Promise<ExtensionRecord[]> | null>(null);
   const activatedExtensionIdsRef = useRef<Set<string>>(new Set());
   const extensionActivationPromisesRef = useRef<Map<string, Promise<void>>>(new Map());
@@ -1098,6 +1099,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   );
 
   useEffect(() => {
+    if (!compositionLoaded) return;
+
     let cancelled = false;
     let cancelIdle: (() => void) | null = null;
 
@@ -1156,7 +1159,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       cancelled = true;
       cancelIdle?.();
     };
-  }, [activateFrontendExtension, criticalExtensionKey, getFrontendExtensions]);
+  }, [activateFrontendExtension, compositionLoaded, criticalExtensionKey, getFrontendExtensions]);
 
   const createElement = useCallback(
     (typeId: string, init: Partial<Omit<CompositionElement, "id" | "type">> = {}): string | null => {
@@ -1322,14 +1325,14 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   }, []);
 
   const markMainViewportReady = useCallback(() => {
-    setMainViewportReady((prev) => {
-      if (prev) return prev;
+    if (!mainViewportReadyMarkedRef.current) {
+      mainViewportReadyMarkedRef.current = true;
       markToposyncPerformance("first-viewport-mounted", {
         compositionId: compositionRef.current.id,
         elements: compositionRef.current.elements.length,
       });
-      return true;
-    });
+    }
+    setMainViewportReady(true);
   }, []);
 
   const normalizedPathname = useMemo(() => {

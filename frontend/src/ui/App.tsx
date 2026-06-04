@@ -234,6 +234,12 @@ function sortNotificationsByCreatedDesc(notifications: readonly Notification[]):
   return out;
 }
 
+function isOpenRealtimeNotification(notification: Notification | null | undefined): boolean {
+  if (!notification) return false;
+  const payload = asRecord(notification.payload);
+  return asString(payload.status, "").trim().toLowerCase() === "open" && payload.realtime === true;
+}
+
 function defaultComposition(): Composition {
   return { id: "ground", name: "Térreo", elements: [] };
 }
@@ -739,6 +745,13 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     });
   }, []);
 
+  const activeNotificationIsOpenRealtime = useMemo(() => {
+    if (!activeNotificationId) return false;
+    return isOpenRealtimeNotification(
+      notifications.find((notification) => notification.id === activeNotificationId),
+    );
+  }, [activeNotificationId, notifications]);
+
   useEffect(() => {
     if (!backendAvailable) return;
     let cancelled = false;
@@ -894,6 +907,31 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       es.close();
     };
   }, [activeNotificationId, backendAvailable, upsertNotification]);
+
+  useEffect(() => {
+    if (!backendAvailable) return;
+    if (!activeNotificationId) return;
+    if (!activeNotificationIsOpenRealtime) return;
+
+    let cancelled = false;
+    const refreshActiveNotification = () => {
+      void getNotification(activeNotificationId)
+        .then((notif) => {
+          if (cancelled) return;
+          upsertNotification(notif, "update");
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          console.warn("Failed to refresh active notification", err);
+        });
+    };
+
+    const handle = window.setInterval(refreshActiveNotification, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [activeNotificationId, activeNotificationIsOpenRealtime, backendAvailable, upsertNotification]);
 
   useEffect(() => {
     if (!compositionLoaded) return;

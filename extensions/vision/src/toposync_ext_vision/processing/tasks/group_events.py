@@ -746,6 +746,21 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             return self._proximity_group(member, now_monotonic=now_monotonic, packet_ts=packet_ts)
         return self._session_group(member, now_monotonic=now_monotonic, packet_ts=packet_ts)
 
+    def _existing_group_for_member(self, member: _MemberSnapshot) -> _GroupState | None:
+        mapped_group_id = self._group_id_by_member_key.get(
+            self._member_key(member.source_stream_id, member.event_id)
+        )
+        if not mapped_group_id:
+            return None
+        group = self._groups_by_id.get(mapped_group_id)
+        if group is not None:
+            return group
+        self._group_id_by_member_key.pop(
+            self._member_key(member.source_stream_id, member.event_id),
+            None,
+        )
+        return None
+
     def _close_expired_groups(
         self,
         packet: Packet,
@@ -803,11 +818,16 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             outputs.append(packet)
             return outputs
 
-        group = self._state_for_member(
-            member,
-            now_monotonic=now_monotonic,
-            packet_ts=packet_ts,
-        )
+        if member.lifecycle == Lifecycle.CLOSE:
+            group = self._existing_group_for_member(member)
+            if group is None:
+                return outputs
+        else:
+            group = self._state_for_member(
+                member,
+                now_monotonic=now_monotonic,
+                packet_ts=packet_ts,
+            )
         was_opened = group.opened
         self._update_group(
             group,

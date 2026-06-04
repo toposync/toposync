@@ -431,11 +431,11 @@ def test_tracking_group_closes_when_source_stops_emitting_packets() -> None:
                 {
                     "id": "group",
                     "operator": "vision.group_events",
-                        "config": {
-                            "mode": "session",
-                            "idle_timeout_seconds": 1.0,
-                            "update_interval_seconds": 0.0,
-                        },
+                    "config": {
+                        "mode": "session",
+                        "idle_timeout_seconds": 1.0,
+                        "update_interval_seconds": 0.0,
+                    },
                 },
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],

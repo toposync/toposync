@@ -257,7 +257,7 @@ def test_wizard_graph_continuous_stream_is_not_downstream_of_event_gates(preset_
     assert "vision.track" not in upstream
 
 
-def test_wizard_graph_defaults_detection_to_annotate_and_tracking_to_events() -> None:
+def test_wizard_graph_defaults_detection_and_tracking_to_annotate() -> None:
     detection_graph = build_streaming_wizard_graph(
         transmission_id="transmission_main",
         camera_id="camera_a",
@@ -275,7 +275,16 @@ def test_wizard_graph_defaults_detection_to_annotate_and_tracking_to_events() ->
     )
     assert _operator_config(tracking_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
     assert _operator_config(tracking_graph, operator_id="vision.detect").get("model_id") == "rfdetr_det_medium"
-    assert _operator_config(tracking_graph, operator_id="vision.track").get("emit_mode") == "events"
+    assert _operator_config(tracking_graph, operator_id="vision.track").get("emit_mode") == "annotate"
+
+    event_gated_tracking_graph = build_streaming_wizard_graph(
+        transmission_id="transmission_main",
+        camera_id="camera_a",
+        preset_id="tracking_stream",
+        optional_parameters={"stream_behavior": "event_gated"},
+    )
+    assert _operator_config(event_gated_tracking_graph, operator_id="vision.track").get("emit_mode") == "annotate"
+    assert _operator_config(event_gated_tracking_graph, operator_id="vision.event_assembler").get("max_gap_seconds") == 5.0
 
 
 def test_wizard_graph_event_gated_keeps_gate_upstream_of_stream() -> None:

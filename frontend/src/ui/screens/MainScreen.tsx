@@ -377,6 +377,7 @@ export function MainScreen({
     const cameraLabel = [cameraName, cameraId].filter(Boolean).join(" • ");
     const trackingId = asTrimmedString(payload.tracking_id) || asTrimmedString(data.tracking_id);
     const eventId = asTrimmedString(payload.event_id) || asTrimmedString(data.event_id);
+    const eventCode = asTrimmedString(payload.event_code) || asTrimmedString(data.event_code);
     const duration = formatDurationVerbose(event.duration_seconds);
     const createdAt = formatDateTimeLong(locale, activeNotification.createdAt);
     const updatedAt = formatDateTimeLong(locale, activeNotification.updatedAt);
@@ -388,8 +389,9 @@ export function MainScreen({
     push(t("core.ui.notifications.details.meta.pipeline", {}, "Pipeline"), payload.pipeline_name);
     push(t("core.ui.notifications.details.meta.camera", {}, "Camera"), cameraLabel);
     push(t("core.ui.notifications.details.meta.area", {}, "Area"), data.area_label);
-    push(t("core.ui.notifications.details.meta.tracking_id", {}, "Tracking ID"), trackingId);
     push(t("core.ui.notifications.details.meta.event_id", {}, "Event ID"), eventId);
+    push(t("core.ui.notifications.details.meta.event_code", {}, "Event code"), eventCode);
+    push(t("core.ui.notifications.details.meta.tracking_id", {}, "Tracking ID"), trackingId);
     push(t("core.ui.notifications.details.meta.duration", {}, "Duration"), duration);
     push(t("core.ui.notifications.details.meta.created_at", {}, "Created"), createdAt);
     push(t("core.ui.notifications.details.meta.updated_at", {}, "Updated"), updatedAt);

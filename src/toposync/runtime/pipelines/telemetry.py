@@ -427,6 +427,7 @@ class PipelineTelemetryStore:
         layer_label: str | None = None,
         size_bytes: int | None = None,
         event_id: str | None = None,
+        event_code: str | None = None,
         tracking_id: str | None = None,
     ) -> bool:
         if self.max_image_markers_per_pipeline <= 0 or self.max_image_pipelines <= 0:
@@ -488,6 +489,9 @@ class PipelineTelemetryStore:
         event = str(event_id or "").strip()
         if event:
             marker["event_id"] = event
+        code = str(event_code or "").strip()
+        if code:
+            marker["event_code"] = code
         tracking = str(tracking_id or "").strip()
         if tracking:
             marker["tracking_id"] = tracking
@@ -1031,7 +1035,7 @@ def _write_persisted_view_atomic(
 
 
 def _write_persisted_payload(writer: _PersistWriter, view: _TelemetryPersistenceView, *, include_hist: bool) -> None:
-    writer.u32(3)  # payload version
+    writer.u32(4)  # payload version
     flags = 1 if include_hist else 0
     writer.u32(flags)
     writer.f64(float(view.captured_at or 0.0))
@@ -1092,6 +1096,7 @@ def _write_persisted_payload(writer: _PersistWriter, view: _TelemetryPersistence
             except Exception:
                 writer.f64(0.0)
             writer.text(str(marker.get("event_id") or ""))
+            writer.text(str(marker.get("event_code") or ""))
             writer.text(str(marker.get("tracking_id") or ""))
 
 
@@ -1191,7 +1196,7 @@ def _sanitize_marker_confidence(value: Any) -> float | None:
 def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: bytes) -> None:
     reader = _PersistReader(payload)
     version = reader.u32()
-    if version not in {1, 2, 3}:
+    if version not in {1, 2, 3, 4}:
         raise ValueError("unsupported telemetry checkpoint version")
     flags = reader.u32()
     include_hist = bool(flags & 1)
@@ -1324,9 +1329,12 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
                 except Exception:
                     size_bytes = 0
             event_id = ""
+            event_code = ""
             tracking_id = ""
             if version >= 3:
                 event_id = _sanitize_marker_text(reader.text())
+                if version >= 4:
+                    event_code = _sanitize_marker_text(reader.text())
                 tracking_id = _sanitize_marker_text(reader.text())
 
             if should_store and rel_path and node_id:
@@ -1346,6 +1354,8 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
                     marker["size_bytes"] = int(size_bytes)
                 if event_id:
                     marker["event_id"] = event_id
+                if event_code:
+                    marker["event_code"] = event_code
                 if tracking_id:
                     marker["tracking_id"] = tracking_id
                 store._image_markers_by_pipeline[pipeline_name].append(marker)

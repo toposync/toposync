@@ -428,6 +428,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         node_id = _resolve_logical_node_id(context)
         camera_id = _resolve_string(packet, "camera_id") or "no_camera"
         event_id = _resolve_string(packet, "event_id")
+        event_code = _resolve_string(packet, "event_code")
         tracking_id = _resolve_string(packet, "tracking_id")
         token = (
             event_id
@@ -562,6 +563,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                             layer_label=layer_label,
                             size_bytes=stored_size_bytes,
                             event_id=event_id,
+                            event_code=event_code,
                             tracking_id=tracking_id,
                         )
                     except Exception:
@@ -832,6 +834,7 @@ class NotifyRuntime(SinkRuntime):
                 "duration_seconds": max(0.0, float(ts) - float(state.started_ts)),
             },
             "event_id": _resolve_string(packet, "event_id") or None,
+            "event_code": _resolve_string(packet, "event_code") or None,
             "tracking_id": _resolve_string(packet, "tracking_id") or None,
             "artifacts": {
                 name: art.reference for name, art in packet.artifacts.items() if art.reference
@@ -1050,6 +1053,10 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "capture",
         "motion",
         "event_id",
+        "event_code",
+        "identity_id",
+        "tracklet_id",
+        "raw_tracking_id",
         "tracking_id",
         "tracker_track_id",
         "correlation_id",

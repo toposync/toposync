@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 VisionDetectEmitMode = Literal["annotate", "events", "filter"]
-VisionTrackEmitMode = Literal["annotate", "events"]
+VisionTrackEmitMode = Literal["annotate"]
 
 
 class VisionDetectConfig(BaseModel):
@@ -105,10 +105,10 @@ class VisionTrackConfig(BaseModel):
 
     tracker_id: str = "simple_iou_kalman"
     emit_mode: VisionTrackEmitMode = Field(
-        default="events",
+        default="annotate",
         description=(
-            "'events' emits per-object lifecycle packets. 'annotate' keeps the source frame "
-            "packet and writes the active tracks into payload['vision']['tracks']."
+            "'annotate' keeps the source frame packet and writes technical tracklets into "
+            "payload['vision']['tracks']. Use vision.event_assembler for product lifecycle events."
         ),
     )
     close_after_seconds: float = Field(default=4.0, ge=0.05, le=300.0)
@@ -135,17 +135,60 @@ class VisionTrackConfig(BaseModel):
     @classmethod
     def _normalize_track_emit_mode(cls, value: Any) -> str:
         if value is None:
-            return "events"
+            return "annotate"
         mode = str(value or "").strip().lower()
-        if mode in {"events", "event"}:
-            return "events"
         if mode in {"annotate", "passthrough", "pass_through", "pass-through"}:
             return "annotate"
-        raise ValueError("emit_mode must be one of: events, annotate")
+        raise ValueError("emit_mode must be annotate; use vision.event_assembler for events")
 
     @field_validator("category_intervals_seconds")
     @classmethod
     def _normalize_category_intervals(cls, value: dict[str, float]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for category_raw, seconds_raw in dict(value or {}).items():
+            category = str(category_raw or "").strip().lower()
+            if not category:
+                continue
+            seconds = float(seconds_raw)
+            if not math.isfinite(seconds) or seconds < 0.0:
+                raise ValueError("Category interval must be a finite number >= 0")
+            out[category] = seconds
+        return out
+
+
+class VisionEventAssemblerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_gap_seconds: float = Field(
+        default=4.0,
+        ge=0.0,
+        le=300.0,
+        description="Maximum gap before a product event is closed and no longer stitchable.",
+    )
+    default_interval_seconds: float = Field(default=0.2, ge=0.0, le=120.0)
+    category_intervals_seconds: dict[str, float] = Field(default_factory=dict)
+    same_event_iou_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
+    same_event_center_distance: float = Field(
+        default=0.18,
+        ge=0.0,
+        le=2.0,
+        description="Normalized image-plane center distance allowed when stitching tracklets.",
+    )
+    same_event_world_radius_meters: float = Field(default=1.5, ge=0.0, le=100.0)
+    same_event_requires_same_class: bool = True
+    event_id_prefix: str = "evt"
+
+    @field_validator("event_id_prefix")
+    @classmethod
+    def _normalize_event_id_prefix(cls, value: str) -> str:
+        prefix = str(value or "").strip().lower()
+        if not prefix:
+            return "evt"
+        return prefix
+
+    @field_validator("category_intervals_seconds")
+    @classmethod
+    def _normalize_event_category_intervals(cls, value: dict[str, float]) -> dict[str, float]:
         out: dict[str, float] = {}
         for category_raw, seconds_raw in dict(value or {}).items():
             category = str(category_raw or "").strip().lower()

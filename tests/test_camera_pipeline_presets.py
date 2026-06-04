@@ -208,7 +208,10 @@ def test_camera_pipeline_preset_defaults_detection_to_rfdetr_medium(
         pipeline = res.json()
         assert _vision_detect_config(pipeline).get("model_id") == "rfdetr_det_medium"
         assert _vision_detect_config(pipeline).get("categories") == ["person"]
+        assert _node_config(pipeline, "vision.track").get("emit_mode") == "annotate"
+        assert _node_config(pipeline, "vision.event_assembler").get("max_gap_seconds") == 5.0
         assert _node_config(pipeline, "core.throttle").get("interval_seconds") == 10.0
+        assert _node_config(pipeline, "core.notify").get("dedupe_key_template") == "{{event_id}}"
         assert _node_config(pipeline, "core.notify").get("priority") == "medium"
 
         res = client.get("/api/cameras/cameras/cam1/pipelines")
@@ -311,9 +314,12 @@ def test_camera_pipeline_mapping_preset_adds_mapping_and_velocity(
         res = client.get(f"/api/pipelines/{pipeline_name}")
         assert res.status_code == 200
         pipeline = res.json()
+        assert _node_config(pipeline, "vision.track").get("emit_mode") == "annotate"
+        assert _node_config(pipeline, "vision.event_assembler").get("default_interval_seconds") == 0.25
         assert _node_config(pipeline, "camera.camera_mapping").get("composition_id") == "yard"
         assert _node_config(pipeline, "camera.velocity_estimation").get("filter_mode") == "annotate"
         assert _node_config(pipeline, "core.throttle").get("interval_seconds") == 10.0
+        assert _node_config(pipeline, "core.notify").get("dedupe_key_template") == "{{event_id}}"
 
 
 def test_camera_pipeline_vehicle_stopped_requires_mapping(
@@ -356,6 +362,7 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
             "camera.motion_gate",
             "vision.detect",
             "vision.track",
+            "vision.event_assembler",
             "camera.camera_mapping",
             "camera.velocity_estimation",
             "core.velocity_throttle",
@@ -379,18 +386,20 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
         assert velocity.get("stopped_speed_threshold") == pytest.approx(1.0 / 3.6)
 
         throttle = _node_config_by_id(pipeline, "storage_throttle")
+        assert throttle.get("key_field") == "payload.event_id"
         assert throttle.get("moving_interval_seconds") == 2.0
         assert throttle.get("stopped_interval_seconds") == 10.0
 
         lifecycle = _node_config_by_id(pipeline, "stopped_lifecycle")
         assert lifecycle.get("field") == "payload.velocity.stopped"
-        assert lifecycle.get("key_field") == "payload.tracking_id"
+        assert lifecycle.get("key_field") == "payload.event_id"
         assert _node_config_by_id(pipeline, "stopped_event_filter").get("expression") == (
             'payload.velocity.stopped or lifecycle == "close"'
         )
+        assert _node_config_by_id(pipeline, "notify_debounce").get("key_field") == "payload.event_id"
 
         notify = _node_config(pipeline, "core.notify")
-        assert notify.get("dedupe_key_template") == "{{tracking_id}}"
+        assert notify.get("dedupe_key_template") == "{{event_id}}"
         assert notify.get("title") == "{{camera_name}}: veículo parado"
         assert notify.get("priority") == "high"
 

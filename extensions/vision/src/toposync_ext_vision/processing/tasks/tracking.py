@@ -232,7 +232,11 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         return float(self._parsed.default_interval_seconds)
 
     def _serialize_contract_track(self, tracked: TrackedObject) -> dict[str, Any]:
+        tracklet_id = tracked.tracking_id
+        raw_tracking_id = tracked.source_tracking_id or tracked.tracking_id
         item: dict[str, Any] = {
+            "tracklet_id": tracklet_id,
+            "raw_tracking_id": raw_tracking_id,
             "tracking_id": tracked.tracking_id,
             "source_tracking_id": tracked.source_tracking_id,
             "camera_id": tracked.camera_id,
@@ -268,6 +272,8 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         item.update(
             {
                 "tracker_track_id": tracked.source_tracking_id,
+                "tracklet_id": tracked.tracking_id,
+                "raw_tracking_id": tracked.source_tracking_id or tracked.tracking_id,
                 "correlation_id": correlation_id,
                 "source_stream_id": source_stream_id,
                 "camera_id": tracked.camera_id,
@@ -309,6 +315,10 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         payload.update(
             {
                 "event_id": None,
+                "event_code": None,
+                "tracklet_id": None,
+                "raw_tracking_id": None,
+                "identity_id": None,
                 "tracking_id": None,
                 "tracker_track_id": None,
                 "correlation_id": None,
@@ -333,6 +343,10 @@ class VisionTrackRuntime(TransformOperatorRuntime):
                 "operator_id": self._operator_id,
                 "source_stream_id": packet.stream_id,
                 "event_id": None,
+                "event_code": None,
+                "tracklet_id": None,
+                "raw_tracking_id": None,
+                "identity_id": None,
                 "tracking_id": None,
                 "tracker_track_id": None,
                 "correlation_id": None,
@@ -513,6 +527,9 @@ class VisionTrackRuntime(TransformOperatorRuntime):
             paused_for = self._mark_paused(source_stream_id, now_monotonic=now_monotonic)
             max_paused = float(self._parsed.max_paused_seconds)
             if max_paused > 0.0 and paused_for >= max_paused:
+                if self._parsed.emit_mode == "annotate":
+                    self._clear_state_for_stream(source_stream_id)
+                    return [self._annotate_packet(packet, objects=[])]
                 return self._force_close_for_stream(packet, source_stream_id=source_stream_id)
             if self._parsed.emit_mode == "annotate":
                 out = self._annotate_packet(packet, objects=[])

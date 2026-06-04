@@ -669,9 +669,11 @@ export function VisionConfigCard({
   const inferenceInterval = Number.isFinite(inferenceIntervalRaw) ? Math.max(0, Math.min(60, inferenceIntervalRaw)) : 0;
   const trackerId = String((config as any).tracker_id ?? "simple_iou_kalman").trim() || "simple_iou_kalman";
   const trackerPreset = TRACKER_CHOICES.find((item) => item.value === trackerId) ?? null;
-  const emitModeRaw = String((config as any).emit_mode ?? "events").trim().toLowerCase() || "events";
-  const emitMode = ["events", "filter", "annotate"].includes(emitModeRaw) ? emitModeRaw : "events";
-  const trackEmitMode = emitMode === "annotate" ? "annotate" : "events";
+  const isTracking = String(operatorId || "").trim() === "vision.track";
+  const emitModeFallback = isTracking ? "annotate" : "events";
+  const emitModeRaw = String((config as any).emit_mode ?? emitModeFallback).trim().toLowerCase() || emitModeFallback;
+  const emitMode = ["events", "filter", "annotate"].includes(emitModeRaw) ? emitModeRaw : emitModeFallback;
+  const trackEmitMode = "annotate";
   const detectEmitMode = emitMode;
   const pauseWhenGateClosed = Boolean((config as any).pause_when_gate_closed ?? true);
   const useWorldAnchor = Boolean((config as any).use_world_anchor ?? false);
@@ -683,7 +685,6 @@ export function VisionConfigCard({
   const topKRaw = Number((config as any).top_k ?? 5);
   const topK = Number.isFinite(topKRaw) ? Math.max(1, Math.min(64, topKRaw)) : 5;
 
-  const isTracking = String(operatorId || "").trim() === "vision.track";
   const isClassification = String(operatorId || "").trim() === "vision.classify_image";
   const isSegmentation = String(operatorId || "").trim() === "vision.segment_instances";
   const isDetection = !isTracking && !isClassification && !isSegmentation;
@@ -1268,7 +1269,6 @@ export function VisionConfigCard({
                 }));
               }}
             >
-              <option value="events">{t("core.ui.pipelines.panels.yolo.track_emit_mode.events")}</option>
               <option value="annotate">{t("core.ui.pipelines.panels.yolo.track_emit_mode.annotate")}</option>
             </select>
           </label>

@@ -444,7 +444,6 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
           >
             <option value="payload.event_id">{t("core.ui.pipelines.panels.throttle.key.event_id")}</option>
             <option value="stream_id">{t("core.ui.pipelines.panels.throttle.key.stream_id")}</option>
-            <option value="payload.tracking_id">{t("core.ui.pipelines.panels.throttle.key.tracking_id")}</option>
             <option value="payload.correlation_id">{t("core.ui.pipelines.panels.throttle.key.correlation_id")}</option>
             <option value="payload.camera_id">{t("core.ui.pipelines.panels.throttle.key.camera_id")}</option>
           </select>
@@ -525,7 +524,6 @@ export function VelocityThrottleConfigCard({
             >
               <option value="payload.event_id">{t("core.ui.pipelines.panels.throttle.key.event_id")}</option>
               <option value="stream_id">{t("core.ui.pipelines.panels.throttle.key.stream_id")}</option>
-              <option value="payload.tracking_id">{t("core.ui.pipelines.panels.throttle.key.tracking_id")}</option>
               <option value="payload.correlation_id">{t("core.ui.pipelines.panels.throttle.key.correlation_id")}</option>
               <option value="payload.camera_id">{t("core.ui.pipelines.panels.throttle.key.camera_id")}</option>
             </select>
@@ -617,7 +615,6 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
           >
             <option value="payload.event_id">{t("core.ui.pipelines.panels.debounce.key.event_id")}</option>
             <option value="stream_id">{t("core.ui.pipelines.panels.debounce.key.stream_id")}</option>
-            <option value="payload.tracking_id">{t("core.ui.pipelines.panels.debounce.key.tracking_id")}</option>
             <option value="payload.correlation_id">{t("core.ui.pipelines.panels.debounce.key.correlation_id")}</option>
             <option value="payload.camera_id">{t("core.ui.pipelines.panels.debounce.key.camera_id")}</option>
           </select>
@@ -1537,8 +1534,8 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
             />
           </label>
           <div className="pipelinesStepHint">
-            {t("core.ui.pipelines.panels.notify.dedupe_key_hint_prefix")} <code>{"{{tracking_id}}"}</code>, <code>{"{{camera_id}}"}</code>,{" "}
-            <code>{"{{object_category_label}}"}</code>.
+            {t("core.ui.pipelines.panels.notify.dedupe_key_hint_prefix")} <code>{"{{event_id}}"}</code>, <code>{"{{event_code}}"}</code>,{" "}
+            <code>{"{{camera_id}}"}</code>, <code>{"{{object_category_label}}"}</code>.
           </div>
         </>
       ) : null}

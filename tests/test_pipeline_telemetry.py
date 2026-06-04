@@ -437,6 +437,7 @@ def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
         layer_label="Original",
         size_bytes=1234,
         event_id="event-telemetry-1",
+        event_code="7",
         tracking_id="track-telemetry-1",
     )
 
@@ -474,6 +475,7 @@ def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
     assert str(markers[0].get("layer_label") or "") == "Original"
     assert int(markers[0].get("size_bytes") or 0) == 1234
     assert str(markers[0].get("event_id") or "") == "event-telemetry-1"
+    assert str(markers[0].get("event_code") or "") == "7"
     assert str(markers[0].get("tracking_id") or "") == "track-telemetry-1"
 
 

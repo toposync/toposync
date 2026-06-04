@@ -13,6 +13,7 @@ from toposync_ext_vision.pipelines import (
     SegmentationInstance,
     TrackedObject,
     VisionDetectConfig,
+    VisionEventAssemblerConfig,
     VisionPoseEstimateConfig,
     VisionSegmentInstancesConfig,
     VisionTrackConfig,
@@ -265,6 +266,9 @@ def test_tracked_object_normalizes_identity_score_and_bbox() -> None:
 
 
 def test_vision_track_config_normalizes_emit_mode_and_tracker_id() -> None:
+    default_config = VisionTrackConfig.model_validate({})
+    assert default_config.emit_mode == "annotate"
+
     config = VisionTrackConfig.model_validate(
         {
             "tracker_id": " Norfair ",
@@ -275,6 +279,21 @@ def test_vision_track_config_normalizes_emit_mode_and_tracker_id() -> None:
 
     assert config.tracker_id == "norfair"
     assert config.emit_mode == "annotate"
+    assert config.category_intervals_seconds == {"person": 0.4}
+
+    with pytest.raises(ValueError):
+        VisionTrackConfig.model_validate({"emit_mode": "events"})
+
+
+def test_vision_event_assembler_config_normalizes_defaults() -> None:
+    config = VisionEventAssemblerConfig.model_validate(
+        {
+            "event_id_prefix": " EVT ",
+            "category_intervals_seconds": {" Person ": 0.4},
+        }
+    )
+
+    assert config.event_id_prefix == "evt"
     assert config.category_intervals_seconds == {"person": 0.4}
 
 

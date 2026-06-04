@@ -9,6 +9,7 @@ from ..processing.tasks import (
     VisionClassifyImageRuntime,
     VisionCropObjectsRuntime,
     VisionDetectRuntime,
+    VisionEventAssemblerRuntime,
     VisionPoseEstimateRuntime,
     VisionSegmentInstancesRuntime,
     VisionTrackRuntime,
@@ -18,6 +19,7 @@ from .schemas import (
     VisionClassifyImageConfig,
     VisionCropObjectsConfig,
     VisionDetectConfig,
+    VisionEventAssemblerConfig,
     VisionPoseEstimateConfig,
     VisionSegmentInstancesConfig,
     VisionTrackConfig,
@@ -46,8 +48,12 @@ def _vision_expression_hints(*, branch: str | None = None) -> list[Any]:
     hints.extend(
         [
             payload_path_hint("payload.event_id", value_type="string", description="Event identifier derived from the vision operator."),
-            payload_path_hint("payload.tracking_id", value_type="string", description="Tracking identifier associated with the current object stream."),
+            payload_path_hint("payload.event_code", value_type="string", description="Short event code for UI grouping and visual correlation."),
+            payload_path_hint("payload.tracklet_id", value_type="string", description="Technical tracklet identifier emitted by the tracker."),
+            payload_path_hint("payload.raw_tracking_id", value_type="string", description="Raw backend-specific tracking identifier."),
+            payload_path_hint("payload.tracking_id", value_type="string", description="Technical tracking identifier associated with the current object stream."),
             payload_path_hint("payload.tracker_track_id", value_type="string", description="Raw tracker-specific track identifier."),
+            payload_path_hint("payload.identity_id", value_type="string", description="Optional recognized identity identifier for the product event."),
             payload_path_hint("payload.correlation_id", value_type="string", description="Correlation identifier connecting related packets."),
             payload_path_hint("payload.source_stream_id", value_type="string", description="Source stream identifier emitted by the vision operator."),
             payload_path_hint("payload.object_category_label", value_type="string", description="Primary detected object category label."),
@@ -264,13 +270,14 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
         registry.register_operator(
             operator_id="vision.track",
             description=(
-                "Object tracking. Consumes payload['vision']['detections'] and emits either "
-                "per-object lifecycle packets or frame annotations with active tracks."
+                "Technical object tracking. Consumes payload['vision']['detections'] and writes "
+                "active tracklets into payload['vision']['tracks']. Use vision.event_assembler "
+                "to produce product lifecycle events."
             ),
             config_model=VisionTrackConfig,
             inputs=[{"name": "in", "required": True}],
             outputs=[{"name": "out"}],
-            capabilities=["vision", "tracking", "heavy_compute", "split_stream"],
+            capabilities=["vision", "tracking", "heavy_compute"],
             defaults=VisionTrackConfig().model_dump(),
             execution_mode="thread_pool",
             max_concurrency=1,
@@ -278,8 +285,9 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             requires_artifacts=[MAIN_ARTIFACT_NAME],
             produces_payload_keys=[
                 "vision",
-                "event_id",
                 "tracking_id",
+                "tracklet_id",
+                "raw_tracking_id",
                 "tracker_track_id",
                 "correlation_id",
                 "source_stream_id",
@@ -298,14 +306,54 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 operator_id="vision.track",
             ),
         )
+    if registry.get("vision.event_assembler") is None:
+        registry.register_operator(
+            operator_id="vision.event_assembler",
+            description=(
+                "Product event assembly for tracked objects. Consumes frame-level tracklets from "
+                "payload['vision']['tracks'] and emits per-object lifecycle packets with stable event_id."
+            ),
+            config_model=VisionEventAssemblerConfig,
+            inputs=[{"name": "in", "required": True}],
+            outputs=[{"name": "out"}],
+            capabilities=["vision", "tracking", "split_stream"],
+            defaults=VisionEventAssemblerConfig().model_dump(),
+            execution_mode="thread_pool",
+            max_concurrency=1,
+            requires_payload_keys=["vision"],
+            produces_payload_keys=[
+                "vision",
+                "event_id",
+                "event_code",
+                "identity_id",
+                "tracklet_id",
+                "raw_tracking_id",
+                "tracking_id",
+                "tracker_track_id",
+                "correlation_id",
+                "source_stream_id",
+                "object_category_label",
+                "object_confidence",
+                "object_bbox01",
+                "detected_object",
+                "detected_objects",
+            ],
+            expression_hints=_vision_expression_hints(branch="tracks"),
+            share_strategy="never",
+            owner="com.toposync.vision",
+            runtime_factory=lambda config, _deps: VisionEventAssemblerRuntime(
+                config,
+                operator_id="vision.event_assembler",
+            ),
+        )
     if registry.get("vision.detect") is None:
         registry.register_operator(
             operator_id="vision.detect",
             description=(
                 "Object detection. Can emit finite per-detection events, filter the stream to "
                 "frames that contain detections, or pass every frame through with detection "
-                "payload attached. Use vision.track for temporal identity and long-lived "
-                "object lifecycle."
+                "payload attached. Use vision.track plus vision.event_assembler for temporal "
+                "identity and long-lived object lifecycle."
             ),
             config_model=VisionDetectConfig,
             inputs=[{"name": "in", "required": True}],

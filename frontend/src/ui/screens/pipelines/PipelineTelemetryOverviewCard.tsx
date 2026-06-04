@@ -250,7 +250,7 @@ function buildMetricTargetLabel(target: { metricId: string; nodeId: string }, du
 }
 
 function markerEventCode(marker: PipelineTelemetryImageMarker): string {
-  return compactTrackedEventCode(String(marker.event_id || marker.tracking_id || legacyMarkerEventCode(marker) || ""));
+  return compactTrackedEventCode(String(marker.event_code || marker.event_id || marker.tracking_id || legacyMarkerEventCode(marker) || ""));
 }
 
 function compactTrackedEventCode(value: string): string {

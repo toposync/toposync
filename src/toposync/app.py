@@ -633,6 +633,7 @@ class PipelineTelemetryImageMarker(BaseModel):
     layer_label: str | None = None
     size_bytes: int | None = None
     event_id: str | None = None
+    event_code: str | None = None
     tracking_id: str | None = None
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import keyword
 import json
 import os
@@ -314,7 +315,14 @@ def _normalize_config(config: AppConfig) -> AppConfig:
         if not isinstance(nodes_raw, list):
             return graph
         changed = False
-        migrated_nodes: list[Any] = []
+        migrated_graph = copy.deepcopy(graph)
+        nodes = migrated_graph.get("nodes")
+        edges = migrated_graph.get("edges")
+        if not isinstance(nodes, list):
+            return graph
+        if not isinstance(edges, list):
+            edges = []
+            migrated_graph["edges"] = edges
 
         def _as_float(v: Any) -> float | None:
             try:
@@ -325,20 +333,69 @@ def _normalize_config(config: AppConfig) -> AppConfig:
                 return None
             return value
 
-        for item in nodes_raw:
+        def _replace_product_tracking_refs(value: Any) -> int:
+            replacements = 0
+            if isinstance(value, dict):
+                for key, item in list(value.items()):
+                    if isinstance(item, str):
+                        next_item = item.replace("{{tracking_id}}", "{{event_id}}")
+                        next_item = next_item.replace("payload.tracking_id", "payload.event_id")
+                        if next_item != item:
+                            value[key] = next_item
+                            replacements += 1
+                    else:
+                        replacements += _replace_product_tracking_refs(item)
+            elif isinstance(value, list):
+                for item in value:
+                    replacements += _replace_product_tracking_refs(item)
+            return replacements
+
+        def _unique_node_id(base: str, used: set[str]) -> str:
+            raw_base = str(base or "event").strip() or "event"
+            candidate = raw_base
+            index = 2
+            while candidate in used:
+                candidate = f"{raw_base}_{index}"
+                index += 1
+            used.add(candidate)
+            return candidate
+
+        def _operator_for_node(node_id: str) -> str:
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                if str(node.get("id") or "") == node_id:
+                    return str(node.get("operator") or "").strip()
+            return ""
+
+        changed = bool(_replace_product_tracking_refs(migrated_graph))
+        used_node_ids = {
+            str(node.get("id") or "")
+            for node in nodes
+            if isinstance(node, dict) and str(node.get("id") or "").strip()
+        }
+
+        index = 0
+        while index < len(nodes):
+            item = nodes[index]
             if not isinstance(item, dict):
-                migrated_nodes.append(item)
+                index += 1
                 continue
             operator_id = str(item.get("operator") or "").strip()
             if operator_id != "vision.track":
-                migrated_nodes.append(item)
+                index += 1
                 continue
             cfg_raw = item.get("config")
             if not isinstance(cfg_raw, dict):
-                migrated_nodes.append(item)
-                continue
+                cfg_raw = {}
+                item["config"] = cfg_raw
+                changed = True
             cfg = dict(cfg_raw)
             node_changed = False
+            track_node_id = str(item.get("id") or "").strip()
+            if not track_node_id:
+                index += 1
+                continue
 
             # Migration: old defaults were too aggressive and caused flickery tracking and excessive updates.
             close_after = _as_float(cfg.get("close_after_seconds"))
@@ -351,15 +408,82 @@ def _normalize_config(config: AppConfig) -> AppConfig:
                 cfg["default_interval_seconds"] = 0.2
                 node_changed = True
 
+            if str(cfg.get("emit_mode") or "").strip().lower() == "events":
+                cfg["emit_mode"] = "annotate"
+                node_changed = True
+
             if node_changed:
                 changed = True
-                migrated_nodes.append({**item, "config": cfg})
-            else:
-                migrated_nodes.append(item)
+                item["config"] = cfg
+
+            outgoing_indices = [
+                edge_index
+                for edge_index, edge in enumerate(edges)
+                if isinstance(edge, dict)
+                and isinstance(edge.get("from"), dict)
+                and str(edge["from"].get("node") or "") == track_node_id
+            ]
+            event_node_id = ""
+            non_event_outgoing_indices: list[int] = []
+            for edge_index in outgoing_indices:
+                edge = edges[edge_index]
+                to_node = edge.get("to") if isinstance(edge, dict) else None
+                to_node_id = str(to_node.get("node") or "") if isinstance(to_node, dict) else ""
+                if _operator_for_node(to_node_id) == "vision.event_assembler":
+                    event_node_id = event_node_id or to_node_id
+                else:
+                    non_event_outgoing_indices.append(edge_index)
+            if non_event_outgoing_indices:
+                add_track_to_event_edge = False
+                if not event_node_id:
+                    event_node_id = _unique_node_id(
+                        "event" if "event" not in used_node_ids else f"{track_node_id}_event",
+                        used_node_ids,
+                    )
+                    raw_gap = _as_float(cfg.get("close_after_seconds"))
+                    raw_interval = _as_float(cfg.get("default_interval_seconds"))
+                    nodes.insert(
+                        index + 1,
+                        {
+                            "id": event_node_id,
+                            "operator": "vision.event_assembler",
+                            "config": {
+                                "max_gap_seconds": raw_gap if raw_gap is not None and raw_gap > 0 else 5.0,
+                                "default_interval_seconds": raw_interval
+                                if raw_interval is not None and raw_interval >= 0
+                                else 0.25,
+                            },
+                        },
+                    )
+                    add_track_to_event_edge = True
+                first_edge = edges[non_event_outgoing_indices[0]]
+                if add_track_to_event_edge:
+                    new_edge: dict[str, Any] = {
+                        "from": {"node": track_node_id, "port": "out"},
+                        "to": {"node": event_node_id, "port": "in"},
+                        "maxsize": first_edge.get("maxsize", 64)
+                        if isinstance(first_edge, dict)
+                        else 64,
+                        "drop_policy": first_edge.get("drop_policy", "keyed_latest_only")
+                        if isinstance(first_edge, dict)
+                        else "keyed_latest_only",
+                    }
+                    edges.append(new_edge)
+                for edge_index in non_event_outgoing_indices:
+                    edge = edges[edge_index]
+                    if not isinstance(edge, dict) or not isinstance(edge.get("from"), dict):
+                        continue
+                    edge["from"]["node"] = event_node_id
+                    edge["from"]["port"] = edge["from"].get("port") or "out"
+                changed = True
+                if add_track_to_event_edge:
+                    index += 1
+
+            index += 1
 
         if not changed:
             return graph
-        return {**graph, "nodes": migrated_nodes}
+        return migrated_graph
 
     seen_pipeline_names: set[str] = set()
     normalized_pipelines: list[Pipeline] = []

@@ -178,6 +178,7 @@ def _register_test_source_and_sink(
 def _tracking_pipeline_graph(
     *, source_id: str, detect_id: str, track_id: str, sink_id: str, sink_name: str
 ) -> dict[str, Any]:
+    event_id = f"{track_id}_event"
     return {
         "schema_version": 1,
         "nodes": [
@@ -202,8 +203,13 @@ def _tracking_pipeline_graph(
                     "tracker_id": "simple_iou_kalman",
                     "default_interval_seconds": 0.0,
                     "close_after_seconds": 0.05,
-                    "emit_mode": "events",
+                    "emit_mode": "annotate",
                 },
+            },
+            {
+                "id": event_id,
+                "operator": "vision.event_assembler",
+                "config": {"default_interval_seconds": 0.0, "max_gap_seconds": 0.05},
             },
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
         ],
@@ -222,6 +228,12 @@ def _tracking_pipeline_graph(
             },
             {
                 "from": {"node": track_id, "port": "out"},
+                "to": {"node": event_id, "port": "in"},
+                "maxsize": 64,
+                "drop_policy": "drop_oldest",
+            },
+            {
+                "from": {"node": event_id, "port": "out"},
                 "to": {"node": sink_id, "port": "in"},
                 "maxsize": 64,
                 "drop_policy": "drop_oldest",
@@ -240,6 +252,7 @@ def _tracking_pipeline_graph_with_shareable_transform(
     sink_name: str,
     track_to_transform_maxsize: int,
 ) -> dict[str, Any]:
+    event_id = f"{track_id}_event"
     return {
         "schema_version": 1,
         "nodes": [
@@ -264,8 +277,13 @@ def _tracking_pipeline_graph_with_shareable_transform(
                     "tracker_id": "simple_iou_kalman",
                     "default_interval_seconds": 0.0,
                     "close_after_seconds": 0.05,
-                    "emit_mode": "events",
+                    "emit_mode": "annotate",
                 },
+            },
+            {
+                "id": event_id,
+                "operator": "vision.event_assembler",
+                "config": {"default_interval_seconds": 0.0, "max_gap_seconds": 0.05},
             },
             {"id": transform_id, "operator": "test.identity", "config": {}},
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
@@ -285,8 +303,14 @@ def _tracking_pipeline_graph_with_shareable_transform(
             },
             {
                 "from": {"node": track_id, "port": "out"},
-                "to": {"node": transform_id, "port": "in"},
+                "to": {"node": event_id, "port": "in"},
                 "maxsize": int(track_to_transform_maxsize),
+                "drop_policy": "drop_oldest",
+            },
+            {
+                "from": {"node": event_id, "port": "out"},
+                "to": {"node": transform_id, "port": "in"},
+                "maxsize": 64,
                 "drop_policy": "drop_oldest",
             },
             {
@@ -361,29 +385,31 @@ def test_vision_track_splits_two_objects_and_closes_lifecycle() -> None:
 
         packets = [record["packet"] for record in counters.get("packets", [])]
         assert packets
-        grouped_by_tracking: dict[str, list[Packet]] = defaultdict(list)
+        grouped_by_event: dict[str, list[Packet]] = defaultdict(list)
         for packet in packets:
-            tracking_id = str(packet.payload.get("tracking_id") or "")
-            grouped_by_tracking[tracking_id].append(packet)
+            event_id = str(packet.payload.get("event_id") or "")
+            grouped_by_event[event_id].append(packet)
 
-        grouped_by_tracking.pop("", None)
-        assert len(grouped_by_tracking) == 2
+        grouped_by_event.pop("", None)
+        assert len(grouped_by_event) == 2
         source_tracking_ids = {
             str(items[0].payload.get("tracker_track_id") or "")
-            for items in grouped_by_tracking.values()
+            for items in grouped_by_event.values()
         }
         assert len(source_tracking_ids) == 2
-        for tracking_id, tracking_packets in grouped_by_tracking.items():
-            assert tracking_id.startswith("trk:camera:test:")
-            assert tracking_packets[0].lifecycle == Lifecycle.OPEN
-            assert any(item.lifecycle == Lifecycle.CLOSE for item in tracking_packets), tracking_id
-            stream_ids = {item.stream_id for item in tracking_packets}
+        for event_id, event_packets in grouped_by_event.items():
+            assert event_id.startswith("evt:camera:test:")
+            assert event_packets[0].lifecycle == Lifecycle.OPEN
+            assert any(item.lifecycle == Lifecycle.CLOSE for item in event_packets), event_id
+            stream_ids = {item.stream_id for item in event_packets}
             assert len(stream_ids) == 1
             correlation_ids = {
-                str(item.payload.get("correlation_id") or "") for item in tracking_packets
+                str(item.payload.get("correlation_id") or "") for item in event_packets
             }
             assert len(correlation_ids) == 1
-            assert all(item.payload.get("event_id") == tracking_id for item in tracking_packets)
+            assert all(item.payload.get("event_id") == event_id for item in event_packets)
+            assert all(str(item.payload.get("tracking_id") or "").startswith("trk:camera:test:") for item in event_packets)
+            assert all(item.payload.get("tracking_id") != event_id for item in event_packets)
 
         source_frames = int(counters.get("source_frames", 0))
         detect_calls = int(counters.get("detect_calls", 0))
@@ -458,8 +484,13 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
                         "tracker_id": "simple_iou_kalman",
                         "default_interval_seconds": 0.0,
                         "close_after_seconds": 0.05,
-                        "emit_mode": "events",
+                        "emit_mode": "annotate",
                     },
+                },
+                {
+                    "id": "event",
+                    "operator": "vision.event_assembler",
+                    "config": {"default_interval_seconds": 0.0, "max_gap_seconds": 0.05},
                 },
                 {
                     "id": "crop",
@@ -485,7 +516,8 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
             "edges": [
                 {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
                 {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
-                {"from": {"node": "track", "port": "out"}, "to": {"node": "crop", "port": "in"}},
+                {"from": {"node": "track", "port": "out"}, "to": {"node": "event", "port": "in"}},
+                {"from": {"node": "event", "port": "out"}, "to": {"node": "crop", "port": "in"}},
                 {"from": {"node": "crop", "port": "out"}, "to": {"node": "collect", "port": "in"}},
                 {"from": {"node": "crop", "port": "out"}, "to": {"node": "store", "port": "in"}},
                 {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}},
@@ -497,19 +529,20 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
         await runtime.run_for(0.6)
 
         crop_packets = [record["packet"] for record in counters.get("packets", [])]
-        grouped_by_tracking: dict[str, list[Packet]] = defaultdict(list)
+        grouped_by_event: dict[str, list[Packet]] = defaultdict(list)
         for packet in crop_packets:
-            tracking_id = str(packet.payload.get("tracking_id") or "")
-            if tracking_id:
-                grouped_by_tracking[tracking_id].append(packet)
+            event_id = str(packet.payload.get("event_id") or "")
+            if event_id:
+                grouped_by_event[event_id].append(packet)
 
-        assert len(grouped_by_tracking) == 3
-        stream_ids = {packets[0].stream_id for packets in grouped_by_tracking.values()}
+        assert len(grouped_by_event) == 3
+        stream_ids = {packets[0].stream_id for packets in grouped_by_event.values()}
         assert len(stream_ids) == 3
-        for tracking_id, packets in grouped_by_tracking.items():
-            assert packets[0].lifecycle == Lifecycle.OPEN, tracking_id
-            assert any(packet.lifecycle == Lifecycle.CLOSE for packet in packets), tracking_id
-            assert all(packet.payload.get("event_id") == tracking_id for packet in packets)
+        for event_id, packets in grouped_by_event.items():
+            assert packets[0].lifecycle == Lifecycle.OPEN, event_id
+            assert any(packet.lifecycle == Lifecycle.CLOSE for packet in packets), event_id
+            assert all(packet.payload.get("event_id") == event_id for packet in packets)
+            assert all(packet.payload.get("tracking_id") != event_id for packet in packets)
             assert len({str(packet.payload.get("correlation_id") or "") for packet in packets}) == 1
             assert all(
                 "main" in packet.artifacts
@@ -524,37 +557,37 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
 
         assert notifications
         notification_lifecycles: dict[str, set[str]] = defaultdict(set)
-        notification_tracking_ids: dict[str, set[str]] = defaultdict(set)
-        stored_paths_by_tracking: dict[str, set[str]] = defaultdict(set)
+        notification_event_ids: dict[str, set[str]] = defaultdict(set)
+        stored_paths_by_event: dict[str, set[str]] = defaultdict(set)
         for item in notifications:
             dedupe_key = str(item.get("dedupe_key") or "")
             payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
             notification_lifecycles[dedupe_key].add(str(payload.get("lifecycle") or ""))
-            tracking_id = str(payload.get("tracking_id") or "")
-            if tracking_id:
-                notification_tracking_ids[dedupe_key].add(tracking_id)
+            event_id = str(payload.get("event_id") or "")
+            if event_id:
+                notification_event_ids[dedupe_key].add(event_id)
             stored_images = payload.get("stored_images") if isinstance(payload, dict) else {}
             if isinstance(stored_images, dict):
                 for entries in stored_images.values():
                     if not isinstance(entries, list):
                         continue
                     for entry in entries:
-                        if isinstance(entry, dict) and tracking_id:
+                        if isinstance(entry, dict) and event_id:
                             rel_path = str(entry.get("rel_path") or "")
                             if rel_path:
-                                stored_paths_by_tracking[tracking_id].add(rel_path)
+                                stored_paths_by_event[event_id].add(rel_path)
 
         assert len(notification_lifecycles) == 3
         for lifecycles in notification_lifecycles.values():
             assert {"open", "close"}.issubset(lifecycles)
-        assert {next(iter(ids)) for ids in notification_tracking_ids.values()} == set(
-            grouped_by_tracking
+        assert {next(iter(ids)) for ids in notification_event_ids.values()} == set(
+            grouped_by_event
         )
-        assert set(stored_paths_by_tracking) == set(grouped_by_tracking)
-        for tracking_id, paths in stored_paths_by_tracking.items():
+        assert set(stored_paths_by_event) == set(grouped_by_event)
+        for event_id, paths in stored_paths_by_event.items():
             assert paths
-            safe_tracking_id = tracking_id.replace(":", "_")
-            assert any(safe_tracking_id in path for path in paths)
+            safe_event_id = event_id.replace(":", "_")
+            assert any(safe_event_id in path for path in paths)
             assert all((tmp_path / "files" / path).is_file() for path in paths)
 
     asyncio.run(scenario())
@@ -632,38 +665,27 @@ def test_vision_track_keeps_same_identity_across_a_short_gap() -> None:
             sink_id="sink",
             sink_name="tracking_sink",
         )
+        for node in graph["nodes"]:
+            if node.get("id") == "track":
+                node["config"]["close_after_seconds"] = 0.08
+            if node.get("id") == "track_event":
+                node["config"]["max_gap_seconds"] = 0.08
         pipeline = Pipeline(
             name="stage5_tracking_gap",
-            graph={
-                **graph,
-                "nodes": [
-                    *graph["nodes"][:-2],
-                    {
-                        "id": "track",
-                        "operator": "vision.track",
-                        "config": {
-                            "tracker_id": "simple_iou_kalman",
-                            "default_interval_seconds": 0.0,
-                            "close_after_seconds": 0.08,
-                            "emit_mode": "events",
-                        },
-                    },
-                    graph["nodes"][-1],
-                ],
-            },
+            graph=graph,
         )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.35)
 
         packets = [record["packet"] for record in counters.get("packets", [])]
-        tracking_ids = [
-            str(packet.payload.get("tracking_id") or "")
+        event_ids = [
+            str(packet.payload.get("event_id") or "")
             for packet in packets
-            if packet.payload.get("tracking_id")
+            if packet.payload.get("event_id")
         ]
-        assert tracking_ids
-        assert len(set(tracking_ids)) == 1
+        assert event_ids
+        assert len(set(event_ids)) == 1
 
     asyncio.run(scenario())
 

@@ -413,7 +413,8 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
         )
         token = (
             str(
-                packet.payload.get("tracking_id")
+                packet.payload.get("event_id")
+                or packet.payload.get("tracking_id")
                 or packet.payload.get("correlation_id")
                 or packet.stream_id
             ).strip()

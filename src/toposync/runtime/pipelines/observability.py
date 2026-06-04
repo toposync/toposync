@@ -96,6 +96,7 @@ def telemetry_image_marker_record(
     layer_label: str | None = None,
     size_bytes: int | None = None,
     event_id: str | None = None,
+    event_code: str | None = None,
     tracking_id: str | None = None,
     origin_accessible: bool = False,
 ) -> dict[str, Any] | None:
@@ -134,6 +135,9 @@ def telemetry_image_marker_record(
     event = str(event_id or "").strip()
     if event:
         record["event_id"] = event
+    code = str(event_code or "").strip()
+    if code:
+        record["event_code"] = code
     tracking = str(tracking_id or "").strip()
     if tracking:
         record["tracking_id"] = tracking
@@ -197,6 +201,7 @@ def apply_observability_record(
                 layer_label=(str(record.get("layer_label") or "").strip() or None),
                 size_bytes=record.get("size_bytes"),
                 event_id=(str(record.get("event_id") or "").strip() or None),
+                event_code=(str(record.get("event_code") or "").strip() or None),
                 tracking_id=(str(record.get("tracking_id") or "").strip() or None),
             )
         )

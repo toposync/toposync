@@ -49,6 +49,7 @@ import type {
   CameraControlPoint,
   CameraControlPointSet,
   CameraProjectionCornerKey,
+  CameraProjectionRefinementPoint,
   CameraProjectionWorldQuad,
   CameraPoseReference,
   CameraPtzPreset,
@@ -665,12 +666,18 @@ function CameraEditor({
 }
 
 const CALIBRATION_CORNERS: CameraProjectionCornerKey[] = ["top_left", "top_right", "bottom_right", "bottom_left"];
+const MAX_CALIBRATION_REFINEMENT_POINTS = 24;
+const CALIBRATION_PREVIEW_GRID_DIVISIONS = 34;
+const LOCAL_REFINEMENT_SIGMA_UV = 0.22;
+const LOCAL_REFINEMENT_EDGE_LOW = 0.015;
+const LOCAL_REFINEMENT_EDGE_HIGH = 0.12;
 
 type CalibrationDragState =
   | {
       kind: "move";
       startWorld: { x: number; z: number };
       startQuad: CameraProjectionWorldQuad;
+      startRefinementPoints: CameraProjectionRefinementPoint[];
     }
   | {
       kind: "corner";
@@ -682,13 +689,23 @@ type CalibrationDragState =
       centerWorld: { x: number; z: number };
       startAngle: number;
       startQuad: CameraProjectionWorldQuad;
+      startRefinementPoints: CameraProjectionRefinementPoint[];
       snappedDelta: number;
+    }
+  | {
+      kind: "refinement";
+      pointId: string;
+      pointerStartWorld: { x: number; z: number };
+      created: boolean;
+      moved: boolean;
     };
 
 type CalibrationHoverState =
   | { kind: "move" }
   | { kind: "corner"; corner: CameraProjectionCornerKey }
   | { kind: "rotate" }
+  | { kind: "refinement"; pointId: string }
+  | { kind: "new_refinement"; image: { x: number; y: number }; world: { x: number; z: number } }
   | null;
 
 type CalibrationRotateHandleInfo = {
@@ -761,6 +778,92 @@ function screenDistanceSquared(a: { x: number; y: number }, b: { x: number; y: n
   return dx * dx + dy * dy;
 }
 
+function refinementPointsForView(view: CameraCalibratedView): CameraProjectionRefinementPoint[] {
+  return view.projection_model.refinement?.points ?? [];
+}
+
+function cloneRefinementPoints(points: CameraProjectionRefinementPoint[]): CameraProjectionRefinementPoint[] {
+  return points.map((point) => ({
+    id: point.id,
+    image: { ...point.image },
+    world: { ...point.world },
+  }));
+}
+
+function withRefinementPoints(
+  view: CameraCalibratedView,
+  points: CameraProjectionRefinementPoint[],
+  status: "ready" | "estimated" = "ready",
+): CameraCalibratedView {
+  const normalized = points
+    .filter(
+      (point) =>
+        Number.isFinite(point.image.x) &&
+        Number.isFinite(point.image.y) &&
+        Number.isFinite(point.world.x) &&
+        Number.isFinite(point.world.z) &&
+        point.image.x >= 0 &&
+        point.image.x <= 1 &&
+        point.image.y >= 0 &&
+        point.image.y <= 1,
+    )
+    .slice(0, MAX_CALIBRATION_REFINEMENT_POINTS)
+    .map((point) => ({
+      id: point.id || createUniqueId(),
+      image: { x: point.image.x, y: point.image.y },
+      world: { x: point.world.x, z: point.world.z },
+    }));
+  return {
+    ...view,
+    projection_model: {
+      ...view.projection_model,
+      refinement: normalized.length > 0 ? { model: "local_rbf_v1", points: normalized } : null,
+    },
+    projection_quality: {
+      ...(view.projection_quality ?? {}),
+      status,
+      estimated: status === "estimated",
+    },
+  };
+}
+
+function translateRefinementPoints(
+  points: CameraProjectionRefinementPoint[],
+  delta: { x: number; z: number },
+): CameraProjectionRefinementPoint[] {
+  return points.map((point) => ({
+    ...point,
+    image: { ...point.image },
+    world: {
+      x: point.world.x + delta.x,
+      z: point.world.z + delta.z,
+    },
+  }));
+}
+
+function rotateWorldPoint(point: { x: number; z: number }, center: { x: number; z: number }, radians: number): { x: number; z: number } {
+  const sin = Math.sin(radians);
+  const cos = Math.cos(radians);
+  const dx = point.x - center.x;
+  const dz = point.z - center.z;
+  return {
+    x: center.x + dx * cos - dz * sin,
+    z: center.z + dx * sin + dz * cos,
+  };
+}
+
+function rotateRefinementPoints(
+  points: CameraProjectionRefinementPoint[],
+  center: { x: number; z: number },
+  radians: number,
+): CameraProjectionRefinementPoint[] {
+  return points.map((point) => ({
+    ...point,
+    image: { ...point.image },
+    world: rotateWorldPoint(point.world, center, radians),
+  }));
+}
+
 function calibrationRotateHandleInfo(
   quad: CameraProjectionWorldQuad,
   viewport: Viewport2DContext,
@@ -814,23 +917,6 @@ function nearestWorldQuadCornerByScreen(
     if (!best || distanceSquared < best.distanceSquared) best = { corner, distanceSquared };
   }
   return best?.corner ?? null;
-}
-
-function pointInWorldQuad(point: { x: number; z: number }, quad: CameraProjectionWorldQuad): boolean {
-  const points = worldQuadPoints(quad);
-  let inside = false;
-  for (let index = 0, previous = points.length - 1; index < points.length; previous = index, index += 1) {
-    const currentPoint = points[index];
-    const previousPoint = points[previous];
-    const intersects =
-      currentPoint.z > point.z !== previousPoint.z > point.z &&
-      point.x <
-        ((previousPoint.x - currentPoint.x) * (point.z - currentPoint.z)) /
-          ((previousPoint.z - currentPoint.z) || 1e-12) +
-          currentPoint.x;
-    if (intersects) inside = !inside;
-  }
-  return inside;
 }
 
 function nearestWorldQuadCorner(
@@ -904,6 +990,261 @@ function drawImageTriangle(
   ctx.transform(a, b, c, d, e, f);
   ctx.drawImage(image, 0, 0);
   ctx.restore();
+}
+
+type CalibrationProjectionPair = {
+  image: { x: number; y: number };
+  world: { x: number; z: number };
+};
+
+type CalibrationMeshVertex = {
+  image: { x: number; y: number };
+  world: { x: number; z: number };
+};
+
+type CalibrationMeshData = {
+  vertices: CalibrationMeshVertex[];
+  indices: number[];
+};
+
+function calibrationPairsFromView(view: CameraCalibratedView): CalibrationProjectionPair[] {
+  const region = view.projection_model.image_region;
+  const quad = view.projection_model.world_quad;
+  return [
+    { image: region.top_left, world: quad.top_left },
+    { image: { x: region.bottom_right.x, y: region.top_left.y }, world: quad.top_right },
+    { image: region.bottom_right, world: quad.bottom_right },
+    { image: { x: region.top_left.x, y: region.bottom_right.y }, world: quad.bottom_left },
+  ];
+}
+
+function solveCalibrationLinearSystem(matrix: number[][], rhs: number[]): number[] | null {
+  const n = rhs.length;
+  const a = matrix.map((row, index) => [...row, rhs[index]]);
+  for (let col = 0; col < n; col += 1) {
+    let pivot = col;
+    for (let row = col + 1; row < n; row += 1) {
+      if (Math.abs(a[row][col]) > Math.abs(a[pivot][col])) pivot = row;
+    }
+    if (Math.abs(a[pivot][col]) < 1e-10) return null;
+    if (pivot !== col) {
+      const tmp = a[col];
+      a[col] = a[pivot];
+      a[pivot] = tmp;
+    }
+    const div = a[col][col];
+    for (let j = col; j <= n; j += 1) a[col][j] /= div;
+    for (let row = 0; row < n; row += 1) {
+      if (row === col) continue;
+      const factor = a[row][col];
+      if (Math.abs(factor) < 1e-12) continue;
+      for (let j = col; j <= n; j += 1) a[row][j] -= factor * a[col][j];
+    }
+  }
+  return a.map((row) => row[n]);
+}
+
+function solveCalibrationHomography(src: Array<{ x: number; y: number }>, dst: Array<{ x: number; y: number }>): number[] | null {
+  if (src.length < 4 || dst.length < 4 || src.length !== dst.length) return null;
+  const ata = Array.from({ length: 8 }, () => Array.from({ length: 8 }, () => 0));
+  const atb = Array.from({ length: 8 }, () => 0);
+  const addRow = (row: number[], target: number) => {
+    for (let i = 0; i < 8; i += 1) {
+      atb[i] += row[i] * target;
+      for (let j = 0; j < 8; j += 1) ata[i][j] += row[i] * row[j];
+    }
+  };
+  for (let index = 0; index < src.length; index += 1) {
+    const a = src[index].x;
+    const b = src[index].y;
+    const x = dst[index].x;
+    const y = dst[index].y;
+    addRow([a, b, 1, 0, 0, 0, -x * a, -x * b], x);
+    addRow([0, 0, 0, a, b, 1, -y * a, -y * b], y);
+  }
+  const solved = solveCalibrationLinearSystem(ata, atb);
+  return solved ? [...solved, 1] : null;
+}
+
+function mapCalibrationHomography(h: number[], point: { x: number; y: number }): { x: number; y: number } | null {
+  const denominator = h[6] * point.x + h[7] * point.y + h[8];
+  if (!Number.isFinite(denominator) || Math.abs(denominator) < 1e-8) return null;
+  const x = (h[0] * point.x + h[1] * point.y + h[2]) / denominator;
+  const y = (h[3] * point.x + h[4] * point.y + h[5]) / denominator;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+
+function estimateCalibrationImageToWorld(view: CameraCalibratedView): number[] | null {
+  const pairs = calibrationPairsFromView(view);
+  return solveCalibrationHomography(
+    pairs.map((pair) => pair.image),
+    pairs.map((pair) => ({ x: pair.world.x, y: pair.world.z })),
+  );
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  if (edge0 === edge1) return value >= edge1 ? 1 : 0;
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function localRefinementDelta(view: CameraCalibratedView, hImageToWorld: number[], image: { x: number; y: number }): { x: number; z: number } {
+  const refinementPoints = refinementPointsForView(view);
+  if (refinementPoints.length === 0) return { x: 0, z: 0 };
+  let totalWeight = 0;
+  let totalX = 0;
+  let totalZ = 0;
+  for (const point of refinementPoints) {
+    const base = mapCalibrationHomography(hImageToWorld, point.image);
+    if (!base) continue;
+    const delta = {
+      x: point.world.x - base.x,
+      z: point.world.z - base.y,
+    };
+    const distance = Math.hypot(image.x - point.image.x, image.y - point.image.y);
+    if (distance <= 1e-9) return delta;
+    const weight = Math.exp(-((distance / LOCAL_REFINEMENT_SIGMA_UV) ** 2));
+    if (weight <= 1e-12) continue;
+    totalWeight += weight;
+    totalX += weight * delta.x;
+    totalZ += weight * delta.z;
+  }
+  if (totalWeight <= 1e-12) return { x: 0, z: 0 };
+  const edgeDistance = Math.min(image.x, image.y, 1 - image.x, 1 - image.y);
+  const edge = smoothstep(LOCAL_REFINEMENT_EDGE_LOW, LOCAL_REFINEMENT_EDGE_HIGH, edgeDistance);
+  return { x: edge * (totalX / totalWeight), z: edge * (totalZ / totalWeight) };
+}
+
+function mapCalibrationImageToWorld(
+  view: CameraCalibratedView,
+  hImageToWorld: number[],
+  image: { x: number; y: number },
+): { x: number; z: number } | null {
+  const base = mapCalibrationHomography(hImageToWorld, image);
+  if (!base) return null;
+  const delta = localRefinementDelta(view, hImageToWorld, image);
+  return { x: base.x + delta.x, z: base.y + delta.z };
+}
+
+function buildCalibrationMesh(view: CameraCalibratedView, divisions = CALIBRATION_PREVIEW_GRID_DIVISIONS): CalibrationMeshData | null {
+  const hImageToWorld = estimateCalibrationImageToWorld(view);
+  if (!hImageToWorld) return null;
+  const region = view.projection_model.image_region;
+  const left = region.top_left.x;
+  const top = region.top_left.y;
+  const right = region.bottom_right.x;
+  const bottom = region.bottom_right.y;
+  if (right <= left || bottom <= top) return null;
+
+  const vertices: CalibrationMeshVertex[] = [];
+  const indices: number[] = [];
+  const vertexByGrid = new Map<string, number>();
+  const getVertex = (gx: number, gy: number): number | null => {
+    const key = `${gx}:${gy}`;
+    const existing = vertexByGrid.get(key);
+    if (existing != null) return existing;
+    const image = {
+      x: left + ((right - left) * gx) / divisions,
+      y: top + ((bottom - top) * gy) / divisions,
+    };
+    const world = mapCalibrationImageToWorld(view, hImageToWorld, image);
+    if (!world) return null;
+    const index = vertices.length;
+    vertices.push({ image, world });
+    vertexByGrid.set(key, index);
+    return index;
+  };
+
+  for (let gy = 0; gy < divisions; gy += 1) {
+    for (let gx = 0; gx < divisions; gx += 1) {
+      const a = getVertex(gx, gy);
+      const b = getVertex(gx + 1, gy);
+      const c = getVertex(gx + 1, gy + 1);
+      const d = getVertex(gx, gy + 1);
+      if (a == null || b == null || c == null || d == null) continue;
+      indices.push(a, b, c, a, c, d);
+    }
+  }
+  return indices.length >= 3 ? { vertices, indices } : null;
+}
+
+function barycentricForWorldPoint(
+  point: { x: number; z: number },
+  a: { x: number; z: number },
+  b: { x: number; z: number },
+  c: { x: number; z: number },
+): { a: number; b: number; c: number } | null {
+  const denominator = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+  if (Math.abs(denominator) < 1e-10) return null;
+  const alpha = ((b.z - c.z) * (point.x - c.x) + (c.x - b.x) * (point.z - c.z)) / denominator;
+  const beta = ((c.z - a.z) * (point.x - c.x) + (a.x - c.x) * (point.z - c.z)) / denominator;
+  const gamma = 1 - alpha - beta;
+  const tolerance = 1e-4;
+  if (alpha < -tolerance || beta < -tolerance || gamma < -tolerance) return null;
+  if (alpha > 1 + tolerance || beta > 1 + tolerance || gamma > 1 + tolerance) return null;
+  return { a: alpha, b: beta, c: gamma };
+}
+
+function resolveImageFromCalibrationMesh(mesh: CalibrationMeshData, world: { x: number; z: number }): { x: number; y: number } | null {
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const va = mesh.vertices[mesh.indices[index]];
+    const vb = mesh.vertices[mesh.indices[index + 1]];
+    const vc = mesh.vertices[mesh.indices[index + 2]];
+    if (!va || !vb || !vc) continue;
+    const barycentric = barycentricForWorldPoint(world, va.world, vb.world, vc.world);
+    if (!barycentric) continue;
+    return {
+      x: barycentric.a * va.image.x + barycentric.b * vb.image.x + barycentric.c * vc.image.x,
+      y: barycentric.a * va.image.y + barycentric.b * vb.image.y + barycentric.c * vc.image.y,
+    };
+  }
+  return null;
+}
+
+function drawCalibrationImageMesh(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  view: CameraCalibratedView,
+  viewport: Viewport2DContext,
+): boolean {
+  const mesh = buildCalibrationMesh(view);
+  if (!mesh) return false;
+  const width = Math.max(1, image.naturalWidth || image.width || 1);
+  const height = Math.max(1, image.naturalHeight || image.height || 1);
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const va = mesh.vertices[mesh.indices[index]];
+    const vb = mesh.vertices[mesh.indices[index + 1]];
+    const vc = mesh.vertices[mesh.indices[index + 2]];
+    if (!va || !vb || !vc) continue;
+    drawImageTriangle(
+      ctx,
+      image,
+      [
+        { x: va.image.x * width, y: va.image.y * height },
+        { x: vb.image.x * width, y: vb.image.y * height },
+        { x: vc.image.x * width, y: vc.image.y * height },
+      ],
+      [viewport.worldToScreen(va.world), viewport.worldToScreen(vb.world), viewport.worldToScreen(vc.world)],
+    );
+  }
+  return true;
+}
+
+function nearestRefinementPointByScreen(
+  screen: { x: number; y: number },
+  view: CameraCalibratedView,
+  viewport: Viewport2DContext,
+  thresholdPx: number,
+): CameraProjectionRefinementPoint | null {
+  let best: { point: CameraProjectionRefinementPoint; distanceSquared: number } | null = null;
+  for (const point of refinementPointsForView(view)) {
+    const pointScreen = viewport.worldToScreen(point.world);
+    const distanceSquared = screenDistanceSquared(screen, pointScreen);
+    if (distanceSquared > thresholdPx * thresholdPx) continue;
+    if (!best || distanceSquared < best.distanceSquared) best = { point, distanceSquared };
+  }
+  return best?.point ?? null;
 }
 
 function CameraCalibrationModal({
@@ -994,7 +1335,9 @@ function CameraCalibrationModal({
             ...view.projection_model,
             image_region: defaultImageRegion(),
             world_quad: cloneWorldQuad(view.projection_model.world_quad),
-            future_mesh: null,
+            refinement: view.projection_model.refinement?.points.length
+              ? { model: "local_rbf_v1", points: cloneRefinementPoints(view.projection_model.refinement.points) }
+              : null,
           },
           projection_quality: { ...(view.projection_quality ?? {}) },
         }))
@@ -1131,6 +1474,35 @@ function CameraCalibrationModal({
     }));
   }
 
+  function updateSelectedProjection(
+    nextQuad: CameraProjectionWorldQuad,
+    nextRefinementPoints: CameraProjectionRefinementPoint[],
+    status: "ready" | "estimated" = "ready",
+  ) {
+    updateSelectedView((view) =>
+      withRefinementPoints(
+        {
+          ...view,
+          projection_model: {
+            ...view.projection_model,
+            world_quad: cloneWorldQuad(nextQuad),
+          },
+          projection_quality: {
+            ...(view.projection_quality ?? {}),
+            status,
+            estimated: status === "estimated",
+          },
+        },
+        nextRefinementPoints,
+        status,
+      ),
+    );
+  }
+
+  function updateSelectedRefinementPoints(updater: (points: CameraProjectionRefinementPoint[]) => CameraProjectionRefinementPoint[]) {
+    updateSelectedView((view) => withRefinementPoints(view, updater(cloneRefinementPoints(refinementPointsForView(view)))));
+  }
+
   async function waitForPtzToSettle(sourceId: string): Promise<PanTiltZoomState | null> {
     await sleep(750);
     let latestStatus: PanTiltZoomState | null = null;
@@ -1263,9 +1635,10 @@ function CameraCalibrationModal({
   const toolSession = useMemo<EditorToolSession>(() => {
     function resolveHoverState(
       event: EditorToolPointerEvent,
-      quad: CameraProjectionWorldQuad,
+      view: CameraCalibratedView,
       viewport: Viewport2DContext | null,
     ): CalibrationHoverState {
+      const quad = view.projection_model.world_quad;
       if (viewport) {
         const corner = nearestWorldQuadCornerByScreen(event.screen, quad, viewport, 13);
         if (corner) return { kind: "corner", corner };
@@ -1273,12 +1646,23 @@ function CameraCalibrationModal({
         if (screenDistanceSquared(event.screen, rotateInfo.handleScreen) <= rotateInfo.hitRadiusPx * rotateInfo.hitRadiusPx) {
           return { kind: "rotate" };
         }
+        const refinementPoint = nearestRefinementPointByScreen(event.screen, view, viewport, 12);
+        if (refinementPoint) return { kind: "refinement", pointId: refinementPoint.id };
+        const centerScreen = viewport.worldToScreen(quadCenter(quad));
+        if (screenDistanceSquared(event.screen, centerScreen) <= 15 * 15) {
+          return { kind: "move" };
+        }
       } else {
         const thresholdWorld = Math.max(0.08, 18 / Math.max(1, viewportScaleRef.current));
         const corner = nearestWorldQuadCorner(event.world, quad, thresholdWorld);
         if (corner) return { kind: "corner", corner };
+        const center = quadCenter(quad);
+        if (Math.hypot(event.world.x - center.x, event.world.z - center.z) <= thresholdWorld) return { kind: "move" };
       }
-      return pointInWorldQuad(event.world, quad) ? { kind: "move" } : null;
+      if (refinementPointsForView(view).length >= MAX_CALIBRATION_REFINEMENT_POINTS) return null;
+      const mesh = buildCalibrationMesh(view);
+      const image = mesh ? resolveImageFromCalibrationMesh(mesh, event.world) : null;
+      return image ? { kind: "new_refinement", image, world: { x: event.world.x, z: event.world.z } } : null;
     }
 
     return {
@@ -1287,7 +1671,7 @@ function CameraCalibrationModal({
         const viewId = selectedViewIdRef.current;
         const currentView = viewsRef.current.find((view) => view.id === viewId) ?? viewsRef.current[0] ?? null;
         if (!currentView) return false;
-        return Boolean(resolveHoverState(event, currentView.projection_model.world_quad, viewportRef.current));
+        return Boolean(resolveHoverState(event, currentView, viewportRef.current));
       },
       onPointerEvent: (event: EditorToolPointerEvent) => {
         if (movingToViewId) return;
@@ -1297,7 +1681,7 @@ function CameraCalibrationModal({
         const quad = currentView.projection_model.world_quad;
         if (event.kind === "down") {
           const viewport = viewportRef.current;
-          const hover = resolveHoverState(event, quad, viewport);
+          const hover = resolveHoverState(event, currentView, viewport);
           hoverStateRef.current = hover;
           if (hover?.kind === "corner") {
             dragStateRef.current = { kind: "corner", corner: hover.corner, startQuad: cloneWorldQuad(quad) };
@@ -1308,10 +1692,41 @@ function CameraCalibrationModal({
               centerWorld: rotateInfo.centerWorld,
               startAngle: Math.atan2(event.world.z - rotateInfo.centerWorld.z, event.world.x - rotateInfo.centerWorld.x),
               startQuad: cloneWorldQuad(quad),
+              startRefinementPoints: cloneRefinementPoints(refinementPointsForView(currentView)),
               snappedDelta: 0,
             };
           } else if (hover?.kind === "move") {
-            dragStateRef.current = { kind: "move", startWorld: { x: event.world.x, z: event.world.z }, startQuad: cloneWorldQuad(quad) };
+            dragStateRef.current = {
+              kind: "move",
+              startWorld: { x: event.world.x, z: event.world.z },
+              startQuad: cloneWorldQuad(quad),
+              startRefinementPoints: cloneRefinementPoints(refinementPointsForView(currentView)),
+            };
+          } else if (hover?.kind === "refinement") {
+            dragStateRef.current = {
+              kind: "refinement",
+              pointId: hover.pointId,
+              pointerStartWorld: { x: event.world.x, z: event.world.z },
+              created: false,
+              moved: false,
+            };
+          } else if (hover?.kind === "new_refinement") {
+            const pointId = createUniqueId();
+            updateSelectedRefinementPoints((points) => [
+              ...points,
+              {
+                id: pointId,
+                image: { x: hover.image.x, y: hover.image.y },
+                world: { x: event.world.x, z: event.world.z },
+              },
+            ]);
+            dragStateRef.current = {
+              kind: "refinement",
+              pointId,
+              pointerStartWorld: { x: event.world.x, z: event.world.z },
+              created: true,
+              moved: false,
+            };
           } else {
             dragStateRef.current = null;
           }
@@ -1319,13 +1734,17 @@ function CameraCalibrationModal({
           return;
         }
         if (event.kind === "up" || event.kind === "cancel") {
+          const drag = dragStateRef.current;
+          if (event.kind === "up" && drag?.kind === "refinement" && !drag.created && !drag.moved) {
+            updateSelectedRefinementPoints((points) => points.filter((point) => point.id !== drag.pointId));
+          }
           dragStateRef.current = null;
           setDragging(false);
           return;
         }
         if (event.kind !== "move") return;
         if (!dragStateRef.current) {
-          hoverStateRef.current = resolveHoverState(event, quad, viewportRef.current);
+          hoverStateRef.current = resolveHoverState(event, currentView, viewportRef.current);
           return;
         }
         const drag = dragStateRef.current;
@@ -1339,15 +1758,36 @@ function CameraCalibrationModal({
           const currentAngle = Math.atan2(event.world.z - drag.centerWorld.z, event.world.x - drag.centerWorld.x);
           const snappedDelta = calibrationRotationDelta(normalizeAngleRad(currentAngle - drag.startAngle), event);
           dragStateRef.current = { ...drag, snappedDelta };
-          updateSelectedQuad(rotateWorldQuad(drag.startQuad, snappedDelta));
+          updateSelectedProjection(
+            rotateWorldQuad(drag.startQuad, snappedDelta),
+            rotateRefinementPoints(drag.startRefinementPoints, drag.centerWorld, snappedDelta),
+          );
           return;
         }
-        updateSelectedQuad(
-          translateWorldQuad(drag.startQuad, {
-            x: event.world.x - drag.startWorld.x,
-            z: event.world.z - drag.startWorld.z,
-          }),
-        );
+        if (drag.kind === "refinement") {
+          const movedThresholdWorld = Math.max(0.01, 4 / Math.max(1, viewportScaleRef.current));
+          const moved =
+            drag.moved ||
+            Math.hypot(event.world.x - drag.pointerStartWorld.x, event.world.z - drag.pointerStartWorld.z) > movedThresholdWorld;
+          dragStateRef.current = { ...drag, moved };
+          updateSelectedRefinementPoints((points) =>
+            points.map((point) =>
+              point.id === drag.pointId
+                ? {
+                    ...point,
+                    image: { ...point.image },
+                    world: { x: event.world.x, z: event.world.z },
+                  }
+                : point,
+            ),
+          );
+          return;
+        }
+        const delta = {
+          x: event.world.x - drag.startWorld.x,
+          z: event.world.z - drag.startWorld.z,
+        };
+        updateSelectedProjection(translateWorldQuad(drag.startQuad, delta), translateRefinementPoints(drag.startRefinementPoints, delta));
       },
       renderOverlay2D: ({ ctx, viewport }) => {
         viewportRef.current = viewport;
@@ -1364,9 +1804,12 @@ function CameraCalibrationModal({
         ctx.save();
         ctx.globalAlpha = dragging ? 0.46 : 0.72;
         if (snapshotImage) {
-          const source = sourceRegionPixels(currentView, snapshotImage);
-          drawImageTriangle(ctx, snapshotImage, [source.topLeft, source.topRight, source.bottomRight], [points[0], points[1], points[2]]);
-          drawImageTriangle(ctx, snapshotImage, [source.topLeft, source.bottomRight, source.bottomLeft], [points[0], points[2], points[3]]);
+          const renderedMesh = drawCalibrationImageMesh(ctx, snapshotImage, currentView, viewport);
+          if (!renderedMesh) {
+            const source = sourceRegionPixels(currentView, snapshotImage);
+            drawImageTriangle(ctx, snapshotImage, [source.topLeft, source.topRight, source.bottomRight], [points[0], points[1], points[2]]);
+            drawImageTriangle(ctx, snapshotImage, [source.topLeft, source.bottomRight, source.bottomLeft], [points[0], points[2], points[3]]);
+          }
         } else {
           ctx.beginPath();
           ctx.moveTo(points[0].x, points[0].y);
@@ -1383,6 +1826,27 @@ function CameraCalibrationModal({
         ctx.lineWidth = 2;
         ctx.strokeStyle = "rgba(56,189,248,0.95)";
         ctx.stroke();
+        const centerHot = activeDrag?.kind === "move" || hover?.kind === "move";
+        ctx.save();
+        ctx.shadowColor = centerHot ? "rgba(56,189,248,0.42)" : "rgba(0,0,0,0)";
+        ctx.shadowBlur = centerHot ? 12 : 0;
+        ctx.beginPath();
+        ctx.arc(rotateInfo.centerScreen.x, rotateInfo.centerScreen.y, centerHot ? 10 : 9, 0, Math.PI * 2);
+        ctx.fillStyle = centerHot ? "rgba(14,165,233,0.96)" : "rgba(15,23,42,0.92)";
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = centerHot ? "rgba(226,232,240,0.96)" : "rgba(148,163,184,0.72)";
+        ctx.stroke();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(241,245,249,0.92)";
+        ctx.beginPath();
+        ctx.moveTo(rotateInfo.centerScreen.x - 5, rotateInfo.centerScreen.y);
+        ctx.lineTo(rotateInfo.centerScreen.x + 5, rotateInfo.centerScreen.y);
+        ctx.moveTo(rotateInfo.centerScreen.x, rotateInfo.centerScreen.y - 5);
+        ctx.lineTo(rotateInfo.centerScreen.x, rotateInfo.centerScreen.y + 5);
+        ctx.stroke();
+        ctx.restore();
         const rotateHot = activeDrag?.kind === "rotate" || hover?.kind === "rotate";
         ctx.lineWidth = 2;
         ctx.strokeStyle = rotateHot ? "rgba(125,211,252,0.95)" : "rgba(226,232,240,0.72)";
@@ -1392,10 +1856,10 @@ function CameraCalibrationModal({
         ctx.stroke();
         ctx.beginPath();
         ctx.arc(rotateInfo.centerScreen.x, rotateInfo.centerScreen.y, 3.5, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(15,23,42,0.85)";
+        ctx.fillStyle = "rgba(241,245,249,0.82)";
         ctx.fill();
         ctx.lineWidth = 1.5;
-        ctx.strokeStyle = "rgba(226,232,240,0.78)";
+        ctx.strokeStyle = "rgba(15,23,42,0.72)";
         ctx.stroke();
         ctx.shadowColor = rotateHot ? "rgba(56,189,248,0.48)" : "rgba(0,0,0,0)";
         ctx.shadowBlur = rotateHot ? 12 : 0;
@@ -1427,6 +1891,46 @@ function CameraCalibrationModal({
           ctx.fillStyle = "rgba(241,245,249,0.96)";
           ctx.fillText(text, rotateInfo.handleScreen.x, y0 + boxHeight / 2);
         }
+        for (const refinementPoint of refinementPointsForView(currentView)) {
+          const point = viewport.worldToScreen(refinementPoint.world);
+          const hot =
+            (activeDrag?.kind === "refinement" && activeDrag.pointId === refinementPoint.id) ||
+            (hover?.kind === "refinement" && hover.pointId === refinementPoint.id);
+          ctx.save();
+          ctx.translate(point.x, point.y);
+          ctx.rotate(Math.PI / 4);
+          ctx.shadowColor = hot ? "rgba(251,191,36,0.42)" : "rgba(0,0,0,0)";
+          ctx.shadowBlur = hot ? 10 : 0;
+          ctx.beginPath();
+          ctx.rect(hot ? -7 : -6, hot ? -7 : -6, hot ? 14 : 12, hot ? 14 : 12);
+          ctx.fillStyle = hot ? "rgba(251,191,36,0.96)" : "rgba(250,204,21,0.84)";
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.lineWidth = hot ? 2.4 : 1.8;
+          ctx.strokeStyle = "rgba(15,23,42,0.86)";
+          ctx.stroke();
+          ctx.restore();
+        }
+        if (hover?.kind === "new_refinement" && !activeDrag) {
+          const point = viewport.worldToScreen(hover.world);
+          ctx.save();
+          ctx.setLineDash([4, 4]);
+          ctx.lineWidth = 1.8;
+          ctx.strokeStyle = "rgba(250,204,21,0.88)";
+          ctx.fillStyle = "rgba(250,204,21,0.14)";
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 9, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.moveTo(point.x - 5, point.y);
+          ctx.lineTo(point.x + 5, point.y);
+          ctx.moveTo(point.x, point.y - 5);
+          ctx.lineTo(point.x, point.y + 5);
+          ctx.stroke();
+          ctx.restore();
+        }
         points.forEach((point, index) => {
           const corner = CALIBRATION_CORNERS[index];
           const hot =
@@ -1446,6 +1950,7 @@ function CameraCalibrationModal({
         if (movingToViewId) return "default";
         if (dragStateRef.current) return "grabbing";
         if (hoverStateRef.current?.kind === "move") return "move";
+        if (hoverStateRef.current?.kind === "new_refinement") return "crosshair";
         if (hoverStateRef.current) return "grab";
         return "default";
       },
@@ -1634,7 +2139,9 @@ function CameraCalibrationModal({
                   projection_model: {
                     ...view.projection_model,
                     image_region: defaultImageRegion(),
-                    future_mesh: null,
+                    refinement: view.projection_model.refinement?.points.length
+                      ? { model: "local_rbf_v1", points: cloneRefinementPoints(view.projection_model.refinement.points) }
+                      : null,
                   },
                 })),
               );

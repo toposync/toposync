@@ -22,6 +22,9 @@ const MIN_TRAPEZOID_EDGE_LENGTH = 1e-4;
 const MAX_TRAPEZOID_WIDTH_RATIO = 2.5;
 const MAX_TRAPEZOID_CONTROL_SPAN_RATIO = 2.8;
 const TRAPEZOID_IMAGE_PADDING = 0.04;
+const LOCAL_REFINEMENT_SIGMA_UV = 0.22;
+const LOCAL_REFINEMENT_EDGE_LOW = 0.015;
+const LOCAL_REFINEMENT_EDGE_HIGH = 0.12;
 
 function finiteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -40,6 +43,33 @@ function validPairs(set: CameraControlPointSet): Pair[] {
     });
   }
   return out;
+}
+
+function validBasePairs(set: CameraControlPointSet): Pair[] {
+  return validPairs(set).slice(0, 4);
+}
+
+function validRefinementPairs(set: CameraControlPointSet): Pair[] {
+  const out: Pair[] = [];
+  for (const point of set.refinement_points ?? []) {
+    const image = point.image;
+    const world = point.world;
+    if (!image || !world) continue;
+    if (!finiteNumber(image.x) || !finiteNumber(image.y) || !finiteNumber(world.x) || !finiteNumber(world.z)) continue;
+    if (image.x < 0 || image.x > 1 || image.y < 0 || image.y > 1) continue;
+    out.push({ image: { x: image.x, y: image.y }, world: { x: world.x, z: world.z } });
+  }
+  return out;
+}
+
+export function controlPointSetProjectionSignature(set: CameraControlPointSet): string {
+  const base = validBasePairs(set)
+    .map((pair) => `${pair.image.x.toFixed(6)},${pair.image.y.toFixed(6)}>${pair.world.x.toFixed(6)},${pair.world.z.toFixed(6)}`)
+    .join(";");
+  const refinement = validRefinementPairs(set)
+    .map((pair) => `${pair.image.x.toFixed(6)},${pair.image.y.toFixed(6)}>${pair.world.x.toFixed(6)},${pair.world.z.toFixed(6)}`)
+    .join(";");
+  return `${base}|${refinement}`;
 }
 
 function convexHull(points: Vector2[]): Vector2[] {
@@ -197,6 +227,46 @@ function dot(a: Vector2, b: Vector2): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  if (edge0 === edge1) return value >= edge1 ? 1 : 0;
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function localRefinementDelta(set: CameraControlPointSet, hImageToWorld: number[], image: Vector2): Vector2 {
+  const refinementPairs = validRefinementPairs(set);
+  if (refinementPairs.length === 0) return { x: 0, y: 0 };
+  let totalWeight = 0;
+  let totalX = 0;
+  let totalY = 0;
+  for (const pair of refinementPairs) {
+    const base = mapHomography(hImageToWorld, pair.image);
+    if (!base) continue;
+    const delta = {
+      x: pair.world.x - base.x,
+      y: pair.world.z - base.y,
+    };
+    const distance = pointDistance(image, pair.image);
+    if (distance <= 1e-9) return delta;
+    const weight = Math.exp(-((distance / LOCAL_REFINEMENT_SIGMA_UV) ** 2));
+    if (weight <= 1e-12) continue;
+    totalWeight += weight;
+    totalX += weight * delta.x;
+    totalY += weight * delta.y;
+  }
+  if (totalWeight <= 1e-12) return { x: 0, y: 0 };
+  const edgeDistance = Math.min(image.x, image.y, 1 - image.x, 1 - image.y);
+  const edge = smoothstep(LOCAL_REFINEMENT_EDGE_LOW, LOCAL_REFINEMENT_EDGE_HIGH, edgeDistance);
+  return { x: edge * (totalX / totalWeight), y: edge * (totalY / totalWeight) };
+}
+
+function mapImageToWorldWithRefinement(set: CameraControlPointSet, hImageToWorld: number[], image: Vector2): WorldPoint | null {
+  const base = mapHomography(hImageToWorld, image);
+  if (!base) return null;
+  const delta = localRefinementDelta(set, hImageToWorld, image);
+  return { x: base.x + delta.x, z: base.y + delta.y };
 }
 
 function controlWorldSpan(pairs: Pair[]): number {
@@ -397,7 +467,7 @@ function buildQuadMesh(corners: Vector2[]): ProjectionMeshData | null {
 export const homographyGridProjectionStrategy: ProjectionStrategy = {
   id: "homography_grid",
   buildMesh(set, options) {
-    const pairs = validPairs(set);
+    const pairs = validBasePairs(set);
     if (pairs.length < 4) return null;
     const estimate = estimateRobustHomography(pairs);
     if (!estimate) return null;
@@ -417,8 +487,7 @@ export const homographyGridProjectionStrategy: ProjectionStrategy = {
 
       const u = gx / gridDivisions;
       const v = gy / gridDivisions;
-      const mapped = mapHomography(estimate.hImageToWorld, { x: u, y: v });
-      const world = mapped ? { x: mapped.x, z: mapped.y } : null;
+      const world = mapImageToWorldWithRefinement(set, estimate.hImageToWorld, { x: u, y: v });
       if (!world) return null;
       const index = vertices.length / 3;
       vertices.push(world.x, PROJECTION_Y_OFFSET, world.z);
@@ -452,7 +521,7 @@ export const homographyGridProjectionStrategy: ProjectionStrategy = {
 export const constrainedTrapezoidProjectionStrategy: ProjectionStrategy = {
   id: "constrained_trapezoid",
   buildMesh(set) {
-    const pairs = validPairs(set);
+    const pairs = validBasePairs(set);
     if (pairs.length < 4) return null;
     const estimate = estimateRobustHomography(pairs);
     if (!estimate) return null;

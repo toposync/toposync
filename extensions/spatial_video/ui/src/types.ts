@@ -18,6 +18,12 @@ export type CameraControlPoint = {
   world?: WorldPoint | null;
 };
 
+export type CameraProjectionRefinementPoint = {
+  id: string;
+  image: Vector2;
+  world: WorldPoint;
+};
+
 export type CameraControlPointSet = {
   id: string;
   label: string;
@@ -27,6 +33,7 @@ export type CameraControlPointSet = {
     compatible_source_ids?: string[];
   };
   control_points?: CameraControlPoint[];
+  refinement_points?: CameraProjectionRefinementPoint[];
 };
 
 export type StreamingTransport = "mse" | "hls" | "jsmpeg" | "webrtc";

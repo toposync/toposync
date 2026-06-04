@@ -10,6 +10,7 @@ import type {
   CameraOnvifConfig,
   CameraPoseReference,
   CameraProjectionModel,
+  CameraProjectionRefinementPoint,
   CameraProjectionWorldQuad,
   CameraMappingQuality,
   CameraSourceConfig,
@@ -183,13 +184,32 @@ function readWorldQuad(value: unknown): CameraProjectionWorldQuad | null {
   };
 }
 
+function readProjectionRefinement(value: unknown): CameraProjectionModel["refinement"] {
+  const record = readRecord(value);
+  if (readString(record.model, "local_rbf_v1").trim() !== "local_rbf_v1") return null;
+  const rawPoints = Array.isArray(record.points) ? record.points : [];
+  const points: CameraProjectionRefinementPoint[] = [];
+  for (let index = 0; index < rawPoints.length && points.length < 24; index += 1) {
+    const item = readRecord(rawPoints[index]);
+    const image = readNormalizedPoint(item.image);
+    const world = readWorldPoint(item.world);
+    if (!image || !world) continue;
+    points.push({
+      id: readString(item.id).trim() || createUniqueId(),
+      image,
+      world,
+    });
+  }
+  return points.length > 0 ? { model: "local_rbf_v1", points } : null;
+}
+
 export function readProjectionModel(value: unknown, fallbackCenter?: { x: number; z: number }): CameraProjectionModel {
   const record = readRecord(value);
   return {
     type: "image_quad_on_world",
     image_region: readImageRegion(record.image_region),
     world_quad: readWorldQuad(record.world_quad) ?? createDefaultWorldQuad(fallbackCenter ?? { x: 0, z: 0 }, { estimated: true }),
-    future_mesh: null,
+    refinement: readProjectionRefinement(record.refinement),
   };
 }
 
@@ -214,7 +234,7 @@ export function createDefaultCalibratedView(
         type: "image_quad_on_world",
         image_region: defaultImageRegion(),
         world_quad: createDefaultWorldQuad(center, { estimated }),
-        future_mesh: null,
+        refinement: null,
       },
     projection_quality: {
       status: estimated ? "estimated" : "incomplete",
@@ -266,6 +286,7 @@ export function controlPointSetFromCalibratedView(view: CameraCalibratedView): C
       { id: "bottom_right", label: "C", image: region.bottom_right, world: quad.bottom_right },
       { id: "bottom_left", label: "D", image: { x: region.top_left.x, y: region.bottom_right.y }, world: quad.bottom_left },
     ],
+    refinement_points: view.projection_model.refinement?.points.map((point) => ({ ...point, image: { ...point.image }, world: { ...point.world } })) ?? [],
   };
 }
 
@@ -310,7 +331,7 @@ export function calibratedViewsFromControlPointSets(controlPointSets: CameraCont
             bottom_right: firstFour[2].world!,
             bottom_left: firstFour[3].world!,
           },
-          future_mesh: null,
+          refinement: set.refinement_points?.length ? { model: "local_rbf_v1", points: set.refinement_points } : null,
         },
         projection_quality: { status: "ready", estimated: false, note: null },
       };

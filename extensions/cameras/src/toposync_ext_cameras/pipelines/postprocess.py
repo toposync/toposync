@@ -764,7 +764,6 @@ class CameraMappingProjectionModel(BaseModel):
     image_region: CameraMappingImageRegion = Field(default_factory=CameraMappingImageRegion)
     world_quad: CameraMappingWorldQuad
     refinement: CameraMappingProjectionRefinement | None = None
-    future_mesh: Any | None = None
 
 
 class CameraMappingStreamScope(BaseModel):

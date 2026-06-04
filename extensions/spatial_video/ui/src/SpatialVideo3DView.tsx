@@ -15,7 +15,7 @@ import type {
 import { fetchCameraPtzPresets, fetchCameraPtzStatus, fetchLiveViews } from "./api";
 import { resolveProjectionCandidates } from "./candidates";
 import { markerEntries, markerVideoStatus, type MarkerVideoStatus } from "./markers";
-import type { ProjectionMeshDensity, ProjectionStrategyId } from "./projection";
+import { controlPointSetProjectionSignature, type ProjectionMeshDensity, type ProjectionStrategyId } from "./projection";
 import { createProjectionGeometry } from "./projectionGeometry";
 import { resolveActiveProjectionPose } from "./ptzProjection";
 import { readSpatialVideoSettings, SPATIAL_VIDEO_RENDER_VIEW_ID } from "./spatialSettings";
@@ -36,6 +36,7 @@ type ProjectionEntry = {
   mesh: THREE.Mesh;
   material: THREE.MeshBasicMaterial;
   setId: string;
+  setSignature: string;
   strategyId: ProjectionStrategyId;
   meshDensity: ProjectionMeshDensity;
 };
@@ -786,14 +787,22 @@ export function SpatialVideo3DView({
     for (const candidate of candidates) {
       const pose = activePoses.get(candidate.id);
       const set = pose?.set ?? candidate.initialControlPointSet;
+      const setSignature = controlPointSetProjectionSignature(set);
       const visible = pose?.status !== "unmatched";
       const existing = projectionEntriesRef.current.get(candidate.id);
-      if (existing && (existing.setId !== set.id || existing.strategyId !== projectionStrategyId || existing.meshDensity !== meshDensity)) {
+      if (
+        existing &&
+        (existing.setId !== set.id ||
+          existing.setSignature !== setSignature ||
+          existing.strategyId !== projectionStrategyId ||
+          existing.meshDensity !== meshDensity)
+      ) {
         const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity);
         if (geometry) {
           existing.mesh.geometry.dispose();
           existing.mesh.geometry = geometry;
           existing.setId = set.id;
+          existing.setSignature = setSignature;
           existing.strategyId = projectionStrategyId;
           existing.meshDensity = meshDensity;
         }
@@ -838,6 +847,7 @@ export function SpatialVideo3DView({
         mesh,
         material,
         setId: set.id,
+        setSignature,
         strategyId: projectionStrategyId,
         meshDensity,
       });

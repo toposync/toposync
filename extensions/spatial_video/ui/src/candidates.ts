@@ -25,6 +25,25 @@ function hasNumberPair(value: unknown, keys: readonly string[]): boolean {
   return keys.every((key) => typeof rec[key] === "number" && Number.isFinite(rec[key]));
 }
 
+function readRefinementPoints(value: unknown): CameraControlPointSet["refinement_points"] {
+  const rec = readRecord(value);
+  if (readString(rec.model || "local_rbf_v1") !== "local_rbf_v1") return [];
+  const rawPoints = Array.isArray(rec.points) ? rec.points : [];
+  const out: NonNullable<CameraControlPointSet["refinement_points"]> = [];
+  for (const item of rawPoints.slice(0, 24)) {
+    const point = readRecord(item);
+    const image = readRecord(point.image);
+    const world = readRecord(point.world);
+    if (!hasNumberPair(image, ["x", "y"]) || !hasNumberPair(world, ["x", "z"])) continue;
+    out.push({
+      id: readString(point.id) || `refinement-${out.length + 1}`,
+      image: { x: Number(image.x), y: Number(image.y) },
+      world: { x: Number(world.x), z: Number(world.z) },
+    });
+  }
+  return out;
+}
+
 export function completeControlPointCount(set: CameraControlPointSet): number {
   return (set.control_points ?? []).filter((point) => hasNumberPair(point.image, ["x", "y"]) && hasNumberPair(point.world, ["x", "z"])).length;
 }
@@ -81,6 +100,7 @@ export function mappedControlPointSets(element: CompositionElement): CameraContr
             world: corners.bottom_left as { x: number; z: number },
           },
         ],
+        refinement_points: readRefinementPoints(projection.refinement),
       };
     })
     .filter((item): item is CameraControlPointSet => Boolean(item));

@@ -9,11 +9,13 @@ import { prettyOperatorDescription, prettyOperatorLabel, resolvePipelineOperator
 type Props = {
   catalogItems: PipelineCatalogItem[];
   onAddItem: (item: PipelineCatalogItem) => void;
+  readOnly?: boolean;
 };
 
 export function InteractiveStepsToolbar({
   catalogItems,
   onAddItem,
+  readOnly = false,
 }: Props): React.ReactElement {
   const { t } = i18n.useI18n();
   const [showAdvanced, setShowAdvanced] = React.useState(false);
@@ -54,7 +56,10 @@ export function InteractiveStepsToolbar({
               key={item.id}
               className="pillButton pipelinesOperatorButton"
               type="button"
-              onClick={() => onAddItem(item)}
+              disabled={readOnly}
+              onClick={() => {
+                if (!readOnly) onAddItem(item);
+              }}
               title={`${t("core.ui.pipelines.editor.operator_group_tooltip", { group: groupLabel })}\n${description}`}
               style={{ "--operator-group-color": group.color } as React.CSSProperties}
             >

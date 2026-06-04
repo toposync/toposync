@@ -29,6 +29,7 @@ type Props = {
   stepOutputsByNodeId: Record<string, number> | null;
   stepAlerts?: PipelineAlert[];
   operatorPanels?: Record<string, PipelineOperatorPanel>;
+  readOnly?: boolean;
 
   draggingStepUid: string | null;
   dragOverStep: { uid: string; position: DragInsertPosition } | null;
@@ -144,6 +145,7 @@ export function InteractiveStepCard({
   stepOutputsByNodeId,
   stepAlerts = [],
   operatorPanels = {},
+  readOnly = false,
   draggingStepUid,
   dragOverStep,
   onBeginDrag,
@@ -200,6 +202,7 @@ export function InteractiveStepCard({
   if (issueSeverity === "error") rowClass.push("hasError");
   if (issueSeverity === "warning") rowClass.push("hasWarning");
   if (issueSeverity === "info") rowClass.push("hasInfo");
+  if (readOnly) rowClass.push("isReadOnly");
 
   const operatorName = operator ? prettyOperatorName(operator.id) : prettyOperatorName(step.operatorId);
   const operatorDescription = operator ? prettyOperatorDescription(operator) : prettyOperatorDescription(step.operatorId);
@@ -217,8 +220,12 @@ export function InteractiveStepCard({
     <div
       className={rowClass.join(" ")}
       data-pipeline-step-uid={step.uid}
-      onDragOver={(event) => onDragOver(event, step.uid)}
-      onDrop={(event) => onDrop(event, step.uid)}
+      onDragOver={(event) => {
+        if (!readOnly) onDragOver(event, step.uid);
+      }}
+      onDrop={(event) => {
+        if (!readOnly) onDrop(event, step.uid);
+      }}
     >
       <div className="pipelinesStepHeader">
         <button
@@ -266,8 +273,12 @@ export function InteractiveStepCard({
           <button
             className="iconButton"
             type="button"
-            draggable
-            onDragStart={(event) => onBeginDrag(event, step.uid)}
+            draggable={!readOnly}
+            disabled={readOnly}
+            onDragStart={(event) => {
+              if (readOnly) return;
+              onBeginDrag(event, step.uid);
+            }}
             onDragEnd={onEndDrag}
             title={t("core.ui.pipelines.editor.step.drag_handle", {}, "Reordenar etapa")}
           >
@@ -280,7 +291,7 @@ export function InteractiveStepCard({
             onClick={() => onMoveStep(step.uid, "up")}
             title={moveUpTitle}
             aria-label={moveUpTitle}
-            disabled={!canMoveUp}
+            disabled={readOnly || !canMoveUp}
           >
             <i className="fa-solid fa-arrow-up-long" aria-hidden="true" />
           </button>
@@ -291,7 +302,7 @@ export function InteractiveStepCard({
             onClick={() => onMoveStep(step.uid, "down")}
             title={moveDownTitle}
             aria-label={moveDownTitle}
-            disabled={!canMoveDown}
+            disabled={readOnly || !canMoveDown}
           >
             <i className="fa-solid fa-arrow-down-long" aria-hidden="true" />
           </button>
@@ -301,6 +312,7 @@ export function InteractiveStepCard({
             type="button"
             onClick={() => onRemoveStep(step.uid)}
             title={t("core.ui.pipelines.editor.step.remove")}
+            disabled={readOnly}
           >
             <i className="fa-solid fa-trash" aria-hidden="true" />
           </button>
@@ -327,6 +339,7 @@ export function InteractiveStepCard({
                 <input
                   className="pipelinesInput"
                   value={step.nodeId}
+                  readOnly={readOnly}
                   onChange={(event) => onUpdateStep(step.uid, { nodeId: event.target.value })}
                   placeholder={t("core.ui.pipelines.editor.step.step_id_placeholder")}
                 />
@@ -335,28 +348,34 @@ export function InteractiveStepCard({
             </div>
           ) : null}
 
-            <OperatorConfigPanel
-              step={step}
-              index={index}
-              steps={steps}
-              operatorsById={operatorsById}
-            config={config}
-            pipelineName={pipelineName}
-            processingServerId={processingServerId}
-            onOpenProcessingServers={onOpenProcessingServers}
-            interactiveCameraId={interactiveCameraId}
-            camerasIndex={camerasIndex}
-            cameraSelectOptions={cameraSelectOptions}
-            cameraSelectOptionById={cameraSelectOptionById}
-            activeCameraContexts={activeCameraContexts}
-            activeCameraContextsError={activeCameraContextsError}
-              cameraAreaOptions={cameraAreaOptions}
-              operatorPanels={operatorPanels}
-              showAdvanced={step.showAdvanced}
-              onUpdateConfig={(updater) => onUpdateStepConfig(step.uid, updater)}
-              onInsertStepAfter={onInsertStepAfter}
-              onOpenTelemetryField={onOpenTelemetryField}
-            />
+            <div className={readOnly ? "pipelinesReadOnlyPanel" : undefined} aria-disabled={readOnly || undefined}>
+              <OperatorConfigPanel
+                step={step}
+                index={index}
+                steps={steps}
+                operatorsById={operatorsById}
+                config={config}
+                pipelineName={pipelineName}
+                processingServerId={processingServerId}
+                onOpenProcessingServers={onOpenProcessingServers}
+                interactiveCameraId={interactiveCameraId}
+                camerasIndex={camerasIndex}
+                cameraSelectOptions={cameraSelectOptions}
+                cameraSelectOptionById={cameraSelectOptionById}
+                activeCameraContexts={activeCameraContexts}
+                activeCameraContextsError={activeCameraContextsError}
+                cameraAreaOptions={cameraAreaOptions}
+                operatorPanels={operatorPanels}
+                showAdvanced={step.showAdvanced}
+                onUpdateConfig={(updater) => {
+                  if (!readOnly) onUpdateStepConfig(step.uid, updater);
+                }}
+                onInsertStepAfter={(afterUid, operatorId, defaultsOverride) => {
+                  if (!readOnly) onInsertStepAfter(afterUid, operatorId, defaultsOverride);
+                }}
+                onOpenTelemetryField={readOnly ? undefined : onOpenTelemetryField}
+              />
+            </div>
 
           {shouldShowScalarGrid ? (
             <div className="pipelinesScalarGrid">
@@ -365,7 +384,12 @@ export function InteractiveStepCard({
                   {typeof value === "boolean" ? (
                     <>
                       <span>{prettyConfigKeyLabel(key)}</span>
-                      <input type="checkbox" checked={value} onChange={(event) => onUpdateStepScalar(step.uid, key, event.target.checked)} />
+                      <input
+                        type="checkbox"
+                        checked={value}
+                        disabled={readOnly}
+                        onChange={(event) => onUpdateStepScalar(step.uid, key, event.target.checked)}
+                      />
                     </>
                   ) : typeof value === "number" ? (
                     <>
@@ -400,13 +424,20 @@ export function InteractiveStepCard({
                         className="pipelinesInput"
                         value={Number.isFinite(value) ? value : 0}
                         step={guessScalarNumberStep(key, value)}
+                        disabled={readOnly}
                         onChange={(nextValue) => onUpdateStepScalar(step.uid, key, nextValue)}
                       />
                     </>
                   ) : (
                     <>
                       <span>{prettyConfigKeyLabel(key)}</span>
-                      <input className="pipelinesInput" type="text" value={String(value)} onChange={(event) => onUpdateStepScalar(step.uid, key, event.target.value)} />
+                      <input
+                        className="pipelinesInput"
+                        type="text"
+                        value={String(value)}
+                        readOnly={readOnly}
+                        onChange={(event) => onUpdateStepScalar(step.uid, key, event.target.value)}
+                      />
                     </>
                   )}
                 </label>
@@ -423,6 +454,7 @@ export function InteractiveStepCard({
                   value={step.configText}
                   rows={10}
                   placeholder="{ }"
+                  readOnly={readOnly}
                   onChange={(event) => onUpdateStep(step.uid, { configText: event.target.value })}
                 />
               </label>

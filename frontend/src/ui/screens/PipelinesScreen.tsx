@@ -53,6 +53,7 @@ type Props = {
 };
 
 const PIPELINES_BASE_PATH = "/settings/pipelines";
+const PIPELINE_NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 function pipelineNameFromPipelinesPath(pathname: string): string | null {
   const raw = String(pathname || "").trim();
@@ -102,6 +103,31 @@ function cameraSourceRefsFromPipelineGraph(graph: unknown): Array<{ cameraId: st
     }
   }
   return refs;
+}
+
+function isImplicitPipeline(pipeline: Pipeline): boolean {
+  const name = String(pipeline.name || "").trim();
+  if (name.startsWith("implicit__")) return true;
+
+  const graph = isRecord(pipeline.graph) ? pipeline.graph : null;
+  const meta = graph && isRecord(graph.meta) ? graph.meta : null;
+  const streaming = meta && isRecord(meta.streaming) ? meta.streaming : null;
+  const generatedBy = String(streaming?.generated_by || "").trim();
+  return generatedBy === "stream_publication" || generatedBy === "camera_live_view";
+}
+
+function comparePipelinesByName(left: Pipeline, right: Pipeline): number {
+  const leftName = String(left.name || "").trim();
+  const rightName = String(right.name || "").trim();
+  const semanticOrder = PIPELINE_NAME_COLLATOR.compare(leftName, rightName);
+  return semanticOrder || leftName.localeCompare(rightName);
+}
+
+function sortPipelinesForDisplay(items: Pipeline[]): Pipeline[] {
+  return [...items].sort((left, right) => {
+    const implicitOrder = Number(isImplicitPipeline(left)) - Number(isImplicitPipeline(right));
+    return implicitOrder || comparePipelinesByName(left, right);
+  });
 }
 
 export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPanels = {} }: Props): React.ReactElement {
@@ -160,16 +186,18 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     if (!selectedName) return null;
     return pipelines.find((pipeline) => pipeline.name === selectedName) ?? null;
   }, [pipelines, selectedName]);
+  const explicitPipelines = useMemo(() => pipelines.filter((pipeline) => !isImplicitPipeline(pipeline)).sort(comparePipelinesByName), [pipelines]);
+  const implicitPipelines = useMemo(() => pipelines.filter(isImplicitPipeline).sort(comparePipelinesByName), [pipelines]);
   const aggregatePipelineOptions = useMemo<SelectOption[]>(
     () =>
-      pipelines
+      explicitPipelines
         .map((pipeline) => {
           const name = String(pipeline.name || "").trim();
           if (!name) return null;
           return { value: name, label: name };
         })
         .filter(Boolean) as SelectOption[],
-    [pipelines],
+    [explicitPipelines],
   );
 
   const interactiveGraph = useMemo(
@@ -187,7 +215,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
         listPipelineOperators(),
         listCamerasIndex().catch(() => ({ cameras: [] })),
       ]);
-      setPipelines(pipelineList);
+      setPipelines(sortPipelinesForDisplay(pipelineList));
       setServers(serverList);
       setOperators(operatorList);
       setCamerasIndex(cameras);
@@ -314,6 +342,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   }, [draft?.name, draft?.processing_server_id]);
 
   const isPythonLocked = Boolean(draft && draft.editor_mode === "python");
+  const isDraftReadOnly = Boolean(draft && isImplicitPipeline(draft));
   const selectedServerIssues = useMemo(() => {
     if (!selectedServerStatus?.ok) return [];
     return filterProcessingRuntimeIssuesForPipeline(
@@ -572,7 +601,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setError(null);
     try {
       const created = await createPipeline(defaultPipeline(name));
-      setPipelines((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setPipelines((prev) => sortPipelinesForDisplay([...prev, created]));
       setSelectedName(created.name);
       if (compactLayout) setSidebarOpen(false);
       setCreateName("");
@@ -583,6 +612,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
   const handleSave = async () => {
     if (!draft) return;
+    if (isDraftReadOnly) {
+      setError(t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here."));
+      return;
+    }
     setError(null);
 
     let updated: Pipeline;
@@ -626,7 +659,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     try {
       const saved = await putPipeline(draft.name, updated);
       setPipelines((prev) =>
-        prev.map((pipeline) => (pipeline.name === saved.name ? saved : pipeline)).sort((a, b) => a.name.localeCompare(b.name)),
+        sortPipelinesForDisplay(prev.map((pipeline) => (pipeline.name === saved.name ? saved : pipeline))),
       );
       setDraft(saved);
       setGraphText(jsonPretty(saved.graph ?? emptyGraph()));
@@ -638,8 +671,9 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const handleDuplicate = useCallback(
     async (newName: string) => {
       if (!draft) return;
+      if (isImplicitPipeline(draft)) return;
       const created = await duplicatePipeline(draft.name, newName);
-      setPipelines((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setPipelines((prev) => sortPipelinesForDisplay([...prev, created]));
       setSelectedName(created.name);
       if (compactLayout) setSidebarOpen(false);
     },
@@ -648,6 +682,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
   const handleDelete = async () => {
     if (!draft) return;
+    if (isDraftReadOnly) {
+      setError(t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here."));
+      return;
+    }
     if (!confirm(t("core.ui.pipelines.confirm_delete", { name: draft.name }))) return;
     setError(null);
     try {
@@ -657,6 +695,35 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     } catch (err: any) {
       setError(String(err?.message ?? err));
     }
+  };
+
+  const renderPipelineListItem = (pipeline: Pipeline): React.ReactElement => {
+    const implicit = isImplicitPipeline(pipeline);
+    const metaParts = [
+      pipeline.enabled === false ? t("core.ui.pipelines.status.disabled") : t("core.ui.pipelines.status.enabled"),
+      pipeline.processing_server_id ?? "local",
+      implicit ? t("core.ui.pipelines.status.read_only", {}, "read-only") : "",
+    ].filter(Boolean);
+    return (
+      <button
+        key={pipeline.name}
+        type="button"
+        className={[
+          "pipelinesListItem",
+          selectedName === pipeline.name ? "isActive" : "",
+          implicit ? "isReadOnly" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        onClick={() => {
+          setSelectedName(pipeline.name);
+          if (compactLayout) setSidebarOpen(false);
+        }}
+      >
+        <div className="pipelinesListItemName">{pipeline.name}</div>
+        <div className="pipelinesListItemMeta">{metaParts.join(" · ")}</div>
+      </button>
+    );
   };
 
   return (
@@ -723,24 +790,11 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
           </div>
 
           <div className="pipelinesList">
-            {pipelines.map((pipeline) => (
-              <button
-                key={pipeline.name}
-                type="button"
-                className={["pipelinesListItem", selectedName === pipeline.name ? "isActive" : ""].filter(Boolean).join(" ")}
-                onClick={() => {
-                  setSelectedName(pipeline.name);
-                  if (compactLayout) setSidebarOpen(false);
-                }}
-              >
-                <div className="pipelinesListItemName">{pipeline.name}</div>
-                <div className="pipelinesListItemMeta">
-                  {pipeline.enabled === false ? t("core.ui.pipelines.status.disabled") : t("core.ui.pipelines.status.enabled")}
-                  {" · "}
-                  {pipeline.processing_server_id ?? "local"}
-                </div>
-              </button>
-            ))}
+            {explicitPipelines.map(renderPipelineListItem)}
+            {implicitPipelines.length > 0 ? (
+              <div className="pipelinesListSeparator">{t("core.ui.pipelines.generated.separator", {}, "Generated pipelines")}</div>
+            ) : null}
+            {implicitPipelines.map(renderPipelineListItem)}
           </div>
 
           <div className="pipelinesSidebarFooter">
@@ -782,20 +836,49 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               <div className="pipelinesEditorHeader">
                 <div className="pipelinesEditorTitle">{draft.name}</div>
                 <div className="pipelinesEditorActions">
-                  <button className="pillButton pillButtonPrimary" type="button" onClick={() => void handleSave()}>
+                  <button
+                    className="pillButton pillButtonPrimary"
+                    type="button"
+                    onClick={() => void handleSave()}
+                    disabled={isDraftReadOnly}
+                    title={isDraftReadOnly ? t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here.") : undefined}
+                  >
                     <i className="fa-solid fa-floppy-disk" aria-hidden="true" />
                     {t("core.actions.save")}
                   </button>
-                  <button className="pillButton" type="button" onClick={() => setDuplicateOpen(true)}>
+                  <button
+                    className="pillButton"
+                    type="button"
+                    onClick={() => setDuplicateOpen(true)}
+                    disabled={isDraftReadOnly}
+                    title={isDraftReadOnly ? t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here.") : undefined}
+                  >
                     <i className="fa-solid fa-copy" aria-hidden="true" />
                     {t("core.ui.pipelines.actions.duplicate")}
                   </button>
-                  <button className="pillButton pillButtonDanger" type="button" onClick={() => void handleDelete()}>
+                  <button
+                    className="pillButton pillButtonDanger"
+                    type="button"
+                    onClick={() => void handleDelete()}
+                    disabled={isDraftReadOnly}
+                    title={isDraftReadOnly ? t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here.") : undefined}
+                  >
                     <i className="fa-solid fa-trash" aria-hidden="true" />
                     {t("core.actions.delete")}
                   </button>
                 </div>
               </div>
+
+              {isDraftReadOnly ? (
+                <div className="pipelinesAlertRow isInfo">
+                  <div className="pipelinesAlertBadge">{t("core.ui.pipelines.read_only.badge", {}, "Read-only")}</div>
+                  <div className="pipelinesAlertText">
+                    <div className="pipelinesAlertMessage">
+                      {t("core.ui.pipelines.read_only.message", {}, "This generated pipeline is managed by its source and can only be inspected here.")}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               {recommendationsError ? (
                 <div className="card cardDanger">
@@ -878,6 +961,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   <input
                     type="checkbox"
                     checked={draft.enabled !== false}
+                    disabled={isDraftReadOnly}
                     onChange={(event) => setDraft((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))}
                   />
                   <span>{t("core.ui.pipelines.form.enabled")}</span>
@@ -889,6 +973,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                     <select
                       className="pipelinesSelect"
                       value={draft.processing_server_id ?? "local"}
+                      disabled={isDraftReadOnly}
                       onChange={(event) =>
                         setDraft((prev) => (prev ? { ...prev, processing_server_id: event.target.value } : prev))
                       }
@@ -946,11 +1031,14 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                       height="520px"
                       language="python"
                       value={pythonText}
-                      onChange={(value) => setPythonText(String(value ?? ""))}
+                      onChange={(value) => {
+                        if (!isDraftReadOnly) setPythonText(String(value ?? ""));
+                      }}
                       options={{
                         automaticLayout: true,
                         fontSize: 13,
                         minimap: { enabled: false },
+                        readOnly: isDraftReadOnly,
                         scrollBeyondLastLine: false,
                         wordWrap: "on",
                       }}
@@ -971,7 +1059,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                     interactiveGraph={interactiveGraph}
                     pipelineAlerts={recommendations}
                     operatorPanels={operatorPanels}
-                    onOpenTelemetryField={openTelemetryFieldInspector}
+                    readOnly={isDraftReadOnly}
+                    onOpenTelemetryField={isDraftReadOnly ? undefined : openTelemetryFieldInspector}
                   />
                 ) : (
                   <div className="pipelinesMonacoWrap">
@@ -979,11 +1068,14 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                       height="520px"
                       language="json"
                       value={graphText}
-                      onChange={(value) => setGraphText(String(value ?? ""))}
+                      onChange={(value) => {
+                        if (!isDraftReadOnly) setGraphText(String(value ?? ""));
+                      }}
                       options={{
                         automaticLayout: true,
                         fontSize: 13,
                         minimap: { enabled: false },
+                        readOnly: isDraftReadOnly,
                         scrollBeyondLastLine: false,
                         wordWrap: "on",
                       }}
@@ -1004,20 +1096,21 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                 limitBytes={pipelineStorageLimitBytes}
                 onUpdateLimitBytes={updatePipelineStorageLimitBytes}
                 steps={interactiveSteps}
+                readOnly={isDraftReadOnly}
               />
-              </div>
+            </div>
             )}
         </div>
       </div>
 
-	      <PipelineTelemetryFieldModal
-	        open={Boolean(telemetryFieldInspector && draft)}
-	        pipelineName={draft?.name ?? null}
-	        request={telemetryFieldInspector}
-	        refreshNonce={telemetryResetNonce}
-	        onClose={() => setTelemetryFieldInspector(null)}
-	        onApplyValue={(value) => void applyTelemetryFieldValue(value)}
-	      />
+      <PipelineTelemetryFieldModal
+        open={Boolean(telemetryFieldInspector && draft && !isDraftReadOnly)}
+        pipelineName={draft?.name ?? null}
+        request={telemetryFieldInspector}
+        refreshNonce={telemetryResetNonce}
+        onClose={() => setTelemetryFieldInspector(null)}
+        onApplyValue={(value) => void applyTelemetryFieldValue(value)}
+      />
 
       <PipelineDuplicateModal
         open={duplicateOpen}

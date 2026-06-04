@@ -47,6 +47,7 @@ type Props = {
   interactiveGraph: InteractiveBuildResult;
   pipelineAlerts?: PipelineAlert[];
   operatorPanels?: Record<string, PipelineOperatorPanel>;
+  readOnly?: boolean;
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 
@@ -73,6 +74,7 @@ type PipelineStorageCardProps = {
   limitBytes: number | null;
   onUpdateLimitBytes: (value: number | null) => void;
   steps: InteractiveStep[];
+  readOnly?: boolean;
 };
 
 export function PipelineStorageCard({
@@ -80,6 +82,7 @@ export function PipelineStorageCard({
   limitBytes,
   onUpdateLimitBytes,
   steps,
+  readOnly = false,
 }: PipelineStorageCardProps): React.ReactElement {
   const { t, locale } = i18n.useI18n();
   const [storage, setStorage] = useState<Awaited<ReturnType<typeof loadCachedPipelineStorage>> | null>(null);
@@ -142,7 +145,7 @@ export function PipelineStorageCard({
       }));
 
   const runCleanup = async () => {
-    if (!pipelineName || cleaning) return;
+    if (!pipelineName || cleaning || readOnly) return;
     const confirmed = window.confirm(
       t(
         "core.ui.pipelines.storage.confirm_clean",
@@ -177,7 +180,7 @@ export function PipelineStorageCard({
           <button className="iconButton" type="button" onClick={() => setRefreshNonce((prev) => prev + 1)} title={t("core.actions.refresh", {}, "Refresh")}>
             <i className="fa-solid fa-rotate" aria-hidden="true" />
           </button>
-          <button className="pillButton" type="button" onClick={() => void runCleanup()} disabled={!pipelineName || cleaning}>
+          <button className="pillButton" type="button" onClick={() => void runCleanup()} disabled={!pipelineName || cleaning || readOnly}>
             <i className="fa-solid fa-broom" aria-hidden="true" />
             {cleaning ? t("core.ui.pipelines.storage.cleaning", {}, "Cleaning") : t("core.ui.pipelines.storage.clean_now", {}, "Clean now")}
           </button>
@@ -205,7 +208,9 @@ export function PipelineStorageCard({
             max={4096}
             step={0.25}
             value={displayLimitGiB}
+            disabled={readOnly}
             onChange={(nextValue) => {
+              if (readOnly) return;
               onUpdateLimitBytes(giBToBytes(nextValue));
             }}
           />
@@ -274,6 +279,7 @@ export function InteractivePipelineEditor({
   interactiveGraph,
   pipelineAlerts = [],
   operatorPanels = {},
+  readOnly = false,
   onOpenTelemetryField,
 }: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
@@ -477,6 +483,7 @@ export function InteractivePipelineEditor({
 
   const addInteractiveStep = useCallback(
     (operatorId: string) => {
+      if (readOnly) return;
       const operator = operatorsById[operatorId];
       if (!operator) return;
       setInteractiveSteps((prev) => {
@@ -495,11 +502,12 @@ export function InteractivePipelineEditor({
       });
       setInteractiveWarning(null);
     },
-    [isCameraSourceOperator, operatorsById, setInteractiveSteps, setInteractiveWarning],
+    [isCameraSourceOperator, operatorsById, readOnly, setInteractiveSteps, setInteractiveWarning],
   );
 
   const addInteractiveCatalogItem = useCallback(
     (item: PipelineCatalogItem) => {
+      if (readOnly) return;
       if (item.kind === "operator") {
         addInteractiveStep(item.operator.id);
         return;
@@ -523,25 +531,28 @@ export function InteractivePipelineEditor({
       });
       setInteractiveWarning(null);
     },
-    [addInteractiveStep, operatorsById, setInteractiveSteps, setInteractiveWarning],
+    [addInteractiveStep, operatorsById, readOnly, setInteractiveSteps, setInteractiveWarning],
   );
 
   const updateInteractiveStep = useCallback(
     (uid: string, patch: Partial<InteractiveStep>) => {
+      if (readOnly && !("collapsed" in patch)) return;
       setInteractiveSteps((prev) => prev.map((step) => (step.uid === uid ? { ...step, ...patch } : step)));
     },
-    [setInteractiveSteps],
+    [readOnly, setInteractiveSteps],
   );
 
   const removeInteractiveStep = useCallback(
     (uid: string) => {
+      if (readOnly) return;
       setInteractiveSteps((prev) => prev.filter((step) => step.uid !== uid));
     },
-    [setInteractiveSteps],
+    [readOnly, setInteractiveSteps],
   );
 
   const moveInteractiveStep = useCallback(
     (uid: string, direction: "up" | "down") => {
+      if (readOnly) return;
       setInteractiveSteps((prev) => {
         const currentIndex = prev.findIndex((step) => step.uid === uid);
         if (currentIndex < 0) return prev;
@@ -554,11 +565,12 @@ export function InteractivePipelineEditor({
         return next;
       });
     },
-    [setInteractiveSteps],
+    [readOnly, setInteractiveSteps],
   );
 
   const updateInteractiveStepScalar = useCallback(
     (uid: string, key: string, value: string | number | boolean) => {
+      if (readOnly) return;
       setInteractiveSteps((prev) =>
         prev.map((step) => {
           if (step.uid !== uid) return step;
@@ -569,11 +581,12 @@ export function InteractivePipelineEditor({
         }),
       );
     },
-    [setInteractiveSteps],
+    [readOnly, setInteractiveSteps],
   );
 
   const updateInteractiveStepConfig = useCallback(
     (uid: string, updater: (config: Record<string, unknown>) => Record<string, unknown>) => {
+      if (readOnly) return;
       setInteractiveSteps((prev) =>
         prev.map((step) => {
           if (step.uid !== uid) return step;
@@ -584,11 +597,12 @@ export function InteractivePipelineEditor({
         }),
       );
     },
-    [setInteractiveSteps],
+    [readOnly, setInteractiveSteps],
   );
 
   const insertInteractiveStepAfter = useCallback(
     (afterUid: string, operatorId: string, defaultsOverride?: Record<string, unknown>) => {
+      if (readOnly) return;
       const operator = operatorsById[operatorId];
       if (!operator) return;
       setInteractiveSteps((prev) => {
@@ -606,15 +620,16 @@ export function InteractivePipelineEditor({
       });
       setInteractiveWarning(null);
     },
-    [operatorsById, setInteractiveSteps, setInteractiveWarning],
+    [operatorsById, readOnly, setInteractiveSteps, setInteractiveWarning],
   );
 
   const beginStepDrag = useCallback((event: React.DragEvent, uid: string) => {
+    if (readOnly) return;
     setDraggingStepUid(uid);
     setDragOverStep(null);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", uid);
-  }, []);
+  }, [readOnly]);
 
   const endStepDrag = useCallback(() => {
     setDraggingStepUid(null);
@@ -636,6 +651,7 @@ export function InteractivePipelineEditor({
   const dropStep = useCallback(
     (event: React.DragEvent<HTMLElement>, targetUid: string) => {
       const draggedUid = draggingStepUid || event.dataTransfer.getData("text/plain");
+      if (readOnly) return;
       if (!draggedUid || draggedUid === targetUid) return;
       event.preventDefault();
       const rect = event.currentTarget.getBoundingClientRect();
@@ -644,7 +660,7 @@ export function InteractivePipelineEditor({
       setDraggingStepUid(null);
       setDragOverStep(null);
     },
-    [draggingStepUid, setInteractiveSteps],
+    [draggingStepUid, readOnly, setInteractiveSteps],
   );
 
   return (
@@ -652,6 +668,7 @@ export function InteractivePipelineEditor({
       <InteractiveStepsToolbar
         catalogItems={catalogItems}
         onAddItem={addInteractiveCatalogItem}
+        readOnly={readOnly}
       />
 
       {interactiveWarning ? (
@@ -725,6 +742,7 @@ export function InteractivePipelineEditor({
         stepOutputsByNodeId={stepOutputsByNodeId}
         alertsByNodeId={alertsByNodeId}
         operatorPanels={operatorPanels}
+        readOnly={readOnly}
         draggingStepUid={draggingStepUid}
         dragOverStep={dragOverStep}
         onBeginDrag={beginStepDrag}

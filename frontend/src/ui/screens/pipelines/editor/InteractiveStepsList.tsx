@@ -25,6 +25,7 @@ type Props = {
   stepOutputsByNodeId: Record<string, number> | null;
   alertsByNodeId?: Map<string, PipelineAlert[]>;
   operatorPanels?: Record<string, PipelineOperatorPanel>;
+  readOnly?: boolean;
 
   draggingStepUid: string | null;
   dragOverStep: { uid: string; position: DragInsertPosition } | null;

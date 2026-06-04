@@ -10,7 +10,7 @@
   },
   "include": [
     "src/ui/main2d/shared.ts",
-    "src/ui/main2d/vectorEffectCache.ts",
+    "src/ui/main2d/effectDelta.ts",
     "src/ui/main2d/shared.test.ts"
   ]
 }

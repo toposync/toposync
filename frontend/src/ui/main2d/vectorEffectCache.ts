@@ -15,6 +15,14 @@ import {
   stableStringify,
   sha256Hex,
 } from "./shared";
+import {
+  computeMain2DEffectDeltaCrop,
+  type Main2DEffectDeltaCrop,
+  type Main2DEffectPixelBuffer,
+} from "./effectDelta";
+
+export { computeMain2DEffectDeltaCrop };
+export type { Main2DEffectPixelBuffer };
 
 const EFFECT_RENDER_DIR_ID = "render2d-effects";
 const EFFECT_RENDER_VERSION = 2 as const;
@@ -37,17 +45,6 @@ export type Main2DEffectRenderManifest = {
   widthPx: number;
   heightPx: number;
   effects: Main2DEffectOverlayManifest[];
-};
-
-export type Main2DEffectPixelBuffer = {
-  width: number;
-  height: number;
-  data: Uint8ClampedArray;
-};
-
-export type Main2DEffectDeltaCrop = {
-  data: Uint8ClampedArray;
-  crop: { x: number; y: number; width: number; height: number };
 };
 
 type UploadFileResponse = {
@@ -194,105 +191,122 @@ function captureImageData(renderer: THREE.WebGLRenderer, width: number, height: 
   return ctx.getImageData(0, 0, width, height);
 }
 
-function alphaRequirementForIncrease(delta: number, base: number): number {
-  if (delta <= 0) return 0;
-  const headroom = 255 - base;
-  return headroom <= 1e-6 ? 1 : delta / headroom;
-}
-
-function solveSourceOverChannel(base: number, delta: number, alpha: number): number {
-  if (delta <= 0) return base;
-  return Math.max(0, Math.min(255, Math.round(base + delta / Math.max(1e-6, alpha))));
-}
-
-function solveScreenChannel(base: number, delta: number, alpha: number): number {
-  if (delta <= 0) return 0;
-  const headroom = 255 - base;
-  if (headroom <= 1e-6) return 0;
-  return Math.max(0, Math.min(255, Math.round((delta / (headroom * Math.max(1e-6, alpha))) * 255)));
-}
-
-export function computeMain2DEffectDeltaCrop(
-  base: Main2DEffectPixelBuffer,
-  active: Main2DEffectPixelBuffer,
-  options: { blendMode?: Main2DEffectBlendMode } = {},
-): Main2DEffectDeltaCrop | null {
-  if (base.width !== active.width || base.height !== active.height || base.data.length !== active.data.length) {
-    throw new Error("Effect buffers must have matching dimensions");
-  }
-  const blendMode = options.blendMode ?? "source-over";
-  const width = base.width;
-  const height = base.height;
-  const baseData = base.data;
-  const activeData = active.data;
-  const outData = new Uint8ClampedArray(width * height * 4);
-  let minX = width;
-  let minY = height;
-  let maxX = -1;
-  let maxY = -1;
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const idx = (y * width + x) * 4;
-      const baseAlpha = baseData[idx + 3] / 255;
-      const activeAlpha = activeData[idx + 3] / 255;
-      const baseR = baseData[idx] * baseAlpha;
-      const baseG = baseData[idx + 1] * baseAlpha;
-      const baseB = baseData[idx + 2] * baseAlpha;
-      const activeR = activeData[idx] * activeAlpha;
-      const activeG = activeData[idx + 1] * activeAlpha;
-      const activeB = activeData[idx + 2] * activeAlpha;
-      const dr = Math.max(0, activeR - baseR);
-      const dg = Math.max(0, activeG - baseG);
-      const db = Math.max(0, activeB - baseB);
-      const da = Math.max(0, activeData[idx + 3] - baseData[idx + 3]);
-      const delta = Math.max(dr, dg, db, da);
-      if (delta <= 4) continue;
-
-      const rgbAlpha = Math.max(
-        alphaRequirementForIncrease(dr, baseR),
-        alphaRequirementForIncrease(dg, baseG),
-        alphaRequirementForIncrease(db, baseB),
-      );
-      const alphaAlpha = activeAlpha > baseAlpha && baseAlpha < 0.999 ? (activeAlpha - baseAlpha) / (1 - baseAlpha) : 0;
-      const overlayAlpha = Math.max(0.025, Math.min(1, Math.max(rgbAlpha, alphaAlpha)));
-
-      if (blendMode === "screen") {
-        outData[idx] = solveScreenChannel(baseR, dr, overlayAlpha);
-        outData[idx + 1] = solveScreenChannel(baseG, dg, overlayAlpha);
-        outData[idx + 2] = solveScreenChannel(baseB, db, overlayAlpha);
-      } else {
-        outData[idx] = solveSourceOverChannel(baseR, dr, overlayAlpha);
-        outData[idx + 1] = solveSourceOverChannel(baseG, dg, overlayAlpha);
-        outData[idx + 2] = solveSourceOverChannel(baseB, db, overlayAlpha);
-      }
-      outData[idx + 3] = Math.round(overlayAlpha * 255);
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
+type EffectDeltaWorkerResponse =
+  | {
+      id: number;
+      ok: true;
+      delta: {
+        width: number;
+        height: number;
+        data: ArrayBuffer;
+        crop: { x: number; y: number; width: number; height: number };
+      } | null;
     }
+  | { id: number; ok: false; error: string };
+
+type PendingEffectDeltaRequest = {
+  resolve: (delta: Main2DEffectDeltaCrop | null) => void;
+  reject: (err: Error) => void;
+  timeout: number;
+};
+
+let effectDeltaWorker: Worker | null = null;
+let effectDeltaWorkerFailed = false;
+let effectDeltaWorkerRequestId = 0;
+const pendingEffectDeltaRequests = new Map<number, PendingEffectDeltaRequest>();
+
+function clearPendingEffectDeltaRequests(err: Error): void {
+  for (const pending of pendingEffectDeltaRequests.values()) {
+    window.clearTimeout(pending.timeout);
+    pending.reject(err);
   }
-
-  if (maxX < minX || maxY < minY) return null;
-
-  const pad = 2;
-  minX = Math.max(0, minX - pad);
-  minY = Math.max(0, minY - pad);
-  maxX = Math.min(width - 1, maxX + pad);
-  maxY = Math.min(height - 1, maxY + pad);
-  const cropWidth = maxX - minX + 1;
-  const cropHeight = maxY - minY + 1;
-
-  return { data: outData, crop: { x: minX, y: minY, width: cropWidth, height: cropHeight } };
+  pendingEffectDeltaRequests.clear();
 }
 
-function diffAndCrop(
+function getEffectDeltaWorker(): Worker | null {
+  if (effectDeltaWorkerFailed) return null;
+  if (effectDeltaWorker) return effectDeltaWorker;
+
+  try {
+    effectDeltaWorker = new Worker(new URL("./effectDelta.worker.ts", import.meta.url), { type: "module" });
+    effectDeltaWorker.addEventListener("message", (event: MessageEvent<EffectDeltaWorkerResponse>) => {
+      const response = event.data;
+      const pending = pendingEffectDeltaRequests.get(response.id);
+      if (!pending) return;
+      pendingEffectDeltaRequests.delete(response.id);
+      window.clearTimeout(pending.timeout);
+      if (!response.ok) {
+        pending.reject(new Error(response.error));
+        return;
+      }
+      if (!response.delta) {
+        pending.resolve(null);
+        return;
+      }
+      pending.resolve({
+        data: new Uint8ClampedArray(response.delta.data),
+        crop: response.delta.crop,
+      });
+    });
+    effectDeltaWorker.addEventListener("error", () => {
+      effectDeltaWorkerFailed = true;
+      effectDeltaWorker?.terminate();
+      effectDeltaWorker = null;
+      clearPendingEffectDeltaRequests(new Error("Effect delta worker failed"));
+    });
+    return effectDeltaWorker;
+  } catch (err) {
+    effectDeltaWorkerFailed = true;
+    console.warn("Effect delta worker unavailable; falling back to main thread", err);
+    return null;
+  }
+}
+
+async function computeMain2DEffectDeltaCropAsync(
   base: ImageData,
   active: ImageData,
   blendMode: Main2DEffectBlendMode,
-): { canvas: HTMLCanvasElement; crop: { x: number; y: number; width: number; height: number } } | null {
-  const delta = computeMain2DEffectDeltaCrop(base, active, { blendMode });
+): Promise<Main2DEffectDeltaCrop | null> {
+  const worker = getEffectDeltaWorker();
+  if (!worker) {
+    return computeMain2DEffectDeltaCrop(base, active, { blendMode });
+  }
+
+  const id = ++effectDeltaWorkerRequestId;
+  const baseCopy = new Uint8ClampedArray(base.data);
+  const activeCopy = new Uint8ClampedArray(active.data);
+  const baseBuffer = baseCopy.buffer as ArrayBuffer;
+  const activeBuffer = activeCopy.buffer as ArrayBuffer;
+
+  return new Promise<Main2DEffectDeltaCrop | null>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      pendingEffectDeltaRequests.delete(id);
+      reject(new Error("Effect delta worker timed out"));
+    }, 8000);
+    pendingEffectDeltaRequests.set(id, { resolve, reject, timeout });
+    worker.postMessage(
+      {
+        id,
+        width: base.width,
+        height: base.height,
+        blendMode,
+        base: baseBuffer,
+        active: activeBuffer,
+      },
+      [baseBuffer, activeBuffer],
+    );
+  }).catch((err) => {
+    console.warn("Effect delta worker failed; falling back to main thread", err);
+    return computeMain2DEffectDeltaCrop(base, active, { blendMode });
+  });
+}
+
+async function diffAndCrop(
+  base: ImageData,
+  active: ImageData,
+  blendMode: Main2DEffectBlendMode,
+): Promise<{ canvas: HTMLCanvasElement; crop: { x: number; y: number; width: number; height: number } } | null> {
+  const delta = await computeMain2DEffectDeltaCropAsync(base, active, blendMode);
   if (!delta) return null;
 
   const fullCanvas = document.createElement("canvas");
@@ -428,7 +442,7 @@ async function captureEffectOverlay(args: {
     if (!baseData || !activeData) return null;
 
     const blendMode = args.target.blendMode ?? "source-over";
-    const diff = diffAndCrop(baseData, activeData, blendMode);
+    const diff = await diffAndCrop(baseData, activeData, blendMode);
     if (!diff) return null;
 
     const spanX = Math.max(1e-6, args.bounds.maxX - args.bounds.minX);

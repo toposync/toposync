@@ -34,7 +34,8 @@ type Props = {
   compositions: CompositionSummary[];
   activeCompositionId: string;
   compositionLoaded: boolean;
-  extensionsLoaded: boolean;
+  criticalExtensionsLoaded: boolean;
+  allExtensionsLoaded: boolean;
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
   viewSettings: ViewSettings;
@@ -57,6 +58,7 @@ type Props = {
   onCreateComposition: (name: string) => Promise<Composition>;
   onRenameComposition: (compositionId: string, name: string) => Promise<Composition>;
   onDeleteComposition: (compositionId: string) => Promise<void>;
+  onViewportReady: () => void;
 };
 
 function formatDateTimeShort(locale: string, iso: string | undefined): string | null {
@@ -215,6 +217,10 @@ type RenderMode = BuiltinRenderMode | string;
 
 const RENDER_MODE_STORAGE_KEY = "toposync.render_mode.v1";
 const STREAMS_OVERLAY_IDLE_MS = 2500;
+type WindowWithIdleCallback = Window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
 
 const BUILTIN_RENDER_MODES = new Set<string>(["3d", "2d", "vector2d", "streams"]);
 
@@ -227,7 +233,8 @@ export function MainScreen({
   compositions,
   activeCompositionId,
   compositionLoaded,
-  extensionsLoaded,
+  criticalExtensionsLoaded,
+  allExtensionsLoaded,
   elements,
   elementTypesById,
   viewSettings,
@@ -250,6 +257,7 @@ export function MainScreen({
   onCreateComposition,
   onRenameComposition,
   onDeleteComposition,
+  onViewportReady,
 }: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
@@ -277,6 +285,7 @@ export function MainScreen({
   const notificationScrollRef = useRef<HTMLDivElement | null>(null);
   const notificationSentinelRef = useRef<HTMLDivElement | null>(null);
   const streamsOverlayTimerRef = useRef<number | null>(null);
+  const autoFilteredPageRequestedRef = useRef(false);
 
   const clearStreamsOverlayTimer = useCallback(() => {
     const timerId = streamsOverlayTimerRef.current;
@@ -498,6 +507,10 @@ export function MainScreen({
   }, [filter]);
 
   useEffect(() => {
+    autoFilteredPageRequestedRef.current = false;
+  }, [filter]);
+
+  useEffect(() => {
     if (activeNotification) return;
     setIsNotificationDetailsOpen(false);
     setNotificationImageIndex(0);
@@ -629,14 +642,24 @@ export function MainScreen({
   }, [filterRestrictive, notifications.length, filteredLoadedCount]);
 
   // When a restrictive filter leaves few visible items but more pages exist,
-  // proactively pull more so the user isn't staring at an empty list.
+  // pull one extra page during idle. Further pagination is left to scroll.
   useEffect(() => {
+    if (!notificationsOpen) return;
     if (!filterRestrictive) return;
     if (notificationsLoading) return;
     if (!notificationsHasMore) return;
     if (filteredLoadedCount >= 12) return;
-    onLoadMoreNotifications();
-  }, [filterRestrictive, notificationsLoading, notificationsHasMore, filteredLoadedCount, onLoadMoreNotifications]);
+    if (autoFilteredPageRequestedRef.current) return;
+
+    autoFilteredPageRequestedRef.current = true;
+    const win = window as WindowWithIdleCallback;
+    if (typeof win.requestIdleCallback === "function") {
+      const handle = win.requestIdleCallback(() => onLoadMoreNotifications(), { timeout: 1500 });
+      return () => win.cancelIdleCallback?.(handle);
+    }
+    const handle = window.setTimeout(() => onLoadMoreNotifications(), 180);
+    return () => window.clearTimeout(handle);
+  }, [notificationsOpen, filterRestrictive, notificationsLoading, notificationsHasMore, filteredLoadedCount, onLoadMoreNotifications]);
 
   // Close the filter popover when clicking outside.
   useEffect(() => {
@@ -688,9 +711,9 @@ export function MainScreen({
   const activeRenderView = orderedRenderViews.find((view) => view.id === renderMode) ?? null;
 
   useEffect(() => {
-    if (isBuiltinRenderMode(renderMode) || activeRenderView || !extensionsLoaded) return;
+    if (isBuiltinRenderMode(renderMode) || activeRenderView || !allExtensionsLoaded) return;
     setRenderMode("3d");
-  }, [activeRenderView, extensionsLoaded, renderMode]);
+  }, [activeRenderView, allExtensionsLoaded, renderMode]);
 
   const renderViewText = useCallback(
     (value: RenderViewDefinition["name"] | RenderViewDefinition["description"] | undefined, fallback: string) => {
@@ -720,9 +743,16 @@ export function MainScreen({
       ? null
       : !compositionLoaded
         ? t("core.ui.viewport_loading.composition", {}, "Loading composition...")
-        : !extensionsLoaded
+        : !criticalExtensionsLoaded
           ? t("core.ui.viewport_loading.extensions", {}, "Loading extensions...")
+          : !isBuiltinRenderMode(renderMode) && !activeRenderView && !allExtensionsLoaded
+            ? t("core.ui.viewport_loading.extensions", {}, "Loading extensions...")
           : null;
+
+  useEffect(() => {
+    if (viewportLoadingMessage) return;
+    onViewportReady();
+  }, [onViewportReady, viewportLoadingMessage]);
 
   return (
     <div className="screenRoot">

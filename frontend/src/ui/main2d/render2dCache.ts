@@ -1,6 +1,7 @@
 import { resolveToposyncUrl, type CompositionElement, type Element3DInstance, type ElementType, type ViewSettings } from "@toposync/plugin-api";
 import * as THREE from "three";
 
+import { markToposyncPerformance } from "../../util/performance";
 import { DEFAULT_THEME_ID } from "../../util/theme";
 
 const RENDER_DIR_ID = "render2d";
@@ -537,10 +538,13 @@ async function uploadBlob(dir: string, filename: string, blob: Blob): Promise<Up
   return { ...data, url: resolveToposyncUrl(data.url) };
 }
 
-async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-  const response = await fetch(dataUrl);
-  if (!response.ok) throw new Error("Failed to convert dataUrl to blob");
-  return response.blob();
+function canvasToPngBlob(canvas: HTMLCanvasElement, message: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error(message));
+    }, "image/png");
+  });
 }
 
 function pickOverlayTargets(elements: CompositionElement[]): Array<{ elementId: string; specialView: "lamp" | "airflow"; element: CompositionElement }> {
@@ -642,8 +646,8 @@ async function captureBaseAndOverlays(args: {
   maximumRenderSize: number;
 }): Promise<
   Omit<Main2DRenderManifest, "base" | "overlays" | "signature"> & {
-    baseDataUrl: string;
-    overlays: Array<Main2DOverlayManifest & { dataUrl: string }>;
+    baseBlob: Blob;
+    overlays: Array<Main2DOverlayManifest & { blob: Blob }>;
   }
 > {
   const { compositionId, elements, elementTypesById } = args;
@@ -677,13 +681,13 @@ async function captureBaseAndOverlays(args: {
     { maxWaitMs: 6500, warmupSeconds: 0.25, stepMs: 60 },
   );
   renderer.render(scene, camera);
-  const baseDataUrl = renderer.domElement.toDataURL("image/png");
+  const baseBlob = await canvasToPngBlob(renderer.domElement, "Failed to encode 2D base render");
 
   for (const light of defaultLights) scene.remove(light);
   renderer.setClearColor(0x000000, 0);
 
   // Overlay captures.
-  const overlays: Array<Main2DOverlayManifest & { dataUrl: string }> = [];
+  const overlays: Array<Main2DOverlayManifest & { blob: Blob }> = [];
   for (const target of overlayTargets) {
     const variants: Array<Main2DOverlayManifest & { forced: CompositionElement; warmupSeconds: number }> =
       target.specialView === "lamp"
@@ -743,8 +747,8 @@ async function captureBaseAndOverlays(args: {
         },
       );
       renderer.render(scene, camera);
-      const dataUrl = renderer.domElement.toDataURL("image/png");
-      overlays.push({ ...overlayManifest, dataUrl });
+      const blob = await canvasToPngBlob(renderer.domElement, "Failed to encode 2D overlay render");
+      overlays.push({ ...overlayManifest, blob });
 
       disposeInstances(overlayInstances);
       for (const entry of overlayInstances) scene.remove(entry.instance.object);
@@ -761,7 +765,7 @@ async function captureBaseAndOverlays(args: {
     widthPx: renderWidth,
     heightPx: renderHeight,
     bounds: viewBounds,
-    baseDataUrl,
+    baseBlob,
     overlays,
   };
 }
@@ -788,30 +792,49 @@ export async function getOrCreateMain2DRenderManifest(args: {
   const promise = (async () => {
     if (await fileExists(manifestPath)) {
       const existingManifest = await fetchJson<Main2DRenderManifest>(manifestUrl);
-      if (existingManifest) return existingManifest;
+      if (existingManifest) {
+        markToposyncPerformance("render2d-cache-hit", {
+          compositionId: args.compositionId,
+          signature,
+        });
+        return existingManifest;
+      }
     }
 
+    markToposyncPerformance("render2d-cache-miss", {
+      compositionId: args.compositionId,
+      signature,
+      elements: args.elements.length,
+    });
     const maximumRenderSize = Math.max(512, Math.min(8192, args.maximumRenderSize ?? 4096));
+    markToposyncPerformance("render2d-render-start", {
+      compositionId: args.compositionId,
+      maximumRenderSize,
+    });
     const captured = await captureBaseAndOverlays({
       compositionId: args.compositionId,
       elements: args.elements,
       elementTypesById: args.elementTypesById,
       maximumRenderSize,
     });
+    markToposyncPerformance("render2d-render-end", {
+      compositionId: args.compositionId,
+      widthPx: captured.widthPx,
+      heightPx: captured.heightPx,
+      overlays: captured.overlays.length,
+    });
 
     const baseFilename = `${prefix}_base.png`;
     const overlays: Main2DOverlayManifest[] = [];
 
-    const baseBlob = await dataUrlToBlob(captured.baseDataUrl);
-    const baseUpload = await uploadBlob(RENDER_DIR_ID, baseFilename, baseBlob);
+    const baseUpload = await uploadBlob(RENDER_DIR_ID, baseFilename, captured.baseBlob);
 
     for (const overlay of captured.overlays) {
       const filename =
         overlay.kind === "lamp"
           ? `${prefix}_ha_${overlay.elementId}_lamp.png`
           : `${prefix}_ha_${overlay.elementId}_airflow_${overlay.mode}.png`;
-      const blob = await dataUrlToBlob(overlay.dataUrl);
-      const uploaded = await uploadBlob(RENDER_DIR_ID, filename, blob);
+      const uploaded = await uploadBlob(RENDER_DIR_ID, filename, overlay.blob);
       overlays.push(overlay.kind === "lamp" ? { elementId: overlay.elementId, kind: "lamp", url: uploaded.url } : { elementId: overlay.elementId, kind: "airflow", mode: overlay.mode, url: uploaded.url });
     }
 

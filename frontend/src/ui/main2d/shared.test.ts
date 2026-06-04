@@ -10,7 +10,7 @@ import {
   computeMain2DVectorViewBox,
   stableStringify,
 } from "./shared";
-import { computeMain2DEffectDeltaCrop, type Main2DEffectPixelBuffer } from "./vectorEffectCache";
+import { computeMain2DEffectDeltaCrop, type Main2DEffectPixelBuffer } from "./effectDelta";
 
 const test: (name: string, fn: () => void | Promise<void>) => void = require("node:test").test;
 const assert: any = require("node:assert/strict");

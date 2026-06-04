@@ -45,6 +45,7 @@ import {
 import type { AppSettings, AuthUser, NotificationsCount } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
 import { loadRemoteActivate } from "../util/moduleFederation";
+import { markToposyncPerformance } from "../util/performance";
 import {
   applyTheme,
   applyUserVisualPreferences,
@@ -95,8 +96,14 @@ type Composition = {
 const LEGACY_STORAGE_KEY = "toposync.composition.v1";
 const SAVE_DEBOUNCE_MS = 400;
 const VIEW_SETTINGS_STORAGE_KEY = "toposync.view.v1";
+const RENDER_MODE_STORAGE_KEY = "toposync.render_mode.v1";
+const SPATIAL_VIDEO_EXTENSION_ID = "com.toposync.spatial_video";
 const HISTORY_LIMIT = 120;
 type RenderViewSettingsMap = Record<string, Record<string, unknown>>;
+type WindowWithIdleCallback = Window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
 
 function isWallHeightPreset(value: unknown): value is WallHeightPreset {
   return value === "low" || value === "medium" || value === "high";
@@ -261,6 +268,31 @@ function loadLegacyComposition(): Composition | null {
   }
 }
 
+function extensionIdFromElementType(type: string): string | null {
+  const parts = type.split(".").filter(Boolean);
+  if (parts.length < 3) return null;
+  if (parts[0] !== "com" || parts[1] !== "toposync") return null;
+  return parts.slice(0, 3).join(".");
+}
+
+function loadSavedRenderMode(): string {
+  try {
+    return localStorage.getItem(RENDER_MODE_STORAGE_KEY)?.trim() || "3d";
+  } catch {
+    return "3d";
+  }
+}
+
+function scheduleIdle(callback: () => void, timeout = 1200): () => void {
+  const win = window as WindowWithIdleCallback;
+  if (typeof win.requestIdleCallback === "function") {
+    const handle = win.requestIdleCallback(callback, { timeout });
+    return () => win.cancelIdleCallback?.(handle);
+  }
+  const handle = window.setTimeout(callback, 120);
+  return () => window.clearTimeout(handle);
+}
+
 function newId(): string {
   const cryptoAny = crypto as unknown as { randomUUID?: () => string };
   return cryptoAny.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -307,12 +339,18 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const lastUserInteractionTsRef = useRef<number>(Date.now());
   const hasManualNotificationSelectionRef = useRef(false);
   const markNotificationsViewedInFlightRef = useRef<Promise<void> | null>(null);
+  const notificationsInitialLoadStartedRef = useRef(false);
+  const extensionRecordsPromiseRef = useRef<Promise<ExtensionRecord[]> | null>(null);
+  const activatedExtensionIdsRef = useRef<Set<string>>(new Set());
+  const extensionActivationPromisesRef = useRef<Map<string, Promise<void>>>(new Map());
   const [composition, setComposition] = useState<Composition>(() => defaultComposition());
   const compositionRef = useRef<Composition>(composition);
   const [compositions, setCompositions] = useState<Array<{ id: string; name: string }>>([]);
   const [activeCompositionId, setActiveCompositionId] = useState<string>("ground");
   const [compositionLoaded, setCompositionLoaded] = useState(false);
-  const [extensionsLoaded, setExtensionsLoaded] = useState(false);
+  const [criticalExtensionsLoaded, setCriticalExtensionsLoaded] = useState(false);
+  const [allExtensionsLoaded, setAllExtensionsLoaded] = useState(false);
+  const [mainViewportReady, setMainViewportReady] = useState(false);
   const [backendAvailable, setBackendAvailable] = useState(false);
   const [wallHeightPreset, setWallHeightPreset] = useState<WallHeightPreset>(() => loadWallHeightPreset());
   const [ghostWalls, setGhostWalls] = useState<boolean>(() => loadGhostWalls());
@@ -597,6 +635,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         if (fromBackend.elements.length === 0 && legacy && legacy.elements.length > 0) {
           const saved = await putComposition(legacy);
           if (cancelled) return;
+          compositionRef.current = saved;
           setComposition(saved);
           setActiveCompositionId(saved.id);
           setCompositions((prev) => {
@@ -617,6 +656,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             // ignore
           }
         } else {
+          compositionRef.current = fromBackend;
           setComposition(fromBackend);
           setActiveCompositionId(fromBackend.id);
           setCompositions((prev) => {
@@ -644,12 +684,21 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       } catch (err) {
         console.error("Failed to load composition from backend", err);
         const legacy = loadLegacyComposition();
-        if (legacy) setComposition(legacy);
+        if (legacy) {
+          compositionRef.current = legacy;
+          setComposition(legacy);
+        }
         setCompositions((prev) => (legacy ? [{ id: legacy.id, name: legacy.name }] : prev));
         setActiveCompositionId(legacy?.id ?? "ground");
         setBackendAvailable(false);
       } finally {
-        if (!cancelled) setCompositionLoaded(true);
+        if (!cancelled) {
+          markToposyncPerformance("composition-loaded", {
+            compositionId: compositionRef.current.id,
+            elements: compositionRef.current.elements.length,
+          });
+          setCompositionLoaded(true);
+        }
       }
     }
 
@@ -692,25 +741,63 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   useEffect(() => {
     if (!backendAvailable) return;
     let cancelled = false;
-    setNotificationsLoading(true);
     void (async () => {
       try {
-        const [page, count] = await Promise.all([listNotifications(null, 40), getNotificationsCount()]);
+        const count = await getNotificationsCount();
         if (cancelled) return;
-        setNotifications(sortNotificationsByCreatedDesc(page.notifications ?? []));
-        setNotificationsCursor(page.next_cursor ?? null);
-        setNotificationsHasMore(page.next_cursor != null);
         setNotificationsCount(count);
       } catch (err) {
-        console.error("Failed to load notifications", err);
-      } finally {
-        if (!cancelled) setNotificationsLoading(false);
+        console.error("Failed to load notifications count", err);
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [backendAvailable]);
+
+  useEffect(() => {
+    if (!backendAvailable) return;
+    if (!mainViewportReady) {
+      if (!notificationsInitialLoadStartedRef.current) setNotificationsLoading(true);
+      return;
+    }
+    if (notificationsInitialLoadStartedRef.current) return;
+
+    let cancelled = false;
+    setNotificationsLoading(true);
+    const cancelIdle = scheduleIdle(() => {
+      if (cancelled || notificationsInitialLoadStartedRef.current) return;
+      notificationsInitialLoadStartedRef.current = true;
+      void (async () => {
+        try {
+          const page = await listNotifications(null, 40);
+          if (cancelled) return;
+          markToposyncPerformance("notifications-page-loaded", {
+            page: "initial",
+            count: page.notifications?.length ?? 0,
+            hasMore: page.next_cursor != null,
+          });
+          setNotifications((prev) => {
+            const pageNotifications = page.notifications ?? [];
+            const existing = new Set(pageNotifications.map((n) => n.id));
+            const liveOnly = prev.filter((n) => !existing.has(n.id));
+            return sortNotificationsByCreatedDesc([...pageNotifications, ...liveOnly]);
+          });
+          setNotificationsCursor(page.next_cursor ?? null);
+          setNotificationsHasMore(page.next_cursor != null);
+        } catch (err) {
+          console.error("Failed to load notifications", err);
+        } finally {
+          if (!cancelled) setNotificationsLoading(false);
+        }
+      })();
+    }, 1600);
+
+    return () => {
+      cancelled = true;
+      cancelIdle();
+    };
+  }, [backendAvailable, mainViewportReady]);
 
   useEffect(() => {
     if (notifications.length === 0) {
@@ -958,44 +1045,118 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     [backendAvailable, settings.extensions],
   );
 
+  const criticalExtensionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const element of composition.elements) {
+      const extensionId = extensionIdFromElementType(element.type);
+      if (extensionId) ids.add(extensionId);
+    }
+
+    const savedRenderMode = loadSavedRenderMode();
+    if (savedRenderMode === "spatial_video" || savedRenderMode === "spatial_video_3d") {
+      ids.add(SPATIAL_VIDEO_EXTENSION_ID);
+    }
+
+    return Array.from(ids).sort((left, right) => left.localeCompare(right));
+  }, [composition.elements]);
+
+  const criticalExtensionKey = criticalExtensionIds.join("|");
+
+  const getFrontendExtensions = useCallback(async (): Promise<ExtensionRecord[]> => {
+    if (!extensionRecordsPromiseRef.current) {
+      extensionRecordsPromiseRef.current = fetchExtensions();
+    }
+    const exts = await extensionRecordsPromiseRef.current;
+    return exts.filter((ext) => ext.frontend && ext.frontend.kind === "module-federation");
+  }, []);
+
+  const activateFrontendExtension = useCallback(
+    async (ext: ExtensionRecord): Promise<void> => {
+      if (activatedExtensionIdsRef.current.has(ext.id)) return;
+      const existing = extensionActivationPromisesRef.current.get(ext.id);
+      if (existing) return existing;
+
+      const frontend = ext.frontend;
+      if (!frontend) return;
+
+      const promise = (async () => {
+        const activate = await loadRemoteActivate(frontend.remote_entry_url, frontend.scope, frontend.module);
+        await activate(host);
+        activatedExtensionIdsRef.current.add(ext.id);
+      })();
+
+      extensionActivationPromisesRef.current.set(ext.id, promise);
+      try {
+        await promise;
+      } finally {
+        if (!activatedExtensionIdsRef.current.has(ext.id)) {
+          extensionActivationPromisesRef.current.delete(ext.id);
+        }
+      }
+    },
+    [host],
+  );
+
   useEffect(() => {
     let cancelled = false;
+    let cancelIdle: (() => void) | null = null;
 
     async function run() {
-      setExtensionsLoaded(false);
+      setCriticalExtensionsLoaded(false);
+      setAllExtensionsLoaded(false);
       try {
-        const exts: ExtensionRecord[] = await fetchExtensions();
-        const frontendExts = exts.filter((ext) => ext.frontend && ext.frontend.kind === "module-federation");
+        const frontendExts = await getFrontendExtensions();
+        const criticalIds = new Set(criticalExtensionIds);
+        const criticalFrontendExts = frontendExts.filter((ext) => criticalIds.has(ext.id));
         await Promise.all(
-          frontendExts.map(async (ext) => {
-            const frontend = ext.frontend;
-            if (!frontend) return;
+          criticalFrontendExts.map(async (ext) => {
             try {
-              const activate = await loadRemoteActivate(
-                frontend.remote_entry_url,
-                frontend.scope,
-                frontend.module,
-              );
-              if (cancelled) return;
-              await activate(host);
+              await activateFrontendExtension(ext);
             } catch (err) {
               if (cancelled) return;
               console.error(`[extension:${ext.id}]`, err);
             }
           }),
         );
+        if (cancelled) return;
+        markToposyncPerformance("critical-extensions-loaded", {
+          critical: criticalFrontendExts.length,
+          total: frontendExts.length,
+        });
+        setCriticalExtensionsLoaded(true);
+
+        cancelIdle = scheduleIdle(() => {
+          void (async () => {
+            await Promise.all(
+              frontendExts.map(async (ext) => {
+                try {
+                  await activateFrontendExtension(ext);
+                } catch (err) {
+                  if (cancelled) return;
+                  console.error(`[extension:${ext.id}]`, err);
+                }
+              }),
+            );
+            if (cancelled) return;
+            markToposyncPerformance("all-extensions-loaded", { total: frontendExts.length });
+            setAllExtensionsLoaded(true);
+          })();
+        }, 1800);
       } catch (err) {
         if (!cancelled) console.error("Failed to load extensions", err);
-      } finally {
-        if (!cancelled) setExtensionsLoaded(true);
+        if (!cancelled) {
+          setCriticalExtensionsLoaded(true);
+          setAllExtensionsLoaded(true);
+        }
       }
     }
 
     void run();
     return () => {
       cancelled = true;
+      cancelIdle?.();
     };
-  }, [host]);
+  }, [activateFrontendExtension, criticalExtensionKey, getFrontendExtensions]);
 
   const createElement = useCallback(
     (typeId: string, init: Partial<Omit<CompositionElement, "id" | "type">> = {}): string | null => {
@@ -1115,6 +1276,11 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     setNotificationsLoading(true);
     try {
       const page = await listNotifications(notificationsCursor, 40);
+      markToposyncPerformance("notifications-page-loaded", {
+        page: "next",
+        count: page.notifications.length,
+        hasMore: page.next_cursor != null,
+      });
       setNotificationsCursor(page.next_cursor ?? null);
       setNotificationsHasMore(page.next_cursor != null);
       if (page.notifications.length === 0) return;
@@ -1153,6 +1319,17 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     setActiveNotificationId(notificationId);
     hasManualNotificationSelectionRef.current = true;
     lastUserInteractionTsRef.current = Date.now();
+  }, []);
+
+  const markMainViewportReady = useCallback(() => {
+    setMainViewportReady((prev) => {
+      if (prev) return prev;
+      markToposyncPerformance("first-viewport-mounted", {
+        compositionId: compositionRef.current.id,
+        elements: compositionRef.current.elements.length,
+      });
+      return true;
+    });
   }, []);
 
   const normalizedPathname = useMemo(() => {
@@ -1255,7 +1432,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           compositions={compositions}
           activeCompositionId={activeCompositionId}
           compositionLoaded={compositionLoaded}
-          extensionsLoaded={extensionsLoaded}
+          criticalExtensionsLoaded={criticalExtensionsLoaded}
+          allExtensionsLoaded={allExtensionsLoaded}
           elements={composition.elements}
           elementTypesById={elementTypesById}
           viewSettings={viewSettings}
@@ -1278,6 +1456,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           onCreateComposition={createNewComposition}
           onRenameComposition={renameExistingComposition}
           onDeleteComposition={deleteExistingComposition}
+          onViewportReady={markMainViewportReady}
         />
       ) : screen === "editor" ? (
         <CompositionEditorScreen

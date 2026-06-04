@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 
+from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines import Lifecycle, Packet
 from toposync_ext_vision.processing.tasks.group_events import VisionGroupEventsRuntime
 
 
 def _runtime(config: dict[str, object] | None = None) -> VisionGroupEventsRuntime:
     return VisionGroupEventsRuntime(config or {})
+
+
+def test_group_events_runtime_uses_pipeline_runtime_base() -> None:
+    assert isinstance(_runtime(), TransformOperatorRuntime)
 
 
 def _event_packet(

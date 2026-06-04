@@ -82,6 +82,19 @@ def _operator_ids(pipeline: dict[str, Any]) -> list[str]:
     return [str(node.get("operator") or "") for node in nodes if isinstance(node, dict)]
 
 
+def _edge_config(pipeline: dict[str, Any], source_node_id: str, target_node_id: str) -> dict[str, Any]:
+    graph = pipeline.get("graph") if isinstance(pipeline.get("graph"), dict) else {}
+    edges = graph.get("edges") if isinstance(graph.get("edges"), list) else []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        source = edge.get("from") if isinstance(edge.get("from"), dict) else {}
+        target = edge.get("to") if isinstance(edge.get("to"), dict) else {}
+        if str(source.get("node") or "") == source_node_id and str(target.get("node") or "") == target_node_id:
+            return edge
+    return {}
+
+
 def _configure_camera(client: TestClient) -> None:
     res = client.patch(
         "/api/settings/extensions/com.toposync.cameras",
@@ -368,6 +381,13 @@ def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping
         assert _node_config(pipeline, "vision.group_events").get("group_distance_meters") == 10.0
         assert _node_config(pipeline, "core.throttle").get("interval_seconds") == 10.0
         assert _node_config(pipeline, "core.notify").get("dedupe_key_template") == "{{subject.id}}"
+        assert _edge_config(pipeline, "detect", "map").get("maxsize") == 8
+
+        res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert res.status_code == 200, res.text
+        alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
+        assert "split_stream_latest_only_channel" not in alert_codes
+        assert "split_stream_small_channel" not in alert_codes
 
 
 def test_camera_pipeline_vehicle_stopped_requires_mapping(

@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 
@@ -214,7 +215,7 @@ class _GroupState:
     last_world_envelope: dict[str, Any] | None = None
 
 
-class VisionGroupEventsRuntime:
+class VisionGroupEventsRuntime(TransformOperatorRuntime):
     def __init__(
         self,
         config: dict[str, Any],

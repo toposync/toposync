@@ -2282,7 +2282,7 @@ class CamerasExtension(BaseExtension):
                     {
                         "from": {"node": node_ids[index], "port": "out"},
                         "to": {"node": node_ids[index + 1], "port": "in"},
-                        "maxsize": 2 if index < 3 else 8,
+                        "maxsize": 2 if index < 2 else 8,
                         "drop_policy": "drop_oldest",
                     }
                 )

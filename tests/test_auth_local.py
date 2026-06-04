@@ -199,7 +199,7 @@ def test_cameras_pipeline_preset_requires_pipelines_write(
 
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
-            json={"preset": "people_detection", "pipeline_name": "cam1_people", "enabled": True},
+            json={"preset": "people_individual", "pipeline_name": "cam1_people", "enabled": True},
         )
         assert res.status_code == 403
         assert res.json()["detail"] == "Permission denied"

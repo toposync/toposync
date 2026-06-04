@@ -38,7 +38,7 @@ import {
   OnvifStateGateConfigCard,
   VelocityEstimationConfigCard,
 } from "./CameraPanels";
-import { VisionConfigCard } from "./VisionPanels";
+import { VisionConfigCard, VisionGroupEventsConfigCard } from "./VisionPanels";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -167,6 +167,15 @@ export function OperatorConfigPanel({
         onInsertStepAfter={onInsertStepAfter}
         onOpenTelemetryField={onOpenTelemetryField}
         onOpenProcessingServers={onOpenProcessingServers}
+      />
+    );
+  }
+  if (operatorId === "vision.group_events") {
+    return (
+      <VisionGroupEventsConfigCard
+        config={config}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
       />
     );
   }

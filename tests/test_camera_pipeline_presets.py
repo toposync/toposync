@@ -197,11 +197,11 @@ def test_camera_pipeline_preset_defaults_detection_to_rfdetr_medium(
 
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
-            json={"preset": "people_detection", "enabled": True},
+            json={"preset": "people_individual", "enabled": True},
         )
         assert res.status_code == 200
         pipeline_name = res.json()["pipeline_name"]
-        assert pipeline_name == "entrada_principal_deteccao_simples_de_pessoas"
+        assert pipeline_name == "entrada_principal_evento_individual_de_pessoas"
 
         res = client.get(f"/api/pipelines/{pipeline_name}")
         assert res.status_code == 200
@@ -209,6 +209,7 @@ def test_camera_pipeline_preset_defaults_detection_to_rfdetr_medium(
         assert _vision_detect_config(pipeline).get("model_id") == "rfdetr_det_medium"
         assert _vision_detect_config(pipeline).get("categories") == ["person"]
         assert _node_config(pipeline, "vision.track").get("close_after_seconds") == 5.0
+        assert "vision.group_events" not in _operator_ids(pipeline)
         assert "vision.event_assembler" not in _operator_ids(pipeline)
         assert _node_config(pipeline, "core.throttle").get("interval_seconds") == 10.0
         assert _node_config(pipeline, "core.notify").get("dedupe_key_template") == "{{subject.id}}"
@@ -219,12 +220,16 @@ def test_camera_pipeline_preset_defaults_detection_to_rfdetr_medium(
         overview = res.json()
         assert overview["pipelines"][0]["name"] == pipeline_name
         assert (
-            overview["suggested_pipeline_names"]["people_detection"]
-            == "entrada_principal_deteccao_simples_de_pessoas_2"
+            overview["suggested_pipeline_names"]["people_individual"]
+            == "entrada_principal_evento_individual_de_pessoas_2"
         )
         assert (
-            overview["suggested_pipeline_names"]["people_mapping"]
-            == "entrada_principal_deteccao_e_mapeamento_de_pessoas"
+            overview["suggested_pipeline_names"]["people_quiet"]
+            == "entrada_principal_presenca_agrupada_de_pessoas"
+        )
+        assert (
+            overview["suggested_pipeline_names"]["presence_area"]
+            == "entrada_principal_presenca_agrupada_em_area"
         )
         assert (
             overview["suggested_pipeline_names"]["vehicle_stopped"]
@@ -233,13 +238,37 @@ def test_camera_pipeline_preset_defaults_detection_to_rfdetr_medium(
 
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
-            json={"preset": "people_detection", "enabled": True},
+            json={"preset": "people_individual", "enabled": True},
         )
         assert res.status_code == 200
-        assert res.json()["pipeline_name"] == "entrada_principal_deteccao_simples_de_pessoas_2"
+        assert res.json()["pipeline_name"] == "entrada_principal_evento_individual_de_pessoas_2"
 
 
-def test_camera_pipeline_mapping_preset_adds_mapping_and_velocity(
+def test_camera_pipeline_quiet_preset_adds_session_grouping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+
+        res = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={"preset": "people_quiet"},
+        )
+        assert res.status_code == 200, res.text
+        pipeline_name = res.json()["pipeline_name"]
+        assert pipeline_name == "entrada_principal_presenca_agrupada_de_pessoas"
+
+        res = client.get(f"/api/pipelines/{pipeline_name}")
+        assert res.status_code == 200
+        pipeline = res.json()
+        assert _vision_detect_config(pipeline).get("categories") == ["person", "dog", "cat"]
+        assert _node_config(pipeline, "vision.group_events").get("mode") == "session"
+        assert _node_config(pipeline, "vision.group_events").get("categories") == ["person", "dog", "cat"]
+        assert _node_config(pipeline, "core.notify").get("dedupe_key_template") == "{{subject.id}}"
+
+
+def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -305,11 +334,11 @@ def test_camera_pipeline_mapping_preset_adds_mapping_and_velocity(
 
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
-            json={"preset": "people_mapping"},
+            json={"preset": "presence_area"},
         )
         assert res.status_code == 200, res.text
         pipeline_name = res.json()["pipeline_name"]
-        assert pipeline_name == "entrada_principal_deteccao_e_mapeamento_de_pessoas"
+        assert pipeline_name == "entrada_principal_presenca_agrupada_em_area"
 
         res = client.get(f"/api/pipelines/{pipeline_name}")
         assert res.status_code == 200
@@ -318,6 +347,8 @@ def test_camera_pipeline_mapping_preset_adds_mapping_and_velocity(
         assert "vision.event_assembler" not in _operator_ids(pipeline)
         assert _node_config(pipeline, "camera.camera_mapping").get("composition_id") == "yard"
         assert _node_config(pipeline, "camera.velocity_estimation").get("filter_mode") == "annotate"
+        assert _node_config(pipeline, "vision.group_events").get("mode") == "proximity"
+        assert _node_config(pipeline, "vision.group_events").get("group_distance_meters") == 10.0
         assert _node_config(pipeline, "core.throttle").get("interval_seconds") == 10.0
         assert _node_config(pipeline, "core.notify").get("dedupe_key_template") == "{{subject.id}}"
 

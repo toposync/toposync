@@ -9,6 +9,7 @@ from toposync_ext_vision.pipelines import (
     ImageClassificationResult,
     ModelRegistry,
     VisionClassifyImageConfig,
+    VisionGroupEventsConfig,
     PoseObject,
     SegmentationInstance,
     TrackedObject,
@@ -285,6 +286,28 @@ def test_vision_track_config_normalizes_tracker_and_event_stitching_defaults() -
         VisionTrackConfig.model_validate({"emit_mode": "events"})
 
 
+def test_vision_group_events_config_normalizes_defaults_and_categories() -> None:
+    default_config = VisionGroupEventsConfig.model_validate({})
+    assert default_config.mode == "session"
+    assert default_config.categories == []
+    assert default_config.use_world_anchor == "auto"
+    assert default_config.group_event_id_prefix == "grp"
+
+    config = VisionGroupEventsConfig.model_validate(
+        {
+            "mode": " Proximity ",
+            "categories": [" Person ", "dog", "person"],
+            "use_world_anchor": " Always ",
+            "group_event_id_prefix": " GRP ",
+        }
+    )
+
+    assert config.mode == "proximity"
+    assert config.categories == ["person", "dog"]
+    assert config.use_world_anchor == "always"
+    assert config.group_event_id_prefix == "grp"
+
+
 def test_segmentation_instance_normalizes_bbox_polygon_and_metadata() -> None:
     instance = SegmentationInstance(
         label=" Person ",
@@ -371,6 +394,18 @@ def test_register_vision_pipeline_operators_does_not_expose_event_assembler() ->
     register_vision_pipeline_operators(registry)
 
     assert registry.get("vision.event_assembler") is None
+
+
+def test_register_vision_pipeline_operators_exposes_group_events() -> None:
+    registry = OperatorRegistry()
+
+    register_vision_pipeline_operators(registry)
+    operator = registry.get("vision.group_events")
+
+    assert operator is not None
+    assert operator.owner == "com.toposync.vision"
+    assert "grouping" in list(operator.definition.capabilities or [])
+    assert operator.definition.defaults.get("mode") == "session"
 
 
 def test_vision_operator_diagnostics_report_missing_model_artifact(

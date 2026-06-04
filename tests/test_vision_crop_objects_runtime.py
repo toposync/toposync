@@ -128,3 +128,45 @@ def test_vision_crop_objects_reads_detected_object_bbox_fallback() -> None:
         assert tuple(out.artifacts["object"].data.shape[:2]) == (20, 20)
 
     asyncio.run(scenario())
+
+
+def test_vision_crop_objects_reads_group_event_subject_bbox() -> None:
+    async def scenario() -> None:
+        crop = VisionCropObjectsRuntime(
+            {
+                "padding_ratio": 0.0,
+                "min_crop_size_px": 1,
+            }
+        )
+        packet = Packet.create(
+            stream_id="group:camera:test:1",
+            lifecycle=Lifecycle.UPDATE,
+            payload={
+                "event_id": "grp:camera:test:1",
+                "group_event_id": "grp:camera:test:1",
+                "subject": {
+                    "type": "group_event",
+                    "id": "grp:camera:test:1",
+                    "lifecycle": "update",
+                    "bbox01": [0.10, 0.20, 0.60, 0.80],
+                    "member_event_ids": ["evt:camera:test:1", "evt:camera:test:2"],
+                },
+            },
+            artifacts={
+                "main": Artifact(
+                    name="main",
+                    data=np.zeros((100, 100, 3), dtype=np.uint8),
+                    mime_type="image/raw",
+                )
+            },
+        )
+
+        out = (await crop.process_packet(packet, _Context()))[0]
+
+        assert out.stream_id == packet.stream_id
+        assert out.payload.get("event_id") == "grp:camera:test:1"
+        assert "main" in out.artifacts
+        assert tuple(out.artifacts["main"].data.shape[:2]) == (60, 50)
+        assert out.artifacts["main"].metadata["bbox_source"] == "payload:subject.bbox01"
+
+    asyncio.run(scenario())

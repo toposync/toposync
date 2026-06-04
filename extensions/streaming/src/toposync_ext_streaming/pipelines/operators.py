@@ -290,6 +290,15 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
                 "Use a continuous visual branch for normal streaming, or keep this branch only when event-gated streaming is intentional.",
                 {"source_node_id": node_id},
             )
+            continue
+
+        if operator_id == "vision.group_events":
+            add(
+                "stream_publish_video_event_gated_group_events",
+                f"stream.publish_video is downstream of grouped events '{node_id}', which emits group lifecycle packets.",
+                "Use a continuous visual branch for normal streaming, or keep this branch only when event-gated streaming is intentional.",
+                {"source_node_id": node_id},
+            )
 
     return diagnostics
 

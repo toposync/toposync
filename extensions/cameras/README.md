@@ -42,9 +42,10 @@ Public vision operators are registered by the `com.toposync.vision` extension:
 
 - `vision.detect`
 - `vision.track`
+- `vision.group_events`
 - `vision.crop_objects`
 
-Legacy vendor-specific YOLO/Ultralytics runtimes are not part of the official first-party path in this extension. If you need one of those integrations in the future, ship it as a separate package and keep `vision.detect` / `vision.track` as the public operator contract.
+Legacy vendor-specific YOLO/Ultralytics runtimes are not part of the official first-party path in this extension. If you need one of those integrations in the future, ship it as a separate package and keep `vision.detect` / `vision.track` / `vision.group_events` as the public operator contract.
 
 ## Dependencies
 

@@ -267,7 +267,7 @@ export type CameraContextsResponse = {
   compositions: CameraContextComposition[];
 };
 
-export type CameraPipelinePreset = "people_detection" | "people_mapping" | "vehicle_stopped";
+export type CameraPipelinePreset = "people_individual" | "people_quiet" | "presence_area" | "vehicle_stopped";
 export type CameraNotificationPriority = "low" | "medium" | "high";
 
 export type CameraPipelineSummary = {

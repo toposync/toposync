@@ -729,10 +729,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.artifact_privacy": "Remove sensitive images",
     "core.ui.pipelines.operator_name.camera.image_privacy": "Hide image area",
     "core.ui.pipelines.operator_name.vision.track": "Track objects",
+    "core.ui.pipelines.operator_name.vision.group_events": "Group events",
     "core.ui.pipelines.operator_name.vision.classify_image": "Classify scene",
     "core.ui.pipelines.operator_name.vision.detect": "Detect objects",
     "core.ui.pipelines.recipe_name.vision.detect_objects": "Detect objects",
     "core.ui.pipelines.recipe_name.vision.detect_and_track_objects": "Detect and track objects",
+    "core.ui.pipelines.recipe_name.vision.detect_track_and_group_objects": "Detect, track, and group objects",
     "core.ui.pipelines.operator_name.vision.segment_instances": "Separate objects from scene",
     "core.ui.pipelines.operator_name.vision.crop_objects": "Crop objects",
     "core.ui.pipelines.operator_name.vision.pose_estimate": "Estimate pose",
@@ -795,6 +797,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Corrects lens distortion using the camera calibration matrix and coefficients.",
     "core.ui.pipelines.operator_description.vision.track":
       "Links detections over time, stitches technical tracklets, and emits stable object events with subject.id.",
+    "core.ui.pipelines.operator_description.vision.group_events":
+      "Groups related object events into quieter group_event subjects for storage and notifications.",
     "core.ui.pipelines.operator_description.vision.classify_image":
       "Classifies the full image with semantic labels and attaches the results to the flow.",
     "core.ui.pipelines.operator_description.vision.detect":
@@ -803,6 +807,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Creates detection events for objects found in the stream.",
     "core.ui.pipelines.recipe_description.vision.detect_and_track_objects":
       "Detects objects, follows technical tracklets, and assembles stable product events.",
+    "core.ui.pipelines.recipe_description.vision.detect_track_and_group_objects":
+      "Detects objects, tracks individuals, and groups related activity into one quieter event.",
     "core.ui.pipelines.operator_description.vision.segment_instances":
       "Generates one mask per detected object and keeps the mask and detection box together.",
     "core.ui.pipelines.operator_description.vision.crop_objects":
@@ -1448,6 +1454,24 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Leave empty to detect everything the selected model knows how to find.",
     "core.ui.pipelines.panels.yolo.segmentation_categories_hint":
       "Leave empty to segment everything the selected model knows how to separate.",
+    "core.ui.pipelines.panels.group_events.hint":
+      "Creates a higher-level subject from individual tracking events so downstream storage and notifications use the group identity.",
+    "core.ui.pipelines.panels.group_events.mode": "Grouping mode",
+    "core.ui.pipelines.panels.group_events.mode.session": "Session",
+    "core.ui.pipelines.panels.group_events.mode.proximity": "Proximity",
+    "core.ui.pipelines.panels.group_events.mode.disabled": "Disabled",
+    "core.ui.pipelines.panels.group_events.categories_hint": "Leave empty to group every event category.",
+    "core.ui.pipelines.panels.group_events.idle_timeout_seconds": "Idle close (seconds)",
+    "core.ui.pipelines.panels.group_events.update_interval_seconds": "Update interval (seconds)",
+    "core.ui.pipelines.panels.group_events.use_world_anchor": "World anchor",
+    "core.ui.pipelines.panels.group_events.use_world_anchor.auto": "Auto",
+    "core.ui.pipelines.panels.group_events.use_world_anchor.always": "Require",
+    "core.ui.pipelines.panels.group_events.use_world_anchor.never": "Ignore",
+    "core.ui.pipelines.panels.group_events.group_distance_meters": "World distance (m)",
+    "core.ui.pipelines.panels.group_events.image_center_distance": "Image distance",
+    "core.ui.pipelines.panels.group_events.include_stationary_members": "Include stationary members",
+    "core.ui.pipelines.panels.group_events.bbox_padding_ratio": "Group crop padding",
+    "core.ui.pipelines.panels.group_events.max_crop_area_ratio": "Maximum crop area",
     "core.ui.pipelines.panels.yolo.model_id": "Model",
     "core.ui.pipelines.panels.yolo.model_id_hint":
       "Choose the detection model. This quick list favors models that fit the selected machine.",
@@ -2736,10 +2760,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.artifact_privacy": "Remover imagens sensíveis",
     "core.ui.pipelines.operator_name.camera.image_privacy": "Ocultar área da imagem",
     "core.ui.pipelines.operator_name.vision.track": "Acompanhar objetos",
+    "core.ui.pipelines.operator_name.vision.group_events": "Agrupar eventos",
     "core.ui.pipelines.operator_name.vision.classify_image": "Classificar cena",
     "core.ui.pipelines.operator_name.vision.detect": "Detectar objetos",
     "core.ui.pipelines.recipe_name.vision.detect_objects": "Detectar objetos",
     "core.ui.pipelines.recipe_name.vision.detect_and_track_objects": "Detectar e acompanhar objetos",
+    "core.ui.pipelines.recipe_name.vision.detect_track_and_group_objects": "Detectar, acompanhar e agrupar objetos",
     "core.ui.pipelines.operator_name.vision.segment_instances": "Separar objetos da cena",
     "core.ui.pipelines.operator_name.vision.crop_objects": "Recortar objetos",
     "core.ui.pipelines.operator_name.vision.pose_estimate": "Estimar pose",
@@ -2802,6 +2828,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Corrige a distorção da lente usando a calibração da câmera.",
     "core.ui.pipelines.operator_description.vision.track":
       "Liga detecções ao longo do tempo, junta tracklets técnicos e emite eventos de objeto estáveis com subject.id.",
+    "core.ui.pipelines.operator_description.vision.group_events":
+      "Agrupa eventos de objeto relacionados em subjects group_event mais silenciosos para armazenamento e notificações.",
     "core.ui.pipelines.operator_description.vision.classify_image":
       "Classifica a imagem inteira com rótulos semânticos e anexa os resultados ao fluxo.",
     "core.ui.pipelines.operator_description.vision.detect":
@@ -2810,6 +2838,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Cria eventos de detecção para objetos encontrados no fluxo.",
     "core.ui.pipelines.recipe_description.vision.detect_and_track_objects":
       "Detecta objetos, acompanha tracklets técnicos e monta eventos de produto estáveis.",
+    "core.ui.pipelines.recipe_description.vision.detect_track_and_group_objects":
+      "Detecta objetos, acompanha indivíduos e agrupa atividades relacionadas em um evento mais silencioso.",
     "core.ui.pipelines.operator_description.vision.segment_instances":
       "Gera uma máscara por objeto detectado e mantém máscara e caixa de detecção juntas.",
     "core.ui.pipelines.operator_description.vision.crop_objects":
@@ -3462,6 +3492,24 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Deixe em branco para detectar tudo o que o modelo selecionado sabe encontrar.",
     "core.ui.pipelines.panels.yolo.segmentation_categories_hint":
       "Deixe em branco para segmentar tudo o que o modelo selecionado sabe separar.",
+    "core.ui.pipelines.panels.group_events.hint":
+      "Cria um subject de nível mais alto a partir dos eventos individuais de rastreamento para que armazenamento e notificações usem a identidade do grupo.",
+    "core.ui.pipelines.panels.group_events.mode": "Modo de agrupamento",
+    "core.ui.pipelines.panels.group_events.mode.session": "Sessão",
+    "core.ui.pipelines.panels.group_events.mode.proximity": "Proximidade",
+    "core.ui.pipelines.panels.group_events.mode.disabled": "Desativado",
+    "core.ui.pipelines.panels.group_events.categories_hint": "Deixe em branco para agrupar todas as categorias de evento.",
+    "core.ui.pipelines.panels.group_events.idle_timeout_seconds": "Fechamento ocioso (segundos)",
+    "core.ui.pipelines.panels.group_events.update_interval_seconds": "Intervalo de atualização (segundos)",
+    "core.ui.pipelines.panels.group_events.use_world_anchor": "Âncora no ambiente",
+    "core.ui.pipelines.panels.group_events.use_world_anchor.auto": "Automático",
+    "core.ui.pipelines.panels.group_events.use_world_anchor.always": "Exigir",
+    "core.ui.pipelines.panels.group_events.use_world_anchor.never": "Ignorar",
+    "core.ui.pipelines.panels.group_events.group_distance_meters": "Distância no ambiente (m)",
+    "core.ui.pipelines.panels.group_events.image_center_distance": "Distância na imagem",
+    "core.ui.pipelines.panels.group_events.include_stationary_members": "Incluir membros parados",
+    "core.ui.pipelines.panels.group_events.bbox_padding_ratio": "Margem do recorte do grupo",
+    "core.ui.pipelines.panels.group_events.max_crop_area_ratio": "Área máxima do recorte",
     "core.ui.pipelines.panels.yolo.model_id": "Modelo",
     "core.ui.pipelines.panels.yolo.model_id_hint":
       "Escolha o modelo de detecção. Esta lista rápida prioriza opções que cabem na máquina selecionada.",

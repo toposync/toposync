@@ -156,6 +156,77 @@ class VisionTrackConfig(BaseModel):
         return out
 
 
+VisionGroupEventsMode = Literal["session", "proximity", "disabled"]
+VisionGroupEventsWorldAnchorMode = Literal["auto", "always", "never"]
+VisionGroupEventsSummaryStyle = Literal["qualitative"]
+
+
+class VisionGroupEventsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: VisionGroupEventsMode = "session"
+    categories: list[str] = Field(
+        default_factory=list,
+        description="Eligible subject categories. Empty means every category.",
+    )
+    idle_timeout_seconds: float = Field(default=30.0, ge=1.0, le=3600.0)
+    update_interval_seconds: float = Field(default=5.0, ge=0.0, le=300.0)
+    use_world_anchor: VisionGroupEventsWorldAnchorMode = "auto"
+    group_distance_meters: float = Field(default=10.0, ge=0.0, le=1000.0)
+    image_center_distance: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=2.0,
+        description="Normalized image-plane center distance used when world anchors are unavailable.",
+    )
+    include_stationary_members: bool = False
+    bbox_padding_ratio: float = Field(default=0.08, ge=0.0, le=1.0)
+    max_crop_area_ratio: float = Field(default=0.75, ge=0.01, le=1.0)
+    summary_style: VisionGroupEventsSummaryStyle = "qualitative"
+    group_event_id_prefix: str = "grp"
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _normalize_mode(cls, value: Any) -> str:
+        mode = str(value or "").strip().lower()
+        if not mode:
+            return "session"
+        if mode in {"session", "proximity", "disabled"}:
+            return mode
+        raise ValueError("mode must be one of: session, proximity, disabled")
+
+    @field_validator("use_world_anchor", mode="before")
+    @classmethod
+    def _normalize_world_anchor_mode(cls, value: Any) -> str:
+        mode = str(value or "").strip().lower()
+        if not mode:
+            return "auto"
+        if mode in {"auto", "always", "never"}:
+            return mode
+        raise ValueError("use_world_anchor must be one of: auto, always, never")
+
+    @field_validator("categories")
+    @classmethod
+    def _normalize_categories(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            category = str(raw or "").strip().lower()
+            if not category or category in seen:
+                continue
+            out.append(category)
+            seen.add(category)
+        return out
+
+    @field_validator("group_event_id_prefix")
+    @classmethod
+    def _normalize_group_event_id_prefix(cls, value: str) -> str:
+        prefix = str(value or "").strip().lower()
+        if not prefix:
+            return "grp"
+        return prefix
+
+
 class VisionSegmentInstancesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

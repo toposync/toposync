@@ -115,6 +115,9 @@ type LocalBuildConsentState = {
   action: "prepare" | "update";
 };
 
+const GROUP_EVENT_MODE_OPTIONS = ["session", "proximity", "disabled"] as const;
+const GROUP_EVENT_WORLD_ANCHOR_OPTIONS = ["auto", "always", "never"] as const;
+
 type VisionTaskCatalog = {
   task: string;
   profile: string;
@@ -635,6 +638,225 @@ function buildClassificationPrivacyMatchExpression(labels: string[], minScore: n
 
 function buildClassificationPrivacyAllowExpression(labels: string[], minScore: number): string {
   return `not (${buildClassificationPrivacyMatchExpression(labels, minScore)})`;
+}
+
+export function VisionGroupEventsConfigCard({
+  config,
+  showAdvanced,
+  onUpdateConfig,
+}: {
+  config: Record<string, unknown>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+}): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const categoriesRaw = (config as any).categories;
+  const categories = Array.isArray(categoriesRaw)
+    ? categoriesRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
+    : [];
+  const categoryOptions = useMemo<SelectOption[]>(() => {
+    const known = new Set(YOLO_CATEGORY_OPTIONS.map((item) => item.value));
+    const extras = categories
+      .filter((value) => !known.has(value))
+      .map((value) => ({ value, label: value }));
+    return [...YOLO_CATEGORY_OPTIONS, ...extras];
+  }, [categories]);
+  const selectedCategories = useMemo(
+    () => categoryOptions.filter((option) => categories.includes(option.value)),
+    [categories, categoryOptions],
+  );
+  const modeRaw = String((config as any).mode ?? "session").trim().toLowerCase();
+  const mode = GROUP_EVENT_MODE_OPTIONS.includes(modeRaw as any) ? modeRaw : "session";
+  const worldAnchorRaw = String((config as any).use_world_anchor ?? "auto").trim().toLowerCase();
+  const useWorldAnchor = GROUP_EVENT_WORLD_ANCHOR_OPTIONS.includes(worldAnchorRaw as any) ? worldAnchorRaw : "auto";
+  const idleTimeoutRaw = Number((config as any).idle_timeout_seconds ?? 30);
+  const idleTimeout = Number.isFinite(idleTimeoutRaw) ? Math.max(1, Math.min(3600, idleTimeoutRaw)) : 30;
+  const updateIntervalRaw = Number((config as any).update_interval_seconds ?? 5);
+  const updateInterval = Number.isFinite(updateIntervalRaw) ? Math.max(0, Math.min(300, updateIntervalRaw)) : 5;
+  const groupDistanceRaw = Number((config as any).group_distance_meters ?? 10);
+  const groupDistance = Number.isFinite(groupDistanceRaw) ? Math.max(0, Math.min(1000, groupDistanceRaw)) : 10;
+  const imageDistanceRaw = Number((config as any).image_center_distance ?? 0.25);
+  const imageDistance = Number.isFinite(imageDistanceRaw) ? Math.max(0, Math.min(2, imageDistanceRaw)) : 0.25;
+  const includeStationaryMembers = Boolean((config as any).include_stationary_members ?? false);
+  const bboxPaddingRaw = Number((config as any).bbox_padding_ratio ?? 0.08);
+  const bboxPadding = Number.isFinite(bboxPaddingRaw) ? Math.max(0, Math.min(1, bboxPaddingRaw)) : 0.08;
+  const maxCropAreaRaw = Number((config as any).max_crop_area_ratio ?? 0.75);
+  const maxCropArea = Number.isFinite(maxCropAreaRaw) ? Math.max(0.01, Math.min(1, maxCropAreaRaw)) : 0.75;
+
+  return (
+    <div className="pipelinesStepConfigForm">
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.group_events.hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.group_events.mode")}</span>
+        <select
+          className="pipelinesSelect"
+          value={mode}
+          onChange={(event) => {
+            onUpdateConfig((prev) => ({ ...prev, mode: event.target.value }));
+          }}
+        >
+          <option value="session">{t("core.ui.pipelines.panels.group_events.mode.session")}</option>
+          <option value="proximity">{t("core.ui.pipelines.panels.group_events.mode.proximity")}</option>
+          <option value="disabled">{t("core.ui.pipelines.panels.group_events.mode.disabled")}</option>
+        </select>
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.yolo.categories")}</span>
+        <Select
+          classNamePrefix="pipelinesReactSelect"
+          styles={pipelinesReactSelectStyles}
+          isMulti
+          options={categoryOptions}
+          value={selectedCategories}
+          placeholder={t("core.ui.pipelines.panels.yolo.categories_placeholder")}
+          onChange={(nextValue: MultiValue<SelectOption>) => {
+            const nextCategories = Array.from(
+              new Set(nextValue.map((item) => String(item.value || "").trim().toLowerCase()).filter(Boolean)),
+            );
+            onUpdateConfig((prev) => ({ ...prev, categories: nextCategories }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.group_events.categories_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.group_events.idle_timeout_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={1}
+          max={3600}
+          step={1}
+          value={idleTimeout}
+          onChange={(nextValue) => {
+            onUpdateConfig((prev) => ({
+              ...prev,
+              idle_timeout_seconds: Math.max(1, Math.min(3600, nextValue)),
+            }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.group_events.update_interval_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={300}
+          step={0.5}
+          value={updateInterval}
+          onChange={(nextValue) => {
+            onUpdateConfig((prev) => ({
+              ...prev,
+              update_interval_seconds: Math.max(0, Math.min(300, nextValue)),
+            }));
+          }}
+        />
+      </label>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.group_events.use_world_anchor")}</span>
+            <select
+              className="pipelinesSelect"
+              value={useWorldAnchor}
+              onChange={(event) => {
+                onUpdateConfig((prev) => ({ ...prev, use_world_anchor: event.target.value }));
+              }}
+            >
+              <option value="auto">{t("core.ui.pipelines.panels.group_events.use_world_anchor.auto")}</option>
+              <option value="always">{t("core.ui.pipelines.panels.group_events.use_world_anchor.always")}</option>
+              <option value="never">{t("core.ui.pipelines.panels.group_events.use_world_anchor.never")}</option>
+            </select>
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.group_events.group_distance_meters")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={1000}
+              step={0.5}
+              value={groupDistance}
+              onChange={(nextValue) => {
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  group_distance_meters: Math.max(0, Math.min(1000, nextValue)),
+                }));
+              }}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.group_events.image_center_distance")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={2}
+              step={0.01}
+              value={imageDistance}
+              onChange={(nextValue) => {
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  image_center_distance: Math.max(0, Math.min(2, nextValue)),
+                }));
+              }}
+            />
+          </label>
+
+          <label className="pipelinesCheckboxLabel">
+            <input
+              type="checkbox"
+              checked={includeStationaryMembers}
+              onChange={(event) => {
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  include_stationary_members: event.target.checked,
+                }));
+              }}
+            />
+            <span>{t("core.ui.pipelines.panels.group_events.include_stationary_members")}</span>
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.group_events.bbox_padding_ratio")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={1}
+              step={0.01}
+              value={bboxPadding}
+              onChange={(nextValue) => {
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  bbox_padding_ratio: Math.max(0, Math.min(1, nextValue)),
+                }));
+              }}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.group_events.max_crop_area_ratio")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0.01}
+              max={1}
+              step={0.01}
+              value={maxCropArea}
+              onChange={(nextValue) => {
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  max_crop_area_ratio: Math.max(0.01, Math.min(1, nextValue)),
+                }));
+              }}
+            />
+          </label>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 export function VisionConfigCard({

@@ -22,6 +22,7 @@ export const PIPELINE_PRESET_OPERATOR_IDS = [
   "camera.auto_gamma",
   "camera.global_stabilize",
   "vision.track",
+  "vision.group_events",
   "vision.classify_image",
   "vision.detect",
   "vision.segment_instances",
@@ -165,6 +166,42 @@ export const PIPELINE_OPERATOR_RECIPES = [
       },
     ],
   },
+  {
+    id: "recipe.vision.detect_track_and_group_objects",
+    group: "vision",
+    level: "basic",
+    order: 30,
+    labelKey: "core.ui.pipelines.recipe_name.vision.detect_track_and_group_objects",
+    descriptionKey: "core.ui.pipelines.recipe_description.vision.detect_track_and_group_objects",
+    fallbackLabel: "Detect, track, and group objects",
+    fallbackDescription: "Tracks individual objects and groups related activity into one quieter event.",
+    steps: [
+      {
+        operatorId: "vision.detect",
+        defaultsOverride: {
+          emit_mode: "annotate",
+        },
+      },
+      {
+        operatorId: "vision.track",
+        defaultsOverride: {
+          tracker_id: "simple_iou_kalman",
+          close_after_seconds: 5.0,
+          default_interval_seconds: 0.25,
+        },
+      },
+      {
+        operatorId: "vision.group_events",
+        defaultsOverride: {
+          mode: "session",
+          categories: ["person", "dog", "cat"],
+          idle_timeout_seconds: 30.0,
+          update_interval_seconds: 5.0,
+          use_world_anchor: "auto",
+        },
+      },
+    ],
+  },
 ] satisfies PipelineOperatorRecipeDefinition[];
 
 export const PIPELINE_OPERATOR_UX = {
@@ -199,12 +236,13 @@ export const PIPELINE_OPERATOR_UX = {
 
   "vision.detect": { group: "vision", level: "advanced", order: 10 },
   "vision.track": { group: "vision", level: "advanced", order: 20 },
-  "vision.classify_image": { group: "vision", level: "advanced", order: 30 },
-  "vision.segment_instances": { group: "vision", level: "basic", order: 40 },
-  "vision.crop_objects": { group: "vision", level: "basic", order: 50 },
-  "ai.condition_filter": { group: "vision", level: "basic", order: 60 },
-  "ai.smart_crop": { group: "vision", level: "basic", order: 70 },
-  "vision.pose_estimate": { group: "vision", level: "advanced", order: 80 },
+  "vision.group_events": { group: "vision", level: "advanced", order: 30 },
+  "vision.classify_image": { group: "vision", level: "advanced", order: 40 },
+  "vision.segment_instances": { group: "vision", level: "basic", order: 50 },
+  "vision.crop_objects": { group: "vision", level: "basic", order: 60 },
+  "ai.condition_filter": { group: "vision", level: "basic", order: 70 },
+  "ai.smart_crop": { group: "vision", level: "basic", order: 80 },
+  "vision.pose_estimate": { group: "vision", level: "advanced", order: 90 },
 
   "core.category_gate": { group: "rules", level: "advanced", order: 10 },
   "core.filter": { group: "rules", level: "advanced", order: 20 },
@@ -258,6 +296,7 @@ export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "camera.global_stabilize": "Stabilize image",
   "camera.lens_undistort": "Correct lens distortion",
   "vision.track": "Track objects",
+  "vision.group_events": "Group events",
   "vision.classify_image": "Classify scene",
   "vision.detect": "Detect objects",
   "vision.segment_instances": "Separate objects from scene",

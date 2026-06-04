@@ -6,6 +6,7 @@ First-party extension focused on public task-oriented vision operators for the P
 
 - `vision.detect`
 - `vision.track`
+- `vision.group_events`
 - `vision.crop_objects`
 - `vision.segment_instances`
 - `vision.pose_estimate` (skeleton only; not launched yet)
@@ -93,6 +94,7 @@ The public surface is task-based, not vendor-based. The official first-party run
   - `simple_iou_kalman`
   - `norfair`
 - `vision.track` emits stable per-object lifecycle packets directly. The product identity is `payload["subject"]["id"]`; technical tracker details stay available as `tracklet_id`, `tracklet_ids`, `raw_tracking_id`, and `identity_id`.
+- `vision.group_events` consumes individual `subject.type="event"` packets and emits aggregated `subject.type="group_event"` packets with `group_event_id`, `member_event_ids`, `category_summary`, and grouped `subject.bbox01` for quieter storage and notifications.
 - `vision.detect` events are short OPEN/CLOSE notifications; use `vision.track` when you need temporal identity, movement, and long-lived per-object lifecycle.
 - `vision.crop_objects` crops the bbox from `payload["subject"]["bbox01"]` by default and preserves event/subject identifiers. It is not instance segmentation.
 

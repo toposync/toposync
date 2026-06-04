@@ -40,6 +40,7 @@ _UNSUPPORTED_OPERATOR_IDS: set[str] = {
     "stream.publish_video",
     "vision.crop_objects",
     "vision.detect",
+    "vision.group_events",
     "vision.pose_estimate",
     "vision.segment_instances",
     "vision.track",

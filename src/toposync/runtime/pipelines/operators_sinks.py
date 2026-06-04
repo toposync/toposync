@@ -450,6 +450,8 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         )
         event_id = _resolve_string(packet, "event_id")
         event_code = _resolve_string(packet, "event_code")
+        group_event_id = _resolve_string(packet, "group_event_id")
+        group_event_code = _resolve_string(packet, "group_event_code")
         tracking_id = _resolve_string(packet, "tracking_id")
         token = (
             subject_id
@@ -562,6 +564,13 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                     meta["subject_type"] = subject_type
                 if subject_lifecycle:
                     meta["subject_lifecycle"] = subject_lifecycle
+                if group_event_id:
+                    meta["group_event_id"] = group_event_id
+                if group_event_code:
+                    meta["group_event_code"] = group_event_code
+                member_event_ids = packet.payload.get("member_event_ids")
+                if isinstance(member_event_ids, list):
+                    meta["member_event_ids"] = [str(item) for item in member_event_ids]
                 packet = packet.with_artifact(
                     Artifact(
                         name=artifact.name,
@@ -1091,7 +1100,13 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "motion",
         "event_id",
         "event_code",
+        "group_event_id",
+        "group_event_code",
         "subject",
+        "member_event_id",
+        "member_event_ids",
+        "active_member_event_ids",
+        "category_summary",
         "identity_id",
         "tracklet_id",
         "tracklet_ids",
@@ -1105,6 +1120,7 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "object_bbox01",
         "detected_object",
         "world",
+        "world_envelope",
         "mapping",
         "area_label",
         "area_labels",

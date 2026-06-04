@@ -147,7 +147,6 @@ def _build_detection_sequence(
 def _tracking_pipeline_graph(
     *, source_id: str, detect_id: str, track_id: str, sink_id: str, sink_name: str
 ) -> dict[str, Any]:
-    event_id = f"{track_id}_event"
     return {
         "schema_version": 1,
         "nodes": [
@@ -172,13 +171,7 @@ def _tracking_pipeline_graph(
                     "tracker_id": "simple_iou_kalman",
                     "default_interval_seconds": 0.0,
                     "close_after_seconds": 0.05,
-                    "emit_mode": "annotate",
                 },
-            },
-            {
-                "id": event_id,
-                "operator": "vision.event_assembler",
-                "config": {"default_interval_seconds": 0.0, "max_gap_seconds": 0.05},
             },
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
         ],
@@ -197,12 +190,6 @@ def _tracking_pipeline_graph(
             },
             {
                 "from": {"node": track_id, "port": "out"},
-                "to": {"node": event_id, "port": "in"},
-                "maxsize": 64,
-                "drop_policy": "drop_oldest",
-            },
-            {
-                "from": {"node": event_id, "port": "out"},
                 "to": {"node": sink_id, "port": "in"},
                 "maxsize": 64,
                 "drop_policy": "drop_oldest",
@@ -211,7 +198,9 @@ def _tracking_pipeline_graph(
     }
 
 
-def test_orchestrator_runs_local_bundle_and_shares_detect_and_track(tmp_path: Path) -> None:
+def test_orchestrator_runs_local_bundle_with_shared_detect_and_pipeline_local_tracking(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         counters: dict[str, Any] = {}
 

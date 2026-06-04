@@ -111,7 +111,7 @@ def test_home_assistant_notify_runtime_uses_explicit_tag_to_clear_on_close() -> 
             "close_behavior": "clear",
             "title": "",
             "message": "",
-            "tag_template": "camera:{{camera_id}}:event:{{payload.event_id}}",
+            "tag_template": "camera:{{camera_id}}:event:{{payload.subject.id}}",
         },
         PipelineRuntimeDependencies(services=services),
     )
@@ -128,6 +128,7 @@ def test_home_assistant_notify_runtime_uses_explicit_tag_to_clear_on_close() -> 
                 "area_label": "Driveway",
                 "object_category_label": "person",
                 "event_id": "event:1",
+                "subject": {"type": "event", "id": "event:1"},
             },
         )
         close_packet = Packet.create(
@@ -139,6 +140,7 @@ def test_home_assistant_notify_runtime_uses_explicit_tag_to_clear_on_close() -> 
                 "area_label": "Driveway",
                 "object_category_label": "person",
                 "event_id": "event:1",
+                "subject": {"type": "event", "id": "event:1"},
             },
         )
         await runtime.process_packet(open_packet, context)

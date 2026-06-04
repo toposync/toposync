@@ -7,7 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 VisionDetectEmitMode = Literal["annotate", "events", "filter"]
-VisionTrackEmitMode = Literal["annotate"]
 
 
 class VisionDetectConfig(BaseModel):
@@ -81,7 +80,7 @@ class VisionCropObjectsConfig(BaseModel):
 
     input_artifact_name: str = ""
     output_artifact_name: str = "main"
-    bbox_field: str = "object_bbox01"
+    bbox_field: str = "subject.bbox01"
     padding_ratio: float = Field(default=0.08, ge=0.0, le=1.0)
     min_crop_size_px: int = Field(default=8, ge=1, le=4096)
     crop_close_frames: bool = False
@@ -104,13 +103,6 @@ class VisionTrackConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tracker_id: str = "simple_iou_kalman"
-    emit_mode: VisionTrackEmitMode = Field(
-        default="annotate",
-        description=(
-            "'annotate' keeps the source frame packet and writes technical tracklets into "
-            "payload['vision']['tracks']. Use vision.event_assembler for product lifecycle events."
-        ),
-    )
     close_after_seconds: float = Field(default=4.0, ge=0.05, le=300.0)
     pause_when_gate_closed: bool = True
     max_paused_seconds: float = Field(
@@ -122,51 +114,6 @@ class VisionTrackConfig(BaseModel):
     default_interval_seconds: float = Field(default=0.2, ge=0.0, le=120.0)
     category_intervals_seconds: dict[str, float] = Field(default_factory=dict)
     use_world_anchor: bool = False
-
-    @field_validator("tracker_id")
-    @classmethod
-    def _normalize_tracker_id(cls, value: str) -> str:
-        tracker_id = str(value or "").strip().lower()
-        if not tracker_id:
-            return "simple_iou_kalman"
-        return tracker_id
-
-    @field_validator("emit_mode", mode="before")
-    @classmethod
-    def _normalize_track_emit_mode(cls, value: Any) -> str:
-        if value is None:
-            return "annotate"
-        mode = str(value or "").strip().lower()
-        if mode in {"annotate", "passthrough", "pass_through", "pass-through"}:
-            return "annotate"
-        raise ValueError("emit_mode must be annotate; use vision.event_assembler for events")
-
-    @field_validator("category_intervals_seconds")
-    @classmethod
-    def _normalize_category_intervals(cls, value: dict[str, float]) -> dict[str, float]:
-        out: dict[str, float] = {}
-        for category_raw, seconds_raw in dict(value or {}).items():
-            category = str(category_raw or "").strip().lower()
-            if not category:
-                continue
-            seconds = float(seconds_raw)
-            if not math.isfinite(seconds) or seconds < 0.0:
-                raise ValueError("Category interval must be a finite number >= 0")
-            out[category] = seconds
-        return out
-
-
-class VisionEventAssemblerConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    max_gap_seconds: float = Field(
-        default=4.0,
-        ge=0.0,
-        le=300.0,
-        description="Maximum gap before a product event is closed and no longer stitchable.",
-    )
-    default_interval_seconds: float = Field(default=0.2, ge=0.0, le=120.0)
-    category_intervals_seconds: dict[str, float] = Field(default_factory=dict)
     same_event_iou_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
     same_event_center_distance: float = Field(
         default=0.18,
@@ -178,6 +125,14 @@ class VisionEventAssemblerConfig(BaseModel):
     same_event_requires_same_class: bool = True
     event_id_prefix: str = "evt"
 
+    @field_validator("tracker_id")
+    @classmethod
+    def _normalize_tracker_id(cls, value: str) -> str:
+        tracker_id = str(value or "").strip().lower()
+        if not tracker_id:
+            return "simple_iou_kalman"
+        return tracker_id
+
     @field_validator("event_id_prefix")
     @classmethod
     def _normalize_event_id_prefix(cls, value: str) -> str:
@@ -188,7 +143,7 @@ class VisionEventAssemblerConfig(BaseModel):
 
     @field_validator("category_intervals_seconds")
     @classmethod
-    def _normalize_event_category_intervals(cls, value: dict[str, float]) -> dict[str, float]:
+    def _normalize_category_intervals(cls, value: dict[str, float]) -> dict[str, float]:
         out: dict[str, float] = {}
         for category_raw, seconds_raw in dict(value or {}).items():
             category = str(category_raw or "").strip().lower()

@@ -45,7 +45,7 @@ class FPSReducerConfig(BaseModel):
 class ThrottleConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     interval_seconds: float = Field(default=15.0, ge=0.01, le=120.0)
-    key_field: str = Field(default="payload.event_id")
+    key_field: str = Field(default="payload.subject.id")
     mode: str = Field(default="first")
 
     @field_validator("mode")
@@ -71,7 +71,7 @@ class VelocityThrottleConfig(BaseModel):
         le=3600.0,
         description="Interval for packets when entity is currently stopped.",
     )
-    key_field: str = Field(default="payload.event_id")
+    key_field: str = Field(default="payload.subject.id")
     moving_field: str = Field(
         default="payload.velocity.moving",
         description="Boolean field that indicates movement state (payload.* or metadata.* with dotted path).",
@@ -85,7 +85,7 @@ class VelocityThrottleConfig(BaseModel):
 class DebounceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     quiet_period_seconds: float = Field(default=1.0, ge=0.01, le=120.0)
-    key_field: str = Field(default="payload.event_id")
+    key_field: str = Field(default="payload.subject.id")
     mode: str = Field(default="first")
 
     @field_validator("mode")
@@ -413,8 +413,8 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
         )
         token = (
             str(
-                packet.payload.get("event_id")
-                or packet.payload.get("tracking_id")
+                _deep_get(packet.payload, "subject.id")
+                or packet.payload.get("event_id")
                 or packet.payload.get("correlation_id")
                 or packet.stream_id
             ).strip()
@@ -787,7 +787,7 @@ class FPSReducerRuntime(TransformOperatorRuntime):
         self._pending_stored_images_by_key: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        key = _resolve_key(packet, "payload.event_id")
+        key = _resolve_key(packet, "payload.subject.id")
         now = time.monotonic()
         if packet.lifecycle == Lifecycle.OPEN:
             self._pending_stored_images_by_key.pop(key, None)
@@ -839,7 +839,7 @@ class VelocityThrottleRuntime(TransformOperatorRuntime):
         parsed = VelocityThrottleConfig.model_validate(config)
         self._moving_interval_seconds = float(parsed.moving_interval_seconds)
         self._stopped_interval_seconds = float(parsed.stopped_interval_seconds)
-        self._key_field = str(parsed.key_field or "").strip() or "payload.event_id"
+        self._key_field = str(parsed.key_field or "").strip() or "payload.subject.id"
         self._moving_field = str(parsed.moving_field or "").strip() or "payload.velocity.moving"
         self._default_moving = bool(parsed.default_moving)
         self._last_emit_by_key: dict[str, float] = {}
@@ -1181,14 +1181,14 @@ def _resolve_key(packet: Packet, key_field: str) -> str:
         key = packet.packet_id
     elif key_field.startswith("payload."):
         field_name = key_field[len("payload.") :]
-        value = packet.payload.get(field_name)
+        value = _deep_get(packet.payload, field_name)
         if value is None:
             key = ""
         else:
             key = str(value)
     elif key_field.startswith("metadata."):
         field_name = key_field[len("metadata.") :]
-        value = packet.metadata.get(field_name)
+        value = _deep_get(packet.metadata, field_name)
         if value is None:
             key = ""
         else:
@@ -1196,6 +1196,18 @@ def _resolve_key(packet: Packet, key_field: str) -> str:
     if not key:
         key = packet.stream_id
     return key
+
+
+def _deep_get(container: Any, dotted_key: str) -> Any:
+    parts = [part for part in str(dotted_key or "").split(".") if part]
+    current: Any = container
+    for part in parts:
+        if not isinstance(current, dict):
+            return None
+        if part not in current:
+            return None
+        current = current.get(part)
+    return current
 
 
 def _emit_if_interval_elapsed(

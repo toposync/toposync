@@ -283,10 +283,10 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
             )
             continue
 
-        if operator_id == "vision.event_assembler":
+        if operator_id == "vision.track":
             add(
                 "stream_publish_video_event_gated_tracking",
-                f"stream.publish_video is downstream of event assembler '{node_id}'.",
+                f"stream.publish_video is downstream of tracking '{node_id}', which emits object event packets.",
                 "Use a continuous visual branch for normal streaming, or keep this branch only when event-gated streaming is intentional.",
                 {"source_node_id": node_id},
             )

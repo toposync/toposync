@@ -6,11 +6,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 
-from ...pipelines.schemas import VisionEventAssemblerConfig
+from ...pipelines.schemas import VisionTrackConfig
 from ..contracts import normalize_bbox01
 
 
@@ -142,15 +141,15 @@ class _EventState:
     last_world_anchor: dict[str, float] | None = None
 
 
-class VisionEventAssemblerRuntime(TransformOperatorRuntime):
+class TrackEventAssembler:
     def __init__(
         self,
-        config: dict[str, Any],
+        config: VisionTrackConfig,
         *,
-        operator_id: str = "vision.event_assembler",
+        operator_id: str = "vision.track",
     ) -> None:
-        self._config = VisionEventAssemblerConfig.model_validate(config)
-        self._operator_id = str(operator_id or "").strip() or "vision.event_assembler"
+        self._config = config
+        self._operator_id = str(operator_id or "").strip() or "vision.track"
         self._events_by_id: dict[str, _EventState] = {}
         self._event_id_by_tracklet_key: dict[str, str] = {}
         self._next_event_number_by_source_stream: dict[str, int] = {}
@@ -312,7 +311,7 @@ class VisionEventAssemblerRuntime(TransformOperatorRuntime):
         if self._config.same_event_requires_same_class and state.label != track.label:
             return None
         if self._age_seconds(state, now_monotonic=now_monotonic, packet_ts=packet_ts) > float(
-            self._config.max_gap_seconds
+            self._config.close_after_seconds
         ):
             return None
 
@@ -412,6 +411,7 @@ class VisionEventAssemblerRuntime(TransformOperatorRuntime):
                 "event_code": state.event_code,
                 "identity_id": None,
                 "tracklet_id": track.tracklet_id,
+                "tracklet_ids": sorted(state.tracklet_ids | {track.tracklet_id}),
                 "raw_tracking_id": track.raw_tracking_id,
                 "tracking_id": track.tracklet_id,
                 "tracker_track_id": track.raw_tracking_id,
@@ -437,44 +437,74 @@ class VisionEventAssemblerRuntime(TransformOperatorRuntime):
         now_monotonic: float,
         packet_ts: float | None,
     ) -> dict[str, Any]:
-        object_data = self._object_for_state(state, track)
         state.label = track.label
         state.active_tracklet_id = track.tracklet_id
         state.tracklet_ids.add(track.tracklet_id)
         state.last_seen_monotonic = now_monotonic
         state.last_seen_packet_ts = packet_ts
+        object_data = self._object_for_state(state, track)
         state.last_object = dict(object_data)
         state.last_bbox01 = track.bbox01
         state.last_world_anchor = dict(track.world_anchor) if track.world_anchor else None
         return object_data
 
+    def _subject_for_object(
+        self,
+        *,
+        lifecycle: Lifecycle,
+        object_data: dict[str, Any],
+        state: _EventState,
+    ) -> dict[str, Any]:
+        subject: dict[str, Any] = {
+            "type": "event",
+            "id": state.event_id,
+            "lifecycle": lifecycle.value,
+            "category": object_data.get("category") or object_data.get("label"),
+            "confidence": object_data.get("confidence"),
+            "bbox01": list(object_data.get("bbox01") or []),
+        }
+        if world_anchor := object_data.get("world_anchor"):
+            subject["world_anchor"] = dict(world_anchor) if isinstance(world_anchor, dict) else world_anchor
+        if state.tracklet_ids:
+            subject["tracklet_ids"] = sorted(state.tracklet_ids)
+        return subject
+
     def _copy_payload_with_object(
         self,
         packet: Packet,
         *,
+        lifecycle: Lifecycle,
         object_data: dict[str, Any],
         state: _EventState,
     ) -> dict[str, Any]:
         payload = dict(packet.payload)
+        payload.pop("tracking_id", None)
         vision_raw = payload.get("vision")
         vision = dict(vision_raw) if isinstance(vision_raw, dict) else {}
-        vision["task"] = "event_assembly"
+        vision["task"] = "tracking"
         vision["events"] = [dict(object_data)]
         vision["tracks"] = [dict(object_data)]
-        vision["event_assembler"] = {
+        vision["tracking_event"] = {
             "event_id": state.event_id,
             "event_code": state.event_code,
             "source_stream_id": state.source_stream_id,
+            "tracklet_ids": sorted(state.tracklet_ids),
         }
         payload["vision"] = vision
+        subject = self._subject_for_object(
+            lifecycle=lifecycle,
+            object_data=object_data,
+            state=state,
+        )
         payload.update(
             {
                 "event_id": state.event_id,
                 "event_code": state.event_code,
+                "subject": subject,
                 "identity_id": None,
                 "tracklet_id": object_data.get("tracklet_id"),
+                "tracklet_ids": sorted(state.tracklet_ids),
                 "raw_tracking_id": object_data.get("raw_tracking_id"),
-                "tracking_id": object_data.get("tracking_id"),
                 "tracker_track_id": object_data.get("tracker_track_id"),
                 "correlation_id": state.correlation_id,
                 "camera_id": object_data.get("camera_id") or payload.get("camera_id"),
@@ -492,26 +522,31 @@ class VisionEventAssemblerRuntime(TransformOperatorRuntime):
         self,
         packet: Packet,
         *,
+        lifecycle: Lifecycle,
         object_data: dict[str, Any],
         state: _EventState,
     ) -> dict[str, Any]:
         metadata = dict(packet.metadata)
+        metadata.pop("tracking_id", None)
         metadata.update(
             {
                 "operator_id": self._operator_id,
                 "source_stream_id": state.source_stream_id,
                 "event_id": state.event_id,
                 "event_code": state.event_code,
+                "subject_id": state.event_id,
+                "subject_type": "event",
+                "subject_lifecycle": lifecycle.value,
                 "identity_id": None,
                 "tracklet_id": object_data.get("tracklet_id"),
+                "tracklet_ids": sorted(state.tracklet_ids),
                 "raw_tracking_id": object_data.get("raw_tracking_id"),
-                "tracking_id": object_data.get("tracking_id"),
                 "tracker_track_id": object_data.get("tracker_track_id"),
                 "correlation_id": state.correlation_id,
                 "camera_id": object_data.get("camera_id"),
                 "object_category": object_data.get("category") or object_data.get("label"),
                 "object_confidence": object_data.get("confidence"),
-                "vision_task": "event_assembly",
+                "vision_task": "tracking",
             }
         )
         return metadata
@@ -524,8 +559,18 @@ class VisionEventAssemblerRuntime(TransformOperatorRuntime):
         object_data: dict[str, Any],
         state: _EventState,
     ) -> Packet:
-        payload = self._copy_payload_with_object(source_packet, object_data=object_data, state=state)
-        metadata = self._copy_metadata_with_object(source_packet, object_data=object_data, state=state)
+        payload = self._copy_payload_with_object(
+            source_packet,
+            lifecycle=lifecycle,
+            object_data=object_data,
+            state=state,
+        )
+        metadata = self._copy_metadata_with_object(
+            source_packet,
+            lifecycle=lifecycle,
+            object_data=object_data,
+            state=state,
+        )
         return Packet.create(
             stream_id=state.stream_id,
             lifecycle=lifecycle,
@@ -574,7 +619,7 @@ class VisionEventAssemblerRuntime(TransformOperatorRuntime):
         seen_event_ids: set[str],
     ) -> list[Packet]:
         outputs: list[Packet] = []
-        max_gap_seconds = float(self._config.max_gap_seconds)
+        max_gap_seconds = float(self._config.close_after_seconds)
         for event_id, state in list(self._events_by_id.items()):
             if state.source_stream_id not in {
                 _normalize_string(packet.payload.get("source_stream_id"))

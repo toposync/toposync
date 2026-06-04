@@ -275,7 +275,7 @@ def test_wizard_graph_defaults_detection_and_tracking_to_annotate() -> None:
     )
     assert _operator_config(tracking_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
     assert _operator_config(tracking_graph, operator_id="vision.detect").get("model_id") == "rfdetr_det_medium"
-    assert _operator_config(tracking_graph, operator_id="vision.track").get("emit_mode") == "annotate"
+    assert _operator_config(tracking_graph, operator_id="vision.track").get("close_after_seconds") == 5.0
 
     event_gated_tracking_graph = build_streaming_wizard_graph(
         transmission_id="transmission_main",
@@ -283,8 +283,8 @@ def test_wizard_graph_defaults_detection_and_tracking_to_annotate() -> None:
         preset_id="tracking_stream",
         optional_parameters={"stream_behavior": "event_gated"},
     )
-    assert _operator_config(event_gated_tracking_graph, operator_id="vision.track").get("emit_mode") == "annotate"
-    assert _operator_config(event_gated_tracking_graph, operator_id="vision.event_assembler").get("max_gap_seconds") == 5.0
+    assert _operator_config(event_gated_tracking_graph, operator_id="vision.track").get("close_after_seconds") == 5.0
+    assert "vision.event_assembler" not in _operator_ids(event_gated_tracking_graph)
 
 
 def test_wizard_graph_event_gated_keeps_gate_upstream_of_stream() -> None:
@@ -361,7 +361,7 @@ def test_wizard_graph_disables_yolo_filter_when_requested() -> None:
         optional_parameters={"yolo_filter_enabled": False},
     )
     assert _operator_config(tracking_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
-    assert _operator_config(tracking_graph, operator_id="vision.track").get("emit_mode") == "annotate"
+    assert _operator_config(tracking_graph, operator_id="vision.track").get("close_after_seconds") == 5.0
 
 
 def test_wizard_graph_defaults_segmentation_to_rtmdet_ins_and_mask_publish() -> None:

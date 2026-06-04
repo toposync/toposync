@@ -39,7 +39,7 @@ def test_contract_alerts_when_required_payload_keys_are_missing() -> None:
     assert any(
         alert.code == "missing_required_payload_keys"
         and alert.node_id == "crop"
-        and "object_bbox01" in alert.message
+        and "subject" in alert.message
         for alert in alerts
     )
 
@@ -259,14 +259,8 @@ def test_compile_accepts_detect_annotate_before_tracking_recipe_shape() -> None:
                     "operator": "vision.track",
                     "config": {
                         "tracker_id": "simple_iou_kalman",
-                        "emit_mode": "annotate",
                         "close_after_seconds": 5.0,
                     },
-                },
-                {
-                    "id": "event",
-                    "operator": "vision.event_assembler",
-                    "config": {"max_gap_seconds": 5.0},
                 },
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
@@ -280,12 +274,6 @@ def test_compile_accepts_detect_annotate_before_tracking_recipe_shape() -> None:
                 },
                 {
                     "from": {"node": "track", "port": "out"},
-                    "to": {"node": "event", "port": "in"},
-                    "maxsize": 64,
-                    "drop_policy": "keyed_latest_only",
-                },
-                {
-                    "from": {"node": "event", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
                     "maxsize": 64,
                     "drop_policy": "keyed_latest_only",
@@ -297,6 +285,6 @@ def test_compile_accepts_detect_annotate_before_tracking_recipe_shape() -> None:
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
     alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
 
-    assert {node.node_id for node in compiled.nodes} == {"source", "detect", "track", "event", "sink"}
+    assert {node.node_id for node in compiled.nodes} == {"source", "detect", "track", "sink"}
     assert not any(alert.code == "detect_events_before_tracking" for alert in alerts)
     assert not any(alert.code == "split_stream_latest_only_channel" for alert in alerts)

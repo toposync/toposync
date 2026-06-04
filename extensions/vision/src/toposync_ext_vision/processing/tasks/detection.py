@@ -282,6 +282,8 @@ class VisionDetectRuntime(TransformOperatorRuntime):
             payload.update(
                 {
                     "event_id": event_id,
+                    "event_code": None,
+                    "identity_id": None,
                     "tracking_id": None,
                     "tracker_track_id": None,
                     "correlation_id": correlation_id,
@@ -293,6 +295,13 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                     "detected_objects": [object_data],
                 }
             )
+            subject = {
+                "type": "event",
+                "id": event_id,
+                "category": object_data.get("category") or object_data.get("label"),
+                "confidence": payload.get("object_confidence"),
+                "bbox01": payload.get("object_bbox01"),
+            }
 
             metadata = dict(packet.metadata)
             metadata.update(
@@ -300,6 +309,8 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                     "operator_id": self._operator_id,
                     "source_stream_id": packet.stream_id,
                     "event_id": event_id,
+                    "event_code": None,
+                    "identity_id": None,
                     "tracking_id": None,
                     "tracker_track_id": None,
                     "correlation_id": correlation_id,
@@ -311,20 +322,41 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                 }
             )
 
+            open_payload = dict(payload)
+            open_payload["subject"] = {**subject, "lifecycle": Lifecycle.OPEN.value}
+            close_payload = dict(payload)
+            close_payload["subject"] = {**subject, "lifecycle": Lifecycle.CLOSE.value}
+            open_metadata = dict(metadata)
+            open_metadata.update(
+                {
+                    "subject_id": event_id,
+                    "subject_type": "event",
+                    "subject_lifecycle": Lifecycle.OPEN.value,
+                }
+            )
+            close_metadata = dict(metadata)
+            close_metadata.update(
+                {
+                    "subject_id": event_id,
+                    "subject_type": "event",
+                    "subject_lifecycle": Lifecycle.CLOSE.value,
+                }
+            )
+
             open_packet = Packet.create(
                 stream_id=stream_id,
                 lifecycle=Lifecycle.OPEN,
-                payload=payload,
+                payload=open_payload,
                 artifacts=packet.artifacts,
-                metadata=metadata,
+                metadata=open_metadata,
                 parent_packet_id=packet.packet_id,
             )
             close_packet = Packet.create(
                 stream_id=stream_id,
                 lifecycle=Lifecycle.CLOSE,
-                payload=payload,
+                payload=close_payload,
                 artifacts=packet.artifacts,
-                metadata=metadata,
+                metadata=close_metadata,
                 parent_packet_id=open_packet.packet_id,
             )
             outputs.extend([open_packet, close_packet])

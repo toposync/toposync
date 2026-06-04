@@ -104,11 +104,11 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
         sequence = [
             {
                 "lifecycle": Lifecycle.UPDATE,
-                "payload": {
-                    "frame_ts": 123.456,
-                    "camera_id": "camera-main",
-                    "tracking_id": "track-1",
-                },
+                    "payload": {
+                        "frame_ts": 123.456,
+                        "camera_id": "camera-main",
+                        "subject": {"type": "event", "id": "event-1"},
+                    },
                 "artifacts": {
                     "main": Artifact(
                         name="main",
@@ -179,7 +179,7 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
         rel = str(art.reference)
         assert rel.startswith("pipelines/stage7_store_images/")
         assert "camera-main" in rel
-        assert "track-1" in rel
+        assert "event-1" in rel
         assert "main" in rel
         assert (files_dir / str(art.reference)).is_file()
 
@@ -779,8 +779,8 @@ def test_throttle_after_store_images_preserves_notification_image_history(tmp_pa
         }
         common_payload = {
             "camera_id": "camera-main",
-            "tracking_id": "trk-throttle",
             "event_id": "trk-throttle",
+            "subject": {"type": "event", "id": "trk-throttle"},
             "object_category_label": "person",
         }
         sequence = [
@@ -822,7 +822,7 @@ def test_throttle_after_store_images_preserves_notification_image_history(tmp_pa
                 {
                     "id": "throttle",
                     "operator": "core.throttle",
-                    "config": {"interval_seconds": 120.0, "key_field": "payload.event_id"},
+                    "config": {"interval_seconds": 120.0, "key_field": "payload.subject.id"},
                 },
                 {
                     "id": "notify",

@@ -213,11 +213,6 @@ def build_pipeline_from_legacy_camera_rule(
                 "config": {"tracker_id": "simple_iou_kalman"},
             },
             {
-                "id": "event",
-                "operator": "vision.event_assembler",
-                "config": {},
-            },
-            {
                 "id": "store",
                 "operator": "core.store_images",
                 "config": {
@@ -258,12 +253,6 @@ def build_pipeline_from_legacy_camera_rule(
             },
             {
                 "from": {"node": "track", "port": "out"},
-                "to": {"node": "event", "port": "in"},
-                "maxsize": 16,
-                "drop_policy": "drop_oldest",
-            },
-            {
-                "from": {"node": "event", "port": "out"},
                 "to": {"node": "store", "port": "in"},
                 "maxsize": 16,
                 "drop_policy": "drop_oldest",

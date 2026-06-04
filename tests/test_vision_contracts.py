@@ -13,7 +13,6 @@ from toposync_ext_vision.pipelines import (
     SegmentationInstance,
     TrackedObject,
     VisionDetectConfig,
-    VisionEventAssemblerConfig,
     VisionPoseEstimateConfig,
     VisionSegmentInstancesConfig,
     VisionTrackConfig,
@@ -265,36 +264,25 @@ def test_tracked_object_normalizes_identity_score_and_bbox() -> None:
     assert tracked.metadata == {"backend": "unit"}
 
 
-def test_vision_track_config_normalizes_emit_mode_and_tracker_id() -> None:
+def test_vision_track_config_normalizes_tracker_and_event_stitching_defaults() -> None:
     default_config = VisionTrackConfig.model_validate({})
-    assert default_config.emit_mode == "annotate"
+    assert default_config.tracker_id == "simple_iou_kalman"
+    assert default_config.event_id_prefix == "evt"
 
     config = VisionTrackConfig.model_validate(
         {
             "tracker_id": " Norfair ",
-            "emit_mode": "pass-through",
-            "category_intervals_seconds": {" Person ": 0.4},
-        }
-    )
-
-    assert config.tracker_id == "norfair"
-    assert config.emit_mode == "annotate"
-    assert config.category_intervals_seconds == {"person": 0.4}
-
-    with pytest.raises(ValueError):
-        VisionTrackConfig.model_validate({"emit_mode": "events"})
-
-
-def test_vision_event_assembler_config_normalizes_defaults() -> None:
-    config = VisionEventAssemblerConfig.model_validate(
-        {
             "event_id_prefix": " EVT ",
             "category_intervals_seconds": {" Person ": 0.4},
         }
     )
 
+    assert config.tracker_id == "norfair"
     assert config.event_id_prefix == "evt"
     assert config.category_intervals_seconds == {"person": 0.4}
+
+    with pytest.raises(ValueError):
+        VisionTrackConfig.model_validate({"emit_mode": "events"})
 
 
 def test_segmentation_instance_normalizes_bbox_polygon_and_metadata() -> None:
@@ -375,6 +363,14 @@ def test_register_vision_pipeline_operators_exposes_pose_estimate() -> None:
     assert operator is not None
     assert operator.owner == "com.toposync.vision"
     assert "pose" in list(operator.definition.capabilities or [])
+
+
+def test_register_vision_pipeline_operators_does_not_expose_event_assembler() -> None:
+    registry = OperatorRegistry()
+
+    register_vision_pipeline_operators(registry)
+
+    assert registry.get("vision.event_assembler") is None
 
 
 def test_vision_operator_diagnostics_report_missing_model_artifact(

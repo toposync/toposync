@@ -2334,15 +2334,6 @@ class CamerasExtension(BaseExtension):
                         "close_after_seconds": 5.0,
                         "default_interval_seconds": 0.25,
                         "tracker_id": "simple_iou_kalman",
-                        "emit_mode": "annotate",
-                    },
-                },
-                {
-                    "id": "event",
-                    "operator": "vision.event_assembler",
-                    "config": {
-                        "max_gap_seconds": 5.0,
-                        "default_interval_seconds": 0.25,
                     },
                 },
             ]
@@ -2366,7 +2357,7 @@ class CamerasExtension(BaseExtension):
                             "description": notification_description
                             or "{{object_category_label}} - {{camera_name}}",
                             "priority": notification_priority,
-                            "dedupe_key_template": "{{event_id}}",
+                            "dedupe_key_template": "{{subject.id}}",
                         },
                     },
                 ]
@@ -2442,7 +2433,7 @@ class CamerasExtension(BaseExtension):
                                     "description": notification_description
                                     or "{{object_category_label}} - {{camera_name}}",
                                     "priority": notification_priority,
-                                    "dedupe_key_template": "{{event_id}}",
+                                    "dedupe_key_template": "{{subject.id}}",
                                 },
                             },
                         ]
@@ -2460,7 +2451,7 @@ class CamerasExtension(BaseExtension):
                         "id": "storage_throttle",
                         "operator": "core.velocity_throttle",
                         "config": {
-                            "key_field": "payload.event_id",
+                            "key_field": "payload.subject.id",
                             "moving_interval_seconds": 2.0,
                             "stopped_interval_seconds": 10.0,
                         },
@@ -2478,7 +2469,7 @@ class CamerasExtension(BaseExtension):
                         "operator": "core.lifecycle_from_boolean",
                         "config": {
                             "field": "payload.velocity.stopped",
-                            "key_field": "payload.event_id",
+                            "key_field": "payload.subject.id",
                         },
                     },
                     {
@@ -2492,7 +2483,7 @@ class CamerasExtension(BaseExtension):
                         "id": "notify_debounce",
                         "operator": "core.debounce",
                         "config": {
-                            "key_field": "payload.event_id",
+                            "key_field": "payload.subject.id",
                             "quiet_period_seconds": 120.0,
                         },
                     },
@@ -2511,7 +2502,7 @@ class CamerasExtension(BaseExtension):
                             "description": notification_description
                             or "{{object_category_label}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h",
                             "priority": notification_priority,
-                            "dedupe_key_template": "{{event_id}}",
+                            "dedupe_key_template": "{{subject.id}}",
                         },
                     },
                 ]

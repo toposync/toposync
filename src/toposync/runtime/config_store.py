@@ -338,8 +338,12 @@ def _normalize_config(config: AppConfig) -> AppConfig:
             if isinstance(value, dict):
                 for key, item in list(value.items()):
                     if isinstance(item, str):
-                        next_item = item.replace("{{tracking_id}}", "{{event_id}}")
-                        next_item = next_item.replace("payload.tracking_id", "payload.event_id")
+                        next_item = item.replace("{{tracking_id}}", "{{subject.id}}")
+                        next_item = next_item.replace("{{event_id}}", "{{subject.id}}")
+                        next_item = next_item.replace(
+                            "payload.tracking_id", "payload.subject.id"
+                        )
+                        next_item = next_item.replace("payload.event_id", "payload.subject.id")
                         if next_item != item:
                             value[key] = next_item
                             replacements += 1
@@ -350,30 +354,34 @@ def _normalize_config(config: AppConfig) -> AppConfig:
                     replacements += _replace_product_tracking_refs(item)
             return replacements
 
-        def _unique_node_id(base: str, used: set[str]) -> str:
-            raw_base = str(base or "event").strip() or "event"
-            candidate = raw_base
-            index = 2
-            while candidate in used:
-                candidate = f"{raw_base}_{index}"
-                index += 1
-            used.add(candidate)
-            return candidate
-
-        def _operator_for_node(node_id: str) -> str:
+        def _node_by_id(node_id: str) -> dict[str, Any] | None:
             for node in nodes:
-                if not isinstance(node, dict):
-                    continue
-                if str(node.get("id") or "") == node_id:
-                    return str(node.get("operator") or "").strip()
-            return ""
+                if isinstance(node, dict) and str(node.get("id") or "") == node_id:
+                    return node
+            return None
+
+        def _merge_event_config_into_track(track_config: dict[str, Any], event_config: dict[str, Any]) -> bool:
+            cfg_changed = False
+            if "max_gap_seconds" in event_config:
+                gap = _as_float(event_config.get("max_gap_seconds"))
+                if gap is not None and gap > 0.0 and track_config.get("close_after_seconds") != gap:
+                    track_config["close_after_seconds"] = gap
+                    cfg_changed = True
+            for key in (
+                "default_interval_seconds",
+                "category_intervals_seconds",
+                "same_event_iou_threshold",
+                "same_event_center_distance",
+                "same_event_world_radius_meters",
+                "same_event_requires_same_class",
+                "event_id_prefix",
+            ):
+                if key in event_config and track_config.get(key) != event_config.get(key):
+                    track_config[key] = copy.deepcopy(event_config.get(key))
+                    cfg_changed = True
+            return cfg_changed
 
         changed = bool(_replace_product_tracking_refs(migrated_graph))
-        used_node_ids = {
-            str(node.get("id") or "")
-            for node in nodes
-            if isinstance(node, dict) and str(node.get("id") or "").strip()
-        }
 
         index = 0
         while index < len(nodes):
@@ -408,78 +416,115 @@ def _normalize_config(config: AppConfig) -> AppConfig:
                 cfg["default_interval_seconds"] = 0.2
                 node_changed = True
 
-            if str(cfg.get("emit_mode") or "").strip().lower() == "events":
-                cfg["emit_mode"] = "annotate"
+            if "emit_mode" in cfg:
+                cfg.pop("emit_mode", None)
                 node_changed = True
+
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    continue
+                source = edge.get("from")
+                target = edge.get("to")
+                if not isinstance(source, dict) or not isinstance(target, dict):
+                    continue
+                if str(source.get("node") or "") != track_node_id:
+                    continue
+                event_node_id = str(target.get("node") or "").strip()
+                event_node = _node_by_id(event_node_id)
+                if not isinstance(event_node, dict):
+                    continue
+                if str(event_node.get("operator") or "").strip() != "vision.event_assembler":
+                    continue
+                event_config = event_node.get("config")
+                if isinstance(event_config, dict) and _merge_event_config_into_track(cfg, event_config):
+                    node_changed = True
 
             if node_changed:
                 changed = True
                 item["config"] = cfg
 
-            outgoing_indices = [
-                edge_index
-                for edge_index, edge in enumerate(edges)
-                if isinstance(edge, dict)
-                and isinstance(edge.get("from"), dict)
-                and str(edge["from"].get("node") or "") == track_node_id
-            ]
-            event_node_id = ""
-            non_event_outgoing_indices: list[int] = []
-            for edge_index in outgoing_indices:
-                edge = edges[edge_index]
-                to_node = edge.get("to") if isinstance(edge, dict) else None
-                to_node_id = str(to_node.get("node") or "") if isinstance(to_node, dict) else ""
-                if _operator_for_node(to_node_id) == "vision.event_assembler":
-                    event_node_id = event_node_id or to_node_id
-                else:
-                    non_event_outgoing_indices.append(edge_index)
-            if non_event_outgoing_indices:
-                add_track_to_event_edge = False
-                if not event_node_id:
-                    event_node_id = _unique_node_id(
-                        "event" if "event" not in used_node_ids else f"{track_node_id}_event",
-                        used_node_ids,
-                    )
-                    raw_gap = _as_float(cfg.get("close_after_seconds"))
-                    raw_interval = _as_float(cfg.get("default_interval_seconds"))
-                    nodes.insert(
-                        index + 1,
-                        {
-                            "id": event_node_id,
-                            "operator": "vision.event_assembler",
-                            "config": {
-                                "max_gap_seconds": raw_gap if raw_gap is not None and raw_gap > 0 else 5.0,
-                                "default_interval_seconds": raw_interval
-                                if raw_interval is not None and raw_interval >= 0
-                                else 0.25,
-                            },
-                        },
-                    )
-                    add_track_to_event_edge = True
-                first_edge = edges[non_event_outgoing_indices[0]]
-                if add_track_to_event_edge:
-                    new_edge: dict[str, Any] = {
-                        "from": {"node": track_node_id, "port": "out"},
-                        "to": {"node": event_node_id, "port": "in"},
-                        "maxsize": first_edge.get("maxsize", 64)
-                        if isinstance(first_edge, dict)
-                        else 64,
-                        "drop_policy": first_edge.get("drop_policy", "keyed_latest_only")
-                        if isinstance(first_edge, dict)
-                        else "keyed_latest_only",
-                    }
-                    edges.append(new_edge)
-                for edge_index in non_event_outgoing_indices:
-                    edge = edges[edge_index]
-                    if not isinstance(edge, dict) or not isinstance(edge.get("from"), dict):
-                        continue
-                    edge["from"]["node"] = event_node_id
-                    edge["from"]["port"] = edge["from"].get("port") or "out"
-                changed = True
-                if add_track_to_event_edge:
-                    index += 1
-
             index += 1
+
+        event_node_ids = {
+            str(node.get("id") or "").strip()
+            for node in nodes
+            if isinstance(node, dict)
+            and str(node.get("operator") or "").strip() == "vision.event_assembler"
+            and str(node.get("id") or "").strip()
+        }
+        if event_node_ids:
+            incoming_by_event: dict[str, list[dict[str, Any]]] = {node_id: [] for node_id in event_node_ids}
+            outgoing_by_event: dict[str, list[dict[str, Any]]] = {node_id: [] for node_id in event_node_ids}
+            kept_edges: list[dict[str, Any]] = []
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    kept_edges.append(edge)
+                    continue
+                source = edge.get("from") if isinstance(edge.get("from"), dict) else {}
+                target = edge.get("to") if isinstance(edge.get("to"), dict) else {}
+                source_node = str(source.get("node") or "").strip()
+                target_node = str(target.get("node") or "").strip()
+                if target_node in event_node_ids:
+                    incoming_by_event.setdefault(target_node, []).append(edge)
+                    continue
+                if source_node in event_node_ids:
+                    outgoing_by_event.setdefault(source_node, []).append(edge)
+                    continue
+                kept_edges.append(edge)
+
+            signatures: set[tuple[str, str, str, str]] = set()
+            for edge in kept_edges:
+                if not isinstance(edge, dict):
+                    continue
+                source = edge.get("from") if isinstance(edge.get("from"), dict) else {}
+                target = edge.get("to") if isinstance(edge.get("to"), dict) else {}
+                signatures.add(
+                    (
+                        str(source.get("node") or ""),
+                        str(source.get("port") or "out"),
+                        str(target.get("node") or ""),
+                        str(target.get("port") or "in"),
+                    )
+                )
+
+            for event_node_id in sorted(event_node_ids):
+                for incoming in incoming_by_event.get(event_node_id, []):
+                    incoming_source = incoming.get("from") if isinstance(incoming.get("from"), dict) else {}
+                    source_node_id = str(incoming_source.get("node") or "").strip()
+                    if not source_node_id:
+                        continue
+                    for outgoing in outgoing_by_event.get(event_node_id, []):
+                        outgoing_target = outgoing.get("to") if isinstance(outgoing.get("to"), dict) else {}
+                        target_node_id = str(outgoing_target.get("node") or "").strip()
+                        if not target_node_id:
+                            continue
+                        source_port = str(incoming_source.get("port") or "out").strip() or "out"
+                        target_port = str(outgoing_target.get("port") or "in").strip() or "in"
+                        signature = (source_node_id, source_port, target_node_id, target_port)
+                        if signature in signatures:
+                            continue
+                        signatures.add(signature)
+                        kept_edges.append(
+                            {
+                                "from": {"node": source_node_id, "port": source_port},
+                                "to": {"node": target_node_id, "port": target_port},
+                                "maxsize": outgoing.get("maxsize", incoming.get("maxsize", 64)),
+                                "drop_policy": outgoing.get(
+                                    "drop_policy",
+                                    incoming.get("drop_policy", "keyed_latest_only"),
+                                ),
+                            }
+                        )
+            migrated_graph["edges"] = kept_edges
+            migrated_graph["nodes"] = [
+                node
+                for node in nodes
+                if not (
+                    isinstance(node, dict)
+                    and str(node.get("operator") or "").strip() == "vision.event_assembler"
+                )
+            ]
+            changed = True
 
         if not changed:
             return graph

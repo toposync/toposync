@@ -59,7 +59,7 @@ def test_config_store_write_does_not_clobber_external_pipeline_changes(tmp_path:
     assert names == {"p1", "p2"}
 
 
-def test_config_store_migrates_track_events_to_event_assembler(tmp_path: Path) -> None:
+def test_config_store_migrates_tracking_product_identity_to_subject(tmp_path: Path) -> None:
     store = _create_store(tmp_path)
     store.paths.data_dir.mkdir(parents=True, exist_ok=True)
     store.paths.config_path.write_text(
@@ -124,19 +124,14 @@ def test_config_store_migrates_track_events_to_event_assembler(tmp_path: Path) -
     edges = graph["edges"]
     nodes_by_id = {node["id"]: node for node in nodes}
 
-    assert nodes_by_id["track"]["config"]["emit_mode"] == "annotate"
-    assert nodes_by_id["event"]["operator"] == "vision.event_assembler"
-    assert nodes_by_id["event"]["config"] == {
-        "max_gap_seconds": 5.0,
-        "default_interval_seconds": 0.25,
-    }
-    assert nodes_by_id["throttle"]["config"]["key_field"] == "payload.event_id"
-    assert nodes_by_id["notify"]["config"]["dedupe_key_template"] == "{{event_id}}"
-    assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "event" for edge in edges)
-    assert any(edge["from"]["node"] == "event" and edge["to"]["node"] == "throttle" for edge in edges)
+    assert "emit_mode" not in nodes_by_id["track"]["config"]
+    assert not any(node["operator"] == "vision.event_assembler" for node in nodes)
+    assert nodes_by_id["throttle"]["config"]["key_field"] == "payload.subject.id"
+    assert nodes_by_id["notify"]["config"]["dedupe_key_template"] == "{{subject.id}}"
+    assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "throttle" for edge in edges)
 
 
-def test_config_store_reuses_existing_event_assembler_when_retargeting_legacy_track_edges(
+def test_config_store_removes_existing_event_assembler_and_retargets_downstream_edges(
     tmp_path: Path,
 ) -> None:
     store = _create_store(tmp_path)
@@ -165,7 +160,7 @@ def test_config_store_reuses_existing_event_assembler_when_retargeting_legacy_tr
                             ],
                             "edges": [
                                 {"from": {"node": "track", "port": "out"}, "to": {"node": "event", "port": "in"}},
-                                {"from": {"node": "track", "port": "out"}, "to": {"node": "store", "port": "in"}},
+                                {"from": {"node": "event", "port": "out"}, "to": {"node": "store", "port": "in"}},
                             ],
                         },
                     }
@@ -184,8 +179,8 @@ def test_config_store_reuses_existing_event_assembler_when_retargeting_legacy_tr
     edges = graph["edges"]
     nodes_by_id = {node["id"]: node for node in nodes}
 
-    assert nodes_by_id["track"]["config"]["emit_mode"] == "annotate"
-    assert [node["id"] for node in nodes if node["operator"] == "vision.event_assembler"] == ["event"]
-    assert sum(1 for edge in edges if edge["from"]["node"] == "track" and edge["to"]["node"] == "event") == 1
-    assert any(edge["from"]["node"] == "event" and edge["to"]["node"] == "store" for edge in edges)
-    assert not any(edge["from"]["node"] == "track" and edge["to"]["node"] == "store" for edge in edges)
+    assert "emit_mode" not in nodes_by_id["track"]["config"]
+    assert nodes_by_id["track"]["config"]["close_after_seconds"] == 5.0
+    assert not any(node["operator"] == "vision.event_assembler" for node in nodes)
+    assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "store" for edge in edges)
+    assert not any(edge["from"]["node"] == "event" or edge["to"]["node"] == "event" for edge in edges)

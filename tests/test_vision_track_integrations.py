@@ -248,15 +248,9 @@ def test_velocity_estimation_continues_working_after_vision_track_decoupling() -
                     "operator": "vision.track",
                     "config": {
                         "tracker_id": "simple_iou_kalman",
-                        "emit_mode": "annotate",
                         "default_interval_seconds": 0.0,
                         "close_after_seconds": 0.2,
                     },
-                },
-                {
-                    "id": "event",
-                    "operator": "vision.event_assembler",
-                    "config": {"default_interval_seconds": 0.0, "max_gap_seconds": 0.2},
                 },
                 {
                     "id": "mapping",
@@ -294,8 +288,7 @@ def test_velocity_estimation_continues_working_after_vision_track_decoupling() -
             "edges": [
                 {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
                 {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
-                {"from": {"node": "track", "port": "out"}, "to": {"node": "event", "port": "in"}},
-                {"from": {"node": "event", "port": "out"}, "to": {"node": "mapping", "port": "in"}},
+                {"from": {"node": "track", "port": "out"}, "to": {"node": "mapping", "port": "in"}},
                 {
                     "from": {"node": "mapping", "port": "out"},
                     "to": {"node": "velocity", "port": "in"},
@@ -403,7 +396,6 @@ def test_vision_track_annotate_mode_fills_future_multicamera_fields_from_packet(
                     "operator": "vision.track",
                     "config": {
                         "tracker_id": "simple_iou_kalman",
-                        "emit_mode": "annotate",
                         "default_interval_seconds": 0.0,
                         "close_after_seconds": 0.2,
                         "use_world_anchor": True,

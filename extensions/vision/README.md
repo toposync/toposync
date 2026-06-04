@@ -92,11 +92,9 @@ The public surface is task-based, not vendor-based. The official first-party run
 - The first-party tracking backends are:
   - `simple_iou_kalman`
   - `norfair`
-- `vision.track` supports:
-  - `emit_mode="annotate"` for frame passthrough with `payload["vision"]["tracks"]`
-- `vision.event_assembler` consumes `payload["vision"]["tracks"]` and emits stable product events with `event_id`, `event_code`, `tracklet_id`, `raw_tracking_id`, and `identity_id`.
-- `vision.detect` events are short OPEN/CLOSE notifications; use `vision.track` plus `vision.event_assembler` when you need temporal identity, movement, and long-lived per-object lifecycle.
-- `vision.crop_objects` crops the bbox from a single object lifecycle packet and preserves event/tracking identifiers. It is not instance segmentation.
+- `vision.track` emits stable per-object lifecycle packets directly. The product identity is `payload["subject"]["id"]`; technical tracker details stay available as `tracklet_id`, `tracklet_ids`, `raw_tracking_id`, and `identity_id`.
+- `vision.detect` events are short OPEN/CLOSE notifications; use `vision.track` when you need temporal identity, movement, and long-lived per-object lifecycle.
+- `vision.crop_objects` crops the bbox from `payload["subject"]["bbox01"]` by default and preserves event/subject identifiers. It is not instance segmentation.
 
 ## Future runtime compatibility
 

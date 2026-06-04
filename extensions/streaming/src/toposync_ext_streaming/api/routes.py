@@ -3107,8 +3107,8 @@ def _runtime_pipeline_warning(reason: str) -> str:
         return "stream.publish_video is downstream of detection in filter mode."
     if reason == "vision_detect_events":
         return "stream.publish_video is downstream of detection in events mode."
-    if reason == "vision_event_assembler":
-        return "stream.publish_video is downstream of event assembly."
+    if reason == "vision_track_events":
+        return "stream.publish_video is downstream of tracking event packets."
     return "This stream is explicitly configured as event-gated."
 
 
@@ -3195,8 +3195,8 @@ def _runtime_pipeline_event_gate_reasons(
                 reasons.append("vision_detect_events")
             continue
 
-        if operator_id == "vision.event_assembler":
-            reasons.append("vision_event_assembler")
+        if operator_id == "vision.track":
+            reasons.append("vision_track_events")
 
     return list(dict.fromkeys(reasons))
 

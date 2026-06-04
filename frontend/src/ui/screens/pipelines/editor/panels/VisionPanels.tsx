@@ -670,10 +670,8 @@ export function VisionConfigCard({
   const trackerId = String((config as any).tracker_id ?? "simple_iou_kalman").trim() || "simple_iou_kalman";
   const trackerPreset = TRACKER_CHOICES.find((item) => item.value === trackerId) ?? null;
   const isTracking = String(operatorId || "").trim() === "vision.track";
-  const emitModeFallback = isTracking ? "annotate" : "events";
-  const emitModeRaw = String((config as any).emit_mode ?? emitModeFallback).trim().toLowerCase() || emitModeFallback;
-  const emitMode = ["events", "filter", "annotate"].includes(emitModeRaw) ? emitModeRaw : emitModeFallback;
-  const trackEmitMode = "annotate";
+  const emitModeRaw = String((config as any).emit_mode ?? "events").trim().toLowerCase() || "events";
+  const emitMode = ["events", "filter", "annotate"].includes(emitModeRaw) ? emitModeRaw : "events";
   const detectEmitMode = emitMode;
   const pauseWhenGateClosed = Boolean((config as any).pause_when_gate_closed ?? true);
   const useWorldAnchor = Boolean((config as any).use_world_anchor ?? false);
@@ -1256,23 +1254,6 @@ export function VisionConfigCard({
           </label>
           <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.tracker_id_hint")}</div>
           {trackerPreset ? <div className="pipelinesStepHint">{t(trackerPreset.hintKey)}</div> : null}
-
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.yolo.track_emit_mode")}</span>
-            <select
-              className="pipelinesInput"
-              value={trackEmitMode}
-              onChange={(event) => {
-                onUpdateConfig((prev) => ({
-                  ...prev,
-                  emit_mode: event.target.value,
-                }));
-              }}
-            >
-              <option value="annotate">{t("core.ui.pipelines.panels.yolo.track_emit_mode.annotate")}</option>
-            </select>
-          </label>
-          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.track_emit_mode_hint")}</div>
         </>
       ) : (
         <>

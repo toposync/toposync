@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
-from toposync.runtime.pipelines.runtime import Artifact, Packet
+from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync_ext_vision.processing.tasks import (
     VisionCropObjectsRuntime,
     VisionDetectRuntime,
@@ -203,7 +203,7 @@ def test_rtmdet_detection_output_feeds_vision_track(
 
         deps = PipelineRuntimeDependencies(vision_model_registry=build_default_model_registry())
         detect = VisionDetectRuntime({"model_id": "rtmdet.track", "emit_mode": "annotate"}, deps)
-        track = VisionTrackRuntime({"tracker_id": "simple_iou_kalman", "emit_mode": "annotate"}, deps)
+        track = VisionTrackRuntime({"tracker_id": "simple_iou_kalman", "default_interval_seconds": 0.0}, deps)
 
         packet = Packet.create(
             stream_id="camera:test",
@@ -225,6 +225,8 @@ def test_rtmdet_detection_output_feeds_vision_track(
         tracked_packets = await track.process_packet(detected, _Context())
         assert len(tracked_packets) == 1
         tracked = tracked_packets[0]
+        assert tracked.lifecycle == Lifecycle.OPEN
+        assert tracked.payload.get("subject", {}).get("id") == tracked.payload.get("event_id")
         assert tracked.payload.get("vision", {}).get("task") == "tracking"
         assert tracked.payload.get("vision", {}).get("tracks")
         assert tracked.payload.get("object_bbox01") == pytest.approx(

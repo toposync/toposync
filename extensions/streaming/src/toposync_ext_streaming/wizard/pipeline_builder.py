@@ -110,7 +110,6 @@ def build_streaming_wizard_graph(
     yolo_confidence = _coerce_float(options.get("yolo_confidence_threshold"), default=0.55, min_value=0.01, max_value=1.0)
     yolo_filter_enabled = _coerce_bool(options.get("yolo_filter_enabled"), default=True)
     detection_emit_mode = "filter" if event_gated and yolo_filter_enabled else "annotate"
-    tracking_event_gated = bool(event_gated and yolo_filter_enabled)
 
     detection_categories = _sanitize_categories(options.get("detection_categories"))
     tracking_categories = _sanitize_categories(options.get("tracking_categories"))
@@ -229,25 +228,11 @@ def build_streaming_wizard_graph(
                 "config": {
                     "tracker_id": "simple_iou_kalman",
                     "close_after_seconds": 5.0,
-                    "emit_mode": "annotate",
                 },
             }
         )
         _append_edge(edges, source_node_id=current_node_id, target_node_id="track", maxsize=2)
         current_node_id = "track"
-        if tracking_event_gated:
-            nodes.append(
-                {
-                    "id": "event",
-                    "operator": "vision.event_assembler",
-                    "config": {
-                        "max_gap_seconds": 5.0,
-                        "default_interval_seconds": 0.25,
-                    },
-                }
-            )
-            _append_edge(edges, source_node_id=current_node_id, target_node_id="event", maxsize=8)
-            current_node_id = "event"
 
     if preset_id == "segmentation_stream":
         nodes.append(

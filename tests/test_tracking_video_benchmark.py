@@ -15,7 +15,6 @@ from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync_ext_vision.processing.tasks import (
     VisionDetectRuntime,
-    VisionEventAssemblerRuntime,
     VisionTrackRuntime,
 )
 from toposync_ext_vision.registry import build_default_model_registry
@@ -212,17 +211,10 @@ async def _run_tracker(
     track = VisionTrackRuntime(
         {
             "tracker_id": tracker_id,
-            "emit_mode": "annotate",
             "close_after_seconds": close_after_seconds,
             "default_interval_seconds": default_interval_seconds,
         },
         dependencies,
-    )
-    assembler = VisionEventAssemblerRuntime(
-        {
-            "max_gap_seconds": close_after_seconds,
-            "default_interval_seconds": default_interval_seconds,
-        }
     )
     context = _Context()
     outputs: list[Packet] = []
@@ -247,7 +239,7 @@ async def _run_tracker(
                     ).strip()
                     if tracklet_id:
                         raw_tracklet_ids.add(tracklet_id)
-            outputs.extend(await assembler.process_packet(track_packet, context))
+            outputs.append(track_packet)
 
     lifecycle_counts = Counter(str(packet.lifecycle.value) for packet in outputs)
     event_ids = sorted(
@@ -596,12 +588,12 @@ def _write_tracking_overlay_video(
 def _safe_output_suffix(value: str) -> str:
     cleaned = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value.strip())
     cleaned = cleaned.strip("._-")
-    return cleaned or "event_assembler_v1"
+    return cleaned or "subject_v1"
 
 
 def _postfixed_output_video_path(path: Path) -> Path:
     suffix = _safe_output_suffix(
-        _env_text("TOPOSYNC_TRACKING_BENCHMARK_OUTPUT_SUFFIX", "event_assembler_v1")
+        _env_text("TOPOSYNC_TRACKING_BENCHMARK_OUTPUT_SUFFIX", "subject_v1")
     )
     target = path.expanduser()
     if not target.stem.endswith(f"__{suffix}"):

@@ -178,7 +178,6 @@ def _register_test_source_and_sink(
 def _tracking_pipeline_graph(
     *, source_id: str, detect_id: str, track_id: str, sink_id: str, sink_name: str
 ) -> dict[str, Any]:
-    event_id = f"{track_id}_event"
     return {
         "schema_version": 1,
         "nodes": [
@@ -203,13 +202,7 @@ def _tracking_pipeline_graph(
                     "tracker_id": "simple_iou_kalman",
                     "default_interval_seconds": 0.0,
                     "close_after_seconds": 0.05,
-                    "emit_mode": "annotate",
                 },
-            },
-            {
-                "id": event_id,
-                "operator": "vision.event_assembler",
-                "config": {"default_interval_seconds": 0.0, "max_gap_seconds": 0.05},
             },
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
         ],
@@ -228,12 +221,6 @@ def _tracking_pipeline_graph(
             },
             {
                 "from": {"node": track_id, "port": "out"},
-                "to": {"node": event_id, "port": "in"},
-                "maxsize": 64,
-                "drop_policy": "drop_oldest",
-            },
-            {
-                "from": {"node": event_id, "port": "out"},
                 "to": {"node": sink_id, "port": "in"},
                 "maxsize": 64,
                 "drop_policy": "drop_oldest",
@@ -252,7 +239,6 @@ def _tracking_pipeline_graph_with_shareable_transform(
     sink_name: str,
     track_to_transform_maxsize: int,
 ) -> dict[str, Any]:
-    event_id = f"{track_id}_event"
     return {
         "schema_version": 1,
         "nodes": [
@@ -277,13 +263,7 @@ def _tracking_pipeline_graph_with_shareable_transform(
                     "tracker_id": "simple_iou_kalman",
                     "default_interval_seconds": 0.0,
                     "close_after_seconds": 0.05,
-                    "emit_mode": "annotate",
                 },
-            },
-            {
-                "id": event_id,
-                "operator": "vision.event_assembler",
-                "config": {"default_interval_seconds": 0.0, "max_gap_seconds": 0.05},
             },
             {"id": transform_id, "operator": "test.identity", "config": {}},
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
@@ -303,14 +283,8 @@ def _tracking_pipeline_graph_with_shareable_transform(
             },
             {
                 "from": {"node": track_id, "port": "out"},
-                "to": {"node": event_id, "port": "in"},
-                "maxsize": int(track_to_transform_maxsize),
-                "drop_policy": "drop_oldest",
-            },
-            {
-                "from": {"node": event_id, "port": "out"},
                 "to": {"node": transform_id, "port": "in"},
-                "maxsize": 64,
+                "maxsize": int(track_to_transform_maxsize),
                 "drop_policy": "drop_oldest",
             },
             {
@@ -408,8 +382,9 @@ def test_vision_track_splits_two_objects_and_closes_lifecycle() -> None:
             }
             assert len(correlation_ids) == 1
             assert all(item.payload.get("event_id") == event_id for item in event_packets)
-            assert all(str(item.payload.get("tracking_id") or "").startswith("trk:camera:test:") for item in event_packets)
-            assert all(item.payload.get("tracking_id") != event_id for item in event_packets)
+            assert all(item.payload.get("subject", {}).get("id") == event_id for item in event_packets)
+            assert all(item.payload.get("tracking_id") is None for item in event_packets)
+            assert all(str(item.payload.get("tracklet_id") or "").startswith("trk:camera:test:") for item in event_packets)
 
         source_frames = int(counters.get("source_frames", 0))
         detect_calls = int(counters.get("detect_calls", 0))
@@ -484,13 +459,7 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
                         "tracker_id": "simple_iou_kalman",
                         "default_interval_seconds": 0.0,
                         "close_after_seconds": 0.05,
-                        "emit_mode": "annotate",
                     },
-                },
-                {
-                    "id": "event",
-                    "operator": "vision.event_assembler",
-                    "config": {"default_interval_seconds": 0.0, "max_gap_seconds": 0.05},
                 },
                 {
                     "id": "crop",
@@ -516,8 +485,7 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
             "edges": [
                 {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
                 {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
-                {"from": {"node": "track", "port": "out"}, "to": {"node": "event", "port": "in"}},
-                {"from": {"node": "event", "port": "out"}, "to": {"node": "crop", "port": "in"}},
+                {"from": {"node": "track", "port": "out"}, "to": {"node": "crop", "port": "in"}},
                 {"from": {"node": "crop", "port": "out"}, "to": {"node": "collect", "port": "in"}},
                 {"from": {"node": "crop", "port": "out"}, "to": {"node": "store", "port": "in"}},
                 {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}},
@@ -629,9 +597,9 @@ def test_vision_track_matches_fast_non_overlapping_boxes() -> None:
         await runtime.run_for(0.35)
 
         packets = [record["packet"] for record in counters.get("packets", [])]
-        tracking_ids = {str(packet.payload.get("tracking_id") or "") for packet in packets}
-        tracking_ids.discard("")
-        assert len(tracking_ids) == 1
+        event_ids = {str(packet.payload.get("event_id") or "") for packet in packets}
+        event_ids.discard("")
+        assert len(event_ids) == 1
 
     asyncio.run(scenario())
 
@@ -725,7 +693,7 @@ def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
                 {
                     "id": "track",
                     "operator": "vision.track",
-                    "config": {"tracker_id": "simple_iou_kalman", "emit_mode": "annotate"},
+                    "config": {"tracker_id": "simple_iou_kalman", "default_interval_seconds": 0.0},
                 },
                 {
                     "id": "sink",
@@ -747,8 +715,11 @@ def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
         packets = [record["packet"] for record in counters.get("packets", [])]
         assert packets
         out = packets[0]
-        assert out.stream_id == "camera:test"
-        assert out.payload.get("event_id") is None
+        assert str(out.stream_id).startswith("event:camera:test:")
+        assert out.lifecycle == Lifecycle.OPEN
+        assert out.payload.get("event_id")
+        assert out.payload.get("subject", {}).get("id") == out.payload.get("event_id")
+        assert out.payload.get("subject", {}).get("lifecycle") == "open"
         assert out.payload.get("tracking_id") is None
         assert out.payload.get("object_category_label") == "person"
         assert out.payload.get("object_confidence") == 0.9
@@ -763,7 +734,7 @@ def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
     asyncio.run(scenario())
 
 
-def test_bundle_runtime_shares_single_detect_and_track_across_two_final_pipelines() -> None:
+def test_bundle_runtime_shares_single_detect_but_keeps_tracking_state_per_pipeline() -> None:
     async def scenario() -> None:
         counters: dict[str, Any] = {}
         registry = OperatorRegistry()
@@ -823,7 +794,7 @@ def test_bundle_runtime_shares_single_detect_and_track_across_two_final_pipeline
             if node.operator_id == "vision.track"
         )
         assert detect_node_count == 1
-        assert track_node_count == 1
+        assert track_node_count == 2
         source_frames = int(counters.get("source_frames", 0))
         detect_calls = int(counters.get("detect_calls", 0))
         assert 0 < detect_calls <= source_frames
@@ -838,7 +809,7 @@ def test_bundle_runtime_shares_single_detect_and_track_across_two_final_pipeline
     asyncio.run(scenario())
 
 
-def test_bundle_runtime_shares_detect_and_track_even_when_downstream_channel_policies_differ() -> (
+def test_bundle_runtime_shares_detect_but_keeps_tracking_state_when_channel_policies_differ() -> (
     None
 ):
     async def scenario() -> None:
@@ -904,7 +875,7 @@ def test_bundle_runtime_shares_detect_and_track_even_when_downstream_channel_pol
             if node.operator_id == "vision.track"
         )
         assert detect_node_count == 1
-        assert track_node_count == 1
+        assert track_node_count == 2
 
         identity_node_count = sum(
             1

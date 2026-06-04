@@ -396,7 +396,7 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
   const { t } = i18n.useI18n();
   const intervalSeconds = Number((config as any).interval_seconds ?? 15.0);
   const modeRaw = String((config as any).mode ?? "first").trim().toLowerCase() || "first";
-  const keyFieldRaw = String((config as any).key_field ?? "payload.event_id").trim() || "payload.event_id";
+  const keyFieldRaw = String((config as any).key_field ?? "payload.subject.id").trim() || "payload.subject.id";
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -442,7 +442,7 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
               onUpdateConfig((prev) => ({ ...prev, key_field: nextKey }));
             }}
           >
-            <option value="payload.event_id">{t("core.ui.pipelines.panels.throttle.key.event_id")}</option>
+            <option value="payload.subject.id">{t("core.ui.pipelines.panels.throttle.key.event_id")}</option>
             <option value="stream_id">{t("core.ui.pipelines.panels.throttle.key.stream_id")}</option>
             <option value="payload.correlation_id">{t("core.ui.pipelines.panels.throttle.key.correlation_id")}</option>
             <option value="payload.camera_id">{t("core.ui.pipelines.panels.throttle.key.camera_id")}</option>
@@ -471,7 +471,7 @@ export function VelocityThrottleConfigCard({
   const { t } = i18n.useI18n();
   const movingIntervalSeconds = Number((config as any).moving_interval_seconds ?? 2.0);
   const stoppedIntervalSeconds = Number((config as any).stopped_interval_seconds ?? 300.0);
-  const keyFieldRaw = String((config as any).key_field ?? "payload.event_id").trim() || "payload.event_id";
+  const keyFieldRaw = String((config as any).key_field ?? "payload.subject.id").trim() || "payload.subject.id";
   const movingFieldRaw = textConfigValue((config as any).moving_field, "payload.velocity.moving");
 
   return (
@@ -522,7 +522,7 @@ export function VelocityThrottleConfigCard({
                 onUpdateConfig((prev) => ({ ...prev, key_field: nextKey }));
               }}
             >
-              <option value="payload.event_id">{t("core.ui.pipelines.panels.throttle.key.event_id")}</option>
+              <option value="payload.subject.id">{t("core.ui.pipelines.panels.throttle.key.event_id")}</option>
               <option value="stream_id">{t("core.ui.pipelines.panels.throttle.key.stream_id")}</option>
               <option value="payload.correlation_id">{t("core.ui.pipelines.panels.throttle.key.correlation_id")}</option>
               <option value="payload.camera_id">{t("core.ui.pipelines.panels.throttle.key.camera_id")}</option>
@@ -567,7 +567,7 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
   const { t } = i18n.useI18n();
   const quietSeconds = Number((config as any).quiet_period_seconds ?? 1.0);
   const modeRaw = String((config as any).mode ?? "first").trim().toLowerCase() || "first";
-  const keyFieldRaw = String((config as any).key_field ?? "payload.event_id").trim() || "payload.event_id";
+  const keyFieldRaw = String((config as any).key_field ?? "payload.subject.id").trim() || "payload.subject.id";
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -613,7 +613,7 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
               onUpdateConfig((prev) => ({ ...prev, key_field: nextKey }));
             }}
           >
-            <option value="payload.event_id">{t("core.ui.pipelines.panels.debounce.key.event_id")}</option>
+            <option value="payload.subject.id">{t("core.ui.pipelines.panels.debounce.key.event_id")}</option>
             <option value="stream_id">{t("core.ui.pipelines.panels.debounce.key.stream_id")}</option>
             <option value="payload.correlation_id">{t("core.ui.pipelines.panels.debounce.key.correlation_id")}</option>
             <option value="payload.camera_id">{t("core.ui.pipelines.panels.debounce.key.camera_id")}</option>
@@ -1429,7 +1429,7 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
   const updateIntervalSecondsRaw = Number((config as any).update_interval_seconds ?? 1.0);
   const updateIntervalSeconds = Number.isFinite(updateIntervalSecondsRaw) ? Math.max(0, Math.min(60, updateIntervalSecondsRaw)) : 1.0;
   const notificationType = textConfigValue((config as any).notification_type, "pipelines.event");
-  const dedupeKeyTemplate = textConfigValue((config as any).dedupe_key_template);
+  const dedupeKeyTemplate = textConfigValue((config as any).dedupe_key_template, "{{subject.id}}");
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -1534,7 +1534,7 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
             />
           </label>
           <div className="pipelinesStepHint">
-            {t("core.ui.pipelines.panels.notify.dedupe_key_hint_prefix")} <code>{"{{event_id}}"}</code>, <code>{"{{event_code}}"}</code>,{" "}
+            {t("core.ui.pipelines.panels.notify.dedupe_key_hint_prefix")} <code>{"{{subject.id}}"}</code>, <code>{"{{event_code}}"}</code>,{" "}
             <code>{"{{camera_id}}"}</code>, <code>{"{{object_category_label}}"}</code>.
           </div>
         </>

@@ -3,7 +3,12 @@ from __future__ import annotations
 import asyncio
 
 from toposync.runtime.pipelines import Lifecycle, Packet
-from toposync_ext_vision.processing.tasks import VisionEventAssemblerRuntime
+from toposync_ext_vision.pipelines.schemas import VisionTrackConfig
+from toposync_ext_vision.processing.tasks.event_assembler import TrackEventAssembler
+
+
+def _runtime(config: dict[str, object] | None = None) -> TrackEventAssembler:
+    return TrackEventAssembler(VisionTrackConfig.model_validate(config or {}))
 
 
 def _track(
@@ -48,9 +53,9 @@ def _packet(ts: float, tracks: list[dict[str, object]]) -> Packet:
     )
 
 
-def test_event_assembler_keeps_same_tracklet_on_same_event() -> None:
+def test_track_event_keeps_same_tracklet_on_same_subject() -> None:
     async def scenario() -> None:
-        runtime = VisionEventAssemblerRuntime({"default_interval_seconds": 0.0})
+        runtime = _runtime({"default_interval_seconds": 0.0})
 
         opened = await runtime.process_packet(_packet(1.0, [_track("trk:camera:test:1")]), None)
         updated = await runtime.process_packet(_packet(1.2, [_track("trk:camera:test:1")]), None)
@@ -58,17 +63,21 @@ def test_event_assembler_keeps_same_tracklet_on_same_event() -> None:
         assert [packet.lifecycle for packet in opened] == [Lifecycle.OPEN]
         assert [packet.lifecycle for packet in updated] == [Lifecycle.UPDATE]
         assert opened[0].payload["event_id"] == updated[0].payload["event_id"]
+        assert opened[0].payload["subject"]["id"] == updated[0].payload["subject"]["id"]
+        assert opened[0].payload["subject"]["lifecycle"] == "open"
+        assert updated[0].payload["subject"]["lifecycle"] == "update"
         assert opened[0].payload["event_code"] == "1"
         assert opened[0].payload["tracklet_id"] == "trk:camera:test:1"
+        assert opened[0].payload["tracklet_ids"] == ["trk:camera:test:1"]
         assert opened[0].payload["raw_tracking_id"] == "1"
         assert opened[0].payload["identity_id"] is None
 
     asyncio.run(scenario())
 
 
-def test_event_assembler_stitches_fragmented_tracklets_inside_gap() -> None:
+def test_track_event_stitches_fragmented_tracklets_inside_gap() -> None:
     async def scenario() -> None:
-        runtime = VisionEventAssemblerRuntime({"default_interval_seconds": 0.0, "max_gap_seconds": 5.0})
+        runtime = _runtime({"default_interval_seconds": 0.0, "close_after_seconds": 5.0})
 
         opened = await runtime.process_packet(_packet(1.0, [_track("trk:camera:test:1")]), None)
         assert opened[0].lifecycle == Lifecycle.OPEN
@@ -81,15 +90,17 @@ def test_event_assembler_stitches_fragmented_tracklets_inside_gap() -> None:
 
         assert [packet.lifecycle for packet in stitched] == [Lifecycle.UPDATE]
         assert stitched[0].payload["event_id"] == opened[0].payload["event_id"]
+        assert stitched[0].payload["subject"]["id"] == opened[0].payload["subject"]["id"]
         assert stitched[0].payload["event_code"] == "1"
         assert stitched[0].payload["tracklet_id"] == "trk:camera:test:2"
+        assert stitched[0].payload["tracklet_ids"] == ["trk:camera:test:1", "trk:camera:test:2"]
 
     asyncio.run(scenario())
 
 
-def test_event_assembler_does_not_merge_different_classes() -> None:
+def test_track_event_does_not_merge_different_classes() -> None:
     async def scenario() -> None:
-        runtime = VisionEventAssemblerRuntime({"default_interval_seconds": 0.0, "max_gap_seconds": 5.0})
+        runtime = _runtime({"default_interval_seconds": 0.0, "close_after_seconds": 5.0})
 
         person = await runtime.process_packet(_packet(1.0, [_track("trk:camera:test:1", label="person")]), None)
         car = await runtime.process_packet(
@@ -104,9 +115,9 @@ def test_event_assembler_does_not_merge_different_classes() -> None:
     asyncio.run(scenario())
 
 
-def test_event_assembler_does_not_merge_simultaneous_objects() -> None:
+def test_track_event_does_not_merge_simultaneous_objects() -> None:
     async def scenario() -> None:
-        runtime = VisionEventAssemblerRuntime({"default_interval_seconds": 0.0})
+        runtime = _runtime({"default_interval_seconds": 0.0})
 
         outputs = await runtime.process_packet(
             _packet(
@@ -126,12 +137,12 @@ def test_event_assembler_does_not_merge_simultaneous_objects() -> None:
     asyncio.run(scenario())
 
 
-def test_event_assembler_prefers_world_anchor_over_bbox_when_available() -> None:
+def test_track_event_prefers_world_anchor_over_bbox_when_available() -> None:
     async def scenario() -> None:
-        runtime = VisionEventAssemblerRuntime(
+        runtime = _runtime(
             {
                 "default_interval_seconds": 0.0,
-                "max_gap_seconds": 5.0,
+                "close_after_seconds": 5.0,
                 "same_event_world_radius_meters": 1.0,
             }
         )
@@ -165,5 +176,21 @@ def test_event_assembler_prefers_world_anchor_over_bbox_when_available() -> None
 
         assert far_world[0].payload["event_id"] != opened[0].payload["event_id"]
         assert far_world[0].payload["event_code"] == "2"
+
+    asyncio.run(scenario())
+
+
+def test_track_event_close_packet_carries_subject_lifecycle() -> None:
+    async def scenario() -> None:
+        runtime = _runtime({"default_interval_seconds": 0.0, "close_after_seconds": 1.0})
+
+        opened = await runtime.process_packet(_packet(1.0, [_track("trk:camera:test:1")]), None)
+        closed = await runtime.process_packet(_packet(2.2, []), None)
+
+        assert opened[0].lifecycle == Lifecycle.OPEN
+        assert [packet.lifecycle for packet in closed] == [Lifecycle.CLOSE]
+        assert closed[0].payload["event_id"] == opened[0].payload["event_id"]
+        assert closed[0].payload["subject"]["id"] == opened[0].payload["subject"]["id"]
+        assert closed[0].payload["subject"]["lifecycle"] == "close"
 
     asyncio.run(scenario())

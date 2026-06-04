@@ -10,12 +10,13 @@ from typing import Any
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
 from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
-from toposync.runtime.pipelines.runtime import Lifecycle, Packet
+from toposync.runtime.pipelines.runtime import Packet
 from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 
 from ...pipelines.schemas import VisionTrackConfig
 from ..contracts import DetectionObject, TrackedObject, TrackerBackend, normalize_identifier
 from ..trackers import build_tracker_backend
+from .event_assembler import TrackEventAssembler
 
 
 def _read_env_int(name: str, fallback: int, *, min_value: int, max_value: int) -> int:
@@ -64,6 +65,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         self._dependencies = dependencies
         self._operator_id = str(operator_id or "").strip() or "vision.track"
         self._backend: TrackerBackend | None = None
+        self._event_assembler = TrackEventAssembler(self._parsed, operator_id=self._operator_id)
         self._state_by_tracking_key: dict[str, _LifecycleState] = {}
         self._pause_started_by_source_stream: dict[str, float] = {}
         self._pause_accumulated_by_source_stream: dict[str, float] = {}
@@ -225,12 +227,6 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         paused_since_seen = max(0.0, pause_total - float(state.last_seen_pause_total))
         return max(0.0, (now_monotonic - float(state.last_seen_monotonic)) - paused_since_seen)
 
-    def _category_interval_seconds(self, label: str) -> float:
-        category_key = str(label or "").strip().lower()
-        if category_key in self._parsed.category_intervals_seconds:
-            return float(self._parsed.category_intervals_seconds[category_key])
-        return float(self._parsed.default_interval_seconds)
-
     def _serialize_contract_track(self, tracked: TrackedObject) -> dict[str, Any]:
         tracklet_id = tracked.tracking_id
         raw_tracking_id = tracked.source_tracking_id or tracked.tracking_id
@@ -361,59 +357,6 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         )
         return replace(packet, payload=payload, metadata=metadata)
 
-    def _copy_payload_with_object(
-        self,
-        packet: Packet,
-        *,
-        object_data: dict[str, Any],
-    ) -> dict[str, Any]:
-        payload = dict(packet.payload)
-        payload["vision"] = self._vision_payload(packet, tracks=[dict(object_data)])
-        payload.update(
-            {
-                "event_id": object_data.get("tracking_id") or None,
-                "tracking_id": object_data.get("tracking_id"),
-                "tracker_track_id": object_data.get("tracker_track_id"),
-                "correlation_id": object_data.get("correlation_id"),
-                "camera_id": object_data.get("camera_id") or payload.get("camera_id"),
-                "object_category_label": object_data.get("category"),
-                "object_confidence": object_data.get("confidence"),
-                "object_bbox01": list(object_data.get("bbox01") or (0.0, 0.0, 0.0, 0.0)),
-                "source_stream_id": object_data.get("source_stream_id"),
-                "detected_object": object_data,
-                "detected_objects": [object_data],
-            }
-        )
-        return payload
-
-    def _copy_metadata_with_object(
-        self,
-        packet: Packet,
-        *,
-        object_data: dict[str, Any],
-    ) -> dict[str, Any]:
-        metadata = dict(packet.metadata)
-        metadata.update(
-            {
-                "operator_id": self._operator_id,
-                "source_stream_id": object_data.get("source_stream_id"),
-                "event_id": object_data.get("tracking_id") or None,
-                "tracking_id": object_data.get("tracking_id"),
-                "tracker_track_id": object_data.get("tracker_track_id"),
-                "correlation_id": object_data.get("correlation_id"),
-                "camera_id": object_data.get("camera_id"),
-                "object_category": object_data.get("category"),
-                "object_confidence": object_data.get("confidence"),
-                "vision_task": "tracking",
-                "vision_model_id": payload_model_id
-                if (payload_model_id := object_data.get("model_id"))
-                else "",
-                "vision_runtime": self._ensure_backend().tracker_id,
-                "vision_tracker_id": self._parsed.tracker_id,
-            }
-        )
-        return metadata
-
     def _record_confidence_telemetry(
         self,
         *,
@@ -444,51 +387,6 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         self._pause_started_by_source_stream.pop(source_stream_id, None)
         self._pause_accumulated_by_source_stream.pop(source_stream_id, None)
         self._ensure_backend().reset_stream(source_stream_id)
-
-    def _build_tracking_packet(
-        self,
-        source_packet: Packet,
-        *,
-        lifecycle: Lifecycle,
-        object_data: dict[str, Any],
-        state: _LifecycleState,
-    ) -> Packet:
-        payload = self._copy_payload_with_object(source_packet, object_data=object_data)
-        metadata = self._copy_metadata_with_object(source_packet, object_data=object_data)
-        return Packet.create(
-            stream_id=state.stream_id,
-            lifecycle=lifecycle,
-            payload=payload,
-            artifacts=source_packet.artifacts,
-            metadata=metadata,
-            parent_packet_id=source_packet.packet_id,
-        )
-
-    def _force_close_for_stream(self, packet: Packet, *, source_stream_id: str) -> list[Packet]:
-        outputs: list[Packet] = []
-        for tracking_key, state in list(self._state_by_tracking_key.items()):
-            if state.source_stream_id != source_stream_id:
-                continue
-            tracked = state.tracked_object
-            if tracked is None:
-                self._state_by_tracking_key.pop(tracking_key, None)
-                continue
-            object_data = self._serialize_compat_track(
-                tracked,
-                correlation_id=state.correlation_id,
-                source_stream_id=source_stream_id,
-            )
-            outputs.append(
-                self._build_tracking_packet(
-                    packet,
-                    lifecycle=Lifecycle.CLOSE,
-                    object_data=object_data,
-                    state=state,
-                )
-            )
-            self._state_by_tracking_key.pop(tracking_key, None)
-        self._ensure_backend().reset_stream(source_stream_id)
-        return outputs
 
     def _run_backend_update(
         self,
@@ -527,14 +425,9 @@ class VisionTrackRuntime(TransformOperatorRuntime):
             paused_for = self._mark_paused(source_stream_id, now_monotonic=now_monotonic)
             max_paused = float(self._parsed.max_paused_seconds)
             if max_paused > 0.0 and paused_for >= max_paused:
-                if self._parsed.emit_mode == "annotate":
-                    self._clear_state_for_stream(source_stream_id)
-                    return [self._annotate_packet(packet, objects=[])]
-                return self._force_close_for_stream(packet, source_stream_id=source_stream_id)
-            if self._parsed.emit_mode == "annotate":
-                out = self._annotate_packet(packet, objects=[])
-                return [out]
-            return []
+                self._clear_state_for_stream(source_stream_id)
+            annotated = self._annotate_packet(packet, objects=[])
+            return await self._event_assembler.process_packet(annotated, context)
 
         self._mark_resumed(source_stream_id, now_monotonic=now_monotonic)
         detections = self._extract_detections(packet)
@@ -579,19 +472,15 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         tracks.sort(key=lambda tracked: tracked.score, reverse=True)
         self._record_confidence_telemetry(packet=packet, context=context, tracks=tracks)
 
-        if self._parsed.emit_mode == "annotate":
-            return self._process_packet_annotate(
-                packet,
-                tracks=tracks,
-                now_monotonic=now_monotonic,
-                packet_ts=frame_ts if math.isfinite(frame_ts) else None,
-            )
-        return self._process_packet_events(
+        annotated_packets = self._process_packet_annotate(
             packet,
             tracks=tracks,
             now_monotonic=now_monotonic,
             packet_ts=frame_ts if math.isfinite(frame_ts) else None,
         )
+        if not annotated_packets:
+            return []
+        return await self._event_assembler.process_packet(annotated_packets[0], context)
 
     def _process_packet_annotate(
         self,
@@ -662,111 +551,3 @@ class VisionTrackRuntime(TransformOperatorRuntime):
 
         out = self._annotate_packet(packet, objects=objects)
         return [out]
-
-    def _process_packet_events(
-        self,
-        packet: Packet,
-        *,
-        tracks: list[TrackedObject],
-        now_monotonic: float,
-        packet_ts: float | None,
-    ) -> list[Packet]:
-        source_stream_id = packet.stream_id
-        pause_total_now = self._pause_total_for_stream(
-            source_stream_id, now_monotonic=now_monotonic
-        )
-        outputs: list[Packet] = []
-        active_keys: set[str] = set()
-
-        for tracked in tracks:
-            tracking_key = tracked.tracking_id
-            active_keys.add(tracking_key)
-            state = self._state_by_tracking_key.get(tracking_key)
-            if state is None:
-                state = _LifecycleState(
-                    correlation_id=uuid.uuid4().hex,
-                    stream_id=f"obj:{source_stream_id}:{tracking_key}",
-                    source_stream_id=source_stream_id,
-                )
-                self._state_by_tracking_key[tracking_key] = state
-
-            state.last_seen_monotonic = now_monotonic
-            state.last_seen_packet_ts = packet_ts
-            state.last_seen_pause_total = pause_total_now
-            state.tracked_object = tracked
-
-            object_data = self._serialize_compat_track(
-                tracked,
-                correlation_id=state.correlation_id,
-                source_stream_id=source_stream_id,
-            )
-            if not state.opened:
-                outputs.append(
-                    self._build_tracking_packet(
-                        packet,
-                        lifecycle=Lifecycle.OPEN,
-                        object_data=object_data,
-                        state=state,
-                    )
-                )
-                state.opened = True
-                state.last_emit_monotonic = now_monotonic
-                state.last_emit_packet_ts = packet_ts
-                continue
-
-            interval_seconds = self._category_interval_seconds(tracked.label)
-            emit_age_seconds = (
-                max(0.0, float(packet_ts) - float(state.last_emit_packet_ts))
-                if packet_ts is not None
-                and state.last_emit_packet_ts is not None
-                and math.isfinite(float(packet_ts))
-                and math.isfinite(float(state.last_emit_packet_ts))
-                else (now_monotonic - state.last_emit_monotonic)
-            )
-            if state.last_emit_monotonic and emit_age_seconds < interval_seconds:
-                continue
-
-            outputs.append(
-                self._build_tracking_packet(
-                    packet,
-                    lifecycle=Lifecycle.UPDATE,
-                    object_data=object_data,
-                    state=state,
-                )
-            )
-            state.last_emit_monotonic = now_monotonic
-            state.last_emit_packet_ts = packet_ts
-
-        close_after_seconds = float(self._parsed.close_after_seconds)
-        for tracking_key, state in list(self._state_by_tracking_key.items()):
-            if state.source_stream_id != source_stream_id:
-                continue
-            if tracking_key in active_keys:
-                continue
-            if (
-                self._effective_age_seconds(
-                    state,
-                    now_monotonic=now_monotonic,
-                    now_packet_ts=packet_ts,
-                )
-                < close_after_seconds
-            ):
-                continue
-            tracked = state.tracked_object
-            if tracked is not None:
-                object_data = self._serialize_compat_track(
-                    tracked,
-                    correlation_id=state.correlation_id,
-                    source_stream_id=source_stream_id,
-                )
-                outputs.append(
-                    self._build_tracking_packet(
-                        packet,
-                        lifecycle=Lifecycle.CLOSE,
-                        object_data=object_data,
-                        state=state,
-                    )
-                )
-            self._state_by_tracking_key.pop(tracking_key, None)
-
-        return outputs

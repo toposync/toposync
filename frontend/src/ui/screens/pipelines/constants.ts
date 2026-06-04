@@ -159,14 +159,7 @@ export const PIPELINE_OPERATOR_RECIPES = [
         operatorId: "vision.track",
         defaultsOverride: {
           tracker_id: "simple_iou_kalman",
-          emit_mode: "annotate",
           close_after_seconds: 5.0,
-        },
-      },
-      {
-        operatorId: "vision.event_assembler",
-        defaultsOverride: {
-          max_gap_seconds: 5.0,
           default_interval_seconds: 0.25,
         },
       },

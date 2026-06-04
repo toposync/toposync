@@ -110,9 +110,15 @@ def _read_object_bbox01(
 ) -> tuple[tuple[float, float, float, float], str] | None:
     field = str(bbox_field or "").strip()
     if field:
-        bbox01 = _normalize_raw_bbox01(packet.payload.get(field))
+        bbox01 = _normalize_raw_bbox01(_deep_get(packet.payload, field))
         if bbox01 is not None:
             return bbox01, f"payload:{field}"
+
+    subject = packet.payload.get("subject")
+    if isinstance(subject, dict):
+        bbox01 = _normalize_raw_bbox01(subject.get("bbox01"))
+        if bbox01 is not None:
+            return bbox01, "payload:subject.bbox01"
 
     detected = packet.payload.get("detected_object")
     if isinstance(detected, dict):
@@ -120,6 +126,19 @@ def _read_object_bbox01(
         if bbox01 is not None:
             return bbox01, "payload:detected_object.bbox01"
     return None
+
+
+def _deep_get(value: Any, path: str) -> Any:
+    current = value
+    for part in str(path or "").split("."):
+        key = part.strip()
+        if not key:
+            return None
+        if isinstance(current, dict):
+            current = current.get(key)
+            continue
+        return None
+    return current
 
 
 def _normalize_raw_bbox01(raw: Any) -> tuple[float, float, float, float] | None:

@@ -729,7 +729,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.artifact_privacy": "Remove sensitive images",
     "core.ui.pipelines.operator_name.camera.image_privacy": "Hide image area",
     "core.ui.pipelines.operator_name.vision.track": "Track objects",
-    "core.ui.pipelines.operator_name.vision.event_assembler": "Assemble events",
     "core.ui.pipelines.operator_name.vision.classify_image": "Classify scene",
     "core.ui.pipelines.operator_name.vision.detect": "Detect objects",
     "core.ui.pipelines.recipe_name.vision.detect_objects": "Detect objects",
@@ -795,9 +794,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.camera.lens_undistort":
       "Corrects lens distortion using the camera calibration matrix and coefficients.",
     "core.ui.pipelines.operator_description.vision.track":
-      "Links detections over time and annotates technical tracklets on the frame.",
-    "core.ui.pipelines.operator_description.vision.event_assembler":
-      "Stitches technical tracklets into stable product events for storage, throttling, and notifications.",
+      "Links detections over time, stitches technical tracklets, and emits stable object events with subject.id.",
     "core.ui.pipelines.operator_description.vision.classify_image":
       "Classifies the full image with semantic labels and attaches the results to the flow.",
     "core.ui.pipelines.operator_description.vision.detect":
@@ -989,7 +986,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.throttle.mode": "Mode",
     "core.ui.pipelines.panels.throttle.mode.first": "First (recommended)",
     "core.ui.pipelines.panels.throttle.key": "Key",
-    "core.ui.pipelines.panels.throttle.key.event_id": "Event ID",
+    "core.ui.pipelines.panels.throttle.key.event_id": "Subject ID",
     "core.ui.pipelines.panels.throttle.key.stream_id": "Stream (per object/camera)",
     "core.ui.pipelines.panels.throttle.key.tracking_id": "Tracking ID",
     "core.ui.pipelines.panels.throttle.key.correlation_id": "Correlation ID",
@@ -1007,7 +1004,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.debounce.mode": "Mode",
     "core.ui.pipelines.panels.debounce.mode.first": "First (recommended)",
     "core.ui.pipelines.panels.debounce.key": "Key",
-    "core.ui.pipelines.panels.debounce.key.event_id": "Event ID",
+    "core.ui.pipelines.panels.debounce.key.event_id": "Subject ID",
     "core.ui.pipelines.panels.debounce.key.stream_id": "Stream (per object/camera)",
     "core.ui.pipelines.panels.debounce.key.tracking_id": "Tracking ID",
     "core.ui.pipelines.panels.debounce.key.correlation_id": "Correlation ID",
@@ -1734,17 +1731,13 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Best default for most cameras. It is lighter and works well on CPU-first machines.",
     "core.ui.pipelines.panels.yolo.tracker_norfair_hint":
       "Usually steadier, but a little heavier. Use it when the default tracker is losing objects too often.",
-    "core.ui.pipelines.panels.yolo.track_emit_mode": "Tracking result",
-    "core.ui.pipelines.panels.yolo.track_emit_mode.annotate": "Keep tracks on the frame",
-    "core.ui.pipelines.panels.yolo.track_emit_mode_hint":
-      "Tracking stays technical. Add Assemble events when downstream steps need stable object events.",
     "core.ui.pipelines.panels.yolo.iou_threshold": "IoU threshold",
     "core.ui.pipelines.panels.yolo.iou_threshold_hint": "Backend-level overlap threshold used by model-specific postprocessing when available.",
     "core.ui.pipelines.panels.yolo.inference_interval_detection": "Analysis interval (seconds)",
     "core.ui.pipelines.panels.yolo.inference_interval_hint":
       "Higher values reduce machine load by analyzing fewer frames. Use 0 for every frame.",
     "core.ui.pipelines.panels.yolo.detect_annotate_only_hint":
-      "vision.detect keeps results attached to the frame. Add vision.track and vision.event_assembler when downstream steps need stable object events.",
+      "vision.detect keeps results attached to the frame. Add vision.track when downstream steps need stable object events.",
     "core.ui.pipelines.panels.yolo.classification_top_k": "Labels kept on packet",
     "core.ui.pipelines.panels.yolo.classification_top_k_hint":
       "Keep only the highest-confidence labels in payload. Use a later core.filter if you want to allow or block specific labels.",
@@ -2743,7 +2736,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.artifact_privacy": "Remover imagens sensíveis",
     "core.ui.pipelines.operator_name.camera.image_privacy": "Ocultar área da imagem",
     "core.ui.pipelines.operator_name.vision.track": "Acompanhar objetos",
-    "core.ui.pipelines.operator_name.vision.event_assembler": "Montar eventos",
     "core.ui.pipelines.operator_name.vision.classify_image": "Classificar cena",
     "core.ui.pipelines.operator_name.vision.detect": "Detectar objetos",
     "core.ui.pipelines.recipe_name.vision.detect_objects": "Detectar objetos",
@@ -2809,9 +2801,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.camera.lens_undistort":
       "Corrige a distorção da lente usando a calibração da câmera.",
     "core.ui.pipelines.operator_description.vision.track":
-      "Liga detecções ao longo do tempo e anota tracklets técnicos no frame.",
-    "core.ui.pipelines.operator_description.vision.event_assembler":
-      "Junta tracklets técnicos em eventos de produto estáveis para armazenamento, throttling e notificações.",
+      "Liga detecções ao longo do tempo, junta tracklets técnicos e emite eventos de objeto estáveis com subject.id.",
     "core.ui.pipelines.operator_description.vision.classify_image":
       "Classifica a imagem inteira com rótulos semânticos e anexa os resultados ao fluxo.",
     "core.ui.pipelines.operator_description.vision.detect":
@@ -3004,7 +2994,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.throttle.mode": "Modo",
     "core.ui.pipelines.panels.throttle.mode.first": "Primeiro (recomendado)",
     "core.ui.pipelines.panels.throttle.key": "Chave",
-    "core.ui.pipelines.panels.throttle.key.event_id": "ID do evento",
+    "core.ui.pipelines.panels.throttle.key.event_id": "ID do subject",
     "core.ui.pipelines.panels.throttle.key.stream_id": "Stream (por objeto/câmera)",
     "core.ui.pipelines.panels.throttle.key.tracking_id": "Tracking ID",
     "core.ui.pipelines.panels.throttle.key.correlation_id": "Correlation ID",
@@ -3022,7 +3012,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.debounce.mode": "Modo",
     "core.ui.pipelines.panels.debounce.mode.first": "Primeiro (recomendado)",
     "core.ui.pipelines.panels.debounce.key": "Chave",
-    "core.ui.pipelines.panels.debounce.key.event_id": "ID do evento",
+    "core.ui.pipelines.panels.debounce.key.event_id": "ID do subject",
     "core.ui.pipelines.panels.debounce.key.stream_id": "Stream (por objeto/câmera)",
     "core.ui.pipelines.panels.debounce.key.tracking_id": "Tracking ID",
     "core.ui.pipelines.panels.debounce.key.correlation_id": "Correlation ID",
@@ -3758,17 +3748,13 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Melhor padrão para a maioria das câmeras. É mais leve e funciona bem em máquinas focadas em CPU.",
     "core.ui.pipelines.panels.yolo.tracker_norfair_hint":
       "Costuma ser mais estável, mas um pouco mais pesado. Use quando o rastreador padrão estiver perdendo objetos com frequência.",
-    "core.ui.pipelines.panels.yolo.track_emit_mode": "Resultado do rastreamento",
-    "core.ui.pipelines.panels.yolo.track_emit_mode.annotate": "Manter rastros no frame",
-    "core.ui.pipelines.panels.yolo.track_emit_mode_hint":
-      "O rastreamento fica técnico. Adicione Montar eventos quando as próximas etapas precisarem de eventos de objeto estáveis.",
     "core.ui.pipelines.panels.yolo.iou_threshold": "Limiar de IoU",
     "core.ui.pipelines.panels.yolo.iou_threshold_hint": "Limiar de sobreposição usado pelo pós-processamento específico do backend quando disponível.",
     "core.ui.pipelines.panels.yolo.inference_interval_detection": "Intervalo de análise (segundos)",
     "core.ui.pipelines.panels.yolo.inference_interval_hint":
       "Valores maiores reduzem carga na máquina analisando menos frames. Use 0 para analisar todos.",
     "core.ui.pipelines.panels.yolo.detect_annotate_only_hint":
-      "vision.detect mantém os resultados anexados ao frame. Adicione vision.track e vision.event_assembler quando as próximas etapas precisarem de eventos de objeto estáveis.",
+      "vision.detect mantém os resultados anexados ao frame. Adicione vision.track quando as próximas etapas precisarem de eventos de objeto estáveis.",
     "core.ui.pipelines.panels.yolo.classification_top_k": "Rótulos mantidos no pacote",
     "core.ui.pipelines.panels.yolo.classification_top_k_hint":
       "Mantém só os rótulos com maior confiança no payload. Use um core.filter depois se quiser permitir ou bloquear rótulos específicos.",

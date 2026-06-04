@@ -159,6 +159,19 @@ def _resolve_string(packet: Packet, field: str) -> str:
     return str(packet.metadata.get(field) or "").strip()
 
 
+def _resolve_subject(packet: Packet) -> dict[str, Any]:
+    subject = packet.payload.get("subject")
+    return dict(subject) if isinstance(subject, dict) else {}
+
+
+def _resolve_subject_string(packet: Packet, field: str) -> str:
+    subject = _resolve_subject(packet)
+    value = str(subject.get(field) or "").strip()
+    if value:
+        return value
+    return str(packet.metadata.get(f"subject_{field}") or "").strip()
+
+
 def _resolve_template_value(packet: Packet, key: str) -> Any:
     key = str(key or "").strip()
     if not key:
@@ -427,12 +440,20 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         pipeline_name = _resolve_logical_pipeline_name(context)
         node_id = _resolve_logical_node_id(context)
         camera_id = _resolve_string(packet, "camera_id") or "no_camera"
+        subject = _resolve_subject(packet)
+        subject_id = str(subject.get("id") or "").strip() or _resolve_subject_string(packet, "id")
+        subject_type = str(subject.get("type") or "").strip() or _resolve_subject_string(packet, "type")
+        subject_lifecycle = (
+            str(subject.get("lifecycle") or "").strip()
+            or _resolve_subject_string(packet, "lifecycle")
+            or packet.lifecycle.value
+        )
         event_id = _resolve_string(packet, "event_id")
         event_code = _resolve_string(packet, "event_code")
         tracking_id = _resolve_string(packet, "tracking_id")
         token = (
-            event_id
-            or tracking_id
+            subject_id
+            or event_id
             or _resolve_string(packet, "correlation_id")
             or packet.stream_id
         )
@@ -470,6 +491,10 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                 if category:
                     parts.append(_safe_component(category, max_len=32))
                 parts.append(_safe_component(artifact_name, max_len=32))
+                if subject_type:
+                    parts.append(_safe_component(subject_type, max_len=32))
+                if subject_lifecycle:
+                    parts.append(_safe_component(subject_lifecycle, max_len=32))
                 if token:
                     parts.append(_safe_component(token, max_len=80))
                 parts.append(_safe_component(packet.packet_id[:8], max_len=16))
@@ -531,6 +556,12 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                 meta["stored_ts_ms"] = ts_ms
                 meta["stored_size_bytes"] = stored_size_bytes
                 meta["storage_layer"] = stored.layer_label
+                if subject_id:
+                    meta["subject_id"] = subject_id
+                if subject_type:
+                    meta["subject_type"] = subject_type
+                if subject_lifecycle:
+                    meta["subject_lifecycle"] = subject_lifecycle
                 packet = packet.with_artifact(
                     Artifact(
                         name=artifact.name,
@@ -642,7 +673,7 @@ class NotifyConfig(BaseModel):
     realtime: bool = True
     update_interval_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
     input_artifact_name: str = ""
-    dedupe_key_template: str = ""
+    dedupe_key_template: str = "{{subject.id}}"
 
     @field_validator(
         "notification_type", "title", "description", "input_artifact_name", "dedupe_key_template"
@@ -817,6 +848,9 @@ class NotifyRuntime(SinkRuntime):
             state.last_image_path = image_path
 
         status = "closed" if lifecycle == Lifecycle.CLOSE else "open"
+        subject = _resolve_subject(packet)
+        subject_id = str(subject.get("id") or "").strip() or _resolve_subject_string(packet, "id")
+        subject_type = str(subject.get("type") or "").strip() or _resolve_subject_string(packet, "type")
         payload = {
             "source": "pipelines",
             "pipeline_name": _resolve_logical_pipeline_name(context),
@@ -833,6 +867,9 @@ class NotifyRuntime(SinkRuntime):
                 "ts": float(ts),
                 "duration_seconds": max(0.0, float(ts) - float(state.started_ts)),
             },
+            "subject": subject or None,
+            "subject_id": subject_id or None,
+            "subject_type": subject_type or None,
             "event_id": _resolve_string(packet, "event_id") or None,
             "event_code": _resolve_string(packet, "event_code") or None,
             "tracking_id": _resolve_string(packet, "tracking_id") or None,
@@ -913,9 +950,9 @@ class NotifyRuntime(SinkRuntime):
         node_id = getattr(context, "node_id", "") or "node"
         camera_id = _resolve_string(packet, "camera_id") or "-"
         token = (
-            _resolve_string(packet, "event_id")
+            _resolve_subject_string(packet, "id")
+            or _resolve_string(packet, "event_id")
             or _resolve_string(packet, "correlation_id")
-            or _resolve_string(packet, "tracking_id")
             or packet.stream_id
         )
         raw = f"pipeline:{node_id}:camera:{camera_id}:token:{token}"
@@ -1054,8 +1091,10 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "motion",
         "event_id",
         "event_code",
+        "subject",
         "identity_id",
         "tracklet_id",
+        "tracklet_ids",
         "raw_tracking_id",
         "tracking_id",
         "tracker_track_id",

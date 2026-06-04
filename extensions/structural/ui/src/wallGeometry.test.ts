@@ -6,6 +6,7 @@ import type {
   EditorToolPointerEvent,
   EditorToolSession,
   PlanePoint,
+  Viewport2DContext,
 } from "@toposync/plugin-api";
 
 import {
@@ -18,6 +19,12 @@ import {
   WALL_TOOL_ID,
 } from "./constants";
 import { distanceBetweenPoints } from "./geometry";
+import {
+  formatMeters,
+  formatSquareMeters,
+  polygonAreaSquareMeters,
+  polygonMeasurementAnchor,
+} from "./measurementOverlay";
 import { createStructuralTools } from "./tools/structuralTools";
 import {
   buildWallFootprints,
@@ -91,6 +98,76 @@ function must<T>(value: T | null | undefined): T {
   if (value == null) throw new Error("expected value to be present");
   return value;
 }
+
+function createFakeCanvasContext(): CanvasRenderingContext2D & {
+  texts: string[];
+} {
+  const texts: string[] = [];
+  const context: Partial<CanvasRenderingContext2D> & { texts: string[] } = {
+    texts,
+    save: () => undefined,
+    restore: () => undefined,
+    setLineDash: () => undefined,
+    beginPath: () => undefined,
+    moveTo: () => undefined,
+    lineTo: () => undefined,
+    closePath: () => undefined,
+    stroke: () => undefined,
+    fill: () => undefined,
+    fillRect: () => undefined,
+    strokeRect: () => undefined,
+    arc: () => undefined,
+    measureText: (text) =>
+      ({ width: String(text).length * 7 }) as TextMetrics,
+    fillText: (text) => {
+      texts.push(String(text));
+    },
+  };
+  return context as CanvasRenderingContext2D & { texts: string[] };
+}
+
+function createFakeViewport(scale = 100): Viewport2DContext {
+  return {
+    canvas: {} as HTMLCanvasElement,
+    width: 640,
+    height: 480,
+    dpr: 1,
+    scale,
+    worldToScreen: (point) => ({
+      x: 120 + point.x * scale,
+      y: 120 + point.z * scale,
+    }),
+    screenToWorld: (point) => ({
+      x: (point.x - 120) / scale,
+      z: (point.y - 120) / scale,
+    }),
+  };
+}
+
+test("measurement helpers format lengths and polygon areas", () => {
+  const i18n = { getLocale: () => "en" as const };
+  assert.equal(formatMeters(1.234, i18n), "1.23 m");
+  assert.equal(formatSquareMeters(6, i18n), "6.00 m²");
+
+  const rectangle = [
+    { x: 0, z: 0 },
+    { x: 2, z: 0 },
+    { x: 2, z: 3 },
+    { x: 0, z: 3 },
+  ];
+  assert.equal(polygonAreaSquareMeters(rectangle), 6);
+  assert.equal(polygonAreaSquareMeters([...rectangle].reverse()), 6);
+  assert.equal(
+    polygonAreaSquareMeters([
+      { x: 0, z: 0 },
+      { x: 2, z: 0 },
+      { x: 2, z: 2 },
+    ]),
+    2,
+  );
+  assert.equal(polygonAreaSquareMeters(rectangle.slice(0, 2)), 0);
+  assertPointClose(polygonMeasurementAnchor(rectangle), { x: 1, z: 1.5 });
+});
 
 test("L-shaped 90 degree walls share the same joined corner points", () => {
   const footprints = buildWallFootprints([
@@ -342,6 +419,44 @@ test("wall tool Alt bypasses endpoint and grid snap", () => {
   assert.equal(elements.length, 2);
   assert.deepEqual(elements[1].props.a, rawStart);
   assert.notDeepEqual(elements[1].props.a, elements[0].props.b);
+});
+
+test("wall tool preview draws live length measurement", () => {
+  const { session } = createWallToolHarness();
+  const canvasContext = createFakeCanvasContext();
+
+  session.onPointerEvent?.(pointer("down", { x: 0, z: 0 }, { altKey: true }));
+  session.onPointerEvent?.(
+    pointer("move", { x: 1.23, z: 0 }, { altKey: true, buttons: 1 }),
+  );
+  session.renderOverlay2D?.({
+    ctx: canvasContext,
+    viewport: createFakeViewport(),
+  });
+
+  assert.ok(canvasContext.texts.includes("1.23 m"));
+});
+
+test("rectangular area tool preview draws area and side measurements", () => {
+  const { session } = createToolHarness(AREA_SQUARE_WITH_WALLS_TOOL_ID);
+  const canvasContext = createFakeCanvasContext();
+
+  session.onPointerEvent?.(pointer("down", { x: 0, z: 0 }));
+  session.onPointerEvent?.(pointer("move", { x: 2, z: 3 }, { buttons: 1 }));
+  session.renderOverlay2D?.({
+    ctx: canvasContext,
+    viewport: createFakeViewport(),
+  });
+
+  assert.ok(canvasContext.texts.includes("6.00 m²"));
+  assert.equal(
+    canvasContext.texts.filter((text) => text === "2.00 m").length,
+    2,
+  );
+  assert.equal(
+    canvasContext.texts.filter((text) => text === "3.00 m").length,
+    2,
+  );
 });
 
 test("rectangular room tool creates an area and walls with exactly matching vertices", () => {

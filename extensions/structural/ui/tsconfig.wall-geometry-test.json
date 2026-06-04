@@ -9,6 +9,7 @@
     "types": []
   },
   "include": [
+    "src/measurementOverlay.ts",
     "src/wallGeometry.ts",
     "src/wallGeometry.test.ts",
     "src/tools/structuralTools.ts"

@@ -27,6 +27,10 @@ import {
   WALL_WINDOW_TOOL_ID,
 } from "../constants";
 import { centerOfPoints, distanceBetweenPoints } from "../geometry";
+import {
+  drawPolygonMeasurementOverlay,
+  drawSegmentLengthLabel,
+} from "../measurementOverlay";
 import { loadAreaFillColor, readNumber, readPlanePoint } from "../parsing";
 import {
   createDefaultOpening,
@@ -657,6 +661,14 @@ function createWallTool(i18n: HostI18n): EditorTool {
           canvasContext.lineTo(b.x, b.y);
           canvasContext.stroke();
           canvasContext.restore();
+
+          drawSegmentLengthLabel({
+            ctx: canvasContext,
+            viewport,
+            aWorld: startPoint,
+            bWorld: currentPoint,
+            i18n,
+          });
         },
         getCursor: () => "crosshair",
       };
@@ -766,6 +778,15 @@ function createAreaRectangleTool(
           canvasContext.setLineDash([6, 6]);
           canvasContext.stroke();
           canvasContext.restore();
+
+          drawPolygonMeasurementOverlay({
+            ctx: canvasContext,
+            viewport,
+            vertices,
+            i18n,
+            includeClosing: true,
+            includeArea: true,
+          });
         },
         getCursor: () => "crosshair",
       };
@@ -955,10 +976,13 @@ function createAreaPolygonTool(
           const preview = hoverPoint
             ? viewport.worldToScreen(hoverPoint)
             : null;
+          const measurementVertices = hoverPoint
+            ? [...vertices, hoverPoint]
+            : [...vertices];
 
           canvasContext.save();
 
-          if (vertices.length >= 2) {
+          if (vertices.length >= 2 || preview) {
             canvasContext.beginPath();
             canvasContext.moveTo(pts[0].x, pts[0].y);
             for (let i = 1; i < pts.length; i++)
@@ -968,6 +992,19 @@ function createAreaPolygonTool(
             canvasContext.lineWidth = 2;
             canvasContext.setLineDash([6, 6]);
             canvasContext.stroke();
+          }
+
+          if (measurementVertices.length >= 3) {
+            const first = pts[0];
+            const last = preview ?? pts[pts.length - 1];
+            canvasContext.beginPath();
+            canvasContext.moveTo(last.x, last.y);
+            canvasContext.lineTo(first.x, first.y);
+            canvasContext.strokeStyle = rgbaFromHex("#fbbf24", 0.34);
+            canvasContext.lineWidth = 1.5;
+            canvasContext.setLineDash([4, 7]);
+            canvasContext.stroke();
+            canvasContext.setLineDash([]);
           }
 
           for (let i = 0; i < pts.length; i++) {
@@ -985,6 +1022,15 @@ function createAreaPolygonTool(
           }
 
           canvasContext.restore();
+
+          drawPolygonMeasurementOverlay({
+            ctx: canvasContext,
+            viewport,
+            vertices: measurementVertices,
+            i18n,
+            includeClosing: measurementVertices.length >= 3,
+            includeArea: measurementVertices.length >= 3,
+          });
         },
         getCursor: () => "crosshair",
       };

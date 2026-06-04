@@ -68,11 +68,24 @@ NotificationPriority = Literal["low", "medium", "high"]
 EXTENSION_ID = "com.toposync.cameras"
 DEFAULT_CAMERA_DETECTION_MODEL_ID = "rfdetr_det_medium"
 PIPELINE_NAME_MAX_LENGTH = 120
-CAMERA_PIPELINE_PRESETS = ("people_individual", "people_quiet", "presence_area", "vehicle_stopped")
+CAMERA_PIPELINE_PRESETS = (
+    "people_simple",
+    "people_individual",
+    "people_quiet",
+    "presence_area",
+    "vehicle_stopped",
+)
+CAMERA_MAPPING_REQUIRED_PRESETS = {
+    "people_individual",
+    "people_quiet",
+    "presence_area",
+    "vehicle_stopped",
+}
 NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
 VEHICLE_STOPPED_OBJECT_CATEGORIES = ["car", "truck", "bus", "motorcycle"]
 VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
 PRESET_PIPELINE_NAME_PARTS = {
+    "people_simple": "deteccao_simples_de_pessoas",
     "people_individual": "evento_individual_de_pessoas",
     "people_quiet": "presenca_agrupada_de_pessoas",
     "presence_area": "presenca_agrupada_em_area",
@@ -366,7 +379,13 @@ class CameraPipelinesResponse(BaseModel):
 
 
 class CameraPipelinePresetRequest(BaseModel):
-    preset: Literal["people_individual", "people_quiet", "presence_area", "vehicle_stopped"]
+    preset: Literal[
+        "people_simple",
+        "people_individual",
+        "people_quiet",
+        "presence_area",
+        "vehicle_stopped",
+    ]
     source_id: str = ""
     pipeline_name: str = ""
     enabled: bool = True
@@ -2335,7 +2354,7 @@ class CamerasExtension(BaseExtension):
                     },
                 },
             ]
-            if preset in {"presence_area", "vehicle_stopped"}:
+            if preset in CAMERA_MAPPING_REQUIRED_PRESETS:
                 base_nodes.append(
                     {
                         "id": "map",
@@ -2362,7 +2381,7 @@ class CamerasExtension(BaseExtension):
             )
 
             tail_nodes: list[dict[str, Any]]
-            if preset == "people_individual":
+            if preset in {"people_simple", "people_individual"}:
                 tail_nodes = [
                     {
                         "id": "throttle",
@@ -2376,7 +2395,12 @@ class CamerasExtension(BaseExtension):
                         "operator": "core.notify",
                         "config": {
                             "notification_type": "pipelines.tracking",
-                            "title": notification_title or "{{camera_name}}: Person detected",
+                            "title": notification_title
+                            or (
+                                "{{camera_name}}: Person detected"
+                                if preset == "people_simple"
+                                else "{{camera_name}}: Person mapped"
+                            ),
                             "description": notification_description
                             or "{{object_category_label}} - {{camera_name}}",
                             "priority": notification_priority,
@@ -2684,7 +2708,7 @@ class CamerasExtension(BaseExtension):
 
             composition_id = str(body.composition_id or "").strip()
             area_restriction_config: dict[str, Any] | None = None
-            if preset in {"presence_area", "vehicle_stopped"}:
+            if preset in CAMERA_MAPPING_REQUIRED_PRESETS:
                 if preset == "vehicle_stopped" and str(body.area_id or "").strip():
                     resolved_area = _resolve_mapped_camera_area(
                         cfg,

@@ -680,7 +680,13 @@ class TrackEventAssembler:
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         now_monotonic = time.monotonic()
         packet_ts_value = _packet_ts_seconds(packet)
-        packet_ts = packet_ts_value if math.isfinite(packet_ts_value) else None
+        packet_ts = (
+            None
+            if packet.metadata.get("vision_track_idle_flush") is True
+            else packet_ts_value
+            if math.isfinite(packet_ts_value)
+            else None
+        )
         tracks = self._extract_tracks(packet)
         current_tracklet_ids = {item.tracklet_id for item in tracks}
         used_event_ids: set[str] = set()

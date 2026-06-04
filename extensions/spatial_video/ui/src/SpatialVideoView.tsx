@@ -8,6 +8,7 @@ import type {
   RenderViewContext,
 } from "@toposync/plugin-api";
 
+import { areaClipSignature, controlPointSetIntersectsAreaClip } from "./areaClip";
 import { fetchCameraPtzPresets, fetchCameraPtzStatus, fetchLiveViews } from "./api";
 import { resolveProjectionCandidates } from "./candidates";
 import { markerEntries, markerVideoStatus, type MarkerVideoStatus } from "./markers";
@@ -27,6 +28,7 @@ type ProjectionEntry = {
   material: THREE.MeshBasicMaterial;
   setId: string;
   setSignature: string;
+  areaClipSignature: string;
   strategyId: ProjectionStrategyId;
   meshDensity: ProjectionMeshDensity;
 };
@@ -207,7 +209,7 @@ function vectorLayerNodes(args: {
       const def = args.elementTypesById[element.type];
       if (!def?.renderMain2DVector) return args.layer === "above-video" ? fallbackVectorElement(element, key) : null;
       try {
-        const rendered = def.renderMain2DVector({ element, ctx: { bounds: args.sceneBounds, scale: 1 } });
+        const rendered = def.renderMain2DVector({ element, elements: args.elements, ctx: { bounds: args.sceneBounds, scale: 1 } });
         if (rendered == null && args.layer === "above-video") return fallbackVectorElement(element, key);
         return <React.Fragment key={key}>{rendered}</React.Fragment>;
       } catch (error) {
@@ -356,8 +358,8 @@ export function SpatialVideoView({
   }, [compositionId]);
 
   const candidates = useMemo(
-    () => resolveProjectionCandidates(elements, liveViews),
-    [elements, liveViews],
+    () => resolveProjectionCandidates(elements, elementTypesById, liveViews),
+    [elementTypesById, elements, liveViews],
   );
 
   const activePoses = useMemo(() => {
@@ -528,23 +530,34 @@ export function SpatialVideoView({
       const pose = activePoses.get(candidate.id);
       const set = pose?.set ?? candidate.initialControlPointSet;
       const setSignature = controlPointSetProjectionSignature(set);
-      const visible = pose?.status !== "unmatched";
+      const clipSignature = areaClipSignature(candidate.areaClip);
+      const visible = pose?.status !== "unmatched" && controlPointSetIntersectsAreaClip(set, candidate.areaClip);
       const existing = projectionEntriesRef.current.get(candidate.id);
       if (
         existing &&
         (existing.setId !== set.id ||
           existing.setSignature !== setSignature ||
+          existing.areaClipSignature !== clipSignature ||
           existing.strategyId !== projectionStrategyId ||
           existing.meshDensity !== meshDensity)
       ) {
-        const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity);
+        const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity, { clipPolygon: candidate.areaClip?.polygon ?? null });
         if (geometry) {
           existing.mesh.geometry.dispose();
           existing.mesh.geometry = geometry;
           existing.setId = set.id;
           existing.setSignature = setSignature;
+          existing.areaClipSignature = clipSignature;
           existing.strategyId = projectionStrategyId;
           existing.meshDensity = meshDensity;
+        } else {
+          group.remove(existing.mesh);
+          existing.unsubscribe();
+          existing.source.destroy();
+          existing.mesh.geometry.dispose();
+          existing.material.dispose();
+          projectionEntriesRef.current.delete(candidate.id);
+          continue;
         }
       }
       if (existing) {
@@ -554,7 +567,7 @@ export function SpatialVideoView({
         continue;
       }
 
-      const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity);
+      const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity, { clipPolygon: candidate.areaClip?.polygon ?? null });
       if (!geometry) continue;
       const material = new THREE.MeshBasicMaterial({
         color: 0xffffff,
@@ -587,6 +600,7 @@ export function SpatialVideoView({
         material,
         setId: set.id,
         setSignature,
+        areaClipSignature: clipSignature,
         strategyId: projectionStrategyId,
         meshDensity,
       });
@@ -677,7 +691,12 @@ export function SpatialVideoView({
     for (const candidate of candidates) {
       const pose = activePoses.get(candidate.id);
       const snapshot = projectionEntriesRef.current.get(candidate.id)?.source.getSnapshot() ?? null;
-      const status = markerVideoStatus(snapshot, pose?.status);
+      const areaClipWarning =
+        candidate.areaClipWarning ||
+        (candidate.areaClip && pose && !controlPointSetIntersectsAreaClip(pose.set, candidate.areaClip)
+          ? "A área de recorte não cruza a pose atual da câmera."
+          : null);
+      const status = markerVideoStatus(snapshot, pose?.status, areaClipWarning);
       if (status) out.set(candidate.element.id, status);
     }
     return out;

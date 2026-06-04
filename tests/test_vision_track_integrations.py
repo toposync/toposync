@@ -318,6 +318,153 @@ def test_velocity_estimation_continues_working_after_vision_track_decoupling() -
     asyncio.run(scenario())
 
 
+def test_vision_track_closes_event_when_source_stops_emitting_packets() -> None:
+    async def scenario() -> None:
+        frame = np.zeros((32, 32, 3), dtype=np.uint8)
+        source_sequence = [
+            {
+                "payload": {"camera_id": "camera-main", "frame_ts": 100.0},
+                "artifacts": _frame_artifacts(frame),
+            }
+        ]
+        detection_sequence = [
+            [
+                DetectionObject(
+                    label="person",
+                    label_id=0,
+                    score=0.9,
+                    bbox01=(0.1, 0.1, 0.3, 0.5),
+                    model_id="fake.detector",
+                )
+            ]
+        ]
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
+                {
+                    "id": "detect",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "fake.detector", "emit_mode": "annotate"},
+                },
+                {
+                    "id": "track",
+                    "operator": "vision.track",
+                    "config": {
+                        "tracker_id": "simple_iou_kalman",
+                        "default_interval_seconds": 0.0,
+                        "close_after_seconds": 0.1,
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
+                {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
+                {"from": {"node": "track", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+            ],
+        }
+
+        collector: dict[str, list[Packet]] = {}
+        runtime = _pipeline_runtime(
+            graph=graph,
+            source_sequence=source_sequence,
+            detection_sequence=detection_sequence,
+            collector=collector,
+        )
+        await runtime.run_for(0.45)
+
+        packets = collector.get("sink", [])
+        assert [packet.lifecycle for packet in packets] == [Lifecycle.OPEN, Lifecycle.CLOSE]
+        assert packets[1].payload["event_id"] == packets[0].payload["event_id"]
+        assert packets[1].payload["subject"]["lifecycle"] == "close"
+
+    asyncio.run(scenario())
+
+
+def test_tracking_group_closes_when_source_stops_emitting_packets() -> None:
+    async def scenario() -> None:
+        frame = np.zeros((32, 32, 3), dtype=np.uint8)
+        source_sequence = [
+            {
+                "payload": {"camera_id": "camera-main", "frame_ts": 100.0},
+                "artifacts": _frame_artifacts(frame),
+            }
+        ]
+        detection_sequence = [
+            [
+                DetectionObject(
+                    label="person",
+                    label_id=0,
+                    score=0.9,
+                    bbox01=(0.1, 0.1, 0.3, 0.5),
+                    model_id="fake.detector",
+                )
+            ]
+        ]
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
+                {
+                    "id": "detect",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "fake.detector", "emit_mode": "annotate"},
+                },
+                {
+                    "id": "track",
+                    "operator": "vision.track",
+                    "config": {
+                        "tracker_id": "simple_iou_kalman",
+                        "default_interval_seconds": 0.0,
+                        "close_after_seconds": 0.1,
+                    },
+                },
+                {
+                    "id": "group",
+                    "operator": "vision.group_events",
+                        "config": {
+                            "mode": "session",
+                            "idle_timeout_seconds": 1.0,
+                            "update_interval_seconds": 0.0,
+                        },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
+                {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
+                {"from": {"node": "track", "port": "out"}, "to": {"node": "group", "port": "in"}},
+                {"from": {"node": "group", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+            ],
+        }
+
+        collector: dict[str, list[Packet]] = {}
+        runtime = _pipeline_runtime(
+            graph=graph,
+            source_sequence=source_sequence,
+            detection_sequence=detection_sequence,
+            collector=collector,
+        )
+        await runtime.run_for(1.35)
+
+        packets = collector.get("sink", [])
+        assert [packet.lifecycle for packet in packets] == [Lifecycle.OPEN, Lifecycle.CLOSE]
+        assert packets[1].payload["subject"]["id"] == packets[0].payload["subject"]["id"]
+        assert packets[1].payload["subject"]["type"] == "group_event"
+        assert packets[1].payload["subject"]["lifecycle"] == "close"
+
+    asyncio.run(scenario())
+
+
 def test_vision_track_annotate_mode_fills_future_multicamera_fields_from_packet() -> None:
     class _FutureTrackerBackend:
         tracker_id = "future_tracker"

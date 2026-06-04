@@ -139,6 +139,44 @@ function formatDurationVerbose(secondsRaw: unknown): string | null {
   return secs > 0 ? `${hours}h ${secs}s` : `${hours}h`;
 }
 
+function notificationPayload(notification: Notification): Record<string, unknown> {
+  return asRecord(notification.payload);
+}
+
+function notificationIsOpenRealtime(notification: Notification): boolean {
+  const payload = notificationPayload(notification);
+  return asTrimmedString(payload.status).toLowerCase() === "open" && payload.realtime === true;
+}
+
+function notificationStartedMillis(notification: Notification): number | null {
+  const payload = notificationPayload(notification);
+  const event = asRecord(payload.event);
+  const startedSeconds = asFiniteNumber(event.started_ts);
+  if (startedSeconds != null && startedSeconds > 0) return startedSeconds * 1000;
+  const createdAt = Date.parse(notification.createdAt ?? "");
+  return Number.isFinite(createdAt) && createdAt > 0 ? createdAt : null;
+}
+
+function withLiveDuration(notification: Notification, nowMs: number): Notification {
+  if (!notificationIsOpenRealtime(notification)) return notification;
+  const startedMs = notificationStartedMillis(notification);
+  if (startedMs == null) return notification;
+  const payload = notificationPayload(notification);
+  const event = asRecord(payload.event);
+  const previous = asFiniteNumber(event.duration_seconds) ?? 0;
+  const durationSeconds = Math.max(previous, (nowMs - startedMs) / 1000);
+  return {
+    ...notification,
+    payload: {
+      ...payload,
+      event: {
+        ...event,
+        duration_seconds: durationSeconds,
+      },
+    },
+  };
+}
+
 const NOTIFICATIONS_OPEN_STORAGE_KEY = "toposync.notifications_open.v1";
 const NOTIFICATIONS_FILTER_STORAGE_KEY = "toposync.notifications_filter.v2";
 
@@ -271,6 +309,7 @@ export function MainScreen({
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
   const [filter, setFilter] = useState<NotificationsFilter>(() => loadNotificationsFilter());
   const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
+  const [notificationsNowMs, setNotificationsNowMs] = useState(() => Date.now());
   const filterPopoverRef = useRef<HTMLDivElement | null>(null);
   const filterButtonRef = useRef<HTMLButtonElement | null>(null);
   const [renderMode, setRenderMode] = useState<RenderMode>(() => {
@@ -311,6 +350,27 @@ export function MainScreen({
     }, STREAMS_OVERLAY_IDLE_MS);
   }, [clearStreamsOverlayTimer, renderMode]);
 
+  const hasOpenRealtimeNotifications = useMemo(
+    () => notifications.some(notificationIsOpenRealtime),
+    [notifications],
+  );
+
+  useEffect(() => {
+    if (!hasOpenRealtimeNotifications) return;
+    setNotificationsNowMs(Date.now());
+    const handle = window.setInterval(() => {
+      setNotificationsNowMs(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(handle);
+    };
+  }, [hasOpenRealtimeNotifications]);
+
+  const displayNotifications = useMemo(
+    () => notifications.map((notification) => withLiveDuration(notification, notificationsNowMs)),
+    [notifications, notificationsNowMs],
+  );
+
   useEffect(() => {
     if (renderMode !== "streams") {
       clearStreamsOverlayTimer();
@@ -349,8 +409,8 @@ export function MainScreen({
 
   const activeNotification = useMemo(() => {
     if (!activeNotificationId) return null;
-    return notifications.find((n) => n.id === activeNotificationId) ?? null;
-  }, [activeNotificationId, notifications]);
+    return displayNotifications.find((n) => n.id === activeNotificationId) ?? null;
+  }, [activeNotificationId, displayNotifications]);
 
   const activeNotificationImages = useMemo(() => {
     if (!activeNotification) return [];
@@ -600,11 +660,11 @@ export function MainScreen({
 
   const availableTypes = useMemo(() => {
     const seen = new Set<string>();
-    for (const n of notifications) {
+    for (const n of displayNotifications) {
       if (typeof n.type === "string" && n.type) seen.add(n.type);
     }
     return Array.from(seen).sort();
-  }, [notifications]);
+  }, [displayNotifications]);
 
   const matchesFilter = useCallback(
     (n: Notification): boolean => {
@@ -622,19 +682,19 @@ export function MainScreen({
   );
 
   const visibleNotifications = useMemo(() => {
-    return notifications.filter((n) => {
+    return displayNotifications.filter((n) => {
       if (matchesFilter(n)) return true;
       // Always keep the actively-selected notification visible so the
       // selection isn't silently lost when the user tightens the filter.
       return Boolean(activeNotificationId && n.id === activeNotificationId);
     });
-  }, [activeNotificationId, notifications, matchesFilter]);
+  }, [activeNotificationId, displayNotifications, matchesFilter]);
 
   const filterRestrictive = useMemo(() => isFilterRestrictive(filter), [filter]);
 
   const filteredLoadedCount = useMemo(
-    () => notifications.reduce((acc, n) => (matchesFilter(n) ? acc + 1 : acc), 0),
-    [notifications, matchesFilter],
+    () => displayNotifications.reduce((acc, n) => (matchesFilter(n) ? acc + 1 : acc), 0),
+    [displayNotifications, matchesFilter],
   );
 
   const badgeLabel = useMemo(() => {
@@ -648,8 +708,8 @@ export function MainScreen({
 
   const hiddenByFilterCount = useMemo(() => {
     if (!filterRestrictive) return 0;
-    return notifications.length - filteredLoadedCount;
-  }, [filterRestrictive, notifications.length, filteredLoadedCount]);
+    return displayNotifications.length - filteredLoadedCount;
+  }, [filterRestrictive, displayNotifications.length, filteredLoadedCount]);
 
   // When a restrictive filter leaves few visible items but more pages exist,
   // pull one extra page during idle. Further pagination is left to scroll.

@@ -1,5 +1,6 @@
-import type { CompositionElement } from "@toposync/plugin-api";
+import type { CompositionElement, ElementType } from "@toposync/plugin-api";
 
+import { resolveAreaClipForElement } from "./areaClip";
 import type { CameraControlPointSet, CameraLiveView, ProjectionCandidate } from "./types";
 
 function readRecord(value: unknown): Record<string, unknown> {
@@ -134,6 +135,7 @@ function liveViewForCamera(liveViews: CameraLiveView[], cameraId: string): Camer
 
 export function resolveProjectionCandidates(
   elements: CompositionElement[],
+  elementTypesById: Record<string, ElementType>,
   liveViews: CameraLiveView[],
 ): ProjectionCandidate[] {
   const out: ProjectionCandidate[] = [];
@@ -162,6 +164,7 @@ export function resolveProjectionCandidates(
       return roleOk && sourceOk;
     });
     if (compatibleVariants.length === 0) continue;
+    const areaClipResult = resolveAreaClipForElement(element, elements, elementTypesById, sets);
     const variantPool = compatibleVariants;
     const preferredVariant =
       variantPool.find((variant) => variant.role === "sub") ??
@@ -181,6 +184,8 @@ export function resolveProjectionCandidates(
       controlPointSets: sets,
       initialControlPointSet: sets[0],
       variantId: preferredVariant?.id ?? null,
+      areaClip: areaClipResult.clip,
+      areaClipWarning: areaClipResult.warning,
     });
   }
   return out;

@@ -36,6 +36,14 @@ export type CameraControlPointSet = {
   refinement_points?: CameraProjectionRefinementPoint[];
 };
 
+export type AreaClip = {
+  areaElementId: string;
+  label: string;
+  polygon: WorldPoint[];
+  signature: string;
+  warning?: string | null;
+};
+
 export type StreamingTransport = "mse" | "hls" | "jsmpeg" | "webrtc";
 
 export type StreamingOutputUrl = {
@@ -120,6 +128,8 @@ export type ProjectionCandidate = {
   controlPointSets: CameraControlPointSet[];
   initialControlPointSet: CameraControlPointSet;
   variantId?: string | null;
+  areaClip?: AreaClip | null;
+  areaClipWarning?: string | null;
 };
 
 export type ActiveProjectionPose = {

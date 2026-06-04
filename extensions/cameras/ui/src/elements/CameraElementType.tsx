@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Select, { type SingleValue, type StylesConfig } from "react-select";
 import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 
 import cameraSvg from "@fortawesome/fontawesome-free/svgs/solid/camera.svg";
@@ -96,8 +97,127 @@ const PTZ_ZOOM_SPEED = 0.65;
 const PTZ_STATUS_REFRESH_MS = 2200;
 const SNAPSHOT_REFRESH_MS = 8000;
 
+type CameraAreaClipOption = {
+  value: string;
+  label: string;
+  polygon: Array<{ x: number; z: number }>;
+};
+
+const cameraAreaSelectStyles: StylesConfig<CameraAreaClipOption, false> = {
+  control: (base, state) => ({
+    ...base,
+    minHeight: 38,
+    borderColor: state.isFocused ? "rgba(59,130,246,0.85)" : "rgba(148,163,184,0.28)",
+    background: "rgba(15,23,42,0.55)",
+    boxShadow: state.isFocused ? "0 0 0 1px rgba(59,130,246,0.55)" : "none",
+  }),
+  menu: (base) => ({
+    ...base,
+    background: "rgb(15,23,42)",
+    border: "1px solid rgba(148,163,184,0.24)",
+    zIndex: 40,
+  }),
+  option: (base, state) => ({
+    ...base,
+    background: state.isFocused ? "rgba(59,130,246,0.26)" : state.isSelected ? "rgba(59,130,246,0.42)" : "transparent",
+    color: "rgb(226,232,240)",
+  }),
+  singleValue: (base) => ({ ...base, color: "rgb(226,232,240)" }),
+  placeholder: (base) => ({ ...base, color: "rgba(203,213,225,0.72)" }),
+  input: (base) => ({ ...base, color: "rgb(226,232,240)" }),
+};
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function readAreaPolygon(element: CompositionElement): Array<{ x: number; z: number }> {
+  const vertices = Array.isArray(element.props?.vertices) ? element.props.vertices : [];
+  const out: Array<{ x: number; z: number }> = [];
+  for (const item of vertices) {
+    const point = readRecord(item);
+    if (!finiteNumber(point.x) || !finiteNumber(point.z)) continue;
+    out.push({ x: Number(point.x), z: Number(point.z) });
+  }
+  return out.length >= 3 ? out : [];
+}
+
+function polygonSignedArea(points: Array<{ x: number; z: number }>): number {
+  let total = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    total += current.x * next.z - next.x * current.z;
+  }
+  return total / 2;
+}
+
+function pointInPolygon(point: { x: number; z: number }, polygon: Array<{ x: number; z: number }>): boolean {
+  if (polygon.length < 3) return false;
+  let inside = false;
+  for (let index = 0, previousIndex = polygon.length - 1; index < polygon.length; previousIndex = index, index += 1) {
+    const current = polygon[index];
+    const previous = polygon[previousIndex];
+    const crosses = current.z > point.z !== previous.z > point.z;
+    if (!crosses) continue;
+    const xAtZ = ((previous.x - current.x) * (point.z - current.z)) / ((previous.z - current.z) || 1e-12) + current.x;
+    if (point.x < xAtZ) inside = !inside;
+  }
+  return inside;
+}
+
+function orientation(a: { x: number; z: number }, b: { x: number; z: number }, c: { x: number; z: number }): number {
+  return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
+}
+
+function pointOnSegment(a: { x: number; z: number }, b: { x: number; z: number }, p: { x: number; z: number }): boolean {
+  return (
+    Math.abs(orientation(a, b, p)) < 1e-9 &&
+    p.x >= Math.min(a.x, b.x) - 1e-9 &&
+    p.x <= Math.max(a.x, b.x) + 1e-9 &&
+    p.z >= Math.min(a.z, b.z) - 1e-9 &&
+    p.z <= Math.max(a.z, b.z) + 1e-9
+  );
+}
+
+function segmentsIntersect(a: { x: number; z: number }, b: { x: number; z: number }, c: { x: number; z: number }, d: { x: number; z: number }): boolean {
+  const o1 = orientation(a, b, c);
+  const o2 = orientation(a, b, d);
+  const o3 = orientation(c, d, a);
+  const o4 = orientation(c, d, b);
+  if (Math.abs(o1) < 1e-9 && pointOnSegment(a, b, c)) return true;
+  if (Math.abs(o2) < 1e-9 && pointOnSegment(a, b, d)) return true;
+  if (Math.abs(o3) < 1e-9 && pointOnSegment(c, d, a)) return true;
+  if (Math.abs(o4) < 1e-9 && pointOnSegment(c, d, b)) return true;
+  return o1 > 0 !== o2 > 0 && o3 > 0 !== o4 > 0;
+}
+
+function polygonsIntersect(a: Array<{ x: number; z: number }>, b: Array<{ x: number; z: number }>): boolean {
+  if (a.length < 3 || b.length < 3) return false;
+  if (a.some((point) => pointInPolygon(point, b))) return true;
+  if (b.some((point) => pointInPolygon(point, a))) return true;
+  for (let ai = 0; ai < a.length; ai += 1) {
+    const a0 = a[ai];
+    const a1 = a[(ai + 1) % a.length];
+    for (let bi = 0; bi < b.length; bi += 1) {
+      if (segmentsIntersect(a0, a1, b[bi], b[(bi + 1) % b.length])) return true;
+    }
+  }
+  return false;
+}
+
+function calibratedViewFootprint(view: CameraCalibratedView): Array<{ x: number; z: number }> {
+  const quad = view.projection_model.world_quad;
+  const points = [quad.top_left, quad.top_right, quad.bottom_right, quad.bottom_left].filter((point) => finiteNumber(point.x) && finiteNumber(point.z));
+  return Math.abs(polygonSignedArea(points)) > 1e-8 ? points : [];
+}
+
+function readSpatialVideoClipAreaId(props: Record<string, unknown>): string {
+  return readString(readRecord(props.spatial_video).clip_area_element_id).trim();
 }
 
 function normalizePtzMoveStatus(value: string | null | undefined): "moving" | "idle" | "unknown" {
@@ -482,8 +602,17 @@ export function createCameraElementType(host: ToposyncHost): ElementType {
         },
       };
     },
-    renderEditorModal: ({ element, update, remove, close }) => (
-      <CameraEditor element={element} update={update} remove={remove} close={close} i18n={i18n} host={host} />
+    renderEditorModal: ({ element, elements, elementTypesById, update, remove, close }) => (
+      <CameraEditor
+        element={element}
+        elements={elements}
+        elementTypesById={elementTypesById}
+        update={update}
+        remove={remove}
+        close={close}
+        i18n={i18n}
+        host={host}
+      />
     ),
     renderActionModal: ({ element }) => <CameraAction element={element} i18n={i18n} host={host} />,
   };
@@ -491,6 +620,8 @@ export function createCameraElementType(host: ToposyncHost): ElementType {
 
 function CameraEditor({
   element,
+  elements,
+  elementTypesById,
   update,
   remove,
   close,
@@ -498,6 +629,8 @@ function CameraEditor({
   host,
 }: {
   element: CompositionElement;
+  elements: CompositionElement[];
+  elementTypesById: Record<string, ElementType>;
   update: (patch: CompositionElementPatch) => void;
   remove: () => void;
   close: () => void;
@@ -516,7 +649,12 @@ function CameraEditor({
     () => existingCalibratedViews.filter((item) => summarizeCalibratedViewQuality(item).status !== "incomplete").length,
     [existingCalibratedViews],
   );
+  const readyCalibratedViews = useMemo(
+    () => existingCalibratedViews.filter((item) => summarizeCalibratedViewQuality(item).status !== "incomplete"),
+    [existingCalibratedViews],
+  );
   const totalSets = existingCalibratedViews.length;
+  const spatialClipAreaId = readSpatialVideoClipAreaId(props);
   const [isCalibrationOpen, setIsCalibrationOpen] = useState(false);
 
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndex | null>(null);
@@ -567,6 +705,41 @@ function CameraEditor({
     () => cameraOptions.find((camera) => camera.id === selectedCameraId) ?? null,
     [cameraOptions, selectedCameraId],
   );
+  const areaClipOptions = useMemo<CameraAreaClipOption[]>(() => {
+    if (readyCalibratedViews.length === 0) return [];
+    const footprints = readyCalibratedViews.map(calibratedViewFootprint).filter((footprint) => footprint.length >= 3);
+    if (footprints.length === 0) return [];
+    return elements
+      .filter((item) => item.id !== element.id && (elementTypesById[item.type]?.layerGroup ?? "") === "areas")
+      .map((item): CameraAreaClipOption | null => {
+        const polygon = readAreaPolygon(item);
+        if (polygon.length < 3) return null;
+        if (!footprints.some((footprint) => polygonsIntersect(footprint, polygon))) return null;
+        const typeName = elementTypesById[item.type]?.name;
+        const typeFallback = typeof typeName === "string" ? typeName : typeName?.fallback;
+        return {
+          value: item.id,
+          label: item.name || typeFallback || item.id,
+          polygon,
+        };
+      })
+      .filter((item): item is CameraAreaClipOption => Boolean(item));
+  }, [element.id, elementTypesById, elements, readyCalibratedViews]);
+  const selectedAreaClipOption = areaClipOptions.find((option) => option.value === spatialClipAreaId) ?? null;
+  const areaClipDisabled = !selectedCameraId || readyCalibratedViews.length === 0 || areaClipOptions.length === 0;
+  const areaClipInvalid = Boolean(spatialClipAreaId && !selectedAreaClipOption);
+
+  function updateSpatialVideoClipArea(nextAreaId: string) {
+    const existingSpatialVideo = readRecord(props.spatial_video);
+    update({
+      props: {
+        spatial_video: {
+          ...existingSpatialVideo,
+          clip_area_element_id: nextAreaId,
+        },
+      },
+    });
+  }
 
   return (
     <div>
@@ -626,6 +799,32 @@ function CameraEditor({
         {totalSets > 0 && readySets === 0 ? (
           <div className="cardMeta" style={{ marginTop: 6 }}>
             {t("ext.cameras.editor.calibration_hint")}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="field">
+        <label className="label">{t("ext.cameras.editor.spatial_clip")}</label>
+        <Select<CameraAreaClipOption, false>
+          classNamePrefix="toposyncSelect"
+          styles={cameraAreaSelectStyles}
+          value={selectedAreaClipOption}
+          options={areaClipOptions}
+          isClearable
+          isDisabled={areaClipDisabled}
+          placeholder={t("ext.cameras.editor.spatial_clip_placeholder")}
+          onChange={(option: SingleValue<CameraAreaClipOption>) => updateSpatialVideoClipArea(option?.value ?? "")}
+        />
+        <div className="cardMeta" style={{ marginTop: 6 }}>
+          {readyCalibratedViews.length === 0
+            ? t("ext.cameras.editor.spatial_clip_disabled_no_calibration")
+            : areaClipOptions.length === 0
+              ? t("ext.cameras.editor.spatial_clip_none")
+              : t("ext.cameras.editor.spatial_clip_hint")}
+        </div>
+        {areaClipInvalid ? (
+          <div className="cardMeta" style={{ marginTop: 4, color: "rgb(251,191,36)" }}>
+            {t("ext.cameras.editor.spatial_clip_invalid")}
           </div>
         ) : null}
       </div>

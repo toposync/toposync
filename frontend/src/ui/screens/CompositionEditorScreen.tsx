@@ -1355,6 +1355,8 @@ export function CompositionEditorScreen({
           editingType?.renderEditorModal ? (
             editingType.renderEditorModal({
               element: editingElement,
+              elements,
+              elementTypesById,
               update: (patch) => updateElement(editingElement.id, patch),
               remove: () => {
                 removeElement(editingElement.id);

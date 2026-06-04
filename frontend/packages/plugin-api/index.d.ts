@@ -244,6 +244,8 @@ export type ElementType = {
   }) => import("react").ReactNode;
   renderEditorModal?: (args: {
     element: CompositionElement;
+    elements: CompositionElement[];
+    elementTypesById: Record<string, ElementType>;
     update: (patch: CompositionElementPatch) => void;
     remove: () => void;
     close: () => void;

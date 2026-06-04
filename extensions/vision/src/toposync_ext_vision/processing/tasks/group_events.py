@@ -228,23 +228,62 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         self._group_ids_by_source_stream: dict[str, list[str]] = {}
         self._group_id_by_member_key: dict[str, str] = {}
         self._next_group_number_by_source_stream: dict[str, int] = {}
+        self._last_packet_by_source_stream: dict[str, Packet] = {}
 
     async def shutdown(self) -> None:
         return None
 
+    def _idle_flush_packet(self, packet: Packet) -> Packet:
+        payload = dict(packet.payload)
+        now_ts = time.time()
+        payload["frame_ts"] = now_ts
+        media = payload.get("media")
+        if isinstance(media, dict):
+            payload["media"] = {**media, "ts": now_ts}
+        metadata = dict(packet.metadata)
+        metadata["source_stream_id"] = self._source_stream_id(packet)
+        metadata["vision_group_idle_flush"] = True
+        return Packet.create(
+            stream_id=packet.stream_id,
+            lifecycle=Lifecycle.UPDATE,
+            payload=payload,
+            artifacts={},
+            metadata=metadata,
+            parent_packet_id=packet.packet_id,
+        )
+
+    async def _flush_idle_groups(self, context) -> list[Packet]:  # noqa: ANN001
+        _ = context
+        outputs: list[Packet] = []
+        now_monotonic = time.monotonic()
+        for source_stream_id, packet in list(self._last_packet_by_source_stream.items()):
+            outputs.extend(
+                self._close_expired_groups(
+                    self._idle_flush_packet(packet),
+                    source_stream_id=source_stream_id,
+                    now_monotonic=now_monotonic,
+                    packet_ts=None,
+                )
+            )
+        return outputs
+
     async def run(self, context) -> None:  # noqa: ANN001
         while not context.is_cancelled():
             packet = await context.read(port="in", timeout_s=0.2)
-            if packet is None:
-                continue
             started_ns = time.monotonic_ns()
             try:
-                out_packets = await self.process_packet(packet, context)
+                out_packets = (
+                    await self._flush_idle_groups(context)
+                    if packet is None
+                    else await self.process_packet(packet, context)
+                )
             except Exception as exc:  # noqa: BLE001
                 context.metrics.record_error(exc)
                 context.logger.exception("Node '%s' failed to process packet", context.node_id)
                 continue
-            context.metrics.record_latency(max(0.0, (time.monotonic_ns() - started_ns) / 1_000_000.0))
+            context.metrics.record_latency(
+                max(0.0, (time.monotonic_ns() - started_ns) / 1_000_000.0)
+            )
             for out_packet in out_packets:
                 await context.emit(out_packet, port="out")
 
@@ -751,6 +790,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         packet_ts_value = _packet_ts_seconds(packet)
         packet_ts = packet_ts_value if math.isfinite(packet_ts_value) else None
         source_stream_id = self._source_stream_id(packet)
+        self._last_packet_by_source_stream[source_stream_id] = packet
         outputs = self._close_expired_groups(
             packet,
             source_stream_id=source_stream_id,

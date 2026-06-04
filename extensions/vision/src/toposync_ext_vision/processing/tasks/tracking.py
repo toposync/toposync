@@ -10,7 +10,7 @@ from typing import Any
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
 from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
-from toposync.runtime.pipelines.runtime import Packet
+from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 
 from ...pipelines.schemas import VisionTrackConfig
@@ -69,6 +69,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         self._state_by_tracking_key: dict[str, _LifecycleState] = {}
         self._pause_started_by_source_stream: dict[str, float] = {}
         self._pause_accumulated_by_source_stream: dict[str, float] = {}
+        self._last_packet_by_source_stream: dict[str, Packet] = {}
         self._telemetry_top_k = _read_env_int(
             "TOPOSYNC_TELEMETRY_VISION_TOP_K", 3, min_value=1, max_value=16
         )
@@ -403,6 +404,62 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         self._pause_accumulated_by_source_stream.pop(source_stream_id, None)
         self._ensure_backend().reset_stream(source_stream_id)
 
+    def _idle_flush_packet(self, packet: Packet) -> Packet:
+        payload = dict(packet.payload)
+        now_ts = time.time()
+        payload["frame_ts"] = now_ts
+        media = payload.get("media")
+        if isinstance(media, dict):
+            payload["media"] = {**media, "ts": now_ts}
+        vision = payload.get("vision")
+        next_vision = dict(vision) if isinstance(vision, dict) else {}
+        next_vision["task"] = "tracking"
+        next_vision["tracker_id"] = self._parsed.tracker_id
+        next_vision["tracks"] = []
+        payload["vision"] = next_vision
+        metadata = dict(packet.metadata)
+        metadata["source_stream_id"] = packet.stream_id
+        metadata["vision_track_idle_flush"] = True
+        return Packet.create(
+            stream_id=packet.stream_id,
+            lifecycle=Lifecycle.UPDATE,
+            payload=payload,
+            artifacts={},
+            metadata=metadata,
+            parent_packet_id=packet.packet_id,
+        )
+
+    async def _flush_idle_events(self, context) -> list[Packet]:  # noqa: ANN001
+        outputs: list[Packet] = []
+        for source_stream_id, packet in list(self._last_packet_by_source_stream.items()):
+            out = await self._event_assembler.process_packet(self._idle_flush_packet(packet), context)
+            if not out:
+                continue
+            outputs.extend(out)
+            if any(item.lifecycle == Lifecycle.CLOSE for item in out):
+                self._clear_state_for_stream(source_stream_id)
+        return outputs
+
+    async def run(self, context) -> None:  # noqa: ANN001
+        while not context.is_cancelled():
+            packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
+            started_ns = time.monotonic_ns()
+            try:
+                out_packets = (
+                    await self._flush_idle_events(context)
+                    if packet is None
+                    else await self.process_packet(packet, context)
+                )
+            except Exception as exc:
+                context.metrics.record_error(exc)
+                context.logger.exception("Node '%s' failed to process packet", context.node_id)
+                continue
+            context.metrics.record_latency(
+                max(0.0, (time.monotonic_ns() - started_ns) / 1_000_000.0)
+            )
+            for out_packet in out_packets:
+                await context.emit(out_packet, port=self.output_port)
+
     def _run_backend_update(
         self,
         packet: Packet,
@@ -435,6 +492,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         now_monotonic = time.monotonic()
         source_stream_id = packet.stream_id
+        self._last_packet_by_source_stream[source_stream_id] = packet
 
         if bool(self._parsed.pause_when_gate_closed) and not self._motion_gate_open(packet):
             paused_for = self._mark_paused(source_stream_id, now_monotonic=now_monotonic)

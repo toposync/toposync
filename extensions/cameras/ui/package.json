@@ -10,6 +10,7 @@
     "@toposync/plugin-api": "^0.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-select": "^5.9.0",
     "three": "^0.167.0"
   },
   "devDependencies": {

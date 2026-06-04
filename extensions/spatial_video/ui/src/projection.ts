@@ -5,6 +5,7 @@ export type ProjectionMeshDensity = 34 | 64 | 96;
 
 export type ProjectionBuildOptions = {
   gridDivisions?: ProjectionMeshDensity;
+  clipPolygon?: WorldPoint[] | null;
 };
 
 export type ProjectionStrategy = {
@@ -14,6 +15,7 @@ export type ProjectionStrategy = {
 
 type Pair = { image: Vector2; world: WorldPoint };
 type HomographyEstimate = { hImageToWorld: number[]; inlierPairs: Pair[] };
+type ProjectionClipVertex = { x: number; y: number; z: number; u: number; v: number };
 
 const DEFAULT_GRID_DIVISIONS: ProjectionMeshDensity = 34;
 const PROJECTION_Y_OFFSET = 0.026;
@@ -102,6 +104,126 @@ function pointInPolygon(point: Vector2, polygon: Vector2[]): boolean {
     if (intersects) inside = !inside;
   }
   return inside;
+}
+
+function worldPolygonSignedArea(points: WorldPoint[]): number {
+  if (points.length < 3) return 0;
+  let total = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    total += current.x * next.z - next.x * current.z;
+  }
+  return total / 2;
+}
+
+function sanitizeClipPolygon(polygon: WorldPoint[] | null | undefined): WorldPoint[] | null {
+  if (!polygon || polygon.length < 3) return null;
+  const out: WorldPoint[] = [];
+  for (const point of polygon) {
+    if (!finiteNumber(point.x) || !finiteNumber(point.z)) continue;
+    const previous = out[out.length - 1];
+    if (previous && Math.hypot(previous.x - point.x, previous.z - point.z) < 1e-8) continue;
+    out.push({ x: point.x, z: point.z });
+  }
+  if (out.length >= 2 && Math.hypot(out[0].x - out[out.length - 1].x, out[0].z - out[out.length - 1].z) < 1e-8) out.pop();
+  if (Math.abs(worldPolygonSignedArea(out)) < 1e-8) return null;
+  return worldPolygonSignedArea(out) >= 0 ? out : [...out].reverse();
+}
+
+function crossWorld(a: WorldPoint, b: WorldPoint, c: WorldPoint): number {
+  return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
+}
+
+function clipVertexInsideEdge(vertex: ProjectionClipVertex, edgeStart: WorldPoint, edgeEnd: WorldPoint): boolean {
+  return crossWorld(edgeStart, edgeEnd, vertex) >= -1e-8;
+}
+
+function interpolateClipVertex(start: ProjectionClipVertex, end: ProjectionClipVertex, edgeStart: WorldPoint, edgeEnd: WorldPoint): ProjectionClipVertex | null {
+  const segment = { x: end.x - start.x, z: end.z - start.z };
+  const edge = { x: edgeEnd.x - edgeStart.x, z: edgeEnd.z - edgeStart.z };
+  const denom = segment.x * edge.z - segment.z * edge.x;
+  if (Math.abs(denom) < 1e-10) return null;
+  const relative = { x: edgeStart.x - start.x, z: edgeStart.z - start.z };
+  const t = (relative.x * edge.z - relative.z * edge.x) / denom;
+  const clamped = clamp(t, 0, 1);
+  return {
+    x: start.x + (end.x - start.x) * clamped,
+    y: start.y + (end.y - start.y) * clamped,
+    z: start.z + (end.z - start.z) * clamped,
+    u: start.u + (end.u - start.u) * clamped,
+    v: start.v + (end.v - start.v) * clamped,
+  };
+}
+
+function clipPolygonAgainstEdge(vertices: ProjectionClipVertex[], edgeStart: WorldPoint, edgeEnd: WorldPoint): ProjectionClipVertex[] {
+  if (vertices.length === 0) return [];
+  const out: ProjectionClipVertex[] = [];
+  let previous = vertices[vertices.length - 1];
+  let previousInside = clipVertexInsideEdge(previous, edgeStart, edgeEnd);
+  for (const current of vertices) {
+    const currentInside = clipVertexInsideEdge(current, edgeStart, edgeEnd);
+    if (currentInside !== previousInside) {
+      const intersection = interpolateClipVertex(previous, current, edgeStart, edgeEnd);
+      if (intersection) out.push(intersection);
+    }
+    if (currentInside) out.push(current);
+    previous = current;
+    previousInside = currentInside;
+  }
+  return out;
+}
+
+function clipTriangleToPolygon(vertices: ProjectionClipVertex[], clipPolygon: WorldPoint[]): ProjectionClipVertex[] {
+  let out = vertices;
+  for (let index = 0; index < clipPolygon.length && out.length >= 3; index += 1) {
+    out = clipPolygonAgainstEdge(out, clipPolygon[index], clipPolygon[(index + 1) % clipPolygon.length]);
+  }
+  return out;
+}
+
+function applyClipToProjectionMesh(meshData: ProjectionMeshData, polygon: WorldPoint[] | null | undefined): ProjectionMeshData | null {
+  const clipPolygon = sanitizeClipPolygon(polygon);
+  if (!clipPolygon) return meshData;
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  const pushVertex = (vertex: ProjectionClipVertex): number => {
+    const index = positions.length / 3;
+    positions.push(vertex.x, vertex.y, vertex.z);
+    uvs.push(vertex.u, vertex.v);
+    return index;
+  };
+
+  const sourceIndices = meshData.indices;
+  for (let offset = 0; offset < sourceIndices.length; offset += 3) {
+    const triangle = [0, 1, 2].map((localIndex) => {
+      const sourceIndex = sourceIndices[offset + localIndex];
+      return {
+        x: meshData.positions[sourceIndex * 3],
+        y: meshData.positions[sourceIndex * 3 + 1],
+        z: meshData.positions[sourceIndex * 3 + 2],
+        u: meshData.uvs[sourceIndex * 2],
+        v: meshData.uvs[sourceIndex * 2 + 1],
+      };
+    });
+    const clipped = clipTriangleToPolygon(triangle, clipPolygon);
+    if (clipped.length < 3) continue;
+    const first = pushVertex(clipped[0]);
+    for (let index = 1; index < clipped.length - 1; index += 1) {
+      const second = pushVertex(clipped[index]);
+      const third = pushVertex(clipped[index + 1]);
+      indices.push(first, second, third);
+    }
+  }
+
+  if (indices.length < 3) return null;
+  return {
+    positions: new Float32Array(positions),
+    uvs: new Float32Array(uvs),
+    indices: new Uint32Array(indices),
+  };
 }
 
 function solveLinearSystem(matrix: number[][], rhs: number[]): number[] | null {
@@ -510,11 +632,11 @@ export const homographyGridProjectionStrategy: ProjectionStrategy = {
     }
 
     if (indices.length < 3) return null;
-    return {
+    return applyClipToProjectionMesh({
       positions: new Float32Array(vertices),
       uvs: new Float32Array(uvs),
       indices: new Uint32Array(indices),
-    };
+    }, options?.clipPolygon);
   },
 };
 
@@ -526,7 +648,8 @@ export const constrainedTrapezoidProjectionStrategy: ProjectionStrategy = {
     const estimate = estimateRobustHomography(pairs);
     if (!estimate) return null;
     const corners = trapezoidCornersFromHomography(estimate);
-    return corners ? buildQuadMesh(corners) : null;
+    const mesh = corners ? buildQuadMesh(corners) : null;
+    return mesh ? applyClipToProjectionMesh(mesh, options?.clipPolygon) : null;
   },
 };
 

@@ -18,7 +18,7 @@ export function snapshotLabel(snapshot: StreamTextureSnapshot): string {
   return "Aguardando";
 }
 
-export function markerVideoStatus(snapshot: StreamTextureSnapshot | null, poseStatus: string | null | undefined): MarkerVideoStatus | null {
+export function markerVideoStatus(snapshot: StreamTextureSnapshot | null, poseStatus: string | null | undefined, areaClipWarning?: string | null): MarkerVideoStatus | null {
   if (snapshot?.status === "error") {
     return {
       kind: "error",
@@ -27,6 +27,16 @@ export function markerVideoStatus(snapshot: StreamTextureSnapshot | null, poseSt
       color: "rgb(254,202,202)",
       background: "rgba(127,29,29,0.94)",
       border: "rgba(248,113,113,0.78)",
+    };
+  }
+  if (areaClipWarning) {
+    return {
+      kind: "pose_warning",
+      icon: "crop-simple",
+      title: areaClipWarning,
+      color: "rgb(254,240,138)",
+      background: "rgba(113,63,18,0.92)",
+      border: "rgba(250,204,21,0.72)",
     };
   }
   if (!snapshot || snapshot.status === "idle" || snapshot.status === "loading") {

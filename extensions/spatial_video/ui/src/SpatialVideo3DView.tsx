@@ -333,6 +333,7 @@ export function SpatialVideo3DView({
   const markerObjectsRef = useRef<CSS2DObject[]>([]);
   const statusAdornmentsRef = useRef<Map<string, StatusAdornment>>(new Map());
   const renderViewSettingsRef = useRef<ViewSettings>(viewForSpatial3D(viewSettings));
+  const lastElementsContextRef = useRef<CompositionElement[] | null>(null);
   const userInteractedWithCameraRef = useRef(false);
   const autoFitUntilRef = useRef(Date.now() + AUTO_FIT_GRACE_MS);
   const compositionIdRef = useRef(compositionId);
@@ -679,6 +680,8 @@ export function SpatialVideo3DView({
 
     const tracked = trackedRef.current;
     const elementsById = new Map(elements.map((element) => [element.id, element]));
+    const elementsContextChanged = lastElementsContextRef.current !== elements;
+    lastElementsContextRef.current = elements;
     const areaElements = elements.filter((element) => (elementTypesById[element.type]?.layerGroup ?? "") === "areas");
     const areaOrderById = new Map<string, number>();
     for (let i = 0; i < areaElements.length; i += 1) areaOrderById.set(areaElements[i].id, i);
@@ -718,6 +721,7 @@ export function SpatialVideo3DView({
               camera,
               renderer,
               view: renderViewSettingsRef.current,
+              elements,
               compositionId: compositionIdRef.current,
               requestRender: () => undefined,
             },
@@ -749,8 +753,12 @@ export function SpatialVideo3DView({
       ) {
         entry.instance.object.rotation.set(element.rotation.x, element.rotation.y, element.rotation.z);
       }
-      if (!elementsEqual(entry.last, element) || (entry.instance.object.userData as Record<string, unknown>).__spatialViewKey !== renderViewKey) {
-        entry.instance.update?.(element);
+      if (
+        elementsContextChanged ||
+        !elementsEqual(entry.last, element) ||
+        (entry.instance.object.userData as Record<string, unknown>).__spatialViewKey !== renderViewKey
+      ) {
+        entry.instance.update?.(element, { elements });
         entry.last = element;
         (entry.instance.object.userData as Record<string, unknown>).__spatialViewKey = renderViewKey;
       }

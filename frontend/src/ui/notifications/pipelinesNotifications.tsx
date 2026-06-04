@@ -1,6 +1,8 @@
 import React from "react";
 import { resolveToposyncUrl } from "@toposync/plugin-api";
 
+import { i18n } from "../../util/i18n";
+
 import type {
   Notification,
   Notification2DContext,
@@ -620,7 +622,7 @@ function renderPipelinesNotification(notification: Notification): React.ReactNod
           {isLive ? (
             <div className="notificationLivePip">
               <span className="notificationLiveDot" />
-              LIVE
+              {i18n.t("core.ui.notifications.live", {}, "Live")}
             </div>
           ) : null}
         </div>

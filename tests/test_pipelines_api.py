@@ -650,6 +650,18 @@ def test_pipeline_storage_summary_and_cleanup_api(
         markers = telemetry_store.list_image_markers("storage_api")
         assert [item["rel_path"] for item in markers] == [second.rel_path]
 
+        purge_res = client.post(
+            "/api/pipelines/storage_api/storage/cleanup",
+            params={"purge": "true"},
+        )
+        assert purge_res.status_code == 200
+        purged = purge_res.json()
+        assert purged["file_count"] == 0
+        assert purged["used_bytes"] == 0
+        assert purged["layers"] == []
+        assert not (tmp_path / "files" / second.rel_path).exists()
+        assert telemetry_store.list_image_markers("storage_api") == []
+
 
 def test_processing_servers_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client(tmp_path, monkeypatch) as client:

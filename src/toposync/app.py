@@ -3585,6 +3585,7 @@ def create_app() -> FastAPI:
     async def cleanup_pipeline_storage(
         request: Request,
         pipeline_name: str,
+        purge: bool = Query(default=False),
     ) -> PipelineStorageResponse:
         _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
@@ -3601,11 +3602,17 @@ def create_app() -> FastAPI:
         settings = storage_settings_from_core_settings(await config_store.get_settings())
         storage_manager.configure(settings)
         limits = storage_limits_from_pipeline(pipeline, settings=settings)
-        cleanup_result = await asyncio.to_thread(
-            storage_manager.cleanup_pipeline,
-            pipeline.name,
-            limits=limits,
-        )
+        if purge:
+            cleanup_result = await asyncio.to_thread(
+                storage_manager.purge_pipeline,
+                pipeline.name,
+            )
+        else:
+            cleanup_result = await asyncio.to_thread(
+                storage_manager.cleanup_pipeline,
+                pipeline.name,
+                limits=limits,
+            )
         telemetry_store = getattr(request.app.state, "pipeline_telemetry_store", None)
         if telemetry_store is not None and cleanup_result.deleted_rel_paths:
             remove = getattr(telemetry_store, "remove_image_markers_by_rel_paths", None)

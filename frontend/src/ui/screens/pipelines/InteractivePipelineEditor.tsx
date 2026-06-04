@@ -142,11 +142,19 @@ export function PipelineStorageCard({
       }));
 
   const runCleanup = async () => {
-    if (!pipelineName) return;
+    if (!pipelineName || cleaning) return;
+    const confirmed = window.confirm(
+      t(
+        "core.ui.pipelines.storage.confirm_clean",
+        { name: pipelineName },
+        `Clear all stored files for '${pipelineName}'?`,
+      ),
+    );
+    if (!confirmed) return;
     setCleaning(true);
     setError(null);
     try {
-      const summary = await cleanupPipelineStorage(pipelineName);
+      const summary = await cleanupPipelineStorage(pipelineName, { purge: true });
       updatePipelineStorageCache(summary);
       setStorage(summary);
     } catch (err: any) {

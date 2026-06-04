@@ -170,6 +170,27 @@ def test_storage_manager_applies_layer_file_count_retention(tmp_path: Path) -> N
         manager.close()
 
 
+def test_storage_manager_purge_pipeline_deletes_all_active_files(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    try:
+        stored = [
+            _store(manager, payload=b"a" * 10, limits=_limits(pipeline_bytes=10_000)),
+            _store(manager, payload=b"b" * 10, limits=_limits(pipeline_bytes=10_000)),
+        ]
+
+        purged = manager.purge_pipeline("pipe")
+
+        assert set(purged.deleted_rel_paths) == {item.rel_path for item in stored}
+        assert purged.delete_pending_rel_paths == ()
+        for item in stored:
+            assert not (tmp_path / "files" / item.rel_path).exists()
+        summary = manager.summarize_pipeline("pipe", limits=_limits())
+        assert summary["used_bytes"] == 0
+        assert summary["file_count"] == 0
+    finally:
+        manager.close()
+
+
 def test_storage_manager_keeps_new_file_when_it_exceeds_limit(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     try:

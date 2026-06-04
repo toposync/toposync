@@ -365,6 +365,28 @@ class PipelineStorageManager:
                 layer_key=None,
             )
 
+    def purge_pipeline(self, pipeline_name: str) -> PipelineStorageCleanupResult:
+        pipeline = _safe_component(pipeline_name, fallback="pipeline", max_len=80)
+        with self._lock:
+            deleted: list[str] = []
+            pending: list[str] = []
+            rows = self._conn.execute(
+                """
+                SELECT seq, rel_path, size_bytes
+                FROM storage_object
+                WHERE pipeline_name = ? AND status IN ('active', 'delete_pending')
+                ORDER BY created_at ASC, seq ASC
+                """,
+                (pipeline,),
+            ).fetchall()
+            self._delete_rows_locked(rows, deleted=deleted, pending=pending)
+            if deleted or pending:
+                self._set_meta_locked(f"last_cleanup.{pipeline}", str(time.time()))
+            return PipelineStorageCleanupResult(
+                deleted_rel_paths=tuple(deleted),
+                delete_pending_rel_paths=tuple(pending),
+            )
+
     def summarize_pipeline(
         self,
         pipeline_name: str,

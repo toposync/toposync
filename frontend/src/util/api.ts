@@ -2007,8 +2007,12 @@ export async function getPipelineStorage(
   return res.json();
 }
 
-export async function cleanupPipelineStorage(name: string): Promise<PipelineStorageSummary> {
-  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/storage/cleanup`, {
+export async function cleanupPipelineStorage(
+  name: string,
+  options?: { purge?: boolean },
+): Promise<PipelineStorageSummary> {
+  const query = options?.purge ? "?purge=true" : "";
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/storage/cleanup${query}`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(`Failed to clean pipeline storage ${name}: ${res.status}`);

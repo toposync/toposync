@@ -104,27 +104,56 @@ type CameraAreaClipOption = {
 };
 
 const cameraAreaSelectStyles: StylesConfig<CameraAreaClipOption, false> = {
+  container: (base) => ({ ...base }),
   control: (base, state) => ({
     ...base,
-    minHeight: 38,
-    borderColor: state.isFocused ? "rgba(59,130,246,0.85)" : "rgba(148,163,184,0.28)",
-    background: "rgba(15,23,42,0.55)",
-    boxShadow: state.isFocused ? "0 0 0 1px rgba(59,130,246,0.55)" : "none",
+    minHeight: 40,
+    borderRadius: "var(--radius-control)",
+    border: `1px solid ${state.isFocused ? "var(--color-accent-border)" : "var(--color-border-subtle)"}`,
+    backgroundColor: "var(--color-surface-frost)",
+    boxShadow: state.isFocused
+      ? "0 0 0 2px var(--color-focus-ring-inner), 0 0 0 4px var(--color-focus-ring-outer)"
+      : "inset 0 1px 0 color-mix(in srgb, var(--color-surface-solid) 28%, transparent)",
+    cursor: state.isDisabled ? "not-allowed" : "text",
+    backdropFilter: "blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness))",
+    WebkitBackdropFilter: "blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness))",
+    transition: "border-color var(--motion-medium) var(--ease-standard), box-shadow var(--motion-medium) var(--ease-standard)",
   }),
   menu: (base) => ({
     ...base,
-    background: "rgb(15,23,42)",
-    border: "1px solid rgba(148,163,184,0.24)",
-    zIndex: 40,
+    backgroundColor: "var(--color-surface-frost-strong)",
+    border: "1px solid var(--color-border-subtle)",
+    borderRadius: "var(--radius-panel)",
+    overflow: "hidden",
+    boxShadow: "var(--shadow-elevation-3)",
+    backdropFilter: "blur(var(--frost-blur-large)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness))",
+    WebkitBackdropFilter: "blur(var(--frost-blur-large)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness))",
+    zIndex: 50,
+  }),
+  menuList: (base) => ({
+    ...base,
+    paddingTop: 4,
+    paddingBottom: 4,
   }),
   option: (base, state) => ({
     ...base,
-    background: state.isFocused ? "rgba(59,130,246,0.26)" : state.isSelected ? "rgba(59,130,246,0.42)" : "transparent",
-    color: "rgb(226,232,240)",
+    padding: "10px 12px",
+    backgroundColor: "transparent",
+    background: state.isSelected
+      ? "linear-gradient(135deg, var(--color-accent-background-strong), var(--color-accent-background-strong-2))"
+      : state.isFocused
+        ? "linear-gradient(135deg, var(--color-accent-background-soft), var(--color-accent-background-soft-2))"
+        : "transparent",
+    color: "var(--color-text-primary)",
+    cursor: "pointer",
+    borderBottom: "1px solid color-mix(in srgb, var(--color-border-subtle) 35%, transparent)",
   }),
-  singleValue: (base) => ({ ...base, color: "rgb(226,232,240)" }),
-  placeholder: (base) => ({ ...base, color: "rgba(203,213,225,0.72)" }),
-  input: (base) => ({ ...base, color: "rgb(226,232,240)" }),
+  input: (base) => ({ ...base, color: "var(--color-text-primary)" }),
+  placeholder: (base) => ({ ...base, color: "var(--color-text-subtle)" }),
+  singleValue: (base) => ({ ...base, color: "var(--color-text-primary)" }),
+  indicatorSeparator: (base) => ({ ...base, backgroundColor: "var(--color-border-subtle)" }),
+  dropdownIndicator: (base) => ({ ...base, color: "var(--color-text-muted)" }),
+  clearIndicator: (base) => ({ ...base, color: "var(--color-text-muted)" }),
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -806,7 +835,6 @@ function CameraEditor({
       <div className="field">
         <label className="label">{t("ext.cameras.editor.spatial_clip")}</label>
         <Select<CameraAreaClipOption, false>
-          classNamePrefix="toposyncSelect"
           styles={cameraAreaSelectStyles}
           value={selectedAreaClipOption}
           options={areaClipOptions}

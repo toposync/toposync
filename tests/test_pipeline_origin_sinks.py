@@ -298,7 +298,12 @@ def test_store_images_layers_share_pipeline_budget_and_cleanup_telemetry(tmp_pat
         sequence = [
             {
                 "lifecycle": Lifecycle.UPDATE,
-                "payload": {"frame_ts": 456.789, "camera_id": "camera-main"},
+                "payload": {
+                    "frame_ts": 456.789,
+                    "camera_id": "camera-main",
+                    "event_id": "event-camera-main-7",
+                    "tracking_id": "track-camera-main-7",
+                },
                 "artifacts": {
                     "main": Artifact(name="main", data=frame, mime_type="image/raw"),
                     "crop": Artifact(name="crop", data=crop, mime_type="image/raw"),
@@ -387,6 +392,8 @@ def test_store_images_layers_share_pipeline_budget_and_cleanup_telemetry(tmp_pat
             assert markers[0]["rel_path"] == crop_ref
             assert markers[0]["layer_label"] == "Recorte"
             assert int(markers[0]["size_bytes"]) > 0
+            assert markers[0]["event_id"] == "event-camera-main-7"
+            assert markers[0]["tracking_id"] == "track-camera-main-7"
         finally:
             storage_manager.close()
 

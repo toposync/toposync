@@ -632,6 +632,8 @@ class PipelineTelemetryImageMarker(BaseModel):
     confidence: float | None = None
     layer_label: str | None = None
     size_bytes: int | None = None
+    event_id: str | None = None
+    tracking_id: str | None = None
 
 
 class PipelineTelemetryImageMarkersResponse(BaseModel):

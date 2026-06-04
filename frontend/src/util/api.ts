@@ -284,6 +284,8 @@ export type PipelineTelemetryImageMarker = {
   confidence?: number | null;
   layer_label?: string | null;
   size_bytes?: number | null;
+  event_id?: string | null;
+  tracking_id?: string | null;
 };
 
 export type PipelineTelemetryImageMarkers = {

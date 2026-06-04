@@ -291,6 +291,8 @@ class NodeExecutionContext:
         confidence: float | None = None,
         layer_label: str | None = None,
         size_bytes: int | None = None,
+        event_id: str | None = None,
+        tracking_id: str | None = None,
     ) -> None:
         store = self.telemetry_store
         if store is None:
@@ -309,6 +311,8 @@ class NodeExecutionContext:
                     confidence=confidence,
                     layer_label=layer_label,
                     size_bytes=size_bytes,
+                    event_id=event_id,
+                    tracking_id=tracking_id,
                     origin_accessible=False,
                 )
             )
@@ -325,6 +329,8 @@ class NodeExecutionContext:
                     confidence=confidence,
                     layer_label=layer_label,
                     size_bytes=size_bytes,
+                    event_id=event_id,
+                    tracking_id=tracking_id,
                 )
             except Exception:
                 continue

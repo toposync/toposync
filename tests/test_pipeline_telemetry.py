@@ -436,6 +436,8 @@ def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
         confidence=0.5,
         layer_label="Original",
         size_bytes=1234,
+        event_id="event-telemetry-1",
+        tracking_id="track-telemetry-1",
     )
 
     checkpoint = store.dump_checkpoint_bytes(include_hist=True, now_s=110.0)
@@ -471,6 +473,8 @@ def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
     assert str(markers[0].get("rel_path") or "") == "pipelines/test/frame_0.png"
     assert str(markers[0].get("layer_label") or "") == "Original"
     assert int(markers[0].get("size_bytes") or 0) == 1234
+    assert str(markers[0].get("event_id") or "") == "event-telemetry-1"
+    assert str(markers[0].get("tracking_id") or "") == "track-telemetry-1"
 
 
 def test_pipeline_telemetry_removes_image_markers_by_rel_path() -> None:

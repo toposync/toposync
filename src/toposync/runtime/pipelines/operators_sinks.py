@@ -427,9 +427,11 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         pipeline_name = _resolve_logical_pipeline_name(context)
         node_id = _resolve_logical_node_id(context)
         camera_id = _resolve_string(packet, "camera_id") or "no_camera"
+        event_id = _resolve_string(packet, "event_id")
+        tracking_id = _resolve_string(packet, "tracking_id")
         token = (
-            _resolve_string(packet, "event_id")
-            or _resolve_string(packet, "tracking_id")
+            event_id
+            or tracking_id
             or _resolve_string(packet, "correlation_id")
             or packet.stream_id
         )
@@ -559,6 +561,8 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                             confidence=confidence,
                             layer_label=layer_label,
                             size_bytes=stored_size_bytes,
+                            event_id=event_id,
+                            tracking_id=tracking_id,
                         )
                     except Exception:
                         pass

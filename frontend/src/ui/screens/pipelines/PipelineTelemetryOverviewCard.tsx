@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Select, { type MultiValue } from "react-select";
 import { resolveToposyncUrl } from "@toposync/plugin-api";
@@ -103,6 +103,21 @@ type MarkerCluster = {
   visualWidth: number;
 };
 
+type EventColorAssignment = {
+  color: string;
+  textColor: string;
+};
+
+type EventColorAllocatorState = {
+  colorsByKey: Map<string, EventColorAssignment>;
+  nextIndexByPipeline: Map<string, number>;
+};
+
+type EventColorStyle = React.CSSProperties & {
+  "--event-color": string;
+  "--event-text-color": string;
+};
+
 function TelemetryMarkerImage({ src, alt }: { src: string; alt: string }): React.ReactElement {
   const [failed, setFailed] = useState(false);
   if (failed) {
@@ -160,6 +175,56 @@ const METRIC_SERIES_COLORS = [
   "#cc7aff",
   "#ffae73",
 ];
+const EVENT_BADGE_COLORS = [
+  "#2563eb",
+  "#f97316",
+  "#16a34a",
+  "#dc2626",
+  "#7c3aed",
+  "#0891b2",
+  "#ca8a04",
+  "#db2777",
+  "#0d9488",
+  "#9333ea",
+  "#65a30d",
+  "#ea580c",
+  "#0284c7",
+  "#be123c",
+  "#4f46e5",
+  "#059669",
+  "#c2410c",
+  "#a21caf",
+  "#1d4ed8",
+  "#84cc16",
+  "#e11d48",
+  "#14b8a6",
+  "#d97706",
+  "#8b5cf6",
+  "#15803d",
+  "#f43f5e",
+  "#0369a1",
+  "#b45309",
+  "#c026d3",
+  "#22c55e",
+  "#ef4444",
+  "#06b6d4",
+  "#a855f7",
+  "#f59e0b",
+  "#10b981",
+  "#e879f9",
+  "#1e40af",
+  "#fb7185",
+  "#0f766e",
+  "#facc15",
+  "#6d28d9",
+  "#9f1239",
+  "#38bdf8",
+  "#4d7c0f",
+  "#f472b6",
+  "#4338ca",
+  "#2dd4bf",
+  "#fb923c",
+];
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -182,6 +247,90 @@ function buildMetricTargetLabel(target: { metricId: string; nodeId: string }, du
   const base = metricLabel(target.metricId, t);
   if (!duplicateMetricIds.has(target.metricId)) return base;
   return `${base} · ${target.nodeId}`;
+}
+
+function markerEventCode(marker: PipelineTelemetryImageMarker): string {
+  return compactTrackedEventCode(String(marker.event_id || marker.tracking_id || legacyMarkerEventCode(marker) || ""));
+}
+
+function compactTrackedEventCode(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("trk:")) {
+    const tail = raw.split(":").filter(Boolean).pop();
+    return tail || raw;
+  }
+  if (raw.startsWith("trk_")) {
+    const tail = raw.split("_").filter(Boolean).pop();
+    return tail || raw;
+  }
+  return raw;
+}
+
+function parseHexColor(value: string): { r: number; g: number; b: number } | null {
+  const hex = String(value || "").trim().replace(/^#/, "");
+  if (!/^[0-9a-fA-F]{6}$/.test(hex)) return null;
+  return {
+    r: Number.parseInt(hex.slice(0, 2), 16),
+    g: Number.parseInt(hex.slice(2, 4), 16),
+    b: Number.parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+function relativeLuminance(color: string): number {
+  const rgb = parseHexColor(color);
+  if (!rgb) return 0;
+  const channel = (value: number) => {
+    const normalized = value / 255;
+    return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b);
+}
+
+function eventTextColor(color: string): string {
+  return relativeLuminance(color) > 0.46 ? "#111827" : "#ffffff";
+}
+
+function eventColorPipelineKey(marker: PipelineTelemetryImageMarker, fallbackPipelineName: string | null): string {
+  return String(marker.pipeline_name || fallbackPipelineName || "__pipeline__").trim() || "__pipeline__";
+}
+
+function eventColorKey(pipelineKey: string, eventCode: string): string {
+  return `${pipelineKey}\u0000${eventCode}`;
+}
+
+function eventColorStyle(assignment: EventColorAssignment): EventColorStyle {
+  return {
+    "--event-color": assignment.color,
+    "--event-text-color": assignment.textColor,
+  };
+}
+
+function safeStoredFilenameComponent(value: string, maxLength: number): string {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .replace(/^[._-]+|[._-]+$/g, "");
+  return cleaned.slice(0, maxLength);
+}
+
+function legacyMarkerEventCode(marker: PipelineTelemetryImageMarker): string {
+  const relPath = String(marker.rel_path || "").trim();
+  const filename = relPath.split("/").pop() || "";
+  const stem = filename.replace(/\.[^.]*$/, "");
+  const parts = stem
+    .split("__")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 4) return "";
+
+  const artifactName = safeStoredFilenameComponent(String(marker.image_key || ""), 32);
+  const artifactCandidates = [artifactName, "main", "crop", "debug"].filter(Boolean);
+  for (const candidate of artifactCandidates) {
+    const index = parts.findIndex((part) => part === candidate);
+    if (index >= 0 && index + 1 < parts.length) return parts[index + 1];
+  }
+  return "";
 }
 
 function aggregateMetricPoints(items: Array<Pick<PipelineTelemetryNumeric, "points">>): AggregatedPoint[] {
@@ -455,6 +604,11 @@ export function PipelineTelemetryOverviewCard({
   const [fullscreenImageOpen, setFullscreenImageOpen] = useState(false);
   const [fullscreenImageItems, setFullscreenImageItems] = useState<FullscreenImageViewerItem[]>([]);
   const [fullscreenImageIndex, setFullscreenImageIndex] = useState(0);
+  const eventColorAllocatorRef = useRef<EventColorAllocatorState>({
+    colorsByKey: new Map(),
+    nextIndexByPipeline: new Map(),
+  });
+  const [eventColorRevision, setEventColorRevision] = useState(0);
   const pipelineOptions = useMemo(() => {
     const items = Array.isArray(availablePipelines) ? availablePipelines : [];
     const next = items
@@ -495,7 +649,7 @@ export function PipelineTelemetryOverviewCard({
   const buildMarkerImageViewerItem = useCallback(
     (marker: PipelineTelemetryImageMarker): FullscreenImageViewerItem => {
       const relPath = String(marker.rel_path || "");
-      const label = String(marker.layer_label || marker.pipeline_name || marker.node_id || "").trim();
+      const label = markerEventCode(marker);
       const metaParts: string[] = [];
       if (marker.size_bytes) metaParts.push(`${Math.round(Number(marker.size_bytes || 0) / 1024)} KB`);
       metaParts.push(timeFormatter.format(new Date(Number(marker.ts || 0) * 1000)));
@@ -507,6 +661,39 @@ export function PipelineTelemetryOverviewCard({
       };
     },
     [t, timeFormatter],
+  );
+  useEffect(() => {
+    const allocator = eventColorAllocatorRef.current;
+    let changed = false;
+    for (const marker of markers) {
+      const eventCode = markerEventCode(marker);
+      if (!eventCode) continue;
+      const pipelineKey = eventColorPipelineKey(marker, pipelineName);
+      const key = eventColorKey(pipelineKey, eventCode);
+      if (allocator.colorsByKey.has(key)) continue;
+      const nextIndex = allocator.nextIndexByPipeline.get(pipelineKey) ?? 0;
+      const colorIndex =
+        ((nextIndex % EVENT_BADGE_COLORS.length) + EVENT_BADGE_COLORS.length) %
+        EVENT_BADGE_COLORS.length;
+      const color = EVENT_BADGE_COLORS[colorIndex];
+      allocator.colorsByKey.set(key, {
+        color,
+        textColor: eventTextColor(color),
+      });
+      allocator.nextIndexByPipeline.set(pipelineKey, (nextIndex + 1) % EVENT_BADGE_COLORS.length);
+      changed = true;
+    }
+    if (changed) setEventColorRevision((value) => value + 1);
+  }, [markers, pipelineName]);
+  const eventColorStyleForMarker = useCallback(
+    (marker: PipelineTelemetryImageMarker, eventCode: string): EventColorStyle | undefined => {
+      const code = String(eventCode || "").trim();
+      if (!code) return undefined;
+      const pipelineKey = eventColorPipelineKey(marker, pipelineName);
+      const assignment = eventColorAllocatorRef.current.colorsByKey.get(eventColorKey(pipelineKey, code));
+      return assignment ? eventColorStyle(assignment) : undefined;
+    },
+    [eventColorRevision, pipelineName],
   );
   const openFullscreenMarkerImages = useCallback((items: FullscreenImageViewerItem[], index: number) => {
     requestFullscreenImageViewer();
@@ -996,12 +1183,20 @@ export function PipelineTelemetryOverviewCard({
             {activeClusterMarkers.map((marker, index) => {
               const markerKey = `${marker.rel_path}|${marker.ts}|${marker.node_id}`;
               const markerUrl = resolveToposyncUrl(`/files/${encodeURI(String(marker.rel_path || ""))}`);
+              const displayLabel = markerEventCode(marker);
+              const eventStyle = displayLabel ? eventColorStyleForMarker(marker, displayLabel) : undefined;
               return (
                 <button
                   key={markerKey}
-                  className="pipelinesTelemetryClusterTile"
+                  className={[
+                    "pipelinesTelemetryClusterTile",
+                    eventStyle ? "hasEventColor" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                   type="button"
                   title={timeFormatter.format(new Date(Number(marker.ts || 0) * 1000))}
+                  style={eventStyle}
                   onClick={() => openFullscreenMarkerImages(viewerItems, index)}
                 >
                   <TelemetryMarkerImage
@@ -1009,7 +1204,11 @@ export function PipelineTelemetryOverviewCard({
                     alt={t("core.ui.pipelines.telemetry.overview.image_removed", {}, "Image removed by retention")}
                   />
                   <div className="pipelinesTelemetryClusterTileMeta">
-                    <span>{marker.layer_label || marker.pipeline_name || marker.node_id}</span>
+                    {displayLabel ? (
+                      <span className="pipelinesTelemetryClusterTileCode" title={displayLabel}>
+                        {displayLabel}
+                      </span>
+                    ) : null}
                     {marker.size_bytes ? <span>{Math.round(Number(marker.size_bytes || 0) / 1024)} KB</span> : null}
                     <span>{timeFormatter.format(new Date(Number(marker.ts || 0) * 1000))}</span>
                   </div>

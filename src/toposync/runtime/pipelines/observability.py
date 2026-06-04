@@ -95,6 +95,8 @@ def telemetry_image_marker_record(
     confidence: float | None = None,
     layer_label: str | None = None,
     size_bytes: int | None = None,
+    event_id: str | None = None,
+    tracking_id: str | None = None,
     origin_accessible: bool = False,
 ) -> dict[str, Any] | None:
     pipeline = normalize_pipeline_name(pipeline_name)
@@ -129,6 +131,12 @@ def telemetry_image_marker_record(
             parsed_size = 0
         if parsed_size > 0:
             record["size_bytes"] = parsed_size
+    event = str(event_id or "").strip()
+    if event:
+        record["event_id"] = event
+    tracking = str(tracking_id or "").strip()
+    if tracking:
+        record["tracking_id"] = tracking
     return record
 
 
@@ -188,6 +196,8 @@ def apply_observability_record(
                 confidence=_finite_float(record.get("confidence")),
                 layer_label=(str(record.get("layer_label") or "").strip() or None),
                 size_bytes=record.get("size_bytes"),
+                event_id=(str(record.get("event_id") or "").strip() or None),
+                tracking_id=(str(record.get("tracking_id") or "").strip() or None),
             )
         )
 

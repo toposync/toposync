@@ -426,6 +426,8 @@ class PipelineTelemetryStore:
         confidence: float | None = None,
         layer_label: str | None = None,
         size_bytes: int | None = None,
+        event_id: str | None = None,
+        tracking_id: str | None = None,
     ) -> bool:
         if self.max_image_markers_per_pipeline <= 0 or self.max_image_pipelines <= 0:
             return False
@@ -483,6 +485,12 @@ class PipelineTelemetryStore:
                 parsed_size = 0
             if parsed_size > 0:
                 marker["size_bytes"] = parsed_size
+        event = str(event_id or "").strip()
+        if event:
+            marker["event_id"] = event
+        tracking = str(tracking_id or "").strip()
+        if tracking:
+            marker["tracking_id"] = tracking
         markers.append(marker)
         self._image_pipeline_updated_at[pipeline] = timestamp
         self._dirty = True
@@ -1023,7 +1031,7 @@ def _write_persisted_view_atomic(
 
 
 def _write_persisted_payload(writer: _PersistWriter, view: _TelemetryPersistenceView, *, include_hist: bool) -> None:
-    writer.u32(2)  # payload version
+    writer.u32(3)  # payload version
     flags = 1 if include_hist else 0
     writer.u32(flags)
     writer.f64(float(view.captured_at or 0.0))
@@ -1083,6 +1091,8 @@ def _write_persisted_payload(writer: _PersistWriter, view: _TelemetryPersistence
                 writer.f64(float(marker.get("size_bytes") or 0.0))
             except Exception:
                 writer.f64(0.0)
+            writer.text(str(marker.get("event_id") or ""))
+            writer.text(str(marker.get("tracking_id") or ""))
 
 
 def _decode_persisted_payload(
@@ -1181,7 +1191,7 @@ def _sanitize_marker_confidence(value: Any) -> float | None:
 def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: bytes) -> None:
     reader = _PersistReader(payload)
     version = reader.u32()
-    if version not in {1, 2}:
+    if version not in {1, 2, 3}:
         raise ValueError("unsupported telemetry checkpoint version")
     flags = reader.u32()
     include_hist = bool(flags & 1)
@@ -1313,6 +1323,11 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
                     size_bytes = max(0, int(reader.f64()))
                 except Exception:
                     size_bytes = 0
+            event_id = ""
+            tracking_id = ""
+            if version >= 3:
+                event_id = _sanitize_marker_text(reader.text())
+                tracking_id = _sanitize_marker_text(reader.text())
 
             if should_store and rel_path and node_id:
                 marker: dict[str, Any] = {
@@ -1329,6 +1344,10 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
                     marker["layer_label"] = layer_label
                 if size_bytes > 0:
                     marker["size_bytes"] = int(size_bytes)
+                if event_id:
+                    marker["event_id"] = event_id
+                if tracking_id:
+                    marker["tracking_id"] = tracking_id
                 store._image_markers_by_pipeline[pipeline_name].append(marker)
                 if ts > max_ts:
                     max_ts = ts

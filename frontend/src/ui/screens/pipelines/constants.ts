@@ -154,14 +154,21 @@ export const PIPELINE_OPERATOR_RECIPES = [
         operatorId: "vision.detect",
         defaultsOverride: {
           emit_mode: "annotate",
+          confidence_threshold: 0.25,
         },
       },
       {
         operatorId: "vision.track",
         defaultsOverride: {
-          tracker_id: "simple_iou_kalman",
-          close_after_seconds: 5.0,
+          tracker_id: "byte_world",
+          open_confidence_threshold: 0.5,
+          continue_confidence_threshold: 0.25,
+          close_after_seconds: 10.0,
+          stitch_gap_seconds: 30.0,
           default_interval_seconds: 0.25,
+          use_world_anchor: "auto",
+          world_match_distance_meters: 3.0,
+          appearance_mode: "off",
         },
       },
     ],
@@ -180,14 +187,21 @@ export const PIPELINE_OPERATOR_RECIPES = [
         operatorId: "vision.detect",
         defaultsOverride: {
           emit_mode: "annotate",
+          confidence_threshold: 0.25,
         },
       },
       {
         operatorId: "vision.track",
         defaultsOverride: {
-          tracker_id: "simple_iou_kalman",
-          close_after_seconds: 5.0,
+          tracker_id: "byte_world",
+          open_confidence_threshold: 0.5,
+          continue_confidence_threshold: 0.25,
+          close_after_seconds: 10.0,
+          stitch_gap_seconds: 30.0,
           default_interval_seconds: 0.25,
+          use_world_anchor: "auto",
+          world_match_distance_meters: 3.0,
+          appearance_mode: "off",
         },
       },
       {

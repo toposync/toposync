@@ -204,13 +204,24 @@ def build_pipeline_from_legacy_camera_rule(
                 "config": {
                     "model_id": "rtmdet_det_small",
                     "categories": categories,
+                    "confidence_threshold": 0.25,
                     "emit_mode": "annotate",
                 },
             },
             {
                 "id": "track",
                 "operator": "vision.track",
-                "config": {"tracker_id": "simple_iou_kalman"},
+                "config": {
+                    "tracker_id": "byte_world",
+                    "open_confidence_threshold": 0.50,
+                    "continue_confidence_threshold": 0.25,
+                    "close_after_seconds": 10.0,
+                    "stitch_gap_seconds": 30.0,
+                    "default_interval_seconds": 0.25,
+                    "use_world_anchor": "auto",
+                    "world_match_distance_meters": 3.0,
+                    "appearance_mode": "off",
+                },
             },
             {
                 "id": "store",

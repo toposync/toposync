@@ -297,7 +297,7 @@ def analyze_compiled_pipeline(
                         "Object tracking closes streams quickly when a detection is briefly lost "
                         f"(close_after_seconds={close_after:g}). This can look 'flickery' under frame drops/occlusions."
                     ),
-                    suggestion="Increase close_after_seconds (e.g. 4.0) to keep tracks stable through short gaps.",
+                    suggestion="Increase close_after_seconds (e.g. 10.0) to keep tracks stable through short gaps.",
                     details={"close_after_seconds": close_after},
                 )
             )

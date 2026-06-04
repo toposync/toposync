@@ -26,6 +26,15 @@ class ControlPointPair:
 
 
 @dataclass(frozen=True, slots=True)
+class ControlPointRefinementPoint:
+    id: str
+    image_u: float
+    image_v: float
+    world_x: float
+    world_z: float
+
+
+@dataclass(frozen=True, slots=True)
 class PoseReference:
     pan: float | None = None
     tilt: float | None = None
@@ -52,6 +61,7 @@ class ControlPointSet:
     label: str
     pose_reference: PoseReference | None
     control_points: tuple[ControlPointPair, ...]
+    refinement_points: tuple[ControlPointRefinementPoint, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +272,24 @@ def compute_control_points_signature(control_points: list[ControlPointPair] | tu
     return hashlib.sha256(raw).hexdigest()
 
 
+def compute_refinement_points_signature(
+    refinement_points: list[ControlPointRefinementPoint] | tuple[ControlPointRefinementPoint, ...],
+) -> str:
+    raw = "\n".join(
+        "|".join(
+            [
+                str(point.id or "").strip(),
+                f"{float(point.image_u):.12g}",
+                f"{float(point.image_v):.12g}",
+                f"{float(point.world_x):.12g}",
+                f"{float(point.world_z):.12g}",
+            ]
+        )
+        for point in refinement_points
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def estimate_homography_world_to_image(
     pairs: list[ControlPointPair] | tuple[ControlPointPair, ...],
     config: HomographyEstimationConfig | None = None,
@@ -414,13 +442,39 @@ def compute_homography_quality_metrics(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _LocalRefinementDisplacement:
+    image_u: float
+    image_v: float
+    world_x: float
+    world_z: float
+    delta_x: float
+    delta_z: float
+
+
+LOCAL_REFINEMENT_SIGMA_UV = 0.22
+LOCAL_REFINEMENT_EDGE_LOW = 0.015
+LOCAL_REFINEMENT_EDGE_HIGH = 0.12
+LOCAL_REFINEMENT_EPSILON = 1e-9
+
+
 class ControlPointMapper:
-    def __init__(self, pairs: list[ControlPointPair], config: HomographyEstimationConfig | None = None) -> None:
+    def __init__(
+        self,
+        pairs: list[ControlPointPair],
+        config: HomographyEstimationConfig | None = None,
+        refinement_points: list[ControlPointRefinementPoint] | tuple[ControlPointRefinementPoint, ...] = (),
+    ) -> None:
         estimate = estimate_homography_world_to_image(pairs, config=config)
         self._pairs = tuple(pairs)
+        self._refinement_points = tuple(refinement_points)
         self._estimate = estimate
         self._H_world_to_image = estimate.H_world_to_image
         self._H_image_to_world = estimate.H_image_to_world
+        self._refinement_displacements = _local_refinement_displacements(
+            self._H_image_to_world,
+            self._refinement_points,
+        )
         self.quality = estimate.quality
         self.inlier_mask = estimate.inlier_mask
         self.method_used = estimate.method_used
@@ -429,10 +483,129 @@ class ControlPointMapper:
         return self.map_image_to_world(u, v)
 
     def map_image_to_world(self, u: float, v: float) -> tuple[float, float] | None:
-        return apply_homography(self._H_image_to_world, u, v)
+        base = apply_homography(self._H_image_to_world, u, v)
+        if base is None:
+            return None
+        delta = _local_refinement_delta(self._refinement_displacements, float(u), float(v))
+        return float(base[0]) + delta[0], float(base[1]) + delta[1]
 
     def map_world_to_image(self, x: float, z: float) -> tuple[float, float] | None:
-        return apply_homography(self._H_world_to_image, x, z)
+        base = apply_homography(self._H_world_to_image, x, z)
+        if base is None or not self._refinement_displacements:
+            return base
+        return _invert_refined_image_point(self, float(x), float(z), base)
+
+
+def _local_refinement_displacements(
+    H_image_to_world: Any,
+    refinement_points: tuple[ControlPointRefinementPoint, ...],
+) -> tuple[_LocalRefinementDisplacement, ...]:
+    out: list[_LocalRefinementDisplacement] = []
+    for point in refinement_points:
+        image_u = float(point.image_u)
+        image_v = float(point.image_v)
+        world_x = float(point.world_x)
+        world_z = float(point.world_z)
+        if not all(math.isfinite(value) for value in (image_u, image_v, world_x, world_z)):
+            continue
+        if not (0.0 <= image_u <= 1.0 and 0.0 <= image_v <= 1.0):
+            continue
+        base = apply_homography(H_image_to_world, image_u, image_v)
+        if base is None:
+            continue
+        out.append(
+            _LocalRefinementDisplacement(
+                image_u=image_u,
+                image_v=image_v,
+                world_x=world_x,
+                world_z=world_z,
+                delta_x=world_x - float(base[0]),
+                delta_z=world_z - float(base[1]),
+            )
+        )
+    return tuple(out)
+
+
+def _smoothstep(edge0: float, edge1: float, value: float) -> float:
+    if edge0 == edge1:
+        return 1.0 if value >= edge1 else 0.0
+    t = max(0.0, min(1.0, (float(value) - float(edge0)) / (float(edge1) - float(edge0))))
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _local_refinement_edge_falloff(u: float, v: float) -> float:
+    edge_distance = min(float(u), float(v), 1.0 - float(u), 1.0 - float(v))
+    return _smoothstep(LOCAL_REFINEMENT_EDGE_LOW, LOCAL_REFINEMENT_EDGE_HIGH, edge_distance)
+
+
+def _local_refinement_delta(
+    displacements: tuple[_LocalRefinementDisplacement, ...],
+    u: float,
+    v: float,
+) -> tuple[float, float]:
+    if not displacements:
+        return 0.0, 0.0
+
+    total_weight = 0.0
+    total_x = 0.0
+    total_z = 0.0
+    sigma = LOCAL_REFINEMENT_SIGMA_UV
+    for displacement in displacements:
+        distance = math.hypot(float(u) - displacement.image_u, float(v) - displacement.image_v)
+        if distance <= LOCAL_REFINEMENT_EPSILON:
+            return displacement.delta_x, displacement.delta_z
+        weight = math.exp(-((distance / sigma) ** 2))
+        if weight <= 1e-12:
+            continue
+        total_weight += weight
+        total_x += weight * displacement.delta_x
+        total_z += weight * displacement.delta_z
+
+    if total_weight <= 1e-12:
+        return 0.0, 0.0
+    edge = _local_refinement_edge_falloff(float(u), float(v))
+    return edge * (total_x / total_weight), edge * (total_z / total_weight)
+
+
+def _invert_refined_image_point(
+    mapper: ControlPointMapper,
+    x: float,
+    z: float,
+    initial_uv: tuple[float, float],
+) -> tuple[float, float] | None:
+    u = float(initial_uv[0])
+    v = float(initial_uv[1])
+    for _attempt in range(8):
+        mapped = mapper.map_image_to_world(u, v)
+        if mapped is None:
+            return initial_uv
+        error_x = float(mapped[0]) - float(x)
+        error_z = float(mapped[1]) - float(z)
+        if math.hypot(error_x, error_z) <= 1e-7:
+            return u, v
+
+        epsilon = 1e-4
+        mapped_u = mapper.map_image_to_world(u + epsilon, v)
+        mapped_v = mapper.map_image_to_world(u, v + epsilon)
+        if mapped_u is None or mapped_v is None:
+            return initial_uv
+
+        j11 = (float(mapped_u[0]) - float(mapped[0])) / epsilon
+        j21 = (float(mapped_u[1]) - float(mapped[1])) / epsilon
+        j12 = (float(mapped_v[0]) - float(mapped[0])) / epsilon
+        j22 = (float(mapped_v[1]) - float(mapped[1])) / epsilon
+        determinant = j11 * j22 - j12 * j21
+        if not math.isfinite(determinant) or abs(determinant) <= 1e-10:
+            return initial_uv
+
+        delta_u = (error_x * j22 - j12 * error_z) / determinant
+        delta_v = (j11 * error_z - error_x * j21) / determinant
+        if not (math.isfinite(delta_u) and math.isfinite(delta_v)):
+            return initial_uv
+        u = max(-0.25, min(1.25, u - delta_u))
+        v = max(-0.25, min(1.25, v - delta_v))
+
+    return u, v
 
 
 def _candidate_homography_methods(method: str) -> tuple[str, ...]:

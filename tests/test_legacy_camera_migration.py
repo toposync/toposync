@@ -64,7 +64,9 @@ def test_legacy_camera_migration_supports_motion_and_object_triggers(tmp_path: P
 
     object_nodes = {n.get("id"): n for n in object_pipeline.graph.get("nodes", []) if isinstance(n, dict)}
     assert object_nodes.get("detect", {}).get("operator") == "vision.detect"
+    assert object_nodes.get("detect", {}).get("config", {}).get("confidence_threshold") == 0.25
     assert object_nodes.get("track", {}).get("operator") == "vision.track"
+    assert object_nodes.get("track", {}).get("config", {}).get("tracker_id") == "byte_world"
     assert "event" not in object_nodes
 
     registry = OperatorRegistry()

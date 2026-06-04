@@ -281,7 +281,6 @@ async def _run_tracker_annotations(
     track = VisionTrackRuntime(
         {
             "tracker_id": tracker_id,
-            "emit_mode": "annotate",
             "close_after_seconds": close_after_seconds,
         },
         dependencies,
@@ -610,10 +609,10 @@ def _postfixed_output_video_path(path: Path) -> Path:
 def _tracker_ids_from_env() -> list[str]:
     raw = str(
         os.getenv("TOPOSYNC_TRACKING_BENCHMARK_TRACKERS")
-        or "simple_iou_kalman,norfair"
+        or "byte_world,simple_iou_kalman,norfair"
     ).strip()
     trackers = [item.strip() for item in raw.split(",") if item.strip()]
-    return trackers or ["simple_iou_kalman", "norfair"]
+    return trackers or ["byte_world", "simple_iou_kalman", "norfair"]
 
 
 def _max_open_events_for_tracker(tracker_id: str) -> int | None:
@@ -664,13 +663,13 @@ def test_tracking_video_benchmark_counts_event_fragmentation() -> None:
     model_id = str(os.getenv("TOPOSYNC_TRACKING_BENCHMARK_MODEL_ID") or "rfdetr_det_medium").strip()
     confidence_threshold = _env_float(
         "TOPOSYNC_TRACKING_BENCHMARK_CONFIDENCE",
-        0.55,
+        0.25,
         minimum=0.0,
         maximum=1.0,
     )
     close_after_seconds = _env_float(
         "TOPOSYNC_TRACKING_BENCHMARK_CLOSE_AFTER_SECONDS",
-        5.0,
+        10.0,
         minimum=0.05,
         maximum=300.0,
     )

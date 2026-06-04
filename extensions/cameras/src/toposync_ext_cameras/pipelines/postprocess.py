@@ -29,12 +29,14 @@ from toposync.runtime.services import ServiceRegistry
 from ..processing.mapping import (
     ControlPointMapper,
     ControlPointPair,
+    ControlPointRefinementPoint,
     ControlPointSet,
     HomographyEstimationConfig,
     PanTiltZoomState,
     PoseReference,
     PoseSelectionConfig,
     compute_control_points_signature,
+    compute_refinement_points_signature,
     normalize_move_status,
     select_control_point_set,
 )
@@ -735,12 +737,34 @@ class CameraMappingWorldQuad(BaseModel):
     bottom_left: CameraMappingControlPointWorld
 
 
+class CameraMappingProjectionRefinementPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    image: CameraMappingControlPointImage
+    world: CameraMappingControlPointWorld
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _validate_id(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("id is required")
+        return normalized
+
+
+class CameraMappingProjectionRefinement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: Literal["local_rbf_v1"] = "local_rbf_v1"
+    points: list[CameraMappingProjectionRefinementPoint] = Field(default_factory=list, max_length=24)
+
+
 class CameraMappingProjectionModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["image_quad_on_world"] = "image_quad_on_world"
     image_region: CameraMappingImageRegion = Field(default_factory=CameraMappingImageRegion)
     world_quad: CameraMappingWorldQuad
-    future_mesh: None = None
+    refinement: CameraMappingProjectionRefinement | None = None
+    future_mesh: Any | None = None
 
 
 class CameraMappingStreamScope(BaseModel):
@@ -3084,9 +3108,128 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         self._ptz_state_cache: dict[str, _CameraMappingPtzStateCacheEntry] = {}
         self._ptz_state_tasks: dict[str, asyncio.Task[PanTiltZoomState | None]] = {}
 
+    def _mapping_confidence(self, *, selection: Any, mapper: ControlPointMapper) -> float:
+        confidence = 0.85
+        quality = getattr(mapper, "quality", None)
+        quality_payload: dict[str, Any] = {}
+        if quality is not None and hasattr(quality, "as_dict"):
+            try:
+                raw_quality = quality.as_dict()
+            except Exception:
+                raw_quality = {}
+            if isinstance(raw_quality, dict):
+                quality_payload = raw_quality
+        status = str(quality_payload.get("status") or "").strip().lower()
+        if status == "ready":
+            confidence = 0.95
+        elif status == "estimated":
+            confidence = 0.72
+        elif status == "incomplete":
+            confidence = 0.35
+        if bool(quality_payload.get("estimated")):
+            confidence = min(confidence, 0.72)
+
+        pose_distance = getattr(selection, "pose_distance", None)
+        if pose_distance is not None:
+            try:
+                distance = max(0.0, float(pose_distance))
+            except Exception:
+                distance = 0.0
+            max_distance = max(1e-6, float(self._pose_selection_config.max_distance))
+            confidence *= max(0.35, 1.0 - min(1.0, distance / max_distance) * 0.65)
+
+        move_status = str(getattr(selection, "move_status", "") or "").strip().lower()
+        if move_status == "moving":
+            confidence *= 0.55
+        return max(0.05, min(1.0, float(confidence)))
+
+    def _world_for_point(
+        self,
+        mapper: ControlPointMapper,
+        *,
+        point: tuple[float, float],
+        confidence: float,
+    ) -> dict[str, float] | None:
+        mapped = mapper.map(float(point[0]), float(point[1]))
+        if mapped is None:
+            return None
+        return {
+            "x": float(mapped[0]),
+            "z": float(mapped[1]),
+            "confidence": max(0.0, min(1.0, float(confidence))),
+        }
+
+    def _annotate_detection_world_anchors(
+        self,
+        payload: dict[str, Any],
+        *,
+        mapper: ControlPointMapper,
+        confidence: float,
+    ) -> None:
+        vision_raw = payload.get("vision")
+        if isinstance(vision_raw, dict) and isinstance(vision_raw.get("detections"), list):
+            vision = dict(vision_raw)
+            detections: list[Any] = []
+            for raw_detection in vision_raw.get("detections") or []:
+                if not isinstance(raw_detection, dict):
+                    detections.append(raw_detection)
+                    continue
+                detection = dict(raw_detection)
+                point = _image_point_from_bbox01(detection.get("bbox01"))
+                if point is not None:
+                    world_anchor = self._world_for_point(
+                        mapper,
+                        point=point,
+                        confidence=confidence,
+                    )
+                    if world_anchor is not None:
+                        detection["world_anchor"] = dict(world_anchor)
+                detections.append(detection)
+            vision["detections"] = detections
+            payload["vision"] = vision
+
+        for key in ("detected_object",):
+            raw_object = payload.get(key)
+            if not isinstance(raw_object, dict):
+                continue
+            item = dict(raw_object)
+            point = _image_point_from_bbox01(item.get("bbox01"))
+            if point is not None:
+                world_anchor = self._world_for_point(mapper, point=point, confidence=confidence)
+                if world_anchor is not None:
+                    item["world_anchor"] = dict(world_anchor)
+            payload[key] = item
+
+        raw_objects = payload.get("detected_objects")
+        if isinstance(raw_objects, list):
+            objects: list[Any] = []
+            for raw_object in raw_objects:
+                if not isinstance(raw_object, dict):
+                    objects.append(raw_object)
+                    continue
+                item = dict(raw_object)
+                point = _image_point_from_bbox01(item.get("bbox01"))
+                if point is not None:
+                    world_anchor = self._world_for_point(mapper, point=point, confidence=confidence)
+                    if world_anchor is not None:
+                        item["world_anchor"] = dict(world_anchor)
+                objects.append(item)
+            payload["detected_objects"] = objects
+
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        point = _resolve_image_point(packet, bbox_field=self._config.bbox_field, image_uv_field=self._config.image_uv_field)
-        if point is None:
+        point = _resolve_image_point(
+            packet,
+            bbox_field=self._config.bbox_field,
+            image_uv_field=self._config.image_uv_field,
+        )
+        has_detection_points = False
+        vision = packet.payload.get("vision")
+        if isinstance(vision, dict) and isinstance(vision.get("detections"), list):
+            has_detection_points = any(
+                isinstance(item, dict) and _image_point_from_bbox01(item.get("bbox01")) is not None
+                for item in vision.get("detections") or []
+            )
+        if point is None and not has_detection_points:
             return [packet]
 
         camera_id = _resolve_camera_id(packet, camera_id_override=self._config.camera_id)
@@ -3128,26 +3271,32 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 return [replace(packet, payload=payload)]
             return [packet]
 
-        mapped = mapper.map(float(point[0]), float(point[1]))
-        if mapped is None:
-            if pose_state_fetched:
-                return [replace(packet, payload=payload)]
-            return [packet]
-
-        world = {"x": float(mapped[0]), "z": float(mapped[1])}
-        payload[self._config.world_field] = world
-        payload["mapping"] = {
-            "u": float(point[0]),
-            "v": float(point[1]),
-            "composition_id": composition_id,
-            "control_point_set_id": selection.control_point_set.id,
-            "calibrated_view_id": selection.control_point_set.id,
-            "control_point_set_label": selection.control_point_set.label,
-            "pose_distance": (float(selection.pose_distance) if selection.pose_distance is not None else None),
-            "pose_axes_used": list(selection.pose_axes_used),
-            "move_status": selection.move_status,
-            "quality": mapper.quality.as_dict(),
-        }
+        confidence = self._mapping_confidence(selection=selection, mapper=mapper)
+        self._annotate_detection_world_anchors(payload, mapper=mapper, confidence=confidence)
+        if point is not None:
+            world_anchor = self._world_for_point(mapper, point=point, confidence=confidence)
+            if world_anchor is None:
+                if pose_state_fetched:
+                    return [replace(packet, payload=payload)]
+                return [packet]
+            payload[self._config.world_field] = {
+                "x": float(world_anchor["x"]),
+                "z": float(world_anchor["z"]),
+            }
+            payload["world_anchor"] = dict(world_anchor)
+            payload["mapping"] = {
+                "u": float(point[0]),
+                "v": float(point[1]),
+                "composition_id": composition_id,
+                "control_point_set_id": selection.control_point_set.id,
+                "calibrated_view_id": selection.control_point_set.id,
+                "control_point_set_label": selection.control_point_set.label,
+                "pose_distance": (float(selection.pose_distance) if selection.pose_distance is not None else None),
+                "pose_axes_used": list(selection.pose_axes_used),
+                "move_status": selection.move_status,
+                "confidence": float(confidence),
+                "quality": mapper.quality.as_dict(),
+            }
         metadata = dict(packet.metadata)
         if self._config.attach_mapping_metadata:
             metadata["composition_id"] = composition_id
@@ -3196,12 +3345,14 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         control_point_set: ControlPointSet,
     ) -> ControlPointMapper | None:
         points_signature = compute_control_points_signature(control_point_set.control_points)
+        refinement_signature = compute_refinement_points_signature(control_point_set.refinement_points)
         cache_key = "|".join(
             [
                 str(camera_id or "<inline>").strip() or "<inline>",
                 str(composition_id or "").strip() or "<none>",
                 control_point_set.id,
                 points_signature,
+                refinement_signature,
                 self._homography_config_signature,
             ]
         )
@@ -3209,7 +3360,11 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             return self._mapper_cache[cache_key]
 
         try:
-            mapper = ControlPointMapper(list(control_point_set.control_points), config=self._homography_config)
+            mapper = ControlPointMapper(
+                list(control_point_set.control_points),
+                config=self._homography_config,
+                refinement_points=control_point_set.refinement_points,
+            )
         except Exception:
             mapper = None
         self._mapper_cache[cache_key] = mapper
@@ -3944,6 +4099,19 @@ def _read_bbox01(packet: Packet, *, bbox_field: str) -> tuple[float, float, floa
     return None
 
 
+def _image_point_from_bbox01(raw: Any) -> tuple[float, float] | None:
+    if not isinstance(raw, (list, tuple)) or len(raw) < 4:
+        return None
+    try:
+        values = [float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3])]
+    except Exception:
+        return None
+    if not all(math.isfinite(value) for value in values):
+        return None
+    x1, y1, x2, y2 = _normalize_bbox01((values[0], values[1], values[2], values[3]))
+    return ((x1 + x2) / 2.0, float(y2))
+
+
 def _read_bbox01_from_artifact(artifact: Artifact) -> tuple[float, float, float, float] | None:
     meta = artifact.metadata if isinstance(artifact.metadata, dict) else {}
     raw = meta.get("bbox01")
@@ -4404,9 +4572,8 @@ def _resolve_image_point(packet: Packet, *, bbox_field: str, image_uv_field: str
     bbox = _read_bbox01(packet, bbox_field=bbox_field)
     if bbox is None:
         return None
-    x1, y1, x2, y2 = bbox
     # To map to the "ground" (world x/z plane), the most stable point tends to be the bbox base (bottom-center).
-    return ((x1 + x2) / 2.0, float(y2))
+    return _image_point_from_bbox01(bbox)
 
 
 def _resolve_camera_id(packet: Packet, *, camera_id_override: str) -> str:
@@ -4469,6 +4636,43 @@ def _parse_control_point_sets(value: Any) -> list[ControlPointSet]:
     return out
 
 
+def _parse_refinement_points(value: Any) -> tuple[ControlPointRefinementPoint, ...]:
+    rec = value if isinstance(value, dict) else {}
+    if str(rec.get("model") or "local_rbf_v1").strip() != "local_rbf_v1":
+        return ()
+    raw_points = rec.get("points")
+    if not isinstance(raw_points, list):
+        return ()
+
+    out: list[ControlPointRefinementPoint] = []
+    for index, item in enumerate(raw_points[:24]):
+        point = item if isinstance(item, dict) else {}
+        image = point.get("image") if isinstance(point.get("image"), dict) else {}
+        world = point.get("world") if isinstance(point.get("world"), dict) else {}
+        try:
+            image_u = float(image.get("x"))
+            image_v = float(image.get("y"))
+            world_x = float(world.get("x"))
+            world_z = float(world.get("z"))
+        except Exception:
+            continue
+        if not all(math.isfinite(value) for value in (image_u, image_v, world_x, world_z)):
+            continue
+        if not (0.0 <= image_u <= 1.0 and 0.0 <= image_v <= 1.0):
+            continue
+        point_id = str(point.get("id") or "").strip() or f"refinement-{index + 1}"
+        out.append(
+            ControlPointRefinementPoint(
+                id=point_id,
+                image_u=image_u,
+                image_v=image_v,
+                world_x=world_x,
+                world_z=world_z,
+            )
+        )
+    return tuple(out)
+
+
 def _control_point_set_from_calibrated_view_record(value: Any, *, index: int = 0) -> ControlPointSet | None:
     rec = value if isinstance(value, dict) else {}
     view_id = str(rec.get("id") or "").strip()
@@ -4525,6 +4729,7 @@ def _control_point_set_from_calibrated_view_record(value: Any, *, index: int = 0
         label=label,
         pose_reference=_parse_pose_reference(rec.get("pose_reference")),
         control_points=control_points,
+        refinement_points=_parse_refinement_points(projection_model.get("refinement")),
     )
 
 

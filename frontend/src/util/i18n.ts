@@ -625,7 +625,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.alerts.missing_required_artifacts.message": "This step expects artifacts that are not guaranteed upstream: {{missing_artifacts}}.",
     "core.ui.pipelines.alerts.missing_required_artifacts.suggestion": "Move this step after the producer, or add a step that produces these artifacts upstream.",
     "core.ui.pipelines.alerts.tracking_close_after_aggressive.message": "Object tracking closes streams quickly when a detection is briefly lost (close_after_seconds={{close_after_seconds}}). This can look flickery under frame drops or occlusions.",
-    "core.ui.pipelines.alerts.tracking_close_after_aggressive.suggestion": "Increase close_after_seconds, for example to 4.0, to keep tracks stable through short gaps.",
+    "core.ui.pipelines.alerts.tracking_close_after_aggressive.suggestion": "Increase close_after_seconds, for example to 10.0, to keep tracks stable through short gaps.",
     "core.ui.pipelines.alerts.tracking_unbounded_update_rate.message": "Object tracking is configured to emit updates at input frame rate (default_interval_seconds=0), which can overload debug, storage, or notifications and reduce effective FPS.",
     "core.ui.pipelines.alerts.tracking_unbounded_update_rate.suggestion": "Set default_interval_seconds to about 0.1-0.3, or add Reduce frames/Limit frequency before heavy outputs such as Save images, Send notification, or Inspect flow.",
     "core.ui.pipelines.alerts.notify_missing_store_images.message": "Notifications cannot display images because there is no Save images step before Send notification.",
@@ -1749,12 +1749,24 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.tracker_id": "Tracking method",
     "core.ui.pipelines.panels.yolo.tracker_id_hint":
       "Choose how Toposync keeps the same object linked from one frame to the next.",
-    "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_label": "Default (lightweight)",
+    "core.ui.pipelines.panels.yolo.tracker_byte_world_label": "Default (Byte World)",
+    "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_label": "Baseline (lightweight)",
     "core.ui.pipelines.panels.yolo.tracker_norfair_label": "More stable (Norfair)",
+    "core.ui.pipelines.panels.yolo.tracker_byte_world_hint":
+      "Primary tracker. It opens objects with high-confidence detections and uses lower-confidence detections plus mapped world position to keep continuity.",
     "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_hint":
-      "Best default for most cameras. It is lighter and works well on CPU-first machines.",
+      "Internal benchmark baseline. It is lighter, but tends to fragment more in real camera scenes.",
     "core.ui.pipelines.panels.yolo.tracker_norfair_hint":
-      "Usually steadier, but a little heavier. Use it when the default tracker is losing objects too often.",
+      "Optional benchmark baseline based on Norfair. Use it to compare behavior against Byte World.",
+    "core.ui.pipelines.panels.yolo.open_confidence_threshold": "Open confidence",
+    "core.ui.pipelines.panels.yolo.open_confidence_threshold_hint":
+      "Minimum detection confidence allowed to open a new object event.",
+    "core.ui.pipelines.panels.yolo.continue_confidence_threshold": "Continue confidence",
+    "core.ui.pipelines.panels.yolo.continue_confidence_threshold_hint":
+      "Lower-confidence detections can continue an existing object, but cannot open a new event.",
+    "core.ui.pipelines.panels.yolo.stitch_gap_seconds": "Stitch gap (seconds)",
+    "core.ui.pipelines.panels.yolo.stitch_gap_hint":
+      "Keeps short-term association memory after close so fragmented tracklets can reuse the same event id.",
     "core.ui.pipelines.panels.yolo.iou_threshold": "IoU threshold",
     "core.ui.pipelines.panels.yolo.iou_threshold_hint": "Backend-level overlap threshold used by model-specific postprocessing when available.",
     "core.ui.pipelines.panels.yolo.inference_interval_detection": "Analysis interval (seconds)",
@@ -1804,9 +1816,19 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.pause_when_gate_closed": "Pause when motion gate is closed",
     "core.ui.pipelines.panels.yolo.pause_when_gate_closed_hint":
       "Stops advancing trackers while the upstream motion gate is closed, reducing false closes and unnecessary updates.",
-    "core.ui.pipelines.panels.yolo.use_world_anchor": "Use world anchor when available",
+    "core.ui.pipelines.panels.yolo.use_world_anchor": "World anchor",
+    "core.ui.pipelines.panels.yolo.use_world_anchor.auto": "Auto",
+    "core.ui.pipelines.panels.yolo.use_world_anchor.always": "Require",
+    "core.ui.pipelines.panels.yolo.use_world_anchor.never": "Ignore",
     "core.ui.pipelines.panels.yolo.use_world_anchor_hint":
-      "Reserved for future multi-camera fusion. Safe to leave disabled in current pipelines.",
+      "Uses mapped position as a probabilistic matching signal when camera mapping is upstream.",
+    "core.ui.pipelines.panels.yolo.world_match_distance_meters": "World match distance",
+    "core.ui.pipelines.panels.yolo.world_match_distance_hint":
+      "Maximum expected real-world distance, in meters, for matching compatible object observations.",
+    "core.ui.pipelines.panels.yolo.appearance_mode": "Appearance",
+    "core.ui.pipelines.panels.yolo.appearance_mode.off": "Off",
+    "core.ui.pipelines.panels.yolo.appearance_mode_hint":
+      "Reserved for future ReID/face/pose enrichment. It stays off in this phase.",
 
     "core.ui.processing_servers.title": "Processing servers",
     "core.ui.processing_servers.add_server": "Add server",
@@ -2656,7 +2678,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.alerts.missing_required_artifacts.message": "Esta etapa espera artefatos que não estão garantidos nas etapas anteriores: {{missing_artifacts}}.",
     "core.ui.pipelines.alerts.missing_required_artifacts.suggestion": "Mova esta etapa para depois do produtor, ou adicione uma etapa anterior que produza esses artefatos.",
     "core.ui.pipelines.alerts.tracking_close_after_aggressive.message": "O rastreamento fecha fluxos rapidamente quando uma detecção some por pouco tempo (close_after_seconds={{close_after_seconds}}). Isso pode parecer instável com quedas de frames ou oclusões.",
-    "core.ui.pipelines.alerts.tracking_close_after_aggressive.suggestion": "Aumente close_after_seconds, por exemplo para 4.0, para manter rastros estáveis durante falhas curtas.",
+    "core.ui.pipelines.alerts.tracking_close_after_aggressive.suggestion": "Aumente close_after_seconds, por exemplo para 10.0, para manter rastros estáveis durante falhas curtas.",
     "core.ui.pipelines.alerts.tracking_unbounded_update_rate.message": "O rastreamento está configurado para emitir atualizações na frequência de entrada (default_interval_seconds=0), o que pode sobrecarregar debug, armazenamento ou notificações e reduzir o FPS efetivo.",
     "core.ui.pipelines.alerts.tracking_unbounded_update_rate.suggestion": "Defina default_interval_seconds em torno de 0.1-0.3, ou adicione Reduzir frames/Limitar frequência antes de saídas pesadas como Salvar imagens, Enviar notificação ou Inspecionar fluxo.",
     "core.ui.pipelines.alerts.notify_missing_store_images.message": "As notificações não conseguem mostrar imagens porque não há uma etapa Salvar imagens antes de Enviar notificação.",
@@ -3790,12 +3812,24 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.tracker_id": "Método de rastreamento",
     "core.ui.pipelines.panels.yolo.tracker_id_hint":
       "Escolha como o Toposync mantém o mesmo objeto ligado de um frame para o outro.",
-    "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_label": "Padrão (leve)",
+    "core.ui.pipelines.panels.yolo.tracker_byte_world_label": "Padrão (Byte World)",
+    "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_label": "Baseline (leve)",
     "core.ui.pipelines.panels.yolo.tracker_norfair_label": "Mais estável (Norfair)",
+    "core.ui.pipelines.panels.yolo.tracker_byte_world_hint":
+      "Tracker principal. Ele abre objetos com detecções de alta confiança e usa detecções de menor confiança mais posição mapeada no ambiente para manter continuidade.",
     "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_hint":
-      "Melhor padrão para a maioria das câmeras. É mais leve e funciona bem em máquinas focadas em CPU.",
+      "Baseline interno de benchmark. É mais leve, mas tende a fragmentar mais em cenas reais de câmera.",
     "core.ui.pipelines.panels.yolo.tracker_norfair_hint":
-      "Costuma ser mais estável, mas um pouco mais pesado. Use quando o rastreador padrão estiver perdendo objetos com frequência.",
+      "Baseline opcional baseado no Norfair. Use para comparar comportamento com o Byte World.",
+    "core.ui.pipelines.panels.yolo.open_confidence_threshold": "Confiança para abrir",
+    "core.ui.pipelines.panels.yolo.open_confidence_threshold_hint":
+      "Confiança mínima de detecção para abrir um novo evento de objeto.",
+    "core.ui.pipelines.panels.yolo.continue_confidence_threshold": "Confiança para continuar",
+    "core.ui.pipelines.panels.yolo.continue_confidence_threshold_hint":
+      "Detecções de menor confiança podem continuar um objeto existente, mas não abrem novo evento.",
+    "core.ui.pipelines.panels.yolo.stitch_gap_seconds": "Janela de junção (segundos)",
+    "core.ui.pipelines.panels.yolo.stitch_gap_hint":
+      "Mantém memória de associação após o fechamento para tracklets fragmentados reutilizarem o mesmo event id.",
     "core.ui.pipelines.panels.yolo.iou_threshold": "Limiar de IoU",
     "core.ui.pipelines.panels.yolo.iou_threshold_hint": "Limiar de sobreposição usado pelo pós-processamento específico do backend quando disponível.",
     "core.ui.pipelines.panels.yolo.inference_interval_detection": "Intervalo de análise (segundos)",
@@ -3845,9 +3879,19 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.pause_when_gate_closed": "Pausar quando o motion gate estiver fechado",
     "core.ui.pipelines.panels.yolo.pause_when_gate_closed_hint":
       "Para de avançar os trackers enquanto o motion gate a montante estiver fechado, reduzindo closes falsos e updates desnecessários.",
-    "core.ui.pipelines.panels.yolo.use_world_anchor": "Usar âncora world quando disponível",
+    "core.ui.pipelines.panels.yolo.use_world_anchor": "Âncora no ambiente",
+    "core.ui.pipelines.panels.yolo.use_world_anchor.auto": "Automático",
+    "core.ui.pipelines.panels.yolo.use_world_anchor.always": "Exigir",
+    "core.ui.pipelines.panels.yolo.use_world_anchor.never": "Ignorar",
     "core.ui.pipelines.panels.yolo.use_world_anchor_hint":
-      "Reservado para futura fusão multi-câmera. Pode ficar desabilitado nos fluxos atuais.",
+      "Usa a posição mapeada como sinal probabilístico de associação quando o mapeamento da câmera está antes do tracker.",
+    "core.ui.pipelines.panels.yolo.world_match_distance_meters": "Distância de match no ambiente",
+    "core.ui.pipelines.panels.yolo.world_match_distance_hint":
+      "Distância máxima esperada no mundo real, em metros, para associar observações compatíveis do objeto.",
+    "core.ui.pipelines.panels.yolo.appearance_mode": "Aparência",
+    "core.ui.pipelines.panels.yolo.appearance_mode.off": "Desligado",
+    "core.ui.pipelines.panels.yolo.appearance_mode_hint":
+      "Reservado para futuro enriquecimento com ReID/rosto/pose. Fica desligado nesta fase.",
 
     "core.ui.processing_servers.title": "Servidores de processamento",
     "core.ui.processing_servers.add_server": "Adicionar servidor",

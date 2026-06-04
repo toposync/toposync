@@ -1707,7 +1707,10 @@ class CamerasExtension(BaseExtension):
                 return {"world": None} if query.kind == "image" else {"image": None}
 
             try:
-                mapper = ControlPointMapper(list(control_point_set.control_points))
+                mapper = ControlPointMapper(
+                    list(control_point_set.control_points),
+                    refinement_points=control_point_set.refinement_points,
+                )
             except RuntimeError as exc:
                 raise HTTPException(status_code=501, detail=str(exc)) from exc
             except Exception:
@@ -2327,20 +2330,36 @@ class CamerasExtension(BaseExtension):
                     "config": {
                         "model_id": DEFAULT_CAMERA_DETECTION_MODEL_ID,
                         "categories": detect_categories,
-                        "confidence_threshold": 0.55,
+                        "confidence_threshold": 0.25,
                         "emit_mode": "annotate",
                     },
                 },
+            ]
+            if preset in {"presence_area", "vehicle_stopped"}:
+                base_nodes.append(
+                    {
+                        "id": "map",
+                        "operator": "camera.camera_mapping",
+                        "config": {"camera_id": camera_id, "composition_id": composition_id},
+                    }
+                )
+            base_nodes.append(
                 {
                     "id": "track",
                     "operator": "vision.track",
                     "config": {
-                        "close_after_seconds": 5.0,
+                        "tracker_id": "byte_world",
+                        "open_confidence_threshold": 0.50,
+                        "continue_confidence_threshold": 0.25,
+                        "close_after_seconds": 10.0,
+                        "stitch_gap_seconds": 30.0,
                         "default_interval_seconds": 0.25,
-                        "tracker_id": "simple_iou_kalman",
+                        "use_world_anchor": "auto",
+                        "world_match_distance_meters": 3.0,
+                        "appearance_mode": "off",
                     },
                 },
-            ]
+            )
 
             tail_nodes: list[dict[str, Any]]
             if preset == "people_individual":
@@ -2409,13 +2428,7 @@ class CamerasExtension(BaseExtension):
             if preset in {"presence_area", "vehicle_stopped"}:
                 if not composition_id:
                     raise ValueError(f"composition_id is required for {preset}")
-                tail_nodes = [
-                    {
-                        "id": "map",
-                        "operator": "camera.camera_mapping",
-                        "config": {"camera_id": camera_id, "composition_id": composition_id},
-                    },
-                ]
+                tail_nodes = []
 
                 if preset == "vehicle_stopped" and area_restriction_config:
                     tail_nodes.append(

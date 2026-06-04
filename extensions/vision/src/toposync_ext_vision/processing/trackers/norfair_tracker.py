@@ -180,7 +180,7 @@ class NorfairTrackerBackend:
                     tracker_id=self.tracker_id,
                     mask_artifact_name=detection.mask_artifact_name,
                     keypoints=detection.keypoints,
-                    world_anchor=world_anchor,
+                    world_anchor=detection.world_anchor or world_anchor,
                     appearance_embedding_artifact_name=appearance_embedding_artifact_name,
                     metadata={
                         **dict(detection.metadata or {}),

@@ -199,9 +199,10 @@ def _tracking_pipeline_graph(
                 "id": track_id,
                 "operator": "vision.track",
                 "config": {
-                    "tracker_id": "simple_iou_kalman",
+                    "tracker_id": "byte_world",
                     "default_interval_seconds": 0.0,
-                    "close_after_seconds": 0.05,
+                    "close_after_seconds": 0.12,
+                    "stitch_gap_seconds": 0.35,
                 },
             },
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
@@ -260,9 +261,10 @@ def _tracking_pipeline_graph_with_shareable_transform(
                 "id": track_id,
                 "operator": "vision.track",
                 "config": {
-                    "tracker_id": "simple_iou_kalman",
+                    "tracker_id": "byte_world",
                     "default_interval_seconds": 0.0,
-                    "close_after_seconds": 0.05,
+                    "close_after_seconds": 0.12,
+                    "stitch_gap_seconds": 0.35,
                 },
             },
             {"id": transform_id, "operator": "test.identity", "config": {}},
@@ -455,12 +457,13 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
                 {
                     "id": "track",
                     "operator": "vision.track",
-                    "config": {
-                        "tracker_id": "simple_iou_kalman",
-                        "default_interval_seconds": 0.0,
-                        "close_after_seconds": 0.05,
+                        "config": {
+                            "tracker_id": "byte_world",
+                            "default_interval_seconds": 0.0,
+                            "close_after_seconds": 0.12,
+                            "stitch_gap_seconds": 0.35,
+                        },
                     },
-                },
                 {
                     "id": "crop",
                     "operator": "vision.crop_objects",
@@ -636,6 +639,7 @@ def test_vision_track_keeps_same_identity_across_a_short_gap() -> None:
         for node in graph["nodes"]:
             if node.get("id") == "track":
                 node["config"]["close_after_seconds"] = 0.08
+                node["config"]["stitch_gap_seconds"] = 0.35
             if node.get("id") == "track_event":
                 node["config"]["max_gap_seconds"] = 0.08
         pipeline = Pipeline(
@@ -693,7 +697,7 @@ def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
                 {
                     "id": "track",
                     "operator": "vision.track",
-                    "config": {"tracker_id": "simple_iou_kalman", "default_interval_seconds": 0.0},
+                    "config": {"tracker_id": "byte_world", "default_interval_seconds": 0.0},
                 },
                 {
                     "id": "sink",
@@ -728,7 +732,7 @@ def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
         tracks = out.payload.get("vision", {}).get("tracks")
         assert isinstance(tracks, list)
         assert len(tracks) == 1
-        assert tracks[0].get("tracker_id") == "simple_iou_kalman"
+        assert tracks[0].get("tracker_id") == "byte_world"
         assert str(tracks[0].get("tracking_id") or "").startswith("trk:camera:test:")
 
     asyncio.run(scenario())

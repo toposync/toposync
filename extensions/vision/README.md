@@ -20,6 +20,7 @@ The public surface is task-based, not vendor-based. The official first-party run
   - `toposync-vision-cuda`
   - `toposync-vision-directml`
 - The official extension package now also includes the first-party tracker stack:
+  - `byte_world`
   - `simple_iou_kalman`
   - `norfair`
 
@@ -91,8 +92,10 @@ The public surface is task-based, not vendor-based. The official first-party run
 - `ModelManifest` now also accepts optional `capabilities` such as `reid`, so future re-identification models can be cataloged without changing the registry shape.
 - The pipeline editor now chooses models by task, not framework/vendor id. Basic setup is guided for common users, while advanced details expose runtime/model internals and custom manifest import when needed.
 - The first-party tracking backends are:
+  - `byte_world` (primary): ByteTrack-style high/low confidence association with optional world-anchor matching.
   - `simple_iou_kalman`
   - `norfair`
+- `simple_iou_kalman` and `norfair` remain useful benchmark baselines, but camera presets and recipes should use `byte_world`.
 - `vision.track` emits stable per-object lifecycle packets directly. The product identity is `payload["subject"]["id"]`; technical tracker details stay available as `tracklet_id`, `tracklet_ids`, `raw_tracking_id`, and `identity_id`.
 - `vision.group_events` consumes individual `subject.type="event"` packets and emits aggregated `subject.type="group_event"` packets with `group_event_id`, `member_event_ids`, `category_summary`, and grouped `subject.bbox01` for quieter storage and notifications.
 - `vision.detect` events are short OPEN/CLOSE notifications; use `vision.track` when you need temporal identity, movement, and long-lived per-object lifecycle.

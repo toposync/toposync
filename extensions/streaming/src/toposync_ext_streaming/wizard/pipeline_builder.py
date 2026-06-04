@@ -108,6 +108,12 @@ def build_streaming_wizard_graph(
     motion_sensitivity = _coerce_float(options.get("motion_sensitivity"), default=0.010, min_value=0.0001, max_value=1.0)
     motion_hold_seconds = _coerce_float(options.get("motion_hold_seconds"), default=6.0, min_value=0.0, max_value=120.0)
     yolo_confidence = _coerce_float(options.get("yolo_confidence_threshold"), default=0.55, min_value=0.01, max_value=1.0)
+    tracking_detection_confidence = _coerce_float(
+        options.get("yolo_confidence_threshold"),
+        default=0.25,
+        min_value=0.01,
+        max_value=1.0,
+    )
     yolo_filter_enabled = _coerce_bool(options.get("yolo_filter_enabled"), default=True)
     detection_emit_mode = "filter" if event_gated and yolo_filter_enabled else "annotate"
 
@@ -214,7 +220,7 @@ def build_streaming_wizard_graph(
                 "config": {
                     "model_id": DEFAULT_STREAMING_DETECTION_MODEL_ID,
                     "categories": tracking_categories,
-                    "confidence_threshold": float(yolo_confidence),
+                    "confidence_threshold": float(tracking_detection_confidence),
                     "emit_mode": "annotate",
                 },
             }
@@ -226,8 +232,15 @@ def build_streaming_wizard_graph(
                 "id": "track",
                 "operator": "vision.track",
                 "config": {
-                    "tracker_id": "simple_iou_kalman",
-                    "close_after_seconds": 5.0,
+                    "tracker_id": "byte_world",
+                    "open_confidence_threshold": 0.50,
+                    "continue_confidence_threshold": 0.25,
+                    "close_after_seconds": 10.0,
+                    "stitch_gap_seconds": 30.0,
+                    "default_interval_seconds": 0.25,
+                    "use_world_anchor": "auto",
+                    "world_match_distance_meters": 3.0,
+                    "appearance_mode": "off",
                 },
             }
         )

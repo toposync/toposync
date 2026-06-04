@@ -165,6 +165,8 @@ class VisionDetectRuntime(TransformOperatorRuntime):
             item["keypoints"] = [
                 [float(point[0]), float(point[1]), float(point[2])] for point in detection.keypoints
             ]
+        if detection.world_anchor:
+            item["world_anchor"] = dict(detection.world_anchor)
         if detection.metadata:
             item["metadata"] = dict(detection.metadata)
         return item

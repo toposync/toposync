@@ -80,6 +80,7 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert any("onnx" in list(item.get("artifact_formats") or []) for item in vision["backends"])
     assert any("classification" in list(item.get("tasks") or []) for item in vision["backends"])
     assert any("segmentation" in list(item.get("tasks") or []) for item in vision["backends"])
+    assert any(item.get("id") == "byte_world" for item in vision["trackers_available"])
     assert any(item.get("id") == "simple_iou_kalman" for item in vision["trackers_available"])
     assert any(item.get("id") == "norfair" for item in vision["trackers_available"])
     assert "CPUExecutionProvider" in vision["execution_providers"]

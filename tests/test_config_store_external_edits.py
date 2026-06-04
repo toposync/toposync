@@ -181,6 +181,7 @@ def test_config_store_removes_existing_event_assembler_and_retargets_downstream_
 
     assert "emit_mode" not in nodes_by_id["track"]["config"]
     assert nodes_by_id["track"]["config"]["close_after_seconds"] == 5.0
+    assert nodes_by_id["track"]["config"]["stitch_gap_seconds"] == 5.0
     assert not any(node["operator"] == "vision.event_assembler" for node in nodes)
     assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "store" for edge in edges)
     assert not any(edge["from"]["node"] == "event" or edge["to"]["node"] == "event" for edge in edges)

@@ -306,6 +306,11 @@ function fallbackCatalogItem(
 
 const TRACKER_CHOICES = [
   {
+    value: "byte_world",
+    labelKey: "core.ui.pipelines.panels.yolo.tracker_byte_world_label",
+    hintKey: "core.ui.pipelines.panels.yolo.tracker_byte_world_hint",
+  },
+  {
     value: "simple_iou_kalman",
     labelKey: "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_label",
     hintKey: "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_hint",
@@ -316,6 +321,8 @@ const TRACKER_CHOICES = [
     hintKey: "core.ui.pipelines.panels.yolo.tracker_norfair_hint",
   },
 ] as const;
+const TRACKING_WORLD_ANCHOR_OPTIONS = ["auto", "always", "never"] as const;
+const TRACKING_APPEARANCE_MODE_OPTIONS = ["off"] as const;
 
 const MODEL_HINT_KEYS: Record<string, string> = {
   rfdetr_det_nano: "core.ui.pipelines.panels.yolo.model_rfdetr_nano_hint",
@@ -885,18 +892,29 @@ export function VisionConfigCard({
   const iou = Number.isFinite(iouRaw) ? Math.max(0, Math.min(1, iouRaw)) : 0.6;
   const defaultIntervalRaw = Number((config as any).default_interval_seconds ?? 0.2);
   const defaultInterval = Number.isFinite(defaultIntervalRaw) ? Math.max(0, Math.min(120, defaultIntervalRaw)) : 0.2;
-  const closeAfterRaw = Number((config as any).close_after_seconds ?? 4.0);
-  const closeAfter = Number.isFinite(closeAfterRaw) ? Math.max(0.05, Math.min(300, closeAfterRaw)) : 4.0;
+  const openConfidenceRaw = Number((config as any).open_confidence_threshold ?? 0.5);
+  const openConfidence = Number.isFinite(openConfidenceRaw) ? Math.max(0, Math.min(1, openConfidenceRaw)) : 0.5;
+  const continueConfidenceRaw = Number((config as any).continue_confidence_threshold ?? 0.25);
+  const continueConfidence = Number.isFinite(continueConfidenceRaw) ? Math.max(0, Math.min(openConfidence, continueConfidenceRaw)) : 0.25;
+  const closeAfterRaw = Number((config as any).close_after_seconds ?? 10.0);
+  const closeAfter = Number.isFinite(closeAfterRaw) ? Math.max(0.05, Math.min(300, closeAfterRaw)) : 10.0;
+  const stitchGapRaw = Number((config as any).stitch_gap_seconds ?? 30.0);
+  const stitchGap = Number.isFinite(stitchGapRaw) ? Math.max(closeAfter, Math.min(3600, stitchGapRaw)) : 30.0;
+  const worldDistanceRaw = Number((config as any).world_match_distance_meters ?? 3.0);
+  const worldDistance = Number.isFinite(worldDistanceRaw) ? Math.max(0, Math.min(1000, worldDistanceRaw)) : 3.0;
   const inferenceIntervalRaw = Number((config as any).inference_interval_seconds ?? 0);
   const inferenceInterval = Number.isFinite(inferenceIntervalRaw) ? Math.max(0, Math.min(60, inferenceIntervalRaw)) : 0;
-  const trackerId = String((config as any).tracker_id ?? "simple_iou_kalman").trim() || "simple_iou_kalman";
+  const trackerId = String((config as any).tracker_id ?? "byte_world").trim() || "byte_world";
   const trackerPreset = TRACKER_CHOICES.find((item) => item.value === trackerId) ?? null;
   const isTracking = String(operatorId || "").trim() === "vision.track";
   const emitModeRaw = String((config as any).emit_mode ?? "events").trim().toLowerCase() || "events";
   const emitMode = ["events", "filter", "annotate"].includes(emitModeRaw) ? emitModeRaw : "events";
   const detectEmitMode = emitMode;
   const pauseWhenGateClosed = Boolean((config as any).pause_when_gate_closed ?? true);
-  const useWorldAnchor = Boolean((config as any).use_world_anchor ?? false);
+  const useWorldAnchorRaw = String((config as any).use_world_anchor ?? "auto").trim().toLowerCase() || "auto";
+  const useWorldAnchor = TRACKING_WORLD_ANCHOR_OPTIONS.includes(useWorldAnchorRaw as any) ? useWorldAnchorRaw : "auto";
+  const appearanceModeRaw = String((config as any).appearance_mode ?? "off").trim().toLowerCase() || "off";
+  const appearanceMode = TRACKING_APPEARANCE_MODE_OPTIONS.includes(appearanceModeRaw as any) ? appearanceModeRaw : "off";
   const modelId = String((config as any).model_id ?? "").trim();
   const attachMaskArtifacts = Boolean((config as any).attach_mask_artifacts ?? true);
   const attachPolygons = Boolean((config as any).attach_polygons ?? false);
@@ -1463,7 +1481,7 @@ export function VisionConfigCard({
               onChange={(event) => {
                 onUpdateConfig((prev) => ({
                   ...prev,
-                  tracker_id: String(event.target.value || "simple_iou_kalman").trim() || "simple_iou_kalman",
+                  tracker_id: String(event.target.value || "byte_world").trim() || "byte_world",
                 }));
               }}
             >
@@ -2087,6 +2105,49 @@ export function VisionConfigCard({
           {showAdvanced ? (
             <>
               <label className="pipelinesLabel">
+                <span>{t("core.ui.pipelines.panels.yolo.open_confidence_threshold")}</span>
+                <PipelinesNumberInput
+                  className="pipelinesInput"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={openConfidence}
+                  onChange={(nextValue) => {
+                    const nextOpen = Math.max(0, Math.min(1, nextValue));
+                    onUpdateConfig((prev) => ({
+                      ...prev,
+                      open_confidence_threshold: nextOpen,
+                      continue_confidence_threshold: Math.min(
+                        nextOpen,
+                        Number.isFinite(Number((prev as any).continue_confidence_threshold))
+                          ? Number((prev as any).continue_confidence_threshold)
+                          : continueConfidence,
+                      ),
+                    }));
+                  }}
+                />
+              </label>
+              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.open_confidence_threshold_hint")}</div>
+
+              <label className="pipelinesLabel">
+                <span>{t("core.ui.pipelines.panels.yolo.continue_confidence_threshold")}</span>
+                <PipelinesNumberInput
+                  className="pipelinesInput"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={continueConfidence}
+                  onChange={(nextValue) => {
+                    onUpdateConfig((prev) => ({
+                      ...prev,
+                      continue_confidence_threshold: Math.max(0, Math.min(openConfidence, nextValue)),
+                    }));
+                  }}
+                />
+              </label>
+              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.continue_confidence_threshold_hint")}</div>
+
+              <label className="pipelinesLabel">
                 <span>{t("core.ui.pipelines.panels.yolo.update_interval_tracking")}</span>
                 <PipelinesNumberInput
                   className="pipelinesInput"
@@ -2122,6 +2183,24 @@ export function VisionConfigCard({
               </label>
               <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.close_after_hint")}</div>
 
+              <label className="pipelinesLabel">
+                <span>{t("core.ui.pipelines.panels.yolo.stitch_gap_seconds")}</span>
+                <PipelinesNumberInput
+                  className="pipelinesInput"
+                  min={0.05}
+                  max={3600}
+                  step={0.5}
+                  value={stitchGap}
+                  onChange={(nextValue) => {
+                    onUpdateConfig((prev) => ({
+                      ...prev,
+                      stitch_gap_seconds: Math.max(closeAfter, Math.min(3600, nextValue)),
+                    }));
+                  }}
+                />
+              </label>
+              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.stitch_gap_hint")}</div>
+
               <label className="pipelinesCheckboxLabel">
                 <input
                   type="checkbox"
@@ -2137,20 +2216,61 @@ export function VisionConfigCard({
               </label>
               <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.pause_when_gate_closed_hint")}</div>
 
-              <label className="pipelinesCheckboxLabel">
-                <input
-                  type="checkbox"
-                  checked={useWorldAnchor}
+              <label className="pipelinesLabel">
+                <span>{t("core.ui.pipelines.panels.yolo.use_world_anchor")}</span>
+                <select
+                  className="pipelinesInput"
+                  value={useWorldAnchor}
                   onChange={(event) => {
+                    const nextMode = String(event.target.value || "auto").trim().toLowerCase();
                     onUpdateConfig((prev) => ({
                       ...prev,
-                      use_world_anchor: event.target.checked,
+                      use_world_anchor: TRACKING_WORLD_ANCHOR_OPTIONS.includes(nextMode as any) ? nextMode : "auto",
+                    }));
+                  }}
+                >
+                  <option value="auto">{t("core.ui.pipelines.panels.yolo.use_world_anchor.auto")}</option>
+                  <option value="always">{t("core.ui.pipelines.panels.yolo.use_world_anchor.always")}</option>
+                  <option value="never">{t("core.ui.pipelines.panels.yolo.use_world_anchor.never")}</option>
+                </select>
+              </label>
+              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.use_world_anchor_hint")}</div>
+
+              <label className="pipelinesLabel">
+                <span>{t("core.ui.pipelines.panels.yolo.world_match_distance_meters")}</span>
+                <PipelinesNumberInput
+                  className="pipelinesInput"
+                  min={0}
+                  max={1000}
+                  step={0.1}
+                  value={worldDistance}
+                  onChange={(nextValue) => {
+                    onUpdateConfig((prev) => ({
+                      ...prev,
+                      world_match_distance_meters: Math.max(0, Math.min(1000, nextValue)),
                     }));
                   }}
                 />
-                <span>{t("core.ui.pipelines.panels.yolo.use_world_anchor")}</span>
               </label>
-              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.use_world_anchor_hint")}</div>
+              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.world_match_distance_hint")}</div>
+
+              <label className="pipelinesLabel">
+                <span>{t("core.ui.pipelines.panels.yolo.appearance_mode")}</span>
+                <select
+                  className="pipelinesInput"
+                  value={appearanceMode}
+                  onChange={(event) => {
+                    const nextMode = String(event.target.value || "off").trim().toLowerCase();
+                    onUpdateConfig((prev) => ({
+                      ...prev,
+                      appearance_mode: TRACKING_APPEARANCE_MODE_OPTIONS.includes(nextMode as any) ? nextMode : "off",
+                    }));
+                  }}
+                >
+                  <option value="off">{t("core.ui.pipelines.panels.yolo.appearance_mode.off")}</option>
+                </select>
+              </label>
+              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.appearance_mode_hint")}</div>
             </>
           ) : null}
         </>

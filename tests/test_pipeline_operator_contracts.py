@@ -258,8 +258,9 @@ def test_compile_accepts_detect_annotate_before_tracking_recipe_shape() -> None:
                     "id": "track",
                     "operator": "vision.track",
                     "config": {
-                        "tracker_id": "simple_iou_kalman",
-                        "close_after_seconds": 5.0,
+                        "tracker_id": "byte_world",
+                        "close_after_seconds": 10.0,
+                        "stitch_gap_seconds": 30.0,
                     },
                 },
                 {"id": "sink", "operator": "core.sink", "config": {}},

@@ -318,15 +318,18 @@ class SimpleIouKalmanTrackerBackend:
                     best_state = state
 
             if best_state is None or best_score == float("-inf"):
+                detection_world_anchor = detection.world_anchor or world_anchor
                 best_state = self._next_track(
                     key,
                     detection,
                     now_ts=now_ts,
                     camera_id=camera_id,
-                    world_anchor=world_anchor,
+                    world_anchor=detection_world_anchor,
                     appearance_embedding_artifact_name=appearance_embedding_artifact_name,
                 )
                 states[best_state.tracking_id] = best_state
+            else:
+                detection_world_anchor = detection.world_anchor or world_anchor
 
             used_tracking_ids.add(best_state.tracking_id)
             best_state.camera_id = camera_id
@@ -337,7 +340,7 @@ class SimpleIouKalmanTrackerBackend:
             best_state.mask_artifact_name = detection.mask_artifact_name
             best_state.keypoints = detection.keypoints
             best_state.metadata = dict(detection.metadata or {})
-            best_state.world_anchor = world_anchor
+            best_state.world_anchor = detection_world_anchor
             best_state.appearance_embedding_artifact_name = appearance_embedding_artifact_name
             best_state.bbox01 = best_state.filter_state.update(detection.bbox01)
             best_state.last_seen_ts = now_ts

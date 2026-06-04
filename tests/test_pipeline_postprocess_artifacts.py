@@ -25,6 +25,7 @@ from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 from toposync_ext_cameras.processing.mapping import ControlPointMapper, ControlPointPair
 from toposync_ext_cameras.pipelines.postprocess import (
+    CameraMappingRuntime,
     VelocityEstimationRuntime,
 )
 
@@ -93,6 +94,135 @@ def _register_test_source_and_sink(
         share_strategy="never",
         runtime_factory=lambda config, _deps: _CollectSinkRuntime(config, collector),
     )
+
+
+def test_camera_mapping_annotates_detection_world_anchors_before_tracking() -> None:
+    async def scenario() -> None:
+        runtime = CameraMappingRuntime(
+            {
+                "control_point_sets": [
+                    {
+                        "id": "main",
+                        "label": "Main",
+                        "control_points": [
+                            {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
+                            {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
+                            {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+                            {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                        ],
+                    }
+                ]
+            },
+            PipelineRuntimeDependencies(),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "object_bbox01": [0.10, 0.10, 0.30, 0.50],
+                "detected_object": {
+                    "label": "person",
+                    "score": 0.9,
+                    "bbox01": [0.10, 0.10, 0.30, 0.50],
+                },
+                "detected_objects": [
+                    {
+                        "label": "person",
+                        "score": 0.9,
+                        "bbox01": [0.10, 0.10, 0.30, 0.50],
+                    },
+                    {
+                        "label": "person",
+                        "score": 0.8,
+                        "bbox01": [0.60, 0.60, 0.80, 0.80],
+                    },
+                ],
+                "vision": {
+                    "task": "detection",
+                    "detections": [
+                        {
+                            "label": "person",
+                            "label_id": 0,
+                            "score": 0.9,
+                            "bbox01": [0.10, 0.10, 0.30, 0.50],
+                            "model_id": "fake.detector",
+                        },
+                        {
+                            "label": "person",
+                            "label_id": 0,
+                            "score": 0.8,
+                            "bbox01": [0.60, 0.60, 0.80, 0.80],
+                            "model_id": "fake.detector",
+                        },
+                    ],
+                },
+            },
+        )
+
+        outputs = await runtime.process_packet(packet, None)
+        payload = outputs[0].payload
+        detections = payload["vision"]["detections"]
+
+        assert payload["world"] == pytest.approx({"x": 2.0, "z": 5.0}, abs=1e-6)
+        assert payload["world_anchor"]["confidence"] > 0.0
+        assert detections[0]["world_anchor"]["x"] == pytest.approx(2.0, abs=1e-6)
+        assert detections[0]["world_anchor"]["z"] == pytest.approx(5.0, abs=1e-6)
+        assert detections[1]["world_anchor"]["x"] == pytest.approx(7.0, abs=1e-6)
+        assert detections[1]["world_anchor"]["z"] == pytest.approx(8.0, abs=1e-6)
+        assert payload["detected_objects"][1]["world_anchor"]["x"] == pytest.approx(7.0, abs=1e-6)
+
+    asyncio.run(scenario())
+
+
+def test_camera_mapping_runtime_applies_calibrated_view_refinement_to_world_payload() -> None:
+    async def scenario() -> None:
+        runtime = CameraMappingRuntime(
+            {
+                "calibrated_views": [
+                    {
+                        "id": "main",
+                        "label": "Main",
+                        "projection_model": {
+                            "type": "image_quad_on_world",
+                            "image_region": {"top_left": {"x": 0.0, "y": 0.0}, "bottom_right": {"x": 1.0, "y": 1.0}},
+                            "world_quad": {
+                                "top_left": {"x": 0.0, "z": 0.0},
+                                "top_right": {"x": 10.0, "z": 0.0},
+                                "bottom_right": {"x": 10.0, "z": 10.0},
+                                "bottom_left": {"x": 0.0, "z": 10.0},
+                            },
+                            "refinement": {
+                                "model": "local_rbf_v1",
+                                "points": [
+                                    {
+                                        "id": "center",
+                                        "image": {"x": 0.5, "y": 0.5},
+                                        "world": {"x": 7.0, "z": 3.0},
+                                    }
+                                ],
+                            },
+                        },
+                    }
+                ]
+            },
+            PipelineRuntimeDependencies(),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "object_bbox01": [0.40, 0.10, 0.60, 0.50],
+            },
+        )
+
+        outputs = await runtime.process_packet(packet, None)
+        payload = outputs[0].payload
+
+        assert payload["world"]["x"] == pytest.approx(7.0, abs=1e-6)
+        assert payload["world"]["z"] == pytest.approx(3.0, abs=1e-6)
+        assert payload["mapping"]["quality"]["number_of_points"] == 4
+
+    asyncio.run(scenario())
 
 
 def _pipeline_runtime(

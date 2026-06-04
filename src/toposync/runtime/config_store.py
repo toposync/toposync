@@ -367,6 +367,9 @@ def _normalize_config(config: AppConfig) -> AppConfig:
                 if gap is not None and gap > 0.0 and track_config.get("close_after_seconds") != gap:
                     track_config["close_after_seconds"] = gap
                     cfg_changed = True
+                if gap is not None and gap > 0.0 and track_config.get("stitch_gap_seconds") != gap:
+                    track_config["stitch_gap_seconds"] = gap
+                    cfg_changed = True
             for key in (
                 "default_interval_seconds",
                 "category_intervals_seconds",
@@ -408,7 +411,8 @@ def _normalize_config(config: AppConfig) -> AppConfig:
             # Migration: old defaults were too aggressive and caused flickery tracking and excessive updates.
             close_after = _as_float(cfg.get("close_after_seconds"))
             if close_after is not None and abs(close_after - 1.2) < 1e-9:
-                cfg["close_after_seconds"] = 4.0
+                cfg["close_after_seconds"] = 10.0
+                cfg["stitch_gap_seconds"] = max(30.0, _as_float(cfg.get("stitch_gap_seconds")) or 0.0)
                 node_changed = True
 
             default_interval = _as_float(cfg.get("default_interval_seconds"))

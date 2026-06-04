@@ -168,9 +168,10 @@ def _tracking_pipeline_graph(
                 "id": track_id,
                 "operator": "vision.track",
                 "config": {
-                    "tracker_id": "simple_iou_kalman",
+                    "tracker_id": "byte_world",
                     "default_interval_seconds": 0.0,
-                    "close_after_seconds": 0.05,
+                    "close_after_seconds": 0.12,
+                    "stitch_gap_seconds": 0.35,
                 },
             },
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},

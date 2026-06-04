@@ -57,7 +57,7 @@ def _valid_calibrated_views() -> list[dict[str, object]]:
                     "bottom_right": {"x": 10.0, "z": 10.0},
                     "bottom_left": {"x": 0.0, "z": 10.0},
                 },
-                "future_mesh": None,
+                "refinement": None,
             },
             "projection_quality": {"status": "ready", "estimated": False, "note": None},
         }
@@ -175,6 +175,39 @@ def test_projection_map_accepts_calibrated_view_payload(tmp_path: Path, monkeypa
         assert body["world"]["x"] == pytest.approx(5.0, abs=1e-6)
         assert body["world"]["z"] == pytest.approx(5.0, abs=1e-6)
         assert body["quality"]["number_of_points"] == 4
+
+
+def test_projection_map_applies_calibrated_view_refinement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    view = _valid_calibrated_views()[0]
+    projection_model = view["projection_model"]
+    assert isinstance(projection_model, dict)
+    projection_model["refinement"] = {
+        "model": "local_rbf_v1",
+        "points": [
+            {
+                "id": "center",
+                "image": {"x": 0.5, "y": 0.5},
+                "world": {"x": 7.0, "z": 3.0},
+            }
+        ],
+    }
+
+    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        center_res = client.post(
+            "/api/cameras/projection/map",
+            json={"calibrated_view": view, "query": {"kind": "image", "x": 0.5, "y": 0.5}},
+        )
+        corner_res = client.post(
+            "/api/cameras/projection/map",
+            json={"calibrated_view": view, "query": {"kind": "image", "x": 0.0, "y": 0.0}},
+        )
+
+    assert center_res.status_code == 200, center_res.text
+    assert corner_res.status_code == 200, corner_res.text
+    assert center_res.json()["world"]["x"] == pytest.approx(7.0, abs=1e-6)
+    assert center_res.json()["world"]["z"] == pytest.approx(3.0, abs=1e-6)
+    assert corner_res.json()["world"]["x"] == pytest.approx(0.0, abs=1e-6)
+    assert corner_res.json()["world"]["z"] == pytest.approx(0.0, abs=1e-6)
 
 
 def test_camera_mapping_diagnostics_reports_camera_without_composition() -> None:

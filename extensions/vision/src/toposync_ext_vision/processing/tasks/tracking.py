@@ -83,13 +83,15 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         )
 
     def _world_anchor_for_packet(self, packet: Packet) -> dict[str, float] | None:
-        if not bool(self._parsed.use_world_anchor):
+        if self._parsed.use_world_anchor == "never":
             return None
-        world = packet.payload.get("world")
+        world = packet.payload.get("world_anchor")
+        if not isinstance(world, dict):
+            world = packet.payload.get("world")
         if not isinstance(world, dict):
             return None
         out: dict[str, float] = {}
-        for key in ("x", "y", "z"):
+        for key in ("x", "y", "z", "confidence"):
             raw = world.get(key)
             if raw is None:
                 continue
@@ -99,7 +101,15 @@ class VisionTrackRuntime(TransformOperatorRuntime):
                 continue
             if not math.isfinite(value):
                 continue
-            out[key] = value
+            out[key] = max(0.0, min(1.0, value)) if key == "confidence" else value
+        mapping = packet.payload.get("mapping")
+        if "confidence" not in out and isinstance(mapping, dict):
+            try:
+                confidence = float(mapping.get("confidence"))
+            except Exception:
+                confidence = float("nan")
+            if math.isfinite(confidence):
+                out["confidence"] = max(0.0, min(1.0, confidence))
         return out or None
 
     def _appearance_embedding_artifact_name_for_packet(self, packet: Packet) -> str | None:
@@ -148,6 +158,11 @@ class VisionTrackRuntime(TransformOperatorRuntime):
             backend = build_tracker_backend(
                 self._parsed.tracker_id,
                 close_after_seconds=float(self._parsed.close_after_seconds),
+                open_confidence_threshold=float(self._parsed.open_confidence_threshold),
+                continue_confidence_threshold=float(self._parsed.continue_confidence_threshold),
+                use_world_anchor=self._parsed.use_world_anchor,
+                world_match_distance_meters=float(self._parsed.world_match_distance_meters),
+                appearance_mode=self._parsed.appearance_mode,
             )
         if backend is None or not hasattr(backend, "update") or not hasattr(backend, "reset_stream"):
             raise TypeError(

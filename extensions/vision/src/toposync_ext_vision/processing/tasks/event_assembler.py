@@ -311,7 +311,7 @@ class TrackEventAssembler:
         if self._config.same_event_requires_same_class and state.label != track.label:
             return None
         if self._age_seconds(state, now_monotonic=now_monotonic, packet_ts=packet_ts) > float(
-            self._config.close_after_seconds
+            self._config.stitch_gap_seconds
         ):
             return None
 
@@ -384,8 +384,14 @@ class TrackEventAssembler:
         mapped_event_id = self._event_id_by_tracklet_key.get(tracklet_key)
         if mapped_event_id:
             state = self._events_by_id.get(mapped_event_id)
-            if state is not None and state.event_id not in used_event_ids:
+            if (
+                state is not None
+                and state.event_id not in used_event_ids
+                and self._age_seconds(state, now_monotonic=now_monotonic, packet_ts=packet_ts)
+                <= float(self._config.stitch_gap_seconds)
+            ):
                 return state
+            self._event_id_by_tracklet_key.pop(tracklet_key, None)
 
         state = self._match_event(
             track,
@@ -496,6 +502,16 @@ class TrackEventAssembler:
             object_data=object_data,
             state=state,
         )
+        object_world_anchor = object_data.get("world_anchor")
+        if isinstance(object_world_anchor, dict):
+            try:
+                payload["world"] = {
+                    "x": float(object_world_anchor["x"]),
+                    "z": float(object_world_anchor["z"]),
+                }
+            except Exception:
+                pass
+            payload["world_anchor"] = dict(object_world_anchor)
         payload.update(
             {
                 "event_id": state.event_id,
@@ -619,7 +635,8 @@ class TrackEventAssembler:
         seen_event_ids: set[str],
     ) -> list[Packet]:
         outputs: list[Packet] = []
-        max_gap_seconds = float(self._config.close_after_seconds)
+        close_after_seconds = float(self._config.close_after_seconds)
+        stitch_gap_seconds = max(close_after_seconds, float(self._config.stitch_gap_seconds))
         for event_id, state in list(self._events_by_id.items()):
             if state.source_stream_id not in {
                 _normalize_string(packet.payload.get("source_stream_id"))
@@ -632,7 +649,12 @@ class TrackEventAssembler:
                 continue
             if state.active_tracklet_id and state.active_tracklet_id not in current_tracklet_ids:
                 state.active_tracklet_id = None
-            if self._age_seconds(state, now_monotonic=now_monotonic, packet_ts=packet_ts) < max_gap_seconds:
+            age_seconds = self._age_seconds(
+                state,
+                now_monotonic=now_monotonic,
+                packet_ts=packet_ts,
+            )
+            if age_seconds < close_after_seconds:
                 continue
             object_data = dict(state.last_object)
             if object_data and state.opened:
@@ -644,12 +666,15 @@ class TrackEventAssembler:
                         state=state,
                     )
                 )
-            self._events_by_id.pop(event_id, None)
-            for tracklet_id in list(state.tracklet_ids):
-                self._event_id_by_tracklet_key.pop(
-                    self._tracklet_key(state.source_stream_id, tracklet_id),
-                    None,
-                )
+                state.opened = False
+                state.active_tracklet_id = None
+            if age_seconds >= stitch_gap_seconds:
+                self._events_by_id.pop(event_id, None)
+                for tracklet_id in list(state.tracklet_ids):
+                    self._event_id_by_tracklet_key.pop(
+                        self._tracklet_key(state.source_stream_id, tracklet_id),
+                        None,
+                    )
         return outputs
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002

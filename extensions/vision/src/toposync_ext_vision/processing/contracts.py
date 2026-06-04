@@ -64,7 +64,7 @@ def _normalize_world_anchor(value: dict[str, float] | None) -> dict[str, float] 
     if not isinstance(value, dict):
         return None
     out: dict[str, float] = {}
-    for key in ("x", "y", "z"):
+    for key in ("x", "y", "z", "confidence"):
         raw = value.get(key)
         if raw is None:
             continue
@@ -74,7 +74,7 @@ def _normalize_world_anchor(value: dict[str, float] | None) -> dict[str, float] 
             continue
         if not math.isfinite(parsed):
             continue
-        out[key] = parsed
+        out[key] = clamp01(parsed) if key == "confidence" else parsed
     return out or None
 
 
@@ -105,6 +105,7 @@ class DetectionObject:
     model_id: str
     mask_artifact_name: str | None = None
     keypoints: list[tuple[float, float, float]] | None = None
+    world_anchor: dict[str, float] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -115,6 +116,7 @@ class DetectionObject:
         self.model_id = str(self.model_id or "").strip()
         self.mask_artifact_name = str(self.mask_artifact_name or "").strip() or None
         self.keypoints = _normalize_keypoints(self.keypoints)
+        self.world_anchor = _normalize_world_anchor(self.world_anchor)
         self.metadata = dict(self.metadata or {})
 
 

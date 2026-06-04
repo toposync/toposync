@@ -203,7 +203,7 @@ def test_rtmdet_detection_output_feeds_vision_track(
 
         deps = PipelineRuntimeDependencies(vision_model_registry=build_default_model_registry())
         detect = VisionDetectRuntime({"model_id": "rtmdet.track", "emit_mode": "annotate"}, deps)
-        track = VisionTrackRuntime({"tracker_id": "simple_iou_kalman", "default_interval_seconds": 0.0}, deps)
+        track = VisionTrackRuntime({"tracker_id": "byte_world", "default_interval_seconds": 0.0}, deps)
 
         packet = Packet.create(
             stream_id="camera:test",

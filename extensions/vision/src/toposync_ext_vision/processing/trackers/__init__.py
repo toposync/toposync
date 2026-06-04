@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .byte_world import ByteWorldTrackerBackend
 from .norfair_tracker import NorfairTrackerBackend
 from .simple_iou_kalman import SimpleIouKalmanTrackerBackend
 
@@ -10,8 +11,22 @@ def build_tracker_backend(
     tracker_id: str,
     *,
     close_after_seconds: float,
+    open_confidence_threshold: float = 0.50,
+    continue_confidence_threshold: float = 0.25,
+    use_world_anchor: str = "auto",
+    world_match_distance_meters: float = 3.0,
+    appearance_mode: str = "off",
 ):
-    normalized = str(tracker_id or "").strip().lower() or "simple_iou_kalman"
+    normalized = str(tracker_id or "").strip().lower() or "byte_world"
+    if normalized == "byte_world":
+        return ByteWorldTrackerBackend(
+            close_after_seconds=close_after_seconds,
+            open_confidence_threshold=open_confidence_threshold,
+            continue_confidence_threshold=continue_confidence_threshold,
+            use_world_anchor=use_world_anchor,
+            world_match_distance_meters=world_match_distance_meters,
+            appearance_mode=appearance_mode,
+        )
     if normalized == "simple_iou_kalman":
         return SimpleIouKalmanTrackerBackend(close_after_seconds=close_after_seconds)
     if normalized == "norfair":
@@ -22,9 +37,14 @@ def build_tracker_backend(
 def available_tracker_backends() -> list[dict[str, Any]]:
     trackers: list[dict[str, Any]] = [
         {
+            "id": "byte_world",
+            "available": True,
+            "description": "Toposync primary tracker with ByteTrack-style confidence bands and world-anchor matching.",
+        },
+        {
             "id": "simple_iou_kalman",
             "available": True,
-            "description": "Toposync lightweight IoU + Kalman tracker for CPU-first deployments.",
+            "description": "Toposync lightweight IoU + Kalman tracker kept as an internal benchmark baseline.",
         }
     ]
     try:
@@ -52,6 +72,7 @@ def available_tracker_backends() -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "ByteWorldTrackerBackend",
     "NorfairTrackerBackend",
     "SimpleIouKalmanTrackerBackend",
     "available_tracker_backends",

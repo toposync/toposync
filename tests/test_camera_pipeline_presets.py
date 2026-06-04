@@ -208,7 +208,14 @@ def test_camera_pipeline_preset_defaults_detection_to_rfdetr_medium(
         pipeline = res.json()
         assert _vision_detect_config(pipeline).get("model_id") == "rfdetr_det_medium"
         assert _vision_detect_config(pipeline).get("categories") == ["person"]
-        assert _node_config(pipeline, "vision.track").get("close_after_seconds") == 5.0
+        assert _vision_detect_config(pipeline).get("confidence_threshold") == 0.25
+        track_config = _node_config(pipeline, "vision.track")
+        assert track_config.get("tracker_id") == "byte_world"
+        assert track_config.get("open_confidence_threshold") == 0.50
+        assert track_config.get("continue_confidence_threshold") == 0.25
+        assert track_config.get("close_after_seconds") == 10.0
+        assert track_config.get("stitch_gap_seconds") == 30.0
+        assert track_config.get("use_world_anchor") == "auto"
         assert "vision.group_events" not in _operator_ids(pipeline)
         assert "vision.event_assembler" not in _operator_ids(pipeline)
         assert _node_config(pipeline, "core.throttle").get("interval_seconds") == 10.0
@@ -263,6 +270,8 @@ def test_camera_pipeline_quiet_preset_adds_session_grouping(
         assert res.status_code == 200
         pipeline = res.json()
         assert _vision_detect_config(pipeline).get("categories") == ["person", "dog", "cat"]
+        assert _vision_detect_config(pipeline).get("confidence_threshold") == 0.25
+        assert _node_config(pipeline, "vision.track").get("tracker_id") == "byte_world"
         assert _node_config(pipeline, "vision.group_events").get("mode") == "session"
         assert _node_config(pipeline, "vision.group_events").get("categories") == ["person", "dog", "cat"]
         assert _node_config(pipeline, "core.notify").get("dedupe_key_template") == "{{subject.id}}"
@@ -343,6 +352,14 @@ def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping
         res = client.get(f"/api/pipelines/{pipeline_name}")
         assert res.status_code == 200
         pipeline = res.json()
+        assert _operator_ids(pipeline)[:5] == [
+            "camera.source",
+            "camera.motion_gate",
+            "vision.detect",
+            "camera.camera_mapping",
+            "vision.track",
+        ]
+        assert _node_config(pipeline, "vision.track").get("tracker_id") == "byte_world"
         assert _node_config(pipeline, "vision.track").get("default_interval_seconds") == 0.25
         assert "vision.event_assembler" not in _operator_ids(pipeline)
         assert _node_config(pipeline, "camera.camera_mapping").get("composition_id") == "yard"
@@ -392,8 +409,8 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
             "camera.source",
             "camera.motion_gate",
             "vision.detect",
-            "vision.track",
             "camera.camera_mapping",
+            "vision.track",
             "camera.velocity_estimation",
             "core.velocity_throttle",
             "vision.crop_objects",
@@ -407,7 +424,8 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
         ]
         detect = _vision_detect_config(pipeline)
         assert detect.get("categories") == ["car", "truck", "bus", "motorcycle"]
-        assert detect.get("confidence_threshold") == 0.55
+        assert detect.get("confidence_threshold") == 0.25
+        assert _node_config(pipeline, "vision.track").get("tracker_id") == "byte_world"
         assert _node_config(pipeline, "camera.camera_mapping").get("composition_id") == "yard"
         assert _node_config(pipeline, "camera.area_restriction") == {}
 

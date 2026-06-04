@@ -27,6 +27,7 @@ The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tra
 - projection model: `image_quad_on_world`, with an image region and a world-space quadrilateral
 - stream scope: `main` and `sub` are compatible by default; `zoom` needs an explicit calibrated view/scope
 - mapping runtime: derives internal control-point pairs from calibrated views so pipeline outputs keep `payload.world`
+- tracking presets place `camera.camera_mapping` before `vision.track` when mapping exists, allowing `byte_world` to use per-detection `world_anchor` as a probabilistic association signal.
 
 The legacy `control_points` mapping endpoint remains as a low-level diagnostic adapter. New UI and extension code should use calibrated views and `/api/cameras/projection/map`.
 

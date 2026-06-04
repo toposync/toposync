@@ -293,17 +293,18 @@ video {
   z-index: 13;
   pointer-events: none;
   --notification2d-trail-color: #00d1ff;
+  --notification2d-trail-width: 5.5;
   overflow: visible;
 }
 
 .notification2dTrail path {
   fill: none;
   stroke: var(--notification2d-trail-color);
-  stroke-width: 2.5;
+  stroke-width: var(--notification2d-trail-width);
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.85;
-  filter: drop-shadow(0 0 4px var(--notification2d-trail-color));
+  opacity: 0.9;
+  filter: drop-shadow(0 0 7px var(--notification2d-trail-color));
 }
 
 /* Pipelines editor */

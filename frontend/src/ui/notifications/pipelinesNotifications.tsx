@@ -301,24 +301,21 @@ function createPipelines3DOverlay(
   const group = new THREE.Group();
 
   const maxPoints = 512;
-  const positions = new Float32Array(maxPoints * 3);
-  let pointCount = 0;
+  const trailPoints: import("three").Vector3[] = [];
+  const TRAIL_RADIUS = 0.045;
+  const TRAIL_RADIAL_SEGMENTS = 8;
   let lastX: number | null = null;
   let lastZ: number | null = null;
 
-  const geometry = new THREE.BufferGeometry();
-  const positionAttr = new THREE.BufferAttribute(positions, 3);
-  geometry.setAttribute("position", positionAttr);
-  geometry.setDrawRange(0, 0);
-
   const initialPriorityHex = priorityHex(normalizePriority(asRecord(notification.payload).priority));
-  const material = new THREE.LineBasicMaterial({ color: initialPriorityHex, transparent: true, opacity: 0.9 });
-  material.depthTest = false;
-  material.depthWrite = false;
-  const line = new THREE.Line(geometry, material);
-  line.frustumCulled = false;
-  line.renderOrder = 10_000;
-  group.add(line);
+  const trailMaterial = new THREE.MeshBasicMaterial({ color: initialPriorityHex, transparent: true, opacity: 0.9 });
+  trailMaterial.depthTest = false;
+  trailMaterial.depthWrite = false;
+  let trailGeometry: import("three").BufferGeometry = new THREE.BufferGeometry();
+  const trailMesh = new THREE.Mesh(trailGeometry, trailMaterial);
+  trailMesh.frustumCulled = false;
+  trailMesh.renderOrder = 10_000;
+  group.add(trailMesh);
 
   // ── Marker: pulse rings on the ground + map-pin shape + soft halo ──
   const HEAD_RADIUS = 0.17;
@@ -404,8 +401,24 @@ function createPipelines3DOverlay(
   let closedDim = 1;
   let elapsed = 0;
 
+  function replaceTrailGeometry(nextGeometry: import("three").BufferGeometry): void {
+    trailGeometry.dispose();
+    trailGeometry = nextGeometry;
+    trailMesh.geometry = trailGeometry;
+  }
+
+  function rebuildTrailGeometry(): void {
+    if (trailPoints.length < 2) {
+      replaceTrailGeometry(new THREE.BufferGeometry());
+      return;
+    }
+    const curve = new THREE.CatmullRomCurve3(trailPoints, false, "centripetal");
+    const segments = Math.max(8, Math.min(768, (trailPoints.length - 1) * 8));
+    replaceTrailGeometry(new THREE.TubeGeometry(curve, segments, TRAIL_RADIUS, TRAIL_RADIAL_SEGMENTS, false));
+  }
+
   function writeTrail(points: Array<{ x: number; z: number }>): void {
-    pointCount = 0;
+    trailPoints.length = 0;
     lastX = null;
     lastZ = null;
 
@@ -422,17 +435,11 @@ function createPipelines3DOverlay(
       lastX = x;
       lastZ = z;
 
-      const base = pointCount * 3;
-      positions[base] = x;
-      positions[base + 1] = 0.05;
-      positions[base + 2] = z;
-      pointCount += 1;
-      if (pointCount >= maxPoints) break;
+      trailPoints.push(new THREE.Vector3(x, 0.055, z));
+      if (trailPoints.length >= maxPoints) break;
     }
 
-    positionAttr.needsUpdate = true;
-    geometry.setDrawRange(0, pointCount);
-    geometry.computeBoundingSphere();
+    rebuildTrailGeometry();
 
     if (lastX != null && lastZ != null) markerGroup.position.set(lastX, 0, lastZ);
   }
@@ -447,20 +454,9 @@ function createPipelines3DOverlay(
     lastX = x;
     lastZ = z;
 
-    if (pointCount >= maxPoints) {
-      positions.copyWithin(0, 3, positions.length);
-      pointCount = maxPoints - 1;
-    }
-
-    const base = pointCount * 3;
-    positions[base] = x;
-    positions[base + 1] = 0.05;
-    positions[base + 2] = z;
-    pointCount += 1;
-
-    positionAttr.needsUpdate = true;
-    geometry.setDrawRange(0, pointCount);
-    geometry.computeBoundingSphere();
+    if (trailPoints.length >= maxPoints) trailPoints.shift();
+    trailPoints.push(new THREE.Vector3(x, 0.055, z));
+    rebuildTrailGeometry();
 
     markerGroup.position.set(x, 0, z);
   }
@@ -471,8 +467,8 @@ function createPipelines3DOverlay(
     const colorHex = priorityHex(prio);
     const lifecycle = asString(payload.lifecycle, "").trim().toLowerCase();
     const closed = lifecycle === "close" || asString(payload.status, "").trim().toLowerCase() === "closed";
-    material.color.setHex(colorHex);
-    material.opacity = closed ? 0.35 : 0.9;
+    trailMaterial.color.setHex(colorHex);
+    trailMaterial.opacity = closed ? 0.35 : 0.9;
 
     closedDim = closed ? 0.45 : 1;
     const headOpacity = closed ? 0.5 : 1.0;
@@ -532,8 +528,8 @@ function createPipelines3DOverlay(
       return true;
     },
     dispose: () => {
-      geometry.dispose();
-      material.dispose();
+      trailGeometry.dispose();
+      trailMaterial.dispose();
       ringGeom.dispose();
       for (const ring of pulseRings) ring.mat.dispose();
       coneGeom.dispose();

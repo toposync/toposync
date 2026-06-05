@@ -11,6 +11,19 @@ import toposync.extensions.manager as ext_manager_mod
 import toposync_ext_cameras.plugin as cameras_plugin_mod
 
 
+CAMERA_PIPELINE_PRESET_MODEL_CONTRACTS = (
+    "people_simple",
+    "people_individual",
+    "presence_area",
+    "vehicle_stopped",
+)
+CAMERA_PIPELINE_PRESETS_REQUIRING_MAPPING = {
+    "people_individual",
+    "presence_area",
+    "vehicle_stopped",
+}
+
+
 class _ExtensionEntryPoint:
     name = "test_extension"
 
@@ -192,6 +205,12 @@ def _add_mapped_composition(client: TestClient, *, with_area: bool = False) -> N
     assert res.status_code == 200, res.text
 
 
+def _prepare_preset_prerequisites(client: TestClient, preset: str) -> None:
+    _configure_camera(client)
+    if preset in CAMERA_PIPELINE_PRESETS_REQUIRING_MAPPING:
+        _add_mapped_composition(client)
+
+
 def test_camera_pipeline_simple_preset_defaults_detection_to_rfdetr_medium_without_mapping(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -284,21 +303,23 @@ def test_camera_pipeline_simple_preset_defaults_detection_to_rfdetr_medium_witho
         assert res.json()["pipeline_name"] == "entrada_principal_deteccao_simples_de_pessoas_2"
 
 
+@pytest.mark.parametrize("preset", CAMERA_PIPELINE_PRESET_MODEL_CONTRACTS)
 def test_camera_pipeline_preset_uses_requested_detection_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    preset: str,
 ) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
-        _configure_camera(client)
+        _prepare_preset_prerequisites(client, preset)
 
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
             json={
-                "preset": "people_simple",
+                "preset": preset,
                 "model_id": "custom_detector_ready",
             },
         )
-        assert res.status_code == 200
+        assert res.status_code == 200, res.text
         pipeline_name = res.json()["pipeline_name"]
 
         res = client.get(f"/api/pipelines/{pipeline_name}")
@@ -307,9 +328,11 @@ def test_camera_pipeline_preset_uses_requested_detection_model(
         assert _vision_detect_config(pipeline).get("model_id") == "custom_detector_ready"
 
 
+@pytest.mark.parametrize("preset", CAMERA_PIPELINE_PRESET_MODEL_CONTRACTS)
 def test_camera_pipeline_preset_blocks_missing_detection_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    preset: str,
 ) -> None:
     async def _missing_model_status(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {
@@ -318,8 +341,8 @@ def test_camera_pipeline_preset_blocks_missing_detection_model(
                     "detection": {
                         "items": [
                             {
-                                "model_id": "rfdetr_det_medium",
-                                "display_name": "RF-DETR Medium",
+                                "model_id": "custom_detector_missing",
+                                "display_name": "Custom Detector Missing",
                                 "availability": "manifest_only",
                                 "artifact_exists": False,
                                 "local_build_supported": True,
@@ -337,17 +360,21 @@ def test_camera_pipeline_preset_blocks_missing_detection_model(
         _missing_model_status,
     )
     with _create_client(tmp_path, monkeypatch, patch_model_readiness=False) as client:
-        _configure_camera(client)
+        _prepare_preset_prerequisites(client, preset)
 
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
-            json={"preset": "people_simple"},
+            json={"preset": preset, "model_id": "custom_detector_missing"},
         )
         assert res.status_code == 409
         detail = res.json()["detail"]
-        assert "RF-DETR Medium" in detail
+        assert "Custom Detector Missing" in detail
         assert "não está pronto" in detail
         assert "Baixe e prepare automaticamente" in detail
+
+        res = client.get("/api/cameras/cameras/cam1/pipelines")
+        assert res.status_code == 200, res.text
+        assert res.json()["pipelines"] == []
 
 
 def test_camera_pipeline_individual_preset_requires_and_uses_mapping(

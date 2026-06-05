@@ -15,6 +15,25 @@ O primeiro pipeline mais fácil normalmente começa por uma câmera. Telas de c�
 
 Use esses assistentes quando disponíveis. Eles mantêm o primeiro grafo mais simples e reduzem erros de configuração.
 
+## Presets de câmera {/* #camera-presets */}
+
+Presets de câmera são o ponto de partida mais seguro para pipelines de eventos
+de câmera. Eles também codificam o contrato atual do produto: armazenamento,
+throttle e notificações downstream devem usar `payload.subject.id`, não o id
+bruto do tracker.
+
+| Preset | Mapeamento | Use quando |
+| --- | --- | --- |
+| Detecção simples de pessoas | Não exige | Você quer um primeiro teste ou uma câmera ainda sem mapeamento. |
+| Eventos individuais mapeados | Exige | Você quer um evento por pessoa acompanhada, com contexto espacial. |
+| Presença agrupada mapeada | Exige | Você quer menos notificações durante uma atividade contínua. |
+| Presença por área | Exige | Você quer pessoas ou pets mapeados e agrupados por proximidade na área da câmera. |
+| Veículo parou | Exige | Você quer detecção de veículos com lógica de velocidade/parada. |
+
+Escolha o preset simples enquanto a câmera ainda não estiver calibrada. Escolha
+um preset mapeado quando precisar de áreas, coordenadas de mundo, presença
+agrupada mais silenciosa ou regras baseadas em velocidade.
+
 ## Um primeiro grafo simples {/* #a-simple-first-graph */}
 
 Um primeiro pipeline útil pode ser:

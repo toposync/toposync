@@ -117,6 +117,23 @@ Operators exchange `Packet` objects. A packet carries:
 
 The lifecycle is important for event-like flows. For example, a motion or tracking operator can open an event, emit updates while it remains active, and close it when the condition ends. Sinks such as notifications can use that lifecycle to update or close existing records instead of creating unrelated messages.
 
+For product events, the canonical identity is `payload.subject`. Camera and
+vision event packets should set:
+
+- `payload.subject.type`: for example `event` for an individual tracked object
+  or `group_event` for an aggregate event;
+- `payload.subject.id`: the operational identity used by throttle, debounce,
+  storage, and notification dedupe;
+- `payload.subject.lifecycle`: the same lifecycle as the packet;
+- `payload.subject.bbox01`, `category`, `confidence`, and world fields when the
+  operator can provide them.
+
+Raw tracker fields such as `tracking_id`, `tracklet_id`, `raw_tracking_id`, and
+`tracker_track_id` are diagnostic. They must not be used as product identities
+for new downstream behavior. `vision.track` owns individual object lifecycle
+events, while `vision.group_events` can optionally aggregate those individual
+events into quieter `group_event` packets.
+
 Image and video operators usually use the `main` artifact for the primary frame. Operators should declare required and produced artifacts so the UI, diagnostics, and future tooling can reason about graph compatibility.
 
 ## Compilation {/* #compilation */}

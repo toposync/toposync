@@ -26,9 +26,20 @@ The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tra
 - projection model: `image_quad_on_world`, with an image region and a world-space quadrilateral
 - stream scope: `main` and `sub` are compatible by default; `zoom` needs an explicit calibrated view/scope
 - mapping runtime: derives internal control-point pairs from calibrated views so pipeline outputs keep `payload.world`
-- tracking presets place `camera.camera_mapping` before `vision.track` when mapping exists, allowing `byte_world` to use per-detection `world_anchor` as a probabilistic association signal.
+- mapped tracking presets place `camera.camera_mapping` before `vision.track`, allowing `byte_world` to use per-detection `world_anchor` as a probabilistic association signal.
 
 The legacy `control_points` mapping endpoint remains as a low-level diagnostic adapter. New UI and extension code should use calibrated views and `/api/cameras/projection/map`.
+
+## Camera pipeline presets
+
+Preset graphs should keep product identity on `payload.subject.id`. Raw tracker
+ids are diagnostic only.
+
+- `people_simple`: no mapping requirement, for a first people-detection smoke test.
+- `people_individual`: requires mapping, emits individual `event` subjects.
+- `people_quiet`: requires mapping, groups activity with `vision.group_events` in `session` mode.
+- `presence_area`: requires mapping, groups mapped presence with `vision.group_events` in `proximity` mode.
+- `vehicle_stopped`: requires mapping, estimates velocity before notification.
 
 ## Pipeline operators (registered by this extension)
 

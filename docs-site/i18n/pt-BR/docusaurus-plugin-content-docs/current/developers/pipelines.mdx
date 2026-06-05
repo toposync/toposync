@@ -117,6 +117,24 @@ Operadores trocam objetos `Packet`. Um packet carrega:
 
 O lifecycle é importante para fluxos de evento. Por exemplo, um operador de movimento ou tracking pode abrir um evento, emitir updates enquanto ele permanece ativo e fechar o evento quando a condição termina. Sinks como notificações podem usar esse lifecycle para atualizar ou fechar registros existentes em vez de criar mensagens desconectadas.
 
+Para eventos de produto, a identidade canônica é `payload.subject`. Pacotes de
+evento de câmera e visão devem definir:
+
+- `payload.subject.type`: por exemplo `event` para um objeto individual
+  acompanhado ou `group_event` para um evento agregado;
+- `payload.subject.id`: a identidade operacional usada por throttle, debounce,
+  armazenamento e dedupe de notificação;
+- `payload.subject.lifecycle`: o mesmo lifecycle do pacote;
+- `payload.subject.bbox01`, `category`, `confidence` e campos de mundo quando o
+  operador puder fornecer.
+
+Campos brutos do tracker, como `tracking_id`, `tracklet_id`,
+`raw_tracking_id` e `tracker_track_id`, são diagnóstico. Eles não devem ser
+usados como identidade de produto em novos comportamentos downstream.
+`vision.track` é dono dos eventos individuais de lifecycle por objeto, enquanto
+`vision.group_events` pode opcionalmente agregar esses eventos individuais em
+pacotes `group_event` mais silenciosos.
+
 Operadores de imagem e vídeo normalmente usam o artifact `main` para o frame principal. Operadores devem declarar artifacts exigidos e produzidos para que UI, diagnósticos e ferramentas futuras consigam raciocinar sobre compatibilidade do grafo.
 
 ## Compilação {/* #compilation */}

@@ -15,6 +15,24 @@ The easiest first pipeline usually starts from a camera. Camera screens may offe
 
 Use those helpers when available. They keep the first graph simpler and reduce configuration mistakes.
 
+## Camera presets {/* #camera-presets */}
+
+Camera presets are the safest starting point for camera event pipelines. They
+also encode the current product contract: downstream storage, throttling, and
+notifications should use `payload.subject.id`, not a raw tracker id.
+
+| Preset | Mapping | Use when |
+| --- | --- | --- |
+| Simple people detection | Not required | You want a first smoke test or an unmapped camera pipeline. |
+| Mapped individual people events | Required | You want one event per tracked person, with spatial context. |
+| Mapped grouped presence | Required | You want fewer notifications during one continuous activity session. |
+| Presence by area | Required | You want mapped people or pets grouped by proximity in the camera area. |
+| Vehicle stopped | Required | You want vehicle detection plus speed/stopped logic. |
+
+Choose the simple preset first when the camera is not calibrated yet. Choose a
+mapped preset when you need areas, world coordinates, quieter grouped presence,
+or speed-based rules.
+
 ## A simple first graph {/* #a-simple-first-graph */}
 
 A useful first pipeline can be:

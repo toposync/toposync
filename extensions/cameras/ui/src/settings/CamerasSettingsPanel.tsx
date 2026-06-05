@@ -143,16 +143,6 @@ const CAMERA_PIPELINE_PRESET_CARDS: {
   stepsFallback: string;
 }[] = [
   {
-    id: "people_simple",
-    requiresMapping: false,
-    titleKey: "ext.cameras.pipeline_preset.people_simple.title",
-    titleFallback: "Detecção simples",
-    descriptionKey: "ext.cameras.pipeline_preset.people_simple.card_desc",
-    descriptionFallback: "Detecta pessoas e acompanha eventos sem exigir mapeamento.",
-    stepsKey: "ext.cameras.pipeline_preset.people_simple.steps",
-    stepsFallback: "Movimento -> pessoas -> acompanhamento -> notificação",
-  },
-  {
     id: "people_individual",
     requiresMapping: true,
     titleKey: "ext.cameras.pipeline_preset.people_individual.title",
@@ -191,6 +181,16 @@ const CAMERA_PIPELINE_PRESET_CARDS: {
     descriptionFallback: "Detecta veículos, estima velocidade e notifica quando o veículo para.",
     stepsKey: "ext.cameras.pipeline_preset.vehicle_stopped.steps",
     stepsFallback: "Movimento -> veículos -> velocidade -> imagem -> notificação",
+  },
+  {
+    id: "people_simple",
+    requiresMapping: false,
+    titleKey: "ext.cameras.pipeline_preset.people_simple.title",
+    titleFallback: "Detecção simples de pessoas sem mapeamento",
+    descriptionKey: "ext.cameras.pipeline_preset.people_simple.card_desc",
+    descriptionFallback: "Detecta pessoas e acompanha eventos sem exigir mapeamento.",
+    stepsKey: "ext.cameras.pipeline_preset.people_simple.steps",
+    stepsFallback: "Movimento -> pessoas -> acompanhamento -> notificação",
   },
 ];
 
@@ -1403,6 +1403,9 @@ function CamerasSettingsPanelContent({
                     ) : null}
 
                     <div className="sectionDivider">
+                      <div className="modalSectionTitle">
+                        {t("ext.cameras.pipelines.add_title", {}, "Adicionar fluxo")}
+                      </div>
                       <div className="cameraPipelinePresetGrid">
                         {CAMERA_PIPELINE_PRESET_CARDS.map((presetCard) => {
                           const hasVideoSource = activeCamera.sources.some((source) => source.kind === "video" && source.enabled);
@@ -1427,11 +1430,6 @@ function CamerasSettingsPanelContent({
                               <span className="cameraPipelinePresetTop">
                                 <span className="cameraPipelinePresetTitle">
                                   {t(presetCard.titleKey, {}, presetCard.titleFallback)}
-                                </span>
-                                <span className={disabled ? "cameraPipelinePresetState isDisabled" : "cameraPipelinePresetState"}>
-                                  {disabled
-                                    ? t("ext.cameras.pipeline_preset.state.unavailable", {}, "Indisponível")
-                                    : t("ext.cameras.pipeline_preset.state.ready", {}, "Pronto")}
                                 </span>
                               </span>
                               <span className="cameraPipelinePresetDescription">

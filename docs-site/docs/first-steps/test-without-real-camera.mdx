@@ -18,6 +18,7 @@ when you need motion, detection, tracking, or hardware-like development input.
 This is a development and onboarding utility. It does not replace a real camera
 installation. It gives you a predictable RTSP source so you can confirm Docker,
 streaming, source publishing, and browser playback before adding real hardware.
+It is not a people-detection test by itself.
 
 ![Synthetic RTSP camera placeholder](/img/rtsp-placeholder-camera.jpg)
 
@@ -115,6 +116,26 @@ Expected result:
 A short warmup is normal. If the card stays stale or says no pipeline is
 feeding the transmission, go back to **Settings** > **Transmissions**, confirm
 the engine is running, and click **Reconcile streams** in the **Live** tab.
+
+## What this test proves {/* #what-this-test-proves */}
+
+The static image path proves the camera transport loop:
+
+- Toposync can reach the RTSP URL from its runtime;
+- probe and snapshot work;
+- the source can be published for live viewing;
+- browser playback works;
+- after mapping, calibration and 360 View projection can be checked against a
+  stable frame.
+
+It does not prove real person detection, tracking, notifications, or pins. A
+still image may never pass a motion-gated pipeline, and it does not prove that a
+detection model is prepared on the selected processing server.
+
+Use a video loop, webcam, or real camera when you need motion and model-based
+detection. For product or lab validation of mapping -> tracking -> notify -> pin
+without RF-DETR, use the deterministic synthetic detection smoke instead of
+seeding data directly.
 
 ## Other development camera sources {/* #other-development-camera-sources */}
 

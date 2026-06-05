@@ -26,6 +26,29 @@ Valide o acesso da câmera antes de adicionar processamento de imagem:
 
 Isso evita depurar acesso da câmera, streaming e visão ao mesmo tempo.
 
+## Streaming, mapeamento e detecção são testes separados {/* #separate-tests */}
+
+Não trate um stream de imagem estática como prova de que a detecção de pessoas
+funciona. Uma imagem estática é útil para Docker, alcance RTSP, snapshots,
+transmissão ao vivo, mapeamento de câmera e projeção na Visão 360. Mesmo assim,
+ela pode não gerar nenhuma detecção.
+
+Detecção real de pessoa precisa de todos estes pontos:
+
+- um artefato de modelo de detecção pronto no servidor de processamento
+  selecionado;
+- uma fonte alcançável a partir desse servidor de processamento;
+- frames que realmente devem entrar no pipeline;
+- movimento suficiente ou um caminho explícito sem gate de movimento quando o
+  pipeline usa `camera.motion_gate`;
+- operadores de tracking, notificação e mapeamento configurados para o resultado
+  que você quer validar.
+
+Para teste comum de câmera, use vídeo em loop, webcam ou câmera real. Para um
+smoke determinístico de produto que valida mapping -> tracking -> notify -> pin
+sem depender da acurácia do RF-DETR, use o caminho oficial de fonte de detecção
+sintética.
+
 ## Processamento local em CPU {/* #local-cpu-processing */}
 
 Processamento em CPU é o padrão porque é mais fácil de instalar e funciona em

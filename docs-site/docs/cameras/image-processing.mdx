@@ -26,6 +26,27 @@ Validate camera access before adding image processing:
 
 This avoids debugging camera access, streaming, and vision at the same time.
 
+## Streaming, mapping, and detection are separate tests {/* #separate-tests */}
+
+Do not treat a static image stream as proof that people detection works. A
+static image is useful for Docker, RTSP reachability, snapshots, live viewing,
+camera mapping, and 360 View projection. It can still produce no detections.
+
+Real person detection needs all of the following:
+
+- a detection model artifact ready on the selected processing server;
+- a source reachable from that processing server;
+- frames that should actually enter the pipeline;
+- enough motion or an explicit non-motion-gated test path when the pipeline uses
+  `camera.motion_gate`;
+- tracking, notification, and mapping operators configured for the outcome you
+  want to validate.
+
+For ordinary camera testing, use a video loop, webcam, or real camera. For a
+deterministic product smoke that validates mapping -> tracking -> notify -> pin
+without depending on RF-DETR accuracy, use the official synthetic detection
+source path.
+
 ## Local CPU processing {/* #local-cpu-processing */}
 
 CPU processing is the default because it is easiest to install and works across

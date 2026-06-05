@@ -19,6 +19,22 @@ vê e como pontos da imagem se relacionam com o mundo.
 Mapeamento também é o que torna a Visão 360 possível: vídeo ao vivo mapeado pode
 ser projetado sobre a composição.
 
+## Smoke de mapeamento com imagem estática {/* #static-image-mapping-smoke */}
+
+Uma imagem RTSP estática é uma boa fonte controlada para mapeamento de câmera.
+Ela pode provar que snapshot, calibração, publicação ao vivo, recorte de área e
+projeção na Visão 360 estão conectados corretamente contra um frame estável.
+
+Ela não prova detecção real de pessoas. Um frame parado pode validar mapeamento
+e Visão 360 sem gerar detecção, tracking, notificação ou pin. Gates de movimento
+podem ignorar um frame que nunca muda, e detecção baseada em modelo ainda depende
+de um artefato preparado no servidor de processamento selecionado.
+
+Use [Teste sem uma câmera real](../first-steps/test-without-real-camera.mdx)
+para o caminho de streaming com imagem estática. Use [Processamento de imagem](image-processing.mdx)
+quando o teste precisa de prontidão de modelo, detecção de pessoa, tracking,
+notificações ou Spatial Events.
+
 ## Comece pelo posicionamento {/* #start-with-placement */}
 
 Primeiro posicione o elemento de câmera perto da posição real na composição. O

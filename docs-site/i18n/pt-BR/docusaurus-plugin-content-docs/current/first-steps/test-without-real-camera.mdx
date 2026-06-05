@@ -19,7 +19,7 @@ entrada de desenvolvimento mais próxima de hardware real.
 Este é um utilitário de desenvolvimento e onboarding. Ele não substitui uma
 instalação com câmera real. Ele fornece uma fonte RTSP previsível para confirmar
 Docker, streaming, publicação de fonte e playback no navegador antes de adicionar
-hardware real.
+hardware real. Ele não é, sozinho, um teste de detecção de pessoas.
 
 ![Placeholder de câmera RTSP sintética](/img/rtsp-placeholder-camera.jpg)
 
@@ -118,6 +118,27 @@ Um aquecimento curto é normal. Se o card ficar stale ou indicar que nenhum
 pipeline alimenta a transmissão, volte para **Configurações** > **Transmissões**,
 confirme que a engine está rodando e clique em **Reconciliar transmissões** na
 aba **Ao vivo**.
+
+## O que este teste prova {/* #what-this-test-proves */}
+
+O caminho com imagem estática prova o ciclo de transporte da câmera:
+
+- o Toposync consegue alcançar a URL RTSP a partir do runtime;
+- probe e snapshot funcionam;
+- a fonte pode ser publicada para transmissão ao vivo;
+- o playback no navegador funciona;
+- depois do mapeamento, calibração e projeção na Visão 360 podem ser conferidas
+  contra um frame estável.
+
+Ele não prova detecção real de pessoa, tracking, notificações ou pins. Uma
+imagem parada pode nunca passar por um pipeline com gate de movimento, e ela não
+prova que o modelo de detecção está preparado no servidor de processamento
+selecionado.
+
+Use vídeo em loop, webcam ou câmera real quando precisar de movimento e detecção
+baseada em modelo. Para validação de produto ou lab de mapping -> tracking ->
+notify -> pin sem RF-DETR, use o smoke determinístico de detecção sintética em
+vez de inserir dados diretamente.
 
 ## Outras fontes de câmera para desenvolvimento {/* #other-development-camera-sources */}
 

@@ -18,6 +18,22 @@ and how image points relate to the world.
 Mapping is also what makes 360 View possible: mapped live video can be projected
 over the composition.
 
+## Static image mapping smoke {/* #static-image-mapping-smoke */}
+
+A static RTSP image is a good controlled source for camera mapping. It can prove
+that snapshot capture, calibration, live publication, area clipping, and 360
+View projection are wired correctly against a stable frame.
+
+It does not prove real people detection. A still frame can validate mapping and
+360 View while producing no detection, tracking, notification, or pin. Motion
+gates may ignore a frame that never changes, and model-based detection still
+depends on a prepared artifact on the selected processing server.
+
+Use [Test without a real camera](../first-steps/test-without-real-camera.mdx)
+for the static image streaming path. Use [Image processing](image-processing.mdx)
+when the test needs model readiness, person detection, tracking, notifications,
+or Spatial Events.
+
 ## Start with placement {/* #start-with-placement */}
 
 First place the camera element near its real position in the composition. The

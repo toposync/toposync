@@ -159,6 +159,51 @@ function modelProgressLabel(item: DetectionModelCatalogItem, t: TranslateFn): st
   return t("ext.cameras.pipeline_preset.model.progress", { phase, pct: pct.toFixed(0) }, "{{phase}} - {{pct}}%");
 }
 
+function modelArtifactLabel(item: DetectionModelCatalogItem | null, t: TranslateFn): string {
+  if (!item) {
+    return t("ext.cameras.pipeline_preset.model.artifact.unknown", {}, "Artifact status unavailable");
+  }
+  if (isDetectionModelReady(item) || item.artifactExists) {
+    return t("ext.cameras.pipeline_preset.model.artifact.ready", {}, "Artifact present");
+  }
+  if (item.availability === "incompatible") {
+    return t("ext.cameras.pipeline_preset.model.artifact.incompatible", {}, "Incompatible with this server");
+  }
+  return t("ext.cameras.pipeline_preset.model.artifact.missing", {}, "Artifact missing");
+}
+
+function modelPreparationLabel(item: DetectionModelCatalogItem | null, t: TranslateFn): string {
+  if (!item) {
+    return t(
+      "ext.cameras.pipeline_preset.model.preparation.unavailable",
+      { reason: modelReasonLabel("", t) },
+      "Automatic preparation is unavailable: {{reason}}.",
+    );
+  }
+  if (isDetectionModelReady(item)) {
+    return t("ext.cameras.pipeline_preset.model.preparation.not_needed", {}, "No preparation needed.");
+  }
+  if (isActiveDetectionModelInstall(item) || item.availability === "preparing") {
+    return t(
+      "ext.cameras.pipeline_preset.model.preparation.in_progress",
+      { progress: modelProgressLabel(item, t) },
+      "Preparation is running. {{progress}}",
+    );
+  }
+  if (canPrepareDetectionModel(item)) {
+    return t(
+      "ext.cameras.pipeline_preset.model.preparation.available",
+      {},
+      "Automatic preparation is available on this server.",
+    );
+  }
+  return t(
+    "ext.cameras.pipeline_preset.model.preparation.unavailable",
+    { reason: modelReasonLabel(item.localBuildReason, t) },
+    "Automatic preparation is unavailable: {{reason}}.",
+  );
+}
+
 const VEHICLE_STOPPED_DEFAULT_SPEED_KMH = 1.0;
 const NOTIFICATION_PRIORITIES: CameraNotificationPriority[] = ["low", "medium", "high"];
 
@@ -307,12 +352,12 @@ export function CameraPipelinePresetModal({
 
   async function submit(): Promise<void> {
     if (!preset || creating) return;
-    if (!selectedModelReady) {
+    if (createBlockedReasons.length) {
       setError(
         t(
           "ext.cameras.pipeline_preset.model.create_blocked",
           {},
-          "Prepare the selected detection model before creating this pipeline.",
+          "Resolve the blocking items before creating this pipeline.",
         ),
       );
       return;
@@ -377,8 +422,102 @@ export function CameraPipelinePresetModal({
         : t("ext.cameras.pipeline_preset.people_individual.title", {}, "Individual people events");
   const noSource = videoSources.length === 0;
   const noMapping = isMappingPreset && mappedCompositions.length === 0;
+  const selectedServerLabel = processingServerLabel(normalizedProcessingServerId, processingServers, t);
   const selectedModelName = selectedModel?.displayName || DEFAULT_DETECTION_MODEL_NAME;
+  const selectedModelId = selectedModel?.modelId || modelId || DEFAULT_DETECTION_MODEL_ID;
   const selectedModelReason = selectedModel ? modelReasonLabel(selectedModel.localBuildReason, t) : "";
+  const selectedModelMissingTools = selectedModel?.localBuildMissingTools ?? [];
+  const modelStatusHasPayload = Boolean(modelStatusPayload);
+  const modelStatusUnavailable = Boolean(modelStatusError && !modelStatusHasPayload && !selectedModelReady);
+  const modelStatusWaiting = Boolean(modelStatusLoading && !modelStatusHasPayload);
+  const createBlockedReasons: string[] = [];
+  if (noSource) {
+    createBlockedReasons.push(
+      t("ext.cameras.pipeline_preset.blocked.no_source", {}, "Add an active video source before creating a pipeline."),
+    );
+  }
+  if (noMapping) {
+    createBlockedReasons.push(
+      t("ext.cameras.pipeline_preset.blocked.mapping_required", {}, "Map this camera in a composition before using this preset."),
+    );
+  }
+  if (modelStatusWaiting) {
+    createBlockedReasons.push(
+      t(
+        "ext.cameras.pipeline_preset.blocked.model_status_loading",
+        { server: selectedServerLabel },
+        "Wait for model status from {{server}}.",
+      ),
+    );
+  } else if (modelStatusUnavailable) {
+    createBlockedReasons.push(
+      t(
+        "ext.cameras.pipeline_preset.blocked.model_status_error",
+        { server: selectedServerLabel },
+        "Refresh model status for {{server}} before creating this pipeline.",
+      ),
+    );
+  } else if (!selectedModel) {
+    createBlockedReasons.push(
+      t("ext.cameras.pipeline_preset.blocked.no_model", {}, "Choose a detection model before creating this pipeline."),
+    );
+  } else if (isActiveDetectionModelInstall(selectedModel)) {
+    createBlockedReasons.push(
+      t(
+        "ext.cameras.pipeline_preset.blocked.model_preparing",
+        { model: selectedModelName, server: selectedServerLabel },
+        "{{model}} is still being prepared on {{server}}.",
+      ),
+    );
+  } else if (!selectedModelReady && canPrepareDetectionModel(selectedModel)) {
+    createBlockedReasons.push(
+      t(
+        "ext.cameras.pipeline_preset.blocked.model_prepare_available",
+        { model: selectedModelName, server: selectedServerLabel },
+        "Prepare {{model}} on {{server}} before creating this pipeline.",
+      ),
+    );
+  } else if (!selectedModelReady) {
+    createBlockedReasons.push(
+      t(
+        "ext.cameras.pipeline_preset.blocked.model_prepare_unavailable",
+        { model: selectedModelName, server: selectedServerLabel },
+        "{{model}} is not ready on {{server}} and automatic preparation is unavailable.",
+      ),
+    );
+  }
+  const createDisabled = creating || createBlockedReasons.length > 0;
+  const modelReadinessStatus = modelStatusWaiting
+    ? t("core.ui.loading", {}, "Loading...")
+    : modelStatusUnavailable
+      ? t(
+          "ext.cameras.pipeline_preset.model.status_unavailable",
+          { server: selectedServerLabel },
+          "Could not load model status from {{server}}.",
+        )
+      : selectedModelReady
+        ? t(
+            "ext.cameras.pipeline_preset.model.ready",
+            { model: selectedModelName, server: selectedServerLabel },
+            "{{model}} is ready on {{server}}.",
+          )
+        : isActiveDetectionModelInstall(selectedModel)
+          ? t(
+              "ext.cameras.pipeline_preset.model.preparing_status",
+              { model: selectedModelName, progress: selectedModel ? modelProgressLabel(selectedModel, t) : "" },
+              "{{model}} is being prepared. {{progress}}",
+            )
+          : canPrepareDetectionModel(selectedModel)
+            ? t(
+                "ext.cameras.pipeline_preset.model.missing_actionable",
+                { model: selectedModelName, server: selectedServerLabel },
+                "{{model}} needs preparation on {{server}} before this preset can create a pipeline.",
+              )
+            : t(
+                "ext.cameras.pipeline_preset.model.missing_manual",
+                { model: selectedModelName, server: selectedServerLabel, reason: selectedModelReason },
+                "{{model}} is not ready on {{server}} and automatic preparation is unavailable: {{reason}}.",
+              );
 
   return (
     <>
@@ -437,35 +576,44 @@ export function CameraPipelinePresetModal({
               </option>
             ))}
           </select>
-          <div className="settingsStatusMuted">
-            {modelStatusLoading
-              ? t("core.ui.loading", {}, "Loading...")
-              : selectedModelReady
-                ? t(
-                    "ext.cameras.pipeline_preset.model.ready",
-                    { model: selectedModelName },
-                    "{{model}} is ready on this processing server.",
-                  )
-                : isActiveDetectionModelInstall(selectedModel)
-                  ? t(
-                      "ext.cameras.pipeline_preset.model.preparing_status",
-                      { model: selectedModelName, progress: selectedModel ? modelProgressLabel(selectedModel, t) : "" },
-                      "{{model}} is being prepared. {{progress}}",
-                    )
-                  : canPrepareDetectionModel(selectedModel)
-                    ? t(
-                        "ext.cameras.pipeline_preset.model.missing_actionable",
-                        { model: selectedModelName },
-                        "{{model}} needs preparation before this preset can create a pipeline.",
-                      )
-                    : t(
-                        "ext.cameras.pipeline_preset.model.missing_manual",
-                        { model: selectedModelName, reason: selectedModelReason },
-                        "{{model}} is not ready and automatic preparation is unavailable: {{reason}}.",
-                      )}
+          <div className="settingsStatusMuted">{modelReadinessStatus}</div>
+          <div className="settingsList" role="list">
+            <div className="settingsListItem" role="listitem">
+              <span className="settingsListTitle">
+                {t("ext.cameras.pipeline_preset.model.selected_server", {}, "Selected server")}
+              </span>
+              <span className="settingsListMeta">{selectedServerLabel}</span>
+            </div>
+            <div className="settingsListItem" role="listitem">
+              <span className="settingsListTitle">
+                {t("ext.cameras.pipeline_preset.model.selected_model", {}, "Selected model")}
+              </span>
+              <span className="settingsListMeta">
+                {selectedModelName} ({selectedModelId})
+              </span>
+            </div>
+            <div className="settingsListItem" role="listitem">
+              <span className="settingsListTitle">{t("ext.cameras.pipeline_preset.model.artifact", {}, "Artifact")}</span>
+              <span className="settingsListMeta">{modelArtifactLabel(selectedModel, t)}</span>
+            </div>
+            <div className="settingsListItem" role="listitem">
+              <span className="settingsListTitle">
+                {t("ext.cameras.pipeline_preset.model.preparation", {}, "Preparation")}
+              </span>
+              <span className="settingsListMeta">{modelPreparationLabel(selectedModel, t)}</span>
+            </div>
           </div>
           {modelStatusError ? <div className="errorText">{modelStatusError}</div> : null}
           {selectedModel?.installJob?.error ? <div className="errorText">{selectedModel.installJob.error}</div> : null}
+          {!selectedModelReady && selectedModelMissingTools.length ? (
+            <div className="settingsStatusMuted">
+              {t(
+                "ext.cameras.pipeline_preset.model.missing_tools",
+                { tools: selectedModelMissingTools.join(", ") },
+                "Missing tools: {{tools}}",
+              )}
+            </div>
+          ) : null}
           {!selectedModelReady && selectedModel && !canPrepareDetectionModel(selectedModel) && !isActiveDetectionModelInstall(selectedModel) ? (
             <div className="settingsStatusMuted">
               {t(
@@ -608,11 +756,24 @@ export function CameraPipelinePresetModal({
                 )}
         </div>
 
+        {createBlockedReasons.length ? (
+          <div className="settingsStatusMuted" role="status">
+            <div className="settingsListTitle">
+              {t("ext.cameras.pipeline_preset.blocked.title", {}, "Resolve before creating")}
+            </div>
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+              {createBlockedReasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
         <div className="rowWrap" style={{ justifyContent: "flex-end" }}>
           <button className="chipButton" type="button" onClick={onClose} disabled={creating}>
             {t("core.actions.cancel", {}, "Cancel")}
           </button>
-          <button className="primaryButton" type="button" onClick={() => void submit()} disabled={creating || noSource || noMapping || !selectedModelReady}>
+          <button className="primaryButton" type="button" onClick={() => void submit()} disabled={createDisabled}>
             {creating ? t("ext.cameras.pipeline_preset.creating", {}, "Creating...") : t("ext.cameras.pipeline_preset.create", {}, "Create pipeline")}
           </button>
         </div>

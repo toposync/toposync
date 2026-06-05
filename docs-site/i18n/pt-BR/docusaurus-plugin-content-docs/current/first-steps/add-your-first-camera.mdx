@@ -5,9 +5,12 @@ sidebar_position: 6
 
 # Adicione sua primeira câmera {/* #add-your-first-camera */}
 
-Adicione câmeras aos poucos. Uma câmera funcionando bem é mais útil que muitas câmeras configuradas pela metade.
+Adicione câmeras aos poucos. Uma câmera funcionando bem é mais útil que muitas
+câmeras configuradas pela metade.
 
-Comece com uma câmera, valide acesso a snapshot ou stream, posicione na composição e depois conecte a um pipeline simples.
+Comece com uma câmera, valide snapshot e acesso ao stream, publique a fonte para
+transmissão ao vivo e depois posicione e mapeie a câmera na composição. Crie
+pipelines de eventos apenas depois que a transmissão estiver estável.
 
 ## Antes de começar {/* #before-you-start */}
 
@@ -24,11 +27,15 @@ Use uma rede contida e evite expor credenciais de câmeras publicamente.
 
 ## Descoberta ou configuração manual {/* #discovery-or-manual-setup */}
 
-O Toposync pode trabalhar com câmeras adicionadas manualmente e, quando suportado pela câmera e pela rede, descoberta ONVIF.
+O Toposync pode trabalhar com câmeras adicionadas manualmente e, quando
+suportado pela câmera e pela rede, descoberta ONVIF.
 
-Use descoberta quando funcionar, mas não dependa dela para toda câmera. Alguns dispositivos, VLANs, redes Wi-Fi, roteadores ou configurações de câmera podem bloquear descoberta mesmo quando a câmera em si funciona.
+Use descoberta quando funcionar, mas não dependa dela para toda câmera. Alguns
+dispositivos, VLANs, redes Wi-Fi, roteadores ou configurações de câmera podem
+bloquear descoberta mesmo quando a câmera em si funciona.
 
-Se a descoberta não encontrar a câmera, adicione manualmente com as informações que você já tem.
+Se a descoberta não encontrar a câmera, adicione manualmente com as informações
+que você já tem.
 
 ## Primeira validação {/* #first-validation */}
 
@@ -36,32 +43,71 @@ Antes de criar pipelines, confirme o básico:
 
 1. A câmera foi salva com um nome claro.
 2. Snapshot ou acesso à imagem funciona.
-3. Stream funciona se você instalou suporte a streaming.
-4. Controles PTZ funcionam apenas se a câmera suporta PTZ e as credenciais permitem.
-5. A câmera está posicionada perto do local real na composição.
+3. Pelo menos uma fonte de vídeo funciona se você instalou suporte a streaming.
+4. A fonte tem o papel certo: `main`, `sub`, `zoom` ou `custom`.
+5. **Transmitir esta fonte** está habilitado para as fontes que você quer ver.
+6. A live view aparece como ao vivo, aquecendo ou com um problema acionável
+   claro.
+7. Controles PTZ funcionam apenas se a câmera suporta PTZ e as credenciais
+   permitem.
+8. A câmera está posicionada perto do local real na composição.
 
 Não ajuste configurações avançadas até esse primeiro ciclo funcionar.
 
+## Publique a fonte para transmissão ao vivo {/* #publish-the-source-for-live-viewing */}
+
+Para visualização normal de câmera, não crie uma transmissão técnica
+manualmente. Publique a fonte da câmera e deixe o Toposync gerar a transmissão e
+o pipeline implícito contínuo.
+
+Configuração inicial comum:
+
+- stream de baixa resolução como `sub` para tiles de grid;
+- stream de alta resolução como `main` para tela cheia;
+- stream PTZ/autotrack como `zoom` quando a câmera suporta.
+
+Abra o dashboard e confirme que a câmera está visível. Um aquecimento curto é
+normal; um estado persistente de **Sem pipeline** ou **Stale** precisa de
+atenção.
+
+Veja [Transmissões ao vivo](../cameras/live-viewing.mdx) para estados de
+playback e transportes.
+
 ## Posicione a câmera na composição {/* #place-the-camera-in-the-composition */}
 
-O posicionamento não precisa ser exato no primeiro dia. Ele deve ser bom o bastante para responder:
+O posicionamento não precisa ser exato no primeiro dia. Ele deve ser bom o
+bastante para responder:
 
 - onde essa câmera está instalada?
 - qual área ela vê principalmente?
 - quais cômodos, portões, portas ou zonas externas aparecem?
 - quais eventos deveriam pertencer a essa câmera?
 
-Depois de posicionar a câmera, revise suas áreas. Talvez você precise dividir ou renomear áreas com base no que a câmera realmente vê.
+Depois de posicionar a câmera, revise suas áreas. Talvez você precise dividir ou
+renomear áreas com base no que a câmera realmente vê.
 
-## Comece com um fluxo de câmera {/* #start-with-one-camera-flow */}
+## Mapeie a câmera quando precisar de contexto espacial {/* #map-the-camera-when-you-need-spatial-context */}
 
-Quando a tela da câmera oferecer presets ou criação de fluxo, comece pela opção mais simples.
+Mapeamento é opcional para transmissão ao vivo básica, mas é obrigatório para
+Visão 360 e para pipelines que usam posições de câmera para mundo.
 
-Um bom primeiro fluxo é:
+Mapeie a câmera depois que a fonte e a live view estiverem estáveis. Comece com
+quatro pontos de canto, depois use pontos internos de refinamento apenas quando a
+imagem precisar de correção local.
 
-- entrada da câmera;
-- movimento ou detecção;
-- filtro opcional por área;
-- notificação ou imagem armazenada opcional.
+Veja [Mapeamento de câmeras](../cameras/camera-mapping.mdx) para calibração e
+comportamento da Visão 360.
+
+## Crie pipelines depois {/* #build-pipelines-later */}
+
+Depois que a transmissão ao vivo funcionar, crie pipelines para eventos e
+automação:
+
+- detecção de movimento ou objetos;
+- filtros por área;
+- imagens armazenadas ou recortes;
+- notificações;
+- ações no Home Assistant;
+- variantes ao vivo renderizadas com **Transmitir vídeo**.
 
 Use [Crie seus primeiros pipelines](first-pipelines.mdx) para o próximo passo.

@@ -69,11 +69,36 @@ O modo público padrão do HLS é proxy. Isso significa que URLs HLS para web/ap
 
 Use esse padrão, exceto quando estiver diagnosticando o motor de mídia.
 
+## Entidades de câmera do Home Assistant {/* #home-assistant-camera-entities */}
+
+O add-on pode rodar a UI do Toposync, mas cards de câmera do Home Assistant e
+Home Assistant Cloud devem usar entidades nativas `camera.*` da integração
+customizada Toposync.
+
+Antes de configurar a integração:
+
+1. adicione a câmera no Toposync;
+2. habilite **Transmitir esta fonte** para a fonte que você quer expor;
+3. confirme que a live view funciona no Toposync;
+4. configure ou recarregue a integração customizada Toposync no Home Assistant.
+
+A integração lê o manifesto de câmeras Home Assistant do Toposync e cria
+entidades apoiadas por transmissões do Toposync. Ela deve expor endpoints
+RTSP/still do Toposync, não credenciais diretas da câmera.
+
+Veja [Entidades de câmera e Cloud](camera-entities.mdx).
+
 ## Hosts WebRTC {/* #webrtc-hosts */}
 
 Para WebRTC, o navegador precisa de candidates que batam com o host ou IP usado pelo cliente. O add-on tenta descobrir endereços LAN a partir das informações de rede do Home Assistant Supervisor e também adiciona `homeassistant.local`.
 
 Se WebRTC funciona por um hostname, mas não por outro, configure hosts públicos adicionais pelo ambiente/runtime do add-on apenas se você mantém um build customizado do add-on. A maioria dos usuários deve usar HLS, a menos que baixa latência seja necessária.
+
+WebRTC nativo na integração customizada Home Assistant é separado do player da
+sidebar do Toposync. Mantenha WebRTC nativo desabilitado, a menos que você esteja
+testando deliberadamente entidades de câmera de baixa latência e tenha validado
+o comportamento de fallback no seu caminho Home Assistant e Home Assistant
+Cloud.
 
 ## Delegação para servidor de processamento {/* #processing-server-delegation */}
 

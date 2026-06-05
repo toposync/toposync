@@ -5,9 +5,12 @@ sidebar_position: 6
 
 # Add your first camera {/* #add-your-first-camera */}
 
-Add cameras gradually. A single working camera is more useful than many half-configured cameras.
+Add cameras gradually. A single working camera is more useful than many
+half-configured cameras.
 
-Start with one camera, validate snapshot or stream access, place it in the composition, then connect it to a simple pipeline.
+Start with one camera, validate snapshot and stream access, publish the source
+for live viewing, then place and map it in the composition. Build event
+pipelines only after live viewing is stable.
 
 ## Before you start {/* #before-you-start */}
 
@@ -24,11 +27,15 @@ Use a contained network and avoid exposing camera credentials publicly.
 
 ## Discovery or manual setup {/* #discovery-or-manual-setup */}
 
-Toposync can work with cameras added manually and, when supported by the camera and network, ONVIF discovery.
+Toposync can work with cameras added manually and, when supported by the camera
+and network, ONVIF discovery.
 
-Use discovery when it works, but do not depend on it for every camera. Some devices, VLANs, Wi-Fi networks, routers, or camera settings can block discovery even when the camera itself works.
+Use discovery when it works, but do not depend on it for every camera. Some
+devices, VLANs, Wi-Fi networks, routers, or camera settings can block discovery
+even when the camera itself works.
 
-If discovery does not find the camera, add it manually with the information you already have.
+If discovery does not find the camera, add it manually with the information you
+already have.
 
 ## First validation {/* #first-validation */}
 
@@ -36,32 +43,67 @@ Before building pipelines, confirm the basics:
 
 1. The camera is saved with a clear name.
 2. Snapshot or image access works.
-3. Stream access works if you installed streaming support.
-4. PTZ controls work only if the camera supports PTZ and credentials allow it.
-5. The camera is placed near its real location in the composition.
+3. At least one video source works if you installed streaming support.
+4. The source has the right role: `main`, `sub`, `zoom`, or `custom`.
+5. **Transmit this source** is enabled for the sources you want to view.
+6. The live view appears as live, warming up, or with a clear actionable problem.
+7. PTZ controls work only if the camera supports PTZ and credentials allow it.
+8. The camera is placed near its real location in the composition.
 
 Do not tune advanced settings until this first loop works.
 
+## Publish the source for live viewing {/* #publish-the-source-for-live-viewing */}
+
+For normal camera viewing, do not create a technical transmission manually.
+Publish the camera source and let Toposync generate the transmission and
+continuous implicit pipeline.
+
+Common first setup:
+
+- low-resolution stream as `sub` for grid tiles;
+- high-resolution stream as `main` for fullscreen;
+- PTZ/autotrack stream as `zoom` when the camera supports it.
+
+Open the dashboard and confirm that the camera is visible. A short warmup is
+normal; a persistent **No pipeline** or **Stale** state needs attention.
+
+See [Live viewing](../cameras/live-viewing.mdx) for playback states and
+transports.
+
 ## Place the camera in the composition {/* #place-the-camera-in-the-composition */}
 
-Placement does not need to be exact on the first day. It should be good enough to answer:
+Placement does not need to be exact on the first day. It should be good enough
+to answer:
 
 - where is this camera installed?
 - what area does it mainly see?
 - which rooms, gates, doors, or outdoor zones are visible?
 - which events should belong to this camera?
 
-After the camera is placed, revisit your areas. You may need to split or rename areas based on what the camera actually sees.
+After the camera is placed, revisit your areas. You may need to split or rename
+areas based on what the camera actually sees.
 
-## Start with one camera flow {/* #start-with-one-camera-flow */}
+## Map the camera when you need spatial context {/* #map-the-camera-when-you-need-spatial-context */}
 
-When the camera page offers presets or flow creation, start from the simplest option.
+Mapping is optional for basic live viewing, but required for Visao 360 and for
+pipelines that use camera-to-world positions.
 
-A good first flow is:
+Map the camera after the source and live view are stable. Start with four corner
+points, then use internal refinement points only when the image needs local
+correction.
 
-- camera input;
-- motion or detection;
-- optional area filter;
-- optional notification or stored image.
+See [Camera mapping](../cameras/camera-mapping.mdx) for calibration and Visao
+360 behavior.
+
+## Build pipelines later {/* #build-pipelines-later */}
+
+After live viewing works, create pipelines for events and automation:
+
+- motion or object detection;
+- area filters;
+- stored images or crops;
+- notifications;
+- Home Assistant actions;
+- custom rendered live variants through **Transmit video**.
 
 Use [Create your first pipelines](first-pipelines.mdx) for the next step.

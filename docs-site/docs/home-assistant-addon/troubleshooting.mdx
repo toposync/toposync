@@ -141,6 +141,46 @@ Check that playback URLs point to the direct Toposync host and port, for example
 http://<home-assistant-ip>:18756/api/streams/media/hls/...
 ```
 
+## Sidebar works but Home Assistant Cloud does not {/* #sidebar-works-but-home-assistant-cloud-does-not */}
+
+The Toposync sidebar player and Home Assistant Cloud camera playback are
+different paths.
+
+For Cloud viewing, use native Home Assistant camera entities:
+
+1. publish the source in Toposync with **Transmit this source**;
+2. confirm the Toposync live view works;
+3. configure the Toposync custom integration in Home Assistant;
+4. use the resulting `camera.*` entity in a Home Assistant dashboard.
+
+Do not treat direct browser WebRTC inside the Toposync ingress iframe as the
+normal Home Assistant Cloud path.
+
+## Native camera entity does not appear {/* #native-camera-entity-does-not-appear */}
+
+Check the Toposync side first:
+
+- the camera source is published;
+- the live view is enabled;
+- the selected source has a working stream or clear error;
+- the Home Assistant camera manifest endpoint can be reached by the integration.
+
+Then reload the Toposync custom integration in Home Assistant. If the entity
+still does not appear, check Home Assistant logs for the integration setup error.
+
+## Native camera entity appears but does not play {/* #native-camera-entity-appears-but-does-not-play */}
+
+The entity uses Toposync-backed RTSP for `stream_source()` and Toposync still
+images for thumbnails.
+
+Check:
+
+- the source is still published in Toposync;
+- the transmission is not stale or missing a pipeline;
+- Home Assistant can reach the Toposync/MediaMTX RTSP URL from its own network;
+- the Toposync add-on is not overloaded;
+- native WebRTC is disabled unless you are intentionally testing it.
+
 ## WebRTC is black or does not connect {/* #webrtc-is-black-or-does-not-connect */}
 
 WebRTC needs both signaling and media transport.
@@ -153,6 +193,14 @@ If you use WebRTC outside the sidebar, map:
 ```
 
 Then make sure the client uses a hostname or IP that the add-on can advertise as a WebRTC host. If this is unreliable, switch dashboard playback to `Auto` or `HLS` unless low latency is required.
+
+If HLS or MSE is live and only WebRTC warns, treat the warning as low-latency
+diagnostics. It is not the primary playback failure unless you explicitly chose
+WebRTC, PTZ, or low-latency playback.
+
+For Home Assistant Cloud, prefer the native camera entity path with native
+WebRTC disabled until you have validated the WebRTC relay/TURN behavior in that
+installation.
 
 ## ONVIF discovery finds no cameras {/* #onvif-discovery-finds-no-cameras */}
 

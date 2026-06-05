@@ -1,0 +1,113 @@
+---
+title: Transmissões ao vivo
+sidebar_position: 2.5
+---
+
+# Transmissões ao vivo {/* #live-viewing */}
+
+Transmissões ao vivo são a forma normal de ver fontes de câmera e saídas
+renderizadas de pipelines no Toposync.
+
+Para fontes de câmera, o fluxo esperado é simples: habilite a transmissão na
+fonte, escolha o papel da fonte e deixe o Toposync criar a transmissão e o
+pipeline implícito.
+
+## Publique uma fonte {/* #publish-a-source */}
+
+Nas configurações da câmera, habilite **Transmitir esta fonte** para cada fonte
+de vídeo que você quer visualizar.
+
+Cada fonte publicada deve ter:
+
+- um nome visível;
+- um papel: `main`, `sub`, `zoom` ou `custom`;
+- uma imagem ou fonte de stream funcionando;
+- um pipeline implícito gerado pelo Toposync.
+
+Se uma câmera tem múltiplos streams, publique os úteis separadamente. Por
+exemplo, publique o stream de baixa resolução como `sub` e o stream de alta
+resolução como `main`.
+
+## Variantes {/* #variants */}
+
+Uma live view pode ter variantes. O viewer escolhe a melhor variante para o
+contexto atual:
+
+- grid e miniaturas preferem `sub`;
+- tela cheia prefere `main`;
+- PTZ ou autotrack podem preferir `zoom`;
+- saídas avançadas ou renderizadas podem usar `custom`.
+
+O seletor voltado ao usuário deve mostrar nomes como **Principal**, **Baixa
+resolução**, **Zoom** ou o seu rótulo customizado. IDs técnicos de output e
+engine paths são diagnóstico avançado.
+
+## Estados de playback {/* #playback-states */}
+
+Estados comuns:
+
+| Estado | Significado |
+| --- | --- |
+| Ao vivo | Há frame recente, writer selecionado e output saudável. |
+| Aquecendo | A fonte ou publisher está iniciando. Um curto período de tela preta pode ser normal. |
+| Sem pipeline | Nenhum pipeline ativo está alimentando esta transmissão. Reconcile ou confira a publicação da fonte. |
+| Stale | O último frame selecionado está antigo demais. A imagem não deve ser tratada como ao vivo. |
+| Publisher parado | Existem frames, mas o publisher de mídia não está rodando para o output selecionado. |
+| Offline | A câmera/fonte está inacessível ou não há frame recente. |
+
+Um processo rodando não basta para chamar um stream de ao vivo. O Toposync só
+deve mostrar ao vivo quando há frames reais e recentes.
+
+## Transportes {/* #transports */}
+
+O Toposync pode usar vários transportes. Normalmente, deixe o modo em **Auto**.
+
+| Transporte | Melhor uso | Latência |
+| --- | --- | --- |
+| HLS | Playback mais estável em navegador, app e ingress do Home Assistant | Maior |
+| MSE | Playback web fluido quando navegador e sidecar suportam | Menor que HLS |
+| WebRTC | Baixa latência explícita ou interação PTZ | Menor |
+| JSMpeg | Último fallback visual quando transportes melhores falham | Média |
+
+HLS é a base estável. MSE pode ser preferido em dashboards web quando
+disponível. WebRTC não deve ser tratado como padrão para todos os tiles. JSMpeg é
+somente vídeo e baixa qualidade por definição.
+
+RTSP não é um transporte de navegador. Ele é útil para Home Assistant Core,
+diagnóstico, VLC, Frigate ou outras ferramentas externas.
+
+## Depure um transporte {/* #debug-one-transport */}
+
+A tela de debug de streams pode abrir um transporte fixo por vez. Use essa tela
+quando precisar saber se HLS, MSE, WebRTC ou JSMpeg está falhando de forma
+independente.
+
+A tela de debug não deve trocar de transporte silenciosamente. Alguns
+transportes podem falhar em alguns ambientes, e isso é esperado.
+
+## Solução de problemas {/* #troubleshooting */}
+
+### A câmera não mostra imagem {/* #the-camera-shows-no-image */}
+
+Confira se o snapshot da câmera funciona, depois confira se a fonte está
+publicada. Se a live view mostra **Sem pipeline**, reconcilie a publicação ou
+salve a fonte da câmera novamente para o Toposync recriar o pipeline implícito.
+
+### Começa preto e depois funciona {/* #it-starts-black-and-then-works */}
+
+Um aquecimento curto pode ser normal enquanto fonte, publisher, playlist ou
+sidecar inicia. O estado deve estabilizar em **Ao vivo**. Se continuar preto,
+abra a tela de debug para o transporte ativo.
+
+### HLS funciona, mas WebRTC mostra aviso {/* #hls-works-but-webrtc-warns */}
+
+Se o transporte ativo é HLS ou MSE e o vídeo está ao vivo, um aviso de WebRTC
+normalmente é só um aviso de baixa latência. Ele importa quando você pede WebRTC,
+PTZ ou baixa latência explicitamente.
+
+### Ingress do Home Assistant {/* #home-assistant-ingress */}
+
+Dentro da sidebar ou ingress do add-on Home Assistant, espere playback HLS-first.
+WebRTC direto no navegador é sensível a mapeamento de portas do add-on e ao
+caminho de rede. Para Home Assistant Cloud, prefira a integração nativa de
+câmera do Home Assistant em vez de WebRTC direto dentro do iframe do Toposync.

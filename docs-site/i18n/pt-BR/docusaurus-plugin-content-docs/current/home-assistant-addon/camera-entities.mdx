@@ -1,0 +1,103 @@
+---
+title: Entidades de câmera e Cloud
+sidebar_position: 3.5
+---
+
+# Entidades de câmera e Cloud {/* #camera-entities-and-cloud */}
+
+Há duas formas diferentes de ver câmeras do Toposync a partir do Home Assistant:
+
+- **UI do Toposync na sidebar**: abre o app Toposync pelo ingress do Home
+  Assistant.
+- **Entidades nativas de câmera do Home Assistant**: expõem live views
+  publicadas do Toposync como entidades `camera.*` dentro do Home Assistant.
+
+Use a sidebar para configurar o Toposync. Use entidades nativas de câmera quando
+quiser que cards, dashboards, automações ou Home Assistant Cloud sejam donos do
+contrato de playback da câmera.
+
+## Por que entidades nativas importam para Cloud {/* #why-native-entities-matter-for-cloud */}
+
+O Home Assistant Cloud ajuda de verdade quando o stream faz parte do modelo de
+câmera do Home Assistant. Um player de vídeo embutido na sidebar do Toposync
+ainda é um player web do Toposync rodando pelo ingress; isso não é o mesmo que
+uma entidade nativa `camera` do Home Assistant.
+
+Para visualização amigável ao Cloud:
+
+1. publique a fonte da câmera no Toposync com **Transmitir esta fonte**;
+2. confirme que a live view do Toposync funciona;
+3. configure a integração customizada Toposync no Home Assistant;
+4. use as entidades `camera.*` resultantes nos dashboards do Home Assistant.
+
+## O que o Toposync exporta {/* #what-toposync-exports */}
+
+A integração lê:
+
+```text
+GET /api/streams/home-assistant/cameras
+```
+
+Cada câmera exportada é apoiada por uma transmissão/output do Toposync. Ela não
+deve expor credenciais da câmera nem URLs RTSP diretas da câmera.
+
+A entidade nativa usa:
+
+- `stream_source()` com uma URL RTSP interna Toposync/MediaMTX;
+- imagens still dos endpoints do Toposync;
+- renovação de heartbeat enquanto o Home Assistant solicita o stream;
+- tratamento opcional de oferta WebRTC nativa apenas quando habilitado
+  explicitamente.
+
+## Caminho recomendado de playback {/* #recommended-playback-path */}
+
+Caminho padrão:
+
+```text
+Publicação Toposync -> entidade camera do Home Assistant -> stream component do Home Assistant -> UI / Cloud do Home Assistant
+```
+
+Isso mantém o comportamento de fallback no Home Assistant. Quando WebRTC nativo
+está desabilitado, o Home Assistant pode usar seu tratamento normal de stream em
+vez de forçar toda visualização por um caminho somente WebRTC.
+
+## Opção de WebRTC nativo {/* #native-webrtc-option */}
+
+WebRTC nativo na integração Home Assistant é uma configuração avançada e
+opcional. Mantenha desabilitado, a menos que você esteja validando
+intencionalmente playback de baixa latência naquela instalação Home Assistant.
+
+Motivos para manter desabilitado por padrão:
+
+- WebRTC depende de candidates, portas, NAT e comportamento de relay;
+- o caminho WebRTC nativo do Home Assistant pode não usar o mesmo fallback HLS;
+- HLS pelo tratamento normal de stream do Home Assistant costuma ser mais
+  previsível para visualização remota.
+
+Se habilitar WebRTC nativo, valide Home Assistant local e Home Assistant Cloud
+antes de depender dele.
+
+## Ingress do add-on versus entidades {/* #addon-ingress-versus-entities */}
+
+O player da sidebar do Toposync continua importante, mas é otimizado para a
+própria UI do Toposync:
+
+- playback no ingress/sidebar é HLS-first;
+- MSE pode ser usado pelo proxy do Toposync quando disponível;
+- JSMpeg é último fallback visual;
+- WebRTC direto no navegador não é o padrão no ingress.
+
+Se o playback da sidebar funciona mas um card do dashboard Home Assistant não,
+depure o caminho da entidade nativa de câmera. Se a entidade de câmera do Home
+Assistant funciona mas a sidebar do Toposync não, depure o player do Toposync ou
+o caminho de ingress.
+
+## Checklist {/* #checklist */}
+
+1. No Toposync, publique a fonte que você quer que o Home Assistant enxergue.
+2. Confirme que a live view do Toposync está ao vivo ou com estado acionável.
+3. Confirme que o endpoint de manifesto Home Assistant lista a câmera.
+4. Adicione ou recarregue a integração customizada Toposync no Home Assistant.
+5. Confirme que a entidade `camera.*` aparece.
+6. Teste a entidade localmente no Home Assistant.
+7. Teste pelo Home Assistant Cloud se visualização remota for necessária.

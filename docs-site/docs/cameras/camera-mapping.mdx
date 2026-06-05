@@ -5,4 +5,108 @@ sidebar_position: 3
 
 # Camera mapping {/* #camera-mapping */}
 
-This page is under construction.
+Camera mapping connects the camera image to the real composition. It lets
+Toposync understand where the camera is installed, what area it sees, and how
+image points relate to the world.
+
+Mapping is also what makes Visao 360 possible: mapped live video can be projected
+over the composition.
+
+## Start with placement {/* #start-with-placement */}
+
+First place the camera element near its real position in the composition. The
+placement does not need to solve projection by itself. It should make the camera
+easy to find and explain what it sees.
+
+After placement, calibrate the view from a current camera snapshot.
+
+## Four corners and global transform {/* #four-corners-and-global-transform */}
+
+The first calibration step uses four corners:
+
+1. choose points in the camera image;
+2. match those points to positions in the composition;
+3. adjust the global transform by moving, rotating, and dragging corners.
+
+The four corners define the base projection. Keep them on stable, meaningful
+visual references whenever possible: floor edges, gates, walls, driveway
+corners, or other fixed points.
+
+## Internal refinement points {/* #internal-refinement-points */}
+
+Some lenses and camera angles cannot be aligned well with only four corners.
+Use internal refinement points to correct local distortion.
+
+Refinement points:
+
+- adjust a local part of the projection;
+- keep the four corners as the global transform;
+- are useful for wide-angle and distorted lenses;
+- are saved as part of the calibrated view.
+
+Use only as many points as needed. Too many points can make calibration harder to
+reason about.
+
+## PTZ views {/* #ptz-views */}
+
+PTZ cameras can have multiple calibrated views. Each view can store a preset,
+pan, tilt, and zoom reference.
+
+When the camera moves:
+
+- an exact pose can use its matching calibration;
+- a pose between calibrations can be interpolated;
+- a pose near the calibrated range can be extrapolated conservatively;
+- a pose far from calibration can use the nearest view with a warning;
+- with only one view, Toposync can still show that view but should warn that the
+  current pose may not be well mapped.
+
+Warnings about pose quality do not mean the stream is broken. They mean the
+projected position may be imprecise.
+
+## Area clipping for Visao 360 {/* #area-clipping-for-visao-360 */}
+
+A camera element can optionally choose one area as a Visao 360 clip area. This
+limits the projected video to that area.
+
+Use area clipping when the camera sees beyond the space you want to render, for
+example ceiling, street, sky, or a neighboring room.
+
+Area clipping is a spatial crop. It can make the projected video look cropped or
+zoomed even when the video transport is correct.
+
+## Letterbox correction {/* #letterbox-correction */}
+
+The calibration snapshot may use the useful camera image, while the live
+transmission may be resized with black bars around it.
+
+Toposync handles this automatically through media metadata called
+`content_rect`. The Visao 360 renderer uses that rectangle to ignore black
+letterbox padding when projecting video.
+
+Do not recalibrate just because a transmission has black bars. First confirm
+whether the Visao 360 projection is using the useful content and whether an area
+clip is cutting the projection.
+
+## What mapping affects {/* #what-mapping-affects */}
+
+Camera mapping can affect:
+
+- Visao 360 2D and Visao 360 3D projection;
+- camera markers and spatial context;
+- pipelines that use camera-to-world coordinates;
+- future PTZ-aware controls and overlays.
+
+It does not replace live viewing. A camera must still have an active
+transmission/publication before it can be projected as live video.
+
+## Practical checklist {/* #practical-checklist */}
+
+1. Confirm the camera snapshot is current.
+2. Confirm live viewing works for the source you want to map.
+3. Place the camera element in the composition.
+4. Add four reliable corner pairs.
+5. Use the global transform before adding internal refinement points.
+6. Add PTZ views only for meaningful positions or presets.
+7. Use area clipping only when you want a spatial crop in Visao 360.
+8. Open Visao 360 and check that the video, marker, and warnings make sense.

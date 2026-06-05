@@ -20,8 +20,24 @@ Use this path when Home Assistant is the natural center of the installation and 
 - ONVIF LAN discovery support using Supervisor network information, without requiring host networking.
 - Optional direct UI/API access on the local network.
 - Optional RTSP and WebRTC/WHEP streaming outputs.
+- Native Home Assistant `camera` entities through the Toposync custom integration.
 
 The add-on is not the CUDA/GPU deployment target. If you need GPU acceleration or heavy camera/vision processing, keep the add-on as the origin and delegate work to a remote processing server.
+
+## Sidebar versus native camera entities {/* #sidebar-versus-native-camera-entities */}
+
+The Toposync sidebar is the configuration and operations surface. It is where you
+add cameras, publish sources, inspect transmissions, tune mapping, and debug
+playback.
+
+Native Home Assistant camera entities are a separate playback contract. They are
+the recommended path when you want Home Assistant dashboards, automations, or
+Home Assistant Cloud to view Toposync cameras.
+
+For remote viewing through Home Assistant Cloud, publish the source in Toposync
+and expose it through the Toposync Home Assistant integration as a `camera.*`
+entity. Do not rely on direct browser WebRTC inside the Toposync ingress iframe
+as the Cloud path.
 
 ## Runtime shape {/* #runtime-shape */}
 
@@ -100,6 +116,7 @@ See [Compatibility](../installation/architecture-support.mdx) and [Processing se
 
 - [Installation](installation.mdx)
 - [Configuration](configuration.mdx)
+- [Camera entities and Cloud](camera-entities.mdx)
 - [Troubleshooting](troubleshooting.mdx)
 - [Home Assistant add-on quick install](../installation/home-assistant-addon.mdx)
 - [Architecture](../developers/architecture.mdx)

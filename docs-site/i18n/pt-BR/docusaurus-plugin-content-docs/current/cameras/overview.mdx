@@ -5,4 +5,99 @@ sidebar_position: 1
 
 # Visão geral de câmeras {/* #cameras-overview */}
 
-Esta página está em construção.
+Câmeras no Toposync são mais do que uma URL de vídeo. Uma câmera pode ter várias
+fontes de vídeo, transmissões ao vivo, posicionamento físico na composição,
+controles PTZ e pipelines que transformam imagens em eventos.
+
+Comece pela fonte da câmera, não por um pipeline manual. Para visualização ao
+vivo normal, o Toposync pode gerar a transmissão e o pipeline contínuo para você.
+
+## Modelo de câmera {/* #the-camera-model */}
+
+As principais peças são:
+
+- **Câmera**: o dispositivo ou entrada lógica de câmera.
+- **Fonte**: um feed de vídeo daquela câmera. Uma câmera pode ter mais de uma
+  fonte.
+- **Papel**: o uso pretendido da fonte: `main`, `sub`, `zoom` ou `custom`.
+- **Publicação**: a escolha de expor uma fonte como transmissão ao vivo.
+- **Transmissão**: o artefato de vídeo ao vivo gerado para o player.
+- **Pipeline implícito**: o pipeline contínuo que mantém uma fonte publicada
+  alimentando a transmissão.
+
+No fluxo normal, você não deve precisar criar uma `Transmission` manualmente.
+Habilite a transmissão na fonte e deixe o Toposync reconciliar os artefatos
+gerados.
+
+## Papéis das fontes {/* #source-roles */}
+
+Use papéis para descrever como a fonte deve ser usada:
+
+| Papel | Uso típico |
+| --- | --- |
+| `sub` | Tiles de grid, miniaturas e monitoramento leve |
+| `main` | Visualização em tela cheia e inspeção |
+| `zoom` | PTZ, autotrack ou interação de baixa latência |
+| `custom` | Saída renderizada pelo usuário ou feed especial |
+
+O viewer escolhe pelo contexto. Um grid pode preferir a fonte `sub`, enquanto a
+tela cheia pode trocar para `main`. Isso é diferente de escolher um perfil
+técnico de qualidade.
+
+## Transmissões ao vivo {/* #live-viewing */}
+
+Quando uma fonte é marcada para transmitir, o Toposync cria o que é necessário
+para ela aparecer no dashboard:
+
+1. uma intenção de publicação;
+2. uma variante de live view;
+3. uma transmissão gerada;
+4. um pipeline implícito contínuo.
+
+Veja [Transmissões ao vivo](live-viewing.mdx) para comportamento de transportes,
+estados de playback e solução de problemas.
+
+## Pipelines {/* #pipelines */}
+
+Use publicação automática de câmera para visualização ao vivo comum.
+
+Use um pipeline manual quando quiser transformar o vídeo antes de publicá-lo,
+por exemplo:
+
+- recortar um canto da câmera;
+- aplicar overlay ou filtro de imagem;
+- publicar uma visão focada em detecção;
+- criar uma variante personalizada `main`, `sub`, `zoom` ou `custom`.
+
+Em pipelines manuais, adicione o operador **Transmitir vídeo** e publique essa
+saída como uma variante visível. Mesmo assim, você não deve precisar criar a
+transmissão técnica manualmente.
+
+## Mapeamento {/* #mapping */}
+
+Quando a câmera é posicionada em uma composição, o Toposync pode usá-la para
+contexto espacial:
+
+- onde a câmera está instalada;
+- quais áreas a câmera enxerga;
+- como detecções são mapeadas para o mundo;
+- como vídeo ao vivo pode ser projetado nas Visões 360.
+
+Veja [Mapeamento de câmeras](camera-mapping.mdx) para calibração, poses PTZ e
+projeção espacial de vídeo.
+
+## O que validar {/* #what-to-validate */}
+
+Depois de adicionar uma câmera, valide nesta ordem:
+
+1. Snapshot funciona.
+2. Pelo menos uma fonte de vídeo funciona.
+3. A fonte tem o papel correto.
+4. A fonte está publicada para transmissão ao vivo se você quer vê-la no
+   dashboard.
+5. O dashboard mostra a câmera como ao vivo, aquecendo ou com um problema claro.
+6. PTZ funciona apenas se a câmera suporta PTZ e as credenciais permitem.
+7. O mapeamento é calibrado apenas depois que a imagem e a fonte ao vivo estão
+   estáveis.
+
+Evite ajustar transportes avançados até uma câmera estar confiável.

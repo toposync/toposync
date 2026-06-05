@@ -5,4 +5,99 @@ sidebar_position: 1
 
 # Cameras overview {/* #cameras-overview */}
 
-This page is under construction.
+Cameras in Toposync are more than a video URL. A camera can have multiple video
+sources, live transmissions, physical placement in a composition, PTZ controls,
+and pipelines that turn images into events.
+
+Start from the camera source, not from a manual pipeline. For normal live
+viewing, Toposync can generate the transmission and the continuous pipeline for
+you.
+
+## The camera model {/* #the-camera-model */}
+
+The main pieces are:
+
+- **Camera**: the device or logical camera entry.
+- **Source**: one video feed from that camera. A camera can have more than one
+  source.
+- **Role**: the intended use of that source: `main`, `sub`, `zoom`, or
+  `custom`.
+- **Publication**: the choice to expose a source as a live transmission.
+- **Transmission**: the generated live video artifact used by the player.
+- **Implicit pipeline**: the continuous pipeline that keeps a published camera
+  source feeding its transmission.
+
+In the regular flow, you should not need to create a `Transmission` manually.
+Enable live viewing on the source, and let Toposync reconcile the generated
+artifacts.
+
+## Source roles {/* #source-roles */}
+
+Use roles to describe how a source should be used:
+
+| Role | Typical use |
+| --- | --- |
+| `sub` | Grid tiles, thumbnails, low-cost monitoring |
+| `main` | Fullscreen viewing and inspection |
+| `zoom` | PTZ, autotrack, or low-latency interaction |
+| `custom` | User-defined rendered output or a special camera feed |
+
+The viewer chooses by context. A grid can prefer the `sub` source, while
+fullscreen can switch to `main`. This is different from choosing a technical
+quality profile.
+
+## Live viewing {/* #live-viewing */}
+
+When a source is marked for live viewing, Toposync creates what is needed for
+that source to appear in the dashboard:
+
+1. a publication intent;
+2. a live-view variant;
+3. a generated transmission;
+4. a continuous implicit pipeline.
+
+See [Live viewing](live-viewing.mdx) for transport behavior, playback states,
+and troubleshooting.
+
+## Pipelines {/* #pipelines */}
+
+Use automatic camera publication for ordinary live viewing.
+
+Use a manual pipeline when you want to transform the video before publishing it,
+for example:
+
+- crop one corner of a camera;
+- overlay or filter an image;
+- publish a detection-focused view;
+- create a custom `main`, `sub`, `zoom`, or `custom` variant.
+
+In manual pipelines, add the **Transmit video** operator and publish that output
+as a visible variant. You still should not need to create the technical
+transmission by hand.
+
+## Mapping {/* #mapping */}
+
+When the camera is placed in a composition, Toposync can use it for spatial
+context:
+
+- where the camera is installed;
+- which areas the camera sees;
+- how detections map into the world;
+- how live video can be projected in Visao 360 views.
+
+See [Camera mapping](camera-mapping.mdx) for calibration, PTZ poses, and spatial
+video projection.
+
+## What to validate {/* #what-to-validate */}
+
+After adding a camera, validate this in order:
+
+1. Snapshot works.
+2. At least one video source works.
+3. The source has the correct role.
+4. The source is published for live viewing if you want it on the dashboard.
+5. The dashboard shows the camera as live, warming up, or with a clear problem.
+6. PTZ works only if the camera supports PTZ and credentials allow it.
+7. Mapping is calibrated only after the image and live source are stable.
+
+Avoid tuning advanced transport settings until one camera is reliable.

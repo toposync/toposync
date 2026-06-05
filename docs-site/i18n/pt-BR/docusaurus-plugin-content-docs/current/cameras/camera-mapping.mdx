@@ -5,4 +5,108 @@ sidebar_position: 3
 
 # Mapeamento de câmeras {/* #camera-mapping */}
 
-Esta página está em construção.
+Mapeamento de câmera conecta a imagem da câmera ao mundo da composição. Ele
+permite que o Toposync entenda onde a câmera está instalada, qual área ela vê e
+como pontos da imagem se relacionam com o mundo.
+
+Mapeamento também é o que torna a Visão 360 possível: vídeo ao vivo mapeado pode
+ser projetado sobre a composição.
+
+## Comece pelo posicionamento {/* #start-with-placement */}
+
+Primeiro posicione o elemento de câmera perto da posição real na composição. O
+posicionamento não precisa resolver a projeção sozinho. Ele deve deixar a câmera
+fácil de encontrar e explicar o que ela enxerga.
+
+Depois do posicionamento, calibre a visão usando um snapshot atual da câmera.
+
+## Quatro cantos e transformação global {/* #four-corners-and-global-transform */}
+
+O primeiro passo da calibração usa quatro cantos:
+
+1. escolha pontos na imagem da câmera;
+2. associe esses pontos a posições na composição;
+3. ajuste a transformação global movendo, girando e arrastando cantos.
+
+Os quatro cantos definem a projeção base. Mantenha esses pontos em referências
+visuais estáveis e significativas sempre que possível: bordas de piso, portões,
+paredes, cantos de garagem ou outros pontos fixos.
+
+## Pontos internos de refinamento {/* #internal-refinement-points */}
+
+Algumas lentes e ângulos de câmera não encaixam bem com apenas quatro cantos.
+Use pontos internos de refinamento para corrigir distorções locais.
+
+Pontos de refinamento:
+
+- ajustam uma parte local da projeção;
+- mantêm os quatro cantos como transformação global;
+- ajudam em lentes abertas e distorcidas;
+- são salvos como parte da visão calibrada.
+
+Use apenas os pontos necessários. Pontos demais podem dificultar o entendimento
+da calibração.
+
+## Vistas PTZ {/* #ptz-views */}
+
+Câmeras PTZ podem ter várias vistas calibradas. Cada vista pode armazenar
+referência de preset, pan, tilt e zoom.
+
+Quando a câmera se move:
+
+- uma pose exata pode usar a calibração correspondente;
+- uma pose entre calibrações pode ser interpolada;
+- uma pose próxima do intervalo calibrado pode ser extrapolada com cuidado;
+- uma pose distante pode usar a vista mais próxima com aviso forte;
+- com apenas uma vista, o Toposync ainda pode mostrar essa vista, mas deve avisar
+  que a pose atual talvez não esteja bem mapeada.
+
+Avisos de qualidade de pose não significam que o stream está quebrado. Eles
+significam que a posição projetada pode estar imprecisa.
+
+## Recorte de área para Visão 360 {/* #area-clipping-for-visao-360 */}
+
+Um elemento de câmera pode escolher opcionalmente uma área como recorte para
+Visão 360. Isso limita o vídeo projetado àquela área.
+
+Use recorte de área quando a câmera enxerga além do espaço que você quer
+renderizar, por exemplo teto, rua, céu ou outro cômodo.
+
+Recorte de área é um recorte espacial. Ele pode fazer o vídeo projetado parecer
+cortado ou com zoom mesmo quando o transporte de vídeo está correto.
+
+## Correção de letterbox {/* #letterbox-correction */}
+
+O snapshot de calibração pode usar a imagem útil da câmera, enquanto a
+transmissão ao vivo pode ser redimensionada com barras pretas em volta.
+
+O Toposync lida com isso automaticamente por meio de metadados de mídia chamados
+`content_rect`. O renderizador da Visão 360 usa esse retângulo para ignorar
+padding preto de letterbox ao projetar vídeo.
+
+Não recalibre só porque uma transmissão tem barras pretas. Primeiro confirme se
+a Visão 360 está usando o conteúdo útil e se algum recorte de área está cortando
+a projeção.
+
+## O que o mapeamento afeta {/* #what-mapping-affects */}
+
+Mapeamento de câmera pode afetar:
+
+- projeção na Visão 360 2D e Visão 360 3D;
+- marcadores de câmera e contexto espacial;
+- pipelines que usam coordenadas de câmera para mundo;
+- futuros controles e overlays sensíveis a PTZ.
+
+Ele não substitui a transmissão ao vivo. A câmera ainda precisa ter uma
+transmissão/publicação ativa antes de ser projetada como vídeo ao vivo.
+
+## Checklist prático {/* #practical-checklist */}
+
+1. Confirme que o snapshot da câmera está atual.
+2. Confirme que a transmissão ao vivo funciona para a fonte que você quer mapear.
+3. Posicione o elemento de câmera na composição.
+4. Adicione quatro pares de cantos confiáveis.
+5. Use a transformação global antes de adicionar pontos internos de refinamento.
+6. Adicione vistas PTZ apenas para posições ou presets significativos.
+7. Use recorte de área apenas quando quiser um recorte espacial na Visão 360.
+8. Abra a Visão 360 e confira se vídeo, marcador e avisos fazem sentido.

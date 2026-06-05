@@ -1,0 +1,101 @@
+---
+title: Camera entities and Cloud
+sidebar_position: 3.5
+---
+
+# Camera entities and Cloud {/* #camera-entities-and-cloud */}
+
+There are two different ways to view Toposync cameras from Home Assistant:
+
+- **Toposync UI in the sidebar**: opens the Toposync app through Home Assistant
+  ingress.
+- **Native Home Assistant camera entities**: exposes published Toposync live
+  views as `camera.*` entities inside Home Assistant.
+
+Use the sidebar to configure Toposync. Use native camera entities when you want
+Home Assistant cards, dashboards, automations, or Home Assistant Cloud remote
+viewing to handle the camera playback contract.
+
+## Why native entities matter for Cloud {/* #why-native-entities-matter-for-cloud */}
+
+Home Assistant Cloud can help most when the stream is part of Home Assistant's
+camera model. A video player embedded inside the Toposync sidebar is still a
+Toposync web player running through ingress; it is not the same as a native Home
+Assistant `camera` entity.
+
+For Cloud-friendly viewing:
+
+1. publish the camera source in Toposync with **Transmit this source**;
+2. confirm the Toposync live view works;
+3. configure the Toposync custom integration in Home Assistant;
+4. use the resulting `camera.*` entities in Home Assistant dashboards.
+
+## What Toposync exports {/* #what-toposync-exports */}
+
+The integration reads:
+
+```text
+GET /api/streams/home-assistant/cameras
+```
+
+Each exported camera is backed by a Toposync transmission/output. It should not
+expose direct camera credentials or direct camera RTSP URLs.
+
+The native entity uses:
+
+- `stream_source()` with an internal Toposync/MediaMTX RTSP URL;
+- still images from Toposync still endpoints;
+- heartbeat renewal while Home Assistant is requesting the stream;
+- optional native WebRTC offer handling only when explicitly enabled.
+
+## Recommended playback path {/* #recommended-playback-path */}
+
+Default path:
+
+```text
+Toposync publication -> Home Assistant camera entity -> Home Assistant stream component -> Home Assistant UI / Cloud
+```
+
+This keeps fallback behavior in Home Assistant. When native WebRTC is disabled,
+Home Assistant can use its normal stream handling instead of forcing every view
+through a WebRTC-only path.
+
+## Native WebRTC option {/* #native-webrtc-option */}
+
+Native WebRTC in the Home Assistant integration is an advanced opt-in setting.
+Keep it disabled unless you are intentionally validating low-latency playback in
+that Home Assistant installation.
+
+Reasons to keep it off by default:
+
+- WebRTC depends on candidates, ports, NAT, and relay behavior;
+- Home Assistant's native WebRTC path may not use the same HLS fallback behavior;
+- HLS via Home Assistant's stream handling is usually more predictable for
+  remote viewing.
+
+If you enable native WebRTC, validate both local Home Assistant and Home
+Assistant Cloud before relying on it.
+
+## Add-on ingress versus entities {/* #addon-ingress-versus-entities */}
+
+The Toposync sidebar player still matters, but it is optimized for Toposync's own
+UI:
+
+- ingress/sidebar playback is HLS-first;
+- MSE may be used through the Toposync proxy when available;
+- JSMpeg is a last visual fallback;
+- direct browser WebRTC is not the default in ingress.
+
+If sidebar playback works but a Home Assistant dashboard card does not, debug the
+native camera entity path. If the Home Assistant camera entity works but the
+Toposync sidebar does not, debug the Toposync player or ingress path.
+
+## Checklist {/* #checklist */}
+
+1. In Toposync, publish the source you want Home Assistant to see.
+2. Confirm the Toposync live view is live or has a clear actionable state.
+3. Confirm the Home Assistant manifest endpoint lists the camera.
+4. Add or reload the Toposync custom integration in Home Assistant.
+5. Confirm the `camera.*` entity appears.
+6. Test the entity locally in Home Assistant.
+7. Test through Home Assistant Cloud if remote viewing is required.

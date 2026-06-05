@@ -43,4 +43,19 @@ Se você roda o Toposync como add-on do Home Assistant, o add-on pode usar execu
 
 Veja [instalação do add-on do Home Assistant](../installation/home-assistant-addon.mdx) para detalhes de configuração.
 
+## Câmeras e Home Assistant Cloud {/* #cameras-and-home-assistant-cloud */}
+
+Há duas superfícies de câmera:
+
+- o player da sidebar do Toposync, usado para configurar e depurar o Toposync;
+- entidades nativas `camera.*` do Home Assistant, usadas por dashboards do Home
+  Assistant e Home Assistant Cloud.
+
+Para visualização de câmera amigável ao Cloud, publique a fonte da câmera no
+Toposync e use a integração customizada Toposync para que o Home Assistant crie
+entidades nativas de câmera. Não dependa de WebRTC direto dentro do iframe de
+ingress do Toposync como caminho de visualização remota.
+
+Veja [Entidades de câmera e Cloud](../home-assistant-addon/camera-entities.mdx).
+
 Próximo: [Adicione sua primeira câmera](add-your-first-camera.mdx).

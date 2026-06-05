@@ -20,8 +20,24 @@ Use este caminho quando o Home Assistant for o centro natural da instalação e 
 - Suporte à descoberta ONVIF na rede local usando informações de rede do Supervisor, sem exigir host networking.
 - Acesso direto opcional à UI/API pela rede local.
 - Saídas opcionais de streaming RTSP e WebRTC/WHEP.
+- Entidades nativas `camera` do Home Assistant pela integração customizada Toposync.
 
 O add-on não é o alvo de deploy CUDA/GPU. Se você precisar de aceleração GPU ou processamento pesado de câmeras/vision, mantenha o add-on como origin e delegue trabalho para um servidor de processamento remoto.
+
+## Sidebar versus entidades nativas de câmera {/* #sidebar-versus-native-camera-entities */}
+
+A sidebar do Toposync é a superfície de configuração e operação. É onde você
+adiciona câmeras, publica fontes, inspeciona transmissões, ajusta mapeamento e
+depura playback.
+
+Entidades nativas de câmera do Home Assistant são um contrato de playback
+separado. Elas são o caminho recomendado quando você quer que dashboards,
+automações ou Home Assistant Cloud visualizem câmeras do Toposync.
+
+Para visualização remota pelo Home Assistant Cloud, publique a fonte no Toposync
+e exponha pela integração Home Assistant do Toposync como entidade `camera.*`.
+Não dependa de WebRTC direto no navegador dentro do iframe de ingress do
+Toposync como caminho Cloud.
 
 ## Formato de runtime {/* #runtime-shape */}
 
@@ -100,6 +116,7 @@ Veja [Compatibilidade](../installation/architecture-support.mdx) e [Servidor de 
 
 - [Instalação](installation.mdx)
 - [Configuração](configuration.mdx)
+- [Entidades de câmera e Cloud](camera-entities.mdx)
 - [Solução de problemas](troubleshooting.mdx)
 - [Instalação rápida do add-on Home Assistant](../installation/home-assistant-addon.mdx)
 - [Arquitetura](../developers/architecture.mdx)

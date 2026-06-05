@@ -43,4 +43,19 @@ If you run Toposync as a Home Assistant add-on, the add-on can use supervised ex
 
 See [Home Assistant add-on installation](../installation/home-assistant-addon.mdx) for setup details.
 
+## Cameras and Home Assistant Cloud {/* #cameras-and-home-assistant-cloud */}
+
+There are two camera surfaces:
+
+- the Toposync sidebar player, used to configure and debug Toposync;
+- native Home Assistant `camera.*` entities, used by Home Assistant dashboards
+  and Home Assistant Cloud.
+
+For Cloud-friendly camera viewing, publish the camera source in Toposync, then
+use the Toposync custom integration so Home Assistant creates native camera
+entities. Do not depend on direct WebRTC inside the Toposync ingress iframe as
+the remote viewing path.
+
+See [Camera entities and Cloud](../home-assistant-addon/camera-entities.mdx).
+
 Next: [Add your first camera](add-your-first-camera.mdx).

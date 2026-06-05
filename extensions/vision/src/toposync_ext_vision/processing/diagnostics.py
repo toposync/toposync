@@ -55,6 +55,11 @@ def _collect_local_builder_summary(
                 "reason": str(probe.get("reason") or "").strip(),
                 "backend": str(probe.get("backend") or "").strip(),
                 "runtime": str(probe.get("container_runtime") or "").strip(),
+                "missing_tools": [
+                    str(item or "").strip()
+                    for item in list(probe.get("missing_tools") or [])
+                    if str(item or "").strip()
+                ],
                 "supported_platforms": list(probe.get("supported_platforms") or []),
             }
         )

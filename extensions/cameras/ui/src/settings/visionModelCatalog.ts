@@ -19,6 +19,7 @@ export type DetectionModelCatalogItem = {
   localBuildReason: string;
   localBuildRuntime: string;
   localBuildSourceLabel: string;
+  localBuildMissingTools: string[];
   explicitConsentRequired: boolean;
   installJob: DetectionModelInstallJob | null;
   recommended: boolean;
@@ -86,6 +87,7 @@ function normalizeModel(rawValue: unknown): DetectionModelCatalogItem | null {
   if (!modelId) return null;
   const artifactExists = readBoolean(raw.artifact_exists ?? raw.artifactExists);
   const installJob = readInstallJob(raw.install_job ?? raw.installJob ?? raw.job);
+  const localBuildMissingToolsRaw = raw.local_build_missing_tools ?? raw.localBuildMissingTools;
   return {
     modelId,
     displayName: readString(raw.display_name ?? raw.displayName ?? raw.name) || modelId,
@@ -98,6 +100,9 @@ function normalizeModel(rawValue: unknown): DetectionModelCatalogItem | null {
     localBuildSourceLabel:
       readString(raw.local_build_source_label ?? raw.localBuildSourceLabel) ||
       readString(acquisition.checkpoint_url ?? acquisition.source_url ?? acquisition.url ?? acquisition.source_label),
+    localBuildMissingTools: Array.isArray(localBuildMissingToolsRaw)
+      ? localBuildMissingToolsRaw.map((value: unknown) => readString(value)).filter(Boolean)
+      : [],
     explicitConsentRequired: readBoolean(raw.explicit_consent_required ?? acquisition.explicit_consent_required),
     installJob,
     recommended: modelId === DEFAULT_DETECTION_MODEL_ID,
@@ -127,6 +132,7 @@ export function readDetectionModelCatalog(statusPayload: unknown): DetectionMode
       localBuildReason: "catalog_missing",
       localBuildRuntime: "",
       localBuildSourceLabel: "",
+      localBuildMissingTools: [],
       explicitConsentRequired: true,
       installJob: null,
       recommended: true,

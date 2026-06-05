@@ -355,6 +355,11 @@ def _catalog_entry(
         "local_build_backend": str(install_info.get("local_build_backend") or "").strip(),
         "local_build_runtime": str(install_info.get("local_build_runtime") or "").strip(),
         "local_build_source_label": str(install_info.get("local_build_source_label") or "").strip(),
+        "local_build_missing_tools": [
+            str(item or "").strip()
+            for item in list(install_info.get("local_build_missing_tools") or [])
+            if str(item or "").strip()
+        ],
         "input": {
             "width": int(manifest.input.width),
             "height": int(manifest.input.height),

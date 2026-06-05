@@ -30,6 +30,7 @@ type VisionDetectionCatalogItem = {
   localBuildReason: string;
   localBuildRuntime: string;
   localBuildSourceLabel: string;
+  localBuildMissingTools: string[];
   explicitConsentRequired: boolean;
   installJob: { status: string; phase: string; progressPct: number; error: string } | null;
 };
@@ -202,6 +203,9 @@ function readVisionDetectionCatalog(status: Record<string, unknown> | undefined)
         localBuildReason: String(raw.local_build_reason || "").trim(),
         localBuildRuntime: String(raw.local_build_runtime || "").trim(),
         localBuildSourceLabel: String(acquisition?.checkpoint_url || raw.local_build_source_label || acquisition?.source_url || "").trim(),
+        localBuildMissingTools: Array.isArray(raw.local_build_missing_tools)
+          ? raw.local_build_missing_tools.map((value) => String(value || "").trim()).filter(Boolean)
+          : [],
         explicitConsentRequired: !!acquisition?.explicit_consent_required,
         installJob: isRecord(raw.install_job)
           ? {

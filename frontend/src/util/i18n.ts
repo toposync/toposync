@@ -2092,6 +2092,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.local_build.reason.container_runtime_missing": "docker or podman was not found",
     "core.ui.processing_servers.local_build.reason.python_runtime_missing": "a compatible Python runtime was not found",
     "core.ui.processing_servers.local_build.reason.python_version_unsupported": "Python 3.10 or newer is required for this builder",
+    "core.ui.processing_servers.local_build.reason.rfdetr_build_tool_missing":
+      "the RF-DETR build toolchain is missing from this processing server",
     "core.ui.processing_servers.local_build.reason.insufficient_disk_space": "insufficient free disk space",
     "core.ui.pipelines.editor.step.drag_handle": "Reorder step",
 
@@ -4210,6 +4212,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.local_build.reason.container_runtime_missing": "docker ou podman não foi encontrado",
     "core.ui.processing_servers.local_build.reason.python_runtime_missing": "não foi encontrado um Python compatível",
     "core.ui.processing_servers.local_build.reason.python_version_unsupported": "este builder exige Python 3.10 ou mais recente",
+    "core.ui.processing_servers.local_build.reason.rfdetr_build_tool_missing":
+      "faltam ferramentas de build do RF-DETR neste servidor de processamento",
     "core.ui.processing_servers.local_build.reason.insufficient_disk_space": "não há espaço livre em disco suficiente",
     "core.ui.pipelines.editor.step.drag_handle": "Reordenar etapa",
 

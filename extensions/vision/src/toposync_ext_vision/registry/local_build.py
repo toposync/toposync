@@ -296,6 +296,22 @@ def _rfdetr_pip_spec() -> str:
     return str(os.getenv("TOPOSYNC_VISION_RFDETR_PIP_SPEC") or _DEFAULT_RFDETR_PIP_SPEC).strip() or _DEFAULT_RFDETR_PIP_SPEC
 
 
+_RFDETR_BUILD_TOOL_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("cmake", ("cmake",)),
+    ("c_compiler", ("cc", "gcc", "clang")),
+    ("cxx_compiler", ("c++", "g++", "clang++")),
+)
+
+
+def _missing_rfdetr_build_tools() -> list[str]:
+    missing: list[str] = []
+    for label, candidates in _RFDETR_BUILD_TOOL_GROUPS:
+        if any(shutil.which(candidate) for candidate in candidates):
+            continue
+        missing.append(label)
+    return missing
+
+
 def _minimum_disk_free_bytes() -> int:
     raw = str(os.getenv("TOPOSYNC_VISION_LOCAL_BUILDER_MIN_DISK_FREE_BYTES") or "").strip()
     if raw.isdigit():
@@ -552,6 +568,7 @@ def probe_local_builder(
         "disk_root": str(disk_root),
         "disk_free_bytes": disk_free_bytes,
         "minimum_disk_free_bytes": minimum_disk_free_bytes,
+        "missing_tools": [],
     }
     if manifest.task != "detection":
         result["reason"] = "task_unsupported"
@@ -585,6 +602,12 @@ def probe_local_builder(
         if version_tuple is None or version_tuple < (3, 10, 0):
             result["reason"] = "python_version_unsupported"
             return result
+        if _builder_family(manifest) == "rfdetr":
+            missing_tools = _missing_rfdetr_build_tools()
+            result["missing_tools"] = missing_tools
+            if missing_tools:
+                result["reason"] = "rfdetr_build_tool_missing"
+                return result
         result["supported"] = True
         result["reason"] = "ok"
         return result

@@ -110,7 +110,14 @@ COPY --from=wheel-build /wheelhouse /wheelhouse
 COPY --from=go2rtc-build /go2rtc/go2rtc /usr/local/bin/go2rtc
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tini ${TOPOSYNC_APT_PACKAGES} \
+ && apt-get install -y --no-install-recommends ca-certificates tini \
+    build-essential \
+    cmake \
+    ninja-build \
+    git \
+    pkg-config \
+    curl \
+    ${TOPOSYNC_APT_PACKAGES} \
  && rm -rf /var/lib/apt/lists/* \
  && python -m venv "${VIRTUAL_ENV}" \
  && "${VIRTUAL_ENV}/bin/python" -m pip install --upgrade pip \

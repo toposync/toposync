@@ -69,6 +69,7 @@ type VisionModelCatalogItem = {
   localBuildBackend: string;
   localBuildRuntime: string;
   localBuildSourceLabel: string;
+  localBuildMissingTools: string[];
   compatibleProviderIds: string[];
   acceleratorIds: string[];
   inputWidth: number;
@@ -215,6 +216,9 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
     localBuildBackend: String(raw.local_build_backend || "").trim(),
     localBuildRuntime: String(raw.local_build_runtime || "").trim(),
     localBuildSourceLabel: String(acquisition?.checkpoint_url || raw.local_build_source_label || acquisition?.source_url || "").trim(),
+    localBuildMissingTools: Array.isArray(raw.local_build_missing_tools)
+      ? raw.local_build_missing_tools.map((value) => String(value || "").trim()).filter(Boolean)
+      : [],
     compatibleProviderIds: Array.isArray(raw.compatible_provider_ids)
       ? raw.compatible_provider_ids.map((value) => String(value || "").trim()).filter(Boolean)
       : [],
@@ -289,6 +293,7 @@ function fallbackCatalogItem(
     localBuildBackend: "",
     localBuildRuntime: "",
     localBuildSourceLabel: "",
+    localBuildMissingTools: [],
     compatibleProviderIds: [],
     acceleratorIds: [],
     inputWidth: 0,

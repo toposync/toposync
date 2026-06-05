@@ -11,10 +11,12 @@ import {
   fetchCameraSourceHealth,
   fetchProcessingServerStatus,
   fetchProcessingServers,
+  fetchRtspSnapshot,
   fetchStreamPublications,
   installProcessingServerVisionModel,
   inspectOnvif,
   probeCameraRtsp,
+  probeRtsp,
   reconcileStreamPublications,
   updateCameraSourcePublication,
 } from "../api/camerasApi";
@@ -106,18 +108,29 @@ function modelSetupProgressLabel(item: DetectionModelCatalogItem, t: TranslateFn
 
 function useDelayedStatusText(active: boolean, initialText: string, delayedText: string, delayMs: number): string {
   const [delayed, setDelayed] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   useEffect(() => {
     if (!active) {
       setDelayed(false);
+      setElapsedSeconds(0);
       return undefined;
     }
     setDelayed(false);
+    setElapsedSeconds(0);
     const timer = window.setTimeout(() => setDelayed(true), Math.max(0, delayMs));
-    return () => window.clearTimeout(timer);
+    const interval = window.setInterval(() => {
+      setElapsedSeconds((value) => value + 1);
+    }, 1000);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(interval);
+    };
   }, [active, delayMs]);
 
-  return active && delayed ? delayedText : initialText;
+  const text = active && delayed ? delayedText : initialText;
+  if (!active || elapsedSeconds <= 0) return text;
+  return `${text} (${elapsedSeconds}s)`;
 }
 
 function ingestSelectValue(source: CameraSourceConfig): string {
@@ -162,6 +175,16 @@ function sourceOriginLabel(source: CameraSourceConfig, t: TranslateFn): string {
       : t("ext.cameras.settings.sources.origin.onvif", {}, "Perfil ONVIF");
   }
   return t("ext.cameras.settings.sources.origin.rtsp", {}, "RTSP manual");
+}
+
+function sourceRtspRequest(source: CameraSourceConfig): { url: string; username: string; password: string } | null {
+  const url = String(source.origin.rtsp_url || "").trim();
+  if (!url) return null;
+  return {
+    url,
+    username: String(source.origin.stream_username || ""),
+    password: String(source.origin.stream_password || ""),
+  };
 }
 
 function sourceResolutionLabel(source: CameraSourceConfig): string {
@@ -408,8 +431,8 @@ function CamerasSettingsPanelContent({
   const [snapshotBusy, setSnapshotBusy] = useState(false);
   const probeBusyMessage = useDelayedStatusText(
     probeBusy,
-    t("ext.cameras.settings.probe_progress", {}, "Testando RTSP... pode levar até 5s."),
-    t("ext.cameras.settings.probe_progress_waiting", {}, "Ainda testando RTSP... se expirar, revise a URL e credenciais."),
+    t("ext.cameras.settings.probe_progress", {}, "Testando RTSP... pode levar alguns segundos."),
+    t("ext.cameras.settings.probe_progress_waiting", {}, "Ainda testando RTSP... tentando transporte/fallback da câmera."),
     4500,
   );
   const snapshotBusyMessage = useDelayedStatusText(
@@ -417,9 +440,13 @@ function CamerasSettingsPanelContent({
     t(
       "ext.cameras.settings.snapshot_progress",
       {},
-      "Capturando snapshot... a primeira captura pode levar alguns segundos.",
+      "Capturando snapshot... câmeras RTSP podem levar até 10s.",
     ),
-    t("ext.cameras.settings.snapshot_progress_waiting", {}, "Ainda aguardando frame da câmera."),
+    t(
+      "ext.cameras.settings.snapshot_progress_waiting",
+      {},
+      "Ainda aguardando frame da câmera; se falhar, teste RTSP e revise a URL.",
+    ),
     8000,
   );
 
@@ -857,6 +884,16 @@ function CamerasSettingsPanelContent({
     setProbeError(null);
     setProbeResult(null);
     try {
+      const cameraPersisted = savedCameraIds?.has(camera.id) === true;
+      if (!cameraPersisted) {
+        const request = sourceRtspRequest(source);
+        if (!request) {
+          throw new Error(t("ext.cameras.settings.sources.rtsp_url_required", {}, "Informe a URL RTSP antes de testar."));
+        }
+        const result = await probeRtsp({ ...request, timeout_ms: 5000 });
+        setProbeResult(result);
+        return;
+      }
       const result = await probeCameraRtsp(camera.id, { source_id: source.id, timeout_ms: 5000 });
       setProbeResult(result);
     } catch (error) {
@@ -875,7 +912,17 @@ function CamerasSettingsPanelContent({
       return null;
     });
     try {
-      const blob = await fetchCameraSnapshot(camera.id, source.id);
+      const cameraPersisted = savedCameraIds?.has(camera.id) === true;
+      let blob: Blob;
+      if (cameraPersisted) {
+        blob = await fetchCameraSnapshot(camera.id, source.id);
+      } else {
+        const request = sourceRtspRequest(source);
+        if (!request) {
+          throw new Error(t("ext.cameras.settings.sources.rtsp_url_required", {}, "Informe a URL RTSP antes de capturar."));
+        }
+        blob = await fetchRtspSnapshot(request);
+      }
       const nextUrl = URL.createObjectURL(blob);
       setSnapshotUrl(nextUrl);
     } catch (error) {
@@ -1685,7 +1732,7 @@ function CamerasSettingsPanelContent({
         ) : null}
         {snapshotUrl ? <img src={snapshotUrl} alt={t("ext.cameras.settings.snapshot", {}, "Snapshot")} style={{ width: "100%" }} /> : null}
         {!snapshotError && !snapshotUrl ? (
-          <div className="cardBody">
+          <div className="cardBody" role="status">
             {snapshotBusy ? snapshotBusyMessage : t("ext.cameras.settings.snapshot", {}, "Snapshot")}
           </div>
         ) : null}

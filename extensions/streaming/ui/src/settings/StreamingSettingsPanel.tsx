@@ -77,6 +77,27 @@ type StreamingIssueSeverity = "critical" | "warning" | "info";
 const BROWSER_DEBUG_TRANSPORTS: BrowserDebugTransport[] = ["hls", "webrtc", "mse", "jsmpeg"];
 const STREAMING_SETTINGS_TABS: StreamingSettingsTab[] = ["live", "issues", "playback", "infrastructure", "advanced"];
 
+function enginePortFallbackWarningLabel(warning: string): string | null {
+  const text = String(warning || "").toLowerCase();
+  if (!text.includes("unavailable") || !text.includes("using")) return null;
+  if (text.includes("rtp/rtcp port pair")) return "RTP/RTCP";
+  if (text.includes("webrtc udp port")) return "WebRTC UDP";
+  if (text.includes("webrtc port")) return "WebRTC";
+  if (text.includes("rtsp port")) return "RTSP";
+  if (text.includes("hls port")) return "HLS";
+  if (text.includes("api port")) return "API";
+  if (text.includes("metrics port")) return "metrics";
+  return null;
+}
+
+function uniqueLabels(labels: string[]): string[] {
+  const unique: string[] = [];
+  for (const label of labels) {
+    if (label && !unique.includes(label)) unique.push(label);
+  }
+  return unique;
+}
+
 function toSafeInt(value: string, fallback: number): number {
   const parsed = Number.parseInt(String(value || "").trim(), 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -596,6 +617,7 @@ function StreamingSettingsPanelContent({
   const [enginePendingAction, setEnginePendingAction] = useState<"start" | "stop" | "restart" | "reclaim" | "download" | "refresh" | null>(null);
   const [engineStatus, setEngineStatus] = useState<EngineStatusResponse | null>(null);
   const [engineError, setEngineError] = useState<string | null>(null);
+  const [enginePortDetailsOpen, setEnginePortDetailsOpen] = useState(false);
 
   const [runtimeHealthLoading, setRuntimeHealthLoading] = useState(true);
   const [runtimeHealth, setRuntimeHealth] = useState<StreamingRuntimeHealthResponse | null>(null);
@@ -1653,6 +1675,10 @@ function StreamingSettingsPanelContent({
     Boolean(engineNetworkContract) &&
     engineNetworkContractStatus !== "ok" &&
     engineNetworkContractStatus !== "not_applicable";
+  const engineWarnings = Array.isArray(engineStatus?.warnings) ? engineStatus.warnings : [];
+  const enginePortFallbackWarnings = engineWarnings.filter((warning) => enginePortFallbackWarningLabel(warning));
+  const engineOtherWarnings = engineWarnings.filter((warning) => !enginePortFallbackWarningLabel(warning));
+  const enginePortFallbackLabels = uniqueLabels(enginePortFallbackWarnings.map((warning) => enginePortFallbackWarningLabel(warning) ?? ""));
   const primaryEngineAction = engineRunning ? "restart" : "start";
   const primaryEngineLabel =
     enginePendingAction === "start"
@@ -2709,9 +2735,36 @@ function StreamingSettingsPanelContent({
             </div>
           ) : null}
 
-          {Array.isArray(engineStatus?.warnings) && engineStatus.warnings.length > 0 ? (
+          {enginePortFallbackWarnings.length > 0 ? (
             <div style={{ marginTop: 6 }}>
-              {engineStatus.warnings.map((warning, index) => (
+              <div className="cardMeta">
+                {t(
+                  "ext.streaming.engine.port_fallback_summary",
+                  { ports: enginePortFallbackLabels.join(", ") },
+                  `Portas ajustadas automaticamente: ${enginePortFallbackLabels.join(", ")}. O runtime está usando as portas disponíveis.`,
+                )}
+              </div>
+              <details
+                className="cardMeta"
+                open={enginePortDetailsOpen}
+                onToggle={(event) => setEnginePortDetailsOpen(event.currentTarget.open)}
+                style={{ marginTop: 4 }}
+              >
+                <summary>{t("ext.streaming.engine.port_fallback_details", {}, "Detalhes técnicos das portas")}</summary>
+                {enginePortDetailsOpen
+                  ? enginePortFallbackWarnings.map((warning, index) => (
+                      <div key={`${warning}-${index}`} style={{ marginTop: 4 }}>
+                        {warning}
+                      </div>
+                    ))
+                  : null}
+              </details>
+            </div>
+          ) : null}
+
+          {engineOtherWarnings.length > 0 ? (
+            <div style={{ marginTop: 6 }}>
+              {engineOtherWarnings.map((warning, index) => (
                 <div className="cardMeta" key={`${warning}-${index}`} style={index > 0 ? { marginTop: 4 } : undefined}>
                   {warning}
                 </div>

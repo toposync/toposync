@@ -574,6 +574,26 @@ def _rtsp_stream2_fallback(rtsp_url: str) -> str | None:
     return urllib.parse.urlunsplit(parsed._replace(path=new_path))
 
 
+def _rtsp_url_candidates(rtsp_url: str) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = [("configured", rtsp_url)]
+    stream2 = _rtsp_stream2_fallback(rtsp_url)
+    if stream2 and stream2 != rtsp_url:
+        candidates.append(("fallback_stream2", stream2))
+    return candidates
+
+
+def _bounded_rtsp_attempt_timeout(
+    *,
+    remaining_s: float,
+    attempts_left: int,
+    max_attempt_s: float,
+) -> float:
+    if attempts_left <= 1:
+        return max(0.0, remaining_s)
+    fair_share_s = remaining_s / max(1, attempts_left)
+    return max(0.05, min(remaining_s, max_attempt_s, max(0.75, fair_share_s * 2.0)))
+
+
 @dataclass(frozen=True, slots=True)
 class RtspSnapshotResult:
     blob: bytes
@@ -590,76 +610,83 @@ class SnapshotCacheEntry:
 
 
 async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> RtspSnapshotResult:
-    if shutil.which("ffmpeg") is None:
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
         raise HTTPException(status_code=500, detail="ffmpeg is required to capture RTSP snapshots")
 
-    timeout_s = max(1.5, timeout_ms / 1000)
-    timeout_us = int(max(0, timeout_ms) * 1000)
+    timeout_s = max(1.5, float(timeout_ms) / 1000.0)
 
     # Some RTSP servers misbehave when clients negotiate audio+video; for snapshots we only need video.
     # Also, a few servers only work reliably over UDP even when TCP is requested.
-    attempts: list[tuple[str, list[str]]] = [
-        ("tcp", ["-rtsp_transport", "tcp"]),
-        ("udp", ["-rtsp_transport", "udp"]),
-    ]
+    attempts: list[tuple[str, str, str, list[str]]] = []
+    for source, url in _rtsp_url_candidates(rtsp_url):
+        attempts.append((source, "tcp", url, ["-rtsp_transport", "tcp"]))
+        attempts.append((source, "udp", url, ["-rtsp_transport", "udp"]))
 
-    url_candidates: list[tuple[str, str]] = [("configured", rtsp_url)]
-    stream2 = _rtsp_stream2_fallback(rtsp_url)
-    if stream2 and stream2 != rtsp_url:
-        url_candidates.append(("fallback_stream2", stream2))
-
+    started = time.monotonic()
+    deadline = started + timeout_s
     last_error = "Failed to capture RTSP snapshot"
 
-    for source, url in url_candidates:
-        for name, rtsp_args in attempts:
-            args = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-timeout",
-                str(timeout_us),
-                *rtsp_args,
-                "-allowed_media_types",
-                "video",
-                "-i",
-                url,
-                "-an",
-                "-sn",
-                "-dn",
-                "-frames:v",
-                "1",
-                "-f",
-                "image2pipe",
-                "-vcodec",
-                "mjpeg",
-                "pipe:1",
-            ]
+    for index, (source, transport, url, rtsp_args) in enumerate(attempts):
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0.05:
+            last_error = f"Snapshot timed out after {int(round(timeout_s * 1000))} ms"
+            break
 
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+        attempt_timeout_s = _bounded_rtsp_attempt_timeout(
+            remaining_s=remaining_s,
+            attempts_left=len(attempts) - index,
+            max_attempt_s=min(4.5, timeout_s),
+        )
+        attempt_timeout_us = int(max(50_000, attempt_timeout_s * 1_000_000))
+        args = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-timeout",
+            str(attempt_timeout_us),
+            *rtsp_args,
+            "-allowed_media_types",
+            "video",
+            "-i",
+            url,
+            "-an",
+            "-sn",
+            "-dn",
+            "-frames:v",
+            "1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "pipe:1",
+        ]
 
-            try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s + 2.0)
-            except TimeoutError:
-                proc.kill()
-                await proc.communicate()
-                last_error = f"Snapshot timed out (transport={name}, source={source})"
-                continue
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
 
-            if proc.returncode == 0 and stdout:
-                return RtspSnapshotResult(blob=stdout, source=source, transport=name)
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=attempt_timeout_s)
+        except TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            last_error = f"Snapshot timed out (transport={transport}, source={source})"
+            continue
 
-            message = (stderr or b"").decode("utf-8", errors="ignore").strip()
-            message = _redact_rtsp_credentials(message)
-            if message:
-                last_error = f"{message} (transport={name}, source={source})"
-            else:
-                last_error = f"Failed to capture RTSP snapshot (transport={name}, source={source})"
+        if proc.returncode == 0 and stdout:
+            return RtspSnapshotResult(blob=stdout, source=source, transport=transport)
+
+        message = (stderr or b"").decode("utf-8", errors="ignore").strip()
+        message = _redact_rtsp_credentials(message)
+        if message:
+            last_error = f"{message} (transport={transport}, source={source})"
+        else:
+            last_error = f"Failed to capture RTSP snapshot (transport={transport}, source={source})"
 
     raise HTTPException(status_code=502, detail=last_error)
 
@@ -677,11 +704,7 @@ async def _ffmpeg_rtsp_probe(rtsp_url: str, *, timeout_ms: int) -> RtspProbeResp
 
     timeout_s = max(1.0, float(timeout_ms) / 1000.0)
     attempts: list[tuple[str, str, list[str]]] = []
-    url_candidates: list[tuple[str, str]] = [("configured", rtsp_url)]
-    stream2 = _rtsp_stream2_fallback(rtsp_url)
-    if stream2 and stream2 != rtsp_url:
-        url_candidates.append(("fallback_stream2", stream2))
-    for source, url in url_candidates:
+    for source, url in _rtsp_url_candidates(rtsp_url):
         attempts.append((source, "tcp", ["-rtsp_transport", "tcp", "-i", url]))
         attempts.append((source, "udp", ["-rtsp_transport", "udp", "-i", url]))
 

@@ -153,8 +153,7 @@ export async function fetchRtspSnapshot(
     signal,
   });
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(detail || `Snapshot failed: ${response.status}`);
+    throw new Error(await readErrorDetail(response, `Snapshot failed: ${response.status}`));
   }
   return response.blob();
 }
@@ -207,8 +206,7 @@ export async function fetchCameraSnapshot(cameraId: string, sourceIdOrSignal: st
   const query = resolved.sourceId ? `?source_id=${encodeURIComponent(resolved.sourceId)}` : "";
   const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot${query}`, { signal: resolved.signal });
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(detail || `Snapshot failed: ${response.status}`);
+    throw new Error(await readErrorDetail(response, `Snapshot failed: ${response.status}`));
   }
   return response.blob();
 }

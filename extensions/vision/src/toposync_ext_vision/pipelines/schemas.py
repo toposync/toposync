@@ -10,6 +10,54 @@ VisionDetectEmitMode = Literal["annotate", "events", "filter"]
 VisionTrackWorldAnchorMode = Literal["auto", "always", "never"]
 
 
+class VisionSyntheticDetectionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = "person"
+    label_id: int | None = 0
+    score: float = Field(default=0.95, ge=0.0, le=1.0)
+    bbox01: tuple[float, float, float, float] = (0.45, 0.25, 0.55, 0.85)
+
+    @field_validator("label")
+    @classmethod
+    def _normalize_label(cls, value: str) -> str:
+        label = str(value or "").strip().lower()
+        if not label:
+            raise ValueError("label is required")
+        return label
+
+
+class VisionSyntheticDetectionSourceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stream_id: str = "camera:synthetic"
+    camera_id: str = "synthetic-camera"
+    camera_name: str = "Synthetic Camera"
+    source_id: str = "synthetic"
+    source_name: str = "Synthetic"
+    model_id: str = "synthetic.detector"
+    width: int = Field(default=1280, ge=8, le=8192)
+    height: int = Field(default=720, ge=8, le=8192)
+    frames: int = Field(default=8, ge=1, le=10_000)
+    interval_seconds: float = Field(default=0.05, ge=0.0, le=60.0)
+    close_on_last_frame: bool = False
+    detections: list[VisionSyntheticDetectionConfig] = Field(
+        default_factory=lambda: [VisionSyntheticDetectionConfig()]
+    )
+
+    @field_validator("stream_id", "camera_id", "camera_name", "source_id", "source_name", "model_id")
+    @classmethod
+    def _trim_strings(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @field_validator("detections")
+    @classmethod
+    def _require_detection(cls, value: list[VisionSyntheticDetectionConfig]) -> list[VisionSyntheticDetectionConfig]:
+        if not value:
+            raise ValueError("detections must contain at least one item")
+        return value
+
+
 class VisionDetectConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

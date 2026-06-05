@@ -16,6 +16,7 @@ from toposync_ext_vision.pipelines import (
     VisionDetectConfig,
     VisionPoseEstimateConfig,
     VisionSegmentInstancesConfig,
+    VisionSyntheticDetectionSourceConfig,
     VisionTrackConfig,
     register_vision_pipeline_operators,
 )
@@ -409,6 +410,20 @@ def test_register_vision_pipeline_operators_does_not_expose_event_assembler() ->
     register_vision_pipeline_operators(registry)
 
     assert registry.get("vision.event_assembler") is None
+
+
+def test_register_vision_pipeline_operators_exposes_synthetic_detection_source() -> None:
+    registry = OperatorRegistry()
+
+    register_vision_pipeline_operators(registry)
+    operator = registry.get("vision.synthetic_detection_source")
+
+    assert operator is not None
+    assert operator.owner == "com.toposync.vision"
+    assert operator.definition.inputs == []
+    assert "source" in list(operator.definition.capabilities or [])
+    assert "test" in list(operator.definition.capabilities or [])
+    assert operator.definition.defaults == VisionSyntheticDetectionSourceConfig().model_dump(mode="json")
 
 
 def test_register_vision_pipeline_operators_exposes_group_events() -> None:

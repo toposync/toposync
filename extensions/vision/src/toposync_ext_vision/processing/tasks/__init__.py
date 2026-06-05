@@ -4,6 +4,7 @@ from .detection import VisionDetectRuntime
 from .group_events import VisionGroupEventsRuntime
 from .pose import VisionPoseEstimateRuntime
 from .segmentation import VisionSegmentInstancesRuntime
+from .synthetic_detection_source import VisionSyntheticDetectionSourceRuntime
 from .tracking import VisionTrackRuntime
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "VisionGroupEventsRuntime",
     "VisionPoseEstimateRuntime",
     "VisionSegmentInstancesRuntime",
+    "VisionSyntheticDetectionSourceRuntime",
     "VisionTrackRuntime",
 ]

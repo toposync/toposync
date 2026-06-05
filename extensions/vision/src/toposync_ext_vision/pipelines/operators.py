@@ -12,6 +12,7 @@ from ..processing.tasks import (
     VisionGroupEventsRuntime,
     VisionPoseEstimateRuntime,
     VisionSegmentInstancesRuntime,
+    VisionSyntheticDetectionSourceRuntime,
     VisionTrackRuntime,
 )
 from ..registry import ModelRegistry, build_default_model_registry
@@ -22,6 +23,7 @@ from .schemas import (
     VisionGroupEventsConfig,
     VisionPoseEstimateConfig,
     VisionSegmentInstancesConfig,
+    VisionSyntheticDetectionSourceConfig,
     VisionTrackConfig,
 )
 
@@ -139,6 +141,48 @@ def _vision_model_diagnostics(task: str) -> Any:
 
 
 def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
+    if registry.get("vision.synthetic_detection_source") is None:
+        registry.register_operator(
+            operator_id="vision.synthetic_detection_source",
+            description=(
+                "Deterministic synthetic camera source that emits frame artifacts with "
+                "payload['vision']['detections'] for onboarding, demos, and smoke tests."
+            ),
+            config_model=VisionSyntheticDetectionSourceConfig,
+            inputs=[],
+            outputs=[{"name": "out"}],
+            capabilities=["vision", "detection", "source", "test", "demo"],
+            defaults=VisionSyntheticDetectionSourceConfig().model_dump(),
+            produces_payload_keys=[
+                "vision",
+                "frame_ts",
+                "frame_index",
+                "camera_id",
+                "camera_name",
+                "frame_width",
+                "frame_height",
+                "source_stream_id",
+            ],
+            produces_artifacts=[MAIN_ARTIFACT_NAME],
+            produces_source_fields=[
+                "device_id",
+                "source_id",
+                "source_name",
+                "view_id",
+                "role",
+                "kind",
+                "modality",
+                "name",
+                "transport",
+                "clock_domain",
+            ],
+            produces_media_fields=["modality", "ts", "width", "height", "frame_rate"],
+            output_modalities=["video"],
+            expression_hints=_vision_expression_hints(branch="detections"),
+            share_strategy="never",
+            owner="com.toposync.vision",
+            runtime_factory=lambda config, _deps: VisionSyntheticDetectionSourceRuntime(config),
+        )
     if registry.get("vision.classify_image") is None:
         registry.register_operator(
             operator_id="vision.classify_image",

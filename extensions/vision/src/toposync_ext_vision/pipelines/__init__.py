@@ -63,6 +63,14 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "toposync_ext_vision.pipelines.schemas",
         "VisionSegmentInstancesConfig",
     ),
+    "VisionSyntheticDetectionConfig": (
+        "toposync_ext_vision.pipelines.schemas",
+        "VisionSyntheticDetectionConfig",
+    ),
+    "VisionSyntheticDetectionSourceConfig": (
+        "toposync_ext_vision.pipelines.schemas",
+        "VisionSyntheticDetectionSourceConfig",
+    ),
     "VisionTrackConfig": ("toposync_ext_vision.pipelines.schemas", "VisionTrackConfig"),
     "VisionClassifyImageRuntime": (
         "toposync_ext_vision.processing.tasks",
@@ -84,6 +92,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "VisionSegmentInstancesRuntime": (
         "toposync_ext_vision.processing.tasks",
         "VisionSegmentInstancesRuntime",
+    ),
+    "VisionSyntheticDetectionSourceRuntime": (
+        "toposync_ext_vision.processing.tasks",
+        "VisionSyntheticDetectionSourceRuntime",
     ),
     "VisionTrackRuntime": ("toposync_ext_vision.processing.tasks", "VisionTrackRuntime"),
     "available_onnxruntime_execution_providers": (

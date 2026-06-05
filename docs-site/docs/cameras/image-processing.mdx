@@ -8,4 +8,90 @@ sidebar_position: 4
 
 # Image processing {/* #image-processing */}
 
-This page is under construction.
+Image processing turns camera frames into useful signals: motion, detections,
+tracking, crops, snapshots, notifications, or pipeline events.
+
+In the default product, vision starts on CPU through ONNX Runtime. GPU
+acceleration is an upgrade path, not a requirement for first setup.
+
+## Start simple {/* #start-simple */}
+
+Validate camera access before adding image processing:
+
+1. Add the camera.
+2. Confirm the snapshot or video source works.
+3. Publish the source for live viewing if needed.
+4. Create or generate a simple pipeline.
+5. Add heavier vision steps only after the stream is stable.
+
+This avoids debugging camera access, streaming, and vision at the same time.
+
+## Local CPU processing {/* #local-cpu-processing */}
+
+CPU processing is the default because it is easiest to install and works across
+more environments.
+
+It is good for:
+
+- early testing;
+- low camera counts;
+- occasional snapshots;
+- simple pipelines;
+- machines with enough CPU headroom.
+
+It can become limited when several cameras decode video and run vision models at
+the same time, especially on small ARM devices.
+
+## Processing servers {/* #processing-servers */}
+
+Use a processing server when the origin machine or Home Assistant OS add-on
+should not handle heavy camera work.
+
+Common reasons:
+
+- Home Assistant runs on a Raspberry Pi or small mini PC;
+- one machine has a better CPU or NVIDIA GPU;
+- camera decoding should happen closer to the cameras;
+- you want to isolate experiments from the main origin.
+
+See [Processing server on Linux and macOS](../installation/processing-server-linux-macos.mdx),
+[Processing server as a Windows service](../installation/processing-server-windows-service.mdx),
+and [Processing server on Docker](../installation/processing-server-docker.mdx).
+
+## GPU upgrades {/* #gpu-upgrades */}
+
+Install Toposync first, then add acceleration if diagnostics show it is useful.
+
+- Windows GPU: `toposync-vision-directml`.
+- NVIDIA native or Docker CUDA: `toposync-vision-cuda`.
+- CPU default: no extra GPU package.
+
+See [Compatibility](../installation/architecture-support.mdx) before choosing a
+GPU path.
+
+## Practical limits {/* #practical-limits */}
+
+For early access testing:
+
+- start with one camera;
+- prefer lower-resolution streams for continuous analysis;
+- keep high-resolution sources for fullscreen viewing or targeted inspection;
+- avoid running multiple heavy vision pipelines on Raspberry Pi-class hardware;
+- delegate repeated decoding and ONNX workloads when possible.
+
+## Troubleshooting {/* #troubleshooting */}
+
+### Detection is slow {/* #detection-is-slow */}
+
+Reduce resolution, lower frame rate, test one camera at a time, or move the
+pipeline to a processing server.
+
+### The camera works but the pipeline does not {/* #camera-works-pipeline-does-not */}
+
+Confirm that the pipeline reads the intended camera source and that
+`processing_server_id` points to the server where the camera source is reachable.
+
+### GPU package installed but CPU is still used {/* #gpu-package-installed-but-cpu-used */}
+
+Check runtime diagnostics and provider order. The GPU package only helps when
+the driver, runtime, platform, and ONNX Runtime provider are all available.

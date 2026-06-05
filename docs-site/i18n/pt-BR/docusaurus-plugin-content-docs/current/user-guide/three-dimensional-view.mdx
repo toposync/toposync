@@ -8,4 +8,46 @@ sidebar_position: 3
 
 # Visualização 3D {/* #three-dimensional-view */}
 
-Esta página está em construção.
+A visualização 3D ajuda a inspecionar uma composição como cena espacial.
+
+Use depois que a estrutura 2D básica existir, ou quando posicionamento de
+câmeras, modelos e contexto espacial forem mais importantes do que edição de
+cima.
+
+## Para que usar {/* #what-to-use-it-for */}
+
+A visualização 3D é útil para:
+
+- conferir se paredes, áreas e câmeras fazem sentido espacialmente;
+- posicionar objetos 3D leves;
+- entender direção e cobertura de câmeras;
+- revisar entidades do Home Assistant no contexto;
+- inspecionar Spatial Camera Mapping e visualizações renderizadas de câmeras
+  conforme esses workflows amadurecem.
+
+## Modelos devem ser leves {/* #models-should-be-lightweight */}
+
+O Toposync aceita modelos `GLB` ou `GLTF` leves pelo workflow de modelos.
+
+No estágio atual do produto, prefira:
+
+- modelos low-poly;
+- texturas pequenas;
+- móveis ou objetos simplificados;
+- modelos que expliquem o espaço em vez de decorar cada detalhe.
+
+Modelos pesados podem deixar o navegador mais lento e desviar do objetivo
+operacional da composição.
+
+## 2D e 3D trabalham juntos {/* #2d-and-3d-work-together */}
+
+Use a visualização 2D para decalque e estrutura. Use a visualização 3D para
+revisão espacial.
+
+Se algo parecer errado em 3D, normalmente corrija primeiro posição base, escala
+ou layout de paredes em 2D.
+
+## Nota alpha {/* #alpha-note */}
+
+A experiência 3D está em trabalho ativo de produto. Espere que as versões mobile
+e TV do app repensem partes do modelo de interação 3D com o tempo.

@@ -8,4 +8,91 @@ sidebar_position: 2
 
 # RTSP {/* #rtsp */}
 
-Esta página está em construção.
+RTSP é uma das formas mais comuns de trazer vídeo de câmeras de rede para o
+Toposync.
+
+Use RTSP quando a câmera, NVR, Frigate, go2rtc ou outro serviço local expõe uma
+URL de stream de vídeo.
+
+RTSP é sobre transporte de vídeo. ONVIF também é suportado, mas é usado para
+descoberta de câmeras, metadados, snapshots, descoberta de perfis de stream,
+eventos e controles PTZ quando a câmera suporta. Para o modelo mais amplo de
+câmeras, veja [Visão geral de câmeras](overview.mdx).
+
+## O que você precisa {/* #what-you-need */}
+
+Uma fonte RTSP utilizável normalmente precisa de:
+
+- endereço IP da câmera ou do host de restream;
+- porta RTSP, comumente `554` ou uma porta específica do fabricante;
+- path do stream;
+- credenciais, quando a câmera exige autenticação;
+- acesso de rede da máquina que roda o Toposync até a câmera.
+
+Formato típico da URL:
+
+```text
+rtsp://usuario:senha@ip-da-camera:554/path
+```
+
+Os paths exatos dependem do fabricante. Consulte a documentação da câmera, NVR,
+Frigate ou go2rtc para encontrar o path correto.
+
+## Fluxo recomendado {/* #recommended-flow */}
+
+1. Adicione a câmera no Toposync.
+2. Adicione uma fonte RTSP.
+3. Valide snapshot ou acesso de vídeo.
+4. Atribua um papel para a fonte, como `main` ou `sub`.
+5. Habilite live viewing só depois que a fonte estiver estável.
+6. Posicione a câmera em uma composição quando estiver pronto para Spatial Camera Mapping.
+
+Se a câmera expõe múltiplos streams RTSP, use o stream de menor resolução como
+`sub` para grades e o de maior resolução como `main` para inspeção em tela cheia.
+
+## Observações de rede {/* #network-notes */}
+
+O Toposync precisa alcançar a fonte RTSP a partir do runtime que vai lê-la.
+
+- Uma instalação Python local lê a partir da máquina local.
+- Docker lê a partir da rede do container.
+- O add-on Home Assistant OS lê a partir do container do add-on.
+- Um processing server lê a partir da máquina do processing server quando a carga
+  da câmera é delegada.
+
+Evite `127.0.0.1` em URLs RTSP, a menos que a câmera ou o serviço de restream
+esteja rodando dentro do mesmo runtime. Use um IP de LAN ou hostname alcançável
+pelo processo do Toposync.
+
+## Credenciais {/* #credentials */}
+
+Use uma conta da câmera com apenas as permissões necessárias para o Toposync. Em
+testes de early access, prefira uma rede contida e evite expor RTSP diretamente
+para a internet.
+
+Se as credenciais tiverem caracteres especiais, a URL RTSP pode precisar de URL
+encoding. Quando possível, use campos de usuário e senha na UI em vez de embutir
+credenciais diretamente na URL.
+
+## Solução de problemas {/* #troubleshooting */}
+
+### Connection refused {/* #connection-refused */}
+
+O host está acessível, mas a porta RTSP está fechada ou bloqueada. Confira a
+porta da câmera, firewall, caminho de rede do Docker e se a fonte está exposta
+na interface esperada.
+
+### Unauthorized {/* #unauthorized */}
+
+As credenciais estão erradas ou a conta da câmera não tem acesso ao stream.
+Valide a mesma URL no VLC, FFmpeg, Frigate ou outra ferramenta local.
+
+### Funciona no host, mas não no Docker ou Home Assistant OS {/* #works-on-host-but-not-runtime */}
+
+A URL pode ser válida apenas a partir da sua máquina host. Use um endereço
+alcançável pelo container ou runtime do add-on, não `localhost`.
+
+### O stream abre, mas o live view fica instável {/* #unstable-live-view */}
+
+Comece com um stream de menor resolução e valide [Live viewing](live-viewing.mdx)
+antes de adicionar visão ou pipelines de processamento.

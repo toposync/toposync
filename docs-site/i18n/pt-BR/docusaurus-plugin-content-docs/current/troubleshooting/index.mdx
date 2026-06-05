@@ -1,11 +1,96 @@
 ---
 title: Solução de problemas
-description: "Resolva problemas de instalação, inicialização, acesso pelo navegador, add-on Home Assistant OS e streaming no Toposync."
-keywords: ["toposync", "local-first", "automação residencial", "solução de problemas", "instalação", "suporte"]
+description: "Resolva problemas do Toposync durante o Alpha Early Access, encontre guias focados para instalação, Home Assistant OS, câmeras, streaming, processing servers, configuração, portas e arquivos, e reporte bugs no GitHub."
+keywords: ["toposync", "local-first", "automação residencial", "solução de problemas", "Alpha Early Access", "bugs", "GitHub issues", "suporte"]
 image: /img/social-card.png
 sidebar_position: 1
 ---
 
 # Solução de problemas {/* #troubleshooting */}
 
-Esta página está em construção.
+Toposync está em **Alpha Early Access**. Isso significa que troubleshooting faz parte do trabalho de produto neste momento: existem muitos sistemas operacionais, câmeras, protocolos, instalações de Home Assistant, hosts Docker, GPUs, navegadores, redes e caminhos de instalação para validar.
+
+Esta página é o ponto de partida. Guias de troubleshooting mais focados serão adicionados com o tempo.
+
+## Primeiras verificações {/* #first-checks */}
+
+Comece pelo básico:
+
+1. Confirme qual caminho de instalação você está usando: Python, Docker, add-on do Home Assistant OS ou processing server.
+2. Confirme que o processo do Toposync está rodando.
+3. Abra o endpoint de health quando disponível, normalmente `/api/health`.
+4. Confira o console do navegador ou logs do servidor.
+5. Confirme o diretório de dados ativo e os locais de arquivos.
+6. Reinicie depois de alterar variáveis de ambiente ou flags de linha de comando.
+
+Se o problema envolve câmeras, anote protocolo e modelo da câmera. Se envolve Home Assistant OS, anote versão do add-on, arquitetura do host e se o problema acontece por ingress, porta direta ou ambos.
+
+## Encontre o guia focado {/* #find-the-focused-guide */}
+
+| Área | Use este guia |
+| --- | --- |
+| Escolher o caminho de instalação | [Escolha sua instalação](../installation/choose-your-installation.mdx) |
+| Python no Linux/macOS | [Python no Linux e macOS](../installation/python-linux-macos.mdx) |
+| Python no Windows | [Python no Windows](../installation/python-windows.mdx) |
+| Docker CPU | [Docker CPU](../installation/docker-cpu.mdx) |
+| Docker CUDA | [Docker CUDA](../installation/docker-cuda.mdx) |
+| Instalação do add-on Home Assistant OS | [Add-on para Home Assistant OS](../installation/home-assistant-addon.mdx) |
+| Operação no Home Assistant OS | [Solução de problemas do add-on Home Assistant](../home-assistant-addon/troubleshooting.mdx) |
+| Processing server no Linux/macOS | [Processing server no Linux e macOS](../installation/processing-server-linux-macos.mdx) |
+| Processing server no Windows | [Serviço Windows de processamento](../installation/processing-server-windows-service.mdx) |
+| Processing server com Docker | [Processing server com Docker](../installation/processing-server-docker.mdx) |
+| Visualização ao vivo e streaming | [Visualização ao vivo de câmeras](../cameras/live-viewing.mdx) |
+| Portas e connection refused | [Portas](../reference/ports.mdx) |
+| Variáveis de ambiente | [Variáveis de ambiente](../reference/environment-variables.mdx) |
+| Diretório de dados e uso de disco | [Locais de arquivos](../reference/file-locations.mdx) |
+| Settings quebrados ou recuperação de config | [Configuração](../reference/configuration.mdx) |
+
+## Sintomas comuns {/* #common-symptoms */}
+
+| Sintoma | Primeiro lugar para verificar |
+| --- | --- |
+| Navegador não abre o Toposync | Logs do processo, bind de porta, [Portas](../reference/ports.mdx). |
+| `connection refused` | Host errado, porta errada, serviço parado, porta do container não publicada ou porta direta do add-on Home Assistant desabilitada. |
+| UI carrega, mas câmeras não | URL da câmera, credenciais RTSP/ONVIF, fonte de stream, [Visualização ao vivo de câmeras](../cameras/live-viewing.mdx). |
+| Sidebar do Home Assistant funciona, mas URL direta não | Configurações de rede do add-on, ingress versus modo de porta direta, [Solução de problemas do add-on Home Assistant](../home-assistant-addon/troubleshooting.mdx). |
+| Pipelines não produzem eventos | Estado enabled do pipeline, diagnósticos de operadores, mapeamento de câmera, atribuição de processing server. |
+| Processing server não é acessível | Basic auth, URL do host, firewall, status do serviço e o guia de instalação do processing server correspondente. |
+| Uso de disco cresce | Diretório de dados, arquivos gerados, snapshots de pipeline, arquivos de runtime de streaming, [Locais de arquivos](../reference/file-locations.mdx). |
+
+## Abra uma issue no GitHub {/* #open-a-github-issue */}
+
+Para bugs comuns, use [GitHub Issues](https://github.com/toposync/toposync/issues).
+
+Boas issues ajudam o projeto a validar o mundo real mais rápido. Inclua:
+
+- versão do Toposync;
+- caminho de instalação;
+- sistema operacional e arquitetura;
+- navegador ou superfície do app;
+- versão do Home Assistant OS/add-on quando relevante;
+- modelo da câmera e protocolo quando relevante;
+- detalhes de Docker, GPU, DirectML, CUDA ou processing server quando relevante;
+- comportamento esperado;
+- comportamento observado;
+- logs e screenshots sanitizados;
+- passos exatos para reproduzir.
+
+Não inclua senhas, tokens, URLs privadas, credenciais de câmera, imagens privadas de câmera, dados pessoais ou detalhes de vulnerabilidade em uma issue pública.
+
+## Contribua com correções ou docs {/* #contribute-fixes-or-docs */}
+
+Contribuições são bem-vindas. Comece pelo [CONTRIBUTING.md](https://github.com/toposync/toposync/blob/main/CONTRIBUTING.md) para setup, fluxo de desenvolvimento, testes, regras de documentação e expectativas de pull request.
+
+Contribuições pequenas e focadas são especialmente úteis durante o Alpha Early Access:
+
+- melhorar docs de instalação;
+- adicionar notas de troubleshooting a partir de dispositivos reais;
+- reportar detalhes de compatibilidade de câmeras;
+- corrigir links quebrados ou passos pouco claros;
+- adicionar testes focados em distribuição ou comportamento no Home Assistant.
+
+## Problemas de segurança {/* #security-issues */}
+
+Não reporte vulnerabilidades em issues públicas.
+
+Use private vulnerability reporting do GitHub ou um GitHub Security Advisory privado quando disponível. Veja [SECURITY.md](https://github.com/toposync/toposync/blob/main/SECURITY.md).

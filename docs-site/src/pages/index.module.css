@@ -51,6 +51,30 @@
   gap: 0.8rem;
 }
 
+.productLink {
+  margin: 0.9rem 0 0;
+  color: var(--topo-text-subtle);
+  font-size: 0.96rem;
+  line-height: 1.5;
+}
+
+.productLink a {
+  color: var(--ifm-link-color);
+  font-weight: 850;
+  text-decoration: none;
+  text-underline-offset: 0.22em;
+}
+
+.productLink a::after {
+  content: " ->";
+  color: var(--topo-amber);
+}
+
+.productLink a:hover {
+  color: var(--topo-text);
+  text-decoration: underline;
+}
+
 .section {
   padding: clamp(1.25rem, 3vw, 2.25rem) 0;
 }

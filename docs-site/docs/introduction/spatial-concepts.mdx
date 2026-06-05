@@ -1,0 +1,88 @@
+---
+title: Spatial concepts
+description: "Understand Toposync product language: Spatial Home Automation, Spatial Intelligence, Spatial Camera Mapping, Spatial Events, and Spatial Awareness."
+keywords: ["toposync", "Spatial Home Automation", "Spatial Intelligence", "Spatial Camera Mapping", "Spatial Events", "Spatial Awareness", "home automation"]
+image: /img/social-card.png
+sidebar_position: 4
+---
+
+# Spatial concepts {/* #spatial-concepts */}
+
+Toposync uses spatial language to describe the product category it is building. These terms help explain the product, but they do not replace precise technical labels.
+
+Keep using technical terms when they matter: RTSP, ONVIF, PTZ, pipelines, processing servers, areas, camera mapping, Home Assistant entities, and ONNX still mean their concrete operational features.
+
+## Spatial Home Automation {/* #spatial-home-automation */}
+
+**Spatial Home Automation** is the main category. It means home automation organized around mapped spaces instead of only device lists, camera feeds, and isolated automations.
+
+In Toposync, a room, area, camera, device, event, and automation can share the same composition. That gives the system a physical context for decisions and visualization.
+
+Example:
+
+- a person on the sidewalk may be normal;
+- a person in the backyard at night may matter;
+- the same event near the pool may require different attention;
+- nearby lights or controls can be surfaced because the event has a position.
+
+## Spatial Intelligence {/* #spatial-intelligence */}
+
+**Spatial Intelligence** is the broader local interpretation layer. It combines camera input, mapped areas, devices, pipelines, events, and history.
+
+It is not one model or one provider. It is the product direction where Toposync uses local data and local processing to understand what happened, where it happened, and what context matters.
+
+Examples:
+
+- camera detections filtered by mapped areas;
+- events grouped by presence in a real area;
+- notifications that include area, object state, image context, and related devices;
+- processing servers that run heavier vision workloads while the origin keeps orchestration.
+
+## Spatial Camera Mapping {/* #spatial-camera-mapping */}
+
+**Spatial Camera Mapping** connects a camera image to real positions and areas inside the composition.
+
+It includes camera placement, snapshot calibration, corner mapping, refinement points, PTZ-aware views, and future projection features. It lets Toposync understand how image points relate to the mapped home.
+
+Use the operational guide when calibrating cameras: [Camera mapping](../cameras/camera-mapping.mdx).
+
+## Spatial Events {/* #spatial-events */}
+
+**Spatial Events** are events enriched with mapped context.
+
+A normal detection may say that a person, pet, vehicle, or object was detected. A Spatial Event should also carry context such as:
+
+- camera;
+- area;
+- position or world coordinates when available;
+- object category and state;
+- lifecycle such as open, update, and close;
+- related image or crop;
+- related Home Assistant output or notification context.
+
+Pipelines are the main way Toposync creates Spatial Events. See [Create your first pipelines](../first-steps/first-pipelines.mdx) and [Pipelines](../developers/pipelines.mdx).
+
+## Spatial Awareness {/* #spatial-awareness */}
+
+**Spatial Awareness** is feature language for area-aware behavior. It is used when the product reacts differently because it understands where something happened.
+
+Examples:
+
+- person near the gate;
+- vehicle stopped in the driveway;
+- pet near a pool or street;
+- motion in a restricted area;
+- related lights or controls shown while viewing an area.
+
+Spatial Awareness depends on good mapping, useful areas, and pipelines that preserve event context.
+
+## Practical rule {/* #practical-rule */}
+
+Use spatial terms to explain product value. Use operational terms for setup and troubleshooting.
+
+For example:
+
+- say **Spatial Camera Mapping** when explaining why camera calibration matters;
+- say `RTSP`, `ONVIF`, `PTZ`, and camera credentials when configuring a camera;
+- say **Spatial Events** when explaining event value;
+- say `payload.subject`, `lifecycle`, and operator ids when documenting pipeline contracts.

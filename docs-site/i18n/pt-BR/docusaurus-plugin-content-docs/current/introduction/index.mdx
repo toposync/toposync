@@ -1,0 +1,70 @@
+---
+title: Visão geral
+description: "Comece aqui para entender o Toposync, Spatial Home Automation com inteligência local, limites de teste alpha, caminhos de instalação e os primeiros documentos a ler."
+keywords: ["toposync", "Spatial Home Automation", "Spatial Intelligence", "local-first", "alpha early access", "visão geral", "documentação"]
+image: /img/social-card.png
+sidebar_position: 1
+---
+
+# Visão geral {/* #overview */}
+
+Toposync é um projeto open source, local-first, para **Spatial Home Automation com inteligência local**. Ele conecta câmeras, áreas, dispositivos, eventos, automações e contexto do Home Assistant em uma visualização 2D e 3D interpretável de um ambiente residencial privado.
+
+Esta documentação é primeiro prática. Comece aqui para entender a forma do projeto, depois siga para instalação, primeiro uso, câmeras, Home Assistant OS ou desenvolvimento.
+
+## O que o Toposync tenta fazer {/* #what-toposync-is-trying-to-do */}
+
+O Toposync adiciona contexto espacial à automação residencial. Em vez de tratar câmeras, entidades, áreas e automações como listas desconectadas, ele dá a elas um modelo compartilhado da casa.
+
+Isso permite perguntar:
+
+- onde algo aconteceu?
+- qual câmera viu?
+- qual área mapeada foi afetada?
+- quais dispositivos ou automações próximos estão relacionados?
+- o que deve ser armazenado, exibido ou enviado como notificação?
+
+A linguagem de produto para isso é **Spatial Home Automation**, apoiada por **Spatial Camera Mapping**, **Spatial Events**, **Spatial Intelligence** e **Spatial Awareness**.
+
+## Estado atual {/* #current-status */}
+
+Toposync está em **alpha early access**. Ele está pronto para testes cuidadosos por usuários técnicos, não para operação diária crítica.
+
+Use ambientes de teste contidos, entidades não críticas do Home Assistant, redes privadas, logs sanitizados e planos de rollback. Ainda não dependa do Toposync para monitoramento de segurança sem supervisão, fluxos de emergência, controle de acesso ou automações em que falha possa causar dano.
+
+Leia [Alpha testing](alpha-testing.mdx) antes de conectar câmeras ou automações importantes.
+
+## Comece pelo objetivo {/* #start-by-goal */}
+
+| Objetivo | Comece aqui |
+| --- | --- |
+| Entender o produto | [O que é o Toposync](what-is-toposync.mdx) |
+| Entender a linguagem de categoria | [Conceitos espaciais](spatial-concepts.mdx) |
+| Entender o comportamento local-first | [Local-first](local-first.mdx) |
+| Instalar o Toposync | [Escolha sua instalação](../installation/choose-your-installation.mdx) |
+| Criar o primeiro mapa | [Crie sua primeira composição](../first-steps/create-your-first-composition.mdx) |
+| Adicionar câmeras | [Adicione sua primeira câmera](../first-steps/add-your-first-camera.mdx) |
+| Calibrar o espaço da câmera | [Mapeamento de câmeras](../cameras/camera-mapping.mdx) |
+| Criar fluxos de evento | [Crie seus primeiros pipelines](../first-steps/first-pipelines.mdx) |
+| Usar Home Assistant OS | [Add-on para Home Assistant OS](../installation/home-assistant-addon.mdx) |
+| Desenvolver ou estender o Toposync | [Arquitetura](../developers/architecture.mdx) |
+
+## Caminhos de instalação {/* #installation-paths */}
+
+Os principais caminhos de instalação são:
+
+- add-on para Home Assistant OS em ambientes Home Assistant supervisionados;
+- Python com `uv` para instalações diretas em Linux, macOS e Windows;
+- Docker CPU para servidores locais e homelabs;
+- Docker CUDA ou bundles de upgrade para hosts de processamento com GPU;
+- processing servers quando cargas de câmera ou visão devem rodar em outra máquina.
+
+Use [Escolha sua instalação](../installation/choose-your-installation.mdx) para escolher o caminho certo antes de instalar.
+
+## O que ler agora {/* #what-to-read-next */}
+
+1. [O que é o Toposync](what-is-toposync.mdx)
+2. [Local-first](local-first.mdx)
+3. [Conceitos espaciais](spatial-concepts.mdx)
+4. [Alpha testing](alpha-testing.mdx)
+5. [Escolha sua instalação](../installation/choose-your-installation.mdx)

@@ -8,4 +8,50 @@ sidebar_position: 1
 
 # Interface overview {/* #interface-overview */}
 
-This page is under construction.
+Toposync is organized around spatial work: compositions, cameras, pipelines,
+settings, and integrations.
+
+The interface is still evolving during Alpha Early Access, but the main areas
+are stable enough to guide first use.
+
+## Main areas {/* #main-areas */}
+
+| Area | What it is for |
+| --- | --- |
+| Compositions | Build the spatial model of a home, room, yard, or other place. |
+| Cameras | Add camera sources, configure live viewing, and start Spatial Camera Mapping. |
+| Pipelines | Turn camera frames, Home Assistant state, or other inputs into actions and Spatial Events. |
+| Settings | Configure extensions, integrations, runtime options, and advanced behavior. |
+| Troubleshooting | Check known failure modes, installation issues, and alpha testing guidance. |
+
+Installed extensions can add their own panels, routes, tools, and settings.
+That is why the interface may change depending on which bundle or add-on you
+installed.
+
+## Suggested first path {/* #suggested-first-path */}
+
+For a first test:
+
+1. Install Toposync.
+2. Create a composition.
+3. Add a tracing image, walls, and areas.
+4. Add one camera.
+5. Validate live viewing.
+6. Create a simple pipeline only after the camera is stable.
+
+See [First steps](../first-steps/index.mdx) for the guided path.
+
+## Local-first behavior {/* #local-first-behavior */}
+
+The UI talks to your Toposync origin server. In production, the same backend can
+serve the API and the embedded frontend. In development, the frontend may run on
+a separate Node server for fast reloads.
+
+User data is stored under the configured Toposync data directory. See
+[File locations](../reference/file-locations.mdx).
+
+## Alpha expectations {/* #alpha-expectations */}
+
+During Alpha Early Access, expect rough edges in wording, layout, and advanced
+workflows. Prefer contained networks and test environments when using cameras,
+Home Assistant entities, or automation flows.

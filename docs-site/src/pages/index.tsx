@@ -40,6 +40,12 @@ export default function Home(): JSX.Element {
                 <Translate id="homepage.startFirstSteps">Start with first steps</Translate>
               </Link>
             </div>
+            <p className={styles.productLink}>
+              <Translate id="homepage.productPrompt">Want to understand the product first?</Translate>{' '}
+              <Link to="https://toposync.com/">
+                <Translate id="homepage.learnProduct">Learn about Toposync</Translate>
+              </Link>
+            </p>
           </div>
         </section>
 

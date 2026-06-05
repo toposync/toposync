@@ -1,0 +1,88 @@
+---
+title: Conceitos espaciais
+description: "Entenda a linguagem de produto do Toposync: Spatial Home Automation, Spatial Intelligence, Spatial Camera Mapping, Spatial Events e Spatial Awareness."
+keywords: ["toposync", "Spatial Home Automation", "Spatial Intelligence", "Spatial Camera Mapping", "Spatial Events", "Spatial Awareness", "automação residencial"]
+image: /img/social-card.png
+sidebar_position: 4
+---
+
+# Conceitos espaciais {/* #spatial-concepts */}
+
+Toposync usa linguagem espacial para descrever a categoria de produto que está construindo. Esses termos ajudam a explicar o produto, mas não substituem labels técnicos precisos.
+
+Continue usando termos técnicos quando eles importam: RTSP, ONVIF, PTZ, pipelines, processing servers, áreas, mapeamento de câmera, entidades do Home Assistant e ONNX continuam significando seus recursos operacionais concretos.
+
+## Spatial Home Automation {/* #spatial-home-automation */}
+
+**Spatial Home Automation** é a categoria principal. Significa automação residencial organizada ao redor de espaços mapeados, não apenas listas de dispositivos, feeds de câmera e automações isoladas.
+
+No Toposync, cômodo, área, câmera, dispositivo, evento e automação podem compartilhar a mesma composição. Isso dá ao sistema contexto físico para decisões e visualização.
+
+Exemplo:
+
+- uma pessoa na calçada pode ser normal;
+- uma pessoa no quintal à noite pode importar;
+- o mesmo evento perto da piscina pode exigir outra atenção;
+- luzes ou controles próximos podem aparecer porque o evento tem posição.
+
+## Spatial Intelligence {/* #spatial-intelligence */}
+
+**Spatial Intelligence** é a camada local mais ampla de interpretação. Ela combina entrada de câmera, áreas mapeadas, dispositivos, pipelines, eventos e histórico.
+
+Não é um único modelo nem um único provedor. É a direção de produto em que o Toposync usa dados locais e processamento local para entender o que aconteceu, onde aconteceu e qual contexto importa.
+
+Exemplos:
+
+- detecções de câmera filtradas por áreas mapeadas;
+- eventos agrupados por presença em uma área real;
+- notificações com área, estado do objeto, contexto de imagem e dispositivos relacionados;
+- processing servers executando cargas mais pesadas de visão enquanto o origin mantém a orquestração.
+
+## Spatial Camera Mapping {/* #spatial-camera-mapping */}
+
+**Spatial Camera Mapping** conecta uma imagem de câmera a posições e áreas reais dentro da composição.
+
+Ele inclui posicionamento de câmera, calibração por snapshot, mapeamento de cantos, pontos de refinamento, vistas sensíveis a PTZ e recursos futuros de projeção. Ele permite que o Toposync entenda como pontos da imagem se relacionam com a casa mapeada.
+
+Use o guia operacional ao calibrar câmeras: [Mapeamento de câmeras](../cameras/camera-mapping.mdx).
+
+## Spatial Events {/* #spatial-events */}
+
+**Spatial Events** são eventos enriquecidos com contexto mapeado.
+
+Uma detecção comum pode dizer que uma pessoa, pet, veículo ou objeto foi detectado. Um Spatial Event deve carregar também contexto como:
+
+- câmera;
+- área;
+- posição ou coordenadas de mundo quando disponíveis;
+- categoria e estado do objeto;
+- lifecycle como open, update e close;
+- imagem ou recorte relacionado;
+- saída para Home Assistant ou contexto de notificação relacionado.
+
+Pipelines são o principal caminho para o Toposync criar Spatial Events. Veja [Crie seus primeiros pipelines](../first-steps/first-pipelines.mdx) e [Pipelines](../developers/pipelines.mdx).
+
+## Spatial Awareness {/* #spatial-awareness */}
+
+**Spatial Awareness** é linguagem de recurso para comportamento sensível a áreas. Ela é usada quando o produto reage de forma diferente porque entende onde algo aconteceu.
+
+Exemplos:
+
+- pessoa perto do portão;
+- veículo parado na garagem;
+- pet perto de uma piscina ou rua;
+- movimento em uma área restrita;
+- luzes ou controles relacionados exibidos ao visualizar uma área.
+
+Spatial Awareness depende de bom mapeamento, áreas úteis e pipelines que preservam contexto de evento.
+
+## Regra prática {/* #practical-rule */}
+
+Use termos espaciais para explicar valor de produto. Use termos operacionais para setup e troubleshooting.
+
+Por exemplo:
+
+- diga **Spatial Camera Mapping** ao explicar por que calibração de câmera importa;
+- diga `RTSP`, `ONVIF`, `PTZ` e credenciais de câmera ao configurar uma câmera;
+- diga **Spatial Events** ao explicar o valor dos eventos;
+- diga `payload.subject`, `lifecycle` e ids de operadores ao documentar contratos de pipeline.

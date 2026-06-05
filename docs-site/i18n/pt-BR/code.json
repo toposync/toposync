@@ -53,6 +53,12 @@
   "homepage.introText": {
     "message": "Guias práticos para instalar o Toposync, criar sua primeira composição espacial, conectar câmeras e entender Spatial Home Automation com inteligência local na arquitetura atual."
   },
+  "homepage.learnProduct": {
+    "message": "Conhecer o Toposync"
+  },
+  "homepage.productPrompt": {
+    "message": "Quer entender o produto primeiro?"
+  },
   "homepage.startFirstSteps": {
     "message": "Começar pelos primeiros passos"
   },

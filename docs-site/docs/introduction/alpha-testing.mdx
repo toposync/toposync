@@ -1,0 +1,84 @@
+---
+title: Alpha testing
+description: "Understand Toposync alpha early access, safe testing boundaries, what not to rely on yet, and how to report bugs or security issues."
+keywords: ["toposync", "alpha early access", "testing", "security", "home automation", "cameras", "Home Assistant"]
+image: /img/social-card.png
+sidebar_position: 5
+---
+
+# Alpha testing {/* #alpha-testing */}
+
+Toposync is in **alpha early access**. The project is ready for careful testing by technical users, but it is not a polished end-user product and should not be treated as a safety-critical system.
+
+The best alpha feedback comes from real but contained setups: real cameras, real Home Assistant environments, real networks, and real installation paths, with clear rollback and privacy boundaries.
+
+## Who should test now {/* #who-should-test-now */}
+
+This phase is best for:
+
+- advanced Home Assistant users;
+- IP camera, RTSP, ONVIF, or PTZ users;
+- homelab builders;
+- developers interested in local computer vision;
+- small integrators testing ideas;
+- documentation and installation testers;
+- people comfortable with logs, updates, backups, and troubleshooting.
+
+If you need a finished product with a low-friction setup and stable behavior, wait for a later release.
+
+## Safe testing posture {/* #safe-testing-posture */}
+
+Use a contained environment:
+
+- private LAN or isolated test network;
+- non-critical Home Assistant entities;
+- test cameras or non-sensitive camera views when possible;
+- no emergency, access-control, or safety-critical automations;
+- backups before upgrades;
+- rollback path for Home Assistant, Docker, Python environments, and Toposync data.
+
+Do not expose private camera views, tokens, passwords, internal URLs, or raw logs in public issues.
+
+## What not to rely on yet {/* #what-not-to-rely-on-yet */}
+
+Do not rely on Toposync yet for:
+
+- unattended security monitoring;
+- emergency workflows;
+- access control;
+- life safety;
+- critical lighting, gate, lock, siren, or alarm behavior;
+- any automation where failure could cause harm, property damage, privacy exposure, or loss of essential service.
+
+Toposync can provide additional visualization, local intelligence, and situational awareness, but it does not replace certified security systems, dedicated sensors, human supervision, or protective equipment.
+
+## What to report {/* #what-to-report */}
+
+Useful bug reports include:
+
+- installation path and version;
+- operating system and architecture;
+- Home Assistant OS/add-on details when relevant;
+- camera brand, protocol, and sanitized connection shape;
+- GPU/runtime path when relevant;
+- expected behavior and actual behavior;
+- sanitized logs;
+- screenshots with private information removed;
+- steps to reproduce.
+
+Open public issues for ordinary bugs and documentation problems.
+
+## Security reports {/* #security-reports */}
+
+Do not report vulnerabilities in public issues.
+
+Use GitHub private vulnerability reporting or a private GitHub Security Advisory when available. Include enough information to reproduce and understand the impact, but do not include secrets, passwords, camera credentials, personal media, or sensitive internal network details.
+
+See the repository `SECURITY.md` for the current policy.
+
+## What to read next {/* #what-to-read-next */}
+
+- [Choose your installation](../installation/choose-your-installation.mdx)
+- [File locations](../reference/file-locations.mdx)
+- [Troubleshooting](../troubleshooting/)
+- [Development setup](../developers/development-setup.mdx)

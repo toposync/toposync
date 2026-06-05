@@ -8,4 +8,91 @@ sidebar_position: 4
 
 # Processamento de imagem {/* #image-processing */}
 
-Esta página está em construção.
+Processamento de imagem transforma frames de câmera em sinais úteis: movimento,
+detecções, tracking, recortes, snapshots, notificações ou eventos de pipeline.
+
+No produto padrão, visão começa em CPU com ONNX Runtime. Aceleração por GPU é um
+caminho de upgrade, não um requisito para a primeira instalação.
+
+## Comece simples {/* #start-simple */}
+
+Valide o acesso da câmera antes de adicionar processamento de imagem:
+
+1. Adicione a câmera.
+2. Confirme que snapshot ou fonte de vídeo funciona.
+3. Publique a fonte para live viewing, se necessário.
+4. Crie ou gere um pipeline simples.
+5. Adicione etapas de visão mais pesadas só depois que o stream estiver estável.
+
+Isso evita depurar acesso da câmera, streaming e visão ao mesmo tempo.
+
+## Processamento local em CPU {/* #local-cpu-processing */}
+
+Processamento em CPU é o padrão porque é mais fácil de instalar e funciona em
+mais ambientes.
+
+Ele é adequado para:
+
+- testes iniciais;
+- poucas câmeras;
+- snapshots ocasionais;
+- pipelines simples;
+- máquinas com folga de CPU.
+
+Ele pode se tornar limitado quando várias câmeras decodificam vídeo e executam
+modelos de visão ao mesmo tempo, especialmente em dispositivos ARM pequenos.
+
+## Processing servers {/* #processing-servers */}
+
+Use um processing server quando a máquina origin ou o add-on Home Assistant OS
+não deve lidar com trabalho pesado de câmera.
+
+Motivos comuns:
+
+- Home Assistant roda em Raspberry Pi ou mini PC pequeno;
+- outra máquina tem CPU melhor ou GPU NVIDIA;
+- a decodificação de câmera deve acontecer mais perto das câmeras;
+- você quer isolar experimentos do origin principal.
+
+Veja [Processing server em Linux e macOS](../installation/processing-server-linux-macos.mdx),
+[Processing server como serviço Windows](../installation/processing-server-windows-service.mdx)
+e [Processing server em Docker](../installation/processing-server-docker.mdx).
+
+## Upgrades de GPU {/* #gpu-upgrades */}
+
+Instale o Toposync primeiro, depois adicione aceleração se os diagnósticos
+mostrarem que ela é útil.
+
+- GPU no Windows: `toposync-vision-directml`.
+- NVIDIA nativo ou Docker CUDA: `toposync-vision-cuda`.
+- CPU padrão: nenhum pacote extra de GPU.
+
+Veja [Compatibilidade](../installation/architecture-support.mdx) antes de
+escolher um caminho de GPU.
+
+## Limites práticos {/* #practical-limits */}
+
+Para testes em early access:
+
+- comece com uma câmera;
+- prefira streams de menor resolução para análise contínua;
+- mantenha fontes de maior resolução para tela cheia ou inspeção direcionada;
+- evite rodar vários pipelines pesados de visão em hardware do porte de Raspberry Pi;
+- delegue decodificação repetida e cargas ONNX quando possível.
+
+## Solução de problemas {/* #troubleshooting */}
+
+### Detecção está lenta {/* #detection-is-slow */}
+
+Reduza resolução, diminua frame rate, teste uma câmera por vez ou mova o
+pipeline para um processing server.
+
+### A câmera funciona, mas o pipeline não {/* #camera-works-pipeline-does-not */}
+
+Confirme que o pipeline lê a fonte de câmera pretendida e que
+`processing_server_id` aponta para o servidor onde a fonte é alcançável.
+
+### Pacote de GPU instalado, mas CPU ainda é usada {/* #gpu-package-installed-but-cpu-used */}
+
+Confira diagnósticos de runtime e ordem de providers. O pacote de GPU só ajuda
+quando driver, runtime, plataforma e provider do ONNX Runtime estão disponíveis.

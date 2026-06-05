@@ -3,50 +3,71 @@ title: O que é o Toposync
 description: "Entenda o que é o Toposync: uma plataforma open source, local-first, de Spatial Home Automation com inteligência local para câmeras, eventos espaciais, composições e pipelines."
 keywords: ["toposync", "local-first", "Spatial Home Automation", "Spatial Camera Mapping", "Spatial Events", "Spatial Intelligence", "Spatial Awareness", "automação residencial", "o que é Toposync"]
 image: /img/social-card.png
-sidebar_position: 1
+sidebar_position: 2
 ---
 
 # O que é o Toposync {/* #what-is-toposync */}
 
-Toposync é uma plataforma open source, local-first, para **Spatial Home Automation com inteligência local**. Ele reúne câmeras, áreas, dispositivos, entidades do Home Assistant, composições 2D/3D e pipelines em um modelo espacial para ambientes residenciais privados.
+Toposync é uma plataforma open source, local-first, para **Spatial Home Automation com inteligência local**. Ele reúne câmeras, áreas, dispositivos, entidades do Home Assistant, composições 2D e 3D e pipelines em um modelo espacial para ambientes residenciais privados.
 
-O objetivo não é substituir Home Assistant, ferramentas RTSP, utilitários ONVIF ou dashboards de câmera. O objetivo é adicionar uma camada espacial onde esses sistemas consigam responder perguntas mais úteis:
+O projeto parte de uma ideia simples: automação residencial fica mais útil quando eventos têm lugar, câmeras têm contexto e automações podem reagir à área onde algo aconteceu.
 
-- onde um evento aconteceu?
+## Qual problema ele resolve {/* #what-problem-it-solves */}
+
+A maior parte dos sistemas de automação residencial e câmera é organizada como listas:
+
+- listas de dispositivos;
+- listas de entidades;
+- feeds de câmera;
+- regras de automação;
+- históricos de eventos;
+- fluxos de notificações.
+
+Essas listas são úteis, mas muitas vezes perdem o contexto físico. O Toposync adiciona uma camada mapeada onde câmera, área, evento, dispositivo e automação podem ser entendidos juntos.
+
+Isso ajuda a responder perguntas como:
+
+- onde aconteceu?
 - qual câmera viu?
-- qual área mapeada foi afetada?
-- qual objeto, dispositivo ou automação está relacionado?
-- o que deve ser armazenado, exibido ou encaminhado?
+- qual área foi afetada?
+- qual dispositivo próximo deveria reagir?
+- isso deve virar notificação, imagem armazenada, item de histórico ou saída para Home Assistant?
 
-## A categoria {/* #the-category */}
+## O que o Toposync não é {/* #what-toposync-is-not */}
 
-**Spatial Home Automation** é a categoria de produto que o Toposync está construindo. Ela trata a casa como um ambiente mapeado, não apenas como uma lista de dispositivos ou feeds de câmera.
+Toposync não substitui Home Assistant, ferramentas RTSP, utilitários ONVIF, dashboards de câmera ou sistemas de segurança certificados.
 
-Dentro dessa categoria, o Toposync usa alguns termos específicos:
+Ele também ainda não está pronto para ser a única camada de segurança crítica, controle de acesso ou fluxos de emergência. No alpha atual, trate o Toposync como uma camada adicional de inteligência local e visualização que precisa ser testada com cuidado.
 
-- **Spatial Camera Mapping**: conectar a imagem de uma câmera a posições, áreas e visões reais dentro da casa mapeada.
-- **Spatial Events**: eventos enriquecidos com posição, área, câmera, estado do objeto, lifecycle, contexto de imagem e contexto de automação relacionado.
-- **Spatial Intelligence**: a camada local mais ampla de interpretação que pode combinar entrada de câmera, áreas, dispositivos, pipelines, histórico e futuros serviços opcionais de cloud.
-- **Spatial Awareness**: linguagem de recurso para comportamento sensível a áreas, como fazer a mesma detecção significar algo diferente perto de um portão, calçada, piscina, quintal, garagem ou entrada.
-
-Esses termos são linguagem de produto. Labels operacionais continuam precisos: RTSP, ONVIF, PTZ, pipelines, processing servers, áreas e mapeamento de câmera ainda significam os recursos técnicos concretos que descrevem.
-
-## O que o Toposync inclui hoje {/* #what-toposync-includes-today */}
+## O que ele inclui hoje {/* #what-it-includes-today */}
 
 O alpha atual foca em:
 
-- construir uma composição 2D/3D da casa;
+- criar uma composição 2D/3D da casa;
 - adicionar paredes, áreas, imagens, modelos, câmeras e contexto do Home Assistant;
-- mapear câmeras na composição;
+- mapear visões de câmera na composição;
 - criar pipelines de câmera e visão;
-- produzir eventos, notificações, imagens e saídas para Home Assistant;
-- delegar processamento pesado para processing servers remotos quando necessário.
+- produzir eventos espaciais, notificações, imagens armazenadas e saídas para Home Assistant;
+- delegar cargas pesadas de câmera e visão para processing servers quando necessário.
 
-O Toposync é local-first por padrão. Dados do usuário, configuração de câmeras, arquivos gerados e artifacts de pipeline ficam no diretório de dados configurado, salvo quando o usuário escolhe explicitamente outro caminho de integração.
+O caminho padrão do produto é local-first. O servidor principal, a UI, extensões, configuração, arquivos e estado de pipelines rodam no próprio ambiente do usuário.
+
+## Quando faz sentido {/* #when-it-makes-sense */}
+
+Toposync faz mais sentido quando:
+
+- você já usa Home Assistant e quer contexto visual mais rico;
+- você tem câmeras IP, RTSP, ONVIF ou dispositivos PTZ;
+- você quer eventos de câmera associados a áreas da casa;
+- você quer visão computacional local sem depender de um único fabricante de câmera;
+- você quer um lugar central para experimentar pipelines de câmera, automação e espaço;
+- você está confortável testando software alpha em um ambiente contido.
+
+Se você só precisa de um visualizador básico de câmera ou um dashboard simples de dispositivos, o Toposync pode ser mais do que você precisa hoje.
 
 ## O que ler agora {/* #what-to-read-next */}
 
-- Comece por [Escolha sua instalação](../installation/choose-your-installation.mdx).
-- Monte o primeiro mapa em [Crie sua primeira composição](../first-steps/create-your-first-composition.mdx).
-- Entenda calibração de câmeras em [Mapeamento de câmeras](../cameras/camera-mapping.mdx).
-- Crie fluxos de evento em [Crie seus primeiros pipelines](../first-steps/first-pipelines.mdx).
+- [Conceitos espaciais](spatial-concepts.mdx)
+- [Local-first](local-first.mdx)
+- [Alpha testing](alpha-testing.mdx)
+- [Escolha sua instalação](../installation/choose-your-installation.mdx)

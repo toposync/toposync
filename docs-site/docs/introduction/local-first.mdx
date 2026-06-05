@@ -1,11 +1,75 @@
 ---
 title: Local-first
-description: "Understand Toposync local-first design, data ownership, and why cloud features are optional rather than required."
-keywords: ["toposync", "local-first", "home automation", "privacy", "architecture"]
+description: "Understand Toposync local-first behavior, data ownership, local runtime boundaries, Home Assistant integration, and processing servers."
+keywords: ["toposync", "local-first", "home automation", "privacy", "data ownership", "processing server"]
 image: /img/social-card.png
-sidebar_position: 2
+sidebar_position: 3
 ---
 
 # Local-first {/* #local-first */}
 
-This page is under construction.
+Toposync is local-first by default. The main product path runs the backend, UI, extensions, settings, files, and pipeline state in the user's own environment.
+
+Local-first does not mean isolated from everything else. Toposync can integrate with Home Assistant, cameras, processing servers, and optional external services. It means the local system should remain the center of ownership and operation.
+
+## What stays local {/* #what-stays-local */}
+
+In a normal installation, Toposync stores and operates locally:
+
+- configuration and settings;
+- users, sessions, and access grants;
+- compositions, walls, areas, and elements;
+- camera registry and mapping data;
+- uploaded files, images, models, and generated artifacts;
+- pipeline definitions, telemetry, snapshots, and storage;
+- extension data created by installed extensions.
+
+The active data directory depends on the installation path. See [File locations](../reference/file-locations.mdx) for platform-specific paths.
+
+## Data directory {/* #data-directory */}
+
+Toposync has one main data directory. It can be set with `--data-dir`, `TOPOSYNC_DATA_DIR`, Docker volumes, or add-on storage.
+
+Use an explicit data directory for predictable installations:
+
+```bash
+toposync serve --data-dir ./toposync-data
+```
+
+Do not edit `config.json` while the server is running. Prefer the UI or API. If manual recovery is needed, stop Toposync first and keep a backup.
+
+## Home Assistant integration {/* #home-assistant-integration */}
+
+Home Assistant integration is optional. Toposync can run independently, or it can use Home Assistant for entities, states, automations, notifications, camera entities, and add-on operation.
+
+When running as a Home Assistant OS add-on, Toposync still uses local add-on storage and Home Assistant Supervisor manages the add-on lifecycle.
+
+## Processing servers {/* #processing-servers */}
+
+Processing servers are still part of the local-first model when they run on machines you control.
+
+Use them when:
+
+- the origin server should stay lightweight;
+- Home Assistant OS runs on constrained hardware;
+- multiple cameras need processing;
+- OpenCV or ONNX workloads are too heavy for the origin;
+- a Windows, Linux, macOS, Docker, or GPU host should do the heavy work.
+
+The origin remains responsible for configuration and orchestration. The processing server receives the work it needs to run and reports status or events back to the origin.
+
+## External services {/* #external-services */}
+
+Toposync should not require an external service to start, load the UI, manage a home, load extensions, run local pipelines, or integrate with Home Assistant on the same network.
+
+If optional services are added later, they should be additive. They should not change the local-first baseline.
+
+## Practical rules {/* #practical-rules */}
+
+- Keep backups of the data directory before upgrades.
+- Use contained networks and non-critical entities while testing alpha builds.
+- Prefer local processing for private camera media.
+- Sanitize logs before sharing issues.
+- Treat security findings as private reports, not public issues.
+
+Next: [Spatial concepts](spatial-concepts.mdx).

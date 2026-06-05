@@ -8,4 +8,91 @@ sidebar_position: 2
 
 # RTSP {/* #rtsp */}
 
-This page is under construction.
+RTSP is the most common way to bring network camera video into Toposync.
+
+Use RTSP when the camera, NVR, Frigate, go2rtc, or another local service exposes
+a video stream URL.
+
+RTSP is about video transport. ONVIF is also supported, but it is used for
+camera discovery, metadata, snapshots, stream profile discovery, events, and PTZ
+controls when the camera supports them. For the broader camera model, see
+[Cameras overview](overview.mdx).
+
+## What you need {/* #what-you-need */}
+
+A usable RTSP source usually needs:
+
+- the camera or restream host IP address;
+- the RTSP port, commonly `554` or a vendor-specific port;
+- the path for the stream;
+- credentials, when the camera requires authentication;
+- network access from the machine running Toposync to the camera.
+
+Typical URL shape:
+
+```text
+rtsp://username:password@camera-ip:554/path
+```
+
+Exact paths are vendor-specific. Check the camera, NVR, Frigate, or go2rtc
+documentation for the correct stream path.
+
+## Recommended flow {/* #recommended-flow */}
+
+1. Add the camera in Toposync.
+2. Add one RTSP source.
+3. Verify snapshot or video access.
+4. Assign a source role such as `main` or `sub`.
+5. Enable live viewing only after the source is stable.
+6. Place the camera in a composition when you are ready for Spatial Camera Mapping.
+
+If the camera exposes multiple RTSP streams, use the lower-resolution stream as
+`sub` for grids and the higher-resolution stream as `main` for fullscreen
+inspection.
+
+## Network notes {/* #network-notes */}
+
+Toposync must reach the RTSP source from the runtime that will read it.
+
+- A local Python install reads from the local machine.
+- Docker reads from inside the container network.
+- The Home Assistant OS add-on reads from the add-on container.
+- A processing server reads from the processing server machine when the camera
+  workload is delegated.
+
+Avoid `127.0.0.1` in RTSP URLs unless the camera or restream service is running
+inside the same runtime. Use a LAN IP or hostname that is reachable from the
+Toposync process.
+
+## Credentials {/* #credentials */}
+
+Use a camera account with only the permissions Toposync needs. For early access
+testing, prefer a contained network and avoid exposing RTSP directly to the
+internet.
+
+If credentials include special characters, the RTSP URL may need URL encoding.
+When possible, use the UI fields for username and password instead of embedding
+credentials directly in the URL.
+
+## Troubleshooting {/* #troubleshooting */}
+
+### Connection refused {/* #connection-refused */}
+
+The host is reachable, but the RTSP port is closed or blocked. Check the camera
+port, firewall, Docker network path, and whether the source is exposed on the
+expected interface.
+
+### Unauthorized {/* #unauthorized */}
+
+The credentials are wrong or the camera account does not have stream access.
+Verify the same URL in VLC, FFmpeg, Frigate, or another local tool.
+
+### Works on the host but not in Docker or Home Assistant OS {/* #works-on-host-but-not-runtime */}
+
+The URL may only be valid from your host machine. Use an address reachable from
+the container or add-on runtime, not `localhost`.
+
+### Stream opens but live view is unstable {/* #unstable-live-view */}
+
+Start with a lower-resolution stream and validate [Live viewing](live-viewing.mdx)
+before adding vision or processing pipelines.

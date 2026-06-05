@@ -8,4 +8,52 @@ sidebar_position: 4
 
 # Settings {/* #settings */}
 
-This page is under construction.
+Settings are where Toposync exposes runtime configuration, installed extension
+panels, integrations, and advanced operational controls.
+
+The exact panels depend on the installed bundle. The default installation shows
+the core product areas and first-party extension settings. Optional extensions
+can add more panels.
+
+## What belongs in settings {/* #what-belongs-in-settings */}
+
+Common settings areas include:
+
+- access and authentication;
+- Home Assistant connection details;
+- camera discovery and source management;
+- streaming runtime configuration when streaming is installed;
+- vision model diagnostics and runtime information;
+- processing server registration;
+- extension-specific options.
+
+For configuration keys, ports, environment variables, and file locations, use
+the [Reference](../reference/configuration.mdx) section.
+
+## Be careful with advanced settings {/* #be-careful-with-advanced-settings */}
+
+During Alpha Early Access, prefer changing settings through the UI or documented
+API flows.
+
+Manual edits to the data directory can be useful for recovery, but they can also
+break pipeline graphs, extension settings, or auth state if the JSON shape is
+wrong.
+
+## Home Assistant OS add-on {/* #home-assistant-os-addon */}
+
+When running inside Home Assistant OS, some behavior is controlled by the add-on
+configuration rather than the in-app settings page.
+
+Use the add-on documentation for ingress, direct access, ports, and supervised
+operation:
+
+- [Home Assistant OS add-on installation](../installation/home-assistant-addon.mdx)
+- [Home Assistant add-on details](../home-assistant-addon/overview.mdx)
+
+## Troubleshooting {/* #troubleshooting */}
+
+If a setting does not appear, confirm that the related extension is installed
+and loaded in `/api/extensions`.
+
+If a change does not seem to apply, restart the Toposync server after saving and
+check the logs for extension startup errors.

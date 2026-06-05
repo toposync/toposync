@@ -9,8 +9,9 @@ sidebar_position: 1
 # Visão geral de câmeras {/* #cameras-overview */}
 
 Câmeras no Toposync são mais do que uma URL de vídeo. Uma câmera pode ter várias
-fontes de vídeo, transmissões ao vivo, posicionamento físico na composição,
-controles PTZ e pipelines que transformam imagens em eventos.
+fontes de vídeo, descoberta e metadados ONVIF, transmissões ao vivo,
+posicionamento físico na composição, controles PTZ e pipelines que transformam
+imagens em eventos.
 
 Comece pela fonte da câmera, não por um pipeline manual. Para visualização ao
 vivo normal, o Toposync pode gerar a transmissão e o pipeline contínuo para você.
@@ -31,6 +32,24 @@ As principais peças são:
 No fluxo normal, você não deve precisar criar uma `Transmission` manualmente.
 Habilite a transmissão na fonte e deixe o Toposync reconciliar os artefatos
 gerados.
+
+## RTSP e ONVIF {/* #rtsp-and-onvif */}
+
+O Toposync suporta RTSP e ONVIF, mas eles resolvem partes diferentes do workflow
+de câmera.
+
+| Tecnologia | Como o Toposync usa |
+| --- | --- |
+| RTSP | Ler streams de vídeo de câmeras, NVRs, Frigate, go2rtc ou outros serviços locais de restream. |
+| ONVIF | Descobrir câmeras na rede local, ler metadados, capturar snapshots, encontrar perfis de stream, receber eventos e controlar PTZ quando suportado. |
+
+Muitas câmeras usam os dois: ONVIF ajuda o Toposync a encontrar e descrever a
+câmera, enquanto RTSP carrega o vídeo. Algumas câmeras expõem RTSP sem suporte
+ONVIF útil, e algumas redes bloqueiam descoberta ONVIF mesmo quando o acesso
+manual à câmera funciona.
+
+Use descoberta quando ela funcionar. Se a descoberta ONVIF não encontrar uma
+câmera, adicione a câmera manualmente com endereço e credenciais RTSP ou ONVIF.
 
 ## Papéis das fontes {/* #source-roles */}
 

@@ -3,50 +3,71 @@ title: What is Toposync
 description: "Learn what Toposync is: an open source, local-first Spatial Home Automation platform with local intelligence for cameras, spatial events, compositions, and pipelines."
 keywords: ["toposync", "local-first", "Spatial Home Automation", "Spatial Camera Mapping", "Spatial Events", "Spatial Intelligence", "Spatial Awareness", "home automation", "what is Toposync"]
 image: /img/social-card.png
-sidebar_position: 1
+sidebar_position: 2
 ---
 
 # What is Toposync {/* #what-is-toposync */}
 
-Toposync is an open source, local-first platform for **Spatial Home Automation with local intelligence**. It brings cameras, areas, devices, Home Assistant entities, 2D/3D compositions, and pipelines into one spatial model for private home environments.
+Toposync is an open source, local-first platform for **Spatial Home Automation with local intelligence**. It brings cameras, areas, devices, Home Assistant entities, 2D and 3D compositions, and pipelines into one spatial model for private home environments.
 
-The goal is not to replace Home Assistant, RTSP tools, ONVIF utilities, or camera dashboards. The goal is to add a spatial layer where those systems can answer more useful questions:
+The project is built around a simple idea: home automation becomes more useful when events have places, cameras have context, and automations can react to the area where something happened.
 
-- where did an event happen?
+## What problem it solves {/* #what-problem-it-solves */}
+
+Most home automation and camera systems are organized as lists:
+
+- device lists;
+- entity lists;
+- camera feeds;
+- automation rules;
+- event histories;
+- notification streams.
+
+Those lists are useful, but they often lose physical context. Toposync adds a mapped layer where a camera, area, event, device, and automation can be understood together.
+
+That helps answer questions like:
+
+- where did it happen?
 - which camera saw it?
-- which mapped area was affected?
-- which object, device, or automation is related?
-- what should be stored, shown, or forwarded?
+- which area was affected?
+- which nearby device should react?
+- should this become a notification, stored image, event history item, or Home Assistant output?
 
-## The category {/* #the-category */}
+## What Toposync is not {/* #what-toposync-is-not */}
 
-**Spatial Home Automation** is the product category Toposync is building toward. It treats the home as a mapped environment, not only as a list of devices or camera feeds.
+Toposync is not a replacement for Home Assistant, RTSP tools, ONVIF utilities, camera dashboards, or certified security systems.
 
-Within that category, Toposync uses a few specific terms:
+It is also not ready to be the only layer for critical safety, security, access control, or emergency workflows. In the current alpha, treat it as an additional local intelligence and visualization layer that should be tested carefully.
 
-- **Spatial Camera Mapping**: connecting a camera image to real positions, areas, and views inside the mapped home.
-- **Spatial Events**: events enriched with position, area, camera, object state, lifecycle, image context, and related automation context.
-- **Spatial Intelligence**: the broader local interpretation layer that can combine camera input, areas, devices, pipelines, history, and future optional cloud services.
-- **Spatial Awareness**: feature language for area-aware behavior, such as making the same detection mean something different near a gate, sidewalk, pool, backyard, garage, or entrance.
-
-These terms are product language. Operational labels stay precise: RTSP, ONVIF, PTZ, pipelines, processing servers, areas, and camera mapping still mean the concrete technical features they describe.
-
-## What Toposync includes today {/* #what-toposync-includes-today */}
+## What it includes today {/* #what-it-includes-today */}
 
 The current alpha focuses on:
 
-- building a 2D/3D composition of a home;
+- creating a 2D/3D composition of the home;
 - adding walls, areas, images, models, cameras, and Home Assistant context;
-- mapping cameras into the composition;
+- mapping camera views into the composition;
 - creating camera and vision pipelines;
-- producing events, notifications, images, and Home Assistant outputs;
-- delegating heavier processing to remote processing servers when needed.
+- producing spatial events, notifications, stored images, and Home Assistant outputs;
+- delegating heavier camera and vision workloads to processing servers when needed.
 
-Toposync is local-first by default. User data, camera configuration, generated files, and pipeline artifacts live under the configured data directory unless a user explicitly chooses another integration path.
+The default product path is local-first. The main server, UI, extensions, configuration, files, and pipeline state run in the user's own environment.
+
+## When it makes sense {/* #when-it-makes-sense */}
+
+Toposync makes the most sense when:
+
+- you already use Home Assistant and want richer visual context;
+- you have IP cameras, RTSP, ONVIF, or PTZ devices;
+- you want camera events tied to areas of the home;
+- you want local computer vision without depending on one camera vendor;
+- you want a central place to experiment with camera, automation, and spatial pipelines;
+- you are comfortable testing alpha software in a contained environment.
+
+If you only need a basic camera viewer or a simple device dashboard, Toposync may be more than you need today.
 
 ## What to read next {/* #what-to-read-next */}
 
-- Start with [Choose your installation](../installation/choose-your-installation.mdx).
-- Build the first map with [Create your first composition](../first-steps/create-your-first-composition.mdx).
-- Learn camera calibration in [Camera mapping](../cameras/camera-mapping.mdx).
-- Create event flows with [Create your first pipelines](../first-steps/first-pipelines.mdx).
+- [Spatial concepts](spatial-concepts.mdx)
+- [Local-first](local-first.mdx)
+- [Alpha testing](alpha-testing.mdx)
+- [Choose your installation](../installation/choose-your-installation.mdx)

@@ -8,4 +8,50 @@ sidebar_position: 1
 
 # Visão geral da interface {/* #interface-overview */}
 
-Esta página está em construção.
+O Toposync é organizado em torno de trabalho espacial: composições, câmeras,
+pipelines, configurações e integrações.
+
+A interface ainda evolui durante o Alpha Early Access, mas as áreas principais
+já são estáveis o suficiente para orientar o primeiro uso.
+
+## Áreas principais {/* #main-areas */}
+
+| Área | Para que serve |
+| --- | --- |
+| Composições | Construir o modelo espacial de uma casa, cômodo, área externa ou outro lugar. |
+| Câmeras | Adicionar fontes de câmera, configurar live viewing e iniciar Spatial Camera Mapping. |
+| Pipelines | Transformar frames de câmera, estado do Home Assistant ou outros inputs em ações e Spatial Events. |
+| Configurações | Configurar extensões, integrações, opções de runtime e comportamento avançado. |
+| Solução de problemas | Conferir falhas conhecidas, problemas de instalação e orientação para testes alpha. |
+
+Extensões instaladas podem adicionar seus próprios painéis, rotas, ferramentas e
+configurações. Por isso a interface pode mudar dependendo do bundle ou add-on
+instalado.
+
+## Caminho sugerido para começar {/* #suggested-first-path */}
+
+Para um primeiro teste:
+
+1. Instale o Toposync.
+2. Crie uma composição.
+3. Adicione uma imagem de decalque, paredes e áreas.
+4. Adicione uma câmera.
+5. Valide live viewing.
+6. Crie um pipeline simples só depois que a câmera estiver estável.
+
+Veja [Primeiros passos](../first-steps/index.mdx) para o caminho guiado.
+
+## Comportamento local-first {/* #local-first-behavior */}
+
+A UI conversa com o servidor origin do Toposync. Em produção, o mesmo backend
+pode servir a API e o frontend embutido. Em desenvolvimento, o frontend pode
+rodar em um servidor Node separado para recarregamento rápido.
+
+Os dados do usuário ficam no diretório de dados configurado do Toposync. Veja
+[Locais de arquivos](../reference/file-locations.mdx).
+
+## Expectativas alpha {/* #alpha-expectations */}
+
+Durante o Alpha Early Access, espere arestas em textos, layout e workflows
+avançados. Prefira redes contidas e ambientes de teste ao usar câmeras,
+entidades do Home Assistant ou fluxos de automação.

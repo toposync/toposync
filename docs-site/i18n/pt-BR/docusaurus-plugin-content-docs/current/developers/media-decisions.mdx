@@ -1,0 +1,272 @@
+---
+title: Decisões de mídia
+description: "Revise as decisões atuais do runtime de mídia do Toposync para streaming, playback, transportes e tradeoffs de implementação."
+keywords: ["toposync", "local-first", "automação residencial", "mídia", "streaming", "arquitetura"]
+image: /img/social-card.png
+sidebar_position: 6
+---
+
+# Decisões de mídia {/* #media-decisions */}
+
+Esta página registra as decisões atuais de produto e arquitetura por trás de
+live viewing, transportes de mídia, reprodução no Home Assistant, publicação de
+câmeras e vídeo espacial no Toposync.
+
+Ela é deliberadamente mais rígida do que um guia passo a passo. Se uma mudança
+futura contradisser uma dessas decisões, atualize esta página junto com a
+mudança em vez de esconder o conflito em heurísticas locais de UI ou fallback.
+
+Páginas relacionadas:
+
+- [Visão geral de câmeras](/pt-BR/docs/cameras/overview)
+- [Live viewing](/pt-BR/docs/cameras/live-viewing)
+- [Mapeamento de câmeras](/pt-BR/docs/cameras/camera-mapping)
+- [Entidades de câmera do Home Assistant](/pt-BR/docs/home-assistant-addon/camera-entities)
+
+## Resumo das decisões {/* #decision-summary */}
+
+| Área | Decisão |
+| --- | --- |
+| Modelo de usuário | Usuários gerenciam fontes de câmera, publicações, live views e variantes. `Transmission` é artefato avançado ou gerado. |
+| Estabilidade | Playback visível e estável importa mais do que latência mínima ou qualidade máxima. |
+| Liveness | Um stream só é live quando tem frame selecionado recente, writer selecionado e saída ativa saudável. |
+| Transportes | A escolha do transporte é contextual. HLS continua sendo a base de compatibilidade. |
+| MSE | MSE é transporte web iniciado por demanda via go2rtc e proxy assinado do Toposync. |
+| WebRTC | WebRTC é para baixa latência explícita e PTZ, não para todo tile de dashboard. |
+| JSMpeg | JSMpeg é fallback visual final, por sessão, com qualidade baixa por desenho. |
+| Home Assistant Cloud | Playback amigável ao Cloud passa por entidades nativas `camera` do Home Assistant. |
+| Vídeo espacial | Projeção espacial é responsabilidade de extensão separada que consome câmeras mapeadas e live views. |
+| Fronteira do core | O core permanece genérico; streaming, publicação de câmera e política de vídeo espacial ficam em extensões. |
+
+## Decisão 1: playback de câmera começa por fontes publicadas {/* #decision-1-camera-playback-starts-from-published-sources */}
+
+Playback normal de câmera começa em uma fonte de câmera, não em uma transmissão
+técnica criada manualmente.
+
+```text
+fonte de câmera
+  -> intenção de publicação
+  -> reconciler
+  -> pipeline implícito
+  -> stream.publish_video
+  -> runtime de transmissão
+  -> saída de mídia
+  -> viewer
+```
+
+Usuários não devem precisar entender `transmission_id`, `engine_path`,
+`output_id` ou `quality_profile_id` para ver uma câmera comum. Esses valores
+continuam importantes para diagnóstico e contratos internos, mas não são o
+modelo principal de produto.
+
+## Decisão 2: publicação manual por pipeline continua first-class {/* #decision-2-manual-pipeline-publication-is-still-first-class */}
+
+Publicação automática de câmera é o fluxo principal, mas pipelines manuais ainda
+podem publicar vídeo renderizado ou transformado.
+
+Use esse caminho para recortar uma câmera, aplicar overlay, publicar uma visão
+focada em detecção ou criar variantes `main`, `sub`, `zoom` ou `custom`.
+
+O reconciler é dono da `Transmission` gerada e pode escrever o
+`transmission_id` determinístico de volta no nó. Ao remover um pipeline manual,
+somente os artefatos gerados por aquele pipeline devem ser removidos.
+
+## Decisão 3: liveness é frescor de frame, não processo rodando {/* #decision-3-liveness-is-frame-freshness-not-process-presence */}
+
+O Toposync não deve marcar um stream congelado como live só porque FFmpeg,
+MediaMTX, go2rtc ou outro processo está rodando.
+
+Playback live exige:
+
+- frame selecionado recente;
+- writer selecionado ativo;
+- saída de mídia selecionada saudável;
+- saúde específica do transporte quando há playback ativo.
+
+Classificações importantes incluem `no_frame`, `source_pipeline_stale`,
+`publisher_down`, `event_gated_idle` e `app_player_lifecycle`. Hints de usuário
+devem priorizar a causa acionável, não avisos técnicos de transportes inativos.
+
+## Decisão 4: política de transporte é contextual {/* #decision-4-transport-policy-is-contextual */}
+
+Nenhum transporte único deve ser apresentado como melhor para todos os casos.
+
+| Contexto | Preferência |
+| --- | --- |
+| Sidebar do Home Assistant, ingress, compatibilidade ampla | HLS |
+| Dashboard web local quando o browser suporta | MSE |
+| PTZ, baixa latência explícita, inspeção interativa | WebRTC |
+| Diagnóstico visual final | JSMpeg |
+| Home Assistant nativo e integrações externas | RTSP ou entidade `camera` do Home Assistant |
+
+O seletor automático deve escolher pelo contexto, mas páginas de debug devem
+fixar um transporte para diagnóstico.
+
+## Decisão 5: HLS é a base estável {/* #decision-5-hls-is-the-stable-baseline */}
+
+HLS é a opção mais conservadora para browser, Home Assistant ingress, apps e
+redes mistas. A latência é maior, mas a compatibilidade é melhor.
+
+O modo padrão deve funcionar via proxy assinado pelo próprio Toposync, sem exigir
+que o usuário exponha portas internas do MediaMTX para playback comum.
+
+## Decisão 6: MSE é transporte web iniciado por demanda {/* #decision-6-mse-is-a-demand-started-web-transport */}
+
+MSE melhora a experiência web quando go2rtc e o browser suportam o caminho. Ele
+deve ser iniciado por demanda, por sessão de viewer, e não tratado como saída
+persistente de transmissão.
+
+Isso mantém o contrato de publicação simples: a transmissão continua tendo
+saídas reais como HLS, RTSP e WebRTC, enquanto MSE é um caminho de viewer.
+
+## Decisão 7: WebRTC é baixa latência contextual {/* #decision-7-webrtc-is-contextual-low-latency */}
+
+WebRTC é útil para interação de baixa latência, especialmente PTZ, zoom e
+inspeção. Ele não deve ser default universal para grades, cards e iframes.
+
+Erros de WebRTC não devem eclipsar um HLS saudável quando o usuário não pediu
+baixa latência.
+
+## Decisão 8: JSMpeg é fallback visual final {/* #decision-8-jsmpeg-is-the-final-visual-fallback */}
+
+JSMpeg é fallback de último caso para ver imagem quando transportes melhores
+falham. Ele é sessão-escopo, com baixa qualidade e sem áudio por desenho.
+
+Ele não deve virar saída persistente de transmissão nem caminho principal de
+produto.
+
+## Decisão 9: trabalho de mídia deve ser escopado por demanda {/* #decision-9-media-work-must-be-demand-scoped */}
+
+Decodificação, transcodificação e sidecars devem ser iniciados apenas quando há
+demanda real ou publicação configurada. Isso é especialmente importante em
+Home Assistant OS, Raspberry Pi e máquinas pequenas.
+
+O sistema deve distinguir:
+
+- publicação configurada;
+- viewer ativo;
+- transporte ativo;
+- pipeline alimentando frames;
+- processo técnico rodando.
+
+## Decisão 10: Home Assistant Cloud usa entidades nativas {/* #decision-10-home-assistant-cloud-uses-native-entities */}
+
+Para visualização remota pelo Home Assistant Cloud, o caminho preferido é:
+
+```text
+Publicação Toposync -> entidade camera do Home Assistant -> componente stream do Home Assistant -> UI / Cloud do Home Assistant
+```
+
+O iframe do Toposync no add-on é ótimo para operar a plataforma, mas não deve ser
+tratado como o caminho universal para playback remoto pelo Cloud.
+
+## Decisão 11: vídeo espacial é responsabilidade de extensão separada {/* #decision-11-spatial-video-is-a-separate-extension-concern */}
+
+Vídeo espacial consome câmeras mapeadas, calibração, poses PTZ, live views e
+artefatos de mídia. Isso deve viver em extensão própria, não no core.
+
+O core fornece composição, arquivos, extensões, pipelines e contratos genéricos.
+Política de projeção, clipping, calibração e modos de renderização pertencem ao
+domínio de mídia espacial.
+
+## Decisão 12: calibração é transformação global mais refinamento local {/* #decision-12-calibration-is-global-transform-plus-local-refinement */}
+
+Calibração deve combinar uma transformação global da câmera com refinamentos
+locais quando necessário.
+
+O objetivo é mapear o suficiente para Spatial Camera Mapping e Spatial Events,
+sem exigir perfeição geométrica em cada primeira configuração.
+
+## Decisão 13: mapeamento PTZ pode sintetizar poses, com avisos {/* #decision-13-ptz-mapping-can-synthesize-poses-with-warnings */}
+
+Câmeras PTZ podem ter poses conhecidas, presets ou estimativas. O sistema pode
+sintetizar poses para melhorar a experiência, mas deve sinalizar claramente
+quando a pose é estimada, incompleta ou não validada.
+
+Não trate pose inferida como calibração confirmada.
+
+## Decisão 14: clipping de área é geométrico, não correção de mídia {/* #decision-14-area-clipping-is-geometric-not-media-correction */}
+
+Clipping por área deve operar como decisão geométrica: qual parte do mundo ou da
+composição está sendo considerada.
+
+Ele não deve ser usado para esconder problemas de letterbox, padding, aspect
+ratio ou calibração de mídia. Esses problemas devem ser tratados como metadados
+e correção de mídia.
+
+## Decisão 15: content rect é metadado de mídia {/* #decision-15-content-rect-is-media-metadata */}
+
+Quando um vídeo tem letterbox, padding ou conteúdo útil menor do que o frame
+total, isso precisa ser representado como metadado de mídia.
+
+Essa decisão evita pedir que usuários corrijam manualmente offsets visuais em
+cada camada e ajuda projeções, crops e overlays a usarem a região correta.
+
+## Decisão 16: telas de debug são ferramentas de transporte fixo {/* #decision-16-debug-views-are-fixed-transport-tools */}
+
+Uma tela de debug deve testar exatamente o transporte escolhido: HLS, MSE,
+WebRTC, JSMpeg ou outro caminho. Ela não deve trocar silenciosamente para outro
+transporte, porque isso destrói o valor do diagnóstico.
+
+Fallback automático pertence ao viewer normal, não à tela de debug.
+
+## Decisão 17: paths de ingress do Home Assistant fazem parte do contrato {/* #decision-17-home-assistant-ingress-paths-are-part-of-the-contract */}
+
+Toda URL visível no navegador precisa preservar o prefixo público do Toposync em
+Home Assistant ingress. Isso inclui links, assets, chamadas de API, EventSource,
+WebSocket, downloads e URLs de mídia assinadas.
+
+Código de frontend deve usar helpers de base path em vez de montar URLs
+absolutas com `/api/...` quando isso for aparecer no navegador.
+
+## Decisão 18: validação de mídia precisa inspecionar mídia quando essa é a promessa {/* #decision-18-validation-must-inspect-media-when-media-visibility-is-the-claim */}
+
+Quando uma mudança promete que vídeo aparece, a validação precisa verificar
+mídia real ou evidência direta de frames, não apenas status HTTP.
+
+Exemplos:
+
+- player renderizando frames;
+- playlist HLS com segmentos acessíveis;
+- evento de playback com progresso;
+- snapshot ou frame recente;
+- diagnóstico de liveness com frame fresco.
+
+## Alternativas rejeitadas {/* #rejected-alternatives */}
+
+### Usar go2rtc como engine principal de mídia {/* #use-go2rtc-as-the-main-media-engine */}
+
+go2rtc é útil como sidecar e caminho MSE/WebRTC, mas o Toposync precisa manter
+controle sobre publicação, liveness, reconciliação e integração com pipelines.
+
+### Tornar WebRTC o default para todo playback web {/* #make-webrtc-the-default-for-all-web-playback */}
+
+WebRTC é excelente em cenários certos, mas é sensível a rede, NAT, ingress,
+portas e browser. HLS continua sendo a base mais segura.
+
+### Persistir MSE e JSMpeg como saídas reais de transmissão {/* #persist-mse-and-jsmpeg-as-real-transmission-outputs */}
+
+Esses caminhos são de sessão e viewer. Persisti-los como saídas reais tornaria o
+modelo mais confuso e difícil de reconciliar.
+
+### Pedir que usuários corrijam manualmente padding de letterbox {/* #ask-users-to-manually-fix-letterbox-padding */}
+
+Isso transforma um problema de metadados de mídia em ajuste manual frágil. O
+sistema deve detectar ou configurar a região útil como metadado.
+
+### Colocar política de vídeo espacial no core {/* #put-spatial-video-policy-in-the-core */}
+
+O core deve continuar genérico. Política de vídeo espacial pertence a extensão,
+onde pode evoluir sem acoplar todo o produto a um fluxo específico.
+
+## Quando atualizar esta página {/* #when-to-update-this-page */}
+
+Atualize esta página quando uma mudança:
+
+- altera seleção de transporte;
+- muda publicação de câmera ou reconciliação de transmissão;
+- altera liveness, diagnóstico ou classificação de playback;
+- muda comportamento de Home Assistant ingress ou Home Assistant Cloud;
+- move responsabilidade entre core, streaming, câmeras ou vídeo espacial;
+- altera calibração, clipping, content rect ou projeção espacial;
+- adiciona um novo fallback de mídia ou remove um fallback existente.

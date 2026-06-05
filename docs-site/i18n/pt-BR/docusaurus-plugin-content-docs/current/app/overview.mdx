@@ -1,11 +1,83 @@
 ---
-title: Visão geral do app
-description: "Conheça o app Toposync, seus fluxos atuais e sua relação com o servidor local Toposync."
-keywords: ["toposync", "local-first", "automação residencial", "app", "visão geral", "mobile"]
+title: App Toposync
+description: "Entenda o app Toposync planejado para iPhone, iPad, Android, Apple TV e Android TV, incluindo visão 3D, transmissões, Picture-in-Picture, notificações e composições assistidas por RoomPlan."
+keywords: ["toposync", "app", "iOS", "iPhone", "iPad", "Android", "Apple TV", "Android TV", "RoomPlan", "Picture-in-Picture", "transmissões"]
 image: /img/social-card.png
 sidebar_position: 1
 ---
 
-# Visão geral do app {/* #app-overview */}
+# App Toposync {/* #toposync-app */}
 
-Esta página está em construção.
+O app Toposync está planejado, mas ainda está em desenvolvimento. O foco público atual do produto é o servidor local Toposync, a UI web, o add-on para Home Assistant OS, câmeras, pipelines e processing servers.
+
+O app deve complementar a UI web e a sidebar do Home Assistant com experiências
+nativas para celular e TV, focadas em visualização, notificações,
+Picture-in-Picture e navegação espacial.
+
+## Superfícies planejadas {/* #planned-surfaces */}
+
+Os alvos pretendidos para o app são:
+
+- iPhone;
+- iPad;
+- celulares Android;
+- Apple TV;
+- Android TV.
+
+A ordem exata de lançamento ainda não está fechada. Detalhes de compatibilidade serão documentados quando houver builds prontos para teste.
+
+## Papel pretendido {/* #intended-role */}
+
+O app deve se conectar a um servidor Toposync rodando localmente ou por um caminho de acesso aprovado. Ele não deve substituir o servidor. O servidor continua responsável por configuração, extensões, arquivos, pipelines, câmeras, eventos e orquestração de processamento.
+
+O app deve focar superfícies de interação que se beneficiam de comportamento nativo mobile ou TV.
+
+## Capacidades planejadas {/* #planned-capabilities */}
+
+A direção atual de produto inclui:
+
+- experiência 3D repensada para mobile e TV;
+- transmissões ao vivo e visualização focada em câmeras;
+- Picture-in-Picture para transmissões quando a plataforma suportar;
+- notificações com contexto de evento, câmera, imagem e área;
+- acesso mais seguro à instância local do Toposync a partir do dispositivo;
+- criação de composições assistida por RoomPlan em dispositivos iPhone e iPad suportados, usando Apple RoomPlan API quando disponível;
+- visualização adequada para TV com streams, eventos e contexto espacial.
+
+Essas capacidades não são promessa de release. Elas descrevem a direção do trabalho do app enquanto o projeto ainda está em alpha.
+
+## RoomPlan e criação de composições {/* #roomplan-and-composition-creation */}
+
+Em dispositivos iPhone e iPad suportados, Apple RoomPlan API pode ajudar a criar ou acelerar a primeira composição. A ideia é usar o scan nativo de cômodos como assistente, não como única fonte de verdade.
+
+O usuário ainda deve poder refinar paredes, áreas, imagens, modelos, câmeras e mapeamento dentro do Toposync depois de importar ou gerar uma estrutura inicial.
+
+## Relação com a UI web e Home Assistant {/* #relationship-with-the-web-ui-and-home-assistant */}
+
+A UI web continua sendo a interface principal hoje. O add-on Home Assistant OS e
+a sidebar continuam sendo superfícies suportadas importantes para instalações
+centradas no Home Assistant. O app deve adicionar comportamento nativo para
+mobile e TV sem substituir essas superfícies.
+
+A UI web é o caminho atual para:
+
+- validar instalação;
+- criar a primeira composição;
+- configurar e calibrar câmeras;
+- criar pipelines;
+- integrar com Home Assistant;
+- usar UI fornecida por extensões.
+
+O app deve eventualmente complementar esse fluxo com experiências nativas para
+mobile e TV, sem dividir o produto em um modelo de configuração separado.
+
+## Estado atual {/* #current-status */}
+
+O app ainda não é documentado como caminho de instalação suportado. Trate páginas relacionadas ao app como direção de produto até os primeiros builds de teste serem publicados.
+
+Por enquanto, comece por:
+
+- [Escolha sua instalação](../installation/choose-your-installation.mdx)
+- [Crie sua primeira composição](../first-steps/create-your-first-composition.mdx)
+- [Adicione sua primeira câmera](../first-steps/add-your-first-camera.mdx)
+- [Mapeamento de câmeras](../cameras/camera-mapping.mdx)

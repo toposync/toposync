@@ -1,11 +1,75 @@
 ---
 title: Local-first
-description: "Entenda o desenho local-first do Toposync, propriedade dos dados e por que recursos de cloud são opcionais."
-keywords: ["toposync", "local-first", "automação residencial", "privacidade", "arquitetura"]
+description: "Entenda o comportamento local-first do Toposync, propriedade dos dados, limites de runtime local, integração com Home Assistant e processing servers."
+keywords: ["toposync", "local-first", "automação residencial", "privacidade", "propriedade dos dados", "processing server"]
 image: /img/social-card.png
-sidebar_position: 2
+sidebar_position: 3
 ---
 
 # Local-first {/* #local-first */}
 
-Esta página está em construção.
+Toposync é local-first por padrão. O caminho principal do produto roda backend, UI, extensões, settings, arquivos e estado de pipelines no próprio ambiente do usuário.
+
+Local-first não significa isolado de todo o resto. O Toposync pode integrar com Home Assistant, câmeras, processing servers e serviços externos opcionais. Significa que o sistema local deve continuar sendo o centro de propriedade e operação.
+
+## O que fica local {/* #what-stays-local */}
+
+Em uma instalação normal, o Toposync armazena e opera localmente:
+
+- configuração e settings;
+- usuários, sessões e concessões de acesso;
+- composições, paredes, áreas e elementos;
+- registro de câmeras e dados de mapeamento;
+- arquivos enviados, imagens, modelos e artifacts gerados;
+- definições de pipelines, telemetria, snapshots e armazenamento;
+- dados de extensões criados pelas extensões instaladas.
+
+O diretório de dados ativo depende do caminho de instalação. Veja [Locais de arquivos](../reference/file-locations.mdx) para caminhos específicos por plataforma.
+
+## Diretório de dados {/* #data-directory */}
+
+O Toposync tem um diretório de dados principal. Ele pode ser definido por `--data-dir`, `TOPOSYNC_DATA_DIR`, volumes Docker ou armazenamento do add-on.
+
+Use um diretório de dados explícito para instalações previsíveis:
+
+```bash
+toposync serve --data-dir ./toposync-data
+```
+
+Não edite `config.json` enquanto o servidor está rodando. Prefira a UI ou API. Se precisar de recuperação manual, pare o Toposync antes e mantenha um backup.
+
+## Integração com Home Assistant {/* #home-assistant-integration */}
+
+A integração com Home Assistant é opcional. O Toposync pode rodar de forma independente, ou pode usar Home Assistant para entidades, estados, automações, notificações, entidades de câmera e operação como add-on.
+
+Quando roda como add-on do Home Assistant OS, o Toposync ainda usa armazenamento local do add-on e o Home Assistant Supervisor gerencia o ciclo de vida do add-on.
+
+## Processing servers {/* #processing-servers */}
+
+Processing servers continuam dentro do modelo local-first quando rodam em máquinas que você controla.
+
+Use processing servers quando:
+
+- o servidor origin deve continuar leve;
+- Home Assistant OS roda em hardware limitado;
+- múltiplas câmeras precisam de processamento;
+- cargas OpenCV ou ONNX são pesadas demais para o origin;
+- um host Windows, Linux, macOS, Docker ou GPU deve fazer o trabalho pesado.
+
+O origin continua responsável por configuração e orquestração. O processing server recebe o trabalho que precisa executar e reporta status ou eventos de volta ao origin.
+
+## Serviços externos {/* #external-services */}
+
+O Toposync não deve exigir um serviço externo para iniciar, carregar a UI, gerenciar uma casa, carregar extensões, rodar pipelines locais ou integrar com Home Assistant na mesma rede.
+
+Se serviços opcionais forem adicionados depois, eles devem ser aditivos. Eles não devem mudar a base local-first.
+
+## Regras práticas {/* #practical-rules */}
+
+- Faça backup do diretório de dados antes de upgrades.
+- Use redes contidas e entidades não críticas ao testar builds alpha.
+- Prefira processamento local para mídia privada de câmeras.
+- Sanitize logs antes de compartilhar issues.
+- Trate achados de segurança como reports privados, não issues públicas.
+
+Próximo: [Conceitos espaciais](spatial-concepts.mdx).

@@ -8,4 +8,52 @@ sidebar_position: 4
 
 # Configurações {/* #settings */}
 
-Esta página está em construção.
+Configurações é onde o Toposync expõe configuração de runtime, painéis de
+extensões instaladas, integrações e controles operacionais avançados.
+
+Os painéis exatos dependem do bundle instalado. A instalação padrão mostra as
+áreas principais do produto e configurações das extensões first-party. Extensões
+opcionais podem adicionar mais painéis.
+
+## O que pertence às configurações {/* #what-belongs-in-settings */}
+
+Áreas comuns incluem:
+
+- acesso e autenticação;
+- detalhes de conexão com Home Assistant;
+- descoberta de câmeras e gerenciamento de fontes;
+- configuração de streaming quando streaming está instalado;
+- diagnósticos de modelos de visão e informações de runtime;
+- registro de processing servers;
+- opções específicas de extensões.
+
+Para chaves de configuração, portas, variáveis de ambiente e locais de arquivos,
+use a seção [Referência](../reference/configuration.mdx).
+
+## Cuidado com configurações avançadas {/* #be-careful-with-advanced-settings */}
+
+Durante o Alpha Early Access, prefira mudar configurações pela UI ou por fluxos
+de API documentados.
+
+Edições manuais no diretório de dados podem ser úteis para recuperação, mas
+também podem quebrar grafos de pipeline, configurações de extensões ou estado de
+auth se o formato JSON estiver errado.
+
+## Add-on Home Assistant OS {/* #home-assistant-os-addon */}
+
+Quando roda dentro do Home Assistant OS, parte do comportamento é controlada
+pela configuração do add-on em vez da página de configurações dentro do app.
+
+Use a documentação do add-on para ingress, acesso direto, portas e operação
+supervisionada:
+
+- [Instalação do add-on Home Assistant OS](../installation/home-assistant-addon.mdx)
+- [Detalhes do add-on Home Assistant](../home-assistant-addon/overview.mdx)
+
+## Solução de problemas {/* #troubleshooting */}
+
+Se uma configuração não aparece, confirme que a extensão relacionada está
+instalada e carregada em `/api/extensions`.
+
+Se uma mudança parece não aplicar, reinicie o servidor Toposync depois de salvar
+e confira os logs por erros de inicialização de extensões.

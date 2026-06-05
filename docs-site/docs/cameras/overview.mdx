@@ -9,8 +9,8 @@ sidebar_position: 1
 # Cameras overview {/* #cameras-overview */}
 
 Cameras in Toposync are more than a video URL. A camera can have multiple video
-sources, live transmissions, physical placement in a composition, PTZ controls,
-and pipelines that turn images into events.
+sources, ONVIF discovery and metadata, live transmissions, physical placement in
+a composition, PTZ controls, and pipelines that turn images into events.
 
 Start from the camera source, not from a manual pipeline. For normal live
 viewing, Toposync can generate the transmission and the continuous pipeline for
@@ -33,6 +33,24 @@ The main pieces are:
 In the regular flow, you should not need to create a `Transmission` manually.
 Enable live viewing on the source, and let Toposync reconcile the generated
 artifacts.
+
+## RTSP and ONVIF {/* #rtsp-and-onvif */}
+
+Toposync supports both RTSP and ONVIF, but they solve different parts of the
+camera workflow.
+
+| Technology | What Toposync uses it for |
+| --- | --- |
+| RTSP | Reading video streams from cameras, NVRs, Frigate, go2rtc, or other local restream services. |
+| ONVIF | Discovering cameras on the local network, reading camera metadata, capturing snapshots, finding stream profiles, receiving events, and controlling PTZ when supported. |
+
+Many cameras use both: ONVIF helps Toposync find and describe the camera, while
+RTSP carries the actual video stream. Some cameras expose RTSP without useful
+ONVIF support, and some networks block ONVIF discovery even when manual camera
+access works.
+
+Use discovery when it works. If ONVIF discovery does not find a camera, add the
+camera manually with its RTSP or ONVIF address and credentials.
 
 ## Source roles {/* #source-roles */}
 

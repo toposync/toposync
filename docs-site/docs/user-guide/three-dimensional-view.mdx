@@ -8,4 +8,44 @@ sidebar_position: 3
 
 # Three-dimensional view {/* #three-dimensional-view */}
 
-This page is under construction.
+The three-dimensional view helps you inspect a composition as a spatial scene.
+
+Use it after the basic 2D structure exists, or when camera placement, models,
+and spatial context matter more than top-down editing.
+
+## What to use it for {/* #what-to-use-it-for */}
+
+The 3D view is useful for:
+
+- checking whether walls, areas, and cameras feel spatially correct;
+- placing lightweight 3D objects;
+- understanding camera direction and coverage;
+- reviewing Home Assistant entities in context;
+- inspecting Spatial Camera Mapping and rendered camera views as those workflows
+  mature.
+
+## Models should be lightweight {/* #models-should-be-lightweight */}
+
+Toposync accepts lightweight `GLB` or `GLTF` models through the models workflow.
+
+For the current product stage, prefer:
+
+- low-poly models;
+- small texture sizes;
+- simplified furniture or object shapes;
+- models that explain the space rather than decorate every detail.
+
+Heavy models can make the browser slower and distract from the operational
+purpose of the composition.
+
+## 2D and 3D work together {/* #2d-and-3d-work-together */}
+
+Use the 2D view for tracing and structure. Use the 3D view for spatial review.
+
+If something looks wrong in 3D, usually fix the base position, scale, or wall
+layout in 2D first.
+
+## Alpha note {/* #alpha-note */}
+
+The 3D experience is active product work. Expect the mobile and TV app versions
+to rethink parts of the 3D interaction model over time.

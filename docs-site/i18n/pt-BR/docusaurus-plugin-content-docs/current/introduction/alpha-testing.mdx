@@ -1,0 +1,84 @@
+---
+title: Alpha testing
+description: "Entenda o alpha early access do Toposync, limites seguros de teste, no que ainda não confiar e como reportar bugs ou problemas de segurança."
+keywords: ["toposync", "alpha early access", "testes", "segurança", "automação residencial", "câmeras", "Home Assistant"]
+image: /img/social-card.png
+sidebar_position: 5
+---
+
+# Alpha testing {/* #alpha-testing */}
+
+Toposync está em **alpha early access**. O projeto está pronto para testes cuidadosos por usuários técnicos, mas ainda não é um produto final polido e não deve ser tratado como sistema crítico de segurança.
+
+O melhor feedback de alpha vem de instalações reais, porém contidas: câmeras reais, ambientes reais de Home Assistant, redes reais e caminhos reais de instalação, com limites claros de rollback e privacidade.
+
+## Quem deve testar agora {/* #who-should-test-now */}
+
+Esta fase é mais indicada para:
+
+- usuários avançados de Home Assistant;
+- usuários de câmeras IP, RTSP, ONVIF ou PTZ;
+- pessoas com homelab;
+- desenvolvedores interessados em visão computacional local;
+- pequenos integradores testando ideias;
+- pessoas testando documentação e instalação;
+- quem está confortável com logs, updates, backups e troubleshooting.
+
+Se você precisa de um produto final com setup simples e comportamento estável, espere uma versão futura.
+
+## Postura segura de teste {/* #safe-testing-posture */}
+
+Use um ambiente contido:
+
+- LAN privada ou rede de teste isolada;
+- entidades não críticas do Home Assistant;
+- câmeras de teste ou visões de câmera não sensíveis quando possível;
+- nenhuma automação de emergência, controle de acesso ou segurança crítica;
+- backups antes de upgrades;
+- caminho de rollback para Home Assistant, Docker, ambientes Python e dados do Toposync.
+
+Não exponha imagens privadas de câmeras, tokens, senhas, URLs internas ou logs brutos em issues públicas.
+
+## No que ainda não confiar {/* #what-not-to-rely-on-yet */}
+
+Ainda não dependa do Toposync para:
+
+- monitoramento de segurança sem supervisão;
+- fluxos de emergência;
+- controle de acesso;
+- segurança de vida;
+- comportamento crítico de iluminação, portão, fechadura, sirene ou alarme;
+- qualquer automação em que falha possa causar dano, prejuízo material, exposição de privacidade ou perda de serviço essencial.
+
+O Toposync pode fornecer visualização adicional, inteligência local e consciência situacional, mas não substitui sistemas de segurança certificados, sensores dedicados, supervisão humana ou equipamentos de proteção.
+
+## O que reportar {/* #what-to-report */}
+
+Reports úteis incluem:
+
+- caminho de instalação e versão;
+- sistema operacional e arquitetura;
+- detalhes de Home Assistant OS/add-on quando relevante;
+- marca da câmera, protocolo e formato de conexão sanitizado;
+- caminho de GPU/runtime quando relevante;
+- comportamento esperado e comportamento observado;
+- logs sanitizados;
+- screenshots com informação privada removida;
+- passos para reproduzir.
+
+Abra issues públicas para bugs comuns e problemas de documentação.
+
+## Reports de segurança {/* #security-reports */}
+
+Não reporte vulnerabilidades em issues públicas.
+
+Use private vulnerability reporting do GitHub ou um GitHub Security Advisory privado quando disponível. Inclua informação suficiente para reproduzir e entender o impacto, mas não inclua segredos, senhas, credenciais de câmera, mídia pessoal ou detalhes sensíveis da rede interna.
+
+Veja o `SECURITY.md` do repositório para a política atual.
+
+## O que ler agora {/* #what-to-read-next */}
+
+- [Escolha sua instalação](../installation/choose-your-installation.mdx)
+- [Locais de arquivos](../reference/file-locations.mdx)
+- [Solução de problemas](../troubleshooting/)
+- [Ambiente de desenvolvimento](../developers/development-setup.mdx)

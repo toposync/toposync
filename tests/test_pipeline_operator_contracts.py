@@ -23,7 +23,7 @@ def test_contract_alerts_when_required_payload_keys_are_missing() -> None:
         graph={
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
+                {"id": "source", "operator": "core.synthetic_source", "config": {"rate_hz": 5.0}},
                 {"id": "crop", "operator": "vision.crop_objects", "config": {}},
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],

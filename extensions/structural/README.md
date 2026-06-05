@@ -1,10 +1,10 @@
 # Toposync Extension: Structural
 
-Ferramentas e tipos de elemento estruturais (2D) para o editor de composição:
+Structural 2D tools and element types for the composition editor:
 
-- Paredes (linhas)
-- Áreas (quadrado/polígono)
-- Variantes “área + paredes”
+- Walls (line segments)
+- Areas (rectangle/polygon)
+- Area and wall variants
 
-O frontend dessa extensão é distribuído como bundle prebuilt (`remoteEntry.js`) dentro do wheel.
-
+This extension's frontend is distributed as a prebuilt bundle (`remoteEntry.js`)
+inside the wheel.

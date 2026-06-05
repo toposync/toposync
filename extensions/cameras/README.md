@@ -18,7 +18,6 @@ The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tra
 - `POST /api/cameras/rtsp/snapshot`
 - `GET /api/cameras/cameras/{camera_id}/snapshot`
 - `POST /api/cameras/projection/map`
-- `POST /api/cameras/control_points/map`
 
 `camera.camera_mapping` and the editor use `calibrated_views` as the canonical mapping model:
 

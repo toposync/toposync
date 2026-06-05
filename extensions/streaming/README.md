@@ -4,7 +4,7 @@ Extension ID: `com.toposync.streaming`
 
 This extension provides camera and pipeline video publication in Toposync:
 
-- Users normally publish **camera sources** with a `Transmitir esta fonte` intent.
+- Users normally publish **camera sources** with a `Transmit this source` intent.
 - The extension reconciles generated **CameraLiveView**, **Transmission**, **Outputs**, and implicit continuous pipelines.
 - Advanced pipelines can publish a rendered variant through **`stream.publish_video`**.
 - A local **MediaMTX** engine serves RTSP/HLS/WebRTC (WHEP) URLs.
@@ -47,6 +47,8 @@ In short:
 - Demand heartbeat for web, app, PiP, PTZ, and Home Assistant entity playback.
 - Distributed hosting via `Transmission.host_server_id`, plus URL proxying and processing-side settings sync.
 - Dashboard playback using a backend Playback Plan with HLS/WebRTC, MSE through the optional go2rtc sidecar, and JSMpeg as an on-demand emergency visual fallback.
+- Synthetic playback URLs for MSE and JSMpeg, derived from a real backing output instead of persisted as `TransmissionOutput` rows.
+- Media `content_rect` metadata for contain-resized outputs, so spatial video can remove transport letterboxing without asking the user to recalibrate.
 
 ## Supported protocols (as implemented)
 
@@ -74,12 +76,14 @@ In short:
 - The browser never talks to go2rtc directly. Toposync verifies the signed media token and proxies text control messages plus binary fMP4 fragments.
 - Dashboard Auto can prefer MSE for passive web/grid/fullscreen playback when the sidecar is enabled/startable and the backing output is browser-compatible.
 - A stopped go2rtc process is normal when no MSE viewer is connected. Toposync returns a signed MSE URL when the sidecar can be started, then starts/updates go2rtc on the first MSE WebSocket session.
+- MSE is synthetic. It is generated from a real HLS/backing output and is not stored as `TransmissionOutput(protocol="mse")`.
 
 ### JSMpeg
 - URL format: `ws://<toposync-host>/api/streams/media/jsmpeg/<path>/ws?media_token=...`
 - Intended only as an emergency visual fallback. It is video-only, low resolution/FPS, and does not carry audio.
 - Each browser WebSocket creates one isolated FFmpeg process that converts the selected runtime frame stream to MPEG-TS/MPEG-1. The process is stopped when the WebSocket closes.
 - The source is the selected Toposync Transmission frame, or an explicit placeholder while warming up/offline. It never pulls camera RTSP directly.
+- JSMpeg is synthetic. It is generated from a real backing output and is not stored as `TransmissionOutput(protocol="jsmpeg")`.
 
 ### Playback Plan candidates
 
@@ -98,11 +102,11 @@ RTSP is not a browser transport. It remains the internal/ecosystem contract for 
 
 Camera source publication:
 
-`camera source` -> `StreamPublicationSpec` -> reconciler -> implicit pipeline -> `stream.publish_video` -> `TransmissionRuntimeState` -> `StreamWriterBridge` -> `FFmpeg publisher` -> `MediaMTX path` -> viewers (RTSP/HLS/WHEP)
+`camera source` -> `StreamPublicationSpec` -> reconciler -> implicit pipeline -> `stream.publish_video` -> `TransmissionRuntimeState` -> `StreamWriterBridge` -> `FFmpeg publisher` -> `MediaMTX path` -> viewers (RTSP/HLS/WHEP/MSE) plus Toposync JSMpeg fallback
 
 Advanced pipeline publication:
 
-`pipeline frames` -> `stream.publish_video` -> generated/manual `Transmission` -> `TransmissionRuntimeState` -> `StreamWriterBridge` -> `FFmpeg publisher` -> `MediaMTX path` -> viewers (RTSP/HLS/WHEP)
+`pipeline frames` -> `stream.publish_video` -> generated/manual `Transmission` -> `TransmissionRuntimeState` -> `StreamWriterBridge` -> `FFmpeg publisher` -> `MediaMTX path` -> viewers (RTSP/HLS/WHEP/MSE) plus Toposync JSMpeg fallback
 
 ### Components
 
@@ -192,7 +196,7 @@ Context defaults:
 - `large` and `fullscreen`: prefer `main`.
 - `ptz`: prefer `zoom`, then `main`, then `sub`.
 
-This is intentionally separate from technical quality labels. The dashboard source selector should expose labels such as "Principal", "Baixa resolução", "Zoom", or custom names, not internal output ids.
+This is intentionally separate from technical quality labels. The dashboard source selector should expose labels such as "Main", "Low resolution", "Zoom", or custom names, not internal output ids.
 
 ### Reconciliation rules
 
@@ -251,6 +255,8 @@ Each output is independently configurable:
 
 Notes:
 - Authentication is applied only when `enabled == true` and both `username` and `password` are present (non-empty).
+- MSE and JSMpeg are not valid persisted output protocols. The API can still return signed MSE/JSMpeg playback URLs when a compatible backing output exists.
+- URL responses include optional `content_rect` metadata. For `resize_mode="contain"`, it identifies the useful non-letterboxed rectangle inside the output frame. Consumers such as `spatial_video` remap UVs through this rectangle instead of asking the user to recalibrate.
 - The API model allows extra fields (`extra="allow"`). Some runtime behavior also reads optional extra fields:
   - `output.path` (override the resolved engine path)
   - `output.resize_mode` (`contain` or `none`; best-effort)
@@ -601,7 +607,7 @@ Core auth (enforced mode):
 
 For regular cameras, streaming is configured from the camera source itself:
 
-- each video source can show a `Transmitir esta fonte` checkbox;
+- each video source can show a `Transmit this source` checkbox;
 - the source role is used as the publication role (`main`, `sub`, `zoom`, `custom`);
 - the visible source label becomes the publication label;
 - ONVIF-discovered video sources can be published by default;
@@ -627,7 +633,7 @@ The main UI includes a "Streams" rendering mode with:
 
 - Grid modes `1x1` and `2x2` with pagination.
 - Auto-hide overlay.
-- Source/role selector using camera variants, for example Principal, Baixa resolução, Zoom, or custom names.
+- Source/role selector using camera variants, for example Main, Low resolution, Zoom, or custom names.
 - Playback strategy:
   1. Pick the best variant for the visual context.
   2. Request the backend Playback Plan for that transmission/output/context.
@@ -848,7 +854,7 @@ Camera source publication (`GET /api/streams/publications?camera_id=front`):
     "camera_source_id": "sub",
     "enabled": true,
     "role": "sub",
-    "label": "Baixa resolução",
+    "label": "Low resolution",
     "host_server_id": "local",
     "quality_policy": {},
     "transport_policy": {}
@@ -876,7 +882,7 @@ Demand (`GET /api/streams/transmissions/{id}/demand`):
 For normal use:
 
 1. Add/discover a camera in the Cameras extension.
-2. Keep `Transmitir esta fonte` enabled on the desired video sources.
+2. Keep `Transmit this source` enabled on the desired video sources.
 3. Save the camera/source.
 4. The streaming reconciler creates the live view, generated transmissions, outputs, and implicit pipelines.
 5. Open the dashboard and select the camera/source role.
@@ -888,7 +894,7 @@ curl http://127.0.0.1:8100/api/streams/publications?camera_id=<camera_id>
 
 curl -X PUT http://127.0.0.1:8100/api/streams/publications/camera-sources/<camera_id>/<source_id> \
   -H 'content-type: application/json' \
-  -d '{"enabled": true, "role": "sub", "label": "Baixa resolução"}'
+  -d '{"enabled": true, "role": "sub", "label": "Low resolution"}'
 
 curl -X POST http://127.0.0.1:8100/api/streams/reconcile
 ```
@@ -987,7 +993,7 @@ Likely causes:
 - `stream.publish_video` has not received a frame yet.
 
 Fix:
-- For camera streams, check the camera source and keep `Transmitir esta fonte` enabled.
+- For camera streams, check the camera source and keep `Transmit this source` enabled.
 - Call `POST /api/streams/reconcile`.
 - Check `GET /api/streams/runtime/pipelines` to see which pipeline owns the generated transmission.
 - Check `GET /api/streams/runtime/health` for `active_writer_id`, `selected_writer_id`, `fallback_reason`, and frame age.
@@ -995,7 +1001,7 @@ Fix:
 The primary user-facing message for this class is:
 
 ```text
-Nenhum fluxo está alimentando esta transmissão.
+No pipeline is feeding this transmission.
 ```
 
 ### HLS plays but WebRTC warning appears

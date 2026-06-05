@@ -48,13 +48,15 @@ npm run dev:rtsp-image -- /caminho/para/imagem.jpg --expose docker
 
 ## Suba o Docker com streaming {/* #start-docker-with-streaming */}
 
-Em outro terminal:
+Em outro terminal, na raiz do repositório:
 
 ```bash
-TOPOSYNC_APT_PACKAGES=ffmpeg \
-TOPOSYNC_EXTRA_WHEELS="/wheelhouse/toposync_ext_streaming-*.whl" \
-docker compose up -d --build
+docker compose up -d
 ```
+
+O Compose atual usa a imagem Docker padrão do Toposync. Essa imagem já inclui
+suporte a streaming, então este caminho de onboarding não precisa de argumentos
+extras de build.
 
 Abra o Toposync:
 
@@ -63,6 +65,19 @@ http://127.0.0.1:8000/
 ```
 
 Conclua a criação do primeiro usuário se a pasta de dados estiver nova.
+
+### Avançado: build local {/* #advanced-local-build */}
+
+Use o caminho de build local somente quando estiver desenvolvendo o Toposync a
+partir de um checkout do repositório ou testando mudanças ainda não publicadas:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local-build.yml up -d --build
+```
+
+Não use as variáveis antigas de build de streaming neste guia. Elas pertenciam
+ao fluxo anterior de imagem local e não fazem parte do caminho normal com
+Compose.
 
 ## Inicie o streaming {/* #start-streaming */}
 

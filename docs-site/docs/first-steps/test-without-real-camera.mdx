@@ -47,13 +47,15 @@ npm run dev:rtsp-image -- /path/to/image.jpg --expose docker
 
 ## Start Docker with streaming {/* #start-docker-with-streaming */}
 
-In another terminal:
+In another terminal, from the repository root:
 
 ```bash
-TOPOSYNC_APT_PACKAGES=ffmpeg \
-TOPOSYNC_EXTRA_WHEELS="/wheelhouse/toposync_ext_streaming-*.whl" \
-docker compose up -d --build
+docker compose up -d
 ```
+
+The current Compose file uses the default Toposync Docker image. That image
+includes streaming support, so no extra build arguments are needed for this
+onboarding path.
 
 Open Toposync:
 
@@ -62,6 +64,19 @@ http://127.0.0.1:8000/
 ```
 
 Complete the first-user setup if this is a new data directory.
+
+### Advanced: local build {/* #advanced-local-build */}
+
+Use the local build path only when you are developing Toposync from a repository
+checkout or testing unpublished changes:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local-build.yml up -d --build
+```
+
+Do not use the old streaming build environment variables for this guide. They
+belonged to the previous local-image workflow and are not part of the normal
+Compose path.
 
 ## Start streaming {/* #start-streaming */}
 

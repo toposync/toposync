@@ -2439,7 +2439,7 @@ class CamerasExtension(BaseExtension):
                             "notification_type": "pipelines.tracking",
                             "title": notification_title or "{{camera_name}}: Presence",
                             "description": notification_description
-                            or "{{payload.category_summary.active_member_count}} active - {{camera_name}}",
+                            or "Presence in progress - {{camera_name}}",
                             "priority": notification_priority,
                             "dedupe_key_template": "{{subject.id}}",
                         },
@@ -2522,7 +2522,7 @@ class CamerasExtension(BaseExtension):
                                     "notification_type": "pipelines.tracking",
                                     "title": notification_title or "{{camera_name}}: Presence mapped",
                                     "description": notification_description
-                                    or "{{payload.category_summary.active_member_count}} active - {{camera_name}}",
+                                    or "Presence in progress - {{camera_name}}",
                                     "priority": notification_priority,
                                     "dedupe_key_template": "{{subject.id}}",
                                 },

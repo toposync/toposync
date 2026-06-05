@@ -94,7 +94,12 @@ def test_config_store_migrates_tracking_product_identity_to_subject(tmp_path: Pa
                                 {
                                     "id": "notify",
                                     "operator": "core.notify",
-                                    "config": {"dedupe_key_template": "{{tracking_id}}"},
+                                    "config": {
+                                        "dedupe_key_template": "{{tracking_id}}",
+                                        "description": (
+                                            "{{payload.category_summary.active_member_count}} active - {{camera_name}}"
+                                        ),
+                                    },
                                 },
                             ],
                             "edges": [
@@ -128,6 +133,7 @@ def test_config_store_migrates_tracking_product_identity_to_subject(tmp_path: Pa
     assert not any(node["operator"] == "vision.event_assembler" for node in nodes)
     assert nodes_by_id["throttle"]["config"]["key_field"] == "payload.subject.id"
     assert nodes_by_id["notify"]["config"]["dedupe_key_template"] == "{{subject.id}}"
+    assert nodes_by_id["notify"]["config"]["description"] == "Presence in progress - {{camera_name}}"
     assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "throttle" for edge in edges)
 
 

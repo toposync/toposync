@@ -344,6 +344,10 @@ def _normalize_config(config: AppConfig) -> AppConfig:
                             "payload.tracking_id", "payload.subject.id"
                         )
                         next_item = next_item.replace("payload.event_id", "payload.subject.id")
+                        next_item = next_item.replace(
+                            "{{payload.category_summary.active_member_count}} active - {{camera_name}}",
+                            "Presence in progress - {{camera_name}}",
+                        )
                         if next_item != item:
                             value[key] = next_item
                             replacements += 1

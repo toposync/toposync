@@ -60,6 +60,64 @@ function formatDurationCompact(secondsRaw: unknown): string | null {
   return `${mins}m ${secs}s`;
 }
 
+function subjectType(payload: Record<string, unknown>, data: Record<string, unknown>): string {
+  const subject = asRecord(payload.subject);
+  const dataSubject = asRecord(data.subject);
+  return (
+    asString(subject.type, "").trim() ||
+    asString(dataSubject.type, "").trim() ||
+    asString(payload.subject_type, "").trim()
+  ).toLowerCase();
+}
+
+function isLegacyActiveDescription(value: string): boolean {
+  const normalized = value.trim().replace(/\s+/g, " ").toLowerCase();
+  return /^(?:\d+\s+)?active(?:\s*-\s*.+)?$/.test(normalized);
+}
+
+function isDefaultGroupPresenceDescription(value: string): boolean {
+  const normalized = value.trim().replace(/\s+/g, " ").toLowerCase();
+  return (
+    !normalized ||
+    isLegacyActiveDescription(normalized) ||
+    /^presence in progress(?:\s*-\s*.+)?$/.test(normalized)
+  );
+}
+
+function cameraLabel(payload: Record<string, unknown>, data: Record<string, unknown>): string {
+  const subject = asRecord(payload.subject);
+  const dataSubject = asRecord(data.subject);
+  return (
+    asString(data.camera_name, "").trim() ||
+    asString(payload.camera_name, "").trim() ||
+    asString(dataSubject.camera_name, "").trim() ||
+    asString(subject.camera_name, "").trim()
+  );
+}
+
+function displayDescription(
+  notification: Notification,
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>,
+): string {
+  const description = asString(notification.description, "").trim();
+  const resolvedSubjectType = subjectType(payload, data);
+  const isPipelinesNotification = asString(payload.source, "").trim() === "pipelines";
+  const shouldReplace =
+    resolvedSubjectType === "group_event"
+      ? isDefaultGroupPresenceDescription(description)
+      : isPipelinesNotification && isLegacyActiveDescription(description);
+  if (!shouldReplace) {
+    return description;
+  }
+  const camera = cameraLabel(payload, data);
+  return i18n.t(
+    "core.ui.notifications.group_presence.description",
+    { camera_suffix: camera ? ` - ${camera}` : "" },
+    "Presence in progress{{camera_suffix}}",
+  );
+}
+
 function preferredArtifactNames(): string[] {
   return ["main", "face"];
 }
@@ -192,19 +250,15 @@ function resolveOldDataWorldPoint(data: Record<string, unknown>, fallbackComposi
 function resolveWorldPoint(notification: Notification): WorldPoint | null {
   const payload = asRecord(notification.payload);
   const data = asRecord(payload.data);
-  const subject = asRecord(payload.subject);
-  const dataSubject = asRecord(data.subject);
   const memberSubject = asRecord(payload.member_subject);
   const dataMemberSubject = asRecord(data.member_subject);
   const fallbackCompositionId = readCompositionId(payload, data);
-  const subjectType = (
-    asString(subject.type, "").trim() ||
-    asString(dataSubject.type, "").trim() ||
-    asString(payload.subject_type, "").trim()
-  ).toLowerCase();
+  const resolvedSubjectType = subjectType(payload, data);
+  const subject = asRecord(payload.subject);
+  const dataSubject = asRecord(data.subject);
 
   const candidates =
-    subjectType === "group_event"
+    resolvedSubjectType === "group_event"
       ? [
           normalizeWorldEnvelopeCenter(subject.world_envelope, fallbackCompositionId),
           normalizeWorldEnvelopeCenter(payload.world_envelope, fallbackCompositionId),
@@ -614,7 +668,7 @@ function renderPipelinesNotification(notification: Notification): React.ReactNod
 
   const locationLabel = asString(data.area_label, "").trim();
 
-  const description = asString(notification.description, "").trim();
+  const description = displayDescription(notification, payload, data);
   const metaParts = [locationLabel, duration].filter(Boolean);
   const meta = metaParts.join(" • ");
   const isLive = status === "open" && realtime;

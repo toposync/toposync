@@ -306,6 +306,7 @@ export type CameraPipelinePresetRequest = {
   pipeline_name?: string;
   enabled?: boolean;
   processing_server_id?: string;
+  model_id?: string;
   composition_id?: string;
   area_id?: string;
   stopped_speed_threshold?: number;

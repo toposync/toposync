@@ -462,13 +462,37 @@ function formatSourceKindLabel(
 
 function formatMetricSummary(
   metrics: Record<string, { total: number }>,
-  formatter: (key: string) => string,
+  formatter: (key: string, total: number) => string,
 ): string {
   const entries = Object.entries(metrics)
     .map(([key, raw]) => ({ key, total: Number((isRecord(raw) ? raw.total : 0) || 0) }))
     .filter((item) => item.total > 0)
     .sort((a, b) => b.total - a.total || a.key.localeCompare(b.key));
-  return entries.map((item) => `${formatter(item.key)} ${item.total}`).join(" • ");
+  return entries.map((item) => formatter(item.key, item.total)).join(" • ");
+}
+
+function formatOriginMetric(
+  origin: string,
+  total: number,
+  t: (key: string, vars?: Record<string, unknown>, fallback?: string) => string,
+): string {
+  const clean = String(origin || "").trim().toLowerCase() || "unknown";
+  if (clean === "unknown") {
+    return t("core.ui.processing_servers.origin_metrics.models_unknown", { count: total }, "{{count}} models without registered origin");
+  }
+  return t("core.ui.processing_servers.origin_metrics.item", { count: total, label: formatOriginLabel(origin, t) }, "{{count}} {{label}}");
+}
+
+function formatSourceMetric(
+  sourceKind: string,
+  total: number,
+  t: (key: string, vars?: Record<string, unknown>, fallback?: string) => string,
+): string {
+  const clean = String(sourceKind || "").trim().toLowerCase() || "unknown";
+  if (clean === "unknown") {
+    return t("core.ui.processing_servers.origin_metrics.jobs_unknown", { count: total }, "{{count}} jobs without registered source");
+  }
+  return t("core.ui.processing_servers.origin_metrics.item", { count: total, label: formatSourceKindLabel(sourceKind, t) }, "{{count}} {{label}}");
 }
 
 function sortServers(list: ProcessingServer[]): ProcessingServer[] {
@@ -753,10 +777,10 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
                 localBuilder?.lastJob?.requestedBy?.username ||
                 "";
               const originSummary = originMetrics
-                ? formatMetricSummary(originMetrics.modelsByOrigin, (key) => formatOriginLabel(key, t))
+                ? formatMetricSummary(originMetrics.modelsByOrigin, (key, total) => formatOriginMetric(key, total, t))
                 : "";
               const sourceSummary = originMetrics
-                ? formatMetricSummary(originMetrics.jobsBySourceKind, (key) => formatSourceKindLabel(key, t))
+                ? formatMetricSummary(originMetrics.jobsBySourceKind, (key, total) => formatSourceMetric(key, total, t))
                 : "";
               return (
                 <div key={server.id} className={["pipelinesServerRow", server.id === "local" ? "isBuiltIn" : ""].filter(Boolean).join(" ")}>
@@ -852,6 +876,15 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
                             })}
                       </div>
                     ) : null}
+                    {localBuilder && !localBuilder.supported ? (
+                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
+                        {t(
+                          "core.ui.processing_servers.local_build.unavailable_next_step",
+                          {},
+                          "Next step: install Docker or Podman on this host, choose a ready model, or prepare/upload the model manually in the detection operator.",
+                        )}
+                      </div>
+                    ) : null}
                     {localBuilder?.lastJob ? (
                       <div className="pipelinesServerMeta pipelinesServerMetaDiag">
                         {t("core.ui.processing_servers.local_build.last_job", {
@@ -908,7 +941,7 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
                           const suffix = badges.length ? ` • ${badges.join(" • ")}` : "";
                           const installedSuffix = item.artifactExists
                             ? ` • ${t("core.ui.processing_servers.vision_recommendations.installed")}`
-                            : ` • ${t("core.ui.processing_servers.vision_recommendations.manifest_only")}`;
+                            : ` • ${t("core.ui.processing_servers.vision_recommendations.needs_model_file")}`;
                           const jobPhase = item.installJob?.phase ? installPhaseLabel(item.installJob.phase, t) : "";
                           const key = `${server.id}:${item.modelId}`;
                           const cancelKey = `${server.id}:${item.modelId}:cancel`;
@@ -939,11 +972,20 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
                                 </div>
                               ) : null}
                               {!item.artifactExists && !item.localBuildSupported && item.localBuildReason ? (
-                                <div>
-                                  {t("core.ui.processing_servers.local_build.reason", {
-                                    reason: localBuildReasonLabel(item.localBuildReason, t),
-                                  })}
-                                </div>
+                                <>
+                                  <div>
+                                    {t("core.ui.processing_servers.local_build.reason", {
+                                      reason: localBuildReasonLabel(item.localBuildReason, t),
+                                    })}
+                                  </div>
+                                  <div>
+                                    {t(
+                                      "core.ui.processing_servers.local_build.model_unavailable_next_step",
+                                      {},
+                                      "Install Docker or Podman on this host, choose a ready model, or prepare/upload this model manually in the detection operator.",
+                                    )}
+                                  </div>
+                                </>
                               ) : null}
                               {canPrepareLocally || canCancel || canRetry ? (
                                 <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -960,7 +1002,7 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
                                     >
                                       {provisioningByKey[key]
                                         ? t("core.ui.pipelines.panels.yolo.local_build.starting")
-                                        : t("core.ui.pipelines.panels.yolo.local_build.start")}
+                                        : t("core.ui.pipelines.panels.yolo.provisioning.action.local_prepare")}
                                     </button>
                                   ) : null}
                                   {canCancel ? (

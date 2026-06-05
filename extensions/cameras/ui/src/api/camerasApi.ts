@@ -68,6 +68,35 @@ export async function fetchProcessingServers(signal?: AbortSignal): Promise<Proc
   return Array.isArray(record.servers) ? (record.servers as ProcessingServer[]).filter(Boolean) : [];
 }
 
+export async function fetchProcessingServerStatus(serverId: string, signal?: AbortSignal): Promise<unknown> {
+  const response = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/status`, { signal });
+  if (!response.ok) {
+    throw new Error(await readErrorDetail(response, `Failed to load processing server status: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function installProcessingServerVisionModel(
+  serverId: string,
+  modelId: string,
+  body: { mode?: string; acknowledge_upstream_terms?: boolean } = {},
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const response = await fetch(
+    `/api/processing-servers/${encodeURIComponent(serverId)}/vision/models/${encodeURIComponent(modelId)}/install`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorDetail(response, `Failed to install vision model: ${response.status}`));
+  }
+  return response.json();
+}
+
 export async function fetchCameraSourceHealth(signal?: AbortSignal): Promise<CameraSourceHealthResponse> {
   const response = await fetch("/api/cameras/runtime/source-health", { signal });
   if (!response.ok) throw new Error(`Failed to load camera source health: ${response.status}`);

@@ -269,6 +269,29 @@ def test_camera_pipeline_simple_preset_defaults_detection_to_rfdetr_medium_witho
         assert res.json()["pipeline_name"] == "entrada_principal_deteccao_simples_de_pessoas_2"
 
 
+def test_camera_pipeline_preset_uses_requested_detection_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+
+        res = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={
+                "preset": "people_simple",
+                "model_id": "custom_detector_ready",
+            },
+        )
+        assert res.status_code == 200
+        pipeline_name = res.json()["pipeline_name"]
+
+        res = client.get(f"/api/pipelines/{pipeline_name}")
+        assert res.status_code == 200
+        pipeline = res.json()
+        assert _vision_detect_config(pipeline).get("model_id") == "custom_detector_ready"
+
+
 def test_camera_pipeline_individual_preset_requires_and_uses_mapping(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

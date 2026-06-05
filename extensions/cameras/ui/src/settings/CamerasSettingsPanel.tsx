@@ -9,8 +9,10 @@ import {
   fetchCamerasIndex,
   fetchCameraSnapshot,
   fetchCameraSourceHealth,
+  fetchProcessingServerStatus,
   fetchProcessingServers,
   fetchStreamPublications,
+  installProcessingServerVisionModel,
   inspectOnvif,
   probeCameraRtsp,
   reconcileStreamPublications,
@@ -44,6 +46,17 @@ import type {
   StreamPublication,
 } from "../types";
 import { CameraPipelinePresetModal } from "./CameraPipelinePresetModal";
+import { VisionModelConsentModal } from "./VisionModelConsentModal";
+import {
+  DEFAULT_DETECTION_MODEL_ID,
+  DEFAULT_DETECTION_MODEL_NAME,
+  canPrepareDetectionModel,
+  findDetectionModel,
+  isActiveDetectionModelInstall,
+  isDetectionModelReady,
+  readDetectionModelCatalog,
+  type DetectionModelCatalogItem,
+} from "./visionModelCatalog";
 import { SubModal } from "../ui/SubModal";
 
 type TranslateFn = ReturnType<HostI18n["useI18n"]>["t"];
@@ -74,6 +87,37 @@ function serverDisplayName(serverId: string | null | undefined, servers: Process
   const server = servers.find((item) => normalizeServerId(item.id) === normalized);
   const name = String(server?.name || "").trim();
   return name ? `${name} (${normalized})` : normalized;
+}
+
+function modelSetupReasonLabel(reason: string, t: TranslateFn): string {
+  const clean = String(reason || "").trim().toLowerCase();
+  if (!clean) return t("ext.cameras.pipeline_preset.model.reason.unsupported", {}, "automatic preparation is unavailable");
+  return t(`ext.cameras.pipeline_preset.model.reason.${clean}`, {}, clean.replace(/_/g, " "));
+}
+
+function modelSetupProgressLabel(item: DetectionModelCatalogItem, t: TranslateFn): string {
+  const job = item.installJob;
+  if (!job) return "";
+  const phase = job.phase || job.status;
+  if (job.progressPct === null) return phase;
+  const pct = Math.max(0, Math.min(100, job.progressPct));
+  return t("ext.cameras.pipeline_preset.model.progress", { phase, pct: pct.toFixed(0) }, "{{phase}} - {{pct}}%");
+}
+
+function useDelayedStatusText(active: boolean, initialText: string, delayedText: string, delayMs: number): string {
+  const [delayed, setDelayed] = useState(false);
+
+  useEffect(() => {
+    if (!active) {
+      setDelayed(false);
+      return undefined;
+    }
+    setDelayed(false);
+    const timer = window.setTimeout(() => setDelayed(true), Math.max(0, delayMs));
+    return () => window.clearTimeout(timer);
+  }, [active, delayMs]);
+
+  return active && delayed ? delayedText : initialText;
 }
 
 function ingestSelectValue(source: CameraSourceConfig): string {
@@ -338,6 +382,13 @@ function CamerasSettingsPanelContent({
   const [cameraPipelinesError, setCameraPipelinesError] = useState<string | null>(null);
   const [pipelinePresetOpen, setPipelinePresetOpen] = useState<CameraPipelinePreset | null>(null);
   const [pipelineNotice, setPipelineNotice] = useState<string | null>(null);
+  const [presetModelStatusPayload, setPresetModelStatusPayload] = useState<unknown>(null);
+  const [presetModelStatusLoading, setPresetModelStatusLoading] = useState(false);
+  const [presetModelStatusError, setPresetModelStatusError] = useState<string | null>(null);
+  const [presetModelConsentOpen, setPresetModelConsentOpen] = useState(false);
+  const [presetModelConsentChecked, setPresetModelConsentChecked] = useState(false);
+  const [presetModelInstallSubmitting, setPresetModelInstallSubmitting] = useState(false);
+  const [presetModelInstallError, setPresetModelInstallError] = useState<string | null>(null);
   const [streamPublications, setStreamPublications] = useState<StreamPublication[]>([]);
   const [streamPublicationError, setStreamPublicationError] = useState<string | null>(null);
   const [streamPublicationBusyByKey, setStreamPublicationBusyByKey] = useState<Record<string, boolean>>({});
@@ -355,6 +406,22 @@ function CamerasSettingsPanelContent({
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotBusy, setSnapshotBusy] = useState(false);
+  const probeBusyMessage = useDelayedStatusText(
+    probeBusy,
+    t("ext.cameras.settings.probe_progress", {}, "Testando RTSP... pode levar até 5s."),
+    t("ext.cameras.settings.probe_progress_waiting", {}, "Ainda testando RTSP... se expirar, revise a URL e credenciais."),
+    4500,
+  );
+  const snapshotBusyMessage = useDelayedStatusText(
+    snapshotBusy,
+    t(
+      "ext.cameras.settings.snapshot_progress",
+      {},
+      "Capturando snapshot... a primeira captura pode levar alguns segundos.",
+    ),
+    t("ext.cameras.settings.snapshot_progress_waiting", {}, "Ainda aguardando frame da câmera."),
+    8000,
+  );
 
   useEffect(() => {
     if (activeCameraId && cameras.some((camera) => camera.id === activeCameraId)) return;
@@ -437,6 +504,11 @@ function CamerasSettingsPanelContent({
     [cameraContexts],
   );
   const hasMappedComposition = mappedCompositions.length > 0;
+  const presetDetectionModels = useMemo(() => readDetectionModelCatalog(presetModelStatusPayload), [presetModelStatusPayload]);
+  const presetDefaultDetectionModel =
+    findDetectionModel(presetDetectionModels, DEFAULT_DETECTION_MODEL_ID) ?? presetDetectionModels[0] ?? null;
+  const presetDefaultModelReady = isDetectionModelReady(presetDefaultDetectionModel);
+  const presetDefaultModelPreparing = isActiveDetectionModelInstall(presetDefaultDetectionModel);
 
   useEffect(() => {
     if (!activeCamera || !activeCameraPersisted) {
@@ -446,6 +518,10 @@ function CamerasSettingsPanelContent({
       setCameraPipelines(null);
       setCameraPipelinesLoading(false);
       setCameraPipelinesError(null);
+      setPresetModelStatusPayload(null);
+      setPresetModelStatusLoading(false);
+      setPresetModelStatusError(null);
+      setPresetModelInstallError(null);
       return undefined;
     }
 
@@ -482,6 +558,38 @@ function CamerasSettingsPanelContent({
 
     return () => controller.abort();
   }, [activeCamera?.id, activeCameraPersisted]);
+
+  async function loadPresetModelStatus(showLoading: boolean, signal?: AbortSignal): Promise<void> {
+    if (!activeCameraPersisted) return;
+    if (showLoading) setPresetModelStatusLoading(true);
+    setPresetModelStatusError(null);
+    try {
+      const payload = await fetchProcessingServerStatus("local", signal);
+      setPresetModelStatusPayload(payload);
+    } catch (error) {
+      if (signal?.aborted) return;
+      setPresetModelStatusError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (!signal?.aborted && showLoading) setPresetModelStatusLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!activeCameraPersisted) return;
+    const controller = new AbortController();
+    void loadPresetModelStatus(true, controller.signal);
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCameraPersisted]);
+
+  useEffect(() => {
+    if (!activeCameraPersisted || !presetDefaultModelPreparing) return;
+    const timer = window.setInterval(() => {
+      void loadPresetModelStatus(false);
+    }, 1500);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCameraPersisted, presetDefaultDetectionModel?.modelId, presetDefaultDetectionModel?.installJob?.status, presetDefaultModelPreparing]);
 
   const publicationBySourceKey = useMemo(() => {
     const byKey = new Map<string, StreamPublication>();
@@ -543,6 +651,25 @@ function CamerasSettingsPanelContent({
         .then(() => reloadStreamPublications())
         .catch((error) => setStreamPublicationError(error instanceof Error ? error.message : String(error)));
     }, 150);
+  }
+
+  async function confirmPresetDefaultModelInstall(): Promise<void> {
+    if (!presetDefaultDetectionModel || presetModelInstallSubmitting) return;
+    setPresetModelInstallSubmitting(true);
+    setPresetModelInstallError(null);
+    try {
+      await installProcessingServerVisionModel("local", presetDefaultDetectionModel.modelId, {
+        mode: "local_build",
+        acknowledge_upstream_terms: true,
+      });
+      setPresetModelConsentOpen(false);
+      setPresetModelConsentChecked(false);
+      await loadPresetModelStatus(false);
+    } catch (error) {
+      setPresetModelInstallError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPresetModelInstallSubmitting(false);
+    }
   }
 
   const filteredCameras = useMemo(() => {
@@ -1255,14 +1382,26 @@ function CamerasSettingsPanelContent({
                         <div className="sectionDivider">
                           <div className="rowWrap">
                             <button className="chipButton" type="button" disabled={probeBusy} onClick={() => void runProbe(activeCamera, activeSource)}>
-                              {probeBusy ? t("ext.cameras.settings.testing", {}, "Testando") : t("ext.cameras.settings.probe", {}, "Probe")}
+                              {probeBusy ? t("ext.cameras.settings.probe_testing", {}, "Testando RTSP") : t("ext.cameras.settings.probe", {}, "Probe")}
                             </button>
                             <button className="chipButton" type="button" disabled={snapshotBusy} onClick={() => void openSnapshot(activeCamera, activeSource)}>
                               {t("ext.cameras.settings.snapshot", {}, "Snapshot")}
                             </button>
                           </div>
+                          {probeBusy ? <div className="settingsStatusMuted" role="status">{probeBusyMessage}</div> : null}
                           {probeResult ? <div className="settingsStatusMuted">Probe: {probeResult.status} · {probeResult.latency_ms} ms</div> : null}
-                          {probeError ? <div className="errorText">{probeError}</div> : null}
+                          {probeError ? (
+                            <>
+                              <div className="errorText">{probeError}</div>
+                              <div className="settingsStatusMuted">
+                                {t(
+                                  "ext.cameras.settings.probe_error_hint",
+                                  {},
+                                  "Teste RTSP novamente depois de revisar URL, credenciais e acesso de rede.",
+                                )}
+                              </div>
+                            </>
+                          ) : null}
                           {activeHealth ? (
                             <div className="settingsMetricGrid">
                               <div><span className="label">{t("ext.cameras.settings.source_health.mode", {}, "Modo")}</span><div>{activeHealth.ingest_mode}</div></div>
@@ -1406,6 +1545,85 @@ function CamerasSettingsPanelContent({
                       <div className="modalSectionTitle">
                         {t("ext.cameras.pipelines.add_title", {}, "Adicionar fluxo")}
                       </div>
+                      <div className="settingsStatusMuted">
+                        <div className="settingsListTitle">
+                          {t(
+                            "ext.cameras.pipeline_preset.model.default_banner_title",
+                            { model: presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME },
+                            "{{model}} for camera presets",
+                          )}
+                        </div>
+                        <div>
+                          {presetModelStatusLoading
+                            ? t("core.ui.loading", {}, "Carregando...")
+                            : presetDefaultModelReady
+                              ? t(
+                                  "ext.cameras.pipeline_preset.model.default_ready",
+                                  { model: presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME },
+                                  "{{model}} is ready on the main processing server.",
+                                )
+                              : presetDefaultModelPreparing && presetDefaultDetectionModel
+                                ? t(
+                                    "ext.cameras.pipeline_preset.model.preparing_status",
+                                    {
+                                      model: presetDefaultDetectionModel.displayName,
+                                      progress: modelSetupProgressLabel(presetDefaultDetectionModel, t),
+                                    },
+                                    "{{model}} is being prepared. {{progress}}",
+                                  )
+                                : canPrepareDetectionModel(presetDefaultDetectionModel)
+                                  ? t(
+                                      "ext.cameras.pipeline_preset.model.default_missing_actionable",
+                                      { model: presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME },
+                                      "{{model}} is recommended for these presets and needs to be prepared before pipeline creation.",
+                                    )
+                                  : t(
+                                      "ext.cameras.pipeline_preset.model.default_missing_manual",
+                                      {
+                                        model: presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME,
+                                        reason: modelSetupReasonLabel(presetDefaultDetectionModel?.localBuildReason ?? "", t),
+                                      },
+                                      "{{model}} is not ready on the main server. Automatic preparation is unavailable: {{reason}}.",
+                                    )}
+                        </div>
+                        {presetModelStatusError ? <div className="errorText">{presetModelStatusError}</div> : null}
+                        {presetDefaultDetectionModel?.installJob?.error ? (
+                          <div className="errorText">{presetDefaultDetectionModel.installJob.error}</div>
+                        ) : null}
+                        {!presetDefaultModelReady && !canPrepareDetectionModel(presetDefaultDetectionModel) && !presetDefaultModelPreparing ? (
+                          <div>
+                            {t(
+                              "ext.cameras.pipeline_preset.model.manual_next_step",
+                              {},
+                              "Choose another ready model, use another processing server, or prepare the model manually in the detection operator.",
+                            )}
+                          </div>
+                        ) : null}
+                        <div className="rowWrap">
+                          {canPrepareDetectionModel(presetDefaultDetectionModel) ? (
+                            <button
+                              className="primaryButton"
+                              type="button"
+                              disabled={presetModelInstallSubmitting}
+                              onClick={() => {
+                                setPresetModelInstallError(null);
+                                setPresetModelConsentChecked(false);
+                                setPresetModelConsentOpen(true);
+                              }}
+                            >
+                              {t("ext.cameras.pipeline_preset.model.prepare_auto", {}, "Baixar e preparar automaticamente")}
+                            </button>
+                          ) : null}
+                          <button
+                            className="chipButton"
+                            type="button"
+                            disabled={presetModelStatusLoading}
+                            onClick={() => void loadPresetModelStatus(true)}
+                          >
+                            {t("ext.cameras.pipeline_preset.model.refresh", {}, "Atualizar modelos")}
+                          </button>
+                        </div>
+                      </div>
                       <div className="cameraPipelinePresetGrid">
                         {CAMERA_PIPELINE_PRESET_CARDS.map((presetCard) => {
                           const hasVideoSource = activeCamera.sources.some((source) => source.kind === "video" && source.enabled);
@@ -1453,9 +1671,24 @@ function CamerasSettingsPanelContent({
       </div>
 
       <SubModal open={snapshotOpen} title={t("ext.cameras.settings.snapshot", {}, "Snapshot")} onClose={() => setSnapshotOpen(false)}>
-        {snapshotError ? <div className="errorText">{snapshotError}</div> : null}
+        {snapshotError ? (
+          <>
+            <div className="errorText">{snapshotError}</div>
+            <div className="settingsStatusMuted">
+              {t(
+                "ext.cameras.settings.snapshot_error_hint",
+                {},
+                "Se a captura falhar de novo, teste RTSP e revise a URL da fonte.",
+              )}
+            </div>
+          </>
+        ) : null}
         {snapshotUrl ? <img src={snapshotUrl} alt={t("ext.cameras.settings.snapshot", {}, "Snapshot")} style={{ width: "100%" }} /> : null}
-        {!snapshotError && !snapshotUrl ? <div className="cardBody">{snapshotBusy ? "Carregando..." : "Snapshot"}</div> : null}
+        {!snapshotError && !snapshotUrl ? (
+          <div className="cardBody">
+            {snapshotBusy ? snapshotBusyMessage : t("ext.cameras.settings.snapshot", {}, "Snapshot")}
+          </div>
+        ) : null}
       </SubModal>
 
       {activeCamera ? (
@@ -1472,6 +1705,25 @@ function CamerasSettingsPanelContent({
           onCreated={handlePipelineCreated}
         />
       ) : null}
+
+      <VisionModelConsentModal
+        open={presetModelConsentOpen}
+        serverLabel={serverDisplayName("local", processingServers, t)}
+        modelName={presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME}
+        runtimeLabel={presetDefaultDetectionModel?.localBuildRuntime ?? ""}
+        sourceLabel={presetDefaultDetectionModel?.localBuildSourceLabel ?? ""}
+        checked={presetModelConsentChecked}
+        submitting={presetModelInstallSubmitting}
+        error={presetModelInstallError}
+        t={t}
+        onToggleChecked={setPresetModelConsentChecked}
+        onClose={() => {
+          setPresetModelConsentOpen(false);
+          setPresetModelConsentChecked(false);
+          setPresetModelInstallError(null);
+        }}
+        onConfirm={() => void confirmPresetDefaultModelInstall()}
+      />
     </div>
   );
 }

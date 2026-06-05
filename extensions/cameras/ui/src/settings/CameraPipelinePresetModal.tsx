@@ -2,7 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import type { HostI18n } from "@toposync/plugin-api";
 
-import { createCameraPipelinePreset } from "../api/camerasApi";
+import {
+  createCameraPipelinePreset,
+  fetchProcessingServerStatus,
+  installProcessingServerVisionModel,
+} from "../api/camerasApi";
 import type {
   CameraConfig,
   CameraContextComposition,
@@ -13,6 +17,19 @@ import type {
   ProcessingServer,
 } from "../types";
 import { SubModal } from "../ui/SubModal";
+import { VisionModelConsentModal } from "./VisionModelConsentModal";
+import {
+  DEFAULT_DETECTION_MODEL_ID,
+  DEFAULT_DETECTION_MODEL_NAME,
+  canPrepareDetectionModel,
+  findDetectionModel,
+  isActiveDetectionModelInstall,
+  isDetectionModelReady,
+  readDetectionModelCatalog,
+  type DetectionModelCatalogItem,
+} from "./visionModelCatalog";
+
+type TranslateFn = ReturnType<HostI18n["useI18n"]>["t"];
 
 const PYTHON_KEYWORDS = new Set([
   "False",
@@ -105,6 +122,43 @@ function serverLabel(server: ProcessingServer): string {
   return name ? `${name} (${id})` : id;
 }
 
+function processingServerLabel(serverId: string, servers: ProcessingServer[], t: TranslateFn): string {
+  const normalized = normalizeServerId(serverId);
+  if (normalized === "local") return t("ext.cameras.settings.ingest.host.local", {}, "Main environment");
+  const server = servers.find((item) => normalizeServerId(item.id) === normalized);
+  return server ? serverLabel(server) : normalized;
+}
+
+function modelReasonLabel(reason: string, t: TranslateFn): string {
+  const clean = String(reason || "").trim().toLowerCase();
+  if (!clean) return t("ext.cameras.pipeline_preset.model.reason.unsupported", {}, "automatic preparation is unavailable");
+  return t(`ext.cameras.pipeline_preset.model.reason.${clean}`, {}, clean.replace(/_/g, " "));
+}
+
+function modelAvailabilityLabel(item: DetectionModelCatalogItem, t: TranslateFn): string {
+  if (isDetectionModelReady(item)) return t("ext.cameras.pipeline_preset.model.state.ready", {}, "ready");
+  if (isActiveDetectionModelInstall(item) || item.availability === "preparing") {
+    return t("ext.cameras.pipeline_preset.model.state.preparing", {}, "preparing");
+  }
+  if (item.availability === "incompatible") return t("ext.cameras.pipeline_preset.model.state.incompatible", {}, "incompatible");
+  return t("ext.cameras.pipeline_preset.model.state.needs_prepare", {}, "needs preparation");
+}
+
+function modelOptionLabel(item: DetectionModelCatalogItem, t: TranslateFn): string {
+  const badges = [modelAvailabilityLabel(item, t)];
+  if (item.recommended) badges.unshift(t("ext.cameras.pipeline_preset.model.badge.recommended", {}, "recommended"));
+  return `${item.displayName} (${badges.join(", ")})`;
+}
+
+function modelProgressLabel(item: DetectionModelCatalogItem, t: TranslateFn): string {
+  const job = item.installJob;
+  if (!job) return "";
+  const phase = job.phase || job.status;
+  if (job.progressPct === null) return phase;
+  const pct = Math.max(0, Math.min(100, job.progressPct));
+  return t("ext.cameras.pipeline_preset.model.progress", { phase, pct: pct.toFixed(0) }, "{{phase}} - {{pct}}%");
+}
+
 const VEHICLE_STOPPED_DEFAULT_SPEED_KMH = 1.0;
 const NOTIFICATION_PRIORITIES: CameraNotificationPriority[] = ["low", "medium", "high"];
 
@@ -152,6 +206,14 @@ export function CameraPipelinePresetModal({
   const [notificationPriority, setNotificationPriority] = useState<CameraNotificationPriority>("medium");
   const [enabled, setEnabled] = useState(true);
   const [processingServerId, setProcessingServerId] = useState("local");
+  const [modelId, setModelId] = useState(DEFAULT_DETECTION_MODEL_ID);
+  const [modelStatusPayload, setModelStatusPayload] = useState<unknown>(null);
+  const [modelStatusLoading, setModelStatusLoading] = useState(false);
+  const [modelStatusError, setModelStatusError] = useState<string | null>(null);
+  const [modelConsentOpen, setModelConsentOpen] = useState(false);
+  const [modelConsentChecked, setModelConsentChecked] = useState(false);
+  const [modelInstallSubmitting, setModelInstallSubmitting] = useState(false);
+  const [modelInstallError, setModelInstallError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -181,9 +243,51 @@ export function CameraPipelinePresetModal({
     setNotificationPriority("medium");
     setEnabled(sourceHasVideoOrigin(camera, nextSource));
     setProcessingServerId("local");
+    setModelId(DEFAULT_DETECTION_MODEL_ID);
+    setModelStatusPayload(null);
+    setModelStatusLoading(false);
+    setModelStatusError(null);
+    setModelConsentOpen(false);
+    setModelConsentChecked(false);
+    setModelInstallSubmitting(false);
+    setModelInstallError(null);
     setCreating(false);
     setError(null);
   }, [activeSourceId, camera, mappedCompositions, open, pipelineOverview, preset, videoSources]);
+
+  const normalizedProcessingServerId = normalizeServerId(processingServerId);
+  const detectionModels = useMemo(() => readDetectionModelCatalog(modelStatusPayload), [modelStatusPayload]);
+  const selectedModel = findDetectionModel(detectionModels, modelId) ?? detectionModels[0] ?? null;
+  const selectedModelReady = isDetectionModelReady(selectedModel);
+
+  async function loadModelStatus(showLoading: boolean): Promise<void> {
+    if (!open) return;
+    if (showLoading) setModelStatusLoading(true);
+    setModelStatusError(null);
+    try {
+      const payload = await fetchProcessingServerStatus(normalizedProcessingServerId);
+      setModelStatusPayload(payload);
+    } catch (err) {
+      setModelStatusError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (showLoading) setModelStatusLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    void loadModelStatus(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, normalizedProcessingServerId]);
+
+  useEffect(() => {
+    if (!open || !isActiveDetectionModelInstall(selectedModel)) return;
+    const timer = window.setInterval(() => {
+      void loadModelStatus(false);
+    }, 1500);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, normalizedProcessingServerId, selectedModel?.modelId, selectedModel?.installJob?.status]);
 
   function updateSource(nextSourceId: string): void {
     const nextSource = videoSources.find((source) => source.id === nextSourceId) ?? null;
@@ -203,6 +307,16 @@ export function CameraPipelinePresetModal({
 
   async function submit(): Promise<void> {
     if (!preset || creating) return;
+    if (!selectedModelReady) {
+      setError(
+        t(
+          "ext.cameras.pipeline_preset.model.create_blocked",
+          {},
+          "Prepare the selected detection model before creating this pipeline.",
+        ),
+      );
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
@@ -212,6 +326,7 @@ export function CameraPipelinePresetModal({
         pipeline_name: pipelineName.trim() && pipelineName.trim() !== suggestedName ? pipelineName.trim() : "",
         enabled,
         processing_server_id: processingServerId,
+        model_id: modelId,
         composition_id: presetRequiresMapping(preset) ? compositionId : "",
         area_id: preset === "vehicle_stopped" ? areaId : "",
         stopped_speed_threshold:
@@ -224,6 +339,25 @@ export function CameraPipelinePresetModal({
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function confirmModelInstall(): Promise<void> {
+    if (!selectedModel || modelInstallSubmitting) return;
+    setModelInstallSubmitting(true);
+    setModelInstallError(null);
+    try {
+      await installProcessingServerVisionModel(normalizedProcessingServerId, selectedModel.modelId, {
+        mode: "local_build",
+        acknowledge_upstream_terms: true,
+      });
+      setModelConsentOpen(false);
+      setModelConsentChecked(false);
+      await loadModelStatus(false);
+    } catch (err) {
+      setModelInstallError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setModelInstallSubmitting(false);
     }
   }
 
@@ -243,13 +377,16 @@ export function CameraPipelinePresetModal({
         : t("ext.cameras.pipeline_preset.people_individual.title", {}, "Individual people events");
   const noSource = videoSources.length === 0;
   const noMapping = isMappingPreset && mappedCompositions.length === 0;
+  const selectedModelName = selectedModel?.displayName || DEFAULT_DETECTION_MODEL_NAME;
+  const selectedModelReason = selectedModel ? modelReasonLabel(selectedModel.localBuildReason, t) : "";
 
   return (
-    <SubModal open={open} title={title} onClose={() => (creating ? undefined : onClose())} panelStyle={{ width: "min(760px, calc(100vw - 28px))" }}>
-      <div className="settingsPanel">
-        {error ? <div className="errorText">{error}</div> : null}
-        {noSource ? <div className="settingsStatusMuted">{t("ext.cameras.pipelines.no_video_source", {}, "Add an active video source before creating a pipeline.")}</div> : null}
-        {noMapping ? <div className="settingsStatusMuted">{t("ext.cameras.pipelines.mapping_required", {}, "Map this camera in a composition before using this preset.")}</div> : null}
+    <>
+      <SubModal open={open} title={title} onClose={() => (creating ? undefined : onClose())} panelStyle={{ width: "min(760px, calc(100vw - 28px))" }}>
+        <div className="settingsPanel">
+          {error ? <div className="errorText">{error}</div> : null}
+          {noSource ? <div className="settingsStatusMuted">{t("ext.cameras.pipelines.no_video_source", {}, "Add an active video source before creating a pipeline.")}</div> : null}
+          {noMapping ? <div className="settingsStatusMuted">{t("ext.cameras.pipelines.mapping_required", {}, "Map this camera in a composition before using this preset.")}</div> : null}
 
         <div className="rowWrap">
           <div className="field">
@@ -277,6 +414,85 @@ export function CameraPipelinePresetModal({
                   );
                 })}
             </select>
+          </div>
+        </div>
+
+        <div className="field">
+          <label className="label">{t("ext.cameras.pipeline_preset.model.label", {}, "Detection model")}</label>
+          <select
+            className="input"
+            value={modelId}
+            onChange={(event) => {
+              setModelId(event.target.value);
+              setError(null);
+              setModelInstallError(null);
+              setModelConsentOpen(false);
+              setModelConsentChecked(false);
+            }}
+            disabled={creating}
+          >
+            {detectionModels.map((item) => (
+              <option key={item.modelId} value={item.modelId}>
+                {modelOptionLabel(item, t)}
+              </option>
+            ))}
+          </select>
+          <div className="settingsStatusMuted">
+            {modelStatusLoading
+              ? t("core.ui.loading", {}, "Loading...")
+              : selectedModelReady
+                ? t(
+                    "ext.cameras.pipeline_preset.model.ready",
+                    { model: selectedModelName },
+                    "{{model}} is ready on this processing server.",
+                  )
+                : isActiveDetectionModelInstall(selectedModel)
+                  ? t(
+                      "ext.cameras.pipeline_preset.model.preparing_status",
+                      { model: selectedModelName, progress: selectedModel ? modelProgressLabel(selectedModel, t) : "" },
+                      "{{model}} is being prepared. {{progress}}",
+                    )
+                  : canPrepareDetectionModel(selectedModel)
+                    ? t(
+                        "ext.cameras.pipeline_preset.model.missing_actionable",
+                        { model: selectedModelName },
+                        "{{model}} needs preparation before this preset can create a pipeline.",
+                      )
+                    : t(
+                        "ext.cameras.pipeline_preset.model.missing_manual",
+                        { model: selectedModelName, reason: selectedModelReason },
+                        "{{model}} is not ready and automatic preparation is unavailable: {{reason}}.",
+                      )}
+          </div>
+          {modelStatusError ? <div className="errorText">{modelStatusError}</div> : null}
+          {selectedModel?.installJob?.error ? <div className="errorText">{selectedModel.installJob.error}</div> : null}
+          {!selectedModelReady && selectedModel && !canPrepareDetectionModel(selectedModel) && !isActiveDetectionModelInstall(selectedModel) ? (
+            <div className="settingsStatusMuted">
+              {t(
+                "ext.cameras.pipeline_preset.model.manual_next_step",
+                {},
+                "Choose another ready model, use another processing server, or prepare the model manually in the detection operator.",
+              )}
+            </div>
+          ) : null}
+          <div className="rowWrap">
+            {canPrepareDetectionModel(selectedModel) ? (
+              <button
+                className="primaryButton"
+                type="button"
+                disabled={modelInstallSubmitting || creating}
+                onClick={() => {
+                  setModelInstallError(null);
+                  setModelConsentChecked(false);
+                  setModelConsentOpen(true);
+                }}
+              >
+                {t("ext.cameras.pipeline_preset.model.prepare_auto", {}, "Download and prepare automatically")}
+              </button>
+            ) : null}
+            <button className="chipButton" type="button" disabled={modelStatusLoading || creating} onClick={() => void loadModelStatus(true)}>
+              {t("ext.cameras.pipeline_preset.model.refresh", {}, "Refresh models")}
+            </button>
           </div>
         </div>
 
@@ -396,11 +612,30 @@ export function CameraPipelinePresetModal({
           <button className="chipButton" type="button" onClick={onClose} disabled={creating}>
             {t("core.actions.cancel", {}, "Cancel")}
           </button>
-          <button className="primaryButton" type="button" onClick={() => void submit()} disabled={creating || noSource || noMapping}>
+          <button className="primaryButton" type="button" onClick={() => void submit()} disabled={creating || noSource || noMapping || !selectedModelReady}>
             {creating ? t("ext.cameras.pipeline_preset.creating", {}, "Creating...") : t("ext.cameras.pipeline_preset.create", {}, "Create pipeline")}
           </button>
         </div>
       </div>
     </SubModal>
+      <VisionModelConsentModal
+        open={modelConsentOpen}
+        serverLabel={processingServerLabel(normalizedProcessingServerId, processingServers, t)}
+        modelName={selectedModelName}
+        runtimeLabel={selectedModel?.localBuildRuntime ?? ""}
+        sourceLabel={selectedModel?.localBuildSourceLabel ?? ""}
+        checked={modelConsentChecked}
+        submitting={modelInstallSubmitting}
+        error={modelInstallError}
+        t={t}
+        onToggleChecked={setModelConsentChecked}
+        onClose={() => {
+          setModelConsentOpen(false);
+          setModelConsentChecked(false);
+          setModelInstallError(null);
+        }}
+        onConfirm={() => void confirmModelInstall()}
+      />
+    </>
   );
 }

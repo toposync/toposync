@@ -353,6 +353,7 @@ class CameraPipelinePresetRequest(BaseModel):
     pipeline_name: str = ""
     enabled: bool = True
     processing_server_id: str = "local"
+    model_id: str = ""
     composition_id: str = ""
     area_id: str = ""
     stopped_speed_threshold: float | None = Field(default=None, ge=0.0, le=1000.0)
@@ -2251,6 +2252,7 @@ class CamerasExtension(BaseExtension):
             preset: str,
             camera_id: str,
             source_id: str,
+            detection_model_id: str,
             composition_id: str,
             area_restriction_config: dict[str, Any] | None,
             stopped_speed_threshold: float | None,
@@ -2284,7 +2286,7 @@ class CamerasExtension(BaseExtension):
                     "id": "detect",
                     "operator": "vision.detect",
                     "config": {
-                        "model_id": DEFAULT_CAMERA_DETECTION_MODEL_ID,
+                        "model_id": detection_model_id,
                         "categories": detect_categories,
                         "confidence_threshold": 0.25,
                         "emit_mode": "annotate",
@@ -2682,10 +2684,14 @@ class CamerasExtension(BaseExtension):
                 )
 
             try:
+                detection_model_id = (
+                    str(body.model_id or "").strip() or DEFAULT_CAMERA_DETECTION_MODEL_ID
+                )
                 graph = _build_camera_preset_graph(
                     preset=preset,
                     camera_id=cid,
                     source_id=source_id,
+                    detection_model_id=detection_model_id,
                     composition_id=composition_id,
                     area_restriction_config=area_restriction_config,
                     stopped_speed_threshold=body.stopped_speed_threshold,

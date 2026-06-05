@@ -150,6 +150,7 @@ export type TransmissionOutputUrl = {
   fps_limit?: number | null;
   bitrate_kbps?: number | null;
   latency_profile?: StreamingLatencyProfile | null;
+  content_rect?: { x: number; y: number; width: number; height: number } | null;
 };
 
 export type TransmissionUrlsResponse = {

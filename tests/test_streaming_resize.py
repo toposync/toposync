@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy
 
-from toposync_ext_streaming.streaming.resize import resize_frame_contain
+from toposync_ext_streaming.streaming.resize import contain_content_rect, resize_frame_contain
 
 
 def test_resize_frame_contain_keeps_aspect_ratio_and_black_bars() -> None:
@@ -27,3 +27,36 @@ def test_resize_frame_contain_noop_when_size_matches() -> None:
 
     assert output.shape == source.shape
     assert numpy.array_equal(output, source)
+
+
+def test_contain_content_rect_for_portrait_source_in_landscape_target() -> None:
+    rect = contain_content_rect(720, 1280, 1280, 720)
+
+    assert rect == {
+        "x": 0.34140625,
+        "y": 0.0,
+        "width": 0.31640625,
+        "height": 1.0,
+    }
+
+
+def test_contain_content_rect_for_landscape_source_in_square_target() -> None:
+    rect = contain_content_rect(200, 100, 300, 300)
+
+    assert rect == {
+        "x": 0.0,
+        "y": 0.25,
+        "width": 1.0,
+        "height": 0.5,
+    }
+
+
+def test_contain_content_rect_full_when_aspect_matches() -> None:
+    rect = contain_content_rect(320, 180, 1280, 720)
+
+    assert rect == {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 1.0,
+        "height": 1.0,
+    }

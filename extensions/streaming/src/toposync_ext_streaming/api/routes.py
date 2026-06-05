@@ -62,7 +62,7 @@ from ..streaming.mediamtx_processes import (
 from ..streaming.publisher_manager import PublisherManager
 from ..streaming.playback_events import PlaybackEventStore, summarize_active_sessions
 from ..streaming.placeholder import get_placeholder_frame
-from ..streaming.resize import resize_frame_contain
+from ..streaming.resize import contain_content_rect, resize_frame_contain
 from ..streaming.runtime_state import SelectedWriterFrame, TransmissionRuntimeState
 from ..wizard import build_streaming_wizard_graph, suggested_streaming_wizard_pipeline_name
 from .models import (
@@ -1646,6 +1646,7 @@ async def _resolve_local_transmission_urls(
         if engine_status.running
         else settings.engine.preferred_ports.webrtc
     )
+    media_source_dimensions = await _transmission_media_source_dimensions(request, transmission)
 
     generic_warnings: list[str] = list(getattr(engine_status, "warnings", ()) or ())
     if not engine_status.running:
@@ -1768,7 +1769,11 @@ async def _resolve_local_transmission_urls(
                         media_auth_type=media_auth_type,
                         url_expires_at_unix=url_expires_at_unix,
                         renew_after_unix=renew_after_unix,
-                        **_output_quality_metadata(output),
+                        **_output_quality_metadata(
+                            output,
+                            source_dimensions=media_source_dimensions,
+                            include_content_rect=True,
+                        ),
                     )
                 )
                 if mse_media_url_available:
@@ -1792,7 +1797,11 @@ async def _resolve_local_transmission_urls(
                             media_auth_type="signed_url",
                             url_expires_at_unix=mse_expires_at_unix,
                             renew_after_unix=mse_renew_after_unix,
-                            **_output_quality_metadata(output),
+                            **_output_quality_metadata(
+                                output,
+                                source_dimensions=media_source_dimensions,
+                                include_content_rect=True,
+                            ),
                         )
                     )
                 if jsmpeg_available:
@@ -1816,7 +1825,11 @@ async def _resolve_local_transmission_urls(
                             media_auth_type="signed_url",
                             url_expires_at_unix=jsmpeg_expires_at_unix,
                             renew_after_unix=jsmpeg_renew_after_unix,
-                            **_output_quality_metadata(output),
+                            **_output_quality_metadata(
+                                output,
+                                source_dimensions=media_source_dimensions,
+                                include_content_rect=True,
+                            ),
                         )
                     )
                 continue
@@ -1845,7 +1858,11 @@ async def _resolve_local_transmission_urls(
                 requires_auth=requires_auth,
                 auth_username=auth_username if requires_auth else None,
                 media_auth_type=media_auth_type,
-                **_output_quality_metadata(output),
+                **_output_quality_metadata(
+                    output,
+                    source_dimensions=media_source_dimensions,
+                    include_content_rect=True,
+                ),
             )
         )
         if output.protocol == "hls" and mse_media_url_available:
@@ -1869,7 +1886,11 @@ async def _resolve_local_transmission_urls(
                     media_auth_type="signed_url",
                     url_expires_at_unix=mse_expires_at_unix,
                     renew_after_unix=mse_renew_after_unix,
-                    **_output_quality_metadata(output),
+                    **_output_quality_metadata(
+                        output,
+                        source_dimensions=media_source_dimensions,
+                        include_content_rect=True,
+                    ),
                 )
             )
         if output.protocol == "hls" and jsmpeg_available:
@@ -1893,7 +1914,11 @@ async def _resolve_local_transmission_urls(
                     media_auth_type="signed_url",
                     url_expires_at_unix=jsmpeg_expires_at_unix,
                     renew_after_unix=jsmpeg_renew_after_unix,
-                    **_output_quality_metadata(output),
+                    **_output_quality_metadata(
+                        output,
+                        source_dimensions=media_source_dimensions,
+                        include_content_rect=True,
+                    ),
                 )
             )
 
@@ -2080,14 +2105,109 @@ def _webrtc_url(host: str, port: int, path: str) -> str:
     return f"http://{host}:{port}/{path}/whep"
 
 
-def _output_quality_metadata(output: TransmissionOutput) -> dict[str, Any]:
-    return {
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _full_media_content_rect() -> dict[str, float]:
+    return {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
+
+
+def _source_video_dimensions(source: Any) -> tuple[int, int] | None:
+    if not isinstance(source, dict):
+        return None
+    video = source.get("video") if isinstance(source.get("video"), dict) else {}
+    width = _positive_int(video.get("width"))
+    height = _positive_int(video.get("height"))
+    if width and height:
+        return width, height
+    return None
+
+
+def _output_resolution_dimensions(output: TransmissionOutput) -> tuple[int, int] | None:
+    payload = output.model_dump(mode="python")
+    resolution = payload.get("resolution") if isinstance(payload.get("resolution"), dict) else {}
+    width = _positive_int(payload.get("width")) or _positive_int(resolution.get("width"))
+    height = _positive_int(payload.get("height")) or _positive_int(resolution.get("height"))
+    if width and height:
+        return width, height
+    return None
+
+
+def _output_resize_mode(output: TransmissionOutput) -> str:
+    payload = output.model_dump(mode="python")
+    resize_mode = str(payload.get("resize_mode") or "contain").strip().lower()
+    return resize_mode if resize_mode in {"contain", "none"} else "contain"
+
+
+def _output_content_rect(
+    output: TransmissionOutput,
+    *,
+    source_dimensions: tuple[int, int] | None = None,
+) -> dict[str, float]:
+    target_dimensions = _output_resolution_dimensions(output)
+    if source_dimensions is None or target_dimensions is None:
+        return _full_media_content_rect()
+    source_width, source_height = source_dimensions
+    target_width, target_height = target_dimensions
+    if _output_resize_mode(output) != "contain" and source_width == target_width and source_height == target_height:
+        return _full_media_content_rect()
+    return contain_content_rect(source_width, source_height, target_width, target_height)
+
+
+def _output_quality_metadata(
+    output: TransmissionOutput,
+    *,
+    source_dimensions: tuple[int, int] | None = None,
+    include_content_rect: bool = False,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
         "quality_profile_id": output.quality_profile_id,
         "resolution": output.resolution,
         "fps_limit": output.fps_limit,
         "bitrate_kbps": output.bitrate_kbps,
         "latency_profile": output.latency_profile,
     }
+    if include_content_rect:
+        metadata["content_rect"] = _output_content_rect(output, source_dimensions=source_dimensions)
+    return metadata
+
+
+async def _transmission_media_source_dimensions(
+    request: Request,
+    transmission: Transmission,
+) -> tuple[int, int] | None:
+    controls = transmission.camera_controls
+    camera_id = str(getattr(controls, "camera_id", "") or "").strip()
+    camera_source_id = str(getattr(controls, "camera_source_id", "") or "").strip()
+    if camera_id:
+        try:
+            app_settings = await _config_store(request).get_settings()
+            for device in iter_camera_devices_from_app_settings(app_settings):
+                if str(device.get("id") or "").strip() != camera_id:
+                    continue
+                source = resolve_camera_video_source(device, source_id=camera_source_id, enabled_only=False)
+                dimensions = _source_video_dimensions(source)
+                if dimensions is not None:
+                    return dimensions
+                break
+        except Exception:
+            pass
+
+    try:
+        selected = await _runtime_state(request).get_selected_writer_frame(transmission.id)
+        frame = selected.frame
+        if frame is not None and getattr(frame, "ndim", 0) >= 2:
+            height, width = frame.shape[:2]
+            if int(width) > 0 and int(height) > 0:
+                return int(width), int(height)
+    except Exception:
+        pass
+    return None
 
 
 def _playback_plan_transport_from_output(

@@ -1087,6 +1087,15 @@ class TransmissionCreateRequest(BaseModel):
     outputs: list[TransmissionOutput] = Field(default_factory=list)
 
 
+class MediaContentRect(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+    width: float = Field(ge=0.0, le=1.0)
+    height: float = Field(ge=0.0, le=1.0)
+
+
 class TransmissionOutputUrl(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1104,6 +1113,7 @@ class TransmissionOutputUrl(BaseModel):
     fps_limit: int | None = None
     bitrate_kbps: int | None = None
     latency_profile: Literal["normal", "low", "ultra_low"] | None = None
+    content_rect: MediaContentRect | None = None
 
 
 class TransmissionUrlsResponse(BaseModel):

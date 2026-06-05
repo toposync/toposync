@@ -25,7 +25,9 @@ from toposync.runtime.config_store import (
     PipelineValidationError,
 )
 from toposync.runtime.event_bus import EventBus
+from toposync.runtime.processing_diagnostics import collect_processing_server_diagnostics
 from toposync.runtime.pipelines.compiler import GraphCompileError, PipelineGraphCompiler
+from toposync.runtime.pipelines.distributed import HttpProcessingTransport, ProcessingTransportError
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.templates import safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
@@ -124,6 +126,20 @@ class RtspProbeResponse(BaseModel):
     backend: str = "ffmpeg"
     source: str = "configured"
     error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DetectionModelReadiness:
+    model_id: str
+    display_name: str
+    availability: str
+    reason: str
+    local_build_supported: bool
+    local_build_reason: str
+
+    @property
+    def available(self) -> bool:
+        return self.availability == "available"
 
 
 class CameraSourceHealthItem(BaseModel):
@@ -374,6 +390,139 @@ class CameraPipelinePresetRequest(BaseModel):
 
 class CameraPipelinePresetResponse(BaseModel):
     pipeline_name: str
+
+
+def _as_record(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _read_string(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _read_boolean(value: Any) -> bool:
+    return bool(value) if isinstance(value, bool) else False
+
+
+def _normalize_detection_model_availability(raw: Any, *, artifact_exists: bool) -> str:
+    value = _read_string(raw).lower()
+    if value in {"available", "ready", "installed"}:
+        return "available"
+    if value in {"preparing", "installing", "building"}:
+        return "preparing"
+    if value in {"incompatible", "unsupported"}:
+        return "incompatible"
+    if value in {"missing", "manifest_only", "unavailable", "not_available"}:
+        return "missing"
+    return "available" if artifact_exists else "missing"
+
+
+def _find_detection_model_readiness(
+    status: dict[str, Any],
+    *,
+    model_id: str,
+) -> DetectionModelReadiness | None:
+    root = _as_record(status.get("status")) or status
+    vision = _as_record(root.get("vision"))
+    task_catalogs = _as_record(vision.get("task_catalogs"))
+    detection = _as_record(task_catalogs.get("detection"))
+    items = detection.get("items")
+    if not isinstance(items, list):
+        return None
+
+    wanted = _read_string(model_id)
+    for raw_item in items:
+        item = _as_record(raw_item)
+        item_model_id = _read_string(item.get("model_id") or item.get("modelId") or item.get("id"))
+        if item_model_id != wanted:
+            continue
+        artifact_exists = _read_boolean(item.get("artifact_exists") or item.get("artifactExists"))
+        availability = _normalize_detection_model_availability(
+            item.get("availability") or item.get("status"),
+            artifact_exists=artifact_exists,
+        )
+        return DetectionModelReadiness(
+            model_id=item_model_id,
+            display_name=_read_string(item.get("display_name") or item.get("displayName") or item.get("name")) or item_model_id,
+            availability=availability,
+            reason=_read_string(item.get("availability_reason") or item.get("availabilityReason")),
+            local_build_supported=_read_boolean(item.get("local_build_supported") or item.get("localBuildSupported")),
+            local_build_reason=_read_string(item.get("local_build_reason") or item.get("localBuildReason")),
+        )
+    return None
+
+
+async def _collect_camera_preset_processing_status(
+    store: ConfigStore,
+    *,
+    processing_server_id: str,
+) -> dict[str, Any]:
+    sid = _read_string(processing_server_id).lower() or "local"
+    servers = await store.list_processing_servers()
+    server = next((item for item in servers if item.id == sid), None)
+    if server is None:
+        raise HTTPException(status_code=404, detail="Unknown processing server")
+
+    if server.kind != "http":
+        status: dict[str, Any] = {"kind": server.kind, "id": server.id}
+        status.update(
+            await collect_processing_server_diagnostics(data_dir=str(store.paths.data_dir))
+        )
+        return status
+
+    transport = HttpProcessingTransport(
+        base_url=server.url,
+        username=getattr(server, "username", ""),
+        password=getattr(server, "password", ""),
+        timeout_s=5.0,
+    )
+    try:
+        return await transport.status()
+    except ProcessingTransportError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Could not verify detection model availability on processing server '{sid}': {exc}",
+        ) from exc
+    finally:
+        await transport.close()
+
+
+async def _ensure_camera_preset_detection_model_ready(
+    store: ConfigStore,
+    *,
+    processing_server_id: str,
+    model_id: str,
+) -> None:
+    status = await _collect_camera_preset_processing_status(
+        store,
+        processing_server_id=processing_server_id,
+    )
+    readiness = _find_detection_model_readiness(status, model_id=model_id)
+    if readiness is not None and readiness.available:
+        return
+
+    sid = _read_string(processing_server_id).lower() or "local"
+    if readiness is None:
+        display_name = model_id
+        reason = "modelo não listado por este servidor"
+        can_prepare = False
+    else:
+        display_name = readiness.display_name
+        reason = readiness.local_build_reason or readiness.reason or readiness.availability or "modelo indisponível"
+        can_prepare = readiness.local_build_supported
+    next_step = (
+        "Baixe e prepare automaticamente antes de criar o fluxo, escolha outro modelo pronto "
+        "ou use outro servidor de processamento."
+        if can_prepare
+        else "Escolha outro modelo pronto, use outro servidor de processamento ou prepare/faça upload manual pelo operador de detecção."
+    )
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"Modelo de detecção '{display_name}' não está pronto no servidor de processamento "
+            f"'{sid}' ({reason}). {next_step}"
+        ),
+    )
 
 
 def _rtsp_url_with_auth(url: str, username: str, password: str) -> str:
@@ -2690,10 +2839,17 @@ class CamerasExtension(BaseExtension):
                     existing_names=existing_names,
                 )
 
+            processing_server_id = str(body.processing_server_id or "").strip() or "local"
+            detection_model_id = (
+                str(body.model_id or "").strip() or DEFAULT_CAMERA_DETECTION_MODEL_ID
+            )
+            await _ensure_camera_preset_detection_model_ready(
+                store,
+                processing_server_id=processing_server_id,
+                model_id=detection_model_id,
+            )
+
             try:
-                detection_model_id = (
-                    str(body.model_id or "").strip() or DEFAULT_CAMERA_DETECTION_MODEL_ID
-                )
                 graph = _build_camera_preset_graph(
                     preset=preset,
                     camera_id=cid,
@@ -2709,7 +2865,6 @@ class CamerasExtension(BaseExtension):
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-            processing_server_id = str(body.processing_server_id or "").strip() or "local"
             pipeline = Pipeline(
                 name=pipeline_name,
                 enabled=bool(body.enabled),

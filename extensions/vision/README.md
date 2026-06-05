@@ -97,6 +97,7 @@ The public surface is task-based, not vendor-based. The official first-party run
   - `norfair`
 - `simple_iou_kalman` and `norfair` remain useful benchmark baselines, but camera presets and recipes should use `byte_world`.
 - `vision.track` emits stable per-object lifecycle packets directly. The product identity is `payload["subject"]["id"]`; technical tracker details stay available as `tracklet_id`, `tracklet_ids`, `raw_tracking_id`, and `identity_id`.
+- Frame annotations use `payload["vision"]["detections"]`, `payload["vision"]["tracks"]`, and `payload["vision"]["segmentations"]`. Consumers that need one visual subject from an annotated frame should prefer tracks, then detections, then segmentations.
 - `vision.group_events` consumes individual `subject.type="event"` packets and emits aggregated `subject.type="group_event"` packets with `group_event_id`, `member_event_ids`, `category_summary`, and grouped `subject.bbox01` for quieter storage and notifications.
 - `vision.detect` events are short OPEN/CLOSE notifications; use `vision.track` when you need temporal identity, movement, and long-lived per-object lifecycle.
 - `vision.crop_objects` crops the bbox from `payload["subject"]["bbox01"]` by default and preserves event/subject identifiers. It is not instance segmentation.

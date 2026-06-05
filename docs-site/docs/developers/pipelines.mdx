@@ -134,6 +134,16 @@ for new downstream behavior. `vision.track` owns individual object lifecycle
 events, while `vision.group_events` can optionally aggregate those individual
 events into quieter `group_event` packets.
 
+Frame annotation packets should use `payload.vision`:
+
+- `payload.vision.detections` for detector output;
+- `payload.vision.tracks` for tracked objects;
+- `payload.vision.segmentations` for instance masks and related metadata.
+
+Consumers that need the primary visual subject of a frame should prefer the
+first track, then the first detection, then the first segmentation. Event
+consumers should use `payload.subject` instead.
+
 Image and video operators usually use the `main` artifact for the primary frame. Operators should declare required and produced artifacts so the UI, diagnostics, and future tooling can reason about graph compatibility.
 
 ## Compilation {/* #compilation */}

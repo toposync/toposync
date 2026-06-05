@@ -135,6 +135,17 @@ usados como identidade de produto em novos comportamentos downstream.
 `vision.group_events` pode opcionalmente agregar esses eventos individuais em
 pacotes `group_event` mais silenciosos.
 
+Pacotes com anotações de frame devem usar `payload.vision`:
+
+- `payload.vision.detections` para saída do detector;
+- `payload.vision.tracks` para objetos acompanhados;
+- `payload.vision.segmentations` para máscaras de instância e metadados
+  relacionados.
+
+Consumidores que precisam do sujeito visual primário de um frame devem preferir
+o primeiro track, depois a primeira detecção, depois a primeira segmentação.
+Consumidores de eventos devem usar `payload.subject`.
+
 Operadores de imagem e vídeo normalmente usam o artifact `main` para o frame principal. Operadores devem declarar artifacts exigidos e produzidos para que UI, diagnósticos e ferramentas futuras consigam raciocinar sobre compatibilidade do grafo.
 
 ## Compilação {/* #compilation */}

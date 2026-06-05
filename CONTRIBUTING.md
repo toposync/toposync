@@ -64,7 +64,10 @@ For related references, see [Extension authoring](docs-site/docs/developers/exte
 - Do not commit local runtime data, generated secrets, credentials, tokens, or private environment files.
 - Do not commit build artifacts unless they are intentionally packaged source assets.
 - Prefer targeted changes over broad rewrites.
-- Preserve user data and migration compatibility when changing config, files, auth, pipelines, cameras, streaming, or processing-server behavior.
+- Keep current contracts clean in pre-release areas: do not add compatibility
+  layers for obsolete config, payload, pipeline, or API shapes by default.
+- Preserve user data and add explicit migrations only for established
+  user-facing contracts or when a release note calls that out.
 
 ## Checks
 
@@ -135,7 +138,7 @@ A good pull request includes:
 - tests or checks run;
 - screenshots or short recordings for UI changes;
 - installation, distribution, Home Assistant, or processing-server impact when relevant;
-- compatibility or migration notes when behavior changes.
+- compatibility, removal, or migration notes when behavior changes.
 
 Avoid mixing unrelated refactors with functional changes.
 

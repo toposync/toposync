@@ -28,7 +28,9 @@ The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tra
 - mapping runtime: derives internal control-point pairs from calibrated views so pipeline outputs keep `payload.world`
 - mapped tracking presets place `camera.camera_mapping` before `vision.track`, allowing `byte_world` to use per-detection `world_anchor` as a probabilistic association signal.
 
-The legacy `control_points` mapping endpoint remains as a low-level diagnostic adapter. New UI and extension code should use calibrated views and `/api/cameras/projection/map`.
+`/api/cameras/projection/map` is the public mapping endpoint. UI and extension
+code should use calibrated views; runtime control-point pairs are internal
+projection details derived from that canonical model.
 
 ## Camera pipeline presets
 

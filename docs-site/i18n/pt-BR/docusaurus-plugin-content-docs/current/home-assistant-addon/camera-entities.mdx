@@ -17,7 +17,7 @@ Há duas formas diferentes de ver câmeras do Toposync a partir do Home Assistan
 
 Use a sidebar para configurar o Toposync. Use entidades nativas de câmera quando
 quiser que cards, dashboards, automações ou Home Assistant Cloud sejam donos do
-contrato de playback da câmera.
+contrato de reprodução da câmera.
 
 ## Por que entidades nativas importam para Cloud {/* #why-native-entities-matter-for-cloud */}
 
@@ -52,12 +52,12 @@ A entidade nativa usa:
 - tratamento opcional de oferta WebRTC nativa apenas quando habilitado
   explicitamente.
 
-## Caminho recomendado de playback {/* #recommended-playback-path */}
+## Caminho recomendado de reprodução {/* #recommended-playback-path */}
 
 Caminho padrão:
 
 ```text
-Publicação Toposync -> entidade camera do Home Assistant -> stream component do Home Assistant -> UI / Cloud do Home Assistant
+Publicação Toposync -> entidade camera do Home Assistant -> componente de stream do Home Assistant -> UI / Cloud do Home Assistant
 ```
 
 Isso mantém o comportamento de fallback no Home Assistant. Quando WebRTC nativo
@@ -68,11 +68,11 @@ vez de forçar toda visualização por um caminho somente WebRTC.
 
 WebRTC nativo na integração Home Assistant é uma configuração avançada e
 opcional. Mantenha desabilitado, a menos que você esteja validando
-intencionalmente playback de baixa latência naquela instalação Home Assistant.
+intencionalmente reprodução de baixa latência naquela instalação Home Assistant.
 
 Motivos para manter desabilitado por padrão:
 
-- WebRTC depende de candidates, portas, NAT e comportamento de relay;
+- WebRTC depende de candidatos, portas, NAT e comportamento de relay;
 - o caminho WebRTC nativo do Home Assistant pode não usar o mesmo fallback HLS;
 - HLS pelo tratamento normal de stream do Home Assistant costuma ser mais
   previsível para visualização remota.
@@ -85,17 +85,17 @@ antes de depender dele.
 O player da sidebar do Toposync continua importante, mas é otimizado para a
 própria UI do Toposync:
 
-- playback no ingress/sidebar é HLS-first;
+- reprodução no ingress/sidebar usa HLS primeiro;
 - MSE pode ser usado pelo proxy do Toposync quando disponível;
-- JSMpeg é último fallback visual;
+- JSMpeg é o último recurso visual;
 - WebRTC direto no navegador não é o padrão no ingress.
 
-Se o playback da sidebar funciona mas um card do dashboard Home Assistant não,
+Se a reprodução da sidebar funciona mas um card do dashboard Home Assistant não,
 depure o caminho da entidade nativa de câmera. Se a entidade de câmera do Home
 Assistant funciona mas a sidebar do Toposync não, depure o player do Toposync ou
 o caminho de ingress.
 
-## Checklist {/* #checklist */}
+## Lista de verificação {/* #checklist */}
 
 1. No Toposync, publique a fonte que você quer que o Home Assistant enxergue.
 2. Confirme que a live view do Toposync está ao vivo ou com estado acionável.

@@ -31,9 +31,9 @@ O add-on não é o alvo de deploy CUDA/GPU. Se você precisar de aceleração GP
 
 A sidebar do Toposync é a superfície de configuração e operação. É onde você
 adiciona câmeras, publica fontes, inspeciona transmissões, ajusta mapeamento e
-depura playback.
+depura reprodução.
 
-Entidades nativas de câmera do Home Assistant são um contrato de playback
+Entidades nativas de câmera do Home Assistant são um contrato de reprodução
 separado. Elas são o caminho recomendado quando você quer que dashboards,
 automações ou Home Assistant Cloud visualizem câmeras do Toposync.
 
@@ -81,7 +81,8 @@ O caminho público padrão é o ingress do Home Assistant. Portas diretas na LAN
 | `18761/tcp` | API interna do MediaMTX | Não |
 | `18762/udp` | Transporte de mídia WebRTC | Não |
 
-Para playback web e móvel normal, comece por `18756/tcp`. RTSP e WebRTC devem ser mapeados somente quando você realmente precisar desses protocolos.
+Para reprodução web e móvel normal, comece por `18756/tcp`. RTSP e WebRTC devem
+ser mapeados somente quando você realmente precisar desses protocolos.
 
 Veja [Portas](../reference/ports.mdx) para a referência completa de portas.
 

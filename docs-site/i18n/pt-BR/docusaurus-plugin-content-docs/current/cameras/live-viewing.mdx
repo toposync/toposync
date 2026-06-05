@@ -45,7 +45,7 @@ O seletor voltado ao usuário deve mostrar nomes como **Principal**, **Baixa
 resolução**, **Zoom** ou o seu rótulo customizado. IDs técnicos de output e
 engine paths são diagnóstico avançado.
 
-## Estados de playback {/* #playback-states */}
+## Estados de reprodução {/* #playback-states */}
 
 Estados comuns:
 
@@ -53,10 +53,10 @@ Estados comuns:
 | --- | --- |
 | Ao vivo | Há frame recente, writer selecionado e output saudável. |
 | Aquecendo | A fonte ou publisher está iniciando. Um curto período de tela preta pode ser normal. |
-| Sem pipeline | Nenhum pipeline ativo está alimentando esta transmissão. Reconcile ou confira a publicação da fonte. |
+| Sem pipeline | Nenhum pipeline ativo está alimentando esta transmissão. Reconcilie ou confira a publicação da fonte. |
 | Stale | O último frame selecionado está antigo demais. A imagem não deve ser tratada como ao vivo. |
 | Publisher parado | Existem frames, mas o publisher de mídia não está rodando para o output selecionado. |
-| Offline | A câmera/fonte está inacessível ou não há frame recente. |
+| Fora do ar | A câmera/fonte está inacessível ou não há frame recente. |
 
 Um processo rodando não basta para chamar um stream de ao vivo. O Toposync só
 deve mostrar ao vivo quando há frames reais e recentes.
@@ -67,10 +67,10 @@ O Toposync pode usar vários transportes. Normalmente, deixe o modo em **Auto**.
 
 | Transporte | Melhor uso | Latência |
 | --- | --- | --- |
-| HLS | Playback mais estável em navegador, app e ingress do Home Assistant | Maior |
-| MSE | Playback web fluido quando navegador e sidecar suportam | Menor que HLS |
+| HLS | Reprodução mais estável em navegador, app e ingress do Home Assistant | Maior |
+| MSE | Reprodução web fluida quando navegador e sidecar suportam | Menor que HLS |
 | WebRTC | Baixa latência explícita ou interação PTZ | Menor |
-| JSMpeg | Último fallback visual quando transportes melhores falham | Média |
+| JSMpeg | Último recurso visual quando transportes melhores falham | Média |
 
 HLS é a base estável. MSE pode ser preferido em dashboards web quando
 disponível. WebRTC não deve ser tratado como padrão para todos os tiles. JSMpeg é
@@ -110,7 +110,8 @@ PTZ ou baixa latência explicitamente.
 
 ### Ingress do Home Assistant {/* #home-assistant-ingress */}
 
-Dentro da sidebar ou ingress do add-on Home Assistant, espere playback HLS-first.
+Dentro da sidebar ou ingress do add-on Home Assistant, espere reprodução com HLS
+primeiro.
 WebRTC direto no navegador é sensível a mapeamento de portas do add-on e ao
 caminho de rede. Para Home Assistant Cloud, prefira a integração nativa de
 câmera do Home Assistant em vez de WebRTC direto dentro do iframe do Toposync.

@@ -130,7 +130,7 @@ Abra o Toposync pela sidebar primeiro e crie/gerencie usuários locais por lá.
 
 ## HLS funciona na sidebar, mas falha pelo acesso direto {/* #hls-works-in-the-sidebar-but-fails-from-direct-access */}
 
-Para playback web/móvel fora da sidebar, comece com HLS proxificado por:
+Para reprodução web/móvel fora da sidebar, comece com HLS proxificado por:
 
 ```text
 18756/tcp
@@ -138,7 +138,8 @@ Para playback web/móvel fora da sidebar, comece com HLS proxificado por:
 
 Não publique `18759/tcp` como correção normal. O listener HLS do MediaMTX é interno/diagnóstico no contrato padrão do add-on.
 
-Verifique se as URLs de playback apontam para o host e porta direta do Toposync, por exemplo:
+Verifique se as URLs de reprodução apontam para o host e porta direta do
+Toposync, por exemplo:
 
 ```text
 http://<ip-do-home-assistant>:18756/api/streams/media/hls/...
@@ -146,7 +147,7 @@ http://<ip-do-home-assistant>:18756/api/streams/media/hls/...
 
 ## Sidebar funciona, mas Home Assistant Cloud não {/* #sidebar-works-but-home-assistant-cloud-does-not */}
 
-O player da sidebar do Toposync e o playback de câmera pelo Home Assistant Cloud
+O player da sidebar do Toposync e a reprodução de câmera pelo Home Assistant Cloud
 são caminhos diferentes.
 
 Para visualização pelo Cloud, use entidades nativas de câmera do Home Assistant:
@@ -199,10 +200,12 @@ Se você usa WebRTC fora da sidebar, mapeie:
 18762/udp: 18762
 ```
 
-Depois garanta que o cliente usa um hostname ou IP que o add-on consegue anunciar como host WebRTC. Se isso estiver instável, mude o playback do dashboard para `Auto` ou `HLS`, a menos que baixa latência seja necessária.
+Depois garanta que o cliente usa um hostname ou IP que o add-on consegue
+anunciar como host WebRTC. Se isso estiver instável, mude a reprodução do
+dashboard para `Auto` ou `HLS`, a menos que baixa latência seja necessária.
 
 Se HLS ou MSE está ao vivo e apenas WebRTC mostra aviso, trate o aviso como
-diagnóstico de baixa latência. Ele não é a falha principal de playback, a menos
+diagnóstico de baixa latência. Ele não é a falha principal de reprodução, a menos
 que você tenha escolhido WebRTC, PTZ ou baixa latência explicitamente.
 
 Para Home Assistant Cloud, prefira o caminho de entidade nativa de câmera com

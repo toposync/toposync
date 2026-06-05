@@ -350,7 +350,7 @@ def test_camera_pipeline_quiet_preset_adds_session_grouping(
         assert _node_config(pipeline, "vision.group_events").get("mode") == "session"
         assert _node_config(pipeline, "vision.group_events").get("categories") == ["person", "dog", "cat"]
         notify = _node_config(pipeline, "core.notify")
-        assert notify.get("description") == "Presence in progress - {{camera_name}}"
+        assert notify.get("description") == ""
         assert notify.get("dedupe_key_template") == "{{subject.id}}"
 
 
@@ -446,7 +446,7 @@ def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping
         assert _node_config(pipeline, "vision.group_events").get("include_stationary_members") is True
         assert _node_config(pipeline, "core.throttle").get("interval_seconds") == 10.0
         notify = _node_config(pipeline, "core.notify")
-        assert notify.get("description") == "Presence in progress - {{camera_name}}"
+        assert notify.get("description") == ""
         assert notify.get("dedupe_key_template") == "{{subject.id}}"
         assert _edge_config(pipeline, "detect", "map").get("maxsize") == 8
 

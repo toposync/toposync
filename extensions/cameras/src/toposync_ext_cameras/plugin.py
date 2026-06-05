@@ -2374,8 +2374,7 @@ class CamerasExtension(BaseExtension):
                         "config": {
                             "notification_type": "pipelines.tracking",
                             "title": notification_title or "{{camera_name}}: Presence",
-                            "description": notification_description
-                            or "Presence in progress - {{camera_name}}",
+                            "description": notification_description,
                             "priority": notification_priority,
                             "dedupe_key_template": "{{subject.id}}",
                         },
@@ -2457,8 +2456,7 @@ class CamerasExtension(BaseExtension):
                                 "config": {
                                     "notification_type": "pipelines.tracking",
                                     "title": notification_title or "{{camera_name}}: Presence mapped",
-                                    "description": notification_description
-                                    or "Presence in progress - {{camera_name}}",
+                                    "description": notification_description,
                                     "priority": notification_priority,
                                     "dedupe_key_template": "{{subject.id}}",
                                 },

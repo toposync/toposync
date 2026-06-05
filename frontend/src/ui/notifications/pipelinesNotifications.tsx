@@ -84,6 +84,12 @@ function isDefaultGroupPresenceDescription(value: string): boolean {
   );
 }
 
+function notificationIsClosed(payload: Record<string, unknown>): boolean {
+  const status = asString(payload.status, "").trim().toLowerCase();
+  const lifecycle = asString(payload.lifecycle, "").trim().toLowerCase();
+  return status === "closed" || lifecycle === "close";
+}
+
 function cameraLabel(payload: Record<string, unknown>, data: Record<string, unknown>): string {
   const subject = asRecord(payload.subject);
   const dataSubject = asRecord(data.subject);
@@ -103,6 +109,7 @@ function displayDescription(
   const description = asString(notification.description, "").trim();
   const resolvedSubjectType = subjectType(payload, data);
   const isPipelinesNotification = asString(payload.source, "").trim() === "pipelines";
+  const closed = notificationIsClosed(payload);
   const shouldReplace =
     resolvedSubjectType === "group_event"
       ? isDefaultGroupPresenceDescription(description)
@@ -112,9 +119,9 @@ function displayDescription(
   }
   const camera = cameraLabel(payload, data);
   return i18n.t(
-    "core.ui.notifications.group_presence.description",
+    closed ? "core.ui.notifications.group_presence.closed_description" : "core.ui.notifications.group_presence.description",
     { camera_suffix: camera ? ` - ${camera}` : "" },
-    "Presence in progress{{camera_suffix}}",
+    closed ? "Presence ended{{camera_suffix}}" : "Presence in progress{{camera_suffix}}",
   );
 }
 

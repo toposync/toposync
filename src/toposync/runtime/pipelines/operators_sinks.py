@@ -47,6 +47,11 @@ from .telemetry import METRIC_STORE_IMAGE
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _TEMPLATE_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
+_LEGACY_ACTIVE_DESCRIPTION_RE = re.compile(r"^(?:\d+\s+)?active(?:\s*-\s*.+)?$", re.IGNORECASE)
+_GROUP_PRESENCE_IN_PROGRESS_RE = re.compile(
+    r"^presence\s+in\s+progress(?:\s*-\s*.+)?$",
+    re.IGNORECASE,
+)
 
 ImageStorageFormat = Literal["jpg", "png", "webp"]
 
@@ -318,6 +323,38 @@ def _render_template(packet: Packet, template: str) -> str:
             return ""
 
     return _TEMPLATE_RE.sub(_replace, raw)
+
+
+def _is_default_group_presence_description(value: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(value or "").strip())
+    if not normalized:
+        return True
+    return bool(
+        _LEGACY_ACTIVE_DESCRIPTION_RE.match(normalized)
+        or _GROUP_PRESENCE_IN_PROGRESS_RE.match(normalized)
+    )
+
+
+def _group_presence_description(packet: Packet, lifecycle: Lifecycle) -> str:
+    camera = _resolve_string(packet, "camera_name")
+    suffix = f" - {camera}" if camera else ""
+    if lifecycle == Lifecycle.CLOSE:
+        return f"Presence ended{suffix}"
+    return f"Presence in progress{suffix}"
+
+
+def _normalize_notify_description(
+    packet: Packet,
+    *,
+    lifecycle: Lifecycle,
+    subject_type: str,
+    description: str,
+) -> str:
+    if subject_type.strip().lower() != "group_event":
+        return description
+    if not _is_default_group_presence_description(description):
+        return description
+    return _group_presence_description(packet, lifecycle)
 
 
 def _image_ext_mime(fmt: ImageStorageFormat) -> tuple[str, str]:
@@ -899,8 +936,17 @@ class NotifyRuntime(SinkRuntime):
             if (now_monotonic - state.last_emit_monotonic) < interval:
                 return []
 
+        subject = _resolve_subject(packet)
+        subject_id = str(subject.get("id") or "").strip() or _resolve_subject_string(packet, "id")
+        subject_type = str(subject.get("type") or "").strip() or _resolve_subject_string(packet, "type")
+
         title = _render_template(packet, self._config.title)
-        description = _render_template(packet, self._config.description)
+        description = _normalize_notify_description(
+            packet,
+            lifecycle=lifecycle,
+            subject_type=subject_type,
+            description=_render_template(packet, self._config.description),
+        )
 
         image_path: str | None = None
         input_artifact_name = normalize_artifact_name(self._config.input_artifact_name)
@@ -942,9 +988,6 @@ class NotifyRuntime(SinkRuntime):
             state.last_image_path = image_path
 
         status = "closed" if lifecycle == Lifecycle.CLOSE else "open"
-        subject = _resolve_subject(packet)
-        subject_id = str(subject.get("id") or "").strip() or _resolve_subject_string(packet, "id")
-        subject_type = str(subject.get("type") or "").strip() or _resolve_subject_string(packet, "type")
         payload = {
             "source": "pipelines",
             "pipeline_name": _resolve_logical_pipeline_name(context),

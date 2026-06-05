@@ -574,3 +574,60 @@ def test_core_notify_accumulates_group_event_trail_from_world_envelope(
         assert ops == ["insert", "update"]
 
     asyncio.run(scenario())
+
+
+def test_core_notify_normalizes_default_group_presence_description_by_lifecycle(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+        deps = PipelineRuntimeDependencies(notifications_upsert=notifications.upsert)
+        notify = NotifyRuntime(
+            {
+                "notification_type": "pipelines.tracking",
+                "title": "{{camera_name}}: Presence",
+                "description": "Presence in progress - {{camera_name}}",
+                "dedupe_key_template": "{{subject.id}}",
+                "update_interval_seconds": 0.0,
+            },
+            deps,
+        )
+        common_payload = {
+            "camera_id": "camera-main",
+            "camera_name": "Front camera",
+            "subject": {
+                "type": "group_event",
+                "id": "grp:camera-main:1",
+            },
+        }
+
+        await notify.process_packet(
+            Packet.create(
+                stream_id="group:camera-main:1",
+                lifecycle=Lifecycle.OPEN,
+                payload={**common_payload, "frame_ts": 10.0},
+            ),
+            _NotifyContext(),
+        )
+        items, _cursor = await notifications.list(limit=20)
+        assert len(items) == 1
+        assert items[0]["description"] == "Presence in progress - Front camera"
+
+        await notify.process_packet(
+            Packet.create(
+                stream_id="group:camera-main:1",
+                lifecycle=Lifecycle.CLOSE,
+                payload={**common_payload, "frame_ts": 12.0},
+            ),
+            _NotifyContext(),
+        )
+
+        items, _cursor = await notifications.list(limit=20)
+        assert len(items) == 1
+        assert items[0]["description"] == "Presence ended - Front camera"
+        payload = items[0].get("payload")
+        assert isinstance(payload, dict)
+        assert payload.get("status") == "closed"
+        assert payload.get("lifecycle") == "close"
+
+    asyncio.run(scenario())

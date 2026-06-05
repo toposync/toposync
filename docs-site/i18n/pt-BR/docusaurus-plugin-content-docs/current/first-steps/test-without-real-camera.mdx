@@ -11,6 +11,11 @@ sidebar_position: 5.5
 Use este caminho quando quiser validar o primeiro ciclo de câmera e transmissão
 ao vivo sem depender de uma câmera IP real.
 
+A receita padrão usa a imagem estática incluída no repositório. Este é o caminho
+de onboarding Alpha mais reprodutível. Depois que ele funcionar, use um vídeo em
+loop ou uma webcam local quando precisar de movimento, detecção, tracking ou
+entrada de desenvolvimento mais próxima de hardware real.
+
 Este é um utilitário de desenvolvimento e onboarding. Ele não substitui uma
 instalação com câmera real. Ele fornece uma fonte RTSP previsível para confirmar
 Docker, streaming, publicação de fonte e playback no navegador antes de adicionar
@@ -39,12 +44,6 @@ Se quiser usar sua própria imagem:
 
 ```bash
 npm run dev:rtsp-image -- /caminho/para/imagem.jpg --expose docker
-```
-
-Se quiser um vídeo em loop:
-
-```bash
-npm run dev:rtsp-video -- --video /caminho/para/video.mp4 --expose docker
 ```
 
 ## Suba o Docker com streaming {/* #start-docker-with-streaming */}
@@ -99,9 +98,77 @@ Um aquecimento curto é normal. Se o card ficar stale ou indicar que nenhum
 pipeline alimenta a transmissão, salve a fonte da câmera novamente ou reconcilie
 a publicação nas configurações de streaming.
 
+## Outras fontes de câmera para desenvolvimento {/* #other-development-camera-sources */}
+
+Mantenha a imagem estática como o primeiro teste de onboarding. Use as
+alternativas abaixo depois que o primeiro ciclo de live view funcionar, ou quando
+precisar de uma fonte que se comporte mais como uma câmera real.
+
+### Imagem estática {/* #static-image */}
+
+Use este caminho para um teste determinístico de primeira câmera, Docker,
+streaming e playback no navegador:
+
+```bash
+npm run dev:rtsp-image -- --expose docker
+```
+
+O script usa a imagem placeholder incluída por padrão. Passe o caminho de uma
+imagem quando quiser outro quadro estático:
+
+```bash
+npm run dev:rtsp-image -- /caminho/para/imagem.jpg --expose docker
+```
+
+### Arquivo de vídeo em loop {/* #video-file-loop */}
+
+Use este caminho quando precisar de movimento para testar detecção, tracking,
+modelos ou pipelines:
+
+```bash
+npm run dev:rtsp-video -- --video /caminho/para/video.mp4 --expose docker
+```
+
+O arquivo de vídeo fica em loop até você parar o comando. Use arquivos que você
+tem permissão para usar e evite commitar imagens privadas ou sensíveis no
+repositório.
+
+### Webcam local {/* #local-webcam */}
+
+Use este caminho quando quiser uma câmera local real durante o desenvolvimento:
+
+```bash
+npm run dev:camera-rtsp -- --list-only
+```
+
+Depois selecione a câmera pelo índice impresso, identificador de backend, nome
+exato ou trecho único do nome:
+
+```bash
+npm run dev:camera-rtsp -- --camera 0
+```
+
+Para Toposync rodando no Docker Desktop, exponha o servidor RTSP da webcam no
+host e anuncie um endereço que o container consiga resolver:
+
+```bash
+npm run dev:camera-rtsp -- --camera 0 --expose network --host host.docker.internal
+```
+
+Para Docker Linux ou outro runtime na rede, use o endereço LAN do host:
+
+```bash
+npm run dev:camera-rtsp -- --camera 0 --expose network --host <ip-do-host>
+```
+
+O caminho por webcam é menos reprodutível que os scripts de imagem ou vídeo. Ele
+pode depender de permissões de câmera do sistema operacional, drivers disponíveis
+e modos de captura do dispositivo.
+
 ## Qual modo de exposição devo usar? {/* #which-exposure-mode-should-i-use */}
 
-Use o modo que combina com o local onde o Toposync roda:
+Para os scripts de imagem e vídeo, use o modo que combina com o local onde o
+Toposync roda:
 
 | Runtime do Toposync | Modo do script RTSP | Formato da URL |
 | --- | --- | --- |
@@ -115,6 +182,10 @@ container do Toposync, não a máquina host.
 
 A exposição de rede não tem senha de visualização. Use apenas em uma LAN de
 desenvolvimento confiável.
+
+O script de webcam suporta `--expose local` e `--expose network`. Para Docker
+Desktop, use exposição de rede com `--host host.docker.internal`; para Docker
+Linux, use exposição de rede com o IP LAN do host.
 
 ## Migre para uma câmera real {/* #move-to-a-real-camera */}
 

@@ -11,6 +11,10 @@ sidebar_position: 5.5
 Use this path when you want to validate the first camera and live viewing loop
 without depending on a real IP camera.
 
+The default recipe uses the bundled static image. It is the most reproducible
+Alpha onboarding path. After that works, use a video file loop or a local webcam
+when you need motion, detection, tracking, or hardware-like development input.
+
 This is a development and onboarding utility. It does not replace a real camera
 installation. It gives you a predictable RTSP source so you can confirm Docker,
 streaming, source publishing, and browser playback before adding real hardware.
@@ -38,12 +42,6 @@ If you want to use your own image:
 
 ```bash
 npm run dev:rtsp-image -- /path/to/image.jpg --expose docker
-```
-
-If you want a video loop instead:
-
-```bash
-npm run dev:rtsp-video -- --video /path/to/video.mp4 --expose docker
 ```
 
 ## Start Docker with streaming {/* #start-docker-with-streaming */}
@@ -98,9 +96,75 @@ A short warmup is normal. If the card stays stale or says no pipeline is
 feeding the transmission, save the camera source again or reconcile the
 publication from streaming settings.
 
+## Other development camera sources {/* #other-development-camera-sources */}
+
+Keep the static image as the first onboarding test. Use the alternatives below
+after the first live-view loop works, or when you need a source that behaves
+more like real camera footage.
+
+### Static image {/* #static-image */}
+
+Use this for a deterministic first camera, Docker, streaming, and browser
+playback smoke test:
+
+```bash
+npm run dev:rtsp-image -- --expose docker
+```
+
+The script uses the bundled placeholder image by default. Pass an image path
+when you want a different still frame:
+
+```bash
+npm run dev:rtsp-image -- /path/to/image.jpg --expose docker
+```
+
+### Video file loop {/* #video-file-loop */}
+
+Use this when you need motion for detection, tracking, models, or pipeline
+smoke tests:
+
+```bash
+npm run dev:rtsp-video -- --video /path/to/video.mp4 --expose docker
+```
+
+The video file loops until you stop the command. Use files you are allowed to
+use and avoid committing private or sensitive footage to the repository.
+
+### Local webcam {/* #local-webcam */}
+
+Use this when you want a real local camera during development:
+
+```bash
+npm run dev:camera-rtsp -- --list-only
+```
+
+Then select the camera by printed index, backend identifier, exact name, or a
+unique name fragment:
+
+```bash
+npm run dev:camera-rtsp -- --camera 0
+```
+
+For Toposync running in Docker Desktop, expose the webcam RTSP server on the
+host and advertise a host address the container can resolve:
+
+```bash
+npm run dev:camera-rtsp -- --camera 0 --expose network --host host.docker.internal
+```
+
+For Linux Docker or another runtime on the network, use the host LAN address:
+
+```bash
+npm run dev:camera-rtsp -- --camera 0 --expose network --host <host-ip>
+```
+
+The webcam path is less reproducible than the image or video scripts. It can
+depend on operating system camera permissions, available drivers, and device
+capture modes.
+
 ## Which exposure mode should I use? {/* #which-exposure-mode-should-i-use */}
 
-Use the mode that matches where Toposync runs:
+For the image and video scripts, use the mode that matches where Toposync runs:
 
 | Toposync runtime | RTSP script mode | URL shape |
 | --- | --- | --- |
@@ -114,6 +178,10 @@ container itself, not your host machine.
 
 Network exposure has no viewer password. Use it only on a trusted development
 LAN.
+
+The webcam script supports `--expose local` and `--expose network`. For Docker
+Desktop, use network exposure with `--host host.docker.internal`; for Linux
+Docker, use network exposure with the host LAN IP address.
 
 ## Move to a real camera {/* #move-to-a-real-camera */}
 

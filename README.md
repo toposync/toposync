@@ -12,15 +12,6 @@
 
 The goal is to turn a smart home into a visual and interpretable environment: cameras, areas, devices, automations, notifications, and events can exist inside a 2D/3D map of the home.
 
-Toposync is not meant to be just another camera dashboard, and not just another automation panel. The goal is to create a local spatial layer where you can answer questions such as:
-
-- what happened?
-- where did it happen?
-- which camera saw it?
-- which area of the home was affected?
-- which automation should react?
-- which history is worth keeping?
-
 The category Toposync is exploring is **Spatial Home Automation**. In practical terms:
 
 - **Spatial Camera Mapping** connects camera images to real positions, areas, and views inside the home model.

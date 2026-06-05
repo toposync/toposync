@@ -12,15 +12,6 @@
 
 O objetivo é transformar uma casa inteligente em um ambiente visual e interpretável: câmeras, áreas, dispositivos, automações, notificações e eventos podem existir dentro de um mapa 2D/3D da casa.
 
-O Toposync não pretende ser apenas mais um dashboard de câmeras, nem apenas mais um painel de automação. O objetivo é criar uma camada espacial local onde você consiga responder perguntas como:
-
-- o que aconteceu?
-- onde aconteceu?
-- qual câmera viu?
-- qual área da casa foi afetada?
-- qual automação deveria reagir?
-- qual histórico vale a pena guardar?
-
 A categoria que o Toposync está explorando é **Spatial Home Automation**. Na prática:
 
 - **Spatial Camera Mapping** conecta imagens de câmeras a posições, áreas e visões reais dentro do modelo da casa.

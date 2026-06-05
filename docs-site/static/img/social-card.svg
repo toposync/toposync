@@ -1,0 +1,53 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F6F2EA"/>
+      <stop offset="0.55" stop-color="#EBF4F3"/>
+      <stop offset="1" stop-color="#DDECF7"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="160" y1="120" x2="1040" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#079C9A"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="28" stdDeviation="32" flood-color="#0D2846" flood-opacity="0.18"/>
+    </filter>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" stroke="#0D2846" stroke-opacity="0.055"/>
+    </pattern>
+    <pattern id="majorGrid" width="160" height="160" patternUnits="userSpaceOnUse">
+      <path d="M160 0H0V160" stroke="#0D2846" stroke-opacity="0.075"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <rect width="1200" height="630" fill="url(#majorGrid)"/>
+  <circle cx="1020" cy="112" r="220" fill="#079C9A" fill-opacity="0.12"/>
+  <circle cx="170" cy="560" r="240" fill="#3B82F6" fill-opacity="0.11"/>
+
+  <rect x="74" y="70" width="1052" height="490" rx="42" fill="white" fill-opacity="0.72" stroke="#0D2846" stroke-opacity="0.12"/>
+  <rect x="74" y="70" width="1052" height="490" rx="42" stroke="url(#accent)" stroke-opacity="0.28" stroke-width="2"/>
+
+  <g filter="url(#softShadow)">
+    <rect x="118" y="128" width="230" height="230" rx="48" fill="#0D2846"/>
+    <rect x="118" y="128" width="230" height="230" rx="48" fill="url(#accent)" fill-opacity="0.16"/>
+    <image href="toposync-symbol.svg" x="171" y="154" width="124" height="139" preserveAspectRatio="xMidYMid meet"/>
+    <text x="233" y="326" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="23" font-weight="800" fill="#FFFFFF">TOPOSYNC</text>
+  </g>
+
+  <path d="M410 166H895" stroke="url(#accent)" stroke-width="5" stroke-linecap="round"/>
+  <text x="410" y="235" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="72" font-weight="850" letter-spacing="-3.8" fill="#101418">Toposync Docs</text>
+  <text x="410" y="298" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="33" font-weight="700" letter-spacing="-0.8" fill="#0D2846">Local-first spatial home automation</text>
+  <text x="410" y="363" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="27" font-weight="500" fill="#425466">Installation, cameras, Home Assistant OS,</text>
+  <text x="410" y="405" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="27" font-weight="500" fill="#425466">pipelines, and processing servers.</text>
+
+  <g transform="translate(410 462)">
+    <rect width="140" height="46" rx="23" fill="#079C9A" fill-opacity="0.13" stroke="#079C9A" stroke-opacity="0.28"/>
+    <text x="70" y="30" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="17" font-weight="800" fill="#075F63">Docs</text>
+    <rect x="156" width="182" height="46" rx="23" fill="#3B82F6" fill-opacity="0.12" stroke="#3B82F6" stroke-opacity="0.25"/>
+    <text x="247" y="30" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="17" font-weight="800" fill="#0D3F8C">Local-first</text>
+    <rect x="354" width="226" height="46" rx="23" fill="#F59E0B" fill-opacity="0.14" stroke="#F59E0B" stroke-opacity="0.25"/>
+    <text x="467" y="30" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="17" font-weight="800" fill="#8A4B05">Early access alpha</text>
+  </g>
+</svg>

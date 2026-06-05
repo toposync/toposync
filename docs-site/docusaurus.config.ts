@@ -4,6 +4,12 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
+const siteUrl = 'https://docs.toposync.com';
+const productUrl = 'https://toposync.com';
+const socialImageUrl = `${siteUrl}/img/social-card.png`;
+const seoDescription =
+  'Documentation for Toposync, a local-first spatial home automation platform for cameras, Home Assistant, pipelines, and processing servers.';
+
 const config: Config = {
   title: 'Toposync',
   tagline: 'Local-first home automation, cameras, and spatial context.',
@@ -55,6 +61,11 @@ const config: Config = {
             'https://github.com/toposync/toposync/edit/main/docs-site/',
         },
         blog: false,
+        sitemap: {
+          lastmod: 'date',
+          changefreq: 'weekly',
+          priority: 0.7,
+        },
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -63,6 +74,24 @@ const config: Config = {
   ],
 
   themeConfig: {
+    metadata: [
+      {
+        name: 'keywords',
+        content:
+          'Toposync, home automation, Home Assistant, cameras, RTSP, ONVIF, PTZ, local-first, spatial automation, processing server, computer vision',
+      },
+      {name: 'author', content: 'Toposync'},
+      {name: 'application-name', content: 'Toposync'},
+      {name: 'twitter:card', content: 'summary_large_image'},
+      {name: 'twitter:image', content: socialImageUrl},
+      {name: 'twitter:title', content: 'Toposync documentation'},
+      {name: 'twitter:description', content: seoDescription},
+      {property: 'og:type', content: 'website'},
+      {property: 'og:site_name', content: 'Toposync Docs'},
+      {property: 'og:image', content: socialImageUrl},
+      {property: 'og:image:width', content: '1200'},
+      {property: 'og:image:height', content: '630'},
+    ],
     colorMode: {
       respectPrefersColorScheme: true,
     },
@@ -119,6 +148,56 @@ const config: Config = {
       darkTheme: prismThemes.dracula,
     },
   } satisfies Preset.ThemeConfig,
+  headTags: [
+    {
+      tagName: 'script',
+      attributes: {
+        type: 'application/ld+json',
+      },
+      innerHTML: JSON.stringify({
+        '@context': 'https://schema.org',
+        '@type': 'Organization',
+        name: 'Toposync',
+        url: productUrl,
+        logo: `${siteUrl}/img/toposync-symbol.svg`,
+        sameAs: ['https://github.com/toposync/toposync'],
+      }),
+    },
+    {
+      tagName: 'script',
+      attributes: {
+        type: 'application/ld+json',
+      },
+      innerHTML: JSON.stringify({
+        '@context': 'https://schema.org',
+        '@type': 'WebSite',
+        name: 'Toposync Docs',
+        url: siteUrl,
+        inLanguage: ['en', 'pt-BR'],
+        publisher: {
+          '@type': 'Organization',
+          name: 'Toposync',
+        },
+      }),
+    },
+    {
+      tagName: 'script',
+      attributes: {
+        type: 'application/ld+json',
+      },
+      innerHTML: JSON.stringify({
+        '@context': 'https://schema.org',
+        '@type': 'SoftwareApplication',
+        name: 'Toposync',
+        applicationCategory: 'HomeApplication',
+        operatingSystem: 'Linux, macOS, Windows, Docker, Home Assistant OS',
+        url: productUrl,
+        image: socialImageUrl,
+        description: seoDescription,
+        softwareHelp: `${siteUrl}/docs/`,
+      }),
+    },
+  ],
 };
 
 export default config;

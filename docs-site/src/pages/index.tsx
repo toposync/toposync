@@ -14,7 +14,8 @@ export default function Home(): JSX.Element {
       })}
       description={translate({
         id: 'homepage.description',
-        message: 'Documentation for the Toposync local-first spatial home automation platform',
+        message:
+          'Documentation for Toposync, a local-first spatial home automation platform for cameras, Home Assistant OS, pipelines, and processing servers.',
       })}>
       <main className={styles.home}>
         <section className={styles.intro}>

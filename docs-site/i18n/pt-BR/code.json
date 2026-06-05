@@ -18,7 +18,7 @@
     "message": "Escolher instalação"
   },
   "homepage.description": {
-    "message": "Documentação da plataforma local-first de automação residencial espacial Toposync"
+    "message": "Documentação do Toposync, uma plataforma local-first de automação residencial espacial para câmeras, Home Assistant OS, pipelines e processing servers."
   },
   "homepage.firstSteps.description": {
     "message": "Comece com uma imagem de decalque, adicione paredes e áreas, posicione câmeras e crie um pipeline simples."

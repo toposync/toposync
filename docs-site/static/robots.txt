@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://docs.toposync.com/sitemap.xml
+Sitemap: https://docs.toposync.com/pt-BR/sitemap.xml

@@ -19,7 +19,7 @@ The core design goal is reliability in local-first setups with highly dynamic pi
 - Encoding should happen only when there is actual playback demand.
 
 The canonical product and engineering principles for streaming are documented in
-[`docs/toposync-streaming-dossier-solid-priorities.md`](../../docs/toposync-streaming-dossier-solid-priorities.md#00-principios-permanentes-de-streaming).
+[`docs-site/docs/developers/media-decisions.mdx`](../../docs-site/docs/developers/media-decisions.mdx).
 In short:
 
 - User-facing flows deal with publishable sources and variants; `Transmission`, outputs, engine paths, and quality profile IDs are advanced artifacts.

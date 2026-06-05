@@ -8,11 +8,11 @@ const siteUrl = 'https://docs.toposync.com';
 const productUrl = 'https://toposync.com';
 const socialImageUrl = `${siteUrl}/img/social-card.png`;
 const seoDescription =
-  'Documentation for Toposync, a local-first spatial home automation platform for cameras, Home Assistant, pipelines, and processing servers.';
+  'Documentation for Toposync, an open source project for local-first Spatial Home Automation with local intelligence, Spatial Camera Mapping, Spatial Events, Home Assistant, pipelines, and processing servers.';
 
 const config: Config = {
   title: 'Toposync',
-  tagline: 'Local-first home automation, cameras, and spatial context.',
+  tagline: 'Spatial Home Automation with local intelligence.',
   favicon: 'img/favicon.png',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
@@ -78,7 +78,7 @@ const config: Config = {
       {
         name: 'keywords',
         content:
-          'Toposync, home automation, Home Assistant, cameras, RTSP, ONVIF, PTZ, local-first, spatial automation, processing server, computer vision',
+          'Toposync, Spatial Home Automation, Spatial Camera Mapping, Spatial Events, Spatial Intelligence, Spatial Awareness, home automation, Home Assistant, cameras, RTSP, ONVIF, PTZ, local-first, processing server, computer vision',
       },
       {name: 'author', content: 'Toposync'},
       {name: 'application-name', content: 'Toposync'},

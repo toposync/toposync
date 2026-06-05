@@ -18,7 +18,7 @@
     "message": "Escolher instalação"
   },
   "homepage.description": {
-    "message": "Documentação do Toposync, uma plataforma local-first de automação residencial espacial para câmeras, Home Assistant OS, pipelines e processing servers."
+    "message": "Documentação do Toposync, um projeto open source para Spatial Home Automation local-first com inteligência local, câmeras, eventos espaciais, Home Assistant OS, pipelines e processing servers."
   },
   "homepage.firstSteps.description": {
     "message": "Comece com uma imagem de decalque, adicione paredes e áreas, posicione câmeras e crie um pipeline simples."
@@ -51,7 +51,7 @@
     "message": "Escolha sua instalação"
   },
   "homepage.introText": {
-    "message": "Guias práticos para instalar o Toposync, criar sua primeira composição espacial, conectar câmeras e entender a arquitetura local-first atual."
+    "message": "Guias práticos para instalar o Toposync, criar sua primeira composição espacial, conectar câmeras e entender Spatial Home Automation com inteligência local na arquitetura atual."
   },
   "homepage.startFirstSteps": {
     "message": "Começar pelos primeiros passos"
@@ -63,13 +63,13 @@
     "message": "Comece por aqui"
   },
   "homepage.task.cameras.description": {
-    "message": "RTSP, ONVIF, mapeamento e processamento de imagens"
+    "message": "RTSP, ONVIF, Spatial Camera Mapping e processamento de imagens"
   },
   "homepage.task.cameras.title": {
     "message": "Câmeras"
   },
   "homepage.task.developers.description": {
-    "message": "Arquitetura, criação de extensões, plugin API e pipelines"
+    "message": "Arquitetura, Spatial Events, criação de extensões, plugin API e pipelines"
   },
   "homepage.task.developers.title": {
     "message": "Desenvolvedores"

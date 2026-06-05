@@ -1,11 +1,52 @@
 ---
 title: What is Toposync
-description: "Learn what Toposync is: a local-first spatial home automation platform for cameras, compositions, and pipelines."
-keywords: ["toposync", "local-first", "home automation", "what is Toposync", "spatial context"]
+description: "Learn what Toposync is: an open source, local-first Spatial Home Automation platform with local intelligence for cameras, spatial events, compositions, and pipelines."
+keywords: ["toposync", "local-first", "Spatial Home Automation", "Spatial Camera Mapping", "Spatial Events", "Spatial Intelligence", "Spatial Awareness", "home automation", "what is Toposync"]
 image: /img/social-card.png
 sidebar_position: 1
 ---
 
 # What is Toposync {/* #what-is-toposync */}
 
-This page is under construction.
+Toposync is an open source, local-first platform for **Spatial Home Automation with local intelligence**. It brings cameras, areas, devices, Home Assistant entities, 2D/3D compositions, and pipelines into one spatial model for private home environments.
+
+The goal is not to replace Home Assistant, RTSP tools, ONVIF utilities, or camera dashboards. The goal is to add a spatial layer where those systems can answer more useful questions:
+
+- where did an event happen?
+- which camera saw it?
+- which mapped area was affected?
+- which object, device, or automation is related?
+- what should be stored, shown, or forwarded?
+
+## The category {/* #the-category */}
+
+**Spatial Home Automation** is the product category Toposync is building toward. It treats the home as a mapped environment, not only as a list of devices or camera feeds.
+
+Within that category, Toposync uses a few specific terms:
+
+- **Spatial Camera Mapping**: connecting a camera image to real positions, areas, and views inside the mapped home.
+- **Spatial Events**: events enriched with position, area, camera, object state, lifecycle, image context, and related automation context.
+- **Spatial Intelligence**: the broader local interpretation layer that can combine camera input, areas, devices, pipelines, history, and future optional cloud services.
+- **Spatial Awareness**: feature language for area-aware behavior, such as making the same detection mean something different near a gate, sidewalk, pool, backyard, garage, or entrance.
+
+These terms are product language. Operational labels stay precise: RTSP, ONVIF, PTZ, pipelines, processing servers, areas, and camera mapping still mean the concrete technical features they describe.
+
+## What Toposync includes today {/* #what-toposync-includes-today */}
+
+The current alpha focuses on:
+
+- building a 2D/3D composition of a home;
+- adding walls, areas, images, models, cameras, and Home Assistant context;
+- mapping cameras into the composition;
+- creating camera and vision pipelines;
+- producing events, notifications, images, and Home Assistant outputs;
+- delegating heavier processing to remote processing servers when needed.
+
+Toposync is local-first by default. User data, camera configuration, generated files, and pipeline artifacts live under the configured data directory unless a user explicitly chooses another integration path.
+
+## What to read next {/* #what-to-read-next */}
+
+- Start with [Choose your installation](../installation/choose-your-installation.mdx).
+- Build the first map with [Create your first composition](../first-steps/create-your-first-composition.mdx).
+- Learn camera calibration in [Camera mapping](../cameras/camera-mapping.mdx).
+- Create event flows with [Create your first pipelines](../first-steps/first-pipelines.mdx).

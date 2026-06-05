@@ -1,16 +1,28 @@
 ---
 title: Architecture
-description: "Understand the current Toposync architecture: Python backend, React frontend, extensions, pipelines, and processing servers."
-keywords: ["toposync", "local-first", "home automation", "architecture", "developers", "extensions"]
+description: "Understand the current Toposync architecture for Spatial Home Automation with local intelligence: Python backend, React frontend, extensions, pipelines, and processing servers."
+keywords: ["toposync", "local-first", "Spatial Home Automation", "Spatial Camera Mapping", "Spatial Events", "Spatial Intelligence", "Spatial Awareness", "home automation", "architecture", "developers", "extensions"]
 image: /img/social-card.png
 sidebar_position: 1
 ---
 
 # Architecture {/* #architecture */}
 
-Toposync is a local-first platform for home context, cameras, spatial data, automation, and extensible processing. The current product is built around a Python/FastAPI backend, a React/ThreeJS frontend host, installable Python extension packages, and a pipeline runtime that can run locally or delegate heavier work to processing servers.
+Toposync is an open source, local-first platform for **Spatial Home Automation with local intelligence**: home context, cameras, spatial data, automation, and extensible processing in private home environments. The current product is built around a Python/FastAPI backend, a React/ThreeJS frontend host, installable Python extension packages, and a pipeline runtime that can run locally or delegate heavier work to processing servers.
 
 This page is a high-level map of the system. It intentionally does not document every API route, pipeline operator, extension contract, or deployment command. Those topics belong in focused reference pages.
+
+## Product vocabulary {/* #product-vocabulary */}
+
+Toposync uses a few category terms in user-facing material:
+
+- **Spatial Home Automation**: the product category, where home automation is organized around mapped spaces instead of only device lists.
+- **Spatial Camera Mapping**: the camera-to-world calibration layer that gives camera views position and area context.
+- **Spatial Events**: events that include camera, area, position, object state, lifecycle, and related context.
+- **Spatial Intelligence**: the broader interpretation layer built from cameras, areas, devices, pipelines, and history.
+- **Spatial Awareness**: feature language for area-aware behavior powered by the same mapped context.
+
+These terms describe product concepts. They do not replace technical contracts such as RTSP, ONVIF, PTZ, pipeline operators, processing servers, or areas.
 
 ## System at a glance {/* #system-at-a-glance */}
 
@@ -92,7 +104,7 @@ Streaming and AI are extension paths, not assumptions baked into the core archit
 
 ## Pipelines and processing {/* #pipelines-and-processing */}
 
-Pipelines are Toposync's runtime automation and media-processing graph system. The core owns the operator registry, graph compilation, preview, telemetry, runtime status, storage, and orchestration.
+Pipelines are Toposync's runtime automation and media-processing graph system. The core owns the operator registry, graph compilation, preview, telemetry, runtime status, storage, and orchestration. They are also the main implementation path for Spatial Events and the future Spatial Intelligence layer.
 
 Operators can come from the core or from extensions. Camera and vision capabilities, for example, are mostly contributed by extensions rather than hardcoded into the core.
 

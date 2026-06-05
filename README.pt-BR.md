@@ -6,7 +6,7 @@
 
 [English](README.md)
 
-**Toposync** é uma **plataforma local-first em estágio alpha** para automação residencial espacial, inteligência com câmeras e visualização 2D/3D da casa, opcionalmente integrada ao Home Assistant.
+**Toposync** é uma **plataforma open source, local-first, em estágio alpha** para **Spatial Home Automation com inteligência local**: automação residencial com contexto espacial, inteligência com câmeras, mapeamento espacial de câmeras, eventos espaciais e visualização 2D/3D da casa em ambientes residenciais privados, opcionalmente integrada ao Home Assistant.
 
 O objetivo é transformar uma casa inteligente em um ambiente visual e interpretável: câmeras, áreas, dispositivos, automações, notificações e eventos podem existir dentro de um mapa 2D/3D da casa.
 
@@ -18,6 +18,13 @@ O Toposync não pretende ser apenas mais um dashboard de câmeras, nem apenas ma
 - qual área da casa foi afetada?
 - qual automação deveria reagir?
 - qual histórico vale a pena guardar?
+
+A categoria que o Toposync está explorando é **Spatial Home Automation**. Na prática:
+
+- **Spatial Camera Mapping** conecta imagens de câmeras a posições, áreas e visões reais dentro do modelo da casa.
+- **Spatial Events** são eventos de câmera ou automação com posição, área, câmera, estado do objeto e contexto.
+- **Spatial Intelligence** é a camada local mais ampla de interpretação que pode combinar câmeras, áreas, dispositivos, pipelines e histórico.
+- **Spatial Awareness** é linguagem de recurso para comportamento sensível a áreas, como reagir de forma diferente perto de portão, piscina, garagem, calçada ou entrada.
 
 > O Toposync está atualmente em **alpha early access**. Ele já pode ser testado por early adopters, usuários avançados de automação residencial, usuários de Home Assistant, usuários de câmeras IP, RTSP/ONVIF, entusiastas de homelab e pessoas interessadas em visão computacional local.
 
@@ -47,12 +54,12 @@ Você pode ajudar:
 | Caso de uso | O que permite | Status |
 | --- | --- | --- |
 | **Visão 2D/3D da casa** | Visualizar casa, cômodos, áreas, dispositivos, câmeras e entidades em um modelo espacial. | **Pronto para teste** |
-| **Automação residencial visual** | Ver luzes, câmeras, sensores e dispositivos dentro da representação da casa, com estados visuais como luzes ativas, entidades selecionadas ou itens ativos. | **Pronto para teste** |
-| **Eventos no mapa** | Transformar detecções de câmera em eventos posicionados em áreas reais da casa. Em vez de saber só que algo foi detectado, ver onde aconteceu. | **Pronto para teste** |
-| **Rastreamento no mundo real** | Rastrear objetos, pessoas ou eventos ao longo do tempo e associar seus caminhos a áreas da casa. | **Pronto para teste** |
-| **Consciência da frente da casa** | Detectar pessoas, veículos ou entregas parados perto do portão, garagem, calçada ou entrada. | **Pronto para teste** |
+| **Spatial Home Automation** | Ver luzes, câmeras, sensores e dispositivos dentro da representação da casa, com estados visuais como luzes ativas, entidades selecionadas ou itens ativos. | **Pronto para teste** |
+| **Spatial Events** | Transformar detecções de câmera em eventos posicionados em áreas reais da casa. Em vez de saber só que algo foi detectado, ver onde aconteceu. | **Pronto para teste** |
+| **Rastreamento espacial** | Rastrear objetos, pessoas ou eventos ao longo do tempo e associar seus caminhos a áreas da casa. | **Pronto para teste** |
+| **Spatial Awareness na entrada** | Detectar pessoas, veículos ou entregas parados perto do portão, garagem, calçada ou entrada. | **Pronto para teste** |
 | **Objetos parados relevantes** | Criar regras para coisas que realmente pararam em uma área, em vez de reagir a qualquer movimento rápido. | **Pronto para teste** |
-| **Áreas sensíveis** | Adicionar uma camada extra de consciência em locais como piscinas, portões, garagens, quintais ou áreas restritas. | **Pronto para teste** |
+| **Spatial Awareness para áreas sensíveis** | Adicionar uma camada extra de consciência em locais como piscinas, portões, garagens, quintais ou áreas restritas. | **Pronto para teste** |
 | **Pets perto de áreas sensíveis** | Combinar detecção, áreas e notificações para perceber situações relevantes envolvendo pets perto de piscinas, ruas ou portões. | **Pronto para teste** |
 | **Visão espacial 360** | Projetar imagens de câmeras no modelo 2D/3D, criando uma visualização inspirada em sistemas de câmera 360 de carros. | **Experimento inicial** |
 | **Câmeras multi-marca** | Trazer câmeras RTSP/ONVIF de marcas diferentes para uma única interface local. | **Pronto para teste** |
@@ -61,7 +68,7 @@ Você pode ajudar:
 | **Câmeras comuns com inteligência local** | Usar câmeras simples como fontes de imagem e concentrar inteligência em uma plataforma local mais flexível. | **Pronto para teste** |
 | **Detecção além da câmera** | Usar modelos e pipelines mais avançados que a IA embutida de cada câmera, incluindo objetos distantes ou condições visuais específicas. | **Pronto para teste, avançado** |
 | **Pipelines locais de IA** | Combinar entrada de câmera, detecção, rastreamento, filtros, áreas, notificações e ações em fluxos customizáveis. | **Pronto para teste** |
-| **Regras por área** | A mesma detecção pode significar coisas diferentes dependendo da área. Uma pessoa na calçada pode ser normal; a mesma pessoa no quintal em outro horário pode gerar alerta. | **Pronto para teste** |
+| **Regras espaciais por área** | A mesma detecção pode significar coisas diferentes dependendo da área. Uma pessoa na calçada pode ser normal; a mesma pessoa no quintal em outro horário pode gerar alerta. | **Pronto para teste** |
 | **Notificações contextuais** | Receber notificações com localização, tipo de evento, área, imagem associada e estado do objeto. | **Pronto para teste** |
 | **Entregas e campainhas** | Detectar entregadores, pacotes ou pessoas perto da entrada, mesmo antes de alguém tocar a campainha. | **Pronto para teste** |
 | **Linhas do tempo ricas** | Guardar eventos interpretados com horário, área, objeto, imagem e contexto, facilitando encontrar ocorrências sem assistir horas de vídeo. | **Pronto para teste** |

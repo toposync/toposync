@@ -6,7 +6,7 @@
 
 [Português (Brasil)](README.pt-BR.md)
 
-**Toposync** is an **alpha-stage, local-first platform** for spatial home automation, camera intelligence, and 2D/3D home visualization, optionally integrated with Home Assistant.
+**Toposync** is an **alpha-stage, open source, local-first platform** for **Spatial Home Automation with local intelligence**: camera intelligence, spatial camera mapping, spatial events, and 2D/3D home visualization for private home environments, optionally integrated with Home Assistant.
 
 The goal is to turn a smart home into a visual and interpretable environment: cameras, areas, devices, automations, notifications, and events can exist inside a 2D/3D map of the home.
 
@@ -18,6 +18,13 @@ Toposync is not meant to be just another camera dashboard, and not just another 
 - which area of the home was affected?
 - which automation should react?
 - which history is worth keeping?
+
+The category Toposync is exploring is **Spatial Home Automation**. In practical terms:
+
+- **Spatial Camera Mapping** connects camera images to real positions, areas, and views inside the home model.
+- **Spatial Events** are camera or automation events with position, area, camera, object state, and context.
+- **Spatial Intelligence** is the broader local interpretation layer that can combine cameras, areas, devices, pipelines, and history.
+- **Spatial Awareness** is feature language for area-aware behavior, such as reacting differently near a gate, pool, driveway, sidewalk, or entrance.
 
 > Toposync is currently in **alpha early access**. It can already be tested by early adopters, advanced home automation users, Home Assistant users, IP camera users, RTSP/ONVIF users, homelab enthusiasts, and people interested in local computer vision.
 
@@ -47,12 +54,12 @@ You can help by:
 | Use case | What it enables | Status |
 | --- | --- | --- |
 | **2D/3D home view** | Visualize your home, rooms, areas, devices, cameras, and entities in a spatial model. | **Ready for testing** |
-| **Visual home automation** | See lights, cameras, sensors, and devices inside the home representation, with visual states such as active lights, selected entities, or active items. | **Ready for testing** |
-| **Events on the map** | Turn camera detections into events positioned in real areas of the home. Instead of only knowing that something was detected, see where it happened. | **Ready for testing** |
-| **Real-world tracking** | Track objects, people, or events over time and associate their paths with areas of the home. | **Ready for testing** |
-| **Front-of-house awareness** | Detect people, vehicles, or deliveries stopped near the gate, driveway, sidewalk, or entrance. | **Ready for testing** |
+| **Spatial Home Automation** | See lights, cameras, sensors, and devices inside the home representation, with visual states such as active lights, selected entities, or active items. | **Ready for testing** |
+| **Spatial Events** | Turn camera detections into events positioned in real areas of the home. Instead of only knowing that something was detected, see where it happened. | **Ready for testing** |
+| **Spatial tracking** | Track objects, people, or events over time and associate their paths with areas of the home. | **Ready for testing** |
+| **Spatial Awareness at entrances** | Detect people, vehicles, or deliveries stopped near the gate, driveway, sidewalk, or entrance. | **Ready for testing** |
 | **Relevant stopped objects** | Create rules for things that actually stopped in an area, instead of reacting to every fast movement. | **Ready for testing** |
-| **Sensitive areas** | Add an extra awareness layer around places such as pools, gates, garages, backyards, or restricted areas. | **Ready for testing** |
+| **Spatial Awareness for sensitive areas** | Add an extra awareness layer around places such as pools, gates, garages, backyards, or restricted areas. | **Ready for testing** |
 | **Pets near sensitive areas** | Combine detection, areas, and notifications to notice relevant situations involving pets near places such as pools, streets, or gates. | **Ready for testing** |
 | **Spatial 360 view** | Project camera images into the 2D/3D model, creating a visualization inspired by car 360 camera systems. | **Early experiment** |
 | **Multi-brand cameras** | Bring RTSP/ONVIF cameras from different brands into a single local interface. | **Ready for testing** |
@@ -61,7 +68,7 @@ You can help by:
 | **Common cameras with local intelligence** | Use simple cameras as image sources and concentrate intelligence in a more flexible local platform. | **Ready for testing** |
 | **Detection beyond the camera** | Use more advanced models and pipelines than the built-in AI of each camera, including distant objects or specific visual conditions. | **Ready for testing, advanced** |
 | **Local AI pipelines** | Combine camera input, detection, tracking, filters, areas, notifications, and actions in customizable flows. | **Ready for testing** |
-| **Rules by area** | The same detection can mean different things depending on the area. A person on the sidewalk may be normal; the same person in the backyard at another time may trigger an alert. | **Ready for testing** |
+| **Spatial rules by area** | The same detection can mean different things depending on the area. A person on the sidewalk may be normal; the same person in the backyard at another time may trigger an alert. | **Ready for testing** |
 | **Context-aware notifications** | Receive notifications with location, event type, area, associated image, and object state. | **Ready for testing** |
 | **Deliveries and doorbells** | Detect delivery people, packages, or people near the entrance, even before someone rings the doorbell. | **Ready for testing** |
 | **Rich timelines** | Store interpreted events with time, area, object, image, and context, making it easier to find occurrences without watching hours of video. | **Ready for testing** |

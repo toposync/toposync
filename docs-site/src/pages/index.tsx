@@ -15,7 +15,7 @@ export default function Home(): JSX.Element {
       description={translate({
         id: 'homepage.description',
         message:
-          'Documentation for Toposync, a local-first spatial home automation platform for cameras, Home Assistant OS, pipelines, and processing servers.',
+          'Documentation for Toposync, an open source project for local-first Spatial Home Automation with local intelligence, cameras, spatial events, Home Assistant OS, pipelines, and processing servers.',
       })}>
       <main className={styles.home}>
         <section className={styles.intro}>
@@ -29,7 +29,7 @@ export default function Home(): JSX.Element {
             <p className={styles.introText}>
               <Translate id="homepage.introText">
                 Practical guides for installing Toposync, creating your first spatial composition,
-                connecting cameras, and understanding the current local-first architecture.
+                connecting cameras, and understanding Spatial Home Automation with local intelligence in the current architecture.
               </Translate>
             </p>
             <div className={styles.actions}>
@@ -121,7 +121,7 @@ export default function Home(): JSX.Element {
                   <Translate id="homepage.task.cameras.title">Cameras</Translate>
                 </span>
                 <small>
-                  <Translate id="homepage.task.cameras.description">RTSP, ONVIF, mapping, and image processing</Translate>
+                  <Translate id="homepage.task.cameras.description">RTSP, ONVIF, Spatial Camera Mapping, and image processing</Translate>
                 </small>
               </Link>
               <Link className={styles.taskLink} to="/docs/installation/processing-server-linux-macos">
@@ -153,7 +153,7 @@ export default function Home(): JSX.Element {
                   <Translate id="homepage.task.developers.title">Developers</Translate>
                 </span>
                 <small>
-                  <Translate id="homepage.task.developers.description">Architecture, extension authoring, plugin API, and pipelines</Translate>
+                  <Translate id="homepage.task.developers.description">Architecture, Spatial Events, extension authoring, plugin API, and pipelines</Translate>
                 </small>
               </Link>
               <Link className={styles.taskLink} to="/docs/troubleshooting/">

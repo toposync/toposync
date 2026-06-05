@@ -1,7 +1,7 @@
 ---
 title: Create your first pipelines
-description: "Create your first Toposync pipelines from camera events to simple automation outputs and notifications."
-keywords: ["toposync", "local-first", "home automation", "first steps", "pipelines", "automation"]
+description: "Create your first Toposync pipelines from camera input to Spatial Events, simple automation outputs, and notifications."
+keywords: ["toposync", "local-first", "Spatial Events", "Spatial Home Automation", "home automation", "first steps", "pipelines", "automation"]
 image: /img/social-card.png
 sidebar_position: 7
 ---
@@ -9,6 +9,8 @@ sidebar_position: 7
 # Create your first pipelines {/* #create-your-first-pipelines */}
 
 A pipeline is a flow that takes input, processes it, and produces an output. In first-use terms, it is how a camera image becomes an event, notification, stored image, or Home Assistant action.
+
+In Toposync, mapped camera pipelines can produce **Spatial Events**: events that carry camera, area, position, object state, lifecycle, and image context instead of only a generic detection message.
 
 This page is only a first pass. The full pipeline reference lives in [Pipelines](../developers/pipelines.mdx).
 
@@ -27,8 +29,8 @@ notifications should use `payload.subject.id`, not a raw tracker id.
 | Preset | Mapping | Use when |
 | --- | --- | --- |
 | Simple people detection | Not required | You want a first smoke test or an unmapped camera pipeline. |
-| Mapped individual people events | Required | You want one event per tracked person, with spatial context. |
-| Mapped grouped presence | Required | You want fewer notifications during one continuous activity session. |
+| Spatial Events for individual people | Required | You want one event per tracked person, with camera, area, and position context. |
+| Grouped Spatial Events for presence | Required | You want fewer notifications during one continuous activity session. |
 | Presence by area | Required | You want mapped people or pets grouped by proximity in the camera area. |
 | Vehicle stopped | Required | You want vehicle detection plus speed/stopped logic. |
 

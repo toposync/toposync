@@ -1,7 +1,7 @@
 ---
 title: Pipelines
-description: "Aprenda como pipelines Toposync funcionam, incluindo grafos de operadores, execução local, processamento remoto e contratos de extensões."
-keywords: ["toposync", "local-first", "automação residencial", "pipelines", "operadores", "processing server"]
+description: "Aprenda como pipelines Toposync produzem Spatial Events por meio de grafos de operadores, execução local, processamento remoto e contratos de extensões."
+keywords: ["toposync", "local-first", "Spatial Events", "Spatial Intelligence", "automação residencial", "pipelines", "operadores", "processing server"]
 image: /img/social-card.png
 sidebar_position: 5
 ---
@@ -9,6 +9,8 @@ sidebar_position: 5
 # Pipelines {/* #pipelines */}
 
 Pipelines são o runtime do Toposync para automação em tempo real e processamento de mídia. Um pipeline é um grafo acíclico direcionado, com nome estável, que recebe pacotes de fontes, transforma esses pacotes por operadores e opcionalmente executa efeitos como notificações, armazenamento de imagens, estados do Home Assistant ou publicação de transmissões ao vivo.
+
+Na camada de produto, pipelines são o caminho principal para transformar entrada de câmera e estado de automação em **Spatial Events** e em futuros recursos de **Spatial Intelligence**. Na camada de runtime, esses conceitos continuam usando contratos concretos de packet, payload, lifecycle, artifact e operador.
 
 Esta página é uma visão para desenvolvedores. Ela explica a arquitetura atual e os contratos que autores de extensões devem respeitar. Ela não é uma referência completa de todos os operadores.
 
@@ -120,8 +122,10 @@ Operadores trocam objetos `Packet`. Um packet carrega:
 
 O lifecycle é importante para fluxos de evento. Por exemplo, um operador de movimento ou tracking pode abrir um evento, emitir updates enquanto ele permanece ativo e fechar o evento quando a condição termina. Sinks como notificações podem usar esse lifecycle para atualizar ou fechar registros existentes em vez de criar mensagens desconectadas.
 
-Para eventos de produto, a identidade canônica é `payload.subject`. Pacotes de
-evento de câmera e visão devem definir:
+Para eventos de produto, a identidade canônica é `payload.subject`. **Spatial
+Events** são eventos de produto com contexto mapeado suficiente para UI,
+armazenamento, notificações e integrações raciocinarem sobre onde algo
+aconteceu. Pacotes de evento de câmera e visão devem definir:
 
 - `payload.subject.type`: por exemplo `event` para um objeto individual
   acompanhado ou `group_event` para um evento agregado;

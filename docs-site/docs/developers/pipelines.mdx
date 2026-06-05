@@ -1,7 +1,7 @@
 ---
 title: Pipelines
-description: "Learn how Toposync pipelines work, including operator graphs, local execution, remote processing, and extension contracts."
-keywords: ["toposync", "local-first", "home automation", "pipelines", "operators", "processing server"]
+description: "Learn how Toposync pipelines produce Spatial Events through operator graphs, local execution, remote processing, and extension contracts."
+keywords: ["toposync", "local-first", "Spatial Events", "Spatial Intelligence", "home automation", "pipelines", "operators", "processing server"]
 image: /img/social-card.png
 sidebar_position: 5
 ---
@@ -9,6 +9,8 @@ sidebar_position: 5
 # Pipelines {/* #pipelines */}
 
 Pipelines are Toposync's runtime for real-time automation and media processing. A pipeline is a named directed acyclic graph that receives packets from sources, transforms them through operators, and optionally writes side effects such as notifications, stored images, Home Assistant state, or live stream publications.
+
+At the product layer, pipelines are the main way Toposync turns camera input and automation state into **Spatial Events** and future **Spatial Intelligence** features. At the runtime layer, those concepts still use concrete packet, payload, lifecycle, artifact, and operator contracts.
 
 This page is a developer overview. It explains the current architecture and the contracts extension authors should respect. It is not a full operator reference.
 
@@ -120,8 +122,10 @@ Operators exchange `Packet` objects. A packet carries:
 
 The lifecycle is important for event-like flows. For example, a motion or tracking operator can open an event, emit updates while it remains active, and close it when the condition ends. Sinks such as notifications can use that lifecycle to update or close existing records instead of creating unrelated messages.
 
-For product events, the canonical identity is `payload.subject`. Camera and
-vision event packets should set:
+For product events, the canonical identity is `payload.subject`. **Spatial
+Events** are product events with enough mapped context for the UI, storage,
+notifications, and integrations to reason about where something happened.
+Camera and vision event packets should set:
 
 - `payload.subject.type`: for example `event` for an individual tracked object
   or `group_event` for an aggregate event;

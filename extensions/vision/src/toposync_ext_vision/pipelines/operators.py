@@ -53,6 +53,8 @@ def _vision_expression_hints(*, branch: str | None = None) -> list[Any]:
             payload_path_hint("payload.subject.type", value_type="string", description="Subject kind, such as event or group_event."),
             payload_path_hint("payload.subject.id", value_type="string", description="Canonical product subject identifier for throttling, notifications, and storage."),
             payload_path_hint("payload.subject.lifecycle", value_type="string", description="Lifecycle state for the canonical subject."),
+            payload_path_hint("payload.subject.category", value_type="string", description="Canonical subject category."),
+            payload_path_hint("payload.subject.confidence", value_type="number", description="Canonical subject confidence."),
             payload_path_hint("payload.subject.bbox01", value_type="array", description="Normalized subject bounding box."),
             payload_path_hint("payload.group_event_id", value_type="string", description="Aggregated group event identifier emitted by vision.group_events."),
             payload_path_hint("payload.group_event_code", value_type="string", description="Short group event code emitted by vision.group_events."),
@@ -66,16 +68,6 @@ def _vision_expression_hints(*, branch: str | None = None) -> list[Any]:
             payload_path_hint("payload.identity_id", value_type="string", description="Optional recognized identity identifier for the product event."),
             payload_path_hint("payload.correlation_id", value_type="string", description="Correlation identifier connecting related packets."),
             payload_path_hint("payload.source_stream_id", value_type="string", description="Source stream identifier emitted by the vision operator."),
-            payload_path_hint("payload.object_category_label", value_type="string", description="Primary detected object category label."),
-            payload_path_hint("payload.object_confidence", value_type="number", description="Confidence score for the primary detected object."),
-            payload_path_hint("payload.object_bbox01", value_type="array", description="Normalized bounding box for the primary detected object."),
-            payload_path_hint("payload.object_bbox01[0]", value_type="number", description="Normalized left coordinate of the primary bounding box."),
-            payload_path_hint("payload.object_bbox01[1]", value_type="number", description="Normalized top coordinate of the primary bounding box."),
-            payload_path_hint("payload.object_bbox01[2]", value_type="number", description="Normalized right coordinate of the primary bounding box."),
-            payload_path_hint("payload.object_bbox01[3]", value_type="number", description="Normalized bottom coordinate of the primary bounding box."),
-            payload_path_hint("payload.detected_object", value_type="object", description="Primary detected object payload."),
-            payload_path_hint("payload.detected_objects", value_type="array", description="All detected or tracked objects on the packet."),
-            payload_path_hint("payload.detected_objects[0]", value_type="object", description="First detected or tracked object on the packet."),
         ]
     )
     if branch == "detections":
@@ -183,8 +175,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
         registry.register_operator(
             operator_id="vision.pose_estimate",
             description=(
-                "Pose estimation skeleton. This phase reserves the public task-oriented operator, "
-                "packet contract, and model-registry plumbing for future first-party pose models."
+                "Pose estimation. Produces keypoint annotations under payload['vision']['poses']."
             ),
             config_model=VisionPoseEstimateConfig,
             inputs=[{"name": "in", "required": True}],
@@ -201,11 +192,6 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 "tracker_track_id",
                 "correlation_id",
                 "source_stream_id",
-                "object_category_label",
-                "object_confidence",
-                "object_bbox01",
-                "detected_object",
-                "detected_objects",
             ],
             expression_hints=_vision_expression_hints(),
             share_strategy="by_signature",
@@ -235,11 +221,6 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             requires_artifacts=[MAIN_ARTIFACT_NAME],
             produces_payload_keys=[
                 "vision",
-                "object_category_label",
-                "object_confidence",
-                "object_bbox01",
-                "detected_object",
-                "detected_objects",
             ],
             expression_hints=_vision_expression_hints(branch="segmentations"),
             share_strategy="by_signature",
@@ -305,11 +286,6 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 "tracker_track_id",
                 "correlation_id",
                 "source_stream_id",
-                "object_category_label",
-                "object_confidence",
-                "object_bbox01",
-                "detected_object",
-                "detected_objects",
             ],
             expression_hints=_vision_expression_hints(branch="tracks"),
             share_strategy="never",
@@ -384,11 +360,6 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 "tracker_track_id",
                 "correlation_id",
                 "source_stream_id",
-                "object_category_label",
-                "object_confidence",
-                "object_bbox01",
-                "detected_object",
-                "detected_objects",
             ],
             expression_hints=_vision_expression_hints(branch="detections"),
             share_strategy="by_signature",

@@ -322,7 +322,6 @@ const TRACKER_CHOICES = [
   },
 ] as const;
 const TRACKING_WORLD_ANCHOR_OPTIONS = ["auto", "always", "never"] as const;
-const TRACKING_APPEARANCE_MODE_OPTIONS = ["off"] as const;
 
 const MODEL_HINT_KEYS: Record<string, string> = {
   rfdetr_det_nano: "core.ui.pipelines.panels.yolo.model_rfdetr_nano_hint",
@@ -913,8 +912,6 @@ export function VisionConfigCard({
   const pauseWhenGateClosed = Boolean((config as any).pause_when_gate_closed ?? true);
   const useWorldAnchorRaw = String((config as any).use_world_anchor ?? "auto").trim().toLowerCase() || "auto";
   const useWorldAnchor = TRACKING_WORLD_ANCHOR_OPTIONS.includes(useWorldAnchorRaw as any) ? useWorldAnchorRaw : "auto";
-  const appearanceModeRaw = String((config as any).appearance_mode ?? "off").trim().toLowerCase() || "off";
-  const appearanceMode = TRACKING_APPEARANCE_MODE_OPTIONS.includes(appearanceModeRaw as any) ? appearanceModeRaw : "off";
   const modelId = String((config as any).model_id ?? "").trim();
   const attachMaskArtifacts = Boolean((config as any).attach_mask_artifacts ?? true);
   const attachPolygons = Boolean((config as any).attach_polygons ?? false);
@@ -2253,24 +2250,6 @@ export function VisionConfigCard({
                 />
               </label>
               <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.world_match_distance_hint")}</div>
-
-              <label className="pipelinesLabel">
-                <span>{t("core.ui.pipelines.panels.yolo.appearance_mode")}</span>
-                <select
-                  className="pipelinesInput"
-                  value={appearanceMode}
-                  onChange={(event) => {
-                    const nextMode = String(event.target.value || "off").trim().toLowerCase();
-                    onUpdateConfig((prev) => ({
-                      ...prev,
-                      appearance_mode: TRACKING_APPEARANCE_MODE_OPTIONS.includes(nextMode as any) ? nextMode : "off",
-                    }));
-                  }}
-                >
-                  <option value="off">{t("core.ui.pipelines.panels.yolo.appearance_mode.off")}</option>
-                </select>
-              </label>
-              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.appearance_mode_hint")}</div>
             </>
           ) : null}
         </>

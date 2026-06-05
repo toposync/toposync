@@ -110,7 +110,7 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
                 "config": {
                     "input_artifact_name": "face",
                     "output_artifact_name": "segmented",
-                    "bbox_field": "object_bbox01",
+                    "bbox_field": "subject.bbox01",
                 },
             },
             {
@@ -118,7 +118,7 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
                 "operator": "camera.camera_mapping",
                 "config": {
                     "camera_id_field": "camera_id",
-                    "bbox_field": "object_bbox01",
+                    "bbox_field": "subject.bbox01",
                     "control_points": [
                         {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
                         {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
@@ -233,8 +233,14 @@ def build_sequence() -> list[Packet]:
                     "camera_id": "camera-main",
                     "tracking_id": "track-1",
                     "frame_ts": 100.0 + float(index),
-                    "object_confidence": confidence,
-                    "object_bbox01": bbox_by_index[index - 1],
+                    "subject": {
+                        "type": "event",
+                        "id": "track-1",
+                        "category": "person",
+                        "confidence": confidence,
+                        "bbox01": bbox_by_index[index - 1],
+                        "lifecycle": lifecycle.value,
+                    },
                 },
                 artifacts={
                     "frame_original": Artifact(

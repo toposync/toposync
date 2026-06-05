@@ -142,9 +142,14 @@ def _resolve_image_confidence(packet: Packet, artifact: Artifact) -> float | Non
         if parsed is not None and parsed >= 0.0:
             return float(parsed)
 
-    parsed = _as_finite_float(packet.payload.get("object_confidence"))
+    subject = _resolve_subject(packet)
+    parsed = _as_finite_float(subject.get("confidence"))
     if parsed is not None and parsed >= 0.0:
         return float(parsed)
+    for annotation in _iter_vision_annotations(packet):
+        parsed = _as_finite_float(annotation.get("score"))
+        if parsed is not None and parsed >= 0.0:
+            return float(parsed)
     return None
 
 
@@ -170,6 +175,33 @@ def _resolve_subject_string(packet: Packet, field: str) -> str:
     if value:
         return value
     return str(packet.metadata.get(f"subject_{field}") or "").strip()
+
+
+def _iter_vision_annotations(packet: Packet) -> list[dict[str, Any]]:
+    vision = packet.payload.get("vision")
+    if not isinstance(vision, dict):
+        return []
+    annotations: list[dict[str, Any]] = []
+    for key in ("tracks", "detections", "segmentations"):
+        raw_items = vision.get(key)
+        if not isinstance(raw_items, list):
+            continue
+        for raw_item in raw_items:
+            if isinstance(raw_item, dict):
+                annotations.append(raw_item)
+    return annotations
+
+
+def _resolve_payload_category(packet: Packet) -> str:
+    subject = _resolve_subject(packet)
+    value = str(subject.get("category") or "").strip()
+    if value:
+        return value
+    for annotation in _iter_vision_annotations(packet):
+        value = str(annotation.get("label") or "").strip()
+        if value:
+            return value
+    return str(packet.metadata.get("subject_category") or "").strip()
 
 
 def _normalize_world_point(raw: Any) -> dict[str, Any] | None:
@@ -532,10 +564,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
             or _resolve_string(packet, "correlation_id")
             or packet.stream_id
         )
-        category = (
-            str(packet.payload.get("object_category_label") or "").strip()
-            or str(packet.metadata.get("object_category") or "").strip()
-        )
+        category = _resolve_payload_category(packet)
 
         ts = _resolve_ts(packet, "frame_ts")
         ts_ms = int(max(0.0, float(ts)) * 1000)
@@ -749,7 +778,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
 class NotifyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     notification_type: str = "pipelines.event"
-    title: str = "{{object_category_label}} detected"
+    title: str = "{{subject.category}} detected"
     description: str = ""
     priority: Literal["low", "medium", "high"] = "medium"
     realtime: bool = True
@@ -1171,10 +1200,6 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "tracker_track_id",
         "correlation_id",
         "source_stream_id",
-        "object_category_label",
-        "object_confidence",
-        "object_bbox01",
-        "detected_object",
         "world",
         "world_envelope",
         "mapping",

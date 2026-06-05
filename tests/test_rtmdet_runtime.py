@@ -99,7 +99,7 @@ def test_rtmdet_detection_runtime_reprojects_crop_and_feeds_vision_object_crop(
         detect = VisionDetectRuntime({"model_id": "rtmdet.crop", "emit_mode": "annotate"}, deps)
         crop = VisionCropObjectsRuntime(
             {
-                "bbox_field": "object_bbox01",
+                "bbox_field": "subject.bbox01",
                 "output_artifact_name": "object_crop",
                 "padding_ratio": 0.0,
                 "min_crop_size_px": 1,
@@ -123,8 +123,10 @@ def test_rtmdet_detection_runtime_reprojects_crop_and_feeds_vision_object_crop(
         detected_packets = await detect.process_packet(packet, _Context())
         assert len(detected_packets) == 1
         detected = detected_packets[0]
-        assert detected.payload.get("object_category_label") == "person"
-        assert detected.payload.get("object_bbox01") == pytest.approx([0.35, 0.3, 0.65, 0.7], abs=1e-6)
+        detections = detected.payload.get("vision", {}).get("detections")
+        assert isinstance(detections, list)
+        assert detections[0]["label"] == "person"
+        assert detections[0]["bbox01"] == pytest.approx([0.35, 0.3, 0.65, 0.7], abs=1e-6)
 
         cropped_packets = await crop.process_packet(detected, _Context())
         assert len(cropped_packets) == 1
@@ -180,7 +182,6 @@ def test_rtmdet_detection_runtime_reprojects_warped_stream_frame(
         detected_packets = await detect.process_packet(packet, _Context())
         assert len(detected_packets) == 1
         detected = detected_packets[0]
-        assert detected.payload.get("object_bbox01") == pytest.approx([0.3, 0.3, 0.5, 0.5], abs=0.01)
         detections = detected.payload.get("vision", {}).get("detections")
         assert isinstance(detections, list)
         assert detections[0]["bbox01"] == pytest.approx([0.3, 0.3, 0.5, 0.5], abs=0.01)
@@ -229,8 +230,8 @@ def test_rtmdet_detection_output_feeds_vision_track(
         assert tracked.payload.get("subject", {}).get("id") == tracked.payload.get("event_id")
         assert tracked.payload.get("vision", {}).get("task") == "tracking"
         assert tracked.payload.get("vision", {}).get("tracks")
-        assert tracked.payload.get("object_bbox01") == pytest.approx(
-            detected.payload.get("object_bbox01"),
+        assert tracked.payload.get("subject", {}).get("bbox01") == pytest.approx(
+            detected.payload.get("vision", {}).get("detections", [])[0].get("bbox01"),
             abs=1e-6,
         )
         first_tracking_id = str(tracked.payload["vision"]["tracks"][0]["tracking_id"])

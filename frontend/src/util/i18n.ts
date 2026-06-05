@@ -959,15 +959,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.category_gate.categories": "Categories",
     "core.ui.pipelines.panels.category_gate.categories_placeholder": "All categories",
     "core.ui.pipelines.panels.category_gate.hint":
-      "Matches payload.object_category_label (set by vision operators). Empty selection means “all categories”.",
+      "Matches payload.subject.category for events or payload.vision.* annotations for frames. Empty selection means “all categories”.",
 
     "core.ui.pipelines.panels.filter.preset": "Preset",
     "core.ui.pipelines.panels.filter.preset.custom.label": "Custom expression",
     "core.ui.pipelines.panels.filter.preset.custom.hint": "Write a safe expression referencing payload/metadata.",
     "core.ui.pipelines.panels.filter.preset.object_category_in.label": "Object category in list",
-    "core.ui.pipelines.panels.filter.preset.object_category_in.hint": "Matches payload.object_category_label (vision).",
+    "core.ui.pipelines.panels.filter.preset.object_category_in.hint": "Matches canonical subject or vision annotation category.",
     "core.ui.pipelines.panels.filter.preset.object_category_not_in.label": "Object category not in list",
-    "core.ui.pipelines.panels.filter.preset.object_category_not_in.hint": "Excludes payload.object_category_label (vision).",
+    "core.ui.pipelines.panels.filter.preset.object_category_not_in.hint": "Excludes canonical subject or vision annotation category.",
     "core.ui.pipelines.panels.filter.preset.lifecycle_is.label": "Lifecycle is",
     "core.ui.pipelines.panels.filter.preset.lifecycle_is.hint": "Filters by packet lifecycle (open/update/close).",
     "core.ui.pipelines.panels.filter.preset.has_artifact.label": "Has artifact",
@@ -1048,8 +1048,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.store_images.jpeg_quality": "Quality",
     "core.ui.pipelines.panels.store_images.drop_data_after_store": "Drop pixel data after store",
     "core.ui.pipelines.panels.store_images.drop_data_after_store_hint": "Recommended. Keeps memory stable under load.",
-    "core.ui.pipelines.panels.store_images.keep_data": "Keep data in memory",
-    "core.ui.pipelines.panels.store_images.keep_data_hint": "If disabled, pixel data is dropped after storing to keep memory stable.",
     "core.ui.pipelines.panels.store_images.layer_stats": "Layer usage",
     "core.ui.pipelines.panels.store_images.used": "Used",
     "core.ui.pipelines.panels.store_images.files": "Files",
@@ -1074,7 +1072,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.storage.avg": "avg",
 
     "core.ui.pipelines.panels.notify.title_template": "Title template",
-    "core.ui.pipelines.panels.notify.title_placeholder": "{{object_category_label}} detected",
+    "core.ui.pipelines.panels.notify.title_placeholder": "{{subject.category}} detected",
     "core.ui.pipelines.panels.notify.template_hint_prefix": "Use templates like",
     "core.ui.pipelines.panels.notify.description_template": "Description template",
     "core.ui.pipelines.panels.notify.description_placeholder": "Optional",
@@ -1832,10 +1830,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.world_match_distance_meters": "World match distance",
     "core.ui.pipelines.panels.yolo.world_match_distance_hint":
       "Maximum expected real-world distance, in meters, for matching compatible object observations.",
-    "core.ui.pipelines.panels.yolo.appearance_mode": "Appearance",
-    "core.ui.pipelines.panels.yolo.appearance_mode.off": "Off",
-    "core.ui.pipelines.panels.yolo.appearance_mode_hint":
-      "Reserved for future ReID/face/pose enrichment. It stays off in this phase.",
 
     "core.ui.processing_servers.title": "Processing servers",
     "core.ui.processing_servers.add_server": "Add server",
@@ -3020,15 +3014,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.category_gate.categories": "Categorias",
     "core.ui.pipelines.panels.category_gate.categories_placeholder": "Todas as categorias",
     "core.ui.pipelines.panels.category_gate.hint":
-      "Compara com payload.object_category_label (definido pelos operadores de visão). Seleção vazia significa “todas as categorias”.",
+      "Compara com payload.subject.category em eventos ou payload.vision.* em frames. Seleção vazia significa “todas as categorias”.",
 
     "core.ui.pipelines.panels.filter.preset": "Preset",
     "core.ui.pipelines.panels.filter.preset.custom.label": "Expressão customizada",
     "core.ui.pipelines.panels.filter.preset.custom.hint": "Escreva uma expressão segura referenciando payload/metadata.",
     "core.ui.pipelines.panels.filter.preset.object_category_in.label": "Categoria do objeto na lista",
-    "core.ui.pipelines.panels.filter.preset.object_category_in.hint": "Compara com payload.object_category_label (vision).",
+    "core.ui.pipelines.panels.filter.preset.object_category_in.hint": "Compara com a categoria canônica do subject ou da anotação de visão.",
     "core.ui.pipelines.panels.filter.preset.object_category_not_in.label": "Categoria do objeto fora da lista",
-    "core.ui.pipelines.panels.filter.preset.object_category_not_in.hint": "Exclui payload.object_category_label (vision).",
+    "core.ui.pipelines.panels.filter.preset.object_category_not_in.hint": "Exclui a categoria canônica do subject ou da anotação de visão.",
     "core.ui.pipelines.panels.filter.preset.lifecycle_is.label": "Lifecycle é",
     "core.ui.pipelines.panels.filter.preset.lifecycle_is.hint": "Filtra pelo lifecycle do pacote (open/update/close).",
     "core.ui.pipelines.panels.filter.preset.has_artifact.label": "Possui artefato",
@@ -3109,8 +3103,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.store_images.jpeg_quality": "Qualidade",
     "core.ui.pipelines.panels.store_images.drop_data_after_store": "Descartar pixels após salvar",
     "core.ui.pipelines.panels.store_images.drop_data_after_store_hint": "Recomendado. Mantém a memória estável sob carga.",
-    "core.ui.pipelines.panels.store_images.keep_data": "Manter dados na memória",
-    "core.ui.pipelines.panels.store_images.keep_data_hint": "Se desativado, os pixels são descartados após salvar para manter a memória estável.",
     "core.ui.pipelines.panels.store_images.layer_stats": "Uso da camada",
     "core.ui.pipelines.panels.store_images.used": "Uso",
     "core.ui.pipelines.panels.store_images.files": "Arquivos",
@@ -3135,7 +3127,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.storage.avg": "média",
 
     "core.ui.pipelines.panels.notify.title_template": "Template do título",
-    "core.ui.pipelines.panels.notify.title_placeholder": "{{object_category_label}} detectado",
+    "core.ui.pipelines.panels.notify.title_placeholder": "{{subject.category}} detectado",
     "core.ui.pipelines.panels.notify.template_hint_prefix": "Use templates como",
     "core.ui.pipelines.panels.notify.description_template": "Template da descrição",
     "core.ui.pipelines.panels.notify.description_placeholder": "Opcional",
@@ -3902,10 +3894,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.world_match_distance_meters": "Distância de match no ambiente",
     "core.ui.pipelines.panels.yolo.world_match_distance_hint":
       "Distância máxima esperada no mundo real, em metros, para associar observações compatíveis do objeto.",
-    "core.ui.pipelines.panels.yolo.appearance_mode": "Aparência",
-    "core.ui.pipelines.panels.yolo.appearance_mode.off": "Desligado",
-    "core.ui.pipelines.panels.yolo.appearance_mode_hint":
-      "Reservado para futuro enriquecimento com ReID/rosto/pose. Fica desligado nesta fase.",
 
     "core.ui.processing_servers.title": "Servidores de processamento",
     "core.ui.processing_servers.add_server": "Adicionar servidor",

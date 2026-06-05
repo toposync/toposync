@@ -852,7 +852,7 @@ class CameraMappingConfig(BaseModel):
     composition_id: str = ""
     calibrated_views: list[CameraMappingCalibratedView] = Field(default_factory=list)
     control_point_sets: list[CameraMappingControlPointSet] = Field(default_factory=list)
-    bbox_field: str = "object_bbox01"
+    bbox_field: str = "subject.bbox01"
     image_uv_field: str = "image_uv"
     world_field: str = "world"
     pose_state_field: str = "pan_tilt_zoom_state"
@@ -926,18 +926,6 @@ class VelocityEstimationConfig(BaseModel):
     stopped_speed_threshold: float = Field(default=0.04, ge=0.0, le=1000.0)
     min_elapsed_seconds: float = Field(default=0.001, ge=0.0001, le=10.0)
     filter_mode: str = "annotate"
-
-    @model_validator(mode="before")
-    @classmethod
-    def _drop_legacy_fields(cls, values: Any) -> Any:
-        # Aceita graphs antigos sem expor esses campos no schema atual
-        if isinstance(values, dict):
-            values = dict(values)
-            values.pop("key_field", None)
-            values.pop("world_field", None)
-            values.pop("time_field", None)
-            values.pop("output_field", None)
-        return values
 
     @field_validator("filter_mode")
     @classmethod
@@ -3166,54 +3154,30 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         confidence: float,
     ) -> None:
         vision_raw = payload.get("vision")
-        if isinstance(vision_raw, dict) and isinstance(vision_raw.get("detections"), list):
+        if isinstance(vision_raw, dict):
             vision = dict(vision_raw)
-            detections: list[Any] = []
-            for raw_detection in vision_raw.get("detections") or []:
-                if not isinstance(raw_detection, dict):
-                    detections.append(raw_detection)
+            for key in ("tracks", "detections", "segmentations"):
+                raw_items = vision_raw.get(key)
+                if not isinstance(raw_items, list):
                     continue
-                detection = dict(raw_detection)
-                point = _image_point_from_bbox01(detection.get("bbox01"))
-                if point is not None:
-                    world_anchor = self._world_for_point(
-                        mapper,
-                        point=point,
-                        confidence=confidence,
-                    )
-                    if world_anchor is not None:
-                        detection["world_anchor"] = dict(world_anchor)
-                detections.append(detection)
-            vision["detections"] = detections
+                annotations: list[Any] = []
+                for raw_item in raw_items:
+                    if not isinstance(raw_item, dict):
+                        annotations.append(raw_item)
+                        continue
+                    annotation = dict(raw_item)
+                    point = _image_point_from_bbox01(annotation.get("bbox01"))
+                    if point is not None:
+                        world_anchor = self._world_for_point(
+                            mapper,
+                            point=point,
+                            confidence=confidence,
+                        )
+                        if world_anchor is not None:
+                            annotation["world_anchor"] = dict(world_anchor)
+                    annotations.append(annotation)
+                vision[key] = annotations
             payload["vision"] = vision
-
-        for key in ("detected_object",):
-            raw_object = payload.get(key)
-            if not isinstance(raw_object, dict):
-                continue
-            item = dict(raw_object)
-            point = _image_point_from_bbox01(item.get("bbox01"))
-            if point is not None:
-                world_anchor = self._world_for_point(mapper, point=point, confidence=confidence)
-                if world_anchor is not None:
-                    item["world_anchor"] = dict(world_anchor)
-            payload[key] = item
-
-        raw_objects = payload.get("detected_objects")
-        if isinstance(raw_objects, list):
-            objects: list[Any] = []
-            for raw_object in raw_objects:
-                if not isinstance(raw_object, dict):
-                    objects.append(raw_object)
-                    continue
-                item = dict(raw_object)
-                point = _image_point_from_bbox01(item.get("bbox01"))
-                if point is not None:
-                    world_anchor = self._world_for_point(mapper, point=point, confidence=confidence)
-                    if world_anchor is not None:
-                        item["world_anchor"] = dict(world_anchor)
-                objects.append(item)
-            payload["detected_objects"] = objects
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         point = _resolve_image_point(
@@ -3223,10 +3187,11 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         )
         has_detection_points = False
         vision = packet.payload.get("vision")
-        if isinstance(vision, dict) and isinstance(vision.get("detections"), list):
+        if isinstance(vision, dict):
             has_detection_points = any(
                 isinstance(item, dict) and _image_point_from_bbox01(item.get("bbox01")) is not None
-                for item in vision.get("detections") or []
+                for key in ("tracks", "detections", "segmentations")
+                for item in (vision.get(key) or [])
             )
         if point is None and not has_detection_points:
             return [packet]
@@ -4010,7 +3975,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["camera", "mapping", "metadata"],
         defaults=CameraMappingConfig().model_dump(),
-        requires_payload_keys=["camera_id", "object_bbox01"],
+        requires_payload_keys=["camera_id"],
         produces_payload_keys=["world", "mapping"],
         expression_hints=_world_mapping_expression_hints(),
         share_strategy="by_signature",
@@ -4076,25 +4041,54 @@ def _resolve_input_image(
     return artifact_name, data
 
 
+def _deep_get(container: Any, dotted_key: str) -> Any:
+    current = container
+    for part in str(dotted_key or "").split("."):
+        key = part.strip()
+        if not key:
+            return None
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
 def _read_bbox01(packet: Packet, *, bbox_field: str) -> tuple[float, float, float, float] | None:
-    raw = packet.payload.get(bbox_field)
-    if isinstance(raw, (list, tuple)) and len(raw) >= 4:
-        try:
-            values = [float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3])]
-        except Exception:
-            values = []
-        if values:
-            return _normalize_bbox01((values[0], values[1], values[2], values[3]))
-    detected = packet.payload.get("detected_object")
-    if isinstance(detected, dict):
-        bbox = detected.get("bbox01")
-        if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+    def normalize(raw: Any) -> tuple[float, float, float, float] | None:
+        if isinstance(raw, (list, tuple)) and len(raw) >= 4:
             try:
-                values = [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])]
+                values = [float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3])]
             except Exception:
                 values = []
             if values:
                 return _normalize_bbox01((values[0], values[1], values[2], values[3]))
+        return None
+
+    field = str(bbox_field or "").strip()
+    if field:
+        path = field[len("payload.") :] if field.startswith("payload.") else field
+        bbox = normalize(_deep_get(packet.payload, path))
+        if bbox is not None:
+            return bbox
+
+    subject = packet.payload.get("subject")
+    if isinstance(subject, dict):
+        bbox = normalize(subject.get("bbox01"))
+        if bbox is not None:
+            return bbox
+
+    vision = packet.payload.get("vision")
+    if isinstance(vision, dict):
+        for key in ("tracks", "detections", "segmentations"):
+            raw_items = vision.get(key)
+            if not isinstance(raw_items, list):
+                continue
+            for raw_item in raw_items:
+                if not isinstance(raw_item, dict):
+                    continue
+                bbox = normalize(raw_item.get("bbox01"))
+                if bbox is not None:
+                    return bbox
     return None
 
 

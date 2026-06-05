@@ -985,8 +985,7 @@ export function StoreImagesConfigCard({
   );
 
   const dropDataRaw = (config as any).drop_data_after_store;
-  const legacyKeepData = Boolean((config as any).keep_data ?? false);
-  const dropDataAfterStore = dropDataRaw === undefined || dropDataRaw === null ? !legacyKeepData : Boolean(dropDataRaw);
+  const dropDataAfterStore = dropDataRaw === undefined || dropDataRaw === null ? true : Boolean(dropDataRaw);
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -1063,7 +1062,6 @@ export function StoreImagesConfigCard({
             onUpdateConfig((prev) => {
               const next = { ...prev };
               (next as any).drop_data_after_store = event.target.checked;
-              delete (next as any).keep_data;
               return next;
             })
           }
@@ -1439,7 +1437,7 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
           className="pipelinesInput"
           type="text"
           value={title}
-          placeholder={t("core.ui.pipelines.panels.notify.title_placeholder", { object_category_label: "{{object_category_label}}" })}
+          placeholder={t("core.ui.pipelines.panels.notify.title_placeholder", { subject_category: "{{subject.category}}" })}
           onChange={(event) => {
             const nextValue = String(event.target.value ?? "");
             onUpdateConfig((prev) => ({ ...prev, title: nextValue }));
@@ -1447,7 +1445,7 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
         />
       </label>
       <div className="pipelinesStepHint">
-        {t("core.ui.pipelines.panels.notify.template_hint_prefix")} <code>{"{{object_category_label}}"}</code>, <code>{"{{area_label}}"}</code>,{" "}
+        {t("core.ui.pipelines.panels.notify.template_hint_prefix")} <code>{"{{subject.category}}"}</code>, <code>{"{{area_label}}"}</code>,{" "}
         <code>{"{{pose_label}}"}</code>.
       </div>
 
@@ -1535,7 +1533,7 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
           </label>
           <div className="pipelinesStepHint">
             {t("core.ui.pipelines.panels.notify.dedupe_key_hint_prefix")} <code>{"{{subject.id}}"}</code>, <code>{"{{event_code}}"}</code>,{" "}
-            <code>{"{{camera_id}}"}</code>, <code>{"{{object_category_label}}"}</code>.
+            <code>{"{{camera_id}}"}</code>, <code>{"{{subject.category}}"}</code>.
           </div>
         </>
       ) : null}
@@ -2144,7 +2142,7 @@ export function HomeAssistantNotifyConfigCard({ config, showAdvanced, onUpdateCo
       </label>
       <div className="pipelinesStepHint">
         {t("core.ui.pipelines.panels.home_assistant_notify.template_hint_prefix")} <code>{"{{camera_name}}"}</code>,{" "}
-        <code>{"{{object_category_label}}"}</code>, <code>{"{{area_label}}"}</code>, <code>{"{{payload.some_field}}"}</code>.
+        <code>{"{{subject.category}}"}</code>, <code>{"{{area_label}}"}</code>, <code>{"{{payload.some_field}}"}</code>.
       </div>
 
       {showAdvanced ? (

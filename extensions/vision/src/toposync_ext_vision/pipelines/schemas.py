@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 VisionDetectEmitMode = Literal["annotate", "events", "filter"]
 VisionTrackWorldAnchorMode = Literal["auto", "always", "never"]
-VisionTrackAppearanceMode = Literal["off"]
 
 
 class VisionDetectConfig(BaseModel):
@@ -120,7 +119,6 @@ class VisionTrackConfig(BaseModel):
     category_intervals_seconds: dict[str, float] = Field(default_factory=dict)
     use_world_anchor: VisionTrackWorldAnchorMode = "auto"
     world_match_distance_meters: float = Field(default=3.0, ge=0.0, le=1000.0)
-    appearance_mode: VisionTrackAppearanceMode = "off"
     same_event_iou_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
     same_event_center_distance: float = Field(
         default=0.18,
@@ -128,7 +126,6 @@ class VisionTrackConfig(BaseModel):
         le=2.0,
         description="Normalized image-plane center distance allowed when stitching tracklets.",
     )
-    same_event_world_radius_meters: float = Field(default=3.0, ge=0.0, le=100.0)
     same_event_requires_same_class: bool = True
     event_id_prefix: str = "evt"
 
@@ -143,8 +140,6 @@ class VisionTrackConfig(BaseModel):
     @field_validator("use_world_anchor", mode="before")
     @classmethod
     def _normalize_world_anchor_mode(cls, value: Any) -> str:
-        if isinstance(value, bool):
-            return "auto" if value else "never"
         mode = str(value or "").strip().lower()
         if not mode:
             return "auto"
@@ -152,23 +147,12 @@ class VisionTrackConfig(BaseModel):
             return mode
         raise ValueError("use_world_anchor must be one of: auto, always, never")
 
-    @field_validator("appearance_mode", mode="before")
-    @classmethod
-    def _normalize_appearance_mode(cls, value: Any) -> str:
-        mode = str(value or "").strip().lower()
-        if not mode:
-            return "off"
-        if mode == "off":
-            return mode
-        raise ValueError("appearance_mode must be off")
-
     @model_validator(mode="after")
-    def _normalize_tracking_thresholds(self) -> "VisionTrackConfig":
+    def _validate_tracking_thresholds(self) -> "VisionTrackConfig":
         if float(self.continue_confidence_threshold) > float(self.open_confidence_threshold):
             raise ValueError("continue_confidence_threshold must be <= open_confidence_threshold")
         if float(self.stitch_gap_seconds) < float(self.close_after_seconds):
-            self.stitch_gap_seconds = float(self.close_after_seconds)
-        self.same_event_world_radius_meters = float(self.world_match_distance_meters)
+            raise ValueError("stitch_gap_seconds must be >= close_after_seconds")
         return self
 
     @field_validator("event_id_prefix")

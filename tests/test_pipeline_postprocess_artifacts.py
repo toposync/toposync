@@ -119,24 +119,6 @@ def test_camera_mapping_annotates_detection_world_anchors_before_tracking() -> N
             stream_id="camera:test",
             payload={
                 "camera_id": "camera-main",
-                "object_bbox01": [0.10, 0.10, 0.30, 0.50],
-                "detected_object": {
-                    "label": "person",
-                    "score": 0.9,
-                    "bbox01": [0.10, 0.10, 0.30, 0.50],
-                },
-                "detected_objects": [
-                    {
-                        "label": "person",
-                        "score": 0.9,
-                        "bbox01": [0.10, 0.10, 0.30, 0.50],
-                    },
-                    {
-                        "label": "person",
-                        "score": 0.8,
-                        "bbox01": [0.60, 0.60, 0.80, 0.80],
-                    },
-                ],
                 "vision": {
                     "task": "detection",
                     "detections": [
@@ -169,7 +151,6 @@ def test_camera_mapping_annotates_detection_world_anchors_before_tracking() -> N
         assert detections[0]["world_anchor"]["z"] == pytest.approx(5.0, abs=1e-6)
         assert detections[1]["world_anchor"]["x"] == pytest.approx(7.0, abs=1e-6)
         assert detections[1]["world_anchor"]["z"] == pytest.approx(8.0, abs=1e-6)
-        assert payload["detected_objects"][1]["world_anchor"]["x"] == pytest.approx(7.0, abs=1e-6)
 
     asyncio.run(scenario())
 
@@ -211,7 +192,7 @@ def test_camera_mapping_runtime_applies_calibrated_view_refinement_to_world_payl
             stream_id="camera:test",
             payload={
                 "camera_id": "camera-main",
-                "object_bbox01": [0.40, 0.10, 0.60, 0.50],
+                "subject": {"bbox01": [0.40, 0.10, 0.60, 0.50]},
             },
         )
 
@@ -273,7 +254,7 @@ def test_object_crop_reprojects_bbox_for_cropped_stream_frame() -> None:
                     "frame_ts": 1.0,
                     "tracking_id": "trk-1",
                     # Use exact binary fractions to avoid borderline rounding in int/ceil conversions.
-                    "object_bbox01": [0.3125, 0.3125, 0.50, 0.50],
+                    "subject": {"bbox01": [0.3125, 0.3125, 0.50, 0.50]},
                     "frame_crop": {
                         "bbox01": [0.25, 0.25, 0.75, 0.75],
                         "output_artifact_name": "main",
@@ -296,7 +277,7 @@ def test_object_crop_reprojects_bbox_for_cropped_stream_frame() -> None:
                     "operator": "vision.crop_objects",
                     "config": {
                         "output_artifact_name": "main",
-                        "bbox_field": "object_bbox01",
+                        "bbox_field": "subject.bbox01",
                         "padding_ratio": 0.0,
                         "min_crop_size_px": 1,
                     },
@@ -359,7 +340,7 @@ def test_object_crop_reprojects_bbox_for_perspective_warped_stream_frame() -> No
                 "payload": {
                     "frame_ts": 1.0,
                     "tracking_id": "trk-1",
-                    "object_bbox01": [0.30, 0.30, 0.50, 0.50],
+                    "subject": {"bbox01": [0.30, 0.30, 0.50, 0.50]},
                     "frame_warp": {
                         "kind": "perspective",
                         "source_frame_width": 100,
@@ -387,7 +368,7 @@ def test_object_crop_reprojects_bbox_for_perspective_warped_stream_frame() -> No
                     "operator": "vision.crop_objects",
                     "config": {
                         "output_artifact_name": "main",
-                        "bbox_field": "object_bbox01",
+                        "bbox_field": "subject.bbox01",
                         "padding_ratio": 0.0,
                         "min_crop_size_px": 1,
                     },
@@ -505,7 +486,7 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                     "event_id": "velocity-1",
                     "tracking_id": "velocity-1",
                     "frame_ts": 1.0,
-                    "object_bbox01": [0.48, 0.48, 0.52, 0.52],
+                    "subject": {"bbox01": [0.48, 0.48, 0.52, 0.52]},
                 },
                 "artifacts": _frame_artifacts(frame),
             },
@@ -516,7 +497,7 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                     "event_id": "velocity-1",
                     "tracking_id": "velocity-1",
                     "frame_ts": 2.0,
-                    "object_bbox01": [0.70, 0.48, 0.74, 0.52],
+                    "subject": {"bbox01": [0.70, 0.48, 0.74, 0.52]},
                 },
                 "artifacts": _frame_artifacts(frame),
             },
@@ -527,7 +508,7 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                     "event_id": "velocity-1",
                     "tracking_id": "velocity-1",
                     "frame_ts": 3.0,
-                    "object_bbox01": [0.70, 0.48, 0.74, 0.52],
+                    "subject": {"bbox01": [0.70, 0.48, 0.74, 0.52]},
                 },
                 "artifacts": _frame_artifacts(frame),
             },
@@ -544,7 +525,7 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
                     "config": {
-                        "bbox_field": "object_bbox01",
+                        "bbox_field": "subject.bbox01",
                         "control_point_sets": [
                             {
                                 "id": "main",

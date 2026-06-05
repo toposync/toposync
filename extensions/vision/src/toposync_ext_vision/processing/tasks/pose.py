@@ -212,24 +212,6 @@ class VisionPoseEstimateRuntime(TransformOperatorRuntime):
             item["metadata"] = dict(pose.metadata)
         return item
 
-    def _serialize_compat_pose(
-        self,
-        pose: PoseObject,
-        *,
-        source_stream_id: str,
-    ) -> dict[str, Any]:
-        item = self._serialize_contract_pose(pose)
-        item.update(
-            {
-                "category": pose.label,
-                "confidence": float(pose.score),
-                "tracker_track_id": None,
-                "correlation_id": None,
-                "source_stream_id": source_stream_id,
-            }
-        )
-        return item
-
     def _annotate_packet(
         self,
         packet: Packet,
@@ -238,11 +220,8 @@ class VisionPoseEstimateRuntime(TransformOperatorRuntime):
         backend: PoseBackend,
         poses: list[PoseObject],
     ) -> Packet:
-        compat_poses = [
-            self._serialize_compat_pose(item, source_stream_id=packet.stream_id) for item in poses
-        ]
-        top_pose = compat_poses[0] if compat_poses else None
-        top_bbox = top_pose.get("bbox01") if isinstance(top_pose, dict) else None
+        pose_payloads = [self._serialize_contract_pose(item) for item in poses]
+        top_pose = pose_payloads[0] if pose_payloads else None
 
         payload = dict(packet.payload)
         vision = dict(payload.get("vision")) if isinstance(payload.get("vision"), dict) else {}
@@ -251,7 +230,7 @@ class VisionPoseEstimateRuntime(TransformOperatorRuntime):
                 "task": "pose",
                 "model_id": manifest.model_id,
                 "runtime": str(getattr(backend, "backend_id", "") or manifest.runtime),
-                "poses": [self._serialize_contract_pose(item) for item in poses],
+                "poses": pose_payloads,
             }
         )
         payload["vision"] = vision
@@ -262,11 +241,6 @@ class VisionPoseEstimateRuntime(TransformOperatorRuntime):
                 "tracker_track_id": None,
                 "correlation_id": None,
                 "source_stream_id": packet.stream_id,
-                "object_category_label": top_pose.get("label") if isinstance(top_pose, dict) else None,
-                "object_confidence": float(top_pose.get("score")) if isinstance(top_pose, dict) else 0.0,
-                "object_bbox01": list(top_bbox) if isinstance(top_bbox, list) else None,
-                "detected_object": top_pose,
-                "detected_objects": compat_poses,
             }
         )
 
@@ -279,8 +253,6 @@ class VisionPoseEstimateRuntime(TransformOperatorRuntime):
                 "tracking_id": payload.get("tracking_id"),
                 "tracker_track_id": None,
                 "correlation_id": None,
-                "object_category": payload.get("object_category_label"),
-                "object_confidence": payload.get("object_confidence"),
                 "vision_task": "pose",
                 "vision_model_id": manifest.model_id,
                 "vision_runtime": vision.get("runtime"),

@@ -116,13 +116,13 @@ def test_core_filter_drops_entire_stream_when_open_filtered() -> None:
                     "config": {
                         "frames": 4,
                         "interval_seconds": 0.0,
-                        "object_category_label": "person",
+                        "subject_category": "person",
                     },
                 },
                 {
                     "id": "filter",
                     "operator": "core.filter",
-                    "config": {"expression": 'payload.object_category_label == "car"'},
+                    "config": {"expression": 'payload.subject.category == "car"'},
                 },
                 {"id": "sink", "operator": "test.collect_sink", "config": {}},
             ],

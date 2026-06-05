@@ -177,7 +177,7 @@ def test_ai_extension_registers_initial_operators() -> None:
     assert condition_filter.definition.defaults["max_concurrency"] == 1
     assert condition_filter.definition.defaults["concurrency_policy"] == "skip"
     assert "main" in smart_crop.definition.requires_artifacts
-    assert "object_bbox01" in smart_crop.definition.produces_payload_keys
+    assert "vision" in smart_crop.definition.produces_payload_keys
     assert "ai" in condition_filter.definition.produces_payload_keys
 
 
@@ -261,9 +261,10 @@ def test_ai_smart_crop_uses_ai_bbox_and_updates_frame() -> None:
     out = asyncio.run(scenario())
     assert "main" in out.artifacts
     assert tuple(getattr(out.artifacts["main"].data, "shape", ())) == (40, 100, 3)
-    assert out.payload["object_bbox01"] == pytest.approx([0.25, 0.2, 0.75, 0.6])
-    assert out.payload["object_confidence"] == pytest.approx(0.82)
-    assert out.payload["object_category_label"] == "sofa"
+    detections = out.payload["vision"]["detections"]
+    assert detections[0]["bbox01"] == pytest.approx([0.25, 0.2, 0.75, 0.6])
+    assert detections[0]["score"] == pytest.approx(0.82)
+    assert detections[0]["label"] == "sofa"
     assert out.payload["frame_crop"]["bbox01"] == pytest.approx([0.25, 0.2, 0.75, 0.6])
     assert out.payload["ai"]["smart_crop"]["status"] == "found"
     assert out.payload["ai"]["smart_crop"]["model"] == "qwen3-vl:30b"
@@ -311,11 +312,12 @@ def test_ai_smart_crop_can_union_multiple_detections() -> None:
 
     out = asyncio.run(scenario())
     assert tuple(getattr(out.artifacts["main"].data, "shape", ())) == (80, 160, 3)
-    assert out.payload["object_bbox01"] == pytest.approx([0.1, 0.1, 0.9, 0.9])
-    assert out.payload["object_confidence"] == pytest.approx(0.82)
+    detections = out.payload["vision"]["detections"]
+    assert detections[0]["bbox01"] == pytest.approx([0.1, 0.1, 0.2, 0.3])
+    assert detections[0]["score"] == pytest.approx(0.82)
     assert out.payload["frame_crop"]["detection_strategy"] == "union"
     assert out.payload["frame_crop"]["selected_detection_index"] is None
-    assert len(out.payload["detected_objects"]) == 2
+    assert len(detections) == 2
     assert len(out.payload["ai"]["smart_crop"]["detections"]) == 2
 
 

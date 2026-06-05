@@ -59,7 +59,7 @@ def test_config_store_write_does_not_clobber_external_pipeline_changes(tmp_path:
     assert names == {"p1", "p2"}
 
 
-def test_config_store_migrates_tracking_product_identity_to_subject(tmp_path: Path) -> None:
+def test_config_store_preserves_tracking_graph_without_identity_migration(tmp_path: Path) -> None:
     store = _create_store(tmp_path)
     store.paths.data_dir.mkdir(parents=True, exist_ok=True)
     store.paths.config_path.write_text(
@@ -129,15 +129,18 @@ def test_config_store_migrates_tracking_product_identity_to_subject(tmp_path: Pa
     edges = graph["edges"]
     nodes_by_id = {node["id"]: node for node in nodes}
 
-    assert "emit_mode" not in nodes_by_id["track"]["config"]
+    assert nodes_by_id["track"]["config"]["emit_mode"] == "events"
     assert not any(node["operator"] == "vision.event_assembler" for node in nodes)
-    assert nodes_by_id["throttle"]["config"]["key_field"] == "payload.subject.id"
-    assert nodes_by_id["notify"]["config"]["dedupe_key_template"] == "{{subject.id}}"
-    assert nodes_by_id["notify"]["config"]["description"] == "Presence in progress - {{camera_name}}"
+    assert nodes_by_id["throttle"]["config"]["key_field"] == "payload.tracking_id"
+    assert nodes_by_id["notify"]["config"]["dedupe_key_template"] == "{{tracking_id}}"
+    assert (
+        nodes_by_id["notify"]["config"]["description"]
+        == "{{payload.category_summary.active_member_count}} active - {{camera_name}}"
+    )
     assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "throttle" for edge in edges)
 
 
-def test_config_store_removes_existing_event_assembler_and_retargets_downstream_edges(
+def test_config_store_preserves_existing_event_assembler_and_edges(
     tmp_path: Path,
 ) -> None:
     store = _create_store(tmp_path)
@@ -185,15 +188,13 @@ def test_config_store_removes_existing_event_assembler_and_retargets_downstream_
     edges = graph["edges"]
     nodes_by_id = {node["id"]: node for node in nodes}
 
-    assert "emit_mode" not in nodes_by_id["track"]["config"]
-    assert nodes_by_id["track"]["config"]["close_after_seconds"] == 5.0
-    assert nodes_by_id["track"]["config"]["stitch_gap_seconds"] == 5.0
-    assert not any(node["operator"] == "vision.event_assembler" for node in nodes)
-    assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "store" for edge in edges)
-    assert not any(edge["from"]["node"] == "event" or edge["to"]["node"] == "event" for edge in edges)
+    assert nodes_by_id["track"]["config"]["emit_mode"] == "events"
+    assert any(node["operator"] == "vision.event_assembler" for node in nodes)
+    assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "event" for edge in edges)
+    assert any(edge["from"]["node"] == "event" and edge["to"]["node"] == "store" for edge in edges)
 
 
-def test_config_store_migrates_velocity_group_events_to_include_stationary_members(
+def test_config_store_does_not_add_group_events_stationary_setting(
     tmp_path: Path,
 ) -> None:
     store = _create_store(tmp_path)
@@ -244,7 +245,7 @@ def test_config_store_migrates_velocity_group_events_to_include_stationary_membe
     nodes = config.pipelines[0].graph["nodes"]
     nodes_by_id = {node["id"]: node for node in nodes}
 
-    assert nodes_by_id["group"]["config"]["include_stationary_members"] is True
+    assert "include_stationary_members" not in nodes_by_id["group"]["config"]
 
 
 def test_config_store_preserves_explicit_group_events_stationary_setting(

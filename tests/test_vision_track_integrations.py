@@ -256,7 +256,7 @@ def test_velocity_estimation_continues_working_after_vision_track_decoupling() -
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
                     "config": {
-                        "bbox_field": "object_bbox01",
+                        "bbox_field": "subject.bbox01",
                         "control_point_sets": [
                             {
                                 "id": "main",
@@ -545,7 +545,7 @@ def test_vision_track_annotate_mode_fills_future_multicamera_fields_from_packet(
                         "tracker_id": "simple_iou_kalman",
                         "default_interval_seconds": 0.0,
                         "close_after_seconds": 0.2,
-                        "use_world_anchor": True,
+                        "use_world_anchor": "auto",
                     },
                 },
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},

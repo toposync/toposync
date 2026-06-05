@@ -168,7 +168,6 @@ export const PIPELINE_OPERATOR_RECIPES = [
           default_interval_seconds: 0.25,
           use_world_anchor: "auto",
           world_match_distance_meters: 3.0,
-          appearance_mode: "off",
         },
       },
     ],
@@ -201,7 +200,6 @@ export const PIPELINE_OPERATOR_RECIPES = [
           default_interval_seconds: 0.25,
           use_world_anchor: "auto",
           world_match_distance_meters: 3.0,
-          appearance_mode: "off",
         },
       },
       {

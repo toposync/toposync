@@ -46,7 +46,7 @@ def build_pipeline() -> Pipeline:
                     "artifact_names": ["frame_original"],
                     "subdir": "pipelines",
                     "format": "webp",
-                    "keep_data": False,
+                    "drop_data_after_store": True,
                 },
             },
             {
@@ -54,7 +54,7 @@ def build_pipeline() -> Pipeline:
                 "operator": "core.notify",
                 "config": {
                     "notification_type": "pipelines.tracking",
-                    "title": "{{object_category_label}} detectada!",
+                    "title": "{{subject.category}} detectada!",
                     "description": "Está em {{area_label}} ({{camera_name}})",
                     "priority": "high",
                     "realtime": True,

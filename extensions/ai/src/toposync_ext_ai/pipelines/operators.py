@@ -24,9 +24,10 @@ def _ai_expression_hints(*, task: str) -> list[Any]:
                 payload_path_hint("payload.ai.smart_crop.bbox01", value_type="array", description="Detected normalized region."),
                 payload_path_hint("payload.ai.smart_crop.detections", value_type="array", description="All AI detections used by the smart crop."),
                 payload_path_hint("payload.ai.smart_crop.selected_detection", value_type="object", description="Detection selected by the crop strategy."),
-                payload_path_hint("payload.object_bbox01", value_type="array", description="Primary AI-detected bbox."),
-                payload_path_hint("payload.object_confidence", value_type="number", description="Primary AI-detected confidence."),
-                payload_path_hint("payload.object_category_label", value_type="string", description="Primary AI target label."),
+                payload_path_hint("payload.vision.detections", value_type="array", description="Canonical AI detections."),
+                payload_path_hint("payload.vision.detections[0].bbox01", value_type="array", description="Primary AI detection bbox."),
+                payload_path_hint("payload.vision.detections[0].score", value_type="number", description="Primary AI detection confidence."),
+                payload_path_hint("payload.vision.detections[0].label", value_type="string", description="Primary AI target label."),
                 payload_path_hint("payload.frame_crop", value_type="object", description="Applied frame crop metadata."),
             ]
         )
@@ -59,7 +60,7 @@ def register_ai_pipeline_operators(registry: OperatorRegistry) -> None:
             operator_id="ai.smart_crop",
             description=(
                 "AI-guided image crop. Locates a region from a text description, updates the main image by default, "
-                "and exposes object_bbox01/object_confidence for downstream camera and filter operators."
+                "and exposes canonical vision detections for downstream camera and filter operators."
             ),
             config_model=AiSmartCropConfig,
             inputs=[{"name": "in", "required": True}],
@@ -71,11 +72,7 @@ def register_ai_pipeline_operators(registry: OperatorRegistry) -> None:
             requires_artifacts=[MAIN_ARTIFACT_NAME],
             produces_payload_keys=[
                 "ai",
-                "object_bbox01",
-                "object_confidence",
-                "object_category_label",
-                "detected_object",
-                "detected_objects",
+                "vision",
                 "frame_crop",
             ],
             produces_artifacts=[MAIN_ARTIFACT_NAME],

@@ -480,7 +480,7 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
                     "operator": "core.notify",
                     "config": {
                         "notification_type": "pipelines.tracking",
-                        "title": "{{object_category_label}}",
+                        "title": "{{subject.category}}",
                         "update_interval_seconds": 0.0,
                     },
                 },
@@ -725,9 +725,9 @@ def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
         assert out.payload.get("subject", {}).get("id") == out.payload.get("event_id")
         assert out.payload.get("subject", {}).get("lifecycle") == "open"
         assert out.payload.get("tracking_id") is None
-        assert out.payload.get("object_category_label") == "person"
-        assert out.payload.get("object_confidence") == 0.9
-        assert out.payload.get("object_bbox01") == pytest.approx([0.1, 0.2, 0.3, 0.4])
+        assert out.payload.get("subject", {}).get("category") == "person"
+        assert out.payload.get("subject", {}).get("confidence") == pytest.approx(0.9)
+        assert out.payload.get("subject", {}).get("bbox01") == pytest.approx([0.1, 0.2, 0.3, 0.4])
         assert out.payload.get("vision", {}).get("task") == "tracking"
         tracks = out.payload.get("vision", {}).get("tracks")
         assert isinstance(tracks, list)

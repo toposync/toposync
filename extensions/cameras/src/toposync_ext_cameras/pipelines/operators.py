@@ -527,15 +527,6 @@ class MotionGateConfig(BaseModel):
     )
     mask_strokes: list[MotionMaskStroke] = Field(default_factory=list)
 
-    @model_validator(mode="before")
-    @classmethod
-    def _drop_legacy_fields(cls, values: Any) -> Any:
-        # Accept legacy graphs without exposing those fields in the current schema.
-        if isinstance(values, dict):
-            values = dict(values)
-            values.pop("key_field", None)
-        return values
-
     @field_validator("mask_mode")
     @classmethod
     def _normalize_mask_mode(cls, value: str) -> str:
@@ -2326,39 +2317,19 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         operator_id: str,
         objects: list[dict[str, Any]],
     ) -> Packet:
-        top_object = objects[0] if objects else None
-        bbox01 = top_object.get("bbox01") if isinstance(top_object, dict) else None
-        bbox01_list: list[float] | None = None
-        if isinstance(bbox01, (list, tuple)) and len(bbox01) >= 4:
-            try:
-                bbox01_list = [
-                    float(bbox01[0]),
-                    float(bbox01[1]),
-                    float(bbox01[2]),
-                    float(bbox01[3]),
-                ]
-            except Exception:
-                bbox01_list = None
-
+        annotation_key = "tracks" if "track" in str(operator_id or "").lower() else "detections"
         payload = dict(packet.payload)
+        vision = dict(payload.get("vision")) if isinstance(payload.get("vision"), dict) else {}
+        vision["task"] = "tracking" if annotation_key == "tracks" else "detection"
+        vision[annotation_key] = [self._canonical_annotation(item) for item in objects]
+        payload["vision"] = vision
         payload.update(
             {
-                # Keep annotate mode "non-eventful" on purpose: avoid accidentally triggering
-                # split-stream + lifecycle semantics in downstream sinks/operators.
                 "event_id": None,
                 "tracking_id": None,
                 "tracker_track_id": None,
                 "correlation_id": None,
                 "source_stream_id": packet.stream_id,
-                "object_category_label": top_object.get("category")
-                if isinstance(top_object, dict)
-                else None,
-                "object_confidence": float(top_object.get("confidence"))
-                if isinstance(top_object, dict)
-                else 0.0,
-                "object_bbox01": bbox01_list,
-                "detected_object": top_object,
-                "detected_objects": objects,
             },
         )
         metadata = dict(packet.metadata)
@@ -2370,28 +2341,65 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
                 "tracking_id": None,
                 "tracker_track_id": None,
                 "correlation_id": None,
-                "object_category": payload.get("object_category_label"),
-                "object_confidence": payload.get("object_confidence"),
             },
         )
         return replace(packet, payload=payload, metadata=metadata)
 
+    @staticmethod
+    def _canonical_annotation(object_data: dict[str, Any]) -> dict[str, Any]:
+        raw_bbox = object_data.get("bbox01")
+        bbox01: list[float] = [0.0, 0.0, 0.0, 0.0]
+        if isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) >= 4:
+            try:
+                bbox01 = [float(raw_bbox[0]), float(raw_bbox[1]), float(raw_bbox[2]), float(raw_bbox[3])]
+            except Exception:
+                bbox01 = [0.0, 0.0, 0.0, 0.0]
+        try:
+            score = float(object_data.get("score", object_data.get("confidence", 0.0)) or 0.0)
+        except Exception:
+            score = 0.0
+        item: dict[str, Any] = {
+            "label": str(object_data.get("label") or object_data.get("category") or "").strip().lower(),
+            "score": max(0.0, min(1.0, score)),
+            "bbox01": bbox01,
+        }
+        for key in ("tracking_id", "tracker_track_id", "correlation_id", "source_stream_id"):
+            value = object_data.get(key)
+            if value is not None:
+                item[key] = value
+        return item
+
     def _copy_payload_with_object(
-        self, packet: Packet, *, object_data: dict[str, Any]
+        self,
+        packet: Packet,
+        *,
+        object_data: dict[str, Any],
+        lifecycle: Lifecycle,
     ) -> dict[str, Any]:
+        annotation = self._canonical_annotation(object_data)
+        subject = {
+            "type": "event",
+            "id": object_data.get("tracking_id") or object_data.get("correlation_id"),
+            "lifecycle": lifecycle.value,
+            "category": annotation.get("label"),
+            "confidence": annotation.get("score"),
+            "bbox01": annotation.get("bbox01"),
+        }
         payload = dict(packet.payload)
+        vision = dict(payload.get("vision")) if isinstance(payload.get("vision"), dict) else {}
+        annotation_key = "tracks" if object_data.get("tracking_id") else "detections"
+        vision["task"] = "tracking" if annotation_key == "tracks" else "detection"
+        vision[annotation_key] = [annotation]
+        payload["vision"] = vision
+        event_id = object_data.get("tracking_id") or object_data.get("correlation_id")
         payload.update(
             {
-                "event_id": object_data.get("tracking_id") or None,
+                "event_id": event_id or None,
+                "subject": subject,
                 "tracking_id": object_data.get("tracking_id"),
                 "tracker_track_id": object_data.get("tracker_track_id"),
                 "correlation_id": object_data.get("correlation_id"),
-                "object_category_label": object_data.get("category"),
-                "object_confidence": object_data.get("confidence"),
-                "object_bbox01": list(object_data.get("bbox01") or (0.0, 0.0, 0.0, 0.0)),
                 "source_stream_id": object_data.get("source_stream_id"),
-                "detected_object": object_data,
-                "detected_objects": [object_data],
             },
         )
         return payload
@@ -2400,16 +2408,15 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         self, packet: Packet, *, object_data: dict[str, Any], operator_id: str
     ) -> dict[str, Any]:
         metadata = dict(packet.metadata)
+        event_id = object_data.get("tracking_id") or object_data.get("correlation_id")
         metadata.update(
             {
                 "operator_id": operator_id,
                 "source_stream_id": object_data.get("source_stream_id"),
-                "event_id": object_data.get("tracking_id") or None,
+                "event_id": event_id or None,
                 "tracking_id": object_data.get("tracking_id"),
                 "tracker_track_id": object_data.get("tracker_track_id"),
                 "correlation_id": object_data.get("correlation_id"),
-                "object_category": object_data.get("category"),
-                "object_confidence": object_data.get("confidence"),
             },
         )
         return metadata
@@ -2804,8 +2811,8 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
                     "tracker_track_id": state.tracker_track_id,
                     "correlation_id": state.correlation_id,
                     "source_stream_id": packet.stream_id,
-                    "category": state.category,
-                    "confidence": float(state.confidence),
+                    "label": state.category,
+                    "score": float(state.confidence),
                     "bbox01": tuple(state.bbox01),
                 },
             )
@@ -2845,11 +2852,15 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
             "tracker_track_id": state.tracker_track_id,
             "correlation_id": state.correlation_id,
             "source_stream_id": source_packet.stream_id,
-            "category": state.category,
-            "confidence": float(state.confidence),
+            "label": state.category,
+            "score": float(state.confidence),
             "bbox01": tuple(state.bbox01),
         }
-        payload = self._copy_payload_with_object(source_packet, object_data=object_data)
+        payload = self._copy_payload_with_object(
+            source_packet,
+            object_data=object_data,
+            lifecycle=lifecycle,
+        )
         metadata = self._copy_metadata_with_object(
             source_packet,
             object_data=object_data,
@@ -2893,8 +2904,8 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
                     "tracker_track_id": None,
                     "correlation_id": None,
                     "source_stream_id": packet.stream_id,
-                    "category": detection.category,
-                    "confidence": float(detection.confidence),
+                    "label": detection.category,
+                    "score": float(detection.confidence),
                     "bbox01": tuple(detection.bbox01),
                 }
                 for detection in detections
@@ -2923,11 +2934,15 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
                 "tracking_id": None,
                 "correlation_id": correlation_id,
                 "source_stream_id": packet.stream_id,
-                "category": detection.category,
-                "confidence": float(detection.confidence),
+                "label": detection.category,
+                "score": float(detection.confidence),
                 "bbox01": tuple(detection.bbox01),
             }
-            payload = self._copy_payload_with_object(packet, object_data=object_data)
+            payload = self._copy_payload_with_object(
+                packet,
+                object_data=object_data,
+                lifecycle=Lifecycle.OPEN,
+            )
             metadata = self._copy_metadata_with_object(
                 packet,
                 object_data=object_data,
@@ -2943,11 +2958,16 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
             )
             outputs.append(open_packet)
             if self._parsed.emit_open_and_close:
+                close_payload = self._copy_payload_with_object(
+                    packet,
+                    object_data=object_data,
+                    lifecycle=Lifecycle.CLOSE,
+                )
                 outputs.append(
                     Packet.create(
                         stream_id=event_stream_id,
                         lifecycle=Lifecycle.CLOSE,
-                        payload=payload,
+                        payload=close_payload,
                         artifacts=packet.artifacts,
                         metadata=metadata,
                         parent_packet_id=open_packet.packet_id,

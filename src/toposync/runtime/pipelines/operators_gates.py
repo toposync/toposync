@@ -72,6 +72,27 @@ def _normalize_weekdays(values: list[str]) -> list[int]:
     return out
 
 
+def _resolve_packet_category(packet: Packet) -> str:
+    subject = packet.payload.get("subject")
+    if isinstance(subject, dict):
+        value = str(subject.get("category") or "").strip().lower()
+        if value:
+            return value
+    vision = packet.payload.get("vision")
+    if isinstance(vision, dict):
+        for key in ("tracks", "detections", "segmentations"):
+            raw_items = vision.get(key)
+            if not isinstance(raw_items, list):
+                continue
+            for raw_item in raw_items:
+                if not isinstance(raw_item, dict):
+                    continue
+                value = str(raw_item.get("label") or "").strip().lower()
+                if value:
+                    return value
+    return ""
+
+
 @dataclass(frozen=True, slots=True)
 class ScheduleDecision:
     is_open: bool
@@ -228,8 +249,7 @@ class CategoryGateRuntime(TransformOperatorRuntime):
     def _matches(self, packet: Packet) -> bool:
         if not self._categories:
             return True
-        raw = packet.payload.get("object_category_label") or packet.payload.get("category") or ""
-        category = str(raw or "").strip().lower()
+        category = _resolve_packet_category(packet)
         if not category:
             return self._mode == "exclude"
         if self._mode == "exclude":
@@ -354,8 +374,7 @@ class CoreFilterRuntime(TransformOperatorRuntime):
         if preset_id in {"object_category_in", "object_category_not_in"}:
             if not self._category_set:
                 return True
-            raw = packet.payload.get("object_category_label") or packet.payload.get("category") or ""
-            category = str(raw or "").strip().lower()
+            category = _resolve_packet_category(packet)
             if not category:
                 return preset_id == "object_category_not_in"
             if preset_id == "object_category_not_in":

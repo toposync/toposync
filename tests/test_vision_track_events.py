@@ -25,9 +25,7 @@ def _track(
         "tracker_track_id": tracklet_id.rsplit(":", 1)[-1],
         "source_stream_id": "camera:test",
         "camera_id": "camera",
-        "category": label,
         "label": label,
-        "confidence": 0.9,
         "score": 0.9,
         "bbox01": list(bbox01),
         "model_id": "fake.detector",
@@ -143,7 +141,7 @@ def test_track_event_prefers_world_anchor_over_bbox_when_available() -> None:
             {
                 "default_interval_seconds": 0.0,
                 "close_after_seconds": 5.0,
-                "same_event_world_radius_meters": 1.0,
+                "world_match_distance_meters": 1.0,
             }
         )
 

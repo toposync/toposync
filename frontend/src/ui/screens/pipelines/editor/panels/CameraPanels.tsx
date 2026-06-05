@@ -2957,7 +2957,7 @@ export function ObjectCropConfigCard({
   const { t } = i18n.useI18n();
   const paddingRatio = Number((config as any).padding_ratio ?? 0.08);
   const minCropSizePx = Number((config as any).min_crop_size_px ?? 8);
-  const bboxField = textConfigValue((config as any).bbox_field, "object_bbox01");
+  const bboxField = textConfigValue((config as any).bbox_field, "subject.bbox01");
   const cropCloseFrames = Boolean((config as any).crop_close_frames ?? false);
 
   const clamp = (value: number, min: number, max: number, fallback: number) => {

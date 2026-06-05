@@ -43,10 +43,11 @@ def test_yolo_detection_operator_annotate_mode_passes_through_frames() -> None:
         assert len(out_packets) == 1
         out = out_packets[0]
         assert out.stream_id == "camera:test"
-        assert out.payload.get("object_category_label") == "person"
-        assert out.payload.get("object_confidence") == 0.9
-        assert out.payload.get("object_bbox01") == [0.1, 0.2, 0.3, 0.4]
-        assert out.payload.get("detected_object", {}).get("category") == "person"
+        detections = out.payload.get("vision", {}).get("detections")
+        assert isinstance(detections, list)
+        assert detections[0]["label"] == "person"
+        assert detections[0]["score"] == 0.9
+        assert detections[0]["bbox01"] == [0.1, 0.2, 0.3, 0.4]
         assert out.payload.get("event_id") is None
         assert out.payload.get("tracking_id") is None
 
@@ -87,11 +88,7 @@ def test_yolo_detection_operator_annotate_mode_emits_even_without_detections() -
         out_packets = await runtime.process_packet(packet, _Context())
         assert len(out_packets) == 1
         out = out_packets[0]
-        assert out.payload.get("object_category_label") is None
-        assert out.payload.get("object_confidence") == 0.0
-        assert out.payload.get("object_bbox01") is None
-        assert out.payload.get("detected_object") is None
-        assert out.payload.get("detected_objects") == []
+        assert out.payload.get("vision", {}).get("detections") == []
 
     asyncio.run(scenario())
 
@@ -132,22 +129,20 @@ def test_yolo_tracking_operator_annotate_mode_passes_through_frames() -> None:
         assert len(out_packets) == 1
         out = out_packets[0]
         assert out.stream_id == "camera:test"
-        assert out.payload.get("object_category_label") == "person"
-        assert out.payload.get("object_confidence") == 0.9
-        assert out.payload.get("object_bbox01") == [0.1, 0.2, 0.3, 0.4]
-        assert out.payload.get("event_id") is None
-        assert out.payload.get("tracking_id") is None
-        assert out.payload.get("detected_object", {}).get("category") == "person"
-
-        objects = out.payload.get("detected_objects")
+        objects = out.payload.get("vision", {}).get("tracks")
         assert isinstance(objects, list)
         assert len(objects) == 1
+        assert objects[0]["label"] == "person"
+        assert objects[0]["score"] == 0.9
+        assert objects[0]["bbox01"] == [0.1, 0.2, 0.3, 0.4]
+        assert out.payload.get("event_id") is None
+        assert out.payload.get("tracking_id") is None
         assert objects[0].get("tracker_track_id") == "1"
 
     asyncio.run(scenario())
 
 
-def test_legacy_yolo_runtime_requires_explicit_backend_factory() -> None:
+def test_yolo_runtime_requires_explicit_backend_factory() -> None:
     async def scenario() -> None:
         from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
         from toposync.runtime.pipelines.runtime import Artifact, Packet

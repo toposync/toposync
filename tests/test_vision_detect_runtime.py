@@ -81,11 +81,8 @@ def test_vision_detect_annotate_mode_writes_contract_payload() -> None:
         detections = out.payload.get("vision", {}).get("detections")
         assert isinstance(detections, list)
         assert detections[0]["label"] == "person"
+        assert detections[0]["score"] == 0.93
         assert detections[0]["bbox01"] == [0.1, 0.2, 0.4, 0.8]
-        assert out.payload.get("object_category_label") == "person"
-        assert out.payload.get("object_confidence") == 0.93
-        assert out.payload.get("object_bbox01") == [0.1, 0.2, 0.4, 0.8]
-        assert out.payload.get("detected_object", {}).get("category") == "person"
         assert out.payload.get("event_id") is None
         assert out.payload.get("tracking_id") is None
 
@@ -128,12 +125,6 @@ def test_vision_detect_respects_frame_crop_geometry() -> None:
         out_packets = await runtime.process_packet(packet, _Context())
         assert len(out_packets) == 1
         out = out_packets[0]
-        assert out.payload.get("object_bbox01") == [
-            0.35,
-            0.30000000000000004,
-            0.65,
-            0.7000000000000001,
-        ]
         detections = out.payload.get("vision", {}).get("detections")
         assert isinstance(detections, list)
         assert detections[0]["bbox01"] == [0.35, 0.30000000000000004, 0.65, 0.7000000000000001]
@@ -182,10 +173,10 @@ def test_vision_detect_events_mode_emits_open_close_per_detection() -> None:
         assert opened.payload.get("correlation_id")
         assert opened.payload.get("correlation_id") == closed.payload.get("correlation_id")
         assert opened.payload.get("tracking_id") is None
-        assert opened.payload.get("object_category_label") == "person"
-        assert opened.payload.get("object_confidence") == 0.88
-        assert opened.payload.get("object_bbox01") == [0.1, 0.2, 0.3, 0.4]
-        assert opened.payload.get("detected_objects") == [opened.payload.get("detected_object")]
+        assert opened.payload.get("subject", {}).get("category") == "person"
+        assert opened.payload.get("subject", {}).get("confidence") == 0.88
+        assert opened.payload.get("subject", {}).get("bbox01") == [0.1, 0.2, 0.3, 0.4]
+        assert closed.payload.get("subject", {}).get("lifecycle") == "close"
 
     asyncio.run(scenario())
 
@@ -237,8 +228,8 @@ def test_vision_detect_events_mode_emits_independent_pairs_for_multiple_detectio
         assert second_open.stream_id == second_close.stream_id
         assert first_open.stream_id != second_open.stream_id
         assert first_open.payload.get("event_id") != second_open.payload.get("event_id")
-        assert first_open.payload.get("object_category_label") == "person"
-        assert second_open.payload.get("object_category_label") == "car"
+        assert first_open.payload.get("subject", {}).get("category") == "person"
+        assert second_open.payload.get("subject", {}).get("category") == "car"
 
     asyncio.run(scenario())
 
@@ -277,9 +268,11 @@ def test_vision_detect_filter_mode_emits_packet_when_detections_exist() -> None:
         assert out.stream_id == "camera:test"
         assert out.lifecycle == Lifecycle.UPDATE
         assert out.payload.get("event_id") is None
-        assert out.payload.get("object_category_label") == "person"
-        assert out.payload.get("object_confidence") == 0.88
-        assert out.payload.get("object_bbox01") == [0.1, 0.2, 0.3, 0.4]
+        detections = out.payload.get("vision", {}).get("detections")
+        assert isinstance(detections, list)
+        assert detections[0]["label"] == "person"
+        assert detections[0]["score"] == 0.88
+        assert detections[0]["bbox01"] == [0.1, 0.2, 0.3, 0.4]
 
     asyncio.run(scenario())
 
@@ -337,7 +330,7 @@ def test_vision_detect_events_mode_closes_core_notification(tmp_path: Path) -> N
         notify = NotifyRuntime(
             {
                 "notification_type": "pipelines.event",
-                "title": "{{object_category_label}} detected",
+                "title": "{{subject.category}} detected",
                 "update_interval_seconds": 0.0,
             },
             deps,
@@ -372,7 +365,7 @@ def test_core_notify_creates_new_record_when_logical_event_reopens(tmp_path: Pat
         notify = NotifyRuntime(
             {
                 "notification_type": "pipelines.tracking",
-                "title": "{{object_category_label}}",
+                "title": "{{subject.category}}",
                 "update_interval_seconds": 0.0,
             },
             deps,
@@ -381,7 +374,11 @@ def test_core_notify_creates_new_record_when_logical_event_reopens(tmp_path: Pat
         for started_ts in (10.0, 30.0):
             common_payload = {
                 "camera_id": "camera-main",
-                "object_category_label": "person",
+                "subject": {
+                    "type": "event",
+                    "id": "track-reused",
+                    "category": "person",
+                },
                 "tracking_id": "track-reused",
                 "event_id": "track-reused",
             }
@@ -426,14 +423,18 @@ def test_core_notify_accumulates_stored_images_for_one_tracking_lifecycle(tmp_pa
         notify = NotifyRuntime(
             {
                 "notification_type": "pipelines.tracking",
-                "title": "{{object_category_label}}",
+                "title": "{{subject.category}}",
                 "update_interval_seconds": 60.0,
             },
             deps,
         )
         common_payload = {
             "camera_id": "camera-main",
-            "object_category_label": "person",
+            "subject": {
+                "type": "event",
+                "id": "track-1",
+                "category": "person",
+            },
             "tracking_id": "track-1",
             "event_id": "track-1",
         }

@@ -34,7 +34,6 @@ from .pipelines.operators import register_camera_pipeline_operators
 from .processing.mapping import ControlPointMapper
 from .pipelines.postprocess import (  # noqa: PLC2701
     _parse_calibrated_views_as_control_point_sets,
-    _parse_control_point_sets,
     _parse_mapping_control_point_sets_from_props,
 )
 from .source_health import get_global_source_health_store
@@ -258,47 +257,11 @@ class OnvifDiscoverResponse(BaseModel):
     devices: list[OnvifDiscoveredDeviceInfo] = Field(default_factory=list)
 
 
-class ControlPointMapImage(BaseModel):
-    x: float = Field(ge=0.0, le=1.0)
-    y: float = Field(ge=0.0, le=1.0)
-
-
-class ControlPointMapWorld(BaseModel):
-    x: float
-    z: float
-
-
-class ControlPointMapPoint(BaseModel):
-    id: str | None = None
-    image: ControlPointMapImage
-    world: ControlPointMapWorld
-
-
-class ControlPointMapPoseReference(BaseModel):
-    pan: float | None = None
-    tilt: float | None = None
-    zoom: float | None = None
-    preset_token: str | None = None
-    preset_name: str | None = None
-
-
-class ControlPointMapSet(BaseModel):
-    id: str
-    label: str = ""
-    pose_reference: ControlPointMapPoseReference | None = None
-    control_points: list[ControlPointMapPoint] = Field(default_factory=list)
-
-
 class ControlPointMapQuery(BaseModel):
     kind: Literal["image", "world"]
     x: float
     y: float | None = None
     z: float | None = None
-
-
-class ControlPointMapRequest(BaseModel):
-    control_point_set: ControlPointMapSet
-    query: ControlPointMapQuery
 
 
 class ProjectionMapRequest(BaseModel):
@@ -1766,32 +1729,6 @@ class CamerasExtension(BaseExtension):
             control_point_set = control_point_sets[0] if control_point_sets else None
             return _map_control_point_set(control_point_set, body.query)
 
-        @app.post("/api/cameras/control_points/map")
-        async def map_control_points(body: ControlPointMapRequest) -> dict[str, Any]:
-            control_point_sets = _parse_control_point_sets(
-                [
-                    {
-                        "id": body.control_point_set.id,
-                        "label": body.control_point_set.label,
-                        "pose_reference": (
-                            body.control_point_set.pose_reference.model_dump(mode="json")
-                            if body.control_point_set.pose_reference is not None
-                            else None
-                        ),
-                        "control_points": [
-                            {
-                                "id": point.id,
-                                "image": {"x": float(point.image.x), "y": float(point.image.y)},
-                                "world": {"x": float(point.world.x), "z": float(point.world.z)},
-                            }
-                            for point in body.control_point_set.control_points
-                        ],
-                    }
-                ]
-            )
-            control_point_set = control_point_sets[0] if control_point_sets else None
-            return _map_control_point_set(control_point_set, body.query)
-
         @app.get(
             "/api/cameras/cameras/{camera_id}/ptz/presets", response_model=CameraPtzPresetsResponse
         )
@@ -2375,7 +2312,6 @@ class CamerasExtension(BaseExtension):
                         "default_interval_seconds": 0.25,
                         "use_world_anchor": "auto",
                         "world_match_distance_meters": 3.0,
-                        "appearance_mode": "off",
                     },
                 },
             )
@@ -2402,7 +2338,7 @@ class CamerasExtension(BaseExtension):
                                 else "{{camera_name}}: Person mapped"
                             ),
                             "description": notification_description
-                            or "{{object_category_label}} - {{camera_name}}",
+                            or "{{subject.category}} - {{camera_name}}",
                             "priority": notification_priority,
                             "dedupe_key_template": "{{subject.id}}",
                         },
@@ -2591,7 +2527,7 @@ class CamerasExtension(BaseExtension):
                             "notification_type": "pipelines.tracking",
                             "title": notification_title or "{{camera_name}}: veículo parado",
                             "description": notification_description
-                            or "{{object_category_label}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h",
+                            or "{{subject.category}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h",
                             "priority": notification_priority,
                             "dedupe_key_template": "{{subject.id}}",
                         },

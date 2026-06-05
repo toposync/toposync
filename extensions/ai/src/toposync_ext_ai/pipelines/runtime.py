@@ -334,19 +334,18 @@ class AiSmartCropRuntime(TransformOperatorRuntime):
         detections: list[RegionDetection],
     ) -> dict[str, Any]:
         next_payload = dict(payload)
-        next_payload["object_bbox01"] = list(bbox01)
-        next_payload["object_confidence"] = float(confidence)
-        next_payload["object_category_label"] = label
         detected = {
-            "category": label,
             "label": label,
-            "confidence": float(confidence),
+            "score": float(confidence),
             "bbox01": list(bbox01),
             "source": "ai.smart_crop",
         }
         detection_payloads = self._detections_payload(detections) or [detected]
-        next_payload["detected_object"] = detected
-        next_payload["detected_objects"] = detection_payloads
+        vision = dict(next_payload.get("vision")) if isinstance(next_payload.get("vision"), dict) else {}
+        vision["task"] = "smart_crop"
+        vision["runtime"] = "ai.smart_crop"
+        vision["detections"] = [dict(item) for item in detection_payloads]
+        next_payload["vision"] = vision
         next_payload["frame_crop"] = {
             "bbox01": list(padded_bbox01),
             "bbox01_detected": list(bbox01),
@@ -389,9 +388,8 @@ class AiSmartCropRuntime(TransformOperatorRuntime):
             payloads.append(
                 {
                     "index": index,
-                    "category": label,
                     "label": label,
-                    "confidence": float(detection.confidence),
+                    "score": float(detection.confidence),
                     "bbox01": list(bbox),
                     "reason": detection.reason,
                     "source": "ai.smart_crop",

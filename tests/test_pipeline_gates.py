@@ -91,7 +91,7 @@ def test_category_gate_is_lifecycle_safe() -> None:
                     "config": {
                         "frames": 4,
                         "interval_seconds": 0.0,
-                        "object_category_label": "person",
+                        "subject_category": "person",
                     },
                 },
                 {

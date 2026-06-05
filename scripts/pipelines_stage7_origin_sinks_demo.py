@@ -68,8 +68,13 @@ class SequenceSourceRuntime(SourceOperatorRuntime):
             "camera_id": "camera-main",
             "camera_name": "Front Door",
             "tracking_id": "trk-demo-1",
-            "object_category_label": "person",
-            "object_confidence": float(confidence),
+            "subject": {
+                "type": "event",
+                "id": "trk-demo-1",
+                "category": "person",
+                "confidence": float(confidence),
+                "lifecycle": lifecycle.value,
+            },
             "area_label": area_label,
         }
         artifacts = {
@@ -116,7 +121,7 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
                     "artifact_names": ["frame_original"],
                     "subdir": "pipelines",
                     "format": "webp",
-                    "keep_data": False,
+                    "drop_data_after_store": True,
                 },
             },
             {
@@ -124,7 +129,7 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
                 "operator": "core.notify",
                 "config": {
                     "notification_type": "pipelines.tracking",
-                    "title": "{{object_category_label}} detectada!",
+                    "title": "{{subject.category}} detectada!",
                     "description": "Está em {{area_label}} ({{camera_name}})",
                     "priority": "high",
                     "realtime": True,

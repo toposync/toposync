@@ -163,7 +163,6 @@ class VisionTrackRuntime(TransformOperatorRuntime):
                 continue_confidence_threshold=float(self._parsed.continue_confidence_threshold),
                 use_world_anchor=self._parsed.use_world_anchor,
                 world_match_distance_meters=float(self._parsed.world_match_distance_meters),
-                appearance_mode=self._parsed.appearance_mode,
             )
         if backend is None or not hasattr(backend, "update") or not hasattr(backend, "reset_stream"):
             raise TypeError(
@@ -273,7 +272,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
             item["metadata"] = dict(tracked.metadata)
         return item
 
-    def _serialize_compat_track(
+    def _serialize_tracking_candidate(
         self,
         tracked: TrackedObject,
         *,
@@ -289,8 +288,6 @@ class VisionTrackRuntime(TransformOperatorRuntime):
                 "correlation_id": correlation_id,
                 "source_stream_id": source_stream_id,
                 "camera_id": tracked.camera_id,
-                "category": tracked.label,
-                "confidence": float(tracked.score),
             }
         )
         return item
@@ -318,7 +315,6 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         objects: list[dict[str, Any]],
     ) -> Packet:
         top_object = objects[0] if objects else None
-        top_bbox = top_object.get("bbox01") if isinstance(top_object, dict) else None
         payload = dict(packet.payload)
         payload["vision"] = self._vision_payload(
             packet,
@@ -338,15 +334,6 @@ class VisionTrackRuntime(TransformOperatorRuntime):
                 "camera_id": top_object.get("camera_id")
                 if isinstance(top_object, dict)
                 else self._camera_id_for_packet(packet),
-                "object_category_label": top_object.get("category")
-                if isinstance(top_object, dict)
-                else None,
-                "object_confidence": float(top_object.get("confidence"))
-                if isinstance(top_object, dict)
-                else 0.0,
-                "object_bbox01": list(top_bbox) if isinstance(top_bbox, list) else None,
-                "detected_object": top_object,
-                "detected_objects": objects,
             }
         )
         metadata = dict(packet.metadata)
@@ -362,8 +349,6 @@ class VisionTrackRuntime(TransformOperatorRuntime):
                 "tracking_id": None,
                 "tracker_track_id": None,
                 "correlation_id": None,
-                "object_category": payload.get("object_category_label"),
-                "object_confidence": payload.get("object_confidence"),
                 "vision_task": "tracking",
                 "vision_model_id": payload["vision"].get("model_id", ""),
                 "vision_runtime": payload["vision"].get("runtime"),
@@ -598,7 +583,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
                 state.tracked_object = tracked
 
             objects.append(
-                self._serialize_compat_track(
+                self._serialize_tracking_candidate(
                     tracked,
                     correlation_id=state.correlation_id,
                     source_stream_id=source_stream_id,

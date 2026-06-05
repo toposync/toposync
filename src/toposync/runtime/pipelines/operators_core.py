@@ -678,15 +678,15 @@ class DemoFrameSequenceSourceConfig(BaseModel):
     camera_id: str = "camera-main"
     camera_name: str = "Demo Camera"
     tracking_id: str = "trk-demo-1"
-    object_category_label: str = "person"
-    object_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    subject_category: str = "person"
+    subject_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
     frames: int = Field(default=5, ge=1, le=1000)
     interval_seconds: float = Field(default=0.05, ge=0.0, le=10.0)
     width: int = Field(default=64, ge=8, le=4096)
     height: int = Field(default=64, ge=8, le=4096)
 
     @field_validator(
-        "stream_id", "camera_id", "camera_name", "tracking_id", "object_category_label"
+        "stream_id", "camera_id", "camera_name", "tracking_id", "subject_category"
     )
     @classmethod
     def _trim(cls, value: str) -> str:
@@ -700,8 +700,8 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
         self._camera_id = parsed.camera_id or "camera-main"
         self._camera_name = parsed.camera_name or "Demo Camera"
         self._tracking_id = parsed.tracking_id or "trk-demo-1"
-        self._category = parsed.object_category_label or "person"
-        self._confidence = float(parsed.object_confidence)
+        self._category = parsed.subject_category or "person"
+        self._confidence = float(parsed.subject_confidence)
         self._frames = int(parsed.frames)
         self._interval_s = float(parsed.interval_seconds)
         self._width = int(parsed.width)
@@ -757,8 +757,13 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
             "frame_width": int(self._width),
             "frame_height": int(self._height),
             "tracking_id": self._tracking_id,
-            "object_category_label": self._category,
-            "object_confidence": self._confidence,
+            "subject": {
+                "type": "object",
+                "id": self._tracking_id,
+                "category": self._category,
+                "confidence": self._confidence,
+                "lifecycle": lifecycle.value,
+            },
             "area_label": "demo",
         }
         artifacts = {
@@ -1035,8 +1040,7 @@ def register_core_operators(registry: OperatorRegistry) -> None:
             "frame_width",
             "frame_height",
             "tracking_id",
-            "object_category_label",
-            "object_confidence",
+            "subject",
             "area_label",
         ],
         produces_artifacts=[MAIN_ARTIFACT_NAME],

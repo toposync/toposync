@@ -90,7 +90,7 @@ def test_vision_detect_events_feed_object_crop_without_tracking() -> None:
     asyncio.run(scenario())
 
 
-def test_vision_crop_objects_reads_detected_object_bbox_fallback() -> None:
+def test_vision_crop_objects_reads_vision_detection_bbox_fallback() -> None:
     async def scenario() -> None:
         crop = VisionCropObjectsRuntime(
             {
@@ -107,7 +107,15 @@ def test_vision_crop_objects_reads_detected_object_bbox_fallback() -> None:
                 "event_id": "trk-1",
                 "tracking_id": "trk-1",
                 "correlation_id": "corr-1",
-                "detected_object": {"bbox01": [0.10, 0.20, 0.30, 0.60]},
+                "vision": {
+                    "detections": [
+                        {
+                            "label": "person",
+                            "score": 0.9,
+                            "bbox01": [0.10, 0.20, 0.30, 0.60],
+                        }
+                    ]
+                },
             },
             artifacts={
                 "main": Artifact(

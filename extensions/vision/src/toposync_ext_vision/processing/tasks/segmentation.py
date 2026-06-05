@@ -153,35 +153,20 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
         raw_sources: list[Any] = []
         vision = packet.payload.get("vision")
         if isinstance(vision, dict):
-            for key in ("tracks", "detections"):
+            for key in ("tracks", "detections", "segmentations"):
                 value = vision.get(key)
                 if isinstance(value, list):
                     raw_sources.extend(value)
-        detected_objects = packet.payload.get("detected_objects")
-        if isinstance(detected_objects, list):
-            raw_sources.extend(detected_objects)
-        detected_object = packet.payload.get("detected_object")
-        if isinstance(detected_object, dict):
-            raw_sources.append(detected_object)
-        if not raw_sources and packet.payload.get("object_bbox01") is not None:
-            raw_sources.append(
-                {
-                    "label": packet.payload.get("object_category_label"),
-                    "bbox01": packet.payload.get("object_bbox01"),
-                    "score": packet.payload.get("object_confidence"),
-                    "tracking_id": packet.payload.get("tracking_id"),
-                    "tracker_track_id": packet.payload.get("tracker_track_id"),
-                    "correlation_id": packet.payload.get("correlation_id"),
-                    "source_stream_id": packet.payload.get("source_stream_id"),
-                }
-            )
+        subject = packet.payload.get("subject")
+        if isinstance(subject, dict):
+            raw_sources.append(subject)
 
         hints: list[dict[str, Any]] = []
         seen: set[tuple[str, tuple[float, float, float, float]]] = set()
         for raw in raw_sources:
             if not isinstance(raw, dict):
                 continue
-            raw_bbox = raw.get("bbox01", raw.get("object_bbox01"))
+            raw_bbox = raw.get("bbox01")
             if not isinstance(raw_bbox, (list, tuple)) or len(raw_bbox) < 4:
                 continue
             try:
@@ -190,7 +175,7 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
                 )
             except Exception:
                 continue
-            label = str(raw.get("label", raw.get("category", raw.get("object_category_label"))) or "").strip().lower()
+            label = str(raw.get("label") or raw.get("category") or "").strip().lower()
             dedupe_key = (label, bbox01)
             if dedupe_key in seen:
                 continue
@@ -199,7 +184,7 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
                 {
                     "label": label,
                     "bbox01": bbox01,
-                    "score": float(raw.get("score", raw.get("confidence", raw.get("object_confidence", 0.0))) or 0.0),
+                    "score": float(raw.get("score", raw.get("confidence", 0.0)) or 0.0),
                     "tracking_id": str(raw.get("tracking_id") or packet.payload.get("tracking_id") or "").strip() or None,
                     "tracker_track_id": str(raw.get("tracker_track_id") or packet.payload.get("tracker_track_id") or "").strip()
                     or None,
@@ -380,7 +365,7 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
             item["metadata"] = dict(instance.metadata)
         return item
 
-    def _serialize_compat_instance(
+    def _serialize_instance_with_context(
         self,
         packet: Packet,
         instance: SegmentationInstance,
@@ -390,8 +375,6 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
         item = self._serialize_contract_instance(instance)
         item.update(
             {
-                "category": instance.label,
-                "confidence": float(instance.score),
                 "tracking_id": (hint or {}).get("tracking_id")
                 or str(packet.payload.get("tracking_id") or "").strip()
                 or None,
@@ -439,18 +422,6 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
         vision["segmentations"] = [dict(item) for item in objects]
         payload["vision"] = vision
 
-        if objects:
-            top_object = objects[0]
-            payload.update(
-                {
-                    "object_category_label": top_object.get("category"),
-                    "object_confidence": float(top_object.get("confidence") or 0.0),
-                    "object_bbox01": list(top_object.get("bbox01") or (0.0, 0.0, 0.0, 0.0)),
-                    "detected_object": top_object,
-                    "detected_objects": objects,
-                }
-            )
-
         metadata = dict(packet.metadata)
         metadata.update(
             {
@@ -496,14 +467,14 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
         )
         selected_instances = [instance for instance, _hint in materialized]
         self._record_confidence_telemetry(context=context, instances=selected_instances)
-        compat_objects = [
-            self._serialize_compat_instance(packet_with_masks, instance, hint=hint)
+        segmentation_objects = [
+            self._serialize_instance_with_context(packet_with_masks, instance, hint=hint)
             for instance, hint in materialized
         ]
         out = self._annotate_packet(
             packet_with_masks,
             manifest=manifest,
             backend=backend,
-            objects=compat_objects,
+            objects=segmentation_objects,
         )
         return [out]

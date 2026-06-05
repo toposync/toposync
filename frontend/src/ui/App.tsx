@@ -13,7 +13,6 @@ import type {
   SettingsPanel,
   ThemeDefinition,
   ToposyncHost,
-  Vector3,
   GraphicsQuality,
   ViewSettings,
   WallHeightPreset,
@@ -93,7 +92,6 @@ type Composition = {
   elements: CompositionElement[];
 };
 
-const LEGACY_STORAGE_KEY = "toposync.composition.v1";
 const SAVE_DEBOUNCE_MS = 400;
 const VIEW_SETTINGS_STORAGE_KEY = "toposync.view.v1";
 const RENDER_MODE_STORAGE_KEY = "toposync.render_mode.v1";
@@ -178,10 +176,6 @@ function saveViewSettings(
   }
 }
 
-function asNumber(v: unknown, fallback: number): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
-}
-
 function asString(v: unknown, fallback: string): string {
   return typeof v === "string" ? v : fallback;
 }
@@ -195,15 +189,6 @@ function isCompositionSnapshot(v: unknown): v is Composition {
   if (!v || typeof v !== "object" || Array.isArray(v)) return false;
   const rec = v as Record<string, unknown>;
   return typeof rec.id === "string" && typeof rec.name === "string" && Array.isArray(rec.elements);
-}
-
-function asVector3(v: unknown, fallback: Vector3): Vector3 {
-  const obj = asRecord(v);
-  return {
-    x: asNumber(obj.x, fallback.x),
-    y: asNumber(obj.y, fallback.y),
-    z: asNumber(obj.z, fallback.z),
-  };
 }
 
 function parseIsoMillis(iso: string | undefined): number {
@@ -242,36 +227,6 @@ function isOpenRealtimeNotification(notification: Notification | null | undefine
 
 function defaultComposition(): Composition {
   return { id: "ground", name: "Térreo", elements: [] };
-}
-
-function loadLegacyComposition(): Composition | null {
-  try {
-    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (!raw) return null;
-    const obj = JSON.parse(raw);
-    const rec = asRecord(obj);
-    const elementsRaw = Array.isArray(rec.elements) ? rec.elements : [];
-    const elements: CompositionElement[] = elementsRaw
-      .map((e) => {
-        const el = asRecord(e);
-        return {
-          id: asString(el.id, ""),
-          type: asString(el.type, ""),
-          name: asString(el.name, ""),
-          position: asVector3(el.position, { x: 0, y: 0, z: 0 }),
-          rotation: asVector3(el.rotation, { x: 0, y: 0, z: 0 }),
-          props: asRecord(el.props),
-        } satisfies CompositionElement;
-      })
-      .filter((e) => Boolean(e.id) && Boolean(e.type));
-    return {
-      id: asString(rec.id, "ground"),
-      name: asString(rec.name, "Térreo"),
-      elements,
-    };
-  } catch {
-    return null;
-  }
 }
 
 function extensionIdFromElementType(type: string): string | null {
@@ -638,65 +593,26 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         setCompositions(index.compositions);
         setActiveCompositionId(index.active_composition_id);
 
-        const legacy = loadLegacyComposition();
-        if (fromBackend.elements.length === 0 && legacy && legacy.elements.length > 0) {
-          const saved = await putComposition(legacy);
-          if (cancelled) return;
-          compositionRef.current = saved;
-          setComposition(saved);
-          setActiveCompositionId(saved.id);
-          setCompositions((prev) => {
-            const exists = prev.some((c) => c.id === saved.id);
-            const next = exists ? prev.map((c) => (c.id === saved.id ? { id: saved.id, name: saved.name } : c)) : [...prev, { id: saved.id, name: saved.name }];
-            return next;
-          });
-          setBackendAvailable(true);
-          try {
-            const loaded = await getSettings();
-            if (!cancelled) setSettings(loaded);
-          } catch (err) {
-            console.error("Failed to load settings from backend", err);
-          }
-          try {
-            localStorage.removeItem(LEGACY_STORAGE_KEY);
-          } catch {
-            // ignore
-          }
-        } else {
-          compositionRef.current = fromBackend;
-          setComposition(fromBackend);
-          setActiveCompositionId(fromBackend.id);
-          setCompositions((prev) => {
-            const exists = prev.some((c) => c.id === fromBackend.id);
-            const next = exists
-              ? prev.map((c) => (c.id === fromBackend.id ? { id: fromBackend.id, name: fromBackend.name } : c))
-              : [...prev, { id: fromBackend.id, name: fromBackend.name }];
-            return next;
-          });
-          setBackendAvailable(true);
-          try {
-            const loaded = await getSettings();
-            if (!cancelled) setSettings(loaded);
-          } catch (err) {
-            console.error("Failed to load settings from backend", err);
-          }
-          if (legacy) {
-            try {
-              localStorage.removeItem(LEGACY_STORAGE_KEY);
-            } catch {
-              // ignore
-            }
-          }
+        compositionRef.current = fromBackend;
+        setComposition(fromBackend);
+        setActiveCompositionId(fromBackend.id);
+        setCompositions((prev) => {
+          const exists = prev.some((c) => c.id === fromBackend.id);
+          const next = exists
+            ? prev.map((c) => (c.id === fromBackend.id ? { id: fromBackend.id, name: fromBackend.name } : c))
+            : [...prev, { id: fromBackend.id, name: fromBackend.name }];
+          return next;
+        });
+        setBackendAvailable(true);
+        try {
+          const loaded = await getSettings();
+          if (!cancelled) setSettings(loaded);
+        } catch (err) {
+          console.error("Failed to load settings from backend", err);
         }
       } catch (err) {
         console.error("Failed to load composition from backend", err);
-        const legacy = loadLegacyComposition();
-        if (legacy) {
-          compositionRef.current = legacy;
-          setComposition(legacy);
-        }
-        setCompositions((prev) => (legacy ? [{ id: legacy.id, name: legacy.name }] : prev));
-        setActiveCompositionId(legacy?.id ?? "ground");
+        setActiveCompositionId(compositionRef.current.id || "ground");
         setBackendAvailable(false);
       } finally {
         if (!cancelled) {

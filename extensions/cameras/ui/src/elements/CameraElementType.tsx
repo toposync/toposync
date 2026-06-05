@@ -29,7 +29,6 @@ import {
 } from "../api/camerasApi";
 import { CAMERA_ELEMENT_TYPE_ID, CONTROL_POINT_COLORS } from "../constants";
 import {
-  calibratedViewsFromControlPointSets,
   controlPointSetFromCalibratedView,
   createDefaultCalibratedView,
   createDefaultControlPointSet,
@@ -38,7 +37,6 @@ import {
   duplicateControlPointSetForNewView,
   labelForIndex,
   readCalibratedViews,
-  readControlPointSets,
   readRecord,
   readString,
   summarizeCalibratedViewQuality,
@@ -669,11 +667,9 @@ function CameraEditor({
   const { t } = i18n.useI18n();
   const props = readRecord(element.props);
   const selectedCameraId = readString(props.camera_id).trim();
-  const existingControlPointSets = useMemo(() => readControlPointSets(props.control_point_sets), [props.control_point_sets]);
   const existingCalibratedViews = useMemo(() => {
-    const direct = readCalibratedViews(props.calibrated_views, element.position);
-    return direct.length ? direct : calibratedViewsFromControlPointSets(existingControlPointSets);
-  }, [element.position, existingControlPointSets, props.calibrated_views]);
+    return readCalibratedViews(props.calibrated_views, element.position);
+  }, [element.position, props.calibrated_views]);
   const readySets = useMemo(
     () => existingCalibratedViews.filter((item) => summarizeCalibratedViewQuality(item).status !== "incomplete").length,
     [existingCalibratedViews],

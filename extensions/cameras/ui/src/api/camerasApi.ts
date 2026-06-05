@@ -1,4 +1,5 @@
 import type {
+  CameraCalibratedView,
   CameraControlPointSet,
   CameraContextsResponse,
   CameraPipelinePresetRequest,
@@ -18,7 +19,7 @@ import type {
   RtspProbeResponse,
   StreamPublication,
 } from "../types";
-import { readRecord } from "../parsing";
+import { calibratedViewsFromControlPointSets, readRecord } from "../parsing";
 
 type ControlPointMapQuery = { kind: "image"; x: number; y: number } | { kind: "world"; x: number; z: number };
 type ControlPointMapResponse = {
@@ -291,10 +292,22 @@ export async function mapControlPoint(
   query: ControlPointMapQuery,
   signal?: AbortSignal,
 ): Promise<ControlPointMapResponse> {
-  const response = await fetch("/api/cameras/control_points/map", {
+  const [calibratedView] = calibratedViewsFromControlPointSets([controlPointSet]);
+  if (!calibratedView) {
+    throw new Error("Mapping requires at least four complete calibration points");
+  }
+  return mapCameraProjection(calibratedView, query, signal);
+}
+
+export async function mapCameraProjection(
+  calibratedView: CameraCalibratedView,
+  query: ControlPointMapQuery,
+  signal?: AbortSignal,
+): Promise<ControlPointMapResponse> {
+  const response = await fetch("/api/cameras/projection/map", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ control_point_set: controlPointSet, query }),
+    body: JSON.stringify({ calibrated_view: calibratedView, query }),
     signal,
   });
   if (!response.ok) {

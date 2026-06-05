@@ -115,7 +115,6 @@ class ByteWorldTrackerBackend:
         continue_confidence_threshold: float = 0.25,
         use_world_anchor: str = "auto",
         world_match_distance_meters: float = 3.0,
-        appearance_mode: str = "off",
     ) -> None:
         self._close_after_seconds = max(0.05, float(close_after_seconds))
         self._open_confidence_threshold = clamp01(float(open_confidence_threshold))
@@ -124,9 +123,10 @@ class ByteWorldTrackerBackend:
             clamp01(float(continue_confidence_threshold)),
         )
         mode = str(use_world_anchor or "").strip().lower() or "auto"
-        self._use_world_anchor = mode if mode in {"auto", "always", "never"} else "auto"
+        if mode not in {"auto", "always", "never"}:
+            raise ValueError("use_world_anchor must be one of: auto, always, never")
+        self._use_world_anchor = mode
         self._world_match_distance_meters = max(0.0, float(world_match_distance_meters))
-        self._appearance_mode = str(appearance_mode or "").strip().lower() or "off"
         self._tracks_by_stream: dict[str, dict[str, _ByteWorldTrackState]] = {}
         self._next_track_number_by_stream: dict[str, int] = {}
 
@@ -368,7 +368,6 @@ class ByteWorldTrackerBackend:
             **dict(state.metadata or {}),
             "hits": int(state.hits),
             "confidence_band": state.last_confidence_band,
-            "appearance_mode": self._appearance_mode,
         }
         if state.last_match_cost is not None:
             metadata["match_cost"] = float(state.last_match_cost)

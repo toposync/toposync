@@ -206,28 +206,6 @@ def test_normalize_ignores_legacy_cameras_key() -> None:
     assert [item["id"] for item in normalized["devices"]] == ["kept"]
 
 
-def test_camera_helpers_do_not_fall_back_to_legacy_cameras_when_devices_key_exists() -> None:
-    from toposync.runtime.pipelines.migration_legacy_cameras import extract_legacy_camera_rules
-    from toposync.runtime.pipelines.templates import camera_names_by_id
-
-    extensions = {
-        "com.toposync.cameras": {
-            "devices": [],
-            "cameras": [
-                {
-                    "id": "deleted",
-                    "name": "Deleted legacy camera",
-                    "enabled": True,
-                    "detections": [{"id": "legacy-motion", "trigger": {"kind": "motion"}}],
-                },
-            ],
-        }
-    }
-
-    assert camera_names_by_id(extensions) == {}
-    assert extract_legacy_camera_rules({"extensions": extensions}) == []
-
-
 def test_camera_index_uses_devices_after_deleting_legacy_camera(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -97,10 +97,6 @@ from toposync.runtime.pipelines.distributed.transport import (
     HttpProcessingTransport,
     ProcessingTransportError,
 )
-from toposync.runtime.pipelines.migration_legacy_cameras import (
-    build_pipeline_from_legacy_camera_rule,
-    extract_legacy_camera_rules,
-)
 from toposync.runtime.pipelines.templates import (
     PipelineTemplateError,
     camera_default_source_ids_by_id,
@@ -544,16 +540,6 @@ class FilterExpressionValidateResponse(BaseModel):
 
 class PipelineDuplicateRequest(BaseModel):
     new_name: str = ""
-
-
-class LegacyCamerasMigrationRequest(BaseModel):
-    dry_run: bool = True
-
-
-class LegacyCamerasMigrationResponse(BaseModel):
-    dry_run: bool
-    created: list[str] = Field(default_factory=list)
-    skipped: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PipelineRuntimeStatusResponse(BaseModel):
@@ -3912,61 +3898,6 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Unknown pipeline") from exc
-
-    @app.post(
-        "/api/pipelines/migrate-legacy/cameras", response_model=LegacyCamerasMigrationResponse
-    )
-    async def migrate_legacy_cameras(
-        request: Request, body: LegacyCamerasMigrationRequest
-    ) -> LegacyCamerasMigrationResponse:
-        _require(request, action="core:pipelines:write")
-        config_store: ConfigStore = request.app.state.config_store
-        compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
-
-        settings = await config_store.get_settings()
-        rules = extract_legacy_camera_rules(settings.model_dump(mode="json"))
-        existing = {p.name for p in await config_store.list_pipelines()}
-
-        created: list[str] = []
-        skipped: list[dict[str, Any]] = []
-        for rule in rules:
-            pipeline = build_pipeline_from_legacy_camera_rule(rule, existing_names=existing)
-            if pipeline is None:
-                skipped.append(
-                    {
-                        "camera_id": rule.camera_id,
-                        "rule_id": rule.rule_id,
-                        "trigger_kind": rule.trigger_kind,
-                        "reason": "unsupported_trigger",
-                    },
-                )
-                continue
-            try:
-                compiler.compile_pipeline(pipeline)
-            except GraphCompileError as exc:
-                skipped.append(
-                    {
-                        "camera_id": rule.camera_id,
-                        "rule_id": rule.rule_id,
-                        "trigger_kind": rule.trigger_kind,
-                        "reason": f"compile_error: {exc}",
-                        "pipeline_name": pipeline.name,
-                    },
-                )
-                continue
-
-            created.append(pipeline.name)
-            if body.dry_run:
-                continue
-            try:
-                await config_store.create_pipeline(pipeline)
-            except PipelineAlreadyExistsError:
-                # Name collisions should be rare due to suffixing, but keep it safe.
-                await config_store.replace_pipeline(pipeline.name, pipeline)
-
-        return LegacyCamerasMigrationResponse(
-            dry_run=bool(body.dry_run), created=created, skipped=skipped
-        )
 
     @app.get("/api/composition", response_model=Composition)
     async def get_composition(request: Request) -> Composition:

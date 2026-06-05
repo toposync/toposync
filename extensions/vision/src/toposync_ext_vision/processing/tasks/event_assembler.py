@@ -200,14 +200,10 @@ class TrackEventAssembler:
             if not isinstance(raw, dict):
                 continue
             payload = dict(raw)
-            label = _normalize_label(
-                payload.get("category")
-                or payload.get("label")
-                or payload.get("object_category_label")
-            )
+            label = _normalize_label(payload.get("label"))
             if not label:
                 continue
-            bbox01 = _normalize_bbox(payload.get("bbox01") or payload.get("object_bbox01"))
+            bbox01 = _normalize_bbox(payload.get("bbox01"))
             if bbox01 is None:
                 continue
             tracklet_id = (
@@ -224,7 +220,7 @@ class TrackEventAssembler:
                 or tracklet_id
             )
             try:
-                confidence = float(payload.get("confidence", payload.get("score", 0.0)) or 0.0)
+                confidence = float(payload.get("score", 0.0) or 0.0)
             except Exception:
                 confidence = 0.0
             if not math.isfinite(confidence):
@@ -244,8 +240,6 @@ class TrackEventAssembler:
                     "source_stream_id": track_source_stream_id,
                     "camera_id": camera_id,
                     "label": label,
-                    "category": label,
-                    "confidence": max(0.0, min(1.0, confidence)),
                     "score": max(0.0, min(1.0, confidence)),
                     "bbox01": [float(value) for value in bbox01],
                 }
@@ -317,7 +311,7 @@ class TrackEventAssembler:
 
         if state.last_world_anchor and track.world_anchor:
             distance = _world_distance(state.last_world_anchor, track.world_anchor)
-            radius = float(self._config.same_event_world_radius_meters)
+            radius = float(self._config.world_match_distance_meters)
             if distance is None or radius <= 0.0 or distance > radius:
                 return None
             return 200.0 + (1.0 - (distance / radius))
@@ -425,8 +419,6 @@ class TrackEventAssembler:
                 "source_stream_id": track.source_stream_id,
                 "camera_id": track.camera_id,
                 "label": track.label,
-                "category": track.label,
-                "confidence": float(track.confidence),
                 "score": float(track.confidence),
                 "bbox01": [float(value) for value in track.bbox01],
             }
@@ -465,8 +457,8 @@ class TrackEventAssembler:
             "type": "event",
             "id": state.event_id,
             "lifecycle": lifecycle.value,
-            "category": object_data.get("category") or object_data.get("label"),
-            "confidence": object_data.get("confidence"),
+            "category": object_data.get("label"),
+            "confidence": object_data.get("score"),
             "bbox01": list(object_data.get("bbox01") or []),
         }
         if world_anchor := object_data.get("world_anchor"):
@@ -524,12 +516,7 @@ class TrackEventAssembler:
                 "tracker_track_id": object_data.get("tracker_track_id"),
                 "correlation_id": state.correlation_id,
                 "camera_id": object_data.get("camera_id") or payload.get("camera_id"),
-                "object_category_label": object_data.get("category") or object_data.get("label"),
-                "object_confidence": object_data.get("confidence"),
-                "object_bbox01": list(object_data.get("bbox01") or (0.0, 0.0, 0.0, 0.0)),
                 "source_stream_id": state.source_stream_id,
-                "detected_object": object_data,
-                "detected_objects": [object_data],
             }
         )
         return payload
@@ -560,8 +547,6 @@ class TrackEventAssembler:
                 "tracker_track_id": object_data.get("tracker_track_id"),
                 "correlation_id": state.correlation_id,
                 "camera_id": object_data.get("camera_id"),
-                "object_category": object_data.get("category") or object_data.get("label"),
-                "object_confidence": object_data.get("confidence"),
                 "vision_task": "tracking",
             }
         )

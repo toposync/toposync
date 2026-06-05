@@ -15,7 +15,6 @@ def build_tracker_backend(
     continue_confidence_threshold: float = 0.25,
     use_world_anchor: str = "auto",
     world_match_distance_meters: float = 3.0,
-    appearance_mode: str = "off",
 ):
     normalized = str(tracker_id or "").strip().lower() or "byte_world"
     if normalized == "byte_world":
@@ -25,7 +24,6 @@ def build_tracker_backend(
             continue_confidence_threshold=continue_confidence_threshold,
             use_world_anchor=use_world_anchor,
             world_match_distance_meters=world_match_distance_meters,
-            appearance_mode=appearance_mode,
         )
     if normalized == "simple_iou_kalman":
         return SimpleIouKalmanTrackerBackend(close_after_seconds=close_after_seconds)

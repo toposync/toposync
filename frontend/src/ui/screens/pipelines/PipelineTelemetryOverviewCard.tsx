@@ -250,7 +250,7 @@ function buildMetricTargetLabel(target: { metricId: string; nodeId: string }, du
 }
 
 function markerEventCode(marker: PipelineTelemetryImageMarker): string {
-  return compactTrackedEventCode(String(marker.event_code || marker.event_id || marker.tracking_id || legacyMarkerEventCode(marker) || ""));
+  return compactTrackedEventCode(String(marker.event_code || marker.event_id || marker.tracking_id || ""));
 }
 
 function compactTrackedEventCode(value: string): string {
@@ -304,33 +304,6 @@ function eventColorStyle(assignment: EventColorAssignment): EventColorStyle {
     "--event-color": assignment.color,
     "--event-text-color": assignment.textColor,
   };
-}
-
-function safeStoredFilenameComponent(value: string, maxLength: number): string {
-  const cleaned = String(value || "")
-    .trim()
-    .replace(/[^A-Za-z0-9_.-]+/g, "_")
-    .replace(/^[._-]+|[._-]+$/g, "");
-  return cleaned.slice(0, maxLength);
-}
-
-function legacyMarkerEventCode(marker: PipelineTelemetryImageMarker): string {
-  const relPath = String(marker.rel_path || "").trim();
-  const filename = relPath.split("/").pop() || "";
-  const stem = filename.replace(/\.[^.]*$/, "");
-  const parts = stem
-    .split("__")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length < 4) return "";
-
-  const artifactName = safeStoredFilenameComponent(String(marker.image_key || ""), 32);
-  const artifactCandidates = [artifactName, "main", "crop", "debug"].filter(Boolean);
-  for (const candidate of artifactCandidates) {
-    const index = parts.findIndex((part) => part === candidate);
-    if (index >= 0 && index + 1 < parts.length) return parts[index + 1];
-  }
-  return "";
 }
 
 function aggregateMetricPoints(items: Array<Pick<PipelineTelemetryNumeric, "points">>): AggregatedPoint[] {

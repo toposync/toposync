@@ -158,12 +158,29 @@ def _first_non_empty(*values: Any) -> str:
     return ""
 
 
+def _payload_category(packet: Packet) -> str:
+    subject = packet.payload.get("subject")
+    if isinstance(subject, dict):
+        category = _first_non_empty(subject.get("category"))
+        if category:
+            return category
+    vision = packet.payload.get("vision")
+    if isinstance(vision, dict):
+        for key in ("tracks", "detections", "segmentations"):
+            raw_items = vision.get(key)
+            if not isinstance(raw_items, list):
+                continue
+            for raw_item in raw_items:
+                if not isinstance(raw_item, dict):
+                    continue
+                category = _first_non_empty(raw_item.get("label"))
+                if category:
+                    return category
+    return _first_non_empty(packet.payload.get("area_label"))
+
+
 def _default_title(packet: Packet) -> str:
-    category = _first_non_empty(
-        packet.payload.get("object_category_label"),
-        _deep_get(packet.payload, "detected_object.category"),
-        packet.payload.get("area_label"),
-    )
+    category = _payload_category(packet)
     lifecycle = packet.lifecycle
     if category:
         if lifecycle == Lifecycle.CLOSE:

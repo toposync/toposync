@@ -38,7 +38,7 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
         if image is None or isinstance(image, (bytes, bytearray, memoryview)):
             return []
 
-        bbox_result = _read_object_bbox01(packet, bbox_field=self._config.bbox_field)
+        bbox_result = _read_annotation_bbox01(packet, bbox_field=self._config.bbox_field)
         if bbox_result is None:
             return []
         bbox01, bbox_source = bbox_result
@@ -103,7 +103,7 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
         return replace(packet, artifacts={})
 
 
-def _read_object_bbox01(
+def _read_annotation_bbox01(
     packet: Packet,
     *,
     bbox_field: str,
@@ -120,11 +120,18 @@ def _read_object_bbox01(
         if bbox01 is not None:
             return bbox01, "payload:subject.bbox01"
 
-    detected = packet.payload.get("detected_object")
-    if isinstance(detected, dict):
-        bbox01 = _normalize_raw_bbox01(detected.get("bbox01"))
-        if bbox01 is not None:
-            return bbox01, "payload:detected_object.bbox01"
+    vision = packet.payload.get("vision")
+    if isinstance(vision, dict):
+        for key in ("tracks", "detections", "segmentations"):
+            raw_items = vision.get(key)
+            if not isinstance(raw_items, list):
+                continue
+            for index, raw_item in enumerate(raw_items):
+                if not isinstance(raw_item, dict):
+                    continue
+                bbox01 = _normalize_raw_bbox01(raw_item.get("bbox01"))
+                if bbox01 is not None:
+                    return bbox01, f"payload:vision.{key}[{index}].bbox01"
     return None
 
 

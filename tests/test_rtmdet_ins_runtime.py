@@ -165,7 +165,7 @@ def test_rtmdet_ins_runtime_reprojects_crop_and_attaches_mask_artifact(
         assert artifact_name in segmented.artifacts
         mask = segmented.artifacts[artifact_name].data
         assert getattr(mask, "shape", None) == (720, 1280)
-        bbox01 = segmented.payload.get("object_bbox01")
+        bbox01 = top.get("bbox01")
         assert bbox01 == pytest.approx([0.375, 0.35, 0.625, 0.65], abs=0.03)
         assert _mask_bbox01(mask) == pytest.approx((0.375, 0.35, 0.625, 0.65), abs=0.03)
         assert top.get("bbox01") == pytest.approx([0.375, 0.35, 0.625, 0.65], abs=0.03)
@@ -204,7 +204,7 @@ def test_rtmdet_ins_downstream_storage_can_choose_mask_or_bbox_crop(
         segment = VisionSegmentInstancesRuntime({"model_id": "rtmdet.ins.store"}, deps)
         crop = VisionCropObjectsRuntime(
             {
-                "bbox_field": "object_bbox01",
+                "bbox_field": "subject.bbox01",
                 "output_artifact_name": "debug_crop",
                 "padding_ratio": 0.0,
                 "min_crop_size_px": 1,
@@ -221,7 +221,9 @@ def test_rtmdet_ins_downstream_storage_can_choose_mask_or_bbox_crop(
         )
 
         segmented = (await segment.process_packet(packet, _Context()))[0]
-        mask_name = str(segmented.payload.get("detected_object", {}).get("mask_artifact_name") or "")
+        segmentations = segmented.payload.get("vision", {}).get("segmentations")
+        assert isinstance(segmentations, list)
+        mask_name = str(segmentations[0].get("mask_artifact_name") or "")
         assert mask_name
         store_mask = StoreImagesRuntime({"input_artifact_name": mask_name}, deps)
         store_crop = StoreImagesRuntime({"input_artifact_name": "debug_crop"}, deps)

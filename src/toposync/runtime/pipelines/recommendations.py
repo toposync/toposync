@@ -459,10 +459,7 @@ def analyze_compiled_pipeline(
     }
     for store_node_id in _node_ids_by_operator("core.store_images"):
         cfg = _resolve_config(store_node_id)
-        drop_data_after_store = cfg.get("drop_data_after_store")
-        if drop_data_after_store is None:
-            drop_data_after_store = not bool(cfg.get("keep_data", False))
-        if not bool(drop_data_after_store):
+        if not bool(cfg.get("drop_data_after_store", True)):
             continue
         # If Store Images is fed directly by split/track streams without downstream rate control, it can be very heavy.
         tracking_ids = [

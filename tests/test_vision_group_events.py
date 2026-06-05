@@ -40,9 +40,6 @@ def _event_packet(
         "event_id": event_id,
         "event_code": event_code,
         "subject": subject,
-        "object_category_label": category,
-        "object_confidence": 0.9,
-        "object_bbox01": list(bbox01),
     }
     if world:
         payload["world"] = dict(world)

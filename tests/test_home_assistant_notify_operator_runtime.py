@@ -52,7 +52,7 @@ def test_home_assistant_notify_runtime_treats_first_update_as_event_start_withou
                 "camera_id": "front",
                 "camera_name": "Front gate",
                 "area_label": "Driveway",
-                "object_category_label": "person",
+                "subject": {"type": "event", "id": "event:1", "category": "person"},
             },
         )
         second_update_packet = Packet.create(
@@ -62,7 +62,7 @@ def test_home_assistant_notify_runtime_treats_first_update_as_event_start_withou
                 "camera_id": "front",
                 "camera_name": "Front gate",
                 "area_label": "Driveway",
-                "object_category_label": "person",
+                "subject": {"type": "event", "id": "event:1", "category": "person"},
             },
         )
         await runtime.process_packet(update_packet, context)
@@ -126,9 +126,8 @@ def test_home_assistant_notify_runtime_uses_explicit_tag_to_clear_on_close() -> 
                 "camera_id": "front",
                 "camera_name": "Front gate",
                 "area_label": "Driveway",
-                "object_category_label": "person",
                 "event_id": "event:1",
-                "subject": {"type": "event", "id": "event:1"},
+                "subject": {"type": "event", "id": "event:1", "category": "person"},
             },
         )
         close_packet = Packet.create(
@@ -138,9 +137,8 @@ def test_home_assistant_notify_runtime_uses_explicit_tag_to_clear_on_close() -> 
                 "camera_id": "front",
                 "camera_name": "Front gate",
                 "area_label": "Driveway",
-                "object_category_label": "person",
                 "event_id": "event:1",
-                "subject": {"type": "event", "id": "event:1"},
+                "subject": {"type": "event", "id": "event:1", "category": "person"},
             },
         )
         await runtime.process_packet(open_packet, context)

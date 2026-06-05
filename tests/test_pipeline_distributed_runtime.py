@@ -55,7 +55,7 @@ def test_distributed_projection_runs_processing_and_origin_with_same_definition(
                     "operator": "core.notify",
                     "config": {
                         "notification_type": "pipelines.tracking",
-                        "title": "{{object_category_label}} detectada!",
+                        "title": "{{subject.category}} detectada!",
                         "description": "Está em {{area_label}} ({{camera_name}})",
                         "priority": "high",
                         "update_interval_seconds": 60.0,

@@ -132,34 +132,6 @@ def _camera_mapping_alert_codes(alerts: list[PipelineAlert]) -> set[str]:
     return {alert.code for alert in alerts if alert.code.startswith("camera_mapping_")}
 
 
-def test_control_points_map_accepts_control_point_set_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
-        res = client.post(
-            "/api/cameras/control_points/map",
-            json={
-                "control_point_set": {
-                    "id": "main",
-                    "label": "Vista principal",
-                    "pose_reference": None,
-                    "control_points": [
-                        {"id": "A", "image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
-                        {"id": "B", "image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                        {"id": "C", "image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
-                        {"id": "D", "image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
-                    ],
-                },
-                "query": {"kind": "image", "x": 0.5, "y": 0.5},
-            },
-        )
-
-        assert res.status_code == 200, res.text
-        body = res.json()
-        assert body["world"]["x"] == pytest.approx(5.0, abs=1e-6)
-        assert body["world"]["z"] == pytest.approx(5.0, abs=1e-6)
-        assert body["quality"]["number_of_points"] == 4
-        assert body["quality"]["number_of_inliers"] == 4
-
-
 def test_projection_map_accepts_calibrated_view_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client_with_cameras(tmp_path, monkeypatch) as client:
         res = client.post(

@@ -171,28 +171,6 @@ class VisionDetectRuntime(TransformOperatorRuntime):
             item["metadata"] = dict(detection.metadata)
         return item
 
-    def _serialize_compat_detection(
-        self,
-        detection: DetectionObject,
-        *,
-        source_stream_id: str,
-        event_id: str | None = None,
-        correlation_id: str | None = None,
-    ) -> dict[str, Any]:
-        item = self._serialize_contract_detection(detection)
-        item.update(
-            {
-                "event_id": event_id,
-                "category": detection.label,
-                "confidence": float(detection.score),
-                "tracking_id": None,
-                "tracker_track_id": None,
-                "correlation_id": correlation_id,
-                "source_stream_id": source_stream_id,
-            }
-        )
-        return item
-
     def _annotate_packet(
         self,
         packet: Packet,
@@ -201,13 +179,6 @@ class VisionDetectRuntime(TransformOperatorRuntime):
         backend: DetectorBackend,
         detections: list[DetectionObject],
     ) -> Packet:
-        compat_detections = [
-            self._serialize_compat_detection(item, source_stream_id=packet.stream_id)
-            for item in detections
-        ]
-        top_detection = compat_detections[0] if compat_detections else None
-        top_bbox = top_detection.get("bbox01") if isinstance(top_detection, dict) else None
-
         payload = dict(packet.payload)
         payload["vision"] = {
             "task": "detection",
@@ -222,15 +193,6 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                 "tracker_track_id": None,
                 "correlation_id": None,
                 "source_stream_id": packet.stream_id,
-                "object_category_label": top_detection.get("label")
-                if isinstance(top_detection, dict)
-                else None,
-                "object_confidence": float(top_detection.get("score"))
-                if isinstance(top_detection, dict)
-                else 0.0,
-                "object_bbox01": list(top_bbox) if isinstance(top_bbox, list) else None,
-                "detected_object": top_detection,
-                "detected_objects": compat_detections,
             }
         )
 
@@ -243,8 +205,6 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                 "tracking_id": None,
                 "tracker_track_id": None,
                 "correlation_id": None,
-                "object_category": payload.get("object_category_label"),
-                "object_confidence": payload.get("object_confidence"),
                 "vision_task": "detection",
                 "vision_model_id": manifest.model_id,
                 "vision_runtime": payload["vision"]["runtime"],
@@ -267,13 +227,7 @@ class VisionDetectRuntime(TransformOperatorRuntime):
             event_id = uuid.uuid4().hex
             correlation_id = uuid.uuid4().hex
             stream_id = f"det:{packet.stream_id}:{event_id}"
-            object_data = self._serialize_compat_detection(
-                detection,
-                source_stream_id=packet.stream_id,
-                event_id=event_id,
-                correlation_id=correlation_id,
-            )
-            bbox = object_data.get("bbox01")
+            object_data = self._serialize_contract_detection(detection)
             payload = dict(packet.payload)
             payload["vision"] = {
                 "task": "detection",
@@ -290,19 +244,14 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                     "tracker_track_id": None,
                     "correlation_id": correlation_id,
                     "source_stream_id": packet.stream_id,
-                    "object_category_label": object_data.get("label"),
-                    "object_confidence": float(object_data.get("score") or 0.0),
-                    "object_bbox01": list(bbox) if isinstance(bbox, list) else None,
-                    "detected_object": object_data,
-                    "detected_objects": [object_data],
                 }
             )
             subject = {
                 "type": "event",
                 "id": event_id,
-                "category": object_data.get("category") or object_data.get("label"),
-                "confidence": payload.get("object_confidence"),
-                "bbox01": payload.get("object_bbox01"),
+                "category": object_data.get("label"),
+                "confidence": float(object_data.get("score") or 0.0),
+                "bbox01": object_data.get("bbox01"),
             }
 
             metadata = dict(packet.metadata)
@@ -316,8 +265,6 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                     "tracking_id": None,
                     "tracker_track_id": None,
                     "correlation_id": correlation_id,
-                    "object_category": payload.get("object_category_label"),
-                    "object_confidence": payload.get("object_confidence"),
                     "vision_task": "detection",
                     "vision_model_id": manifest.model_id,
                     "vision_runtime": runtime_id,

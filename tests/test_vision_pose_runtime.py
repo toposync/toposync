@@ -105,7 +105,5 @@ def test_vision_pose_estimate_runtime_annotates_packet_and_links_tracking_ids() 
             [0.625, 0.7000000000000001, 0.8],
         ]
         assert out.payload.get("tracking_id") == "trk:camera:test:7"
-        assert out.payload.get("object_category_label") == "person"
-        assert out.payload.get("object_bbox01") == [0.35, 0.30000000000000004, 0.65, 0.7000000000000001]
 
     asyncio.run(scenario())

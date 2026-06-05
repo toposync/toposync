@@ -274,7 +274,6 @@ def test_vision_track_config_normalizes_tracker_and_event_stitching_defaults() -
     assert default_config.stitch_gap_seconds == 30.0
     assert default_config.use_world_anchor == "auto"
     assert default_config.world_match_distance_meters == 3.0
-    assert default_config.appearance_mode == "off"
     assert default_config.event_id_prefix == "evt"
 
     config = VisionTrackConfig.model_validate(
@@ -283,7 +282,7 @@ def test_vision_track_config_normalizes_tracker_and_event_stitching_defaults() -
             "event_id_prefix": " EVT ",
             "category_intervals_seconds": {" Person ": 0.4},
             "close_after_seconds": 15.0,
-            "stitch_gap_seconds": 5.0,
+            "stitch_gap_seconds": 20.0,
             "use_world_anchor": " Always ",
         }
     )
@@ -291,13 +290,15 @@ def test_vision_track_config_normalizes_tracker_and_event_stitching_defaults() -
     assert config.tracker_id == "norfair"
     assert config.event_id_prefix == "evt"
     assert config.category_intervals_seconds == {"person": 0.4}
-    assert config.stitch_gap_seconds == 15.0
+    assert config.stitch_gap_seconds == 20.0
     assert config.use_world_anchor == "always"
 
     with pytest.raises(ValueError):
         VisionTrackConfig.model_validate({"emit_mode": "events"})
     with pytest.raises(ValueError):
         VisionTrackConfig.model_validate({"continue_confidence_threshold": 0.8, "open_confidence_threshold": 0.5})
+    with pytest.raises(ValueError):
+        VisionTrackConfig.model_validate({"close_after_seconds": 15.0, "stitch_gap_seconds": 5.0})
 
 
 def test_vision_group_events_config_normalizes_defaults_and_categories() -> None:

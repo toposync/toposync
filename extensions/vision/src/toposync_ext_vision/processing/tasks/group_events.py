@@ -324,15 +324,10 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         event_id = _normalize_string(subject.get("id")) or _normalize_string(packet.payload.get("event_id"))
         if not event_id:
             return None
-        category = _normalize_label(
-            subject.get("category")
-            or packet.payload.get("object_category_label")
-            or _deep_get(packet.payload, "detected_object.category")
-            or _deep_get(packet.payload, "detected_object.label")
-        )
+        category = _normalize_label(subject.get("category"))
         if not category:
             return None
-        bbox01 = _normalize_bbox(subject.get("bbox01")) or _normalize_bbox(packet.payload.get("object_bbox01"))
+        bbox01 = _normalize_bbox(subject.get("bbox01"))
         if bbox01 is None:
             return None
         world_anchor = (
@@ -342,7 +337,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         )
         lifecycle = _active_lifecycle(subject.get("lifecycle"), packet.lifecycle)
         try:
-            confidence = float(subject.get("confidence", packet.payload.get("object_confidence", 0.0)) or 0.0)
+            confidence = float(subject.get("confidence", 0.0) or 0.0)
         except Exception:
             confidence = 0.0
         if not math.isfinite(confidence):
@@ -567,9 +562,6 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         )
         if trigger is not None:
             payload["member_subject"] = dict(trigger.subject)
-            payload["member_object_category_label"] = trigger.category
-            payload["member_object_confidence"] = trigger.confidence
-            payload["member_object_bbox01"] = list(trigger.bbox01)
         if world_envelope := subject.get("world_envelope"):
             payload["world_envelope"] = world_envelope
         vision_raw = payload.get("vision")

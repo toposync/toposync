@@ -64,6 +64,16 @@ http://127.0.0.1:8000/
 
 Conclua a criação do primeiro usuário se a pasta de dados estiver nova.
 
+## Inicie o streaming {/* #start-streaming */}
+
+No Toposync:
+
+1. Abra **Configurações**.
+2. Abra **Transmissões**.
+3. Abra a aba **Avançado**.
+4. Clique em **Iniciar** em **Engine (MediaMTX)**.
+5. Aguarde até o status da engine indicar que está rodando.
+
 ## Adicione a fonte RTSP {/* #add-the-rtsp-source */}
 
 No Toposync:
@@ -77,11 +87,21 @@ No Toposync:
 7. Defina o papel da fonte como **Principal**.
 8. Rode **Probe**.
 9. Rode **Snapshot**.
-10. Habilite **Transmitir esta fonte**.
+10. Confirme que **Transmitir esta fonte** está habilitado. Novas fontes de vídeo já vêm com essa opção ativa.
 11. Salve a câmera.
 
 A fonte deve aparecer no probe como vídeo H.264 em `1280x720`. O snapshot deve
 mostrar a imagem de rua usada como placeholder.
+
+## Gere as publicações ao vivo {/* #generate-live-publications */}
+
+No Toposync:
+
+1. Abra **Configurações**.
+2. Abra **Transmissões**.
+3. Abra a aba **Ao vivo**.
+4. Se nenhuma publicação ao vivo aparecer, clique em **Reconciliar transmissões**.
+5. Confirme que a câmera sintética aparece na lista de publicações ao vivo.
 
 ## Confirme a transmissão ao vivo {/* #confirm-live-viewing */}
 
@@ -95,8 +115,9 @@ Resultado esperado:
 - o vídeo toca no navegador.
 
 Um aquecimento curto é normal. Se o card ficar stale ou indicar que nenhum
-pipeline alimenta a transmissão, salve a fonte da câmera novamente ou reconcilie
-a publicação nas configurações de streaming.
+pipeline alimenta a transmissão, volte para **Configurações** > **Transmissões**,
+confirme que a engine está rodando e clique em **Reconciliar transmissões** na
+aba **Ao vivo**.
 
 ## Outras fontes de câmera para desenvolvimento {/* #other-development-camera-sources */}
 
@@ -196,6 +217,7 @@ Mantenha a mesma ordem de validação:
 
 1. Probe.
 2. Snapshot.
-3. Habilitar **Transmitir esta fonte**.
-4. Confirmar **Câmeras ao vivo**.
-5. Adicionar mapeamento e pipelines apenas depois que a transmissão estiver estável.
+3. Confirmar que **Transmitir esta fonte** está habilitado.
+4. Reconciliar as publicações ao vivo.
+5. Confirmar **Câmeras ao vivo**.
+6. Adicionar mapeamento e pipelines apenas depois que a transmissão estiver estável.

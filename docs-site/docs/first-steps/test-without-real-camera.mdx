@@ -62,6 +62,16 @@ http://127.0.0.1:8000/
 
 Complete the first-user setup if this is a new data directory.
 
+## Start streaming {/* #start-streaming */}
+
+In Toposync:
+
+1. Open **Settings**.
+2. Open **Transmissions**.
+3. Open the **Advanced** tab.
+4. Click **Start** in **Engine (MediaMTX)**.
+5. Wait until the engine status is running.
+
 ## Add the RTSP source {/* #add-the-rtsp-source */}
 
 In Toposync:
@@ -75,11 +85,21 @@ In Toposync:
 7. Set the source role to **Main**.
 8. Run **Probe**.
 9. Run **Snapshot**.
-10. Enable **Transmit this source**.
+10. Confirm **Transmit this source** is enabled. New video sources enable it by default.
 11. Save the camera.
 
 The source should probe as H.264 video at `1280x720`. The snapshot should show
 the placeholder street image.
+
+## Generate live publications {/* #generate-live-publications */}
+
+In Toposync:
+
+1. Open **Settings**.
+2. Open **Transmissions**.
+3. Open the **Live** tab.
+4. If no live publication appears, click **Reconcile streams**.
+5. Confirm the synthetic camera appears in the live publications list.
 
 ## Confirm live viewing {/* #confirm-live-viewing */}
 
@@ -93,8 +113,8 @@ Expected result:
 - the video plays in the browser.
 
 A short warmup is normal. If the card stays stale or says no pipeline is
-feeding the transmission, save the camera source again or reconcile the
-publication from streaming settings.
+feeding the transmission, go back to **Settings** > **Transmissions**, confirm
+the engine is running, and click **Reconcile streams** in the **Live** tab.
 
 ## Other development camera sources {/* #other-development-camera-sources */}
 
@@ -192,6 +212,7 @@ Keep the same validation order:
 
 1. Probe.
 2. Snapshot.
-3. Enable **Transmit this source**.
-4. Confirm **Live cameras**.
-5. Add mapping and pipelines only after live viewing is stable.
+3. Confirm **Transmit this source** is enabled.
+4. Reconcile live publications.
+5. Confirm **Live cameras**.
+6. Add mapping and pipelines only after live viewing is stable.

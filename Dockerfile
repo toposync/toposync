@@ -27,6 +27,7 @@ RUN mkdir -p /wheelhouse \
  && uv build --wheel --out-dir /wheelhouse extensions/home_assistant \
  && uv build --wheel --out-dir /wheelhouse extensions/cameras \
  && uv build --wheel --out-dir /wheelhouse extensions/vision \
+ && uv build --wheel --out-dir /wheelhouse extensions/spatial_video \
  && uv build --wheel --out-dir /wheelhouse extensions/streaming
 
 
@@ -91,6 +92,7 @@ PY
 FROM python:3.12-slim-bookworm AS runtime-cpu
 
 ARG TOPOSYNC_INSTALL_WHEEL="/wheelhouse/toposync-*.whl"
+ARG TOPOSYNC_BUNDLE_WHEELS="/wheelhouse/toposync_core-*.whl /wheelhouse/toposync_ext_structural-*.whl /wheelhouse/toposync_ext_models-*.whl /wheelhouse/toposync_ext_home_assistant-*.whl /wheelhouse/toposync_ext_images-*.whl /wheelhouse/toposync_ext_cameras-*.whl /wheelhouse/toposync_ext_vision-*.whl /wheelhouse/toposync_ext_spatial_video-*.whl"
 ARG TOPOSYNC_EXTRA_WHEELS=""
 ARG TOPOSYNC_EXTRA_PIP_PACKAGES=""
 ARG TOPOSYNC_APT_PACKAGES=""
@@ -112,7 +114,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && python -m venv "${VIRTUAL_ENV}" \
  && "${VIRTUAL_ENV}/bin/python" -m pip install --upgrade pip \
- && "${VIRTUAL_ENV}/bin/python" -m pip install --find-links=/wheelhouse ${TOPOSYNC_INSTALL_WHEEL} ${TOPOSYNC_EXTRA_WHEELS} ${TOPOSYNC_EXTRA_PIP_PACKAGES} \
+ && "${VIRTUAL_ENV}/bin/python" -m pip install --find-links=/wheelhouse ${TOPOSYNC_BUNDLE_WHEELS} ${TOPOSYNC_INSTALL_WHEEL} ${TOPOSYNC_EXTRA_WHEELS} ${TOPOSYNC_EXTRA_PIP_PACKAGES} \
  && rm -rf /wheelhouse
 
 EXPOSE 8000
@@ -127,6 +129,7 @@ CMD ["toposync", "serve", "--host", "0.0.0.0", "--port", "8000", "--data-dir", "
 FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04 AS runtime-cuda
 
 ARG TOPOSYNC_INSTALL_WHEEL="/wheelhouse/toposync_vision_cuda-*.whl"
+ARG TOPOSYNC_BUNDLE_WHEELS="/wheelhouse/toposync_core-*.whl /wheelhouse/toposync_ext_structural-*.whl /wheelhouse/toposync_ext_models-*.whl /wheelhouse/toposync_ext_home_assistant-*.whl /wheelhouse/toposync_ext_images-*.whl /wheelhouse/toposync_ext_cameras-*.whl /wheelhouse/toposync_ext_vision-*.whl /wheelhouse/toposync_ext_spatial_video-*.whl"
 ARG TOPOSYNC_EXTRA_WHEELS=""
 ARG TOPOSYNC_EXTRA_PIP_PACKAGES=""
 ARG TOPOSYNC_APT_PACKAGES=""
@@ -148,7 +151,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && python3 -m venv "${VIRTUAL_ENV}" \
  && "${VIRTUAL_ENV}/bin/python" -m pip install --upgrade pip \
- && "${VIRTUAL_ENV}/bin/python" -m pip install --find-links=/wheelhouse ${TOPOSYNC_INSTALL_WHEEL} ${TOPOSYNC_EXTRA_WHEELS} ${TOPOSYNC_EXTRA_PIP_PACKAGES} \
+ && "${VIRTUAL_ENV}/bin/python" -m pip install --find-links=/wheelhouse ${TOPOSYNC_BUNDLE_WHEELS} ${TOPOSYNC_INSTALL_WHEEL} ${TOPOSYNC_EXTRA_WHEELS} ${TOPOSYNC_EXTRA_PIP_PACKAGES} \
  && rm -rf /wheelhouse
 
 EXPOSE 8000

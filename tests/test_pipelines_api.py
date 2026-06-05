@@ -676,14 +676,14 @@ def test_processing_servers_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyP
             name="Garage GPU",
             kind="http",
             url="http://192.168.1.50:49321",
-            username="mateus",
+            username="test-user",
             password="secret",
         ).model_dump()
         res = client.put("/api/processing-servers/remote_gpu", json=server)
         assert res.status_code == 200
         assert res.json()["id"] == "remote_gpu"
         assert res.json()["url"] == "http://192.168.1.50:49321"
-        assert res.json()["username"] == "mateus"
+        assert res.json()["username"] == "test-user"
         assert res.json()["password"] == "secret"
 
         res = client.get("/api/processing-servers")

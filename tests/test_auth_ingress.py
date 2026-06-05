@@ -27,8 +27,8 @@ def _create_ingress_client(
 def test_ingress_auth_status_uses_forwarded_user_headers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     headers = {
         "x-remote-user-id": "ha-user-1",
-        "x-remote-user-name": "mateus",
-        "x-remote-user-display-name": "Mateus Calza",
+        "x-remote-user-name": "test-user",
+        "x-remote-user-display-name": "Test User",
     }
 
     with _create_ingress_client(tmp_path, monkeypatch) as client:
@@ -40,8 +40,8 @@ def test_ingress_auth_status_uses_forwarded_user_headers(tmp_path: Path, monkeyp
     assert payload["authenticated"] is True
     assert payload["requires_setup"] is False
     assert payload["user"]["id"] == "ha-user-1"
-    assert payload["user"]["username"] == "mateus"
-    assert payload["user"]["display_name"] == "Mateus Calza"
+    assert payload["user"]["username"] == "test-user"
+    assert payload["user"]["display_name"] == "Test User"
     assert payload["user"]["role"] == "owner"
 
 
@@ -60,8 +60,8 @@ def test_hybrid_auth_uses_ingress_headers_for_trusted_requests(
 ) -> None:
     headers = {
         "x-remote-user-id": "ha-user-1",
-        "x-remote-user-name": "mateus",
-        "x-remote-user-display-name": "Mateus Calza",
+        "x-remote-user-name": "test-user",
+        "x-remote-user-display-name": "Test User",
     }
 
     with _create_ingress_client(tmp_path, monkeypatch, mode="home_assistant_hybrid") as client:
@@ -130,8 +130,8 @@ def test_ingress_owner_can_pair_local_access_user(
 ) -> None:
     headers = {
         "x-remote-user-id": "ha-user-1",
-        "x-remote-user-name": "mateus",
-        "x-remote-user-display-name": "Mateus Calza",
+        "x-remote-user-name": "test-user",
+        "x-remote-user-display-name": "Test User",
     }
 
     with _create_ingress_client(tmp_path, monkeypatch) as client:

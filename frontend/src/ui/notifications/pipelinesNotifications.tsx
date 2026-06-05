@@ -46,9 +46,9 @@ function normalizePriority(value: unknown): Priority {
 }
 
 function priorityHex(priority: Priority): number {
-  if (priority === "high") return 0xff3b3b;
+  if (priority === "high") return 0xef4444;
   if (priority === "low") return 0x9aa4b2;
-  return 0x00d1ff;
+  return 0xf59e0b;
 }
 
 function formatDurationCompact(secondsRaw: unknown): string | null {

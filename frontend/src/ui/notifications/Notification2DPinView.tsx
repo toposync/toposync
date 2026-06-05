@@ -3,14 +3,14 @@ import React, { useId } from "react";
 import type { Notification2DPin } from "@toposync/plugin-api";
 
 const PRIORITY_COLOR: Record<NonNullable<Notification2DPin["priority"]>, string> = {
-  high: "#ff3b3b",
-  medium: "#00d1ff",
+  high: "#ef4444",
+  medium: "#f59e0b",
   low: "#9aa4b2",
 };
 
 const TRAIL_COLOR: Record<NonNullable<Notification2DPin["priority"]>, string> = {
-  high: "#ff3b3b",
-  medium: "#00d1ff",
+  high: "#ef4444",
+  medium: "#f59e0b",
   low: "#9aa4b2",
 };
 
@@ -79,7 +79,7 @@ export function Notification2DPinView({ screenX, screenY, priority, closed, trai
               <stop offset="100%" stopColor="#000000" stopOpacity="0.30" />
             </linearGradient>
           </defs>
-          <path d={PIN_PATH} fill="var(--notification2d-pin-color, #00d1ff)" />
+          <path d={PIN_PATH} fill="var(--notification2d-pin-color, #f59e0b)" />
           <path d={PIN_PATH} fill={`url(#${gradId})`} />
           <circle cx="0" cy="-140" r="20" fill="#ffffff" />
         </svg>

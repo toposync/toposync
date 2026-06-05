@@ -42,8 +42,8 @@ const DEFAULT_WORLD_BOUNDS: BoundsXZ = { minX: -1, maxX: 1, minZ: -1, maxZ: 1 };
 const PIN_PATH = "M 0 0 L -60.62 -105 A 70 70 0 1 1 60.62 -105 Z";
 
 const NOTIFICATION_PRIORITY_COLOR: Record<NonNullable<Notification2DPin["priority"]>, string> = {
-  high: "#ff3b3b",
-  medium: "#00d1ff",
+  high: "#ef4444",
+  medium: "#f59e0b",
   low: "#9aa4b2",
 };
 
@@ -361,7 +361,7 @@ function SpatialNotificationPinView({
               <stop offset="100%" stopColor="#000000" stopOpacity="0.30" />
             </linearGradient>
           </defs>
-          <path d={PIN_PATH} fill="var(--notification2d-pin-color, #00d1ff)" />
+          <path d={PIN_PATH} fill="var(--notification2d-pin-color, #f59e0b)" />
           <path d={PIN_PATH} fill={`url(#${gradId})`} />
           <circle cx="0" cy="-140" r="20" fill="#ffffff" />
         </svg>

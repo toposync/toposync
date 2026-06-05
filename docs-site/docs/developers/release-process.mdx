@@ -414,7 +414,48 @@ uv pip install --python /tmp/toposync-verify-X.Y.Z-E.F.G/bin/python --refresh --
 
 If PyPI JSON has propagated but `uv` still cannot resolve the version, wait and retry with `--refresh`. The simple index can lag behind JSON briefly.
 
-### 10. Release and tag the Home Assistant add-on {/* #release-and-tag-the-home-assistant-add-on */}
+### 10. Publish Docker images to GHCR {/* #publish-docker-images-to-ghcr */}
+
+Only publish Docker images after production PyPI validation succeeds. The public
+image build installs from PyPI, not from the local checkout.
+
+Push the release tag or run the Docker publish workflow manually from the exact
+release ref:
+
+```bash
+gh workflow run docker-publish.yml -f version=X.Y.Z
+```
+
+The workflow publishes:
+
+- `ghcr.io/toposync/toposync:X.Y.Z`, `:X.Y`, and `:latest` for CPU;
+- `ghcr.io/toposync/toposync:X.Y.Z-cuda`, `:X.Y-cuda`, and `:cuda` for CUDA.
+
+The CPU image is multi-arch for `linux/amd64` and `linux/arm64`. The CUDA image
+is `linux/amd64` and requires a Linux host with NVIDIA driver and NVIDIA
+Container Toolkit.
+
+After the first GHCR publish, confirm the package is public. If it was created
+as private, change package visibility in the GitHub organization package
+settings, then verify anonymous pull:
+
+```bash
+docker logout ghcr.io || true
+docker pull ghcr.io/toposync/toposync:X.Y.Z
+docker pull ghcr.io/toposync/toposync:X.Y.Z-cuda
+```
+
+Run the public image smoke test:
+
+```bash
+python scripts/check_docker_registry_image.py --image ghcr.io/toposync/toposync:X.Y.Z --platform linux/amd64
+python scripts/check_docker_registry_image.py --image ghcr.io/toposync/toposync:X.Y.Z --platform linux/arm64
+python scripts/check_docker_registry_image.py --image ghcr.io/toposync/toposync:X.Y.Z-cuda --platform linux/amd64 --expect-cuda
+```
+
+On a real NVIDIA host, also run `nvidia-smi` inside the CUDA container.
+
+### 11. Release and tag the Home Assistant add-on {/* #release-and-tag-the-home-assistant-add-on */}
 
 Only update the add-on after production PyPI validation succeeds.
 
@@ -430,7 +471,7 @@ git push origin toposync-addon-vA.B.C
 
 The add-on build must show that pip installs the exact published Toposync package version. If Home Assistant still reports an older add-on version after the push, verify the add-on store cache before changing package versions again.
 
-### 11. Publish release notes {/* #publish-release-notes */}
+### 12. Publish release notes {/* #publish-release-notes */}
 
 Create a GitHub Release from the release tag.
 
@@ -468,6 +509,7 @@ The manual process should move toward CI automation as early access grows:
 - CI publishes to TestPyPI on release candidate tags;
 - CI runs clean installation checks against TestPyPI;
 - CI publishes to PyPI through trusted publishing after an approved environment gate;
+- CI publishes CPU and CUDA images to GHCR from the release tag after PyPI is visible;
 - CI builds the add-on image against the published PyPI version;
 - CI creates the GitHub Release from a checked-in release note file.
 

@@ -1,6 +1,6 @@
 ---
 title: Docker CPU
-description: "Run Toposync with Docker CPU using a local build, persistent data volume, health checks, and first-camera streaming support."
+description: "Run the public Toposync CPU Docker image with persistent data, health checks, streaming support, and RF-DETR local build tooling."
 keywords: ["toposync", "local-first", "home automation", "Docker", "CPU", "installation"]
 image: /img/social-card.png
 sidebar_position: 3
@@ -14,7 +14,15 @@ Docker Compose installation without GPU acceleration.
 
 Use this path when you want to run Toposync isolated in a container.
 
-This guide builds from a local repository checkout. It does not assume a public container image yet.
+The default image is:
+
+```text
+ghcr.io/toposync/toposync:0.7.6
+```
+
+It includes the `toposync-streaming` bundle, FFmpeg, bundled go2rtc, and the
+minimum RF-DETR local build toolchain. You do not need a repository checkout for
+the normal install path.
 
 For architecture support, see [Compatibility](architecture-support.mdx).
 
@@ -22,17 +30,30 @@ For architecture support, see [Compatibility](architecture-support.mdx).
 
 - Docker.
 - Docker Compose.
-- A Toposync repository checkout.
 
 ## Installation
 
-From the repository root:
+Create a deployment directory and a Compose file:
 
-```bash
-docker compose up -d --build
+```yaml title="docker-compose.yml"
+services:
+  toposync:
+    image: ghcr.io/toposync/toposync:0.7.6
+    ports:
+      - "${TOPOSYNC_PORT:-8000}:8000"
+    volumes:
+      - ${TOPOSYNC_DATA_VOLUME:-./toposync-data}:/data
+    restart: unless-stopped
 ```
 
-This builds the local `toposync:local` image and starts the `toposync` service.
+Start Toposync:
+
+```bash
+docker compose up -d
+```
+
+If you are using the repository checkout, the root `docker-compose.yml` already
+uses the same public image by default.
 
 By default:
 
@@ -63,13 +84,13 @@ docker compose logs -f toposync
 Change the public port:
 
 ```bash
-TOPOSYNC_PORT=8080 docker compose up -d --build
+TOPOSYNC_PORT=8080 docker compose up -d
 ```
 
 Change the data directory:
 
 ```bash
-TOPOSYNC_DATA_VOLUME=/path/to/toposync-data docker compose up -d --build
+TOPOSYNC_DATA_VOLUME=/path/to/toposync-data docker compose up -d
 ```
 
 ## How to access
@@ -104,20 +125,8 @@ After you complete setup or login in the UI, authenticated API routes such as `/
 
 ## First camera and streaming {/* #first-camera-and-streaming */}
 
-To include the streaming extension in the CPU image and test a first live
-camera:
-
-```bash
-TOPOSYNC_APT_PACKAGES=ffmpeg \
-TOPOSYNC_EXTRA_WHEELS="/wheelhouse/toposync_ext_streaming-*.whl" \
-docker compose up -d --build
-```
-
-In this mode:
-
-- FFmpeg is installed as a system package;
-- `toposync-ext-streaming` is installed as an extra wheel;
-- data and runtime still use `/data`.
+Streaming is included in the public CPU image. FFmpeg is available on `PATH`,
+and go2rtc is bundled at `/usr/local/bin/go2rtc`.
 
 If you do not have a real camera ready, start with the synthetic RTSP path:
 
@@ -129,12 +138,27 @@ view.
 
 ## How to update
 
-Update the repository checkout and rebuild the image:
+Pull the new image and recreate the container:
 
 ```bash
-git pull
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
+
+For a fixed release, pin the exact tag in `docker-compose.yml`, for example
+`ghcr.io/toposync/toposync:0.7.6`.
+
+## Advanced: local build {/* #advanced-local-build */}
+
+Use the local build path only when you are developing Toposync from a repository
+checkout or testing unpublished changes:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local-build.yml up -d --build
+```
+
+This builds `toposync:local` from the monorepo Dockerfile instead of pulling the
+public GHCR image.
 
 ## How to uninstall
 

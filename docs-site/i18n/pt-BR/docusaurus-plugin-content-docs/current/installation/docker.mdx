@@ -10,7 +10,13 @@ sidebar_position: 2
 
 Use Docker quando quiser rodar o Toposync isolado do sistema host e com operação mais fácil de reconstruir ou mover entre máquinas.
 
-Esta documentação cobre, por enquanto, builds locais a partir do repositório. Imagens públicas em registry serão documentadas separadamente quando estiverem disponíveis.
+O Toposync publica imagens oficiais no GitHub Container Registry:
+
+```text
+ghcr.io/toposync/toposync
+```
+
+Imagens públicas no GHCR podem ser baixadas sem login no Docker ou no GitHub.
 
 ## Escolha Um Caminho Docker
 
@@ -32,5 +38,6 @@ Vá para [Docker CUDA](docker-cuda.mdx) somente quando tiver um host Linux com G
 - Os dados de runtime são montados do host para `/data`.
 - A UI e a API continuam sendo servidas pela mesma porta pública.
 - Suporte a GPU fica em um caminho CUDA separado, não no container CPU padrão.
+- Suporte a streaming já vem incluído nas imagens públicas CPU e CUDA.
 
 Para suporte por sistema e arquitetura, consulte [Compatibilidade](architecture-support.mdx).

@@ -1,0 +1,210 @@
+name: Docker Publish
+
+on:
+  push:
+    tags:
+      - "toposync-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Toposync version to publish from this ref"
+        required: true
+        default: "0.7.6"
+      smoke:
+        description: "Run post-publish image smoke tests"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: toposync/toposync
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        id: release
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          from __future__ import annotations
+
+          import datetime as dt
+          import os
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          root = Path(".")
+          with (root / "packages" / "toposync" / "pyproject.toml").open("rb") as handle:
+              app_project = tomllib.load(handle)["project"]
+          with (root / "extensions" / "streaming" / "pyproject.toml").open("rb") as handle:
+              streaming_project = tomllib.load(handle)["project"]
+
+          version = str(app_project["version"])
+          streaming_extension_version = str(streaming_project["version"])
+          event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+          ref_name = os.environ.get("GITHUB_REF_NAME", "")
+          input_version = os.environ.get("INPUT_VERSION", "").strip()
+
+          if event_name == "push":
+              expected_ref = f"toposync-v{version}"
+              if ref_name != expected_ref:
+                  print(f"Tag {ref_name!r} does not match package version {version!r}.", file=sys.stderr)
+                  raise SystemExit(1)
+          elif input_version and input_version != version:
+              print(
+                  f"Workflow input version {input_version!r} does not match package version {version!r}.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          major_minor = ".".join(version.split(".")[:2])
+          created = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+          print(f"version={version}")
+          print(f"major_minor={major_minor}")
+          print(f"streaming_extension_version={streaming_extension_version}")
+          print(f"created={created}")
+          PY
+
+      - name: Verify PyPI packages exist
+        env:
+          TOPOSYNC_VERSION: ${{ steps.release.outputs.version }}
+          TOPOSYNC_EXT_STREAMING_VERSION: ${{ steps.release.outputs.streaming_extension_version }}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          packages = [
+              ("toposync-streaming", os.environ["TOPOSYNC_VERSION"]),
+              ("toposync-vision-cuda", os.environ["TOPOSYNC_VERSION"]),
+              ("toposync-ext-streaming", os.environ["TOPOSYNC_EXT_STREAMING_VERSION"]),
+          ]
+          for package_name, version in packages:
+              url = f"https://pypi.org/pypi/{package_name}/{version}/json"
+              try:
+                  with urllib.request.urlopen(url, timeout=20.0) as response:
+                      payload = json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as exc:
+                  print(f"Missing PyPI package: {package_name}=={version} ({exc})", file=sys.stderr)
+                  raise SystemExit(1) from exc
+              if payload.get("info", {}).get("version") != version:
+                  print(f"Unexpected PyPI version payload for {package_name}: {payload!r}", file=sys.stderr)
+                  raise SystemExit(1)
+              print(f"Found {package_name}=={version}")
+          PY
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push CPU image
+        id: build-cpu
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.registry
+          target: runtime-cpu
+          platforms: linux/amd64,linux/arm64
+          pull: true
+          push: true
+          build-args: |
+            TOPOSYNC_VERSION=${{ steps.release.outputs.version }}
+            TOPOSYNC_EXT_STREAMING_VERSION=${{ steps.release.outputs.streaming_extension_version }}
+            TOPOSYNC_IMAGE_REVISION=${{ github.sha }}
+            TOPOSYNC_IMAGE_CREATED=${{ steps.release.outputs.created }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.major_minor }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha,scope=toposync-registry-cpu
+          cache-to: type=gha,scope=toposync-registry-cpu,mode=max
+
+      - name: Attest CPU image
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build-cpu.outputs.digest }}
+          push-to-registry: true
+
+      - name: Build and push CUDA image
+        id: build-cuda
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.registry
+          target: runtime-cuda
+          platforms: linux/amd64
+          pull: true
+          push: true
+          build-args: |
+            TOPOSYNC_VERSION=${{ steps.release.outputs.version }}
+            TOPOSYNC_EXT_STREAMING_VERSION=${{ steps.release.outputs.streaming_extension_version }}
+            TOPOSYNC_IMAGE_REVISION=${{ github.sha }}
+            TOPOSYNC_IMAGE_CREATED=${{ steps.release.outputs.created }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}-cuda
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.major_minor }}-cuda
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda
+          cache-from: type=gha,scope=toposync-registry-cuda
+          cache-to: type=gha,scope=toposync-registry-cuda,mode=max
+
+      - name: Attest CUDA image
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build-cuda.outputs.digest }}
+          push-to-registry: true
+
+      - name: Smoke CPU amd64 image
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.smoke }}
+        run: |
+          python scripts/check_docker_registry_image.py \
+            --image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}" \
+            --platform linux/amd64
+
+      - name: Smoke CPU arm64 image
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.smoke }}
+        run: |
+          python scripts/check_docker_registry_image.py \
+            --image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}" \
+            --platform linux/arm64
+
+      - name: Smoke CUDA amd64 image
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.smoke }}
+        run: |
+          python scripts/check_docker_registry_image.py \
+            --image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}-cuda" \
+            --platform linux/amd64 \
+            --expect-cuda

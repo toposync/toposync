@@ -1,6 +1,6 @@
 ---
 title: Docker CUDA
-description: "Rode o Toposync com Docker CUDA em Linux com drivers NVIDIA e streaming opcional para processamento em GPU."
+description: "Rode a imagem Docker CUDA pública do Toposync em Linux com drivers NVIDIA, streaming e aceleração de vision em GPU."
 keywords: ["toposync", "local-first", "automação residencial", "Docker", "CUDA", "NVIDIA"]
 image: /img/social-card.png
 sidebar_position: 4
@@ -14,7 +14,16 @@ Instalação com Docker Compose para Linux com GPU NVIDIA.
 
 Use este caminho quando quiser rodar o Toposync em container com aceleração NVIDIA CUDA para vision.
 
-Este guia usa build local do repositório. Ainda não assume imagem pública em registry.
+A imagem CUDA padrão é:
+
+```text
+ghcr.io/toposync/toposync:0.7.6-cuda
+```
+
+Ela instala o bundle `toposync-vision-cuda` mais a extensão de streaming,
+FFmpeg, go2rtc embutido e o mesmo tooling básico de runtime da imagem CPU. Ela
+não instala o bundle CPU `toposync-streaming`, evitando puxar o runtime CPU de
+ONNX junto do bundle CUDA.
 
 Para suporte por arquitetura e alternativas no Windows, consulte [Compatibilidade](architecture-support.mdx).
 
@@ -25,7 +34,6 @@ Para suporte por arquitetura e alternativas no Windows, consulte [Compatibilidad
 - Docker.
 - Docker Compose.
 - NVIDIA Container Toolkit configurado.
-- Checkout do repositório Toposync.
 
 Verifique se o Docker enxerga a GPU:
 
@@ -37,46 +45,72 @@ Se esse comando falhar, corrija o driver ou o NVIDIA Container Toolkit antes de 
 
 ## Instalação
 
-Na raiz do repositório:
+Crie uma pasta de deploy e um arquivo Compose:
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+```yaml title="docker-compose.yml"
+services:
+  toposync:
+    image: ghcr.io/toposync/toposync:0.7.6-cuda
+    ports:
+      - "${TOPOSYNC_PORT:-8000}:8000"
+    volumes:
+      - ${TOPOSYNC_DATA_VOLUME:-./toposync-data}:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+              count: all
+    restart: unless-stopped
 ```
 
-Isso cria a imagem local `toposync:local` usando o target `runtime-cuda`.
+Suba o Toposync:
+
+```bash
+docker compose up -d
+```
+
+Se você estiver usando o checkout do repositório, use os arquivos Compose já
+incluídos:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
+```
 
 Por padrão:
 
 - porta pública: `8000`;
 - pasta de dados no host: `./toposync-data`;
 - pasta de dados no container: `/data`;
-- bundle instalado: `toposync-vision-cuda`.
+- bundle instalado: `toposync-vision-cuda`;
+- extensão de streaming: instalada.
 
 ## Como Rodar
 
 Subir:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
+docker compose up -d
 ```
 
 Parar:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml stop
+docker compose stop
 ```
 
 Ver logs:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml logs -f toposync
+docker compose logs -f toposync
 ```
 
 Alterar porta pública:
 
 ```bash
 TOPOSYNC_PORT=8080 \
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+docker compose up -d
 ```
 
 ## Como Acessar
@@ -106,7 +140,7 @@ curl http://127.0.0.1:8000/api/auth/status
 Verifique a GPU dentro do container:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml exec toposync nvidia-smi
+docker compose exec toposync nvidia-smi
 ```
 
 O esperado:
@@ -118,37 +152,43 @@ O esperado:
 
 Depois de concluir o setup/login pela UI, a API autenticada passa a responder as rotas protegidas, como `/api/extensions`.
 
-## Streaming Opcional
+## Streaming
 
-Para incluir streaming na imagem CUDA:
-
-```bash
-TOPOSYNC_APT_PACKAGES=ffmpeg \
-TOPOSYNC_EXTRA_WHEELS="/wheelhouse/toposync_ext_streaming-*.whl" \
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
-```
-
-Nesse modo:
-
-- FFmpeg entra como pacote do sistema;
-- a extensão `toposync-ext-streaming` entra como wheel adicional;
-- dados e runtime continuam em `/data`.
+Streaming já vem incluído na imagem CUDA pública. O FFmpeg está no `PATH`, e o
+go2rtc fica embutido em `/usr/local/bin/go2rtc`.
 
 ## Como Atualizar
 
-Atualize o checkout e recrie a imagem:
+Baixe a nova imagem e recrie o container:
 
 ```bash
-git pull
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+docker compose pull
+docker compose up -d
 ```
+
+Para uma release fixa, pinne a tag exata no `docker-compose.yml`, por exemplo
+`ghcr.io/toposync/toposync:0.7.6-cuda`.
+
+## Avançado: build local {/* #advanced-local-build */}
+
+Use o caminho de build local apenas quando estiver desenvolvendo o Toposync a
+partir de um checkout do repositório ou testando mudanças ainda não publicadas:
+
+```bash
+TOPOSYNC_DOCKER_TARGET=runtime-cuda \
+TOPOSYNC_LOCAL_IMAGE=toposync:local-cuda \
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml -f docker-compose.local-build.yml up -d --build
+```
+
+Isso cria o target `runtime-cuda` a partir do Dockerfile do monorepo em vez de
+puxar a imagem pública do GHCR.
 
 ## Como Desinstalar
 
 Parar e remover o container:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml down
+docker compose down
 ```
 
 Remover também os dados locais:
@@ -174,7 +214,7 @@ Se falhar, o problema está no host: driver NVIDIA, Docker ou NVIDIA Container T
 Veja os logs:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml logs -f toposync
+docker compose logs -f toposync
 ```
 
 Teste o healthcheck:

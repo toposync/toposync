@@ -1,0 +1,10 @@
+services:
+  toposync:
+    image: ${TOPOSYNC_LOCAL_IMAGE:-toposync:local}
+    build:
+      context: .
+      target: ${TOPOSYNC_DOCKER_TARGET:-runtime-cpu}
+      args:
+        TOPOSYNC_APT_PACKAGES: ${TOPOSYNC_APT_PACKAGES:-}
+        TOPOSYNC_EXTRA_WHEELS: ${TOPOSYNC_EXTRA_WHEELS:-}
+        TOPOSYNC_EXTRA_PIP_PACKAGES: ${TOPOSYNC_EXTRA_PIP_PACKAGES:-}

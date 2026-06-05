@@ -14,7 +14,17 @@ Run a processing server in a container.
 
 Use this path when you want to run an isolated processing server with Docker.
 
-This guide uses the local image built from the repository. It does not assume a public container image yet.
+The default image is:
+
+```text
+ghcr.io/toposync/toposync:0.7.6
+```
+
+Use the CUDA image on Linux hosts with NVIDIA acceleration:
+
+```text
+ghcr.io/toposync/toposync:0.7.6-cuda
+```
 
 For architecture and GPU support, see [Compatibility](architecture-support.mdx).
 
@@ -22,21 +32,20 @@ For architecture and GPU support, see [Compatibility](architecture-support.mdx).
 
 - Docker.
 - Docker Compose.
-- A Toposync repository checkout.
 - TCP access between the origin and the processing server. The default port is `49321`.
 
 ## Installation
 
-First build the local CPU image:
+Pull the CPU image:
 
 ```bash
-docker compose build
+docker pull ghcr.io/toposync/toposync:0.7.6
 ```
 
-For CUDA, build with the CUDA override:
+For CUDA:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml build
+docker pull ghcr.io/toposync/toposync:0.7.6-cuda
 ```
 
 ## How to run
@@ -51,7 +60,7 @@ docker run --rm -d \
   --no-healthcheck \
   -p 49321:49321 \
   -v "$PWD/toposync-processing-data:/data" \
-  toposync:local \
+  ghcr.io/toposync/toposync:0.7.6 \
   toposync processing-serve --host 0.0.0.0 --port 49321 --data-dir /data
 ```
 
@@ -65,11 +74,13 @@ docker run --rm -d \
   -e TOPOSYNC_PROCESSING_PASSWORD='<strong-password>' \
   -p 49321:49321 \
   -v "$PWD/toposync-processing-data:/data" \
-  toposync:local \
+  ghcr.io/toposync/toposync:0.7.6 \
   toposync processing-serve --host 0.0.0.0 --port 49321 --data-dir /data
 ```
 
-`--no-healthcheck` is intentional here: the local image has the origin healthcheck at `/api/health`, while the processing server responds at `/api/processing/status`.
+`--no-healthcheck` is intentional here: the image has the origin healthcheck at
+`/api/health`, while the processing server responds at
+`/api/processing/status`.
 
 ### Docker Compose override
 
@@ -78,7 +89,7 @@ Create a `docker-compose.processing.yml` file in your deployment directory:
 ```yaml
 services:
   toposync-processing:
-    image: toposync:local
+    image: ghcr.io/toposync/toposync:0.7.6
     command:
       - toposync
       - processing-serve
@@ -118,7 +129,8 @@ Start the service:
 docker compose -f docker-compose.processing.yml up -d
 ```
 
-For CUDA, make sure the `toposync:local` image was built with `docker-compose.cuda.yml` before starting this service.
+For CUDA, change the image to `ghcr.io/toposync/toposync:0.7.6-cuda` and add
+the NVIDIA device reservation used in the Docker CUDA guide.
 
 ## How to access
 
@@ -181,25 +193,32 @@ curl http://127.0.0.1:8000/api/processing-servers/docker_processing/status
 
 ## How to update
 
-Rebuild the local image:
+Pull the new image and recreate the processing server:
 
 ```bash
-git pull
-docker compose build
-```
-
-For CUDA:
-
-```bash
-git pull
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml build
-```
-
-Restart the processing server:
-
-```bash
+docker compose -f docker-compose.processing.yml pull
 docker compose -f docker-compose.processing.yml up -d
 ```
+
+## Advanced: local build {/* #advanced-local-build */}
+
+Use the local build path only when you are developing Toposync from a repository
+checkout or testing unpublished changes:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local-build.yml build
+```
+
+For a local CUDA image:
+
+```bash
+TOPOSYNC_DOCKER_TARGET=runtime-cuda \
+TOPOSYNC_LOCAL_IMAGE=toposync:local-cuda \
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml -f docker-compose.local-build.yml build
+```
+
+Then replace the image in your processing server Compose file with the local
+image tag you built.
 
 ## How to uninstall
 

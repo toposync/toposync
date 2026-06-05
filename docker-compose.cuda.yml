@@ -1,7 +1,6 @@
 services:
   toposync:
-    build:
-      target: runtime-cuda
+    image: ${TOPOSYNC_CUDA_IMAGE:-ghcr.io/toposync/toposync:0.7.6-cuda}
     deploy:
       resources:
         reservations:

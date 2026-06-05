@@ -441,6 +441,7 @@ def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping
         assert _node_config(pipeline, "camera.velocity_estimation").get("filter_mode") == "annotate"
         assert _node_config(pipeline, "vision.group_events").get("mode") == "proximity"
         assert _node_config(pipeline, "vision.group_events").get("group_distance_meters") == 10.0
+        assert _node_config(pipeline, "vision.group_events").get("include_stationary_members") is True
         assert _node_config(pipeline, "core.throttle").get("interval_seconds") == 10.0
         assert _node_config(pipeline, "core.notify").get("dedupe_key_template") == "{{subject.id}}"
         assert _edge_config(pipeline, "detect", "map").get("maxsize") == 8

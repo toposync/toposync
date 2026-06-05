@@ -163,6 +163,19 @@ def test_group_events_category_filter_passes_non_eligible_events_through() -> No
     asyncio.run(scenario())
 
 
+def test_group_events_drops_stationary_eligible_events_without_passthrough() -> None:
+    async def scenario() -> None:
+        runtime = _runtime({"categories": ["person"], "include_stationary_members": False})
+        packet = _event_packet(1.0, "1", category="person")
+        packet.payload["velocity"] = {"stopped": True}
+
+        outputs = await runtime.process_packet(packet, None)
+
+        assert outputs == []
+
+    asyncio.run(scenario())
+
+
 def test_group_events_disabled_passes_packets_through() -> None:
     async def scenario() -> None:
         runtime = _runtime({"mode": "disabled"})

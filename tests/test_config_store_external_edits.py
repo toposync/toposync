@@ -185,3 +185,103 @@ def test_config_store_removes_existing_event_assembler_and_retargets_downstream_
     assert not any(node["operator"] == "vision.event_assembler" for node in nodes)
     assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "store" for edge in edges)
     assert not any(edge["from"]["node"] == "event" or edge["to"]["node"] == "event" for edge in edges)
+
+
+def test_config_store_migrates_velocity_group_events_to_include_stationary_members(
+    tmp_path: Path,
+) -> None:
+    store = _create_store(tmp_path)
+    store.paths.data_dir.mkdir(parents=True, exist_ok=True)
+    store.paths.config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "pipelines": [
+                    {
+                        "name": "presence_area_without_stationary_members",
+                        "graph": {
+                            "schema_version": 1,
+                            "nodes": [
+                                {"id": "track", "operator": "vision.track", "config": {}},
+                                {
+                                    "id": "velocity",
+                                    "operator": "camera.velocity_estimation",
+                                    "config": {"filter_mode": "annotate"},
+                                },
+                                {
+                                    "id": "group",
+                                    "operator": "vision.group_events",
+                                    "config": {
+                                        "mode": "proximity",
+                                        "categories": ["person", "dog", "cat"],
+                                    },
+                                },
+                                {"id": "notify", "operator": "core.notify", "config": {}},
+                            ],
+                            "edges": [
+                                {"from": {"node": "track", "port": "out"}, "to": {"node": "velocity", "port": "in"}},
+                                {"from": {"node": "velocity", "port": "out"}, "to": {"node": "group", "port": "in"}},
+                                {"from": {"node": "group", "port": "out"}, "to": {"node": "notify", "port": "in"}},
+                            ],
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = asyncio.run(store.load())
+    nodes = config.pipelines[0].graph["nodes"]
+    nodes_by_id = {node["id"]: node for node in nodes}
+
+    assert nodes_by_id["group"]["config"]["include_stationary_members"] is True
+
+
+def test_config_store_preserves_explicit_group_events_stationary_setting(
+    tmp_path: Path,
+) -> None:
+    store = _create_store(tmp_path)
+    store.paths.data_dir.mkdir(parents=True, exist_ok=True)
+    store.paths.config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "pipelines": [
+                    {
+                        "name": "explicit_stationary_setting",
+                        "graph": {
+                            "schema_version": 1,
+                            "nodes": [
+                                {"id": "velocity", "operator": "camera.velocity_estimation", "config": {}},
+                                {
+                                    "id": "group",
+                                    "operator": "vision.group_events",
+                                    "config": {
+                                        "mode": "proximity",
+                                        "include_stationary_members": False,
+                                    },
+                                },
+                            ],
+                            "edges": [
+                                {"from": {"node": "velocity", "port": "out"}, "to": {"node": "group", "port": "in"}},
+                            ],
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = asyncio.run(store.load())
+    nodes = config.pipelines[0].graph["nodes"]
+    nodes_by_id = {node["id"]: node for node in nodes}
+
+    assert nodes_by_id["group"]["config"]["include_stationary_members"] is False

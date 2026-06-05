@@ -360,6 +360,40 @@ def _normalize_config(config: AppConfig) -> AppConfig:
                     return node
             return None
 
+        def _has_operator_before_node(
+            node_id: str,
+            *,
+            operator_id: str,
+            seen: set[str] | None = None,
+        ) -> bool:
+            if seen is None:
+                seen = set()
+            if node_id in seen:
+                return False
+            seen.add(node_id)
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    continue
+                source = edge.get("from")
+                target = edge.get("to")
+                if not isinstance(source, dict) or not isinstance(target, dict):
+                    continue
+                target_node_id = str(target.get("node") or "").strip()
+                if target_node_id != node_id:
+                    continue
+                source_node_id = str(source.get("node") or "").strip()
+                if not source_node_id:
+                    continue
+                source_node = _node_by_id(source_node_id)
+                if (
+                    isinstance(source_node, dict)
+                    and str(source_node.get("operator") or "").strip() == operator_id
+                ):
+                    return True
+                if _has_operator_before_node(source_node_id, operator_id=operator_id, seen=seen):
+                    return True
+            return False
+
         def _merge_event_config_into_track(track_config: dict[str, Any], event_config: dict[str, Any]) -> bool:
             cfg_changed = False
             if "max_gap_seconds" in event_config:
@@ -448,6 +482,29 @@ def _normalize_config(config: AppConfig) -> AppConfig:
                 item["config"] = cfg
 
             index += 1
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if str(node.get("operator") or "").strip() != "vision.group_events":
+                continue
+            node_id = str(node.get("id") or "").strip()
+            if not node_id:
+                continue
+            group_config = node.get("config")
+            if not isinstance(group_config, dict):
+                group_config = {}
+                node["config"] = group_config
+                changed = True
+            if "include_stationary_members" in group_config:
+                continue
+            if not _has_operator_before_node(
+                node_id,
+                operator_id="camera.velocity_estimation",
+            ):
+                continue
+            group_config["include_stationary_members"] = True
+            changed = True
 
         event_node_ids = {
             str(node.get("id") or "").strip()

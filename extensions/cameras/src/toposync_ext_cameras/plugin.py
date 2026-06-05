@@ -2501,6 +2501,7 @@ class CamerasExtension(BaseExtension):
                                     "update_interval_seconds": 5.0,
                                     "use_world_anchor": "auto",
                                     "group_distance_meters": 10.0,
+                                    "include_stationary_members": True,
                                 },
                             },
                             {

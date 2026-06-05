@@ -367,9 +367,12 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             subject=dict(subject),
         )
 
-    def _member_is_eligible(self, member: _MemberSnapshot) -> bool:
+    def _member_category_is_eligible(self, member: _MemberSnapshot) -> bool:
         if self._config.categories and member.category not in set(self._config.categories):
             return False
+        return True
+
+    def _member_should_be_grouped(self, member: _MemberSnapshot) -> bool:
         if self._config.include_stationary_members:
             return True
         stopped = _deep_get(member.packet.payload, "velocity.stopped")
@@ -814,8 +817,13 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         )
 
         member = self._extract_member(packet)
-        if member is None or not self._member_is_eligible(member):
+        if member is None:
             outputs.append(packet)
+            return outputs
+        if not self._member_category_is_eligible(member):
+            outputs.append(packet)
+            return outputs
+        if not self._member_should_be_grouped(member):
             return outputs
 
         if member.lifecycle == Lifecycle.CLOSE:

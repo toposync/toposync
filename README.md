@@ -1,5 +1,7 @@
 <p align="center">
-  <img src="frontend/src/assets/toposync-symbol.svg" alt="Toposync" width="96" />
+  <a href="https://toposync.com/">
+    <img src="docs-site/static/img/toposync-readme-banner.png" alt="Toposync - Spatial home automation with local intelligence" width="100%" />
+  </a>
 </p>
 
 # Toposync

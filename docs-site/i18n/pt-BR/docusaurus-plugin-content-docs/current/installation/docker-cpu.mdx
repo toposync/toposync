@@ -1,6 +1,6 @@
 ---
 title: Docker CPU
-description: "Rode o Toposync com Docker CPU usando build local, volume persistente, health checks e streaming opcional."
+description: "Rode o Toposync com Docker CPU usando build local, volume persistente, health checks e suporte de streaming para a primeira câmera."
 keywords: ["toposync", "local-first", "automação residencial", "Docker", "CPU", "instalação"]
 image: /img/social-card.png
 sidebar_position: 3
@@ -102,9 +102,10 @@ O esperado:
 
 Depois de concluir o setup/login pela UI, a API autenticada passa a responder as rotas protegidas, como `/api/extensions`.
 
-## Streaming Opcional
+## Primeira câmera e streaming {/* #first-camera-and-streaming */}
 
-Para incluir a extensão de streaming na imagem CPU:
+Para incluir a extensão de streaming na imagem CPU e testar a primeira câmera ao
+vivo:
 
 ```bash
 TOPOSYNC_APT_PACKAGES=ffmpeg \
@@ -117,6 +118,14 @@ Nesse modo:
 - FFmpeg entra como pacote do sistema;
 - a extensão `toposync-ext-streaming` entra como wheel adicional;
 - dados e runtime continuam em `/data`.
+
+Se você ainda não tem uma câmera real pronta, comece pelo caminho RTSP
+sintético:
+
+- [Teste sem uma câmera real](../first-steps/test-without-real-camera.mdx)
+
+Esse guia inicia uma fonte RTSP local, adiciona ela como câmera manual, publica
+a fonte e confirma a tela **Câmeras ao vivo**.
 
 ## Como Atualizar
 

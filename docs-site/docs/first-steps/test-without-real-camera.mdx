@@ -1,0 +1,129 @@
+---
+title: Test without a real camera
+description: "Use a synthetic RTSP camera to test Toposync live viewing before connecting real hardware."
+keywords: ["toposync", "local-first", "home automation", "RTSP", "camera", "streaming", "first steps"]
+image: /img/social-card.png
+sidebar_position: 5.5
+---
+
+# Test without a real camera {/* #test-without-a-real-camera */}
+
+Use this path when you want to validate the first camera and live viewing loop
+without depending on a real IP camera.
+
+This is a development and onboarding utility. It does not replace a real camera
+installation. It gives you a predictable RTSP source so you can confirm Docker,
+streaming, source publishing, and browser playback before adding real hardware.
+
+![Synthetic RTSP camera placeholder](/img/rtsp-placeholder-camera.jpg)
+
+## Start the synthetic RTSP camera {/* #start-the-synthetic-rtsp-camera */}
+
+In one terminal, from the repository root:
+
+```bash
+npm run dev:rtsp-image -- --expose docker
+```
+
+The command publishes the bundled placeholder image as H.264 RTSP and prints a
+URL like:
+
+```text
+rtsp://host.docker.internal:8554/toposync-sample-image
+```
+
+Leave this command running while you test Toposync.
+
+If you want to use your own image:
+
+```bash
+npm run dev:rtsp-image -- /path/to/image.jpg --expose docker
+```
+
+If you want a video loop instead:
+
+```bash
+npm run dev:rtsp-video -- --video /path/to/video.mp4 --expose docker
+```
+
+## Start Docker with streaming {/* #start-docker-with-streaming */}
+
+In another terminal:
+
+```bash
+TOPOSYNC_APT_PACKAGES=ffmpeg \
+TOPOSYNC_EXTRA_WHEELS="/wheelhouse/toposync_ext_streaming-*.whl" \
+docker compose up -d --build
+```
+
+Open Toposync:
+
+```text
+http://127.0.0.1:8000/
+```
+
+Complete the first-user setup if this is a new data directory.
+
+## Add the RTSP source {/* #add-the-rtsp-source */}
+
+In Toposync:
+
+1. Open **Settings**.
+2. Open **Cameras**.
+3. Select **Add manual**.
+4. Name the camera, for example `Synthetic RTSP camera`.
+5. Add an RTSP source.
+6. Paste the RTSP URL printed by the script.
+7. Set the source role to **Main**.
+8. Run **Probe**.
+9. Run **Snapshot**.
+10. Enable **Transmit this source**.
+11. Save the camera.
+
+The source should probe as H.264 video at `1280x720`. The snapshot should show
+the placeholder street image.
+
+## Confirm live viewing {/* #confirm-live-viewing */}
+
+Open the render mode menu and choose **Live cameras**.
+
+Expected result:
+
+- the camera card appears;
+- the state changes through warmup if needed;
+- the card reaches **Live**;
+- the video plays in the browser.
+
+A short warmup is normal. If the card stays stale or says no pipeline is
+feeding the transmission, save the camera source again or reconcile the
+publication from streaming settings.
+
+## Which exposure mode should I use? {/* #which-exposure-mode-should-i-use */}
+
+Use the mode that matches where Toposync runs:
+
+| Toposync runtime | RTSP script mode | URL shape |
+| --- | --- | --- |
+| Toposync runs directly on this host | `--expose local` | `rtsp://127.0.0.1:8554/...` |
+| Docker Desktop on macOS or Windows | `--expose docker` | `rtsp://host.docker.internal:8554/...` |
+| Linux Docker or another LAN machine | `--expose network --host <host-ip>` | `rtsp://<host-ip>:8554/...` |
+
+Do not use `127.0.0.1` inside Docker unless the RTSP server is running in the
+same container. From a Toposync container, `127.0.0.1` means the Toposync
+container itself, not your host machine.
+
+Network exposure has no viewer password. Use it only on a trusted development
+LAN.
+
+## Move to a real camera {/* #move-to-a-real-camera */}
+
+After this loop works, replace the synthetic URL with your real camera, NVR,
+Frigate, or go2rtc RTSP URL.
+
+Keep the same validation order:
+
+1. Probe.
+2. Snapshot.
+3. Enable **Transmit this source**.
+4. Confirm **Live cameras**.
+5. Add mapping and pipelines only after live viewing is stable.

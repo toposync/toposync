@@ -13,6 +13,8 @@
     "dev:backend": "uv run --group extensions python -m toposync serve",
     "dev:frontend": "npm --workspace @toposync/frontend run dev",
     "dev:camera-rtsp": "uv run --group extensions python scripts/local_camera_rtsp_server.py",
+    "dev:rtsp-image": "uv run --group extensions python scripts/rtsp_image_server.py",
+    "dev:rtsp-video": "uv run --group extensions python scripts/rtsp_video_server.py",
     "build:frontend": "npm --workspace @toposync/frontend run build",
     "typecheck:plugin-api": "npm --workspace @toposync/plugin-api run typecheck",
     "pack:plugin-api": "npm --workspace @toposync/plugin-api run pack:dry-run",

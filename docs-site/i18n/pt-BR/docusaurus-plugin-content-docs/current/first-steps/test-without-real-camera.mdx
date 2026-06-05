@@ -1,0 +1,130 @@
+---
+title: Teste sem uma câmera real
+description: "Use uma câmera RTSP sintética para testar live viewing no Toposync antes de conectar hardware real."
+keywords: ["toposync", "local-first", "automação residencial", "RTSP", "câmera", "streaming", "primeiros passos"]
+image: /img/social-card.png
+sidebar_position: 5.5
+---
+
+# Teste sem uma câmera real {/* #test-without-a-real-camera */}
+
+Use este caminho quando quiser validar o primeiro ciclo de câmera e transmissão
+ao vivo sem depender de uma câmera IP real.
+
+Este é um utilitário de desenvolvimento e onboarding. Ele não substitui uma
+instalação com câmera real. Ele fornece uma fonte RTSP previsível para confirmar
+Docker, streaming, publicação de fonte e playback no navegador antes de adicionar
+hardware real.
+
+![Placeholder de câmera RTSP sintética](/img/rtsp-placeholder-camera.jpg)
+
+## Inicie a câmera RTSP sintética {/* #start-the-synthetic-rtsp-camera */}
+
+Em um terminal, na raiz do repositório:
+
+```bash
+npm run dev:rtsp-image -- --expose docker
+```
+
+O comando publica a imagem placeholder do repositório como RTSP H.264 e imprime
+uma URL como:
+
+```text
+rtsp://host.docker.internal:8554/toposync-sample-image
+```
+
+Deixe esse comando rodando enquanto testa o Toposync.
+
+Se quiser usar sua própria imagem:
+
+```bash
+npm run dev:rtsp-image -- /caminho/para/imagem.jpg --expose docker
+```
+
+Se quiser um vídeo em loop:
+
+```bash
+npm run dev:rtsp-video -- --video /caminho/para/video.mp4 --expose docker
+```
+
+## Suba o Docker com streaming {/* #start-docker-with-streaming */}
+
+Em outro terminal:
+
+```bash
+TOPOSYNC_APT_PACKAGES=ffmpeg \
+TOPOSYNC_EXTRA_WHEELS="/wheelhouse/toposync_ext_streaming-*.whl" \
+docker compose up -d --build
+```
+
+Abra o Toposync:
+
+```text
+http://127.0.0.1:8000/
+```
+
+Conclua a criação do primeiro usuário se a pasta de dados estiver nova.
+
+## Adicione a fonte RTSP {/* #add-the-rtsp-source */}
+
+No Toposync:
+
+1. Abra **Configurações**.
+2. Abra **Câmeras**.
+3. Selecione **Adicionar manual**.
+4. Nomeie a câmera, por exemplo `Câmera RTSP sintética`.
+5. Adicione uma fonte RTSP.
+6. Cole a URL RTSP impressa pelo script.
+7. Defina o papel da fonte como **Principal**.
+8. Rode **Probe**.
+9. Rode **Snapshot**.
+10. Habilite **Transmitir esta fonte**.
+11. Salve a câmera.
+
+A fonte deve aparecer no probe como vídeo H.264 em `1280x720`. O snapshot deve
+mostrar a imagem de rua usada como placeholder.
+
+## Confirme a transmissão ao vivo {/* #confirm-live-viewing */}
+
+Abra o menu de modo de renderização e escolha **Câmeras ao vivo**.
+
+Resultado esperado:
+
+- o card da câmera aparece;
+- o estado passa por aquecimento se necessário;
+- o card chega a **Live**;
+- o vídeo toca no navegador.
+
+Um aquecimento curto é normal. Se o card ficar stale ou indicar que nenhum
+pipeline alimenta a transmissão, salve a fonte da câmera novamente ou reconcilie
+a publicação nas configurações de streaming.
+
+## Qual modo de exposição devo usar? {/* #which-exposure-mode-should-i-use */}
+
+Use o modo que combina com o local onde o Toposync roda:
+
+| Runtime do Toposync | Modo do script RTSP | Formato da URL |
+| --- | --- | --- |
+| Toposync roda direto neste host | `--expose local` | `rtsp://127.0.0.1:8554/...` |
+| Docker Desktop no macOS ou Windows | `--expose docker` | `rtsp://host.docker.internal:8554/...` |
+| Docker Linux ou outra máquina na LAN | `--expose network --host <ip-do-host>` | `rtsp://<ip-do-host>:8554/...` |
+
+Não use `127.0.0.1` dentro do Docker, a menos que o servidor RTSP esteja rodando
+no mesmo container. Para um container Toposync, `127.0.0.1` significa o próprio
+container do Toposync, não a máquina host.
+
+A exposição de rede não tem senha de visualização. Use apenas em uma LAN de
+desenvolvimento confiável.
+
+## Migre para uma câmera real {/* #move-to-a-real-camera */}
+
+Depois que esse ciclo funcionar, substitua a URL sintética pela URL RTSP real da
+câmera, NVR, Frigate ou go2rtc.
+
+Mantenha a mesma ordem de validação:
+
+1. Probe.
+2. Snapshot.
+3. Habilitar **Transmitir esta fonte**.
+4. Confirmar **Câmeras ao vivo**.
+5. Adicionar mapeamento e pipelines apenas depois que a transmissão estiver estável.

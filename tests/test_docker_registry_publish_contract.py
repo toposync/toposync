@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
+from types import ModuleType
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +11,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
+
+
+def _load_registry_smoke_script() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "check_docker_registry_image",
+        ROOT / "scripts/check_docker_registry_image.py",
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _section(text: str, start: str, end: str | None = None) -> str:
@@ -113,3 +127,19 @@ def test_docker_publish_workflow_uses_ghcr_tags_and_attestations() -> None:
     assert "${{ steps.release.outputs.version }}-cuda" in workflow
     assert "docker.io" not in workflow
     assert "gcloud" not in workflow.lower()
+
+
+def test_registry_smoke_treats_connection_reset_as_startup_transient(monkeypatch) -> None:
+    smoke = _load_registry_smoke_script()
+    health_attempts = iter([ConnectionResetError("connection reset by peer"), {"status": "ok"}])
+
+    def read_json(_url: str, *, timeout: float = 5.0) -> object:
+        result = next(health_attempts)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    monkeypatch.setattr(smoke, "_read_json", read_json)
+    monkeypatch.setattr(smoke.time, "sleep", lambda _seconds: None)
+
+    smoke._wait_for_health("http://127.0.0.1:1", timeout_s=5.0)

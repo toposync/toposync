@@ -62,7 +62,14 @@ def _wait_for_health(base_url: str, *, timeout_s: float = 120.0) -> None:
             if isinstance(payload, dict) and payload.get("status") == "ok":
                 return
             last_error = f"unexpected health payload: {payload!r}"
-        except (TimeoutError, urllib.error.URLError, json.JSONDecodeError, http.client.HTTPException) as exc:
+        except (
+            ConnectionError,
+            TimeoutError,
+            socket.timeout,
+            urllib.error.URLError,
+            json.JSONDecodeError,
+            http.client.HTTPException,
+        ) as exc:
             last_error = str(exc)
         time.sleep(2.0)
     raise RuntimeError(f"Timed out waiting for {base_url}/api/health: {last_error}")
@@ -149,6 +156,16 @@ def _run_container(args: argparse.Namespace) -> None:
             for module_name in ("toposync", "toposync_ext_streaming.plugin", "toposync_ext_vision"):
                 _assert_import(container_id, module_name)
         finally:
+            subprocess.run(
+                [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}",
+                    container_id,
+                ],
+                check=False,
+            )
             subprocess.run(["docker", "logs", "--tail", "160", container_id], check=False)
             subprocess.run(["docker", "stop", container_id], check=False)
 

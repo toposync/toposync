@@ -227,6 +227,11 @@ class VisionModelInstallManager:
             "local_build_backend": str(local_build.get("backend") or "").strip(),
             "local_build_runtime": str(local_build.get("container_runtime") or "").strip(),
             "local_build_source_label": local_build_source_label,
+            "local_build_missing_tools": [
+                str(item or "").strip()
+                for item in list(local_build.get("missing_tools") or [])
+                if str(item or "").strip()
+            ],
         }
 
     def start_install(

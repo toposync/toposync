@@ -14,6 +14,7 @@ from ..streaming.mediamtx_config import normalize_path_slug
 EXTENSION_ID = "com.toposync.streaming"
 TEST_PATH = "test"
 StreamingRuntimeStatus = Literal["live", "degraded", "stale", "offline"]
+StreamingSummaryStatus = Literal["working", "warming", "action_required"]
 StreamingStreamBehavior = Literal["continuous", "event_gated"]
 StreamingEncoderMode = Literal["auto", "cpu"]
 StreamingOutputEncoderMode = Literal["inherit", "auto", "cpu"]
@@ -1055,6 +1056,10 @@ class StreamingMseSidecarStatusResponse(BaseModel):
     stream_count: int = Field(default=0, ge=0)
     warnings: list[str] = Field(default_factory=list)
     restart_count: int = Field(default=0, ge=0)
+    summary_status: StreamingSummaryStatus = "warming"
+    summary_message: str = ""
+    summary_action: str | None = None
+    technical_status: str = "unknown"
 
 
 class StreamingJsmpegStatusResponse(BaseModel):
@@ -1479,6 +1484,10 @@ class StreamingOutputRuntimeStatus(BaseModel):
     demand_idle: bool = False
     classification: StreamingObservabilityClassification = "unknown"
     evidence: list[str] = Field(default_factory=list)
+    summary_status: StreamingSummaryStatus = "warming"
+    summary_message: str = ""
+    summary_action: str | None = None
+    technical_status: str = "unknown"
     active_playback_session_count: int = Field(default=0, ge=0)
     last_playback_event_at_unix: float | None = None
     publisher_frames_sent_rate: float | None = None
@@ -1529,6 +1538,10 @@ class StreamingRuntimeOutputHealth(BaseModel):
     demand_idle: bool = False
     classification: StreamingObservabilityClassification = "unknown"
     evidence: list[str] = Field(default_factory=list)
+    summary_status: StreamingSummaryStatus = "warming"
+    summary_message: str = ""
+    summary_action: str | None = None
+    technical_status: str = "unknown"
     active_playback_session_count: int = Field(default=0, ge=0)
     last_playback_event_at_unix: float | None = None
     publisher_frames_sent_rate: float | None = None
@@ -1558,6 +1571,10 @@ class StreamingRuntimeTransmissionHealth(BaseModel):
     demand_idle: bool = False
     classification: StreamingObservabilityClassification = "unknown"
     evidence: list[str] = Field(default_factory=list)
+    summary_status: StreamingSummaryStatus = "warming"
+    summary_message: str = ""
+    summary_action: str | None = None
+    technical_status: str = "unknown"
     active_playback_session_count: int = Field(default=0, ge=0)
     last_playback_event_at_unix: float | None = None
     source_health: StreamingRuntimeSourceHealth | None = None
@@ -1678,6 +1695,10 @@ class StreamingRuntimeObservabilityItem(BaseModel):
     output_id: str | None = None
     classification: StreamingObservabilityClassification
     evidence: list[str] = Field(default_factory=list)
+    summary_status: StreamingSummaryStatus = "warming"
+    summary_message: str = ""
+    summary_action: str | None = None
+    technical_status: str = "unknown"
     active_playback_sessions: list[StreamingPlaybackSessionSummary] = Field(default_factory=list)
     last_playback_event_at_unix: float | None = None
     publisher_frames_sent_rate: float | None = None

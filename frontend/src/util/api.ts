@@ -1047,6 +1047,7 @@ export type StreamingTransmissionDemandHeartbeatResponse = {
 };
 
 export type StreamingRuntimeStatus = "live" | "degraded" | "stale" | "offline";
+export type StreamingSummaryStatus = "working" | "warming" | "action_required";
 export type StreamingStreamBehavior = "continuous" | "event_gated";
 export type StreamingEncoderMode = "auto" | "cpu";
 export type StreamingEncoderTrustState = "candidate" | "trusted" | "quarantined";
@@ -1144,6 +1145,10 @@ export type StreamingOutputRuntimeStatus = {
   demand_idle?: boolean;
   classification?: StreamingObservabilityClassification;
   evidence?: string[];
+  summary_status?: StreamingSummaryStatus;
+  summary_message?: string;
+  summary_action?: string | null;
+  technical_status?: string;
   active_playback_session_count?: number;
   last_playback_event_at_unix?: number | null;
   publisher_frames_sent_rate?: number | null;
@@ -1190,6 +1195,10 @@ export type StreamingRuntimeOutputHealth = {
   demand_idle?: boolean;
   classification?: StreamingObservabilityClassification;
   evidence?: string[];
+  summary_status?: StreamingSummaryStatus;
+  summary_message?: string;
+  summary_action?: string | null;
+  technical_status?: string;
   active_playback_session_count?: number;
   last_playback_event_at_unix?: number | null;
   publisher_frames_sent_rate?: number | null;
@@ -1217,6 +1226,10 @@ export type StreamingRuntimeTransmissionHealth = {
   demand_idle?: boolean;
   classification?: StreamingObservabilityClassification;
   evidence?: string[];
+  summary_status?: StreamingSummaryStatus;
+  summary_message?: string;
+  summary_action?: string | null;
+  technical_status?: string;
   active_playback_session_count?: number;
   last_playback_event_at_unix?: number | null;
   source_health?: StreamingRuntimeSourceHealth | null;

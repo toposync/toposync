@@ -1554,6 +1554,53 @@ async def _wait_for_mse_sidecar_api_reachable(
         await asyncio.sleep(max(0.05, float(poll_s)))
 
 
+def _mse_sidecar_summary(
+    *,
+    enabled: bool,
+    engine_enabled: bool,
+    running: bool,
+    api_reachable: bool,
+    last_error: str | None,
+) -> dict[str, Any]:
+    if not enabled:
+        return _runtime_summary_payload(
+            status="working",
+            message="MSE sidecar is disabled.",
+            technical_status="disabled",
+        )
+    if not engine_enabled:
+        return _runtime_summary_payload(
+            status="action_required",
+            message="Action needed: MSE needs the streaming engine to be enabled.",
+            action="Enable the streaming engine before using MSE playback.",
+            technical_status="engine_disabled",
+        )
+    if running and api_reachable:
+        return _runtime_summary_payload(
+            status="working",
+            message="Working.",
+            technical_status="running",
+        )
+    if running:
+        return _runtime_summary_payload(
+            status="warming",
+            message="MSE sidecar is restarting, wait a few seconds.",
+            technical_status="running_unreachable",
+        )
+    if last_error:
+        return _runtime_summary_payload(
+            status="action_required",
+            message="Action needed: MSE sidecar is not running.",
+            action="Restart MSE or inspect the go2rtc log.",
+            technical_status="stopped_error",
+        )
+    return _runtime_summary_payload(
+        status="warming",
+        message="MSE sidecar is starting.",
+        technical_status="stopped",
+    )
+
+
 async def _prime_mse_proxy_demand(
     request: Request | WebSocket,
     *,
@@ -3898,6 +3945,214 @@ def _classify_observability(
     return "unknown", ["Insufficient recent evidence to classify the stream."]
 
 
+def _source_health_requires_action(source_health: StreamingRuntimeSourceHealth | None) -> bool:
+    if source_health is None:
+        return False
+    if source_health.ingest_blocking_errors:
+        return True
+    return source_health.status in {
+        "stale",
+        "unreachable",
+        "unauthorized",
+        "error",
+    }
+
+
+def _source_health_action(source_health: StreamingRuntimeSourceHealth | None) -> str | None:
+    if source_health is None:
+        return None
+    if source_health.recommended_action:
+        return source_health.recommended_action
+    if source_health.ingest_blocking_errors:
+        return "Review the ingest configuration before testing the stream again."
+    if source_health.status in {"unreachable", "unauthorized", "error", "stale"}:
+        return "Test RTSP and review the camera source URL or credentials."
+    return None
+
+
+def _runtime_summary_has_fresh_frame(
+    *,
+    health: StreamingRuntimeTransmissionHealth,
+    output: StreamingRuntimeOutputHealth | None,
+) -> bool:
+    target_status = output.status if output is not None else health.status
+    if target_status not in {"live", "degraded"}:
+        return False
+    if health.stale or health.placeholder_active:
+        return False
+    if output is not None and not output.publisher_running:
+        return False
+
+    ages = [
+        health.selected_frame_age_seconds,
+        health.last_incoming_frame_age_seconds,
+    ]
+    source_health = output.source_health if output is not None else health.source_health
+    if source_health is not None:
+        ages.append(source_health.source_frame_age_seconds)
+    numeric_ages = [float(age) for age in ages if isinstance(age, int | float)]
+    if numeric_ages:
+        return min(numeric_ages) <= 10.0
+    return True
+
+
+def _runtime_summary_payload(
+    *,
+    status: Literal["working", "warming", "action_required"],
+    message: str,
+    technical_status: str,
+    action: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "summary_status": status,
+        "summary_message": message,
+        "summary_action": action,
+        "technical_status": technical_status or "unknown",
+    }
+
+
+def _runtime_health_summary(
+    *,
+    health: StreamingRuntimeTransmissionHealth,
+    output: StreamingRuntimeOutputHealth | None,
+) -> dict[str, Any]:
+    target_status = output.status if output is not None else health.status
+    classification = str(output.classification if output is not None else health.classification or "unknown")
+    source_health = output.source_health if output is not None else health.source_health
+    fresh_frame = _runtime_summary_has_fresh_frame(health=health, output=output)
+    demand_idle = bool(output.demand_idle if output is not None else health.demand_idle)
+    event_gated_idle = bool(output.event_gated_idle if output is not None else health.event_gated_idle)
+    fallback_active = bool(health.fallback_active or (output.publisher_encoder_fallback_active if output is not None else False))
+
+    if classification == "network_contract_error":
+        return _runtime_summary_payload(
+            status="action_required",
+            message="Action needed: network settings are blocking playback.",
+            action="Review the streaming network contract and exposed ports.",
+            technical_status=classification,
+        )
+
+    if _source_health_requires_action(source_health):
+        return _runtime_summary_payload(
+            status="action_required",
+            message="Action needed: the camera source is not delivering usable frames.",
+            action=_source_health_action(source_health),
+            technical_status=classification,
+        )
+
+    if classification in {"source_stale", "source_pipeline_stale"} and not fresh_frame:
+        return _runtime_summary_payload(
+            status="action_required",
+            message="Action needed: no fresh frame is available for this stream.",
+            action="Check the camera source and stream pipeline.",
+            technical_status=classification,
+        )
+
+    if classification == "publisher_down":
+        publisher_running = bool(output.publisher_running) if output is not None else True
+        active_demand = bool(_output_has_active_demand(output)) if output is not None else health.active_playback_session_count > 0
+        if active_demand and not (fresh_frame and publisher_running):
+            return _runtime_summary_payload(
+                status="action_required",
+                message="Action needed: the stream publisher is down while playback is requested.",
+                action="Restart streaming or inspect the publisher logs.",
+                technical_status=classification,
+            )
+        if fresh_frame:
+            return _runtime_summary_payload(
+                status="working",
+                message="Working.",
+                technical_status=classification,
+            )
+
+    if classification in {"auth_url_error", "webrtc_transport_error", "app_player_lifecycle"}:
+        if fresh_frame:
+            return _runtime_summary_payload(
+                status="working",
+                message="Working.",
+                technical_status=classification,
+            )
+        return _runtime_summary_payload(
+            status="action_required",
+            message="Action needed: playback failed and has not recovered.",
+            action="Open the player again and review the playback diagnostics if it still fails.",
+            technical_status=classification,
+        )
+
+    if demand_idle or classification == "demand_idle":
+        return _runtime_summary_payload(
+            status="warming",
+            message="Waiting for viewer demand.",
+            technical_status=classification,
+        )
+
+    if event_gated_idle or classification == "event_gated_idle":
+        return _runtime_summary_payload(
+            status="warming",
+            message="Waiting for an event frame.",
+            technical_status=classification,
+        )
+
+    if classification in {"hls_tail_unavailable", "hls_playlist_stale"}:
+        return _runtime_summary_payload(
+            status="warming",
+            message="Warming up playback, wait a few seconds.",
+            technical_status=classification,
+        )
+
+    if fallback_active and fresh_frame:
+        return _runtime_summary_payload(
+            status="warming",
+            message="Recovering with a fallback frame.",
+            technical_status=classification,
+        )
+
+    if target_status == "stale" or health.stale:
+        return _runtime_summary_payload(
+            status="action_required",
+            message="Action needed: the selected stream frame is stale.",
+            action="Check the camera source and stream pipeline.",
+            technical_status=classification,
+        )
+
+    if target_status == "offline":
+        message = "Stream is disabled." if not health.enabled else "Waiting for the first frame."
+        return _runtime_summary_payload(
+            status="warming",
+            message=message,
+            technical_status=classification,
+        )
+
+    if fresh_frame:
+        return _runtime_summary_payload(
+            status="working",
+            message="Working.",
+            technical_status=classification,
+        )
+
+    return _runtime_summary_payload(
+        status="warming",
+        message="Starting stream runtime.",
+        technical_status=classification,
+    )
+
+
+def _apply_runtime_health_summaries(health: StreamingRuntimeHealthResponse) -> StreamingRuntimeHealthResponse:
+    for transmission in health.transmissions:
+        for output in transmission.outputs:
+            payload = _runtime_health_summary(health=transmission, output=output)
+            output.summary_status = payload["summary_status"]
+            output.summary_message = payload["summary_message"]
+            output.summary_action = payload["summary_action"]
+            output.technical_status = payload["technical_status"]
+        payload = _runtime_health_summary(health=transmission, output=None)
+        transmission.summary_status = payload["summary_status"]
+        transmission.summary_message = payload["summary_message"]
+        transmission.summary_action = payload["summary_action"]
+        transmission.technical_status = payload["technical_status"]
+    return health
+
+
 def _publisher_frames_sent_rate(
     *,
     request: Request,
@@ -3985,7 +4240,7 @@ async def _annotate_runtime_health_observability(
         transmission.evidence = winner[1]
         transmission.active_playback_session_count = len(active_sessions)
         transmission.last_playback_event_at_unix = last_event_at
-    return health
+    return _apply_runtime_health_summaries(health)
 
 
 def _mediamtx_output_snapshot(mediamtx_snapshot: dict[str, Any], *, path: str) -> dict[str, Any]:
@@ -4058,6 +4313,10 @@ async def _build_runtime_observability(
                     transmission_id=transmission.transmission_id,
                     classification=transmission.classification,
                     evidence=transmission.evidence,
+                    summary_status=transmission.summary_status,
+                    summary_message=transmission.summary_message,
+                    summary_action=transmission.summary_action,
+                    technical_status=transmission.technical_status,
                     active_playback_sessions=sessions,
                     last_playback_event_at_unix=transmission.last_playback_event_at_unix,
                     health=transmission,
@@ -4077,6 +4336,10 @@ async def _build_runtime_observability(
                     output_id=output.output_id,
                     classification=output.classification,
                     evidence=output.evidence,
+                    summary_status=output.summary_status,
+                    summary_message=output.summary_message,
+                    summary_action=output.summary_action,
+                    technical_status=output.technical_status,
                     active_playback_sessions=sessions,
                     last_playback_event_at_unix=output.last_playback_event_at_unix,
                     publisher_frames_sent_rate=output.publisher_frames_sent_rate,
@@ -6318,10 +6581,18 @@ def create_streaming_router() -> APIRouter:
                 "go2rtc binary is not installed yet. The next MSE start will download it automatically (internet required), "
                 "or set TOPOSYNC_STREAMING_GO2RTC_PATH to a local path."
             )
+        api_reachable = await _mse_sidecar_api_reachable(status)
+        summary = _mse_sidecar_summary(
+            enabled=bool(settings.engine.mse_sidecar.enabled),
+            engine_enabled=bool(settings.engine.enabled),
+            running=status.running,
+            api_reachable=api_reachable,
+            last_error=status.last_error,
+        )
         return StreamingMseSidecarStatusResponse(
             enabled=bool(settings.engine.mse_sidecar.enabled),
             running=status.running,
-            api_reachable=await _mse_sidecar_api_reachable(status),
+            api_reachable=api_reachable,
             pid=status.pid,
             uptime_seconds=status.uptime_seconds,
             started_at_unix=status.started_at_unix,
@@ -6336,6 +6607,10 @@ def create_streaming_router() -> APIRouter:
             stream_count=status.stream_count,
             warnings=_dedupe_messages(warnings),
             restart_count=status.restart_count,
+            summary_status=summary["summary_status"],
+            summary_message=summary["summary_message"],
+            summary_action=summary["summary_action"],
+            technical_status=summary["technical_status"],
         )
 
     @router.post("/mse/download", response_model=StreamingMseSidecarStatusResponse)
@@ -6406,7 +6681,8 @@ def create_streaming_router() -> APIRouter:
         settings = await _save_settings(config_store, settings)
         try:
             streams = await _build_mse_sidecar_streams(request, settings=settings)
-            await _mse_sidecar_manager(request).restart(settings.engine.mse_sidecar, streams=streams)
+            status = await _mse_sidecar_manager(request).restart(settings.engine.mse_sidecar, streams=streams)
+            await _wait_for_mse_sidecar_api_reachable(status, timeout_s=2.5)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to restart MSE sidecar: {exc}") from exc
         return await mse_sidecar_status(request)
@@ -8235,6 +8511,10 @@ def create_streaming_router() -> APIRouter:
                         event_gate_reasons=transmission.event_gate_reasons,
                         classification=output.classification,
                         evidence=output.evidence,
+                        summary_status=output.summary_status,
+                        summary_message=output.summary_message,
+                        summary_action=output.summary_action,
+                        technical_status=output.technical_status,
                         active_playback_session_count=output.active_playback_session_count,
                         last_playback_event_at_unix=output.last_playback_event_at_unix,
                         publisher_frames_sent_rate=output.publisher_frames_sent_rate,
@@ -8422,6 +8702,10 @@ def create_streaming_router() -> APIRouter:
                 event_gate_reasons=transmission.event_gate_reasons,
                 classification=output.classification,
                 evidence=output.evidence,
+                summary_status=output.summary_status,
+                summary_message=output.summary_message,
+                summary_action=output.summary_action,
+                technical_status=output.technical_status,
                 active_playback_session_count=output.active_playback_session_count,
                 last_playback_event_at_unix=output.last_playback_event_at_unix,
                 publisher_frames_sent_rate=output.publisher_frames_sent_rate,

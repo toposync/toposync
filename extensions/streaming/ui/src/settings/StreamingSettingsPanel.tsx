@@ -56,6 +56,7 @@ import type {
   StreamingRuntimeOutputHealth,
   StreamingRuntimeStatus,
   StreamingRuntimeTransmissionHealth,
+  StreamingSummaryStatus,
   StreamingQualityProfile,
   StreamingQualityProfilesResponse,
   StreamingQualityProfileId,
@@ -381,6 +382,58 @@ function runtimeStatusClass(status: StreamingRuntimeStatus | undefined): string 
   if (status === "stale") return "is-stale";
   if (status === "offline") return "is-offline";
   return "is-unknown";
+}
+
+type RuntimeSummaryCarrier = {
+  summary_status?: StreamingSummaryStatus;
+  summary_message?: string | null;
+  summary_action?: string | null;
+  technical_status?: string | null;
+  classification?: string | null;
+};
+
+function runtimeSummaryStatusLabel(status: StreamingSummaryStatus | undefined, t: TranslateFn): string {
+  if (status === "working") return t("ext.streaming.summary.working", {}, "Funcionando");
+  if (status === "warming") return t("ext.streaming.summary.warming", {}, "Em aquecimento");
+  if (status === "action_required") return t("ext.streaming.summary.action_required", {}, "Ação necessária");
+  return t("ext.streaming.summary.unknown", {}, "Sem leitura");
+}
+
+function runtimeSummaryStatusClass(status: StreamingSummaryStatus | undefined): string {
+  if (status === "working") return "is-live";
+  if (status === "warming") return "is-degraded";
+  if (status === "action_required") return "is-offline";
+  return "is-unknown";
+}
+
+function runtimeSummaryMessage(summary: RuntimeSummaryCarrier | null | undefined, t: TranslateFn): string {
+  const status = summary?.summary_status;
+  const message = String(summary?.summary_message || "").trim();
+  if (status === "working") return t("ext.streaming.summary.message.working", {}, "Funcionando.");
+  if (status === "warming") {
+    if (message === "Waiting for viewer demand.") {
+      return t("ext.streaming.summary.message.waiting_demand", {}, "Aquecendo quando houver visualização.");
+    }
+    if (message === "Waiting for an event frame.") {
+      return t("ext.streaming.summary.message.waiting_event", {}, "Aquecendo, aguardando evento.");
+    }
+    if (message === "Warming up playback, wait a few seconds.") {
+      return t("ext.streaming.summary.message.warming_playback", {}, "Aquecendo transmissão, aguarde alguns segundos.");
+    }
+    if (message === "Recovering with a fallback frame.") {
+      return t("ext.streaming.summary.message.recovering_fallback", {}, "Aquecendo com frame de fallback.");
+    }
+    if (message === "Waiting for the first frame." || message === "Starting stream runtime.") {
+      return t("ext.streaming.summary.message.waiting_first_frame", {}, "Aquecendo, aguardando primeiro frame.");
+    }
+    return message || t("ext.streaming.summary.message.warming", {}, "Aquecendo, aguarde.");
+  }
+  if (status === "action_required") {
+    const fallback = t("ext.streaming.summary.message.action_required", {}, "Ação necessária.");
+    const action = String(summary?.summary_action || "").trim();
+    return action ? `${message || fallback} ${action}` : message || fallback;
+  }
+  return message || "-";
 }
 
 function runtimeDemandIdle(item: StreamingRuntimeTransmissionHealth | null | undefined): boolean {
@@ -1646,6 +1699,11 @@ function StreamingSettingsPanelContent({
       const variantHealth = enabledVariants
         .map((variant) => runtimeHealthByTransmissionId.get(String(variant.transmission_id || "").trim()) ?? null)
         .filter((item): item is StreamingRuntimeTransmissionHealth => Boolean(item));
+      const summaryAware = variantHealth.some((item) => Boolean(item.summary_status));
+      const hasSummaryActionRequired = variantHealth.some((item) => item.summary_status === "action_required");
+      const hasSummaryWorking = variantHealth.some((item) => item.summary_status === "working");
+      const hasSummaryWarming = variantHealth.length > 0 && variantHealth.every((item) => item.summary_status === "warming");
+      const firstSummary = variantHealth.find((item) => item.summary_status === "action_required") ?? variantHealth[0] ?? null;
       const hasNoPipeline = variantHealth.some(
         (item) =>
           !runtimeDemandIdle(item) &&
@@ -1679,6 +1737,18 @@ function StreamingSettingsPanelContent({
         statusClass = "is-offline";
         statusLabel = t("ext.streaming.live.status.no_variants", {}, "Sem variantes");
         statusDetail = t("ext.streaming.live.status.no_variants_detail", {}, "Nenhuma fonte está marcada para exibição.");
+      } else if (hasSummaryActionRequired) {
+        statusClass = runtimeSummaryStatusClass("action_required");
+        statusLabel = runtimeSummaryStatusLabel("action_required", t);
+        statusDetail = runtimeSummaryMessage(firstSummary, t);
+      } else if (hasSummaryWarming) {
+        statusClass = runtimeSummaryStatusClass("warming");
+        statusLabel = runtimeSummaryStatusLabel("warming", t);
+        statusDetail = runtimeSummaryMessage(firstSummary, t);
+      } else if (summaryAware && hasSummaryWorking) {
+        statusClass = runtimeSummaryStatusClass("working");
+        statusLabel = runtimeSummaryStatusLabel("working", t);
+        statusDetail = runtimeSummaryMessage(firstSummary, t);
       } else if (hasNoPipeline) {
         statusClass = "is-offline";
         statusLabel = t("ext.streaming.live.status.no_pipeline", {}, "Sem fluxo");
@@ -1779,6 +1849,40 @@ function StreamingSettingsPanelContent({
           output.publisher_running === false &&
           (output.demand_signal || (output.viewer_count ?? 0) > 0 || (output.active_playback_session_count ?? 0) > 0),
       );
+
+      if (transmissionHealth.summary_status === "working") {
+        continue;
+      }
+
+      if (transmissionHealth.summary_status === "action_required") {
+        issues.push({
+          key: `${transmissionId}:summary-action-required`,
+          severity: "critical",
+          title: t("ext.streaming.issues.summary_action_title", { name: label }, `${label}: ação necessária`),
+          detail: runtimeSummaryMessage(transmissionHealth, t),
+          actionLabel: selectedPipeline
+            ? t("ext.streaming.issues.action.pipeline", {}, "Ver fluxo")
+            : t("ext.streaming.issues.action.advanced", {}, "Inspecionar artefato"),
+          actionTab: selectedPipeline ? undefined : "advanced",
+          transmissionId,
+          pipelineName: selectedPipeline?.pipeline_name ?? null,
+        });
+        continue;
+      }
+
+      if (transmissionHealth.summary_status === "warming") {
+        issues.push({
+          key: `${transmissionId}:summary-warming`,
+          severity: "info",
+          title: t("ext.streaming.issues.summary_warming_title", { name: label }, `${label}: em aquecimento`),
+          detail: runtimeSummaryMessage(transmissionHealth, t),
+          actionLabel: t("ext.streaming.issues.action.advanced", {}, "Inspecionar artefato"),
+          actionTab: "advanced",
+          transmissionId,
+          pipelineName: selectedPipeline?.pipeline_name ?? null,
+        });
+        continue;
+      }
 
       if (!demandIdle && noFrame && noWriter) {
         issues.push({
@@ -3084,6 +3188,7 @@ function StreamingSettingsPanelContent({
                 <tbody>
                   {runtimeRows.map(({ key, transmission, output, transmissionLabel, outputLabel, pipelineLink }) => {
                     const status = output?.status ?? transmission.status;
+                    const summary = output ?? transmission;
                     const activeWriterId = String(transmission.active_writer_id || "").trim();
                     const fallbackText = transmission.fallback_active
                       ? fallbackReasonLabel(transmission.fallback_reason, t)
@@ -3112,9 +3217,25 @@ function StreamingSettingsPanelContent({
 	                            : "-"}
 	                        </td>
 	                        <td>
-                          <span className={["streamingRuntimeBadge", runtimeStatusClass(status)].join(" ")}>
-                            {runtimeStatusLabel(status, t)}
+                          <span
+                            className={[
+                              "streamingRuntimeBadge",
+                              summary.summary_status
+                                ? runtimeSummaryStatusClass(summary.summary_status)
+                                : runtimeStatusClass(status),
+                            ].join(" ")}
+                            title={runtimeSummaryMessage(summary, t)}
+                          >
+                            {summary.summary_status
+                              ? runtimeSummaryStatusLabel(summary.summary_status, t)
+                              : runtimeStatusLabel(status, t)}
                           </span>
+                          {summary.summary_status ? (
+                            <span className="streamingRuntimeSubtle">
+                              {runtimeStatusLabel(status, t)}
+                              {summary.technical_status ? ` / ${summary.technical_status}` : ""}
+                            </span>
+                          ) : null}
                           {transmission.placeholder_active ? (
                             <span className="streamingRuntimeSubtle">
                               {t("ext.streaming.runtime.placeholder_active", {}, "placeholder")}
@@ -3289,11 +3410,25 @@ function StreamingSettingsPanelContent({
                           <span
                             className={[
                               "streamingRuntimeBadge",
-                              item.classification === "healthy" ? "is-live" : item.classification === "unknown" ? "is-unknown" : "is-stale",
+                              item.summary_status
+                                ? runtimeSummaryStatusClass(item.summary_status)
+                                : item.classification === "healthy"
+                                  ? "is-live"
+                                  : item.classification === "unknown"
+                                    ? "is-unknown"
+                                    : "is-stale",
                             ].join(" ")}
+                            title={runtimeSummaryMessage(item, t)}
                           >
-                            {observabilityClassificationLabel(item.classification)}
+                            {item.summary_status
+                              ? runtimeSummaryStatusLabel(item.summary_status, t)
+                              : observabilityClassificationLabel(item.classification)}
                           </span>
+                          {item.summary_status ? (
+                            <span className="streamingRuntimeSubtle">
+                              {item.technical_status || item.classification}
+                            </span>
+                          ) : null}
                         </td>
                         <td title={sourceHealthTitle(itemSourceHealth)}>
                           {itemSourceHealth ? (

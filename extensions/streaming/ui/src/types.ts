@@ -288,6 +288,10 @@ export type StreamingOutputRuntimeStatus = {
   event_gate_reasons?: string[];
   classification?: StreamingObservabilityClassification;
   evidence?: string[];
+  summary_status?: StreamingSummaryStatus;
+  summary_message?: string;
+  summary_action?: string | null;
+  technical_status?: string;
   active_playback_session_count?: number;
   last_playback_event_at_unix?: number | null;
   publisher_frames_sent_rate?: number | null;
@@ -300,6 +304,7 @@ export type StreamingOutputsRuntimeResponse = {
 };
 
 export type StreamingRuntimeStatus = "live" | "degraded" | "stale" | "offline";
+export type StreamingSummaryStatus = "working" | "warming" | "action_required";
 export type StreamingStreamBehavior = "continuous" | "event_gated";
 export type StreamingObservabilityClassification =
   | "healthy"
@@ -387,6 +392,10 @@ export type StreamingRuntimeOutputHealth = {
   demand_idle?: boolean;
   classification?: StreamingObservabilityClassification;
   evidence?: string[];
+  summary_status?: StreamingSummaryStatus;
+  summary_message?: string;
+  summary_action?: string | null;
+  technical_status?: string;
   active_playback_session_count?: number;
   last_playback_event_at_unix?: number | null;
   publisher_frames_sent_rate?: number | null;
@@ -414,6 +423,10 @@ export type StreamingRuntimeTransmissionHealth = {
   demand_idle?: boolean;
   classification?: StreamingObservabilityClassification;
   evidence?: string[];
+  summary_status?: StreamingSummaryStatus;
+  summary_message?: string;
+  summary_action?: string | null;
+  technical_status?: string;
   active_playback_session_count?: number;
   last_playback_event_at_unix?: number | null;
   source_health?: StreamingRuntimeSourceHealth | null;
@@ -486,6 +499,10 @@ export type StreamingRuntimeObservabilityItem = {
   output_id?: string | null;
   classification: StreamingObservabilityClassification;
   evidence?: string[];
+  summary_status?: StreamingSummaryStatus;
+  summary_message?: string;
+  summary_action?: string | null;
+  technical_status?: string;
   active_playback_sessions?: StreamingPlaybackSessionSummary[];
   last_playback_event_at_unix?: number | null;
   publisher_frames_sent_rate?: number | null;

@@ -527,7 +527,6 @@ async def _ffmpeg_rtsp_probe(rtsp_url: str, *, timeout_ms: int) -> RtspProbeResp
         )
 
     timeout_s = max(1.0, float(timeout_ms) / 1000.0)
-    timeout_us = int(max(0, int(timeout_ms)) * 1000)
     attempts: list[tuple[str, str, list[str]]] = []
     url_candidates: list[tuple[str, str]] = [("configured", rtsp_url)]
     stream2 = _rtsp_stream2_fallback(rtsp_url)
@@ -538,20 +537,28 @@ async def _ffmpeg_rtsp_probe(rtsp_url: str, *, timeout_ms: int) -> RtspProbeResp
         attempts.append((source, "udp", ["-rtsp_transport", "udp", "-i", url]))
 
     started = time.monotonic()
+    deadline = started + timeout_s
     transports_tested: list[str] = []
     last_error = "RTSP probe failed"
     last_source = "configured"
     last_status: Literal["unreachable", "unauthorized", "timeout", "probe_error"] = "probe_error"
     for source, transport, input_args in attempts:
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0.05:
+            last_status = "timeout"
+            last_error = f"RTSP probe timed out after {int(round(timeout_s * 1000))} ms"
+            break
+
         last_source = source
         transports_tested.append(f"{source}:{transport}")
+        attempt_timeout_us = int(max(50_000, remaining_s * 1_000_000))
         args = [
             ffmpeg_path,
             "-hide_banner",
             "-loglevel",
             "error",
             "-timeout",
-            str(timeout_us),
+            str(attempt_timeout_us),
             *input_args,
             "-an",
             "-sn",
@@ -569,13 +576,13 @@ async def _ffmpeg_rtsp_probe(rtsp_url: str, *, timeout_ms: int) -> RtspProbeResp
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s + 2.0)
+            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=remaining_s)
         except TimeoutError:
             proc.kill()
             await proc.communicate()
             last_status = "timeout"
             last_error = f"RTSP probe timed out (transport={transport}, source={source})"
-            continue
+            break
 
         if proc.returncode == 0:
             return RtspProbeResponse(

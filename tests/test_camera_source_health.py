@@ -147,6 +147,38 @@ def test_camera_source_health_ignores_transient_decode_warning_when_frames_are_f
     assert health.recommended_action == "Camera source is healthy."
 
 
+def test_camera_source_health_clears_old_error_when_frames_are_fresh() -> None:
+    now = {"value": 300.25}
+    store = CameraSourceHealthStore(
+        stale_after_seconds=3.0,
+        offline_after_seconds=10.0,
+        time_func=lambda: now["value"],
+    )
+
+    health = store.record_frame(
+        source_id="pipe:camera:camera:cam-recovered",
+        camera_id="cam-recovered",
+        pipeline_name="pipe",
+        node_id="camera",
+        configured_backend="auto",
+        rtsp_transport="rtsp",
+        used_ingest=True,
+        frame_ts=300.0,
+        metrics={
+            "backend": "ffmpeg",
+            "opened": True,
+            "frames_captured": 10,
+            "last_frame_ts": 300.0,
+            "last_error": "Connection timed out while opening RTSP",
+        },
+    )
+
+    assert health.status == "healthy"
+    assert health.source_frame_age_seconds == pytest.approx(0.25)
+    assert health.last_error is None
+    assert health.recommended_action == "Camera source is healthy."
+
+
 def test_camera_source_health_api_exposes_runtime_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

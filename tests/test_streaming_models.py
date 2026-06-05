@@ -1318,21 +1318,34 @@ def test_runtime_health_and_observability_include_camera_source_health(tmp_path:
         health_item = health_res.json()["transmissions"][0]
         assert health_item["source_health"]["status"] == "stale"
         assert health_item["classification"] == "source_stale"
+        assert health_item["summary_status"] == "action_required"
+        assert health_item["technical_status"] == "source_stale"
+        assert "camera source" in health_item["summary_message"]
         assert health_item["outputs"][0]["source_health"]["camera_id"] == "camera_a"
         assert health_item["outputs"][0]["classification"] == "source_stale"
+        assert health_item["outputs"][0]["summary_status"] == "action_required"
 
         outputs_res = client.get("/api/streams/runtime/outputs")
         assert outputs_res.status_code == 200
-        assert outputs_res.json()["outputs"][0]["source_health"]["source_frame_age_seconds"] == 6.5
+        output_item = outputs_res.json()["outputs"][0]
+        assert output_item["source_health"]["source_frame_age_seconds"] == 6.5
+        assert output_item["summary_status"] == "action_required"
+        assert output_item["technical_status"] == "source_stale"
 
         observability_res = client.get("/api/streams/runtime/observability")
         assert observability_res.status_code == 200
         observability_item = observability_res.json()["items"][0]
         assert observability_item["classification"] == "source_stale"
+        assert observability_item["summary_status"] == "action_required"
+        assert observability_item["technical_status"] == "source_stale"
         assert observability_item["health"]["source_health"]["recommended_action"] == "Check camera RTSP source."
+        assert observability_item["health"]["summary_status"] == "action_required"
 
         snapshot_res = client.get("/api/streams/runtime/diagnostic-snapshot")
         assert snapshot_res.status_code == 200
         snapshot = snapshot_res.json()
         assert snapshot["source_health"]["sources"][0]["camera_id"] == "camera_a"
         assert snapshot["diagnostics"]["source_health"]["sources"][0]["status"] == "stale"
+        assert snapshot["health"]["transmissions"][0]["summary_status"] == "action_required"
+        assert snapshot["outputs"][0]["summary_status"] == "action_required"
+        assert snapshot["observability"]["items"][0]["summary_status"] == "action_required"

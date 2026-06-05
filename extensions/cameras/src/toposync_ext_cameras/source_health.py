@@ -270,7 +270,7 @@ class CameraSourceHealthStore:
 
         fresh_frame = age is not None and age < self.stale_after_seconds
         last_error = record.last_error
-        if fresh_frame and _is_non_actionable_decode_warning(last_error):
+        if fresh_frame and not record.ingest_blocking_errors:
             last_error = None
 
         status = None if fresh_frame else _status_from_error(last_error)
@@ -467,25 +467,6 @@ def _status_from_error(value: str | None) -> CameraSourceStatus | None:
     ):
         return "unreachable"
     return "error"
-
-
-def _is_non_actionable_decode_warning(value: str | None) -> bool:
-    text = str(value or "").strip().lower()
-    if not text:
-        return False
-    return any(
-        term in text
-        for term in (
-            "error while decoding mb",
-            "bytestream",
-            "concealing",
-            "cabac decode",
-            "reference picture missing",
-            "left block unavailable",
-            "decode_slice_header error",
-            "no frame!",
-        )
-    )
 
 
 def _recommended_action(status: CameraSourceStatus) -> str:

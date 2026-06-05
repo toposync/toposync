@@ -16,6 +16,7 @@ import {
   type StreamingPlaybackPlanResponse,
   type StreamingQualityProfileId,
   type StreamingRuntimeTransmissionHealth,
+  type StreamingSummaryStatus,
   type StreamingTransmission,
   type StreamingTransmissionUrlOutput,
   type StreamingTransmissionUrlsResponse,
@@ -988,6 +989,12 @@ function buildRuntimeHealthHint(
   options: { suppressRecoveredClientTransportErrors?: boolean } = {},
 ): { message: string; tone: TileHealthTone } | null {
   if (!health) return null;
+  if (health.summary_status) {
+    return {
+      message: runtimeSummaryMessage(health, t),
+      tone: runtimeSummaryTone(health.summary_status),
+    };
+  }
   if (health.demand_idle || health.classification === "demand_idle") {
     return {
       message: t(
@@ -1147,6 +1154,58 @@ function buildRuntimeHealthHint(
     };
   }
   return null;
+}
+
+type RuntimeSummaryCarrier = {
+  summary_status?: StreamingSummaryStatus;
+  summary_message?: string | null;
+  summary_action?: string | null;
+  technical_status?: string | null;
+  classification?: string | null;
+};
+
+function runtimeSummaryStatusLabel(status: StreamingSummaryStatus | undefined, t: TranslateFn): string {
+  if (status === "working") return t("core.ui.streams.summary.working", {}, "Funcionando");
+  if (status === "warming") return t("core.ui.streams.summary.warming", {}, "Aquecendo, aguarde");
+  if (status === "action_required") return t("core.ui.streams.summary.action_required", {}, "Ação necessária");
+  return t("core.ui.streams.summary.unknown", {}, "Sem leitura");
+}
+
+function runtimeSummaryTone(status: StreamingSummaryStatus): TileHealthTone {
+  if (status === "action_required") return "error";
+  return "muted";
+}
+
+function runtimeSummaryMessage(summary: RuntimeSummaryCarrier | null | undefined, t: TranslateFn): string {
+  const status = summary?.summary_status;
+  const message = String(summary?.summary_message || "").trim();
+  if (status === "working") {
+    return t("core.ui.streams.summary.message.working", {}, "Funcionando.");
+  }
+  if (status === "warming") {
+    if (message === "Waiting for viewer demand.") {
+      return t("core.ui.streams.summary.message.waiting_demand", {}, "Aquecendo quando houver visualização.");
+    }
+    if (message === "Waiting for an event frame.") {
+      return t("core.ui.streams.summary.message.waiting_event", {}, "Aquecendo, aguardando evento.");
+    }
+    if (message === "Warming up playback, wait a few seconds.") {
+      return t("core.ui.streams.summary.message.warming_playback", {}, "Aquecendo transmissão, aguarde alguns segundos.");
+    }
+    if (message === "Recovering with a fallback frame.") {
+      return t("core.ui.streams.summary.message.recovering_fallback", {}, "Aquecendo com frame de fallback.");
+    }
+    if (message === "Waiting for the first frame." || message === "Starting stream runtime.") {
+      return t("core.ui.streams.summary.message.waiting_first_frame", {}, "Aquecendo, aguardando primeiro frame.");
+    }
+    return message || t("core.ui.streams.summary.message.warming", {}, "Aquecendo, aguarde.");
+  }
+  if (status === "action_required") {
+    const fallback = t("core.ui.streams.summary.message.action_required", {}, "Ação necessária.");
+    const action = String(summary?.summary_action || "").trim();
+    return action ? `${message || fallback} ${action}` : message || fallback;
+  }
+  return message || "-";
 }
 
 function runtimeStatusLabel(
@@ -1401,23 +1460,45 @@ function StreamAdvancedSettingsModal({
       </div>
 
       <section className="streamsAdvancedSection">
-        <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.playback", {}, "Playback")}</div>
+        <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.state", {}, "Estado")}</div>
         <div className="streamsAdvancedDetailGrid">
-          <TechnicalDetailRow label="Player status" value={playbackStatus} />
-          <TechnicalDetailRow label="Active transport" value={playbackTransport === "none" ? "-" : playbackTransport.toUpperCase()} />
-          <TechnicalDetailRow label="Effective mode" value={webRtcFallbackActive ? effectiveTransportModeLabel("hls_fallback", t) : effectiveTransportModeLabel(playbackPlan.effectiveMode, t)} />
-          <TechnicalDetailRow label="Transport preference" value={transportPreferenceLabel(transportPreference, t)} />
-          <TechnicalDetailRow label="Quality preference" value={qualityPreferenceLabel(qualityPreference, t)} />
-          <TechnicalDetailRow label="Low latency requested" value={formatTechnicalBoolean(lowLatencyRequested)} />
-          <TechnicalDetailRow label="HLS fallback" value={formatTechnicalBoolean(webRtcFallbackActive)} />
-          <TechnicalDetailRow label="HLS public base path" value={publicBasePath || "/"} />
-          <TechnicalDetailRow label="HLS ingress prefix in URL" value={formatTechnicalBoolean(hlsUsesPublicBasePath)} />
-          <TechnicalDetailRow label="HLS media origin" value={mediaOrigin} />
-          <TechnicalDetailRow label="Last HLS probe" value={hlsProbeSummary || "-"} />
-          <TechnicalDetailRow label="HLS health" value={hlsHealthy ? "healthy" : playbackTransport === "hls" ? "checking" : "-"} />
-          <TechnicalDetailRow label="WebRTC contract" value={webRtcContractStatus} />
-          <TechnicalDetailRow label="Player error" value={errorText || "-"} />
-          <TechnicalDetailRow label="Current hint" value={sourceHint || "-"} />
+          <TechnicalDetailRow
+            label={t("core.ui.streams.advanced.state_label", {}, "Estado")}
+            value={runtimeSummaryStatusLabel(runtimeHealth?.summary_status, t)}
+          />
+          <TechnicalDetailRow
+            label={t("core.ui.streams.advanced.state_message", {}, "Mensagem")}
+            value={runtimeSummaryMessage(runtimeHealth, t)}
+          />
+          <TechnicalDetailRow
+            label={t("core.ui.streams.advanced.state_action", {}, "Ação recomendada")}
+            value={runtimeHealth?.summary_action || "-"}
+          />
+          <TechnicalDetailRow
+            label={t("core.ui.streams.advanced.technical_status", {}, "Status técnico")}
+            value={runtimeHealth?.technical_status || runtimeHealth?.classification || "-"}
+          />
+        </div>
+      </section>
+
+      <section className="streamsAdvancedSection">
+        <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.playback", {}, "Reprodução")}</div>
+        <div className="streamsAdvancedDetailGrid">
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.player_status", {}, "Estado do player")} value={playbackStatus} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.active_transport", {}, "Transporte ativo")} value={playbackTransport === "none" ? "-" : playbackTransport.toUpperCase()} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.effective_mode", {}, "Modo efetivo")} value={webRtcFallbackActive ? effectiveTransportModeLabel("hls_fallback", t) : effectiveTransportModeLabel(playbackPlan.effectiveMode, t)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.transport_preference", {}, "Preferência de transporte")} value={transportPreferenceLabel(transportPreference, t)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.quality_preference", {}, "Preferência de qualidade")} value={qualityPreferenceLabel(qualityPreference, t)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.low_latency_requested", {}, "Baixa latência solicitada")} value={formatTechnicalBoolean(lowLatencyRequested)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.hls_fallback", {}, "Fallback HLS")} value={formatTechnicalBoolean(webRtcFallbackActive)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.hls_public_base_path", {}, "Base pública HLS")} value={publicBasePath || "/"} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.hls_ingress_prefix", {}, "Prefixo ingress na URL HLS")} value={formatTechnicalBoolean(hlsUsesPublicBasePath)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.hls_media_origin", {}, "Origem de mídia HLS")} value={mediaOrigin} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.last_hls_probe", {}, "Último probe HLS")} value={hlsProbeSummary || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.hls_health", {}, "Saúde HLS")} value={hlsHealthy ? "healthy" : playbackTransport === "hls" ? "checking" : "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.webrtc_contract", {}, "Contrato WebRTC")} value={webRtcContractStatus} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.player_error", {}, "Erro do player")} value={errorText || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.current_hint", {}, "Mensagem atual")} value={sourceHint || "-"} />
         </div>
         {activeTransportWarningText ? <div className="streamsAdvancedNote isWarn">{activeTransportWarningText}</div> : null}
         {showWebRtcIssues && webRtcIssueText && webRtcIssueText !== activeTransportWarningText ? (
@@ -1449,20 +1530,20 @@ function StreamAdvancedSettingsModal({
       </section>
 
       <section className="streamsAdvancedSection">
-        <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.runtime", {}, "Runtime health")}</div>
+        <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.runtime", {}, "Diagnóstico técnico")}</div>
         <div className="streamsAdvancedDetailGrid">
-          <TechnicalDetailRow label="Runtime status" value={runtimeStatusLabel(runtimeHealth?.status, t, Boolean(runtimeHealth?.event_gated_idle), Boolean(runtimeHealth?.demand_idle)) || "-"} />
-          <TechnicalDetailRow label="Classification" value={runtimeHealth?.classification || "-"} />
-          <TechnicalDetailRow label="Selected frame age" value={formatRuntimeAge(runtimeHealth?.selected_frame_age_seconds)} />
-          <TechnicalDetailRow label="Last incoming age" value={formatRuntimeAge(runtimeHealth?.last_incoming_frame_age_seconds)} />
-          <TechnicalDetailRow label="Last live frame" value={formatUnixDateTime(runtimeHealth?.last_live_frame_at_unix)} />
-          <TechnicalDetailRow label="Fallback active" value={formatTechnicalBoolean(runtimeHealth?.fallback_active)} />
-          <TechnicalDetailRow label="Fallback reason" value={runtimeHealth?.fallback_reason || "-"} />
-          <TechnicalDetailRow label="Placeholder active" value={formatTechnicalBoolean(runtimeHealth?.placeholder_active)} />
-          <TechnicalDetailRow label="Active writer" value={runtimeHealth?.active_writer_id || "-"} />
-          <TechnicalDetailRow label="Selected writer" value={runtimeHealth?.selected_writer_id || "-"} />
-          <TechnicalDetailRow label="Stream behavior" value={runtimeHealth?.stream_behavior || "-"} />
-          <TechnicalDetailRow label="Active sessions" value={formatTechnicalNumber(runtimeHealth?.active_playback_session_count, "", 0)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.runtime_status", {}, "Status do runtime")} value={runtimeStatusLabel(runtimeHealth?.status, t, Boolean(runtimeHealth?.event_gated_idle), Boolean(runtimeHealth?.demand_idle)) || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.classification", {}, "Classificação")} value={runtimeHealth?.classification || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.selected_frame_age", {}, "Idade do frame selecionado")} value={formatRuntimeAge(runtimeHealth?.selected_frame_age_seconds)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.last_incoming_age", {}, "Idade do último frame recebido")} value={formatRuntimeAge(runtimeHealth?.last_incoming_frame_age_seconds)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.last_live_frame", {}, "Último frame ao vivo")} value={formatUnixDateTime(runtimeHealth?.last_live_frame_at_unix)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.fallback_active", {}, "Fallback ativo")} value={formatTechnicalBoolean(runtimeHealth?.fallback_active)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.fallback_reason", {}, "Motivo do fallback")} value={runtimeHealth?.fallback_reason || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.placeholder_active", {}, "Placeholder ativo")} value={formatTechnicalBoolean(runtimeHealth?.placeholder_active)} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.active_writer", {}, "Writer ativo")} value={runtimeHealth?.active_writer_id || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.selected_writer", {}, "Writer selecionado")} value={runtimeHealth?.selected_writer_id || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.stream_behavior", {}, "Comportamento do stream")} value={runtimeHealth?.stream_behavior || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.advanced.active_sessions", {}, "Sessões ativas")} value={formatTechnicalNumber(runtimeHealth?.active_playback_session_count, "", 0)} />
         </div>
         {evidence.length ? <div className="streamsAdvancedNote">{evidence.join(" ")}</div> : null}
       </section>
@@ -3255,6 +3336,7 @@ function StreamTilePlayer({
     setAdvancedOpen(true);
   };
   const hlsWarmupHintActive =
+    runtimeHealth?.summary_status === "warming" &&
     playbackWarmupActive &&
     transport === "hls" &&
     runtimeHasFreshSourceAndWriter(runtimeHealth) &&

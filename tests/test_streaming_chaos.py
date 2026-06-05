@@ -17,11 +17,17 @@ from toposync_ext_streaming.api.models import (
     EXTENSION_ID,
     StreamingNetworkContract,
     StreamingNetworkContractPorts,
+    StreamingRuntimeHealthResponse,
     StreamingRuntimeOutputHealth,
     StreamingRuntimeSourceHealth,
     StreamingRuntimeTransmissionHealth,
 )
-from toposync_ext_streaming.api.routes import _classify_observability, create_streaming_router
+from toposync_ext_streaming.api.routes import (
+    _apply_runtime_health_summaries,
+    _classify_observability,
+    _mse_sidecar_summary,
+    create_streaming_router,
+)
 from toposync_ext_streaming.streaming.engine_manager import (
     MediaMtxEngineManager,
     MediaMtxEngineStatus,
@@ -569,6 +575,92 @@ def test_observability_ignores_recovered_webrtc_and_lifecycle_noise() -> None:
         network_contract=None,
     )
     assert classification == "app_player_lifecycle"
+
+
+def _summarize_runtime_health(
+    health: StreamingRuntimeTransmissionHealth,
+    output: StreamingRuntimeOutputHealth | None = None,
+) -> StreamingRuntimeTransmissionHealth:
+    if output is not None:
+        health.outputs = [output]
+    response = StreamingRuntimeHealthResponse(
+        updated_at_unix=time.time(),
+        stale_after_seconds=3.0,
+        placeholder_after_seconds=10.0,
+        transmissions=[health],
+    )
+    return _apply_runtime_health_summaries(response).transmissions[0]
+
+
+def test_runtime_summary_prefers_fresh_working_state_over_old_technical_error() -> None:
+    source = StreamingRuntimeSourceHealth(
+        source_id="camera.source:front",
+        source_frame_age_seconds=0.2,
+        opened=True,
+        last_error="Previous RTSP timeout",
+        status="healthy",
+        recommended_action="Camera source is healthy.",
+    )
+    health = _health(status="live", source_health=source)
+    output = _output(status="live", source_health=source)
+    health.classification = "source_stale"
+    output.classification = "source_stale"
+
+    summarized = _summarize_runtime_health(health, output)
+
+    assert summarized.summary_status == "working"
+    assert summarized.technical_status == "source_stale"
+    assert summarized.outputs[0].summary_status == "working"
+    assert summarized.outputs[0].technical_status == "source_stale"
+
+
+def test_runtime_summary_marks_source_stale_unreachable_as_action_required() -> None:
+    source = StreamingRuntimeSourceHealth(
+        source_id="camera.source:front",
+        source_frame_age_seconds=12.0,
+        opened=False,
+        status="unreachable",
+        recommended_action="Test RTSP and review the camera URL.",
+    )
+    health = _health(status="stale", stale=True, source_health=source)
+    output = _output(status="offline", publisher_running=False, source_health=source)
+    health.classification = "source_stale"
+    output.classification = "source_stale"
+
+    summarized = _summarize_runtime_health(health, output)
+
+    assert summarized.summary_status == "action_required"
+    assert summarized.summary_action == "Test RTSP and review the camera URL."
+    assert summarized.outputs[0].summary_status == "action_required"
+
+
+def test_runtime_summary_classifies_idle_warmup_mse_restart_and_recovered_playback() -> None:
+    demand_idle = _health(status="offline")
+    demand_idle.demand_idle = True
+    demand_idle.classification = "demand_idle"
+    assert _summarize_runtime_health(demand_idle).summary_status == "warming"
+
+    hls_warmup = _health(status="live")
+    hls_warmup.classification = "hls_playlist_stale"
+    assert _summarize_runtime_health(hls_warmup).summary_status == "warming"
+
+    mse_restart = _mse_sidecar_summary(
+        enabled=True,
+        engine_enabled=True,
+        running=True,
+        api_reachable=False,
+        last_error=None,
+    )
+    assert mse_restart["summary_status"] == "warming"
+
+    fallback = _health(status="degraded")
+    fallback.fallback_active = True
+    fallback.classification = "healthy"
+    assert _summarize_runtime_health(fallback).summary_status == "warming"
+
+    recovered_playback = _health(status="live")
+    recovered_playback.classification = "app_player_lifecycle"
+    assert _summarize_runtime_health(recovered_playback).summary_status == "working"
 
 
 def test_hls_port_mismatch_does_not_return_invalid_direct_playback_url(

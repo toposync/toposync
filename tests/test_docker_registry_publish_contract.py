@@ -143,3 +143,12 @@ def test_registry_smoke_treats_connection_reset_as_startup_transient(monkeypatch
     monkeypatch.setattr(smoke.time, "sleep", lambda _seconds: None)
 
     smoke._wait_for_health("http://127.0.0.1:1", timeout_s=5.0)
+
+
+def test_registry_smoke_uses_disposable_docker_volume_for_data() -> None:
+    smoke_script = _read("scripts/check_docker_registry_image.py")
+
+    assert "TemporaryDirectory" not in smoke_script
+    assert '"docker", "volume", "create", volume_name' in smoke_script
+    assert '"docker", "volume", "rm", "-f", volume_name' in smoke_script
+    assert 'f"{volume_name}:/data"' in smoke_script

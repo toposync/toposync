@@ -7,10 +7,10 @@ import json
 import shlex
 import socket
 import subprocess
-import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 
@@ -121,7 +121,9 @@ def _assert_import(container_id: str, module_name: str) -> None:
 
 def _run_container(args: argparse.Namespace) -> None:
     port = _find_free_port()
-    with tempfile.TemporaryDirectory(prefix="toposync-registry-smoke-") as data_dir:
+    volume_name = f"toposync-registry-smoke-{uuid.uuid4().hex}"
+    _run(["docker", "volume", "create", volume_name])
+    try:
         container_id = _run(
             [
                 "docker",
@@ -135,7 +137,7 @@ def _run_container(args: argparse.Namespace) -> None:
                 "-p",
                 f"{HOST}:{port}:8000",
                 "-v",
-                f"{data_dir}:/data",
+                f"{volume_name}:/data",
                 args.image,
             ],
             capture=True,
@@ -168,6 +170,8 @@ def _run_container(args: argparse.Namespace) -> None:
             )
             subprocess.run(["docker", "logs", "--tail", "160", container_id], check=False)
             subprocess.run(["docker", "stop", container_id], check=False)
+    finally:
+        subprocess.run(["docker", "volume", "rm", "-f", volume_name], check=False)
 
 
 def parse_args() -> argparse.Namespace:

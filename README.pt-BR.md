@@ -42,6 +42,52 @@ Você pode ajudar:
 
 > **Problemas de segurança:** não publique detalhes de vulnerabilidades em issues públicas. Siga o [SECURITY.md](SECURITY.md) e use o private vulnerability reporting do GitHub ou um GitHub Security Advisory privado quando disponível.
 
+## Prévia da visualização 3D
+
+O fluxo atual de visualização do Toposync transforma progressivamente um cômodo mapeado em um modelo residencial interpretável: estrutura, objetos 3D, dispositivos, contexto de câmera, projeção espacial, rastros de movimento e notificações de evento.
+
+<table>
+  <tr>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/01-structure.png" alt="Estrutura de cômodo no Toposync com piso, paredes e janela" width="100%" />
+      <br />
+      <sub><strong>Estrutura</strong></sub>
+    </td>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/02-3d-models.png" alt="Cômodo no Toposync com modelos 3D de sofá e planta" width="100%" />
+      <br />
+      <sub><strong>Modelos 3D</strong></sub>
+    </td>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/03-devices.png" alt="Cômodo no Toposync com luminária de teto como dispositivo interativo" width="100%" />
+      <br />
+      <sub><strong>Dispositivos</strong></sub>
+    </td>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/04-camera-feed.png" alt="Cômodo no Toposync com overlay de transmissão da câmera" width="100%" />
+      <br />
+      <sub><strong>Transmissão da câmera</strong></sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/05-spatial-360-view.png" alt="Cômodo no Toposync com projeção espacial de câmera além da janela" width="100%" />
+      <br />
+      <sub><strong>Visão espacial 360</strong></sub>
+    </td>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/06-mapping-trace.png" alt="Cômodo no Toposync com rastro de movimento mapeado e pin de prioridade" width="100%" />
+      <br />
+      <sub><strong>Rastro de mapeamento</strong></sub>
+    </td>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/07-notifications.png" alt="Cômodo no Toposync com rastro de movimento mapeado e notificação de gato detectado" width="100%" />
+      <br />
+      <sub><strong>Notificações</strong></sub>
+    </td>
+  </tr>
+</table>
+
 ## O que você pode construir com Toposync?
 
 | Caso de uso | O que permite | Status |

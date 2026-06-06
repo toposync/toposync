@@ -42,6 +42,52 @@ You can help by:
 
 > **Security issues:** do not publish vulnerability details in public issues. Follow [SECURITY.md](SECURITY.md) and use private GitHub vulnerability reporting or a private GitHub Security Advisory when available.
 
+## 3D visualization preview
+
+Toposync's current visualization flow progressively turns a mapped room into an interpretable home model: structure, 3D objects, devices, camera context, spatial projection, movement traces, and event notifications.
+
+<table>
+  <tr>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/01-structure.png" alt="Toposync room structure with floor, walls, and window" width="100%" />
+      <br />
+      <sub><strong>Structure</strong></sub>
+    </td>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/02-3d-models.png" alt="Toposync room with 3D sofa and plant models" width="100%" />
+      <br />
+      <sub><strong>3D models</strong></sub>
+    </td>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/03-devices.png" alt="Toposync room with an interactive ceiling lamp device" width="100%" />
+      <br />
+      <sub><strong>Devices</strong></sub>
+    </td>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/04-camera-feed.png" alt="Toposync room with camera feed overlay" width="100%" />
+      <br />
+      <sub><strong>Camera feed</strong></sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/05-spatial-360-view.png" alt="Toposync room with spatial camera projection beyond the window" width="100%" />
+      <br />
+      <sub><strong>Spatial 360 view</strong></sub>
+    </td>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/06-mapping-trace.png" alt="Toposync room with mapped movement trace and priority pin" width="100%" />
+      <br />
+      <sub><strong>Mapping trace</strong></sub>
+    </td>
+    <td width="25%" align="center">
+      <img src="docs-site/static/img/readme/visualizations/07-notifications.png" alt="Toposync room with mapped movement trace and cat detection notification" width="100%" />
+      <br />
+      <sub><strong>Notifications</strong></sub>
+    </td>
+  </tr>
+</table>
+
 ## What can you build with Toposync?
 
 | Use case | What it enables | Status |

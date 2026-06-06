@@ -17,7 +17,7 @@ Use this path when you want to run Toposync in a container with NVIDIA CUDA acce
 The default CUDA image is:
 
 ```text
-ghcr.io/toposync/toposync:0.7.6-cuda
+ghcr.io/toposync/toposync:0.7.7-cuda
 ```
 
 It installs the `toposync-vision-cuda` bundle plus the streaming extension,
@@ -50,7 +50,7 @@ Create a deployment directory and a Compose file:
 ```yaml title="docker-compose.yml"
 services:
   toposync:
-    image: ghcr.io/toposync/toposync:0.7.6-cuda
+    image: ghcr.io/toposync/toposync:0.7.7-cuda
     ports:
       - "${TOPOSYNC_PORT:-8000}:8000"
     volumes:
@@ -166,7 +166,7 @@ docker compose up -d
 ```
 
 For a fixed release, pin the exact tag in `docker-compose.yml`, for example
-`ghcr.io/toposync/toposync:0.7.6-cuda`.
+`ghcr.io/toposync/toposync:0.7.7-cuda`.
 
 ## Advanced: local build {/* #advanced-local-build */}
 

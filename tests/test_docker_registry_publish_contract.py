@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -11,6 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
+
+
+def _project_version(path: str) -> str:
+    with (ROOT / path).open("rb") as handle:
+        return str(tomllib.load(handle)["project"]["version"])
 
 
 def _load_registry_smoke_script() -> ModuleType:
@@ -97,9 +103,10 @@ def test_compose_defaults_pull_public_ghcr_images() -> None:
     compose = _read("docker-compose.yml")
     compose_cuda = _read("docker-compose.cuda.yml")
     local_build = _read("docker-compose.local-build.yml")
+    app_version = _project_version("packages/toposync/pyproject.toml")
 
-    assert "image: ${TOPOSYNC_IMAGE:-ghcr.io/toposync/toposync:0.7.6}" in compose
-    assert "image: ${TOPOSYNC_CUDA_IMAGE:-ghcr.io/toposync/toposync:0.7.6-cuda}" in compose_cuda
+    assert f"image: ${{TOPOSYNC_IMAGE:-ghcr.io/toposync/toposync:{app_version}}}" in compose
+    assert f"image: ${{TOPOSYNC_CUDA_IMAGE:-ghcr.io/toposync/toposync:{app_version}-cuda}}" in compose_cuda
     assert "image: ${TOPOSYNC_LOCAL_IMAGE:-toposync:local}" in local_build
     assert "target: ${TOPOSYNC_DOCKER_TARGET:-runtime-cpu}" in local_build
     assert re.search(r"(?m)^\s+build:", compose) is None
@@ -125,8 +132,47 @@ def test_docker_publish_workflow_uses_ghcr_tags_and_attestations() -> None:
     assert "toposync-streaming" in workflow
     assert "toposync-vision-cuda" in workflow
     assert "${{ steps.release.outputs.version }}-cuda" in workflow
+    assert "Verify anonymous GHCR pull" in workflow
+    assert 'docker logout "${{ env.REGISTRY }}" || true' in workflow
+    assert "GHCR package is not public" in workflow
     assert "docker.io" not in workflow
     assert "gcloud" not in workflow.lower()
+
+
+def test_registry_public_version_defaults_match_project_versions() -> None:
+    app_version = _project_version("packages/toposync/pyproject.toml")
+    streaming_version = _project_version("extensions/streaming/pyproject.toml")
+
+    expectations = {
+        "Dockerfile.registry": [
+            f"ARG TOPOSYNC_VERSION={app_version}",
+            f"ARG TOPOSYNC_EXT_STREAMING_VERSION={streaming_version}",
+        ],
+        ".github/workflows/docker-publish.yml": [f'default: "{app_version}"'],
+        "scripts/check_docker_registry_image.py": [f'DEFAULT_IMAGE = "ghcr.io/toposync/toposync:{app_version}"'],
+        "docs-site/docs/installation/docker-cpu.mdx": [f"ghcr.io/toposync/toposync:{app_version}"],
+        "docs-site/docs/installation/docker-cuda.mdx": [f"ghcr.io/toposync/toposync:{app_version}-cuda"],
+        "docs-site/docs/installation/processing-server-docker.mdx": [
+            f"ghcr.io/toposync/toposync:{app_version}",
+            f"ghcr.io/toposync/toposync:{app_version}-cuda",
+        ],
+        "docs-site/i18n/pt-BR/docusaurus-plugin-content-docs/current/installation/docker-cpu.mdx": [
+            f"ghcr.io/toposync/toposync:{app_version}"
+        ],
+        "docs-site/i18n/pt-BR/docusaurus-plugin-content-docs/current/installation/docker-cuda.mdx": [
+            f"ghcr.io/toposync/toposync:{app_version}-cuda"
+        ],
+        "docs-site/i18n/pt-BR/docusaurus-plugin-content-docs/current/installation/processing-server-docker.mdx": [
+            f"ghcr.io/toposync/toposync:{app_version}",
+            f"ghcr.io/toposync/toposync:{app_version}-cuda",
+        ],
+    }
+    for path, required_snippets in expectations.items():
+        text = _read(path)
+        for snippet in required_snippets:
+            assert snippet in text, f"{path} is missing {snippet!r}"
+        assert "0.7.6" not in text
+        assert "0.4.6" not in text
 
 
 def test_registry_smoke_treats_connection_reset_as_startup_transient(monkeypatch) -> None:

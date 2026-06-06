@@ -9,7 +9,7 @@ on:
       version:
         description: "Toposync version to publish from this ref"
         required: true
-        default: "0.7.6"
+        default: "0.7.7"
       smoke:
         description: "Run post-publish image smoke tests"
         required: true
@@ -208,3 +208,15 @@ jobs:
             --image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}-cuda" \
             --platform linux/amd64 \
             --expect-cuda
+
+      - name: Verify anonymous GHCR pull
+        run: |
+          docker logout "${{ env.REGISTRY }}" || true
+          docker pull --platform linux/amd64 "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}" || {
+            echo "::error title=GHCR package is not public::Anonymous pull failed for ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}. Open the toposync organization package settings, change visibility to Public, then rerun Docker Publish."
+            exit 1
+          }
+          docker pull --platform linux/amd64 "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}-cuda" || {
+            echo "::error title=GHCR CUDA package is not public::Anonymous pull failed for ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}-cuda. Open the toposync organization package settings, change visibility to Public, then rerun Docker Publish."
+            exit 1
+          }

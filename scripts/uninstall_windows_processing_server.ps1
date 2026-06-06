@@ -14,6 +14,9 @@ powershell -ExecutionPolicy Bypass -File .\uninstall_windows_processing_server.p
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File .\uninstall_windows_processing_server.ps1 -RemoveData
+
+.EXAMPLE
+$script = Join-Path $env:TEMP 'uninstall-toposync-processing.ps1'; Invoke-WebRequest 'https://raw.githubusercontent.com/toposync/toposync/main/scripts/uninstall_windows_processing_server.ps1' -OutFile $script; powershell -NoProfile -ExecutionPolicy Bypass -File $script
 #>
 
 [CmdletBinding()]

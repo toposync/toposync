@@ -23,45 +23,41 @@ Para suporte por arquitetura e GPU no Windows, consulte [Compatibilidade](archit
 - Windows 10/11.
 - PowerShell.
 - Permissão de administrador.
-- Checkout do repositório Toposync.
+- Acesso à internet para GitHub, PyPI e instalador do `uv`.
 - Rede liberada entre o origin e o Windows.
 
 O script instala `uv` e Python 3.12 se necessário.
 
 ## Instalação
 
-Abra PowerShell como Administrador na raiz do repositório.
+Abra PowerShell como Administrador.
 
-Instalação automática:
+Instalação rápida sem clonar o repositório:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle auto -Version latest -PreferLocalPackages:$false
+$script = Join-Path $env:TEMP 'install-toposync-processing.ps1'; Invoke-WebRequest 'https://raw.githubusercontent.com/toposync/toposync/main/scripts/install_windows_processing_server.ps1' -OutFile $script; powershell -NoProfile -ExecutionPolicy Bypass -File $script -Bundle auto -Version latest -PreferLocalPackages:$false
 ```
+
+O comando baixa o instalador em `%TEMP%` antes de executar. Isso permite que o
+instalador reabra a si mesmo como Administrador se necessário.
 
 O modo `auto` escolhe:
 
 - `cuda`, se encontrar `nvidia-smi`;
 - `directml`, caso contrário.
 
-Para forçar CPU:
+Para forçar CPU, DirectML, CUDA ou um IP anunciado específico, mude os
+argumentos finais do instalador:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle cpu -Version latest -PreferLocalPackages:$false
+-Bundle cpu
+-Bundle directml
+-Bundle cuda
+-AdvertiseHost 192.168.1.50
 ```
 
-Para forçar DirectML:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle directml -Version latest -PreferLocalPackages:$false
-```
-
-Para forçar CUDA:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle cuda -Version latest -PreferLocalPackages:$false
-```
-
-Se precisar anunciar um IP específico para o origin:
+Para desenvolvimento a partir de checkout do repositório, rode o script local
+na raiz do repositório:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle auto -Version latest -PreferLocalPackages:$false -AdvertiseHost 192.168.1.50
@@ -154,13 +150,13 @@ Nos pipelines, use `processing_server_id` igual ao id registrado.
 Rode o instalador novamente:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle auto -Version latest -PreferLocalPackages:$false
+$script = Join-Path $env:TEMP 'install-toposync-processing.ps1'; Invoke-WebRequest 'https://raw.githubusercontent.com/toposync/toposync/main/scripts/install_windows_processing_server.ps1' -OutFile $script; powershell -NoProfile -ExecutionPolicy Bypass -File $script -Bundle auto -Version latest -PreferLocalPackages:$false
 ```
 
 Para recriar o ambiente virtual:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle auto -Version latest -PreferLocalPackages:$false -RecreateVenv
+$script = Join-Path $env:TEMP 'install-toposync-processing.ps1'; Invoke-WebRequest 'https://raw.githubusercontent.com/toposync/toposync/main/scripts/install_windows_processing_server.ps1' -OutFile $script; powershell -NoProfile -ExecutionPolicy Bypass -File $script -Bundle auto -Version latest -PreferLocalPackages:$false -RecreateVenv
 ```
 
 ## Como Desinstalar
@@ -168,19 +164,19 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_se
 Remover serviço e arquivos de runtime, preservando dados e logs:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_windows_processing_server.ps1
+$script = Join-Path $env:TEMP 'uninstall-toposync-processing.ps1'; Invoke-WebRequest 'https://raw.githubusercontent.com/toposync/toposync/main/scripts/uninstall_windows_processing_server.ps1' -OutFile $script; powershell -NoProfile -ExecutionPolicy Bypass -File $script
 ```
 
 Remover também dados e logs:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_windows_processing_server.ps1 -RemoveData
+$script = Join-Path $env:TEMP 'uninstall-toposync-processing.ps1'; Invoke-WebRequest 'https://raw.githubusercontent.com/toposync/toposync/main/scripts/uninstall_windows_processing_server.ps1' -OutFile $script; powershell -NoProfile -ExecutionPolicy Bypass -File $script -RemoveData
 ```
 
 Se o serviço estiver preso:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_windows_processing_server.ps1 -Force
+$script = Join-Path $env:TEMP 'uninstall-toposync-processing.ps1'; Invoke-WebRequest 'https://raw.githubusercontent.com/toposync/toposync/main/scripts/uninstall_windows_processing_server.ps1' -OutFile $script; powershell -NoProfile -ExecutionPolicy Bypass -File $script -Force
 ```
 
 Remova também o processing server registrado no origin.

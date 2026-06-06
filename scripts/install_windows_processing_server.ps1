@@ -22,8 +22,7 @@ powershell -ExecutionPolicy Bypass -File .\install_windows_processing_server.ps1
 powershell -ExecutionPolicy Bypass -File .\install_windows_processing_server.ps1 -Bundle cuda -AdvertiseHost 192.168.1.50
 
 .EXAMPLE
-irm https://example.com/install_windows_processing_server.ps1 -OutFile $env:TEMP\install-toposync-processing.ps1
-powershell -ExecutionPolicy Bypass -File $env:TEMP\install-toposync-processing.ps1 -Bundle auto
+$script = Join-Path $env:TEMP 'install-toposync-processing.ps1'; Invoke-WebRequest 'https://raw.githubusercontent.com/toposync/toposync/main/scripts/install_windows_processing_server.ps1' -OutFile $script; powershell -NoProfile -ExecutionPolicy Bypass -File $script -Bundle auto -Version latest -PreferLocalPackages:$false
 #>
 
 [CmdletBinding()]

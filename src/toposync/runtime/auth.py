@@ -324,6 +324,24 @@ class PairingSession:
     expires_at: float
 
 
+@dataclass(frozen=True, slots=True)
+class ServiceTokenSession:
+    token_id: str
+    user: AuthUser
+    label: str
+    expires_at: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceTokenInfo:
+    id: str
+    user_id: str
+    label: str
+    created_at: float
+    last_used_at: float
+    expires_at: float | None
+
+
 class AuthStore:
     _INIT_SQL = """
 PRAGMA journal_mode=WAL;
@@ -392,6 +410,20 @@ CREATE TABLE IF NOT EXISTS auth_pairing_code (
 
 CREATE INDEX IF NOT EXISTS idx_auth_pairing_user ON auth_pairing_code(user_id);
 CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires_at);
+
+CREATE TABLE IF NOT EXISTS auth_service_token (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL,
+  token_hash    TEXT NOT NULL UNIQUE,
+  label         TEXT NOT NULL,
+  created_at    REAL NOT NULL,
+  expires_at    REAL,
+  last_used_at  REAL NOT NULL,
+  revoked_at    REAL,
+  FOREIGN KEY(user_id) REFERENCES auth_user(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_service_token_user ON auth_service_token(user_id);
 """
 
     def __init__(self, db_path: Path) -> None:
@@ -985,6 +1017,165 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
             expires_at=float(row["pair_expires_at"] or 0.0),
         )
 
+    def issue_service_token(
+        self,
+        *,
+        user_id: str,
+        label: str,
+        ttl_s: int | None = None,
+    ) -> tuple[str, ServiceTokenInfo]:
+        user = self.get_user_by_id(user_id)
+        if user is None:
+            raise KeyError("Unknown user")
+        if user.is_disabled:
+            raise ValueError("User is disabled")
+        raw_token = f"toposync_st_{secrets.token_urlsafe(48)}"
+        token_hash = _sha256(raw_token)
+        token_id = _uuid()
+        now = _now()
+        expires_at = now + max(60, int(ttl_s)) if ttl_s is not None and int(ttl_s) > 0 else None
+        normalized_label = str(label or "").strip()[:80] or "Service token"
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO auth_service_token(
+                  id, user_id, token_hash, label,
+                  created_at, expires_at, last_used_at, revoked_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (token_id, user.id, token_hash, normalized_label, now, expires_at, now),
+            )
+        info = ServiceTokenInfo(
+            id=token_id,
+            user_id=user.id,
+            label=normalized_label,
+            created_at=now,
+            last_used_at=now,
+            expires_at=expires_at,
+        )
+        return raw_token, info
+
+    def list_service_tokens(self, user_id: str) -> list[ServiceTokenInfo]:
+        uid = str(user_id or "").strip()
+        if not uid:
+            return []
+        now = _now()
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, user_id, label, created_at, last_used_at, expires_at
+                FROM auth_service_token
+                WHERE user_id = ?
+                  AND revoked_at IS NULL
+                  AND (expires_at IS NULL OR expires_at > ?)
+                ORDER BY last_used_at DESC, created_at DESC
+                """,
+                (uid, now),
+            ).fetchall()
+        out: list[ServiceTokenInfo] = []
+        for row in rows:
+            expires_at_raw = row["expires_at"]
+            out.append(
+                ServiceTokenInfo(
+                    id=str(row["id"]),
+                    user_id=str(row["user_id"]),
+                    label=str(row["label"] or "").strip() or "Service token",
+                    created_at=float(row["created_at"] or 0.0),
+                    last_used_at=float(row["last_used_at"] or 0.0),
+                    expires_at=float(expires_at_raw) if expires_at_raw is not None else None,
+                )
+            )
+        return out
+
+    def get_service_token_session(self, raw_service_token: str) -> ServiceTokenSession | None:
+        token_hash = _sha256(str(raw_service_token or ""))
+        now = _now()
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT
+                  st.id AS st_id,
+                  st.label AS st_label,
+                  st.expires_at AS st_expires_at,
+                  st.revoked_at AS st_revoked_at,
+                  u.*
+                FROM auth_service_token st
+                JOIN auth_user u ON u.id = st.user_id
+                WHERE st.token_hash = ?
+                LIMIT 1
+                """,
+                (token_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["st_revoked_at"] is not None:
+                return None
+            expires_at_raw = row["st_expires_at"]
+            expires_at = float(expires_at_raw) if expires_at_raw is not None else None
+            if expires_at is not None and expires_at <= now:
+                return None
+            self._conn.execute(
+                "UPDATE auth_service_token SET last_used_at = ? WHERE id = ?",
+                (now, str(row["st_id"])),
+            )
+        user = self._row_to_user(row)
+        if user is None or user.is_disabled:
+            return None
+        return ServiceTokenSession(
+            token_id=str(row["st_id"]),
+            user=user,
+            label=str(row["st_label"] or "").strip() or "Service token",
+            expires_at=expires_at,
+        )
+
+    def revoke_service_token(self, *, token_id: str, user_id: str | None = None) -> bool:
+        tid = str(token_id or "").strip()
+        if not tid:
+            return False
+        uid = str(user_id or "").strip()
+        now = _now()
+        with self._lock:
+            if uid:
+                row = self._conn.execute(
+                    "SELECT id FROM auth_service_token WHERE id = ? AND user_id = ? AND revoked_at IS NULL LIMIT 1",
+                    (tid, uid),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT id FROM auth_service_token WHERE id = ? AND revoked_at IS NULL LIMIT 1",
+                    (tid,),
+                ).fetchone()
+            if row is None:
+                return False
+            self._conn.execute(
+                "UPDATE auth_service_token SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                (now, tid),
+            )
+        return True
+
+    def get_or_create_service_user(
+        self,
+        *,
+        username: str,
+        display_name: str,
+    ) -> AuthUser:
+        uname = str(username or "").strip()
+        if len(uname) < 3:
+            raise ValueError("Username must have at least 3 characters")
+        existing = self.get_user_by_username(uname)
+        if existing is not None:
+            if existing.role != "service":
+                raise ValueError("Username already exists with a non-service role")
+            if existing.is_disabled:
+                raise ValueError("Service user is disabled")
+            return existing
+        return self.create_user(
+            username=uname,
+            display_name=display_name or uname,
+            role="service",
+            password=secrets.token_urlsafe(32),
+        )
+
     def list_grants(self, user_id: str) -> list[GrantRule]:
         with self._lock:
             rows = self._conn.execute(
@@ -1110,6 +1301,20 @@ class AuthRuntime:
 
     # Registry used by UX to configure include/exclude quickly.
     configurable_actions: dict[str, list[str]] = {
+        "core:global": [
+            "core:settings:read",
+            "core:extensions:list",
+            "core:compositions:read",
+            "core:compositions:write",
+            "core:files:read",
+            "core:devices:read",
+            "core:notifications:read",
+            "core:notifications:stream",
+            "core:pipelines:read",
+            "core:pipelines:runtime:read",
+            "core:processing_servers:read",
+            "core:embed:start",
+        ],
         "core:extension": ["core:extension:use", "core:extension:settings:write"],
         "core:extensions": ["core:extensions:list", "core:extensions:manage"],
         "core:event": ["core:events:emit"],
@@ -1121,6 +1326,7 @@ class AuthRuntime:
         "/api/auth/login",
         "/api/auth/logout",
         "/api/auth/pair/complete",
+        "/api/auth/embed/complete",
     }
     public_route_prefixes: tuple[str, ...] = (
         "/api/streams/media/hls/",
@@ -1247,6 +1453,48 @@ class AuthRuntime:
         }
         return self._sign_access_payload(payload), expires_at
 
+    def create_embed_token(
+        self,
+        *,
+        user_id: str,
+        path: str,
+        ttl_s: int,
+    ) -> tuple[str, float]:
+        user = self.store.get_user_by_id(user_id)
+        if user is None or user.is_disabled:
+            raise KeyError("Unknown user")
+        now = _now()
+        expires_at = now + min(max(15, int(ttl_s)), 10 * 60)
+        normalized_path = str(path or "/").strip() or "/"
+        if not normalized_path.startswith("/"):
+            normalized_path = f"/{normalized_path}"
+        if normalized_path.startswith("//") or "://" in normalized_path:
+            normalized_path = "/"
+        payload = {
+            "typ": "embed",
+            "sub": user.id,
+            "path": normalized_path,
+            "iat": now,
+            "exp": expires_at,
+            "nonce": secrets.token_urlsafe(12),
+        }
+        return self._sign_access_payload(payload), expires_at
+
+    def consume_embed_token(self, token: str) -> tuple[AuthUser, str]:
+        payload = self._verify_access_token(token)
+        if payload is None or payload.get("typ") != "embed":
+            raise HTTPException(status_code=401, detail="Invalid or expired embed token")
+        user_id = str(payload.get("sub") or "").strip()
+        user = self.store.get_user_by_id(user_id)
+        if user is None or user.is_disabled:
+            raise HTTPException(status_code=401, detail="Invalid embed user")
+        path = str(payload.get("path") or "/").strip() or "/"
+        if not path.startswith("/"):
+            path = "/"
+        if path.startswith("//") or "://" in path:
+            path = "/"
+        return user, path
+
     def _principal_from_user(self, user: AuthUser) -> AuthPrincipal:
         return AuthPrincipal(
             user_id=user.id,
@@ -1259,6 +1507,9 @@ class AuthRuntime:
     def _principal_from_access(self, token: str) -> AuthPrincipal | None:
         payload = self._verify_access_token(token)
         if payload is None:
+            return None
+        token_type = str(payload.get("typ") or "access")
+        if token_type != "access":
             return None
         user_id = str(payload.get("sub") or "").strip()
         if not user_id:
@@ -1420,7 +1671,12 @@ class AuthRuntime:
 
         bearer = self._authorization_header_token(request)
         if bearer:
-            principal = self._principal_from_access(bearer)
+            service_session = self.store.get_service_token_session(bearer)
+            principal = (
+                self._principal_from_user(service_session.user)
+                if service_session is not None
+                else self._principal_from_access(bearer)
+            )
             return AuthContext(principal=principal, mode=self.mode, requires_setup=requires_setup)
 
         access_cookie = str(request.cookies.get(self.access_cookie_name) or "")
@@ -1538,6 +1794,20 @@ class AuthRuntime:
         )
         return self._principal_from_user(pairing.user), access_token, refresh_token
 
+    def issue_session_for_user(
+        self, *, user_id: str, device_label: str
+    ) -> tuple[AuthPrincipal, str, str]:
+        user = self.store.get_user_by_id(user_id)
+        if user is None or user.is_disabled:
+            raise HTTPException(status_code=401, detail="Unknown user")
+        access_token, _ = self._issue_access_token(user)
+        refresh_token, _ = self.store.issue_refresh_token(
+            user_id=user.id,
+            device_label=device_label,
+            ttl_s=self.refresh_ttl_s,
+        )
+        return self._principal_from_user(user), access_token, refresh_token
+
     def setup_owner(self, *, username: str, display_name: str, password: str) -> AuthUser:
         if self.mode == "bypass":
             raise HTTPException(status_code=400, detail="Setup is disabled in bypass mode")
@@ -1610,6 +1880,17 @@ class AuthRuntime:
                 if not grant_allowed:
                     raise HTTPException(status_code=403, detail="Permission denied")
                 return principal
+
+        global_grant_allowed = self._allow_by_grant(
+            user_id=principal.user_id,
+            action=action,
+            resource_type="core:global",
+            resource_selector="*",
+        )
+        if global_grant_allowed is not None:
+            if not global_grant_allowed:
+                raise HTTPException(status_code=403, detail="Permission denied")
+            return principal
 
         if not role_allowed:
             raise HTTPException(status_code=403, detail="Permission denied")

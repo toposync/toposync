@@ -3,16 +3,18 @@
     "step": {
       "user": {
         "title": "Toposync",
-        "description": "Connect Home Assistant camera entities to Toposync streaming.",
+        "description": "Embed Toposync in Home Assistant and expose published Toposync streams as camera entities.",
         "data": {
-          "url": "Toposync URL",
-          "token": "API token",
+          "url": "Toposync URL used by Home Assistant",
+          "public_url": "Toposync URL used by browsers",
+          "token": "Toposync Home Assistant service token",
           "enable_native_webrtc": "Enable native WebRTC (experimental)"
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to Toposync."
+      "cannot_connect": "Failed to connect to Toposync.",
+      "invalid_auth": "The Toposync service token was rejected."
     }
   }
 }

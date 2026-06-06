@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -370,3 +371,94 @@ def test_owner_can_revoke_session_by_device(
         assert revoke.status_code == 200
         assert revoke.json()["ok"] is True
         assert auth.store.get_refresh_session(str(tablet_refresh)) is None
+
+
+def test_home_assistant_service_token_reads_embed_surface_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        auth = client.app.state.auth
+        owner_access = client.cookies.get(auth.access_cookie_name)
+        assert owner_access
+
+        created = client.post(
+            "/api/auth/home-assistant/token",
+            json={"label": "Home Assistant Lab"},
+        )
+        assert created.status_code == 200
+        payload = created.json()
+        service_token = payload["token"]
+        service_user = payload["user"]
+        assert service_token.startswith("toposync_st_")
+        assert payload["token_type"] == "Bearer"
+        assert service_user["role"] == "service"
+
+        client.cookies.clear()
+        headers = {"Authorization": f"Bearer {service_token}"}
+
+        status = client.get("/api/auth/status", headers=headers)
+        assert status.status_code == 200
+        assert status.json()["authenticated"] is True
+        assert status.json()["user"]["id"] == service_user["id"]
+
+        settings = client.get("/api/settings", headers=headers)
+        assert settings.status_code == 200
+
+        composition = client.get("/api/composition", headers=headers)
+        assert composition.status_code == 200
+        saved = client.put("/api/composition", headers=headers, json=composition.json())
+        assert saved.status_code == 200
+
+        access = client.get("/api/access/users", headers=headers)
+        assert access.status_code == 403
+
+        listed = client.get(
+            f"/api/access/users/{service_user['id']}/service-tokens",
+            headers={"Authorization": f"Bearer {owner_access}"},
+        )
+        assert listed.status_code == 200
+        assert any(item["id"] == payload["token_id"] for item in listed.json()["tokens"])
+
+        revoked = client.delete(
+            f"/api/access/users/{service_user['id']}/service-tokens/{payload['token_id']}",
+            headers={"Authorization": f"Bearer {owner_access}"},
+        )
+        assert revoked.status_code == 200
+
+        denied = client.get("/api/settings", headers=headers)
+        assert denied.status_code == 401
+
+
+def test_home_assistant_service_token_creates_embed_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        auth = client.app.state.auth
+
+        created = client.post("/api/auth/home-assistant/token", json={})
+        assert created.status_code == 200
+        service_token = created.json()["token"]
+
+        client.cookies.clear()
+        start = client.post(
+            "/api/auth/embed/start",
+            headers={"Authorization": f"Bearer {service_token}"},
+            json={"path": "/?source=home-assistant", "ttl_seconds": 60},
+        )
+        assert start.status_code == 200
+        embed_url = start.json()["url"]
+        assert embed_url.startswith("/api/auth/embed/complete?token=")
+
+        complete = client.get(embed_url, follow_redirects=False)
+        assert complete.status_code == 303
+        assert complete.headers["location"] == "/?source=home-assistant"
+        refresh_cookie = client.cookies.get(auth.refresh_cookie_name)
+        assert refresh_cookie
+        refresh_session = auth.store.get_refresh_session(str(refresh_cookie))
+        assert refresh_session is not None
+        assert refresh_session.expires_at > time.time() + (30 * 60)
+
+        settings = client.get("/api/settings")
+        assert settings.status_code == 200

@@ -9,6 +9,10 @@ from aiohttp import ClientResponseError, ClientSession
 class ToposyncApiError(RuntimeError):
     """Raised when Toposync API calls fail."""
 
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
 
 class ToposyncClient:
     def __init__(self, session: ClientSession, *, url: str, token: str = "") -> None:
@@ -39,9 +43,26 @@ class ToposyncClient:
                 response.raise_for_status()
                 return await response.json()
         except ClientResponseError as exc:
-            raise ToposyncApiError(f"Toposync API returned HTTP {exc.status}") from exc
+            raise ToposyncApiError(f"Toposync API returned HTTP {exc.status}", status=exc.status) from exc
         except Exception as exc:  # noqa: BLE001
             raise ToposyncApiError(f"Toposync API request failed: {exc}") from exc
+
+    async def get_auth_status(self) -> dict[str, Any]:
+        data = await self._json("GET", "/api/auth/status")
+        return data if isinstance(data, dict) else {}
+
+    async def start_embed_session(self, *, path: str = "/", ttl_seconds: int = 60) -> dict[str, Any]:
+        data = await self._json(
+            "POST",
+            "/api/auth/embed/start",
+            json={"path": path or "/", "ttl_seconds": ttl_seconds},
+        )
+        if not isinstance(data, dict):
+            raise ToposyncApiError("Toposync embed response is invalid")
+        url = str(data.get("url") or "").strip()
+        if not url:
+            raise ToposyncApiError("Toposync embed response did not include a URL")
+        return {**data, "url": self.url_for(url), "path_url": url}
 
     async def get_cameras_manifest(self) -> dict[str, Any]:
         data = await self._json("GET", "/api/streams/home-assistant/cameras")
@@ -71,7 +92,7 @@ class ToposyncClient:
                 response.raise_for_status()
                 return await response.read()
         except ClientResponseError as exc:
-            raise ToposyncApiError(f"Toposync still returned HTTP {exc.status}") from exc
+            raise ToposyncApiError(f"Toposync still returned HTTP {exc.status}", status=exc.status) from exc
         except Exception as exc:  # noqa: BLE001
             raise ToposyncApiError(f"Toposync still request failed: {exc}") from exc
 

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, TypeVar
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -723,6 +723,31 @@ class AuthPairCompleteRequest(BaseModel):
     device_label: str = "mobile"
 
 
+class HomeAssistantTokenCreateRequest(BaseModel):
+    label: str = "Home Assistant"
+    username: str = "home_assistant"
+    display_name: str = "Home Assistant"
+    ttl_seconds: int | None = None
+
+
+class HomeAssistantTokenCreateResponse(BaseModel):
+    token: str
+    token_id: str
+    token_type: str = "Bearer"
+    user: AuthUserPublic
+    expires_at: float | None = None
+
+
+class AuthEmbedStartRequest(BaseModel):
+    path: str = "/"
+    ttl_seconds: int = 60
+
+
+class AuthEmbedStartResponse(BaseModel):
+    url: str
+    expires_at: float
+
+
 class AccessUsersResponse(BaseModel):
     users: list[AuthUserPublic] = Field(default_factory=list)
     grants_catalog: dict[str, list[str]] = Field(default_factory=dict)
@@ -776,6 +801,18 @@ class AccessSessionPublic(BaseModel):
 
 class AccessSessionsResponse(BaseModel):
     sessions: list[AccessSessionPublic] = Field(default_factory=list)
+
+
+class AccessServiceTokenPublic(BaseModel):
+    id: str
+    label: str
+    created_at: float
+    last_used_at: float
+    expires_at: float | None = None
+
+
+class AccessServiceTokensResponse(BaseModel):
+    tokens: list[AccessServiceTokenPublic] = Field(default_factory=list)
 
 
 def _guess_media_type(path: str) -> str:
@@ -1389,6 +1426,108 @@ def create_app() -> FastAPI:
         )
         return response
 
+    def _grant_home_assistant_embed_permissions(auth: AuthRuntime, user_id: str) -> None:
+        global_actions = [
+            "core:settings:read",
+            "core:extensions:list",
+            "core:compositions:read",
+            "core:compositions:write",
+            "core:files:read",
+            "core:devices:read",
+            "core:notifications:read",
+            "core:notifications:stream",
+            "core:pipelines:read",
+            "core:pipelines:runtime:read",
+            "core:processing_servers:read",
+            "core:embed:start",
+        ]
+        for action in global_actions:
+            auth.store.upsert_grant(
+                user_id=user_id,
+                action=action,
+                resource_type="core:global",
+                include=["*"],
+                exclude=[],
+            )
+        auth.store.upsert_grant(
+            user_id=user_id,
+            action="core:extension:use",
+            resource_type="core:extension",
+            include=["*"],
+            exclude=[],
+        )
+
+    @app.post(
+        "/api/auth/home-assistant/token",
+        response_model=HomeAssistantTokenCreateResponse,
+    )
+    async def auth_home_assistant_token(
+        request: Request, body: HomeAssistantTokenCreateRequest
+    ) -> HomeAssistantTokenCreateResponse:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        try:
+            user = auth.store.get_or_create_service_user(
+                username=body.username,
+                display_name=body.display_name,
+            )
+            _grant_home_assistant_embed_permissions(auth, user.id)
+            token, token_info = auth.store.issue_service_token(
+                user_id=user.id,
+                label=body.label or "Home Assistant",
+                ttl_s=body.ttl_seconds,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        refreshed_user = auth.store.get_user_by_id(user.id) or user
+        return HomeAssistantTokenCreateResponse(
+            token=token,
+            token_id=token_info.id,
+            user=AuthUserPublic.model_validate(
+                auth.serialize_user(refreshed_user, include_grants=True)
+            ),
+            expires_at=token_info.expires_at,
+        )
+
+    @app.post("/api/auth/embed/start", response_model=AuthEmbedStartResponse)
+    async def auth_embed_start(
+        request: Request, body: AuthEmbedStartRequest
+    ) -> AuthEmbedStartResponse:
+        _require(request, action="core:embed:start")
+        auth: AuthRuntime = request.app.state.auth
+        principal = auth.require_authenticated(_auth_context(request))
+        token, expires_at = auth.create_embed_token(
+            user_id=principal.user_id,
+            path=body.path,
+            ttl_s=body.ttl_seconds,
+        )
+        base_path = _public_base_path_for_request(request).rstrip("/")
+        complete_path = (
+            f"{base_path}/api/auth/embed/complete"
+            if base_path
+            else "/api/auth/embed/complete"
+        )
+        return AuthEmbedStartResponse(
+            url=f"{complete_path}?token={token}",
+            expires_at=expires_at,
+        )
+
+    @app.get("/api/auth/embed/complete")
+    async def auth_embed_complete(request: Request, token: str) -> Response:
+        auth: AuthRuntime = request.app.state.auth
+        user, path = auth.consume_embed_token(token)
+        _principal, access_token, refresh_token = auth.issue_session_for_user(
+            user_id=user.id,
+            device_label="home-assistant-embed",
+        )
+        response = RedirectResponse(url=path, status_code=303)
+        auth.apply_session_cookies(
+            response, access_token=access_token, refresh_token=refresh_token, request=request
+        )
+        return response
+
     @app.get("/api/access/users", response_model=AccessUsersResponse)
     async def list_access_users(request: Request) -> AccessUsersResponse:
         _require(request, action="core:access:manage")
@@ -1468,6 +1607,59 @@ def create_app() -> FastAPI:
         revoked = auth.store.revoke_refresh_session(token_id=session_id, user_id=user_id)
         if not revoked:
             raise HTTPException(status_code=404, detail="Unknown session")
+        return {"ok": True}
+
+    @app.get(
+        "/api/access/users/{user_id}/service-tokens",
+        response_model=AccessServiceTokensResponse,
+    )
+    async def list_access_user_service_tokens(
+        request: Request, user_id: str
+    ) -> AccessServiceTokensResponse:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        context = _auth_context(request)
+        target = auth.store.get_user_by_id(user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Unknown user")
+        if (
+            context.principal is not None
+            and context.principal.role != "owner"
+            and target.role == "owner"
+        ):
+            raise HTTPException(status_code=403, detail="Only owners can manage owner tokens")
+        return AccessServiceTokensResponse(
+            tokens=[
+                AccessServiceTokenPublic(
+                    id=item.id,
+                    label=item.label,
+                    created_at=item.created_at,
+                    last_used_at=item.last_used_at,
+                    expires_at=item.expires_at,
+                )
+                for item in auth.store.list_service_tokens(user_id)
+            ]
+        )
+
+    @app.delete("/api/access/users/{user_id}/service-tokens/{token_id}")
+    async def revoke_access_user_service_token(
+        request: Request, user_id: str, token_id: str
+    ) -> dict[str, bool]:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        context = _auth_context(request)
+        target = auth.store.get_user_by_id(user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Unknown user")
+        if (
+            context.principal is not None
+            and context.principal.role != "owner"
+            and target.role == "owner"
+        ):
+            raise HTTPException(status_code=403, detail="Only owners can manage owner tokens")
+        revoked = auth.store.revoke_service_token(token_id=token_id, user_id=user_id)
+        if not revoked:
+            raise HTTPException(status_code=404, detail="Unknown service token")
         return {"ok": True}
 
     @app.get("/api/access/options", response_model=AccessOptionsResponse)

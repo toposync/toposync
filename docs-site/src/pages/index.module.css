@@ -65,11 +65,6 @@
   text-underline-offset: 0.22em;
 }
 
-.productLink a::after {
-  content: " ->";
-  color: var(--topo-amber);
-}
-
 .productLink a:hover {
   color: var(--topo-text);
   text-decoration: underline;

@@ -8,7 +8,7 @@
 
 [English](README.md)
 
-**Toposync** é uma **plataforma open source, local-first, em estágio alpha** para **Spatial Home Automation com inteligência local**: automação residencial com contexto espacial, inteligência com câmeras, mapeamento espacial de câmeras, eventos espaciais e visualização 2D/3D da casa em ambientes residenciais privados, opcionalmente integrada ao Home Assistant.
+**Toposync** é uma **plataforma open source, local-first, em estágio alpha** para **Spatial Home Automation com inteligência local**: automação residencial com contexto espacial, **Spatial Intelligence**, **Spatial Camera Mapping**, **Spatial Events** e visualização 2D/3D da casa em ambientes residenciais privados, opcionalmente integrada ao Home Assistant.
 
 O objetivo é transformar uma casa inteligente em um ambiente visual e interpretável: câmeras, áreas, dispositivos, automações, notificações e eventos podem existir dentro de um mapa 2D/3D da casa.
 

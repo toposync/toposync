@@ -9,6 +9,7 @@ This package contains the stable host-side types used by Module Federation remot
 - editor tools
 - settings panels
 - notification renderers
+- host API helpers
 - i18n helpers
 
 ## Install
@@ -37,6 +38,13 @@ export function activate(host: ToposyncHost): void {
     render: () => null,
   });
 }
+```
+
+Use `host.api.fetch()` for extension backend routes so requests keep the active
+Toposync base path, including Home Assistant ingress paths:
+
+```ts
+const response = await host.api.fetch("/api/demo/status");
 ```
 
 ## Runtime model

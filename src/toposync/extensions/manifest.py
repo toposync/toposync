@@ -16,8 +16,14 @@ class ExtensionManifest(BaseModel):
     id: str
     name: str
     version: str
+    description: str = ""
+    author: str = ""
+    repository: str = ""
+    homepage: str = ""
+    categories: list[str] = Field(default_factory=list)
 
     requires_core_version: str | None = None
     requires_extensions: list[str] = Field(default_factory=list)
+    api_prefixes: list[str] = Field(default_factory=list)
 
     frontend: FrontendManifest | None = None

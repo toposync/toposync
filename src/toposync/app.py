@@ -1853,6 +1853,12 @@ def create_app() -> FastAPI:
         ext_manager: ExtensionManager = request.app.state.extensions
         return JSONResponse(ext_manager.public_extensions())
 
+    @app.get("/api/extensions/diagnostics")
+    async def list_extension_diagnostics(request: Request) -> JSONResponse:
+        _require(request, action="core:extensions:list")
+        ext_manager: ExtensionManager = request.app.state.extensions
+        return JSONResponse(ext_manager.public_diagnostics())
+
     async def _extension_management_response(
         request: Request,
         *,

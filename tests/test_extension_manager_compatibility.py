@@ -215,3 +215,89 @@ def test_extension_manager_validates_required_extension_version(
 
     assert [item["id"] for item in manager.public_extensions()] == ["com.test.base"]
     assert setup_calls == ["com.test.base"]
+
+
+def test_extension_manager_registers_manifest_api_prefixes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup_calls: list[str] = []
+    plugin = _make_plugin(
+        {
+            "id": "com.test.api",
+            "name": "API",
+            "version": "0.1.0",
+            "api_prefixes": ["/api/test-api"],
+        },
+        setup_calls,
+    )
+
+    manager = _load_manager(
+        entry_points=[_FakeEntryPoint("api", plugin)],
+        monkeypatch=monkeypatch,
+    )
+
+    assert setup_calls == ["com.test.api"]
+    routes = manager.auth_routes()
+    assert len(routes) == 1
+    assert routes[0].extension_id == "com.test.api"
+    assert routes[0].prefix == "/api/test-api"
+    assert routes[0].action == "core:extension:use"
+
+
+def test_extension_manager_reports_missing_frontend_remote_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup_calls: list[str] = []
+    plugin = _make_plugin(
+        {
+            "id": "com.test.frontend",
+            "name": "Frontend",
+            "version": "0.1.0",
+            "frontend": {
+                "kind": "module-federation",
+                "remote_entry": "remoteEntry.js",
+                "scope": "test_frontend",
+                "module": "./activate",
+            },
+        },
+        setup_calls,
+    )
+
+    manager = _load_manager(
+        entry_points=[_FakeEntryPoint("frontend", plugin)],
+        monkeypatch=monkeypatch,
+    )
+
+    diagnostics = manager.public_diagnostics()
+    assert any(
+        item["extension_id"] == "com.test.frontend"
+        and item["code"] == "frontend_static_missing"
+        for item in diagnostics
+    )
+
+
+def test_extension_manager_reports_incompatible_extensions_in_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup_calls: list[str] = []
+    plugin = _make_plugin(
+        {
+            "id": "com.test.future",
+            "name": "Future",
+            "version": "0.1.0",
+            "requires_core_version": ">=0.4",
+        },
+        setup_calls,
+    )
+
+    manager = _load_manager(
+        entry_points=[_FakeEntryPoint("future", plugin)],
+        monkeypatch=monkeypatch,
+    )
+
+    diagnostics = manager.public_diagnostics()
+    assert any(
+        item["extension_id"] == "com.test.future"
+        and item["code"] == "incompatible_extension"
+        for item in diagnostics
+    )

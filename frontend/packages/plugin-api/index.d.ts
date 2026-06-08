@@ -177,6 +177,8 @@ export type EmitEventResponse = {
 export type HostApi = {
   emitEvent: (eventName: string, payload: unknown, context?: Record<string, unknown>) => Promise<EmitEventResponse>;
   getDevice: (deviceId: string) => Promise<{ device_id: string; state: boolean }>;
+  fetch: (input: string, init?: RequestInit) => Promise<Response>;
+  resolveUrl: (url: string) => string;
 };
 
 export type Scene3DContext = {

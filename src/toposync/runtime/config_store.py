@@ -236,6 +236,10 @@ def _normalize_extension_management(value: Any) -> dict[str, Any]:
         source = str(item.get("source") or "manual").strip()
         if source not in {"recommended", "manual"}:
             source = "manual"
+        source_kind = str(item.get("source_kind") or "pypi").strip()
+        if source_kind not in {"pypi", "github", "git", "local"}:
+            source_kind = "pypi"
+        editable = bool(item.get("editable") or False)
         key = extension_id or package or pip_spec
         if not pip_spec or not key or key in seen_desired:
             continue
@@ -246,6 +250,8 @@ def _normalize_extension_management(value: Any) -> dict[str, Any]:
                 "package": package,
                 "extension_id": extension_id or None,
                 "source": source,
+                "source_kind": source_kind,
+                "editable": editable,
             }
         )
 

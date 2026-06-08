@@ -50,6 +50,8 @@ export type ManagedExtensionSpec = {
   package: string;
   extension_id: string | null;
   source: "recommended" | "manual";
+  source_kind: "pypi" | "github" | "git" | "local";
+  editable: boolean;
 };
 
 export type PipOperationResult = {
@@ -79,6 +81,16 @@ export type ExtensionManagementItem = {
   loaded_version: string | null;
   package_version: string | null;
   source: "recommended" | "manual" | "installed" | "bundle";
+  source_kind: "pypi" | "github" | "git" | "local";
+  editable: boolean;
+  diagnostics: Array<{
+    extension_id: string;
+    level: string;
+    code: string;
+    message: string;
+    entry_point_name: string;
+    entry_point_value: string;
+  }>;
 };
 
 export type ExtensionManagementCatalog = {

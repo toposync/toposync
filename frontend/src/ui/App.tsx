@@ -17,6 +17,7 @@ import type {
   ViewSettings,
   WallHeightPreset,
 } from "@toposync/plugin-api";
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 
 import {
   activateComposition,
@@ -312,6 +313,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [compositionLoaded, setCompositionLoaded] = useState(false);
   const [criticalExtensionsLoaded, setCriticalExtensionsLoaded] = useState(false);
   const [allExtensionsLoaded, setAllExtensionsLoaded] = useState(false);
+  const [extensionActivationDiagnostics, setExtensionActivationDiagnostics] = useState<Record<string, string>>({});
   const [mainViewportReady, setMainViewportReady] = useState(false);
   const [backendAvailable, setBackendAvailable] = useState(false);
   const [wallHeightPreset, setWallHeightPreset] = useState<WallHeightPreset>(() => loadWallHeightPreset());
@@ -520,6 +522,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       api: {
         emitEvent,
         getDevice,
+        fetch: (input, init) => fetch(resolveToposyncUrl(input), init),
+        resolveUrl: resolveToposyncUrl,
       },
       i18n,
       ui: {
@@ -1038,6 +1042,12 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         const activate = await loadRemoteActivate(frontend.remote_entry_url, frontend.scope, frontend.module);
         await activate(host);
         activatedExtensionIdsRef.current.add(ext.id);
+        setExtensionActivationDiagnostics((prev) => {
+          if (!prev[ext.id]) return prev;
+          const next = { ...prev };
+          delete next[ext.id];
+          return next;
+        });
       })();
 
       extensionActivationPromisesRef.current.set(ext.id, promise);
@@ -1071,6 +1081,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
               await activateFrontendExtension(ext);
             } catch (err) {
               if (cancelled) return;
+              setExtensionActivationDiagnostics((prev) => ({
+                ...prev,
+                [ext.id]: err instanceof Error ? err.message : String(err),
+              }));
               console.error(`[extension:${ext.id}]`, err);
             }
           }),
@@ -1090,6 +1104,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
                   await activateFrontendExtension(ext);
                 } catch (err) {
                   if (cancelled) return;
+                  setExtensionActivationDiagnostics((prev) => ({
+                    ...prev,
+                    [ext.id]: err instanceof Error ? err.message : String(err),
+                  }));
                   console.error(`[extension:${ext.id}]`, err);
                 }
               }),
@@ -1368,6 +1386,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           onSetViewport3dBackground={setViewport3dBackground}
           settings={settings}
           onPatchExtensionSettings={updateExtensionSettings}
+          extensionActivationDiagnostics={extensionActivationDiagnostics}
           onOpenPipelines={openPipelinesSettings}
           onOpenProcessingServers={openProcessingServersSettings}
           onOpenAccess={openAccessSettings}

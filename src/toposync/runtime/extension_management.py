@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import importlib
 import re
+import shutil
 import sys
 import tempfile
+import tomllib
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
@@ -114,6 +117,8 @@ class ManagedExtensionSpec(BaseModel):
     package: str = ""
     extension_id: str | None = None
     source: Literal["recommended", "manual"] = "manual"
+    source_kind: Literal["pypi", "github", "git", "local"] = "pypi"
+    editable: bool = False
 
 
 class ExtensionManagementConfig(BaseModel):
@@ -140,6 +145,13 @@ class PipOperationResult(BaseModel):
     stderr: str = ""
 
 
+class ValidatedExtensionInstall(BaseModel):
+    pip_spec: str
+    package: str
+    source_kind: Literal["pypi", "github", "git", "local"]
+    editable: bool = False
+
+
 class ExtensionManagementItem(BaseModel):
     extension_id: str
     name: str
@@ -159,6 +171,9 @@ class ExtensionManagementItem(BaseModel):
     loaded_version: str | None = None
     package_version: str | None = None
     source: Literal["recommended", "manual", "installed", "bundle"] = "installed"
+    source_kind: Literal["pypi", "github", "git", "local"] = "pypi"
+    editable: bool = False
+    diagnostics: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ExtensionManagementCatalog(BaseModel):
@@ -214,7 +229,7 @@ async def ensure_desired_extensions_installed(
         upgrade = _tracks_updates_requirement(item.pip_spec)
         if package and _installed_distribution_version(package) is not None and not upgrade:
             continue
-        result = await run_pip_install(item.pip_spec, upgrade=upgrade)
+        result = await run_pip_install(item.pip_spec, upgrade=upgrade, editable=item.editable)
         results.append(result)
     return results
 
@@ -243,6 +258,8 @@ async def install_recommended_extension(
             package=rec.package,
             extension_id=rec.extension_id,
             source="recommended",
+            source_kind="pypi",
+            editable=False,
         ),
     )
     config.disabled_extension_ids = [
@@ -252,13 +269,24 @@ async def install_recommended_extension(
     return result
 
 
-async def install_manual_extension(config_store: ConfigStore, pip_spec: str) -> PipOperationResult:
-    spec = validate_manual_pip_spec(pip_spec)
-    package = _package_name_from_spec(spec)
+async def install_manual_extension(
+    config_store: ConfigStore,
+    pip_spec: str,
+    *,
+    editable: bool | None = None,
+) -> PipOperationResult:
+    validated = validate_extension_install_spec(pip_spec)
+    spec = validated.pip_spec
+    package = validated.package
+    use_editable = validated.editable if editable is None else bool(editable)
     if not package:
         raise ValueError("Invalid package spec")
 
-    result = await run_pip_install(spec, upgrade=_tracks_updates_requirement(spec))
+    result = await run_pip_install(
+        spec,
+        upgrade=_tracks_updates_requirement(spec),
+        editable=use_editable,
+    )
     if not result.ok:
         return result
 
@@ -283,6 +311,8 @@ async def install_manual_extension(config_store: ConfigStore, pip_spec: str) -> 
                 package=package,
                 extension_id=item.extension_id,
                 source="manual",
+                source_kind=validated.source_kind,
+                editable=use_editable,
             ),
         )
         config.disabled_extension_ids = [
@@ -377,8 +407,21 @@ async def build_extension_management_catalog(
         for item in extension_manager.public_extensions()
         if isinstance(item, dict) and str(item.get("id") or "").strip()
     }
+    diagnostics_by_id: dict[str, list[dict[str, str]]] = {}
+    for diagnostic in extension_manager.public_diagnostics():
+        eid = str(diagnostic.get("extension_id") or "").strip()
+        if not eid:
+            continue
+        diagnostics_by_id.setdefault(eid, []).append(diagnostic)
 
-    ids = set(recommended) | set(installed) | set(loaded) | set(desired_by_id) | disabled_ids
+    ids = (
+        set(recommended)
+        | set(installed)
+        | set(loaded)
+        | set(desired_by_id)
+        | disabled_ids
+        | set(diagnostics_by_id)
+    )
     items: list[ExtensionManagementItem] = []
     restart_required = False
 
@@ -393,12 +436,39 @@ async def build_extension_management_catalog(
         loaded_now = loaded_manifest is not None
         installed_now = probe is not None
         disabled_now = eid in disabled_ids
+        diagnostics = diagnostics_by_id.get(eid, [])
 
         status: Literal[
             "active", "disabled", "not_installed", "installing", "pending_restart", "error"
         ]
         detail = ""
-        if loaded_now and disabled_now:
+        if probe is not None and probe.load_error:
+            status = "error"
+            detail = f"Installed entry point failed to load: {probe.load_error}"
+        elif diagnostics:
+            first_error = next((item for item in diagnostics if item.get("level") == "error"), None)
+            if first_error is not None:
+                status = "error"
+                detail = first_error.get("message") or ""
+            elif loaded_now and disabled_now:
+                status = "pending_restart"
+                detail = "Sera desabilitada apos reiniciar o Toposync."
+            elif loaded_now and not installed_now:
+                status = "pending_restart"
+                detail = "Foi removida do ambiente, mas ainda esta carregada ate o reinicio."
+            elif loaded_now:
+                status = "active"
+            elif installed_now and disabled_now:
+                status = "disabled"
+            elif installed_now:
+                status = "pending_restart"
+                detail = "Instalada, mas ainda nao carregada neste processo."
+            elif desired is not None:
+                status = "error"
+                detail = "Configurada, mas o pacote nao esta instalado neste ambiente."
+            else:
+                status = "not_installed"
+        elif loaded_now and disabled_now:
             status = "pending_restart"
             detail = "Sera desabilitada apos reiniciar o Toposync."
         elif loaded_now and not installed_now:
@@ -455,6 +525,21 @@ async def build_extension_management_catalog(
             if rec is not None
             else eid
         )
+        description = (
+            rec.description
+            if rec is not None
+            else str(loaded_manifest.get("description") or "")
+            if loaded_manifest is not None
+            else ""
+        )
+        loaded_categories = loaded_manifest.get("categories") if loaded_manifest is not None else None
+        category = (
+            rec.category
+            if rec is not None
+            else ", ".join(str(item) for item in loaded_categories if str(item or "").strip())
+            if isinstance(loaded_categories, list)
+            else ""
+        )
         loaded_version = (
             str(loaded_manifest.get("version") or "") if loaded_manifest is not None else None
         )
@@ -463,10 +548,10 @@ async def build_extension_management_catalog(
             ExtensionManagementItem(
                 extension_id=eid,
                 name=name,
-                description=rec.description if rec is not None else "",
+                description=description,
                 package=package,
                 pip_spec=pip_spec,
-                category=rec.category if rec is not None else "",
+                category=category,
                 status=status,
                 status_detail=detail,
                 installed=installed_now,
@@ -481,6 +566,13 @@ async def build_extension_management_catalog(
                 if probe is not None
                 else _installed_distribution_version(package),
                 source=source,
+                source_kind=(
+                    desired.source_kind
+                    if desired is not None
+                    else _infer_source_kind(pip_spec or package)
+                ),
+                editable=bool(desired.editable) if desired is not None else False,
+                diagnostics=diagnostics,
             )
         )
 
@@ -494,20 +586,61 @@ async def build_extension_management_catalog(
 
 
 def validate_manual_pip_spec(pip_spec: str) -> str:
+    return validate_extension_install_spec(pip_spec).pip_spec
+
+
+def validate_extension_install_spec(pip_spec: str) -> ValidatedExtensionInstall:
     raw = str(pip_spec or "").strip()
     if not raw:
         raise ValueError("pip_spec is required")
-    if any(ch.isspace() for ch in raw) or any(ch in raw for ch in ("/", "\\", "@", ";")):
-        raise ValueError("Only simple package specs are allowed")
+
+    path_candidate = _local_path_candidate(raw)
+    if path_candidate is not None:
+        package = _local_extension_package_name(path_candidate)
+        _validate_extension_package_name(package)
+        return ValidatedExtensionInstall(
+            pip_spec=str(path_candidate),
+            package=package,
+            source_kind="local",
+            editable=True,
+        )
+
+    raw_github = _normalize_github_url(raw)
+    if raw_github is not None:
+        package = _github_repo_package_name(raw_github)
+        _validate_extension_package_name(package)
+        return ValidatedExtensionInstall(
+            pip_spec=f"git+{raw_github}",
+            package=package,
+            source_kind="github",
+            editable=False,
+        )
+
     try:
         req = Requirement(raw)
     except InvalidRequirement as exc:
         raise ValueError(f"Invalid package spec: {exc}") from exc
-    if not canonicalize_name(req.name).startswith(MANUAL_EXTENSION_PREFIX):
-        raise ValueError(
-            f"Manual extensions must use the '{MANUAL_EXTENSION_PREFIX}' package prefix"
+
+    _validate_extension_package_name(req.name)
+    if req.url:
+        if not _is_safe_requirement_url(req.url):
+            raise ValueError("Extension URLs must use git+https://github.com/...")
+        return ValidatedExtensionInstall(
+            pip_spec=raw,
+            package=req.name,
+            source_kind="github",
+            editable=False,
         )
-    return raw
+
+    if req.marker is not None or req.extras or any(ch in raw for ch in ("/", "\\", "@", ";")):
+        raise ValueError("Only package specs, GitHub URLs, or local extension paths are allowed")
+
+    return ValidatedExtensionInstall(
+        pip_spec=raw,
+        package=req.name,
+        source_kind="pypi",
+        editable=False,
+    )
 
 
 def discover_installed_extensions() -> dict[str, InstalledExtensionProbe]:
@@ -546,7 +679,12 @@ def discover_installed_extensions() -> dict[str, InstalledExtensionProbe]:
     return out
 
 
-async def run_pip_install(pip_spec: str, *, upgrade: bool = False) -> PipOperationResult:
+async def run_pip_install(
+    pip_spec: str,
+    *,
+    upgrade: bool = False,
+    editable: bool = False,
+) -> PipOperationResult:
     args = ["install", "--disable-pip-version-check", "--no-input"]
     if upgrade:
         args.append("--upgrade")
@@ -555,7 +693,10 @@ async def run_pip_install(pip_spec: str, *, upgrade: bool = False) -> PipOperati
     try:
         if constraint_file is not None:
             args.extend(["--constraint", str(constraint_file)])
-        args.append(pip_spec)
+        if editable:
+            args.extend(["--editable", pip_spec])
+        else:
+            args.append(pip_spec)
         return await _run_pip(args)
     finally:
         if constraint_file is not None:
@@ -573,6 +714,16 @@ async def run_pip_uninstall(package: str) -> PipOperationResult:
 
 async def _run_pip(args: list[str]) -> PipOperationResult:
     command = [sys.executable, "-m", "pip", *args]
+    result = await _run_subprocess(command)
+    if _is_missing_pip_result(result):
+        fallback_command = _uv_pip_fallback_command(args)
+        if fallback_command is not None:
+            result = await _run_subprocess(fallback_command)
+    importlib.invalidate_caches()
+    return result
+
+
+async def _run_subprocess(command: list[str]) -> PipOperationResult:
     proc = await asyncio.create_subprocess_exec(
         *command,
         stdout=asyncio.subprocess.PIPE,
@@ -581,7 +732,6 @@ async def _run_pip(args: list[str]) -> PipOperationResult:
     stdout_raw, stderr_raw = await proc.communicate()
     stdout = _truncate_output(stdout_raw.decode("utf-8", errors="replace"))
     stderr = _truncate_output(stderr_raw.decode("utf-8", errors="replace"))
-    importlib.invalidate_caches()
     return PipOperationResult(
         ok=proc.returncode == 0,
         command=command,
@@ -589,6 +739,30 @@ async def _run_pip(args: list[str]) -> PipOperationResult:
         stdout=stdout,
         stderr=stderr,
     )
+
+
+def _is_missing_pip_result(result: PipOperationResult) -> bool:
+    if result.ok:
+        return False
+    output = f"{result.stdout}\n{result.stderr}"
+    return "No module named pip" in output
+
+
+def _uv_pip_fallback_command(args: list[str]) -> list[str] | None:
+    uv_path = shutil.which("uv")
+    if not uv_path or not args:
+        return None
+    action = args[0]
+    if action not in {"install", "uninstall"}:
+        return None
+
+    command = [uv_path, "pip", action, "--python", sys.executable]
+    command.extend(
+        arg
+        for arg in args[1:]
+        if arg not in {"--disable-pip-version-check", "--no-input", "--yes"}
+    )
+    return command
 
 
 def _normalize_management_config(config: ExtensionManagementConfig) -> ExtensionManagementConfig:
@@ -608,6 +782,10 @@ def _normalize_management_config(config: ExtensionManagementConfig) -> Extension
                 package=package,
                 extension_id=extension_id or None,
                 source=item.source if item.source in {"recommended", "manual"} else "manual",
+                source_kind=item.source_kind
+                if item.source_kind in {"pypi", "github", "git", "local"}
+                else _infer_source_kind(spec),
+                editable=bool(item.editable),
             )
         )
 
@@ -657,11 +835,98 @@ def _package_name_from_spec(pip_spec: str) -> str:
     raw = str(pip_spec or "").strip()
     if not raw:
         return ""
+    path_candidate = _local_path_candidate(raw)
+    if path_candidate is not None:
+        try:
+            return _local_extension_package_name(path_candidate)
+        except ValueError:
+            return ""
+    normalized_github = _normalize_github_url(raw[4:] if raw.startswith("git+") else raw)
+    if normalized_github is not None:
+        return _github_repo_package_name(normalized_github)
     try:
         return str(Requirement(raw).name or "").strip()
     except InvalidRequirement:
         match = re.match(r"^([A-Za-z0-9_.-]+)", raw)
         return str(match.group(1) if match else "").strip()
+
+
+def _validate_extension_package_name(package: str) -> None:
+    if not canonicalize_name(package).startswith(MANUAL_EXTENSION_PREFIX):
+        raise ValueError(
+            f"Manual extensions must use the '{MANUAL_EXTENSION_PREFIX}' package prefix"
+        )
+
+
+def _local_path_candidate(raw: str) -> Path | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.startswith(("~", "/", "./", "../")):
+        return Path(text).expanduser().resolve()
+    path = Path(text).expanduser()
+    return path.resolve() if path.exists() else None
+
+
+def _local_extension_package_name(path: Path) -> str:
+    pyproject = path.joinpath("pyproject.toml")
+    if not pyproject.is_file():
+        raise ValueError("Local extension paths must contain pyproject.toml")
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Failed to read local pyproject.toml: {exc}") from exc
+    project = data.get("project") if isinstance(data, dict) else None
+    name = project.get("name") if isinstance(project, dict) else None
+    package = str(name or "").strip()
+    if not package:
+        raise ValueError("Local extension pyproject.toml must declare [project].name")
+    return package
+
+
+def _normalize_github_url(raw: str) -> str | None:
+    text = str(raw or "").strip().rstrip("/")
+    if text.startswith("git+"):
+        text = text[4:]
+    parsed = urlparse(text)
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com":
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) != 2:
+        return None
+    return text
+
+
+def _github_repo_package_name(url: str) -> str:
+    parsed = urlparse(url)
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return ""
+    return parts[1].removesuffix(".git")
+
+
+def _is_safe_requirement_url(url: str) -> bool:
+    text = str(url or "").strip()
+    if not text.startswith("git+https://github.com/"):
+        return False
+    return _normalize_github_url(text[4:].split("@", 1)[0]) is not None
+
+
+def _infer_source_kind(pip_spec: str) -> Literal["pypi", "github", "git", "local"]:
+    raw = str(pip_spec or "").strip()
+    if _local_path_candidate(raw) is not None:
+        return "local"
+    if _normalize_github_url(raw[4:] if raw.startswith("git+") else raw) is not None:
+        return "github"
+    try:
+        req = Requirement(raw)
+    except InvalidRequirement:
+        return "pypi"
+    if req.url and "github.com" in req.url:
+        return "github"
+    if req.url:
+        return "git"
+    return "pypi"
 
 
 def _entry_point_distribution(ep: Any) -> tuple[str, str]:
@@ -693,10 +958,14 @@ def _tracks_updates_requirement(pip_spec: str) -> bool:
     raw = str(pip_spec or "").strip()
     if not raw:
         return False
+    if _normalize_github_url(raw[4:] if raw.startswith("git+") else raw) is not None:
+        return True
     try:
         req = Requirement(raw)
     except InvalidRequirement:
         return False
+    if req.url:
+        return True
 
     for specifier in req.specifier:
         if specifier.operator == "===":

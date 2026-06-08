@@ -43,6 +43,7 @@ type Props = {
   onSetViewport3dBackground: (value: Viewport3DBackground) => void;
   settings: AppSettings;
   onPatchExtensionSettings: (extensionId: string, patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  extensionActivationDiagnostics: Record<string, string>;
   onOpenPipelines: () => void;
   onOpenProcessingServers: () => void;
   onOpenAccess: () => void;
@@ -130,6 +131,7 @@ export function SettingsScreen({
   onSetViewport3dBackground,
   settings,
   onPatchExtensionSettings,
+  extensionActivationDiagnostics,
   onOpenPipelines,
   onOpenProcessingServers,
   onOpenAccess,
@@ -853,6 +855,10 @@ export function SettingsScreen({
     return t(`core.ui.settings.extensions.source.${source}`, {}, source);
   }
 
+  function extensionSourceKindLabel(sourceKind: ExtensionManagementItem["source_kind"]): string {
+    return t(`core.ui.settings.extensions.source_kind.${sourceKind}`, {}, sourceKind);
+  }
+
   async function runExtensionAction(actionId: string, action: () => Promise<{ ok: boolean; catalog: ExtensionManagementCatalog; error: string | null }>): Promise<void> {
     if (!backendAvailable || extensionActionId) return;
     setExtensionActionId(actionId);
@@ -1207,6 +1213,14 @@ export function SettingsScreen({
         {extensionError ? <div className="errorText">{extensionError}</div> : null}
         {extensionNotice ? <div className="extensionNotice">{extensionNotice}</div> : null}
 
+        <div className="extensionStatusBanner">
+          <Icon name="triangle-exclamation" />
+          <div>
+            <div className="extensionStatusBannerTitle">{t("core.ui.settings.extensions.trust_title")}</div>
+            <div className="extensionStatusBannerDesc">{t("core.ui.settings.extensions.trust_desc")}</div>
+          </div>
+        </div>
+
         <div className="extensionSummaryGrid">
           <div className="extensionSummaryItem">
             <span>{t("core.ui.settings.extensions.summary.active")}</span>
@@ -1279,10 +1293,24 @@ export function SettingsScreen({
                 <span>{packageLabel(item)}</span>
                 {item.package_version ? <span>{item.package_version}</span> : null}
                 <span>{extensionSourceLabel(item.source)}</span>
+                <span>{extensionSourceKindLabel(item.source_kind)}</span>
+                {item.editable ? <span>{t("core.ui.settings.extensions.editable")}</span> : null}
                 {item.category ? <span>{item.category}</span> : null}
               </div>
 
               {item.status_detail ? <div className="extensionItemDetail">{item.status_detail}</div> : null}
+              {extensionActivationDiagnostics[item.extension_id] ? (
+                <div className="extensionItemDetail">
+                  {t("core.ui.settings.extensions.browser_activation_failed", {
+                    error: extensionActivationDiagnostics[item.extension_id],
+                  })}
+                </div>
+              ) : null}
+              {(item.diagnostics ?? []).slice(0, 3).map((diagnostic) => (
+                <div className="extensionItemDetail" key={`${diagnostic.code}:${diagnostic.message}`}>
+                  {diagnostic.message || diagnostic.code}
+                </div>
+              ))}
 
               <div className="extensionItemFooter">
                 <div className="extensionItemBadges">

@@ -179,6 +179,8 @@ function withLiveDuration(notification: Notification, nowMs: number): Notificati
 
 const NOTIFICATIONS_OPEN_STORAGE_KEY = "toposync.notifications_open.v1";
 const NOTIFICATIONS_FILTER_STORAGE_KEY = "toposync.notifications_filter.v2";
+const FILTERED_NOTIFICATIONS_VISIBLE_TARGET = 12;
+const FILTERED_NOTIFICATIONS_AUTO_PAGE_LIMIT = 30;
 
 type Priority = "low" | "medium" | "high";
 const ALL_PRIORITIES: Priority[] = ["high", "medium", "low"];
@@ -324,7 +326,7 @@ export function MainScreen({
   const notificationScrollRef = useRef<HTMLDivElement | null>(null);
   const notificationSentinelRef = useRef<HTMLDivElement | null>(null);
   const streamsOverlayTimerRef = useRef<number | null>(null);
-  const autoFilteredPageRequestedRef = useRef(false);
+  const autoFilteredPageRequestsRef = useRef(0);
   const notificationPaginationUserEngagedRef = useRef(false);
 
   const clearStreamsOverlayTimer = useCallback(() => {
@@ -575,7 +577,7 @@ export function MainScreen({
   }, [filter]);
 
   useEffect(() => {
-    autoFilteredPageRequestedRef.current = false;
+    autoFilteredPageRequestsRef.current = 0;
     notificationPaginationUserEngagedRef.current = false;
   }, [filter]);
 
@@ -711,17 +713,26 @@ export function MainScreen({
     return displayNotifications.length - filteredLoadedCount;
   }, [filterRestrictive, displayNotifications.length, filteredLoadedCount]);
 
-  // When a restrictive filter leaves few visible items but more pages exist,
-  // pull one extra page during idle. Further pagination is left to scroll.
+  const selectedPriorityTotal = useMemo(
+    () => filter.priorities.reduce((acc, prio) => acc + (notificationsCount.by_priority[prio] ?? 0), 0),
+    [filter.priorities, notificationsCount.by_priority],
+  );
+
+  const filterHasNonPriorityConstraints = filter.types.length > 0 || filter.query.trim().length > 0;
+
+  // A restrictive filter is applied to the pages already loaded in the browser.
+  // Keep paging in the background until the panel has enough matching rows, or
+  // until a small cap prevents rare searches from scanning the whole history.
   useEffect(() => {
     if (!notificationsOpen) return;
     if (!filterRestrictive) return;
     if (notificationsLoading) return;
     if (!notificationsHasMore) return;
-    if (filteredLoadedCount >= 12) return;
-    if (autoFilteredPageRequestedRef.current) return;
+    if (filteredLoadedCount >= FILTERED_NOTIFICATIONS_VISIBLE_TARGET) return;
+    if (!filterHasNonPriorityConstraints && notificationsCount.total > 0 && filteredLoadedCount >= selectedPriorityTotal) return;
+    if (autoFilteredPageRequestsRef.current >= FILTERED_NOTIFICATIONS_AUTO_PAGE_LIMIT) return;
 
-    autoFilteredPageRequestedRef.current = true;
+    autoFilteredPageRequestsRef.current += 1;
     const win = window as WindowWithIdleCallback;
     if (typeof win.requestIdleCallback === "function") {
       const handle = win.requestIdleCallback(() => onLoadMoreNotifications(), { timeout: 1500 });
@@ -729,7 +740,17 @@ export function MainScreen({
     }
     const handle = window.setTimeout(() => onLoadMoreNotifications(), 180);
     return () => window.clearTimeout(handle);
-  }, [notificationsOpen, filterRestrictive, notificationsLoading, notificationsHasMore, filteredLoadedCount, onLoadMoreNotifications]);
+  }, [
+    notificationsOpen,
+    filterRestrictive,
+    notificationsLoading,
+    notificationsHasMore,
+    filteredLoadedCount,
+    filterHasNonPriorityConstraints,
+    notificationsCount.total,
+    selectedPriorityTotal,
+    onLoadMoreNotifications,
+  ]);
 
   // Close the filter popover when clicking outside.
   useEffect(() => {

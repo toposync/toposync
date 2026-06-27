@@ -599,6 +599,7 @@ class RtspSnapshotResult:
     blob: bytes
     source: str
     transport: str
+    capture_mode: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -617,17 +618,24 @@ async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> RtspSnapshotRes
     timeout_s = max(1.5, float(timeout_ms) / 1000.0)
 
     # Some RTSP servers misbehave when clients negotiate audio+video; for snapshots we only need video.
-    # Also, a few servers only work reliably over UDP even when TCP is requested.
-    attempts: list[tuple[str, str, str, list[str]]] = []
-    for source, url in _rtsp_url_candidates(rtsp_url):
-        attempts.append((source, "tcp", url, ["-rtsp_transport", "tcp"]))
-        attempts.append((source, "udp", url, ["-rtsp_transport", "udp"]))
+    # Prefer keyframes so HEVC restreams do not return a fast but damaged pre-IDR gray frame.
+    # A few servers only work reliably over UDP even when TCP is requested, and a first-frame fallback
+    # keeps compatibility with streams that do not expose useful keyframe metadata to FFmpeg.
+    capture_modes: list[tuple[str, list[str]]] = [
+        ("keyframe", ["-skip_frame", "nokey"]),
+        ("first_frame", []),
+    ]
+    attempts: list[tuple[str, str, str, str, list[str], list[str]]] = []
+    for capture_mode, capture_args in capture_modes:
+        for source, url in _rtsp_url_candidates(rtsp_url):
+            attempts.append((source, "tcp", capture_mode, url, ["-rtsp_transport", "tcp"], capture_args))
+            attempts.append((source, "udp", capture_mode, url, ["-rtsp_transport", "udp"], capture_args))
 
     started = time.monotonic()
     deadline = started + timeout_s
     last_error = "Failed to capture RTSP snapshot"
 
-    for index, (source, transport, url, rtsp_args) in enumerate(attempts):
+    for index, (source, transport, capture_mode, url, rtsp_args, capture_args) in enumerate(attempts):
         remaining_s = deadline - time.monotonic()
         if remaining_s <= 0.05:
             last_error = f"Snapshot timed out after {int(round(timeout_s * 1000))} ms"
@@ -649,6 +657,7 @@ async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> RtspSnapshotRes
             *rtsp_args,
             "-allowed_media_types",
             "video",
+            *capture_args,
             "-i",
             url,
             "-an",
@@ -679,14 +688,22 @@ async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> RtspSnapshotRes
             continue
 
         if proc.returncode == 0 and stdout:
-            return RtspSnapshotResult(blob=stdout, source=source, transport=transport)
+            return RtspSnapshotResult(
+                blob=stdout,
+                source=source,
+                transport=transport,
+                capture_mode=capture_mode,
+            )
 
         message = (stderr or b"").decode("utf-8", errors="ignore").strip()
         message = _redact_rtsp_credentials(message)
         if message:
-            last_error = f"{message} (transport={transport}, source={source})"
+            last_error = f"{message} (transport={transport}, source={source}, mode={capture_mode})"
         else:
-            last_error = f"Failed to capture RTSP snapshot (transport={transport}, source={source})"
+            last_error = (
+                "Failed to capture RTSP snapshot "
+                f"(transport={transport}, source={source}, mode={capture_mode})"
+            )
 
     raise HTTPException(status_code=502, detail=last_error)
 
@@ -2124,6 +2141,7 @@ class CamerasExtension(BaseExtension):
                 "Cache-Control": "no-store",
                 "X-Toposync-Snapshot-Source": result.source,
                 "X-Toposync-Snapshot-Transport": result.transport,
+                "X-Toposync-Snapshot-Mode": result.capture_mode,
             }
             snapshot_cache[cache_key] = SnapshotCacheEntry(
                 blob=result.blob,
@@ -2172,6 +2190,7 @@ class CamerasExtension(BaseExtension):
                     "Cache-Control": "no-store",
                     "X-Toposync-Snapshot-Source": result.source,
                     "X-Toposync-Snapshot-Transport": result.transport,
+                    "X-Toposync-Snapshot-Mode": result.capture_mode,
                 }
                 snapshot_cache[cache_key] = SnapshotCacheEntry(
                     blob=result.blob,

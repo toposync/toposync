@@ -255,6 +255,7 @@ export function CameraPipelinePresetModal({
   const [modelStatusPayload, setModelStatusPayload] = useState<unknown>(null);
   const [modelStatusLoading, setModelStatusLoading] = useState(false);
   const [modelStatusError, setModelStatusError] = useState<string | null>(null);
+  const [modelDetailsOpen, setModelDetailsOpen] = useState(false);
   const [modelConsentOpen, setModelConsentOpen] = useState(false);
   const [modelConsentChecked, setModelConsentChecked] = useState(false);
   const [modelInstallSubmitting, setModelInstallSubmitting] = useState(false);
@@ -292,6 +293,7 @@ export function CameraPipelinePresetModal({
     setModelStatusPayload(null);
     setModelStatusLoading(false);
     setModelStatusError(null);
+    setModelDetailsOpen(false);
     setModelConsentOpen(false);
     setModelConsentChecked(false);
     setModelInstallSubmitting(false);
@@ -429,7 +431,8 @@ export function CameraPipelinePresetModal({
   const selectedModelMissingTools = selectedModel?.localBuildMissingTools ?? [];
   const modelStatusHasPayload = Boolean(modelStatusPayload);
   const modelStatusUnavailable = Boolean(modelStatusError && !modelStatusHasPayload && !selectedModelReady);
-  const modelStatusWaiting = Boolean(modelStatusLoading && !modelStatusHasPayload);
+  const modelStatusWaiting = Boolean(!modelStatusHasPayload && !modelStatusError);
+  const showModelReadinessNotice = modelStatusWaiting || modelStatusUnavailable || !selectedModelReady;
   const createBlockedReasons: string[] = [];
   if (noSource) {
     createBlockedReasons.push(
@@ -558,90 +561,157 @@ export function CameraPipelinePresetModal({
 
         <div className="field">
           <label className="label">{t("ext.cameras.pipeline_preset.model.label", {}, "Detection model")}</label>
-          <select
-            className="input"
-            value={modelId}
-            onChange={(event) => {
-              setModelId(event.target.value);
-              setError(null);
-              setModelInstallError(null);
-              setModelConsentOpen(false);
-              setModelConsentChecked(false);
-            }}
-            disabled={creating}
-          >
-            {detectionModels.map((item) => (
-              <option key={item.modelId} value={item.modelId}>
-                {modelOptionLabel(item, t)}
-              </option>
-            ))}
-          </select>
-          <div className="settingsStatusMuted">{modelReadinessStatus}</div>
-          <div className="settingsList" role="list">
-            <div className="settingsListItem" role="listitem">
-              <span className="settingsListTitle">
-                {t("ext.cameras.pipeline_preset.model.selected_server", {}, "Selected server")}
-              </span>
-              <span className="settingsListMeta">{selectedServerLabel}</span>
-            </div>
-            <div className="settingsListItem" role="listitem">
-              <span className="settingsListTitle">
-                {t("ext.cameras.pipeline_preset.model.selected_model", {}, "Selected model")}
-              </span>
-              <span className="settingsListMeta">
-                {selectedModelName} ({selectedModelId})
-              </span>
-            </div>
-            <div className="settingsListItem" role="listitem">
-              <span className="settingsListTitle">{t("ext.cameras.pipeline_preset.model.artifact", {}, "Artifact")}</span>
-              <span className="settingsListMeta">{modelArtifactLabel(selectedModel, t)}</span>
-            </div>
-            <div className="settingsListItem" role="listitem">
-              <span className="settingsListTitle">
-                {t("ext.cameras.pipeline_preset.model.preparation", {}, "Preparation")}
-              </span>
-              <span className="settingsListMeta">{modelPreparationLabel(selectedModel, t)}</span>
-            </div>
-          </div>
-          {modelStatusError ? <div className="errorText">{modelStatusError}</div> : null}
-          {selectedModel?.installJob?.error ? <div className="errorText">{selectedModel.installJob.error}</div> : null}
-          {!selectedModelReady && selectedModelMissingTools.length ? (
-            <div className="settingsStatusMuted">
-              {t(
-                "ext.cameras.pipeline_preset.model.missing_tools",
-                { tools: selectedModelMissingTools.join(", ") },
-                "Missing tools: {{tools}}",
-              )}
-            </div>
-          ) : null}
-          {!selectedModelReady && selectedModel && !canPrepareDetectionModel(selectedModel) && !isActiveDetectionModelInstall(selectedModel) ? (
-            <div className="settingsStatusMuted">
-              {t(
-                "ext.cameras.pipeline_preset.model.manual_next_step",
-                {},
-                "Choose another ready model, use another processing server, or prepare the model manually in the detection operator.",
-              )}
-            </div>
-          ) : null}
-          <div className="rowWrap">
-            {canPrepareDetectionModel(selectedModel) ? (
-              <button
-                className="primaryButton"
-                type="button"
-                disabled={modelInstallSubmitting || creating}
-                onClick={() => {
-                  setModelInstallError(null);
-                  setModelConsentChecked(false);
-                  setModelConsentOpen(true);
-                }}
-              >
-                {t("ext.cameras.pipeline_preset.model.prepare_auto", {}, "Download and prepare automatically")}
-              </button>
-            ) : null}
-            <button className="chipButton" type="button" disabled={modelStatusLoading || creating} onClick={() => void loadModelStatus(true)}>
-              {t("ext.cameras.pipeline_preset.model.refresh", {}, "Refresh models")}
+          <div className="cameraPipelineModelSelectRow">
+            <select
+              className="input"
+              value={modelId}
+              onChange={(event) => {
+                setModelId(event.target.value);
+                setError(null);
+                setModelInstallError(null);
+                setModelConsentOpen(false);
+                setModelConsentChecked(false);
+              }}
+              disabled={creating}
+            >
+              {detectionModels.map((item) => (
+                <option key={item.modelId} value={item.modelId}>
+                  {modelOptionLabel(item, t)}
+                </option>
+              ))}
+            </select>
+            <button
+              className={`iconButton${modelDetailsOpen ? " iconButtonPrimary" : ""}`}
+              type="button"
+              aria-label={
+                modelDetailsOpen
+                  ? t("ext.cameras.pipeline_preset.model.details_hide", {}, "Hide model details")
+                  : t("ext.cameras.pipeline_preset.model.details_show", {}, "Show model details")
+              }
+              title={
+                modelDetailsOpen
+                  ? t("ext.cameras.pipeline_preset.model.details_hide", {}, "Hide model details")
+                  : t("ext.cameras.pipeline_preset.model.details_show", {}, "Show model details")
+              }
+              onClick={() => setModelDetailsOpen((value) => !value)}
+              disabled={creating}
+            >
+              <i className="fa-solid fa-circle-info" aria-hidden="true" />
             </button>
           </div>
+          {showModelReadinessNotice ? (
+            <div className={`cameraPipelineModelNotice${modelStatusWaiting ? "" : " isAttention"}`} role="status">
+              <div className="cameraPipelineModelNoticeMain">
+                <span className="cameraPipelineModelNoticeIcon" aria-hidden="true">
+                  <i
+                    className={`fa-solid ${
+                      modelStatusWaiting || isActiveDetectionModelInstall(selectedModel)
+                        ? "fa-circle-notch"
+                        : "fa-triangle-exclamation"
+                    }`}
+                  />
+                </span>
+                <div>
+                  <div className="settingsListTitle">
+                    {modelStatusWaiting
+                      ? t("ext.cameras.pipeline_preset.model.notice_checking", {}, "Checking model")
+                      : isActiveDetectionModelInstall(selectedModel)
+                        ? t("ext.cameras.pipeline_preset.model.notice_preparing", {}, "Preparing model")
+                        : modelStatusUnavailable
+                          ? t(
+                              "ext.cameras.pipeline_preset.model.notice_unavailable",
+                              {},
+                              "Model status unavailable",
+                            )
+                          : t("ext.cameras.pipeline_preset.model.notice_required", {}, "Detection model required")}
+                  </div>
+                  <div className="settingsStatusMuted">{modelReadinessStatus}</div>
+                </div>
+              </div>
+              {modelStatusError ? <div className="errorText">{modelStatusError}</div> : null}
+              {selectedModel?.installJob?.error ? <div className="errorText">{selectedModel.installJob.error}</div> : null}
+              {!selectedModelReady && selectedModelMissingTools.length ? (
+                <div className="settingsStatusMuted">
+                  {t(
+                    "ext.cameras.pipeline_preset.model.missing_tools",
+                    { tools: selectedModelMissingTools.join(", ") },
+                    "Missing tools: {{tools}}",
+                  )}
+                </div>
+              ) : null}
+              {!selectedModelReady && selectedModel && !canPrepareDetectionModel(selectedModel) && !isActiveDetectionModelInstall(selectedModel) ? (
+                <div className="settingsStatusMuted">
+                  {t(
+                    "ext.cameras.pipeline_preset.model.manual_next_step",
+                    {},
+                    "Choose another ready model, use another processing server, or prepare the model manually in the detection operator.",
+                  )}
+                </div>
+              ) : null}
+              <div className="rowWrap">
+                {canPrepareDetectionModel(selectedModel) ? (
+                  <button
+                    className="primaryButton"
+                    type="button"
+                    disabled={modelInstallSubmitting || creating}
+                    onClick={() => {
+                      setModelInstallError(null);
+                      setModelConsentChecked(false);
+                      setModelConsentOpen(true);
+                    }}
+                  >
+                    {t("ext.cameras.pipeline_preset.model.prepare_auto", {}, "Download and prepare automatically")}
+                  </button>
+                ) : null}
+                {!modelStatusWaiting ? (
+                  <button className="chipButton" type="button" disabled={modelStatusLoading || creating} onClick={() => void loadModelStatus(true)}>
+                    {t("ext.cameras.pipeline_preset.model.refresh", {}, "Refresh models")}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {modelDetailsOpen ? (
+            <div className="cameraPipelineModelDetails">
+              <div className="settingsList" role="list">
+                <div className="settingsListItem" role="listitem">
+                  <span className="settingsListTitle">
+                    {t("ext.cameras.pipeline_preset.model.selected_server", {}, "Selected server")}
+                  </span>
+                  <span className="settingsListMeta">{selectedServerLabel}</span>
+                </div>
+                <div className="settingsListItem" role="listitem">
+                  <span className="settingsListTitle">
+                    {t("ext.cameras.pipeline_preset.model.selected_model", {}, "Selected model")}
+                  </span>
+                  <span className="settingsListMeta">
+                    {selectedModelName} ({selectedModelId})
+                  </span>
+                </div>
+                <div className="settingsListItem" role="listitem">
+                  <span className="settingsListTitle">{t("ext.cameras.pipeline_preset.model.artifact", {}, "Artifact")}</span>
+                  <span className="settingsListMeta">{modelArtifactLabel(selectedModel, t)}</span>
+                </div>
+                <div className="settingsListItem" role="listitem">
+                  <span className="settingsListTitle">
+                    {t("ext.cameras.pipeline_preset.model.preparation", {}, "Preparation")}
+                  </span>
+                  <span className="settingsListMeta">{modelPreparationLabel(selectedModel, t)}</span>
+                </div>
+              </div>
+              {!showModelReadinessNotice && modelStatusError ? <div className="errorText">{modelStatusError}</div> : null}
+              {!showModelReadinessNotice && selectedModel?.installJob?.error ? (
+                <div className="errorText">{selectedModel.installJob.error}</div>
+              ) : null}
+              {!showModelReadinessNotice ? (
+                <div className="rowWrap">
+                  <button className="chipButton" type="button" disabled={modelStatusLoading || creating} onClick={() => void loadModelStatus(true)}>
+                    {t("ext.cameras.pipeline_preset.model.refresh", {}, "Refresh models")}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         {isMappingPreset ? (

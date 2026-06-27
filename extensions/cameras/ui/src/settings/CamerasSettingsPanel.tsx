@@ -536,6 +536,17 @@ function CamerasSettingsPanelContent({
     findDetectionModel(presetDetectionModels, DEFAULT_DETECTION_MODEL_ID) ?? presetDetectionModels[0] ?? null;
   const presetDefaultModelReady = isDetectionModelReady(presetDefaultDetectionModel);
   const presetDefaultModelPreparing = isActiveDetectionModelInstall(presetDefaultDetectionModel);
+  const presetDefaultModelStatusHasPayload = Boolean(presetModelStatusPayload);
+  const presetDefaultModelChecking =
+    activeCameraPersisted && !presetDefaultModelStatusHasPayload && !presetModelStatusError;
+  const presetDefaultModelStatusUnavailable = Boolean(
+    presetModelStatusError && !presetDefaultModelStatusHasPayload && !presetDefaultModelReady,
+  );
+  const showPresetDefaultModelNotice =
+    presetDefaultModelChecking ||
+    presetDefaultModelStatusUnavailable ||
+    presetDefaultModelPreparing ||
+    (!presetDefaultModelReady && Boolean(presetDefaultDetectionModel));
 
   useEffect(() => {
     if (!activeCamera || !activeCameraPersisted) {
@@ -1592,85 +1603,119 @@ function CamerasSettingsPanelContent({
                       <div className="modalSectionTitle">
                         {t("ext.cameras.pipelines.add_title", {}, "Adicionar fluxo")}
                       </div>
-                      <div className="settingsStatusMuted">
-                        <div className="settingsListTitle">
-                          {t(
-                            "ext.cameras.pipeline_preset.model.default_banner_title",
-                            { model: presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME },
-                            "{{model}} for camera presets",
-                          )}
-                        </div>
-                        <div>
-                          {presetModelStatusLoading
-                            ? t("core.ui.loading", {}, "Carregando...")
-                            : presetDefaultModelReady
-                              ? t(
-                                  "ext.cameras.pipeline_preset.model.default_ready",
-                                  { model: presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME },
-                                  "{{model}} is ready on the main processing server.",
-                                )
-                              : presetDefaultModelPreparing && presetDefaultDetectionModel
-                                ? t(
-                                    "ext.cameras.pipeline_preset.model.preparing_status",
-                                    {
-                                      model: presetDefaultDetectionModel.displayName,
-                                      progress: modelSetupProgressLabel(presetDefaultDetectionModel, t),
-                                    },
-                                    "{{model}} is being prepared. {{progress}}",
-                                  )
-                                : canPrepareDetectionModel(presetDefaultDetectionModel)
+                      {showPresetDefaultModelNotice ? (
+                        <div
+                          className={`cameraPipelineModelNotice${presetDefaultModelChecking ? "" : " isAttention"}`}
+                          role="status"
+                        >
+                          <div className="cameraPipelineModelNoticeMain">
+                            <span className="cameraPipelineModelNoticeIcon" aria-hidden="true">
+                              <i
+                                className={`fa-solid ${
+                                  presetDefaultModelChecking || presetDefaultModelPreparing
+                                    ? "fa-circle-notch"
+                                    : "fa-triangle-exclamation"
+                                }`}
+                              />
+                            </span>
+                            <div>
+                              <div className="settingsListTitle">
+                                {presetDefaultModelChecking
+                                  ? t("ext.cameras.pipeline_preset.model.notice_checking", {}, "Checking model")
+                                  : presetDefaultModelPreparing
+                                    ? t("ext.cameras.pipeline_preset.model.notice_preparing", {}, "Preparing model")
+                                    : presetDefaultModelStatusUnavailable
+                                      ? t(
+                                          "ext.cameras.pipeline_preset.model.notice_unavailable",
+                                          {},
+                                          "Model status unavailable",
+                                        )
+                                      : t(
+                                          "ext.cameras.pipeline_preset.model.notice_required",
+                                          {},
+                                          "Detection model required",
+                                        )}
+                              </div>
+                              <div className="settingsStatusMuted">
+                                {presetDefaultModelChecking
                                   ? t(
-                                      "ext.cameras.pipeline_preset.model.default_missing_actionable",
-                                      { model: presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME },
-                                      "{{model}} is recommended for these presets and needs to be prepared before pipeline creation.",
+                                      "ext.cameras.pipeline_preset.model.default_checking",
+                                      {},
+                                      "Checking the detection model used by these presets.",
                                     )
-                                  : t(
-                                      "ext.cameras.pipeline_preset.model.default_missing_manual",
-                                      {
-                                        model: presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME,
-                                        reason: modelSetupReasonLabel(presetDefaultDetectionModel?.localBuildReason ?? "", t),
-                                      },
-                                      "{{model}} is not ready on the main server. Automatic preparation is unavailable: {{reason}}.",
-                                    )}
-                        </div>
-                        {presetModelStatusError ? <div className="errorText">{presetModelStatusError}</div> : null}
-                        {presetDefaultDetectionModel?.installJob?.error ? (
-                          <div className="errorText">{presetDefaultDetectionModel.installJob.error}</div>
-                        ) : null}
-                        {!presetDefaultModelReady && !canPrepareDetectionModel(presetDefaultDetectionModel) && !presetDefaultModelPreparing ? (
-                          <div>
-                            {t(
-                              "ext.cameras.pipeline_preset.model.manual_next_step",
-                              {},
-                              "Choose another ready model, use another processing server, or prepare the model manually in the detection operator.",
-                            )}
+                                  : presetDefaultModelStatusUnavailable
+                                    ? t(
+                                        "ext.cameras.pipeline_preset.model.status_unavailable",
+                                        { server: serverDisplayName("local", processingServers, t) },
+                                        "Could not load model status from {{server}}.",
+                                      )
+                                    : presetDefaultModelPreparing && presetDefaultDetectionModel
+                                      ? t(
+                                          "ext.cameras.pipeline_preset.model.preparing_status",
+                                          {
+                                            model: presetDefaultDetectionModel.displayName,
+                                            progress: modelSetupProgressLabel(presetDefaultDetectionModel, t),
+                                          },
+                                          "{{model}} is being prepared. {{progress}}",
+                                        )
+                                      : canPrepareDetectionModel(presetDefaultDetectionModel)
+                                        ? t(
+                                            "ext.cameras.pipeline_preset.model.default_missing_actionable",
+                                            { model: presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME },
+                                            "{{model}} is recommended for these presets and needs to be prepared before pipeline creation.",
+                                          )
+                                        : t(
+                                            "ext.cameras.pipeline_preset.model.default_missing_manual",
+                                            {
+                                              model: presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME,
+                                              reason: modelSetupReasonLabel(presetDefaultDetectionModel?.localBuildReason ?? "", t),
+                                            },
+                                            "{{model}} is not ready on the main server. Automatic preparation is unavailable: {{reason}}.",
+                                          )}
+                              </div>
+                            </div>
                           </div>
-                        ) : null}
-                        <div className="rowWrap">
-                          {canPrepareDetectionModel(presetDefaultDetectionModel) ? (
-                            <button
-                              className="primaryButton"
-                              type="button"
-                              disabled={presetModelInstallSubmitting}
-                              onClick={() => {
-                                setPresetModelInstallError(null);
-                                setPresetModelConsentChecked(false);
-                                setPresetModelConsentOpen(true);
-                              }}
-                            >
-                              {t("ext.cameras.pipeline_preset.model.prepare_auto", {}, "Baixar e preparar automaticamente")}
-                            </button>
+                          {presetModelStatusError ? <div className="errorText">{presetModelStatusError}</div> : null}
+                          {presetDefaultDetectionModel?.installJob?.error ? (
+                            <div className="errorText">{presetDefaultDetectionModel.installJob.error}</div>
                           ) : null}
-                          <button
-                            className="chipButton"
-                            type="button"
-                            disabled={presetModelStatusLoading}
-                            onClick={() => void loadPresetModelStatus(true)}
-                          >
-                            {t("ext.cameras.pipeline_preset.model.refresh", {}, "Atualizar modelos")}
-                          </button>
+                          {!presetDefaultModelReady && !canPrepareDetectionModel(presetDefaultDetectionModel) && !presetDefaultModelPreparing ? (
+                            <div className="settingsStatusMuted">
+                              {t(
+                                "ext.cameras.pipeline_preset.model.manual_next_step",
+                                {},
+                                "Choose another ready model, use another processing server, or prepare the model manually in the detection operator.",
+                              )}
+                            </div>
+                          ) : null}
+                          <div className="rowWrap">
+                            {canPrepareDetectionModel(presetDefaultDetectionModel) ? (
+                              <button
+                                className="primaryButton"
+                                type="button"
+                                disabled={presetModelInstallSubmitting}
+                                onClick={() => {
+                                  setPresetModelInstallError(null);
+                                  setPresetModelConsentChecked(false);
+                                  setPresetModelConsentOpen(true);
+                                }}
+                              >
+                                {t("ext.cameras.pipeline_preset.model.prepare_auto", {}, "Baixar e preparar automaticamente")}
+                              </button>
+                            ) : null}
+                            {!presetDefaultModelChecking ? (
+                              <button
+                                className="chipButton"
+                                type="button"
+                                disabled={presetModelStatusLoading}
+                                onClick={() => void loadPresetModelStatus(true)}
+                              >
+                                {t("ext.cameras.pipeline_preset.model.refresh", {}, "Atualizar modelos")}
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
+                      ) : null}
                       <div className="cameraPipelinePresetGrid">
                         {CAMERA_PIPELINE_PRESET_CARDS.map((presetCard) => {
                           const hasVideoSource = activeCamera.sources.some((source) => source.kind === "video" && source.enabled);

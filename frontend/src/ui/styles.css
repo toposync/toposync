@@ -5415,6 +5415,76 @@ video {
   min-width: 0;
 }
 
+.settingsPanel .cameraPipelineModelSelectRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.settingsPanel .cameraPipelineModelSelectRow .iconButton {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-control);
+}
+
+.settingsPanel .cameraPipelineModelNotice {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.settingsPanel .cameraPipelineModelNotice.isAttention {
+  border-color: rgba(251, 191, 36, 0.32);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.settingsPanel .cameraPipelineModelNoticeMain {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.settingsPanel .cameraPipelineModelNoticeMain > div {
+  min-width: 0;
+}
+
+.settingsPanel .cameraPipelineModelNoticeIcon {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--color-accent-text);
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  font-size: 11px;
+}
+
+.settingsPanel .cameraPipelineModelNotice .settingsStatusMuted {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.settingsPanel .cameraPipelineModelDetails {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.settingsPanel .cameraPipelineModelDetails .settingsList {
+  max-height: none;
+}
+
 .settingsPanel .cameraPipelinePresetCard {
   width: 100%;
   min-width: 0;

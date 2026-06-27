@@ -17,7 +17,7 @@ Use this path when you want to run Toposync isolated in a container.
 The default image is:
 
 ```text
-ghcr.io/toposync/toposync:0.7.8
+ghcr.io/toposync/toposync:0.7.9
 ```
 
 It includes the `toposync-streaming` bundle, FFmpeg, bundled go2rtc, and the
@@ -38,7 +38,7 @@ Create a deployment directory and a Compose file:
 ```yaml title="docker-compose.yml"
 services:
   toposync:
-    image: ghcr.io/toposync/toposync:0.7.8
+    image: ghcr.io/toposync/toposync:0.7.9
     ports:
       - "${TOPOSYNC_PORT:-8000}:8000"
     volumes:
@@ -146,7 +146,7 @@ docker compose up -d
 ```
 
 For a fixed release, pin the exact tag in `docker-compose.yml`, for example
-`ghcr.io/toposync/toposync:0.7.8`.
+`ghcr.io/toposync/toposync:0.7.9`.
 
 ## Advanced: local build {/* #advanced-local-build */}
 

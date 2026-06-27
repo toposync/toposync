@@ -1,6 +1,6 @@
 [project]
 name = "toposync-core"
-version = "0.7.8"
+version = "0.7.9"
 description = "Toposync core runtime (Python backend + extension host)."
 readme = "README.md"
 license = "MIT"

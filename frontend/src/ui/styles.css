@@ -511,11 +511,13 @@ video {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  overflow-x: hidden;
   padding: 6px;
 }
 
 .pipelinesListItem {
   width: 100%;
+  min-width: 0;
   border: 1px solid transparent;
   border-radius: 12px;
   padding: 10px 10px;
@@ -544,14 +546,19 @@ video {
 }
 
 .pipelinesListItemName {
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 650;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pipelinesListItemMeta {
+  flex: 0 0 auto;
   color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .pipelinesListItem.isReadOnly .pipelinesListItemMeta {
@@ -559,14 +566,53 @@ video {
 }
 
 .pipelinesListSeparator {
+  width: auto;
+  min-width: 0;
+  box-sizing: border-box;
   margin: 10px 6px 6px;
-  padding-top: 10px;
+  padding: 10px 0 0;
+  border: 0;
   border-top: 1px solid var(--border);
+  background: transparent;
   color: var(--muted);
+  font: inherit;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
   text-transform: uppercase;
+}
+
+.pipelinesListDisclosure {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  max-width: calc(100% - 12px);
+  cursor: pointer;
+  text-align: left;
+}
+
+.pipelinesListDisclosure i {
+  flex: 0 0 auto;
+}
+
+.pipelinesListDisclosure:hover {
+  color: var(--text);
+}
+
+.pipelinesListDisclosureLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipelinesGeneratedList {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .pipelinesReadOnlyPanel {

@@ -148,6 +148,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     }
   });
   const [sidebarOpen, setSidebarOpen] = useState(() => !compactLayout);
+  const [showGeneratedPipelines, setShowGeneratedPipelines] = useState(false);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(() => {
@@ -188,6 +189,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   }, [pipelines, selectedName]);
   const explicitPipelines = useMemo(() => pipelines.filter((pipeline) => !isImplicitPipeline(pipeline)).sort(comparePipelinesByName), [pipelines]);
   const implicitPipelines = useMemo(() => pipelines.filter(isImplicitPipeline).sort(comparePipelinesByName), [pipelines]);
+  const selectedIsImplicitPipeline = useMemo(
+    () => Boolean(selectedName && implicitPipelines.some((pipeline) => pipeline.name === selectedName)),
+    [implicitPipelines, selectedName],
+  );
   const aggregatePipelineOptions = useMemo<SelectOption[]>(
     () =>
       explicitPipelines
@@ -249,6 +254,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     if (fromPath === selectedName) return;
     replace(buildPipelinesPath(selectedName));
   }, [pathname, selectedName]);
+
+  useEffect(() => {
+    if (selectedIsImplicitPipeline) setShowGeneratedPipelines(true);
+  }, [selectedIsImplicitPipeline]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -792,9 +801,31 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
           <div className="pipelinesList">
             {explicitPipelines.map(renderPipelineListItem)}
             {implicitPipelines.length > 0 ? (
-              <div className="pipelinesListSeparator">{t("core.ui.pipelines.generated.separator", {}, "Generated pipelines")}</div>
+              <>
+                <button
+                  className="pipelinesListSeparator pipelinesListDisclosure"
+                  type="button"
+                  onClick={() => setShowGeneratedPipelines((prev) => !prev)}
+                  aria-expanded={showGeneratedPipelines}
+                  aria-controls="pipelines-generated-list"
+                  title={
+                    showGeneratedPipelines
+                      ? t("core.ui.pipelines.generated.hide", {}, "Hide generated pipelines")
+                      : t("core.ui.pipelines.generated.show", {}, "Show generated pipelines")
+                  }
+                >
+                  <span className="pipelinesListDisclosureLabel">
+                    {t("core.ui.pipelines.generated.separator", {}, "Generated pipelines")}
+                  </span>
+                  <i className={`fa-solid ${showGeneratedPipelines ? "fa-chevron-up" : "fa-chevron-down"}`} aria-hidden="true" />
+                </button>
+                {showGeneratedPipelines ? (
+                  <div id="pipelines-generated-list" className="pipelinesGeneratedList">
+                    {implicitPipelines.map(renderPipelineListItem)}
+                  </div>
+                ) : null}
+              </>
             ) : null}
-            {implicitPipelines.map(renderPipelineListItem)}
           </div>
 
           <div className="pipelinesSidebarFooter">

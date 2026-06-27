@@ -566,11 +566,11 @@ video {
 }
 
 .pipelinesListSeparator {
-  width: auto;
+  width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  margin: 10px 6px 6px;
-  padding: 10px 0 0;
+  margin: 10px 0 6px;
+  padding: 10px 6px 0;
   border: 0;
   border-top: 1px solid var(--border);
   background: transparent;
@@ -587,7 +587,7 @@ video {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  max-width: calc(100% - 12px);
+  max-width: 100%;
   cursor: pointer;
   text-align: left;
 }

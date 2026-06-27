@@ -751,6 +751,18 @@ export function SettingsScreen({
     void openSettingsCompositionEditor(compositionId);
   }
 
+  useEffect(() => {
+    function handleOpenCompositionEditor(event: Event): void {
+      const detail = (event as CustomEvent<{ compositionId?: unknown }>).detail;
+      const compositionId = typeof detail?.compositionId === "string" ? detail.compositionId : "";
+      if (!compositionId || !compositions.some((composition) => composition.id === compositionId)) return;
+      requestOpenSettingsCompositionEditor(compositionId);
+    }
+
+    window.addEventListener("toposync:open-composition-editor", handleOpenCompositionEditor);
+    return () => window.removeEventListener("toposync:open-composition-editor", handleOpenCompositionEditor);
+  });
+
   async function saveAll(): Promise<void> {
     if (!backendAvailable || saving || dirtyExtensionIds.length === 0) return;
     setSaving(true);

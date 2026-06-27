@@ -5433,6 +5433,40 @@ video {
   overflow-wrap: anywhere;
 }
 
+.settingsPanel .cameraMappingCompositionItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.settingsPanel .cameraMappingCompositionItem:hover {
+  border-color: var(--color-accent-border);
+  background: rgba(20, 31, 57, 0.72);
+}
+
+.settingsPanel .cameraMappingCompositionItem:focus-visible {
+  outline: 2px solid var(--color-accent-border);
+  outline-offset: 2px;
+}
+
+.settingsPanel .cameraMappingCompositionText {
+  min-width: 0;
+}
+
+.settingsPanel .cameraMappingCompositionAction {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-accent-text);
+  font-size: 12px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
 .settingsPanel .settingsSourceGrid {
   display: grid;
   grid-template-columns: minmax(220px, 294px) minmax(0, 1fr);
@@ -6598,6 +6632,10 @@ video {
 
   .settingsPanel .settingsMetricGrid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settingsPanel .cameraMappingCompositionAction span {
+    display: none;
   }
 }
 

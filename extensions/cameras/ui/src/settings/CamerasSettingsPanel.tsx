@@ -289,6 +289,13 @@ function openSettingsPanel(panelId: string): void {
   window.dispatchEvent(new CustomEvent("toposync:open-settings-panel", { detail: { panelId } }));
 }
 
+function openCompositionEditor(compositionId: string): void {
+  if (typeof window === "undefined") return;
+  const normalized = String(compositionId || "").trim();
+  if (!normalized) return;
+  window.dispatchEvent(new CustomEvent("toposync:open-composition-editor", { detail: { compositionId: normalized } }));
+}
+
 function slugSourceId(value: string, fallback: string): string {
   const slug = value
     .trim()
@@ -1526,17 +1533,35 @@ function CamerasSettingsPanelContent({
                       0,
                     );
                     const ready = (composition.camera_elements ?? []).some((element) => Boolean(element.has_mapping));
+                    const compositionName = composition.name || composition.id;
                     return (
-                      <div className="settingsListItem" key={composition.id} role="listitem">
-                        <span className="settingsListTitle">{composition.name || composition.id}</span>
-                        <span className="settingsListMeta">
-                          {ready
-                            ? t("ext.cameras.mapping.ready", {}, "Vistas calibradas")
-                            : t("ext.cameras.mapping.missing", {}, "Faltam vistas calibradas")}
-                          {" · "}
-                          {t("ext.cameras.mapping.views_count", { count: calibratedViews }, "{{count}} vistas")}
+                      <button
+                        className="settingsListItem cameraMappingCompositionItem"
+                        key={composition.id}
+                        type="button"
+                        aria-label={t(
+                          "ext.cameras.mapping.open_composition_aria",
+                          { name: compositionName },
+                          "Open composition editor for {{name}}",
+                        )}
+                        title={t("ext.cameras.mapping.open_composition", {}, "Open editor")}
+                        onClick={() => openCompositionEditor(composition.id)}
+                      >
+                        <span className="cameraMappingCompositionText">
+                          <span className="settingsListTitle">{compositionName}</span>
+                          <span className="settingsListMeta">
+                            {ready
+                              ? t("ext.cameras.mapping.ready", {}, "Vistas calibradas")
+                              : t("ext.cameras.mapping.missing", {}, "Faltam vistas calibradas")}
+                            {" · "}
+                            {t("ext.cameras.mapping.views_count", { count: calibratedViews }, "{{count}} vistas")}
+                          </span>
                         </span>
-                      </div>
+                        <span className="cameraMappingCompositionAction" aria-hidden="true">
+                          <span>{t("ext.cameras.mapping.open_composition", {}, "Open editor")}</span>
+                          <i className="fa-solid fa-arrow-up-right-from-square" />
+                        </span>
+                      </button>
                     );
                   })}
                 </div>

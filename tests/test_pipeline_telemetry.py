@@ -197,6 +197,98 @@ def test_pipeline_telemetry_store_cancel_check_stops_heavy_queries() -> None:
     assert marker_cancel_checks >= 3
 
 
+def test_pipeline_telemetry_store_keeps_numeric_metric_index_after_eviction() -> None:
+    store = PipelineTelemetryStore(max_numeric_series=2)
+
+    assert store.observe_numeric("old_pipe", "node", "metric.old", 0.1, now_s=100.0)
+    assert store.observe_numeric("keep_pipe", "node", "metric.keep", 0.2, now_s=200.0)
+    assert store.observe_numeric("new_pipe", "node", "metric.new", 0.3, now_s=300.0)
+
+    assert store.snapshot_numeric_metric_aggregate("metric.old", now_s=300.0) is None
+    assert not store._numeric_keys_by_metric.get("metric.old")
+
+    keep_snapshot = store.snapshot_numeric_metric_aggregate("metric.keep", now_s=300.0)
+    assert keep_snapshot is not None
+    assert keep_snapshot["metric_id"] == "metric.keep"
+    assert keep_snapshot["series_count"] == 1
+
+
+def test_pipeline_telemetry_store_lists_filtered_image_markers_from_target_pipelines() -> None:
+    store = PipelineTelemetryStore(max_image_markers_per_pipeline=120, max_image_pipelines=8)
+    base_ts = 1_700_000_000.0
+
+    for pipeline_index in range(6):
+        pipeline_name = f"pipe_{pipeline_index:02d}"
+        for marker_index in range(120):
+            store.record_image_marker(
+                pipeline_name,
+                node_id="store",
+                metric_id="store.image",
+                rel_path=f"pipelines/{pipeline_name}/frame_{marker_index:03d}.png",
+                ts_s=base_ts + float(pipeline_index * 10_000 + marker_index),
+            )
+
+    markers = store.list_all_image_markers(
+        limit=40,
+        metric_id="store.image",
+        pipeline_names=["pipe_04"],
+    )
+
+    assert len(markers) == 40
+    assert {str(item.get("pipeline_name") or "") for item in markers} == {"pipe_04"}
+    assert [str(item.get("rel_path") or "") for item in markers][:2] == [
+        "pipelines/pipe_04/frame_080.png",
+        "pipelines/pipe_04/frame_081.png",
+    ]
+    assert str(markers[-1].get("rel_path") or "") == "pipelines/pipe_04/frame_119.png"
+
+
+def test_pipeline_telemetry_store_preserves_window_correctness_with_out_of_order_markers() -> None:
+    store = PipelineTelemetryStore(max_image_markers_per_pipeline=10, max_image_pipelines=2)
+
+    store.record_image_marker(
+        "pipe",
+        node_id="store",
+        metric_id="store.image",
+        rel_path="pipelines/pipe/valid_older.png",
+        ts_s=1_000.0,
+    )
+    store.record_image_marker(
+        "pipe",
+        node_id="store",
+        metric_id="store.image",
+        rel_path="pipelines/pipe/too_old.png",
+        ts_s=900.0,
+    )
+    store.record_image_marker(
+        "pipe",
+        node_id="store",
+        metric_id="store.image",
+        rel_path="pipelines/pipe/valid_newer.png",
+        ts_s=1_100.0,
+    )
+
+    assert store._image_pipeline_markers_ordered["pipe"] is False
+
+    specific = store.list_image_markers("pipe", limit=10, window_seconds=150, now_s=1_120.0)
+    assert [str(item.get("rel_path") or "") for item in specific] == [
+        "pipelines/pipe/valid_older.png",
+        "pipelines/pipe/valid_newer.png",
+    ]
+
+    aggregate = store.list_all_image_markers(
+        limit=10,
+        metric_id="store.image",
+        pipeline_names=["pipe"],
+        window_seconds=150,
+        now_s=1_120.0,
+    )
+    assert [str(item.get("rel_path") or "") for item in aggregate] == [
+        "pipelines/pipe/valid_older.png",
+        "pipelines/pipe/valid_newer.png",
+    ]
+
+
 def test_pipeline_runtime_collects_numeric_and_image_telemetry() -> None:
     async def scenario() -> None:
         registry = OperatorRegistry()

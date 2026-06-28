@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-import { getPipelineTelemetryNumeric, type PipelineTelemetryNumeric } from "../../../util/api";
+import { getPipelineTelemetryNumeric, isAbortError, type PipelineTelemetryNumeric } from "../../../util/api";
 import { i18n } from "../../../util/i18n";
 import { Modal } from "../../Modal";
 import type { TelemetryFieldInspectorRequest } from "./types";
@@ -49,14 +49,6 @@ function histogramRatio(value: number, minValue: number, maxValue: number): numb
 function roundedHistogramValue(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Number(value.toFixed(4));
-}
-
-function isAbortError(err: unknown): boolean {
-  return (
-    typeof DOMException !== "undefined" &&
-    err instanceof DOMException &&
-    err.name === "AbortError"
-  );
 }
 
 export function PipelineTelemetryFieldModal({

@@ -297,8 +297,10 @@ class PipelineTelemetryStore:
 
         self._metric_specs: dict[str, NumericMetricSpec] = {}
         self._numeric_series: dict[tuple[str, str, str], _NumericMetricSeries] = {}
+        self._numeric_keys_by_metric: dict[str, dict[tuple[str, str, str], None]] = {}
         self._image_markers_by_pipeline: dict[str, deque[dict[str, Any]]] = {}
         self._image_pipeline_updated_at: dict[str, float] = {}
+        self._image_pipeline_markers_ordered: dict[str, bool] = {}
         self._dirty = False
 
         for spec in metric_specs or []:
@@ -355,9 +357,35 @@ class PipelineTelemetryStore:
     def _sanitize_metric_id(self, value: str) -> str:
         return str(value or "").strip().lower()
 
+    def _register_numeric_series_key(self, key: tuple[str, str, str]) -> None:
+        metric = key[2]
+        if not metric:
+            return
+        self._numeric_keys_by_metric.setdefault(metric, {})[key] = None
+
+    def _unregister_numeric_series_key(self, key: tuple[str, str, str]) -> None:
+        metric = key[2]
+        keys = self._numeric_keys_by_metric.get(metric)
+        if keys is None:
+            return
+        keys.pop(key, None)
+        if not keys:
+            self._numeric_keys_by_metric.pop(metric, None)
+
+    def _marker_ts(self, marker: dict[str, Any]) -> float:
+        try:
+            ts = float(marker.get("ts") or 0.0)
+        except Exception:
+            return 0.0
+        return ts if math.isfinite(ts) else 0.0
+
+    def _pipeline_markers_are_ordered(self, pipeline: str) -> bool:
+        return bool(self._image_pipeline_markers_ordered.get(pipeline, True))
+
     def _evict_oldest_numeric_series_if_needed(self) -> None:
         if self.max_numeric_series <= 0:
             self._numeric_series.clear()
+            self._numeric_keys_by_metric.clear()
             return
         if len(self._numeric_series) < self.max_numeric_series:
             return
@@ -370,6 +398,7 @@ class PipelineTelemetryStore:
                 oldest_ts = updated_at
         if oldest_key is not None:
             self._numeric_series.pop(oldest_key, None)
+            self._unregister_numeric_series_key(oldest_key)
 
     def observe_numeric(
         self,
@@ -409,6 +438,7 @@ class PipelineTelemetryStore:
                 self._metric_specs[metric] = spec
             series = _NumericMetricSeries(spec=spec)
             self._numeric_series[key] = series
+            self._register_numeric_series_key(key)
         changed = bool(series.observe(numeric_value, now_s=timestamp))
         if changed:
             self._dirty = True
@@ -454,11 +484,17 @@ class PipelineTelemetryStore:
             if oldest_pipeline is not None:
                 self._image_markers_by_pipeline.pop(oldest_pipeline, None)
                 self._image_pipeline_updated_at.pop(oldest_pipeline, None)
+                self._image_pipeline_markers_ordered.pop(oldest_pipeline, None)
 
         markers = self._image_markers_by_pipeline.get(pipeline)
         if markers is None:
             markers = deque(maxlen=self.max_image_markers_per_pipeline)
             self._image_markers_by_pipeline[pipeline] = markers
+            self._image_pipeline_markers_ordered[pipeline] = True
+        elif self._pipeline_markers_are_ordered(pipeline):
+            previous_ts = self._marker_ts(markers[-1]) if markers else 0.0
+            if previous_ts > 0.0 and timestamp < previous_ts:
+                self._image_pipeline_markers_ordered[pipeline] = False
 
         marker: dict[str, Any] = {
             "ts": timestamp,
@@ -529,8 +565,10 @@ class PipelineTelemetryStore:
             return
         for key in [item for item in self._numeric_series.keys() if item[0] == pipeline]:
             self._numeric_series.pop(key, None)
+            self._unregister_numeric_series_key(key)
         self._image_markers_by_pipeline.pop(pipeline, None)
         self._image_pipeline_updated_at.pop(pipeline, None)
+        self._image_pipeline_markers_ordered.pop(pipeline, None)
         self._dirty = True
 
     def snapshot_numeric_metric(
@@ -594,13 +632,14 @@ class PipelineTelemetryStore:
 
         snapshots: list[dict[str, Any]] = []
         pipeline_names: set[str] = set()
-        for index, ((pipeline_name, node_id, metric_name), series) in enumerate(
-            self._numeric_series.items()
-        ):
+        candidate_keys = list(self._numeric_keys_by_metric.get(metric, {}).keys())
+        for index, key in enumerate(candidate_keys):
             if index % 16 == 0:
                 _check_cancelled(cancel_check)
-            if metric_name != metric:
+            series = self._numeric_series.get(key)
+            if series is None:
                 continue
+            pipeline_name, node_id, _metric_name = key
             if allowed_pipelines is not None and pipeline_name not in allowed_pipelines:
                 continue
             snapshot = series.snapshot(
@@ -769,20 +808,22 @@ class PipelineTelemetryStore:
                 if math.isfinite(now_value):
                     min_ts = max(0.0, now_value - float(parsed_window_seconds))
         out: list[dict[str, Any]] = []
+        ordered_markers = self._pipeline_markers_are_ordered(pipeline)
         for index, marker in enumerate(reversed(markers)):
             if index % 512 == 0:
                 _check_cancelled(cancel_check)
+            if min_ts is not None:
+                marker_ts = self._marker_ts(marker)
+                if marker_ts <= 0.0:
+                    continue
+                if marker_ts < min_ts:
+                    if ordered_markers:
+                        break
+                    continue
             if metric_filter and str(marker.get("metric_id") or "").strip().lower() != metric_filter:
                 continue
             if node_filter and str(marker.get("node_id") or "").strip() != node_filter:
                 continue
-            if min_ts is not None:
-                try:
-                    marker_ts = float(marker.get("ts") or 0.0)
-                except Exception:
-                    marker_ts = 0.0
-                if not math.isfinite(marker_ts) or marker_ts < min_ts:
-                    continue
             out.append(marker)
             if len(out) >= cap:
                 break
@@ -805,12 +846,15 @@ class PipelineTelemetryStore:
         metric_filter = self._sanitize_metric_id(metric_id or "")
         node_filter = self._sanitize_node_id(node_id or "")
         allowed_pipelines: set[str] | None = None
+        allowed_pipeline_names: list[str] | None = None
         if pipeline_names is not None:
             allowed_pipelines = set()
+            allowed_pipeline_names = []
             for item in pipeline_names:
                 normalized = self._sanitize_pipeline_name(item)
-                if normalized:
+                if normalized and normalized not in allowed_pipelines:
                     allowed_pipelines.add(normalized)
+                    allowed_pipeline_names.append(normalized)
             if not allowed_pipelines:
                 return []
         min_ts: float | None = None
@@ -827,23 +871,36 @@ class PipelineTelemetryStore:
         out: list[tuple[tuple[float, str, str], int, dict[str, Any]]] = []
         scanned = 0
         sequence = 0
-        for pipeline_name, markers in self._image_markers_by_pipeline.items():
+
+        if allowed_pipeline_names is None:
+            pipeline_items = self._image_markers_by_pipeline.items()
+        else:
+            pipeline_items = (
+                (name, self._image_markers_by_pipeline.get(name))
+                for name in allowed_pipeline_names
+            )
+
+        for pipeline_name, markers in pipeline_items:
             _check_cancelled(cancel_check)
-            if allowed_pipelines is not None and pipeline_name not in allowed_pipelines:
+            if markers is None:
                 continue
-            for marker in markers:
+            ordered_markers = self._pipeline_markers_are_ordered(pipeline_name)
+            marker_iter = reversed(markers) if ordered_markers else markers
+            for marker in marker_iter:
                 scanned += 1
                 if scanned % 512 == 0:
                     _check_cancelled(cancel_check)
+                marker_ts = self._marker_ts(marker)
+                if ordered_markers:
+                    if min_ts is not None and marker_ts > 0.0 and marker_ts < min_ts:
+                        break
+                    if len(out) >= cap and marker_ts > 0.0 and marker_ts < out[0][0][0]:
+                        break
                 if metric_filter and str(marker.get("metric_id") or "").strip().lower() != metric_filter:
                     continue
                 if node_filter and str(marker.get("node_id") or "").strip() != node_filter:
                     continue
-                try:
-                    marker_ts = float(marker.get("ts") or 0.0)
-                except Exception:
-                    marker_ts = 0.0
-                if min_ts is not None and (not math.isfinite(marker_ts) or marker_ts < min_ts):
+                if min_ts is not None and (marker_ts <= 0.0 or marker_ts < min_ts):
                     continue
                 item = dict(marker)
                 item["pipeline_name"] = pipeline_name
@@ -1205,8 +1262,10 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
     numeric_count = int(reader.u32())
 
     store._numeric_series.clear()
+    store._numeric_keys_by_metric.clear()
     store._image_markers_by_pipeline.clear()
     store._image_pipeline_updated_at.clear()
+    store._image_pipeline_markers_ordered.clear()
 
     imported_numeric = 0
     max_numeric = max(0, int(store.max_numeric_series))
@@ -1293,7 +1352,9 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
 
         series.updated_at = float(updated_at or 0.0)
         series.last_sample_at = float(last_sample_at or 0.0)
-        store._numeric_series[(pipeline, node, metric)] = series
+        key = (pipeline, node, metric)
+        store._numeric_series[key] = series
+        store._register_numeric_series_key(key)
         imported_numeric += 1
 
     image_pipeline_count = int(reader.u32())
@@ -1311,6 +1372,7 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
         )
         if should_store and pipeline_name not in store._image_markers_by_pipeline:
             store._image_markers_by_pipeline[pipeline_name] = deque(maxlen=max_markers_per_pipeline)
+            store._image_pipeline_markers_ordered[pipeline_name] = True
         max_ts = 0.0
         for _ in range(max(0, marker_count)):
             ts = reader.f64()
@@ -1338,6 +1400,11 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
                 tracking_id = _sanitize_marker_text(reader.text())
 
             if should_store and rel_path and node_id:
+                markers = store._image_markers_by_pipeline[pipeline_name]
+                if store._pipeline_markers_are_ordered(pipeline_name):
+                    previous_ts = store._marker_ts(markers[-1]) if markers else 0.0
+                    if previous_ts > 0.0 and float(ts or 0.0) < previous_ts:
+                        store._image_pipeline_markers_ordered[pipeline_name] = False
                 marker: dict[str, Any] = {
                     "ts": float(ts or 0.0),
                     "node_id": node_id,
@@ -1358,7 +1425,7 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
                     marker["event_code"] = event_code
                 if tracking_id:
                     marker["tracking_id"] = tracking_id
-                store._image_markers_by_pipeline[pipeline_name].append(marker)
+                markers.append(marker)
                 if ts > max_ts:
                     max_ts = ts
 

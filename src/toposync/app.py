@@ -117,6 +117,10 @@ CLIENT_CLOSED_REQUEST_STATUS = 499
 NOTIFICATIONS_LIST_READ_CONCURRENCY = 4
 NOTIFICATIONS_COUNT_READ_CONCURRENCY = 2
 NOTIFICATIONS_DETAIL_READ_CONCURRENCY = 8
+PIPELINE_TELEMETRY_AGGREGATE_NUMERIC_READ_CONCURRENCY = 2
+PIPELINE_TELEMETRY_AGGREGATE_IMAGE_MARKERS_READ_CONCURRENCY = 1
+PIPELINE_TELEMETRY_NUMERIC_READ_CONCURRENCY = 4
+PIPELINE_TELEMETRY_IMAGE_MARKERS_READ_CONCURRENCY = 2
 REQUEST_DISCONNECT_POLL_SECONDS = 0.01
 _RequestWorkResult = TypeVar("_RequestWorkResult")
 
@@ -1168,6 +1172,24 @@ async def _lifespan(app: FastAPI):
         "count": _RequestConcurrencyLimiter(NOTIFICATIONS_COUNT_READ_CONCURRENCY),
         "detail": _RequestConcurrencyLimiter(
             NOTIFICATIONS_DETAIL_READ_CONCURRENCY,
+            prefer_latest=True,
+        ),
+    }
+    app.state.pipeline_telemetry_read_limiters = {
+        "aggregate_numeric": _RequestConcurrencyLimiter(
+            PIPELINE_TELEMETRY_AGGREGATE_NUMERIC_READ_CONCURRENCY,
+            prefer_latest=True,
+        ),
+        "aggregate_image_markers": _RequestConcurrencyLimiter(
+            PIPELINE_TELEMETRY_AGGREGATE_IMAGE_MARKERS_READ_CONCURRENCY,
+            prefer_latest=True,
+        ),
+        "pipeline_numeric": _RequestConcurrencyLimiter(
+            PIPELINE_TELEMETRY_NUMERIC_READ_CONCURRENCY,
+            prefer_latest=True,
+        ),
+        "pipeline_image_markers": _RequestConcurrencyLimiter(
+            PIPELINE_TELEMETRY_IMAGE_MARKERS_READ_CONCURRENCY,
             prefer_latest=True,
         ),
     }
@@ -3995,7 +4017,11 @@ def create_app() -> FastAPI:
                 aggregation=aggregation_name, series=series
             )
 
-        return await _run_cancelable_request_work(request, build_response)
+        return await _run_cancelable_request_work(
+            request,
+            build_response,
+            limiter=request.app.state.pipeline_telemetry_read_limiters["aggregate_numeric"],
+        )
 
     @app.get(
         "/api/pipelines/telemetry/all/image-markers",
@@ -4046,7 +4072,11 @@ def create_app() -> FastAPI:
                 markers=[PipelineTelemetryImageMarker.model_validate(item) for item in markers],
             )
 
-        return await _run_cancelable_request_work(request, build_response)
+        return await _run_cancelable_request_work(
+            request,
+            build_response,
+            limiter=request.app.state.pipeline_telemetry_read_limiters["aggregate_image_markers"],
+        )
 
     @app.get(
         "/api/pipelines/{pipeline_name}/telemetry/numeric",
@@ -4093,7 +4123,11 @@ def create_app() -> FastAPI:
                 )
             return PipelineTelemetryNumericResponse.model_validate(snapshot)
 
-        return await _run_cancelable_request_work(request, build_response)
+        return await _run_cancelable_request_work(
+            request,
+            build_response,
+            limiter=request.app.state.pipeline_telemetry_read_limiters["pipeline_numeric"],
+        )
 
     @app.get(
         "/api/pipelines/{pipeline_name}/telemetry/image-markers",
@@ -4141,7 +4175,11 @@ def create_app() -> FastAPI:
                 ],
             )
 
-        return await _run_cancelable_request_work(request, build_response)
+        return await _run_cancelable_request_work(
+            request,
+            build_response,
+            limiter=request.app.state.pipeline_telemetry_read_limiters["pipeline_image_markers"],
+        )
 
     @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)
     async def replace_pipeline(request: Request, pipeline_name: str, body: Pipeline) -> Pipeline:

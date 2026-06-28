@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import time
 from typing import Any
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import numpy as np
 import pytest
 
-from toposync.app import create_app
+from toposync.app import CLIENT_CLOSED_REQUEST_STATUS, create_app, _run_cancelable_request_work
 from toposync.runtime.config_store import Pipeline, ProcessingServer
 from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
 from toposync.runtime.pipelines.step_snapshots import build_step_input_snapshot_rel_path
@@ -23,6 +25,14 @@ def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClien
     monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
     monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: [])
     return TestClient(create_app())
+
+
+class _FakeDisconnectRequest:
+    def __init__(self) -> None:
+        self.disconnected = False
+
+    async def is_disconnected(self) -> bool:
+        return bool(self.disconnected)
 
 
 def _register_preview_test_operators(client: TestClient) -> None:
@@ -558,6 +568,65 @@ def test_pipelines_telemetry_aggregate_endpoints_filter_by_pipeline_name(
         assert markers_body["pipeline_count"] == 1
         assert [item["pipeline_name"] for item in markers_body["markers"]] == ["pipe_b"]
         assert [item["rel_path"] for item in markers_body["markers"]] == ["pipelines/b/frame.png"]
+
+
+def test_pipeline_telemetry_limiter_cancels_waiter_before_work_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(limiter) -> None:  # noqa: ANN001
+        await limiter.acquire()
+        request = _FakeDisconnectRequest()
+        work_ran = False
+
+        def work(_check_cancelled):  # noqa: ANN001
+            nonlocal work_ran
+            work_ran = True
+            return {"ok": True}
+
+        task = asyncio.create_task(_run_cancelable_request_work(request, work, limiter=limiter))
+        await asyncio.sleep(0.12)
+        assert not work_ran
+        request.disconnected = True
+
+        with pytest.raises(HTTPException) as exc_info:
+            await task
+        assert exc_info.value.status_code == CLIENT_CLOSED_REQUEST_STATUS
+        assert not work_ran
+        limiter.release()
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        limiter = client.app.state.pipeline_telemetry_read_limiters["aggregate_image_markers"]
+        asyncio.run(scenario(limiter))
+
+
+def test_pipeline_telemetry_limiters_are_independent_by_family(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(blocked_limiter, independent_limiter) -> None:  # noqa: ANN001
+        await blocked_limiter.acquire()
+
+        def work(_check_cancelled):  # noqa: ANN001
+            return {"detail": True}
+
+        try:
+            result = await _run_cancelable_request_work(
+                _FakeDisconnectRequest(),
+                work,
+                limiter=independent_limiter,
+            )
+        finally:
+            blocked_limiter.release()
+
+        assert result == {"detail": True}
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        limiters = client.app.state.pipeline_telemetry_read_limiters
+        asyncio.run(
+            scenario(
+                limiters["aggregate_image_markers"],
+                limiters["pipeline_numeric"],
+            )
+        )
 
 
 def test_pipeline_storage_summary_and_cleanup_api(

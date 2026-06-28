@@ -8,6 +8,7 @@ import {
   getPipelineTelemetryNumeric,
   getPipelinesTelemetryImageMarkers,
   getPipelinesTelemetryNumericOverview,
+  isAbortError,
   type PipelineTelemetryAggregateNumeric,
   type PipelineTelemetryImageMarker,
   type PipelineTelemetryNumeric,
@@ -143,6 +144,7 @@ const RANGE_DEFAULT_SECONDS = 24 * 60 * 60;
 const RANGE_LONG_SECONDS = 3 * 24 * 60 * 60;
 const AGGREGATE_METRIC_IDS = ["motion.score", "onvif.gate_open", "vision.confidence", "ai.condition_filter.confidence"];
 const MARKER_FETCH_LIMIT = 40_000;
+const TELEMETRY_REQUEST_DEBOUNCE_MS = 250;
 const MARKER_CLUSTER_DISTANCE = 9;
 const MARKER_CLUSTER_SPAN_LIMIT = 18;
 const MARKER_CLUSTER_LANE_COUNT = 4;
@@ -473,14 +475,6 @@ function markerClusterCountLabel(count: number): string {
   return String(count);
 }
 
-function isAbortError(err: unknown): boolean {
-  return (
-    typeof DOMException !== "undefined" &&
-    err instanceof DOMException &&
-    err.name === "AbortError"
-  );
-}
-
 function buildMarkerClusters(points: MarkerPoint[], options: { baseY: number }): MarkerCluster[] {
   const { baseY } = options;
   if (points.length <= 0) return [];
@@ -579,6 +573,9 @@ export function PipelineTelemetryOverviewCard({
   const [fullscreenImageItems, setFullscreenImageItems] = useState<FullscreenImageViewerItem[]>([]);
   const [fullscreenImageIndex, setFullscreenImageIndex] = useState(0);
   const latestSuccessfulTelemetryRequestKeyRef = useRef<string | null>(null);
+  const telemetryRequestIdRef = useRef(0);
+  const telemetryRefreshSignalKeyRef = useRef<string | null>(null);
+  const telemetryRefreshSignalInitializedRef = useRef(false);
   const hasTelemetryContentRef = useRef(false);
   const eventColorAllocatorRef = useRef<EventColorAllocatorState>({
     colorsByKey: new Map(),
@@ -798,6 +795,14 @@ export function PipelineTelemetryOverviewCard({
     }
 
     const controller = new AbortController();
+    const requestId = telemetryRequestIdRef.current + 1;
+    telemetryRequestIdRef.current = requestId;
+    const refreshSignalKey = `${refreshNonce}:${externalRefreshNonce ?? 0}`;
+    const shouldDebounce =
+      telemetryRefreshSignalInitializedRef.current &&
+      telemetryRefreshSignalKeyRef.current === refreshSignalKey;
+    telemetryRefreshSignalInitializedRef.current = true;
+    telemetryRefreshSignalKeyRef.current = refreshSignalKey;
     const shouldLoadInBackground =
       latestSuccessfulTelemetryRequestKeyRef.current === telemetryRequestKey && hasTelemetryContentRef.current;
     setLoadingInBackground(shouldLoadInBackground);
@@ -846,7 +851,7 @@ export function PipelineTelemetryOverviewCard({
                 signal: controller.signal,
               }),
             ]);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || requestId !== telemetryRequestIdRef.current) return;
 
         const nextSeries: MetricSeries[] = [];
         for (const [index, item] of numericResponses.entries()) {
@@ -871,7 +876,7 @@ export function PipelineTelemetryOverviewCard({
         latestSuccessfulTelemetryRequestKeyRef.current = telemetryRequestKey;
         setLastUpdatedAt(Date.now());
       } catch (err: any) {
-        if (controller.signal.aborted || isAbortError(err)) return;
+        if (controller.signal.aborted || requestId !== telemetryRequestIdRef.current || isAbortError(err)) return;
         if (!shouldLoadInBackground) {
           latestSuccessfulTelemetryRequestKeyRef.current = null;
           setSeries([]);
@@ -879,14 +884,22 @@ export function PipelineTelemetryOverviewCard({
         }
         setError(String(err?.message ?? err));
       } finally {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || requestId !== telemetryRequestIdRef.current) return;
         setLoading(false);
         setLoadingInBackground(false);
       }
     };
 
-    void run();
+    let debounceTimer: number | null = null;
+    if (shouldDebounce) {
+      debounceTimer = window.setTimeout(() => {
+        void run();
+      }, TELEMETRY_REQUEST_DEBOUNCE_MS);
+    } else {
+      void run();
+    }
     return () => {
+      if (debounceTimer !== null) window.clearTimeout(debounceTimer);
       controller.abort();
     };
   }, [

@@ -9,6 +9,7 @@ import type {
   NotificationRenderer,
 } from "@toposync/plugin-api";
 
+import { isAbortError } from "../../util/api";
 import { i18n } from "../../util/i18n";
 import { Notification2DPinView } from "../notifications/Notification2DPinView";
 import { Icon } from "../Icon";
@@ -262,12 +263,14 @@ export function MainViewportVector2D({
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setEffectError(null);
     if (effectTargets.length === 0) {
       setEffectManifest(null);
       setEffectLoading(false);
       return () => {
         cancelled = true;
+        controller.abort();
       };
     }
 
@@ -282,6 +285,7 @@ export function MainViewportVector2D({
         elementTypesById,
         bounds,
         targets: effectTargets,
+        signal: controller.signal,
       })
         .then((manifest) => {
           if (cancelled) return;
@@ -289,7 +293,7 @@ export function MainViewportVector2D({
           setEffectLoading(false);
         })
         .catch((err) => {
-          if (cancelled) return;
+          if (cancelled || controller.signal.aborted || isAbortError(err)) return;
           console.warn("[vector2d:effects]", err);
           setEffectError(err instanceof Error ? err.message : String(err));
           setEffectLoading(false);
@@ -300,6 +304,7 @@ export function MainViewportVector2D({
 
     return () => {
       cancelled = true;
+      controller.abort();
       if (idleId != null && typeof win.cancelIdleCallback === "function") win.cancelIdleCallback(idleId);
       if (timeoutId != null) window.clearTimeout(timeoutId);
     };

@@ -44,6 +44,58 @@ type UploadFileResponse = {
   size_bytes: number;
 };
 
+type InflightEntry<T> = {
+  promise: Promise<T>;
+  controller: AbortController;
+  subscribers: number;
+  settled: boolean;
+};
+
+function createAbortError(): Error {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("Aborted", "AbortError") as unknown as Error;
+  }
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw createAbortError();
+}
+
+function subscribeToInflight<T>(entry: InflightEntry<T>, signal: AbortSignal | undefined): Promise<T> {
+  entry.subscribers += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    entry.subscribers = Math.max(0, entry.subscribers - 1);
+    if (!entry.settled && entry.subscribers === 0) entry.controller.abort();
+  };
+
+  if (signal?.aborted) {
+    release();
+    return Promise.reject(createAbortError());
+  }
+
+  if (!signal) {
+    return entry.promise.finally(release);
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const handleAbort = () => {
+      release();
+      reject(createAbortError());
+    };
+    signal.addEventListener("abort", handleAbort, { once: true });
+    entry.promise.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", handleAbort);
+      release();
+    });
+  });
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
   return {};
@@ -376,8 +428,25 @@ function hideNonLightRenderables(object: THREE.Object3D): void {
   });
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    let timeoutId: number | null = null;
+    let handleAbort: () => void = () => undefined;
+    const cleanup = () => {
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", handleAbort);
+    };
+    handleAbort = () => {
+      cleanup();
+      reject(createAbortError());
+    };
+    timeoutId = window.setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", handleAbort, { once: true });
+  });
 }
 
 function isAssetReady(entry: { element: CompositionElement; instance: Element3DInstance }): boolean {
@@ -418,14 +487,17 @@ async function warmupCapture(
   scene: THREE.Scene,
   camera: THREE.Camera,
   options: { maxWaitMs: number; warmupSeconds: number; stepMs: number },
+  signal?: AbortSignal,
 ): Promise<void> {
   const start = performance.now();
   let simulated = 0;
 
   while (true) {
+    throwIfAborted(signal);
     const dt = Math.min(0.05, options.stepMs / 1000);
     for (const entry of instances) entry.instance.tick?.(dt);
     renderer.render(scene, camera);
+    throwIfAborted(signal);
     simulated += dt;
 
     const elapsed = performance.now() - start;
@@ -433,7 +505,7 @@ async function warmupCapture(
     const warmedUp = simulated >= options.warmupSeconds;
 
     if ((assetsReady && warmedUp) || elapsed >= options.maxWaitMs) return;
-    await sleep(options.stepMs);
+    await sleep(options.stepMs, signal);
   }
 }
 
@@ -513,34 +585,63 @@ function manifestFilePrefix(compositionId: string, signature: string): string {
   return `render2d_v${RENDER_VERSION}_${compositionId}_${signature}`;
 }
 
-async function fetchJson<T>(url: string): Promise<T | null> {
-  const response = await fetch(url);
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T | null> {
+  throwIfAborted(signal);
+  const response = await fetch(url, { signal });
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
+  throwIfAborted(signal);
   return response.json();
 }
 
-async function fileExists(path: string): Promise<boolean> {
-  const response = await fetch(`/api/files/exists?path=${encodeURIComponent(path)}`);
+async function fileExists(path: string, signal?: AbortSignal): Promise<boolean> {
+  throwIfAborted(signal);
+  const response = await fetch(`/api/files/exists?path=${encodeURIComponent(path)}`, { signal });
   if (!response.ok) throw new Error(`Failed to check ${path}: ${response.status}`);
-  const data = (await response.json().catch(() => null)) as { exists?: unknown } | null;
+  throwIfAborted(signal);
+  const data = (await response.json().catch(() => {
+    throwIfAborted(signal);
+    return null;
+  })) as { exists?: unknown } | null;
   return Boolean(data && data.exists === true);
 }
 
-async function uploadBlob(dir: string, filename: string, blob: Blob): Promise<UploadFileResponse> {
+async function uploadBlob(dir: string, filename: string, blob: Blob, signal?: AbortSignal): Promise<UploadFileResponse> {
+  throwIfAborted(signal);
   const form = new FormData();
   form.append("dir", dir);
   form.append("filename", filename);
   form.append("file", blob, filename);
-  const response = await fetch("/api/files/upload", { method: "POST", body: form });
+  const response = await fetch("/api/files/upload", { method: "POST", body: form, signal });
   if (!response.ok) throw new Error(`Failed to upload ${filename}: ${response.status}`);
+  throwIfAborted(signal);
   const data = (await response.json()) as UploadFileResponse;
   return { ...data, url: resolveToposyncUrl(data.url) };
 }
 
-function canvasToPngBlob(canvas: HTMLCanvasElement, message: string): Promise<Blob> {
+function canvasToPngBlob(canvas: HTMLCanvasElement, message: string, signal?: AbortSignal): Promise<Blob> {
+  throwIfAborted(signal);
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let handleAbort: () => void = () => undefined;
+    const cleanup = () => {
+      signal?.removeEventListener("abort", handleAbort);
+    };
+    handleAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(createAbortError());
+    };
+    signal?.addEventListener("abort", handleAbort, { once: true });
     canvas.toBlob((blob) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (signal?.aborted) {
+        reject(createAbortError());
+        return;
+      }
       if (blob) resolve(blob);
       else reject(new Error(message));
     }, "image/png");
@@ -597,6 +698,7 @@ function createInstances(
   elementTypesById: Record<string, ElementType>,
   view: ViewSettings,
   compositionId: string,
+  signal?: AbortSignal,
 ): Array<{ element: CompositionElement; def: ElementType; instance: Element3DInstance }> {
   const instances: Array<{ element: CompositionElement; def: ElementType; instance: Element3DInstance }> = [];
 
@@ -604,26 +706,42 @@ function createInstances(
   const areaOrderById = new Map<string, number>();
   for (let i = 0; i < areaElements.length; i += 1) areaOrderById.set(areaElements[i].id, i);
 
-  for (const element of elements) {
-    const def = elementTypesById[element.type];
-    if (!def?.create3D) continue;
-    const instance = def.create3D({ THREE, scene, camera, renderer, view, elements, compositionId }, element);
-    instances.push({ element, def, instance });
-    scene.add(instance.object);
-    if (def.layerGroup === "walls") applyGhostWalls(instance.object, Boolean(view.ghostWalls));
-    if (def.layerGroup === "areas") {
-      const order = areaOrderById.get(element.id);
-      if (typeof order === "number") {
-        const stackIndex = areaElements.length - 1 - order;
-        applyPolygonOffsetUnits(instance.object, 1 + stackIndex);
+  try {
+    for (const element of elements) {
+      throwIfAborted(signal);
+      const def = elementTypesById[element.type];
+      if (!def?.create3D) continue;
+      const instance = def.create3D({ THREE, scene, camera, renderer, view, elements, compositionId }, element);
+      if (signal?.aborted) {
+        try {
+          instance.dispose?.();
+        } catch {
+          // ignore
+        }
+        throwIfAborted(signal);
+      }
+      instances.push({ element, def, instance });
+      scene.add(instance.object);
+      if (def.layerGroup === "walls") applyGhostWalls(instance.object, Boolean(view.ghostWalls));
+      if (def.layerGroup === "areas") {
+        const order = areaOrderById.get(element.id);
+        if (typeof order === "number") {
+          const stackIndex = areaElements.length - 1 - order;
+          applyPolygonOffsetUnits(instance.object, 1 + stackIndex);
+        }
       }
     }
-  }
 
-  for (const entry of instances) {
-    const { element, instance } = entry;
-    instance.object.position.set(element.position.x, element.position.y, element.position.z);
-    instance.object.rotation.set(element.rotation.x, element.rotation.y, element.rotation.z);
+    for (const entry of instances) {
+      throwIfAborted(signal);
+      const { element, instance } = entry;
+      instance.object.position.set(element.position.x, element.position.y, element.position.z);
+      instance.object.rotation.set(element.rotation.x, element.rotation.y, element.rotation.z);
+    }
+  } catch (err) {
+    disposeInstances(instances);
+    for (const entry of instances) scene.remove(entry.instance.object);
+    throw err;
   }
 
   return instances;
@@ -644,6 +762,7 @@ async function captureBaseAndOverlays(args: {
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
   maximumRenderSize: number;
+  signal?: AbortSignal;
 }): Promise<
   Omit<Main2DRenderManifest, "base" | "overlays" | "signature"> & {
     baseBlob: Blob;
@@ -651,6 +770,8 @@ async function captureBaseAndOverlays(args: {
   }
 > {
   const { compositionId, elements, elementTypesById } = args;
+  const signal = args.signal;
+  throwIfAborted(signal);
   const overlayTargets = pickOverlayTargets(elements);
   const baseElements = elements.filter((el) => shouldCaptureElementInBaseSnapshot(el, elementTypesById));
 
@@ -672,114 +793,127 @@ async function captureBaseAndOverlays(args: {
   const camera = buildCamera(viewBounds, viewWidth, viewHeight);
   const defaultLights = addDefaultLights(scene);
 
-  const baseInstances = createInstances(scene, camera, renderer, baseElements, elementTypesById, view, compositionId);
-  await warmupCapture(
-    baseInstances.map((entry) => ({ element: entry.element, instance: entry.instance })),
-    renderer,
-    scene,
-    camera,
-    { maxWaitMs: 6500, warmupSeconds: 0.25, stepMs: 60 },
-  );
-  renderer.render(scene, camera);
-  const baseBlob = await canvasToPngBlob(renderer.domElement, "Failed to encode 2D base render");
+  const baseInstances = createInstances(scene, camera, renderer, baseElements, elementTypesById, view, compositionId, signal);
+  try {
+    await warmupCapture(
+      baseInstances.map((entry) => ({ element: entry.element, instance: entry.instance })),
+      renderer,
+      scene,
+      camera,
+      { maxWaitMs: 6500, warmupSeconds: 0.25, stepMs: 60 },
+      signal,
+    );
+    throwIfAborted(signal);
+    renderer.render(scene, camera);
+    const baseBlob = await canvasToPngBlob(renderer.domElement, "Failed to encode 2D base render", signal);
 
-  for (const light of defaultLights) scene.remove(light);
-  renderer.setClearColor(0x000000, 0);
+    for (const light of defaultLights) scene.remove(light);
+    renderer.setClearColor(0x000000, 0);
 
-  // Overlay captures.
-  const overlays: Array<Main2DOverlayManifest & { blob: Blob }> = [];
-  for (const target of overlayTargets) {
-    const variants: Array<Main2DOverlayManifest & { forced: CompositionElement; warmupSeconds: number }> =
-      target.specialView === "lamp"
-        ? [
-            {
-              elementId: target.elementId,
-              kind: "lamp",
-              url: "",
-              forced: forceHomeAssistantVisualOn(target.element, { specialView: "lamp" }),
-              warmupSeconds: 0.35,
-            },
-          ]
-        : ([
-            {
-              elementId: target.elementId,
-              kind: "airflow",
-              mode: "cool",
-              url: "",
-              forced: forceHomeAssistantVisualOn(target.element, { specialView: "airflow", mode: "cool" }),
-              warmupSeconds: 2.0,
-            },
-            {
-              elementId: target.elementId,
-              kind: "airflow",
-              mode: "heat",
-              url: "",
-              forced: forceHomeAssistantVisualOn(target.element, { specialView: "airflow", mode: "heat" }),
-              warmupSeconds: 2.0,
-            },
-            {
-              elementId: target.elementId,
-              kind: "airflow",
-              mode: "neutral",
-              url: "",
-              forced: forceHomeAssistantVisualOn(target.element, { specialView: "airflow", mode: "neutral" }),
-              warmupSeconds: 2.0,
-            },
-          ] satisfies Array<Main2DOverlayManifest & { forced: CompositionElement; warmupSeconds: number }>);
+    // Overlay captures.
+    const overlays: Array<Main2DOverlayManifest & { blob: Blob }> = [];
+    for (const target of overlayTargets) {
+      throwIfAborted(signal);
+      const variants: Array<Main2DOverlayManifest & { forced: CompositionElement; warmupSeconds: number }> =
+        target.specialView === "lamp"
+          ? [
+              {
+                elementId: target.elementId,
+                kind: "lamp",
+                url: "",
+                forced: forceHomeAssistantVisualOn(target.element, { specialView: "lamp" }),
+                warmupSeconds: 0.35,
+              },
+            ]
+          : ([
+              {
+                elementId: target.elementId,
+                kind: "airflow",
+                mode: "cool",
+                url: "",
+                forced: forceHomeAssistantVisualOn(target.element, { specialView: "airflow", mode: "cool" }),
+                warmupSeconds: 2.0,
+              },
+              {
+                elementId: target.elementId,
+                kind: "airflow",
+                mode: "heat",
+                url: "",
+                forced: forceHomeAssistantVisualOn(target.element, { specialView: "airflow", mode: "heat" }),
+                warmupSeconds: 2.0,
+              },
+              {
+                elementId: target.elementId,
+                kind: "airflow",
+                mode: "neutral",
+                url: "",
+                forced: forceHomeAssistantVisualOn(target.element, { specialView: "airflow", mode: "neutral" }),
+                warmupSeconds: 2.0,
+              },
+            ] satisfies Array<Main2DOverlayManifest & { forced: CompositionElement; warmupSeconds: number }>);
 
-    for (const variant of variants) {
-      const { forced, warmupSeconds, ...overlayManifest } = variant;
-      // No extra lighting: we want the special-view element to drive the glow.
-      const overlayInstances = createInstances(scene, camera, renderer, [forced], elementTypesById, view, compositionId);
-      if (overlayManifest.kind === "lamp") {
-        const forcedInstance = overlayInstances[0]?.instance ?? null;
-        if (forcedInstance) hideNonLightRenderables(forcedInstance.object);
+      for (const variant of variants) {
+        throwIfAborted(signal);
+        const { forced, warmupSeconds, ...overlayManifest } = variant;
+        // No extra lighting: we want the special-view element to drive the glow.
+        const overlayInstances = createInstances(scene, camera, renderer, [forced], elementTypesById, view, compositionId, signal);
+        try {
+          if (overlayManifest.kind === "lamp") {
+            const forcedInstance = overlayInstances[0]?.instance ?? null;
+            if (forcedInstance) hideNonLightRenderables(forcedInstance.object);
+          }
+          await warmupCapture(
+            overlayInstances.map((entry) => ({ element: entry.element, instance: entry.instance })),
+            renderer,
+            scene,
+            camera,
+            {
+              maxWaitMs: 5000,
+              warmupSeconds,
+              stepMs: 50,
+            },
+            signal,
+          );
+          throwIfAborted(signal);
+          renderer.render(scene, camera);
+          const blob = await canvasToPngBlob(renderer.domElement, "Failed to encode 2D overlay render", signal);
+          overlays.push({ ...overlayManifest, blob });
+        } finally {
+          disposeInstances(overlayInstances);
+          for (const entry of overlayInstances) scene.remove(entry.instance.object);
+        }
       }
-      await warmupCapture(
-        overlayInstances.map((entry) => ({ element: entry.element, instance: entry.instance })),
-        renderer,
-        scene,
-        camera,
-        {
-          maxWaitMs: 5000,
-          warmupSeconds,
-          stepMs: 50,
-        },
-      );
-      renderer.render(scene, camera);
-      const blob = await canvasToPngBlob(renderer.domElement, "Failed to encode 2D overlay render");
-      overlays.push({ ...overlayManifest, blob });
-
-      disposeInstances(overlayInstances);
-      for (const entry of overlayInstances) scene.remove(entry.instance.object);
     }
+
+    return {
+      version: RENDER_VERSION,
+      compositionId,
+      widthPx: renderWidth,
+      heightPx: renderHeight,
+      bounds: viewBounds,
+      baseBlob,
+      overlays,
+    };
+  } finally {
+    disposeInstances(baseInstances);
+    for (const entry of baseInstances) scene.remove(entry.instance.object);
+    renderer.dispose();
   }
-
-  disposeInstances(baseInstances);
-  for (const entry of baseInstances) scene.remove(entry.instance.object);
-  renderer.dispose();
-
-  return {
-    version: RENDER_VERSION,
-    compositionId,
-    widthPx: renderWidth,
-    heightPx: renderHeight,
-    bounds: viewBounds,
-    baseBlob,
-    overlays,
-  };
 }
 
-const inflight = new Map<string, Promise<Main2DRenderManifest>>();
+const inflight = new Map<string, InflightEntry<Main2DRenderManifest>>();
 
 export async function getOrCreateMain2DRenderManifest(args: {
   compositionId: string;
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
   maximumRenderSize?: number;
+  signal?: AbortSignal;
 }): Promise<Main2DRenderManifest> {
+  throwIfAborted(args.signal);
   const signatureInput = stableStringify(buildSignatureElements(args.elements));
   const signature = (await sha256Hex(signatureInput)).slice(0, 24);
+  throwIfAborted(args.signal);
   const prefix = manifestFilePrefix(args.compositionId, signature);
   const manifestFilename = `${prefix}_manifest.json`;
   const manifestPath = `${RENDER_DIR_ID}/${manifestFilename}`;
@@ -787,12 +921,17 @@ export async function getOrCreateMain2DRenderManifest(args: {
 
   const inflightKey = `${args.compositionId}:${signature}`;
   const existing = inflight.get(inflightKey);
-  if (existing) return existing;
+  if (existing) return subscribeToInflight(existing, args.signal);
+
+  const controller = new AbortController();
+  const signal = controller.signal;
 
   const promise = (async () => {
-    if (await fileExists(manifestPath)) {
-      const existingManifest = await fetchJson<Main2DRenderManifest>(manifestUrl);
+    throwIfAborted(signal);
+    if (await fileExists(manifestPath, signal)) {
+      const existingManifest = await fetchJson<Main2DRenderManifest>(manifestUrl, signal);
       if (existingManifest) {
+        throwIfAborted(signal);
         markToposyncPerformance("render2d-cache-hit", {
           compositionId: args.compositionId,
           signature,
@@ -811,12 +950,15 @@ export async function getOrCreateMain2DRenderManifest(args: {
       compositionId: args.compositionId,
       maximumRenderSize,
     });
+    throwIfAborted(signal);
     const captured = await captureBaseAndOverlays({
       compositionId: args.compositionId,
       elements: args.elements,
       elementTypesById: args.elementTypesById,
       maximumRenderSize,
+      signal,
     });
+    throwIfAborted(signal);
     markToposyncPerformance("render2d-render-end", {
       compositionId: args.compositionId,
       widthPx: captured.widthPx,
@@ -827,14 +969,15 @@ export async function getOrCreateMain2DRenderManifest(args: {
     const baseFilename = `${prefix}_base.png`;
     const overlays: Main2DOverlayManifest[] = [];
 
-    const baseUpload = await uploadBlob(RENDER_DIR_ID, baseFilename, captured.baseBlob);
+    const baseUpload = await uploadBlob(RENDER_DIR_ID, baseFilename, captured.baseBlob, signal);
 
     for (const overlay of captured.overlays) {
+      throwIfAborted(signal);
       const filename =
         overlay.kind === "lamp"
           ? `${prefix}_ha_${overlay.elementId}_lamp.png`
           : `${prefix}_ha_${overlay.elementId}_airflow_${overlay.mode}.png`;
-      const uploaded = await uploadBlob(RENDER_DIR_ID, filename, overlay.blob);
+      const uploaded = await uploadBlob(RENDER_DIR_ID, filename, overlay.blob, signal);
       overlays.push(overlay.kind === "lamp" ? { elementId: overlay.elementId, kind: "lamp", url: uploaded.url } : { elementId: overlay.elementId, kind: "airflow", mode: overlay.mode, url: uploaded.url });
     }
 
@@ -850,15 +993,21 @@ export async function getOrCreateMain2DRenderManifest(args: {
     };
 
     const manifestBlob = new Blob([JSON.stringify(manifest)], { type: "application/json" });
-    await uploadBlob(RENDER_DIR_ID, manifestFilename, manifestBlob);
+    await uploadBlob(RENDER_DIR_ID, manifestFilename, manifestBlob, signal);
 
     return manifest;
   })();
 
-  inflight.set(inflightKey, promise);
-  try {
-    return await promise;
-  } finally {
-    inflight.delete(inflightKey);
-  }
+  const entry: InflightEntry<Main2DRenderManifest> = { promise, controller, subscribers: 0, settled: false };
+  inflight.set(inflightKey, entry);
+  void promise
+    .finally(() => {
+      entry.settled = true;
+      if (inflight.get(inflightKey) === entry) inflight.delete(inflightKey);
+    })
+    .catch(() => {
+      // The caller handles the original promise; this branch only prevents an
+      // unhandled rejection from the cleanup chain.
+    });
+  return subscribeToInflight(entry, args.signal);
 }

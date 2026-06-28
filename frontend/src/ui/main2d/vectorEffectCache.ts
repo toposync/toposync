@@ -56,6 +56,62 @@ type UploadFileResponse = {
   size_bytes: number;
 };
 
+type InflightEntry<T> = {
+  promise: Promise<T>;
+  controller: AbortController;
+  subscribers: number;
+  settled: boolean;
+};
+
+function createAbortError(): Error {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("Aborted", "AbortError") as unknown as Error;
+  }
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw createAbortError();
+}
+
+function isAbortError(err: unknown): boolean {
+  return Boolean(err && typeof err === "object" && "name" in err && String((err as { name?: unknown }).name) === "AbortError");
+}
+
+function subscribeToInflight<T>(entry: InflightEntry<T>, signal: AbortSignal | undefined): Promise<T> {
+  entry.subscribers += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    entry.subscribers = Math.max(0, entry.subscribers - 1);
+    if (!entry.settled && entry.subscribers === 0) entry.controller.abort();
+  };
+
+  if (signal?.aborted) {
+    release();
+    return Promise.reject(createAbortError());
+  }
+
+  if (!signal) {
+    return entry.promise.finally(release);
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const handleAbort = () => {
+      release();
+      reject(createAbortError());
+    };
+    signal.addEventListener("abort", handleAbort, { once: true });
+    entry.promise.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", handleAbort);
+      release();
+    });
+  });
+}
+
 function createRenderer(renderWidth: number, renderHeight: number): THREE.WebGLRenderer {
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
@@ -121,28 +177,43 @@ function createInstances(args: {
   view: ViewSettings;
   compositionId: string;
   hideElementIds?: Set<string>;
+  signal?: AbortSignal;
 }): Array<{ element: CompositionElement; instance: Element3DInstance }> {
   const out: Array<{ element: CompositionElement; instance: Element3DInstance }> = [];
-  for (const element of args.elements) {
-    const def = args.elementTypesById[element.type];
-    if (!def?.create3D) continue;
-    const instance = def.create3D(
-      {
-        THREE,
-        scene: args.scene,
-        camera: args.camera,
-        renderer: args.renderer,
-        view: args.view,
-        elements: args.elements,
-        compositionId: args.compositionId,
-      },
-      element,
-    );
-    instance.object.position.set(element.position.x, element.position.y, element.position.z);
-    instance.object.rotation.set(element.rotation.x, element.rotation.y, element.rotation.z);
-    args.scene.add(instance.object);
-    if (args.hideElementIds?.has(element.id)) hideNonLightRenderables(instance.object);
-    out.push({ element, instance });
+  try {
+    for (const element of args.elements) {
+      throwIfAborted(args.signal);
+      const def = args.elementTypesById[element.type];
+      if (!def?.create3D) continue;
+      const instance = def.create3D(
+        {
+          THREE,
+          scene: args.scene,
+          camera: args.camera,
+          renderer: args.renderer,
+          view: args.view,
+          elements: args.elements,
+          compositionId: args.compositionId,
+        },
+        element,
+      );
+      if (args.signal?.aborted) {
+        try {
+          instance.dispose?.();
+        } catch {
+          // ignore
+        }
+        throwIfAborted(args.signal);
+      }
+      instance.object.position.set(element.position.x, element.position.y, element.position.z);
+      instance.object.rotation.set(element.rotation.x, element.rotation.y, element.rotation.z);
+      args.scene.add(instance.object);
+      if (args.hideElementIds?.has(element.id)) hideNonLightRenderables(instance.object);
+      out.push({ element, instance });
+    }
+  } catch (err) {
+    disposeInstances(args.scene, out);
+    throw err;
   }
   return out;
 }
@@ -158,8 +229,25 @@ function disposeInstances(scene: THREE.Scene, instances: Array<{ instance: Eleme
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    let timeoutId: number | null = null;
+    let handleAbort: () => void = () => undefined;
+    const cleanup = () => {
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", handleAbort);
+    };
+    handleAbort = () => {
+      cleanup();
+      reject(createAbortError());
+    };
+    timeoutId = window.setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", handleAbort, { once: true });
+  });
 }
 
 async function warmupCapture(
@@ -168,16 +256,19 @@ async function warmupCapture(
   camera: THREE.Camera,
   instances: Array<{ instance: Element3DInstance }>,
   options: { warmupSeconds: number; maxWaitMs: number; stepMs: number },
+  signal?: AbortSignal,
 ): Promise<void> {
   const started = performance.now();
   let simulated = 0;
   while (true) {
+    throwIfAborted(signal);
     const dt = Math.min(0.05, options.stepMs / 1000);
     for (const entry of instances) entry.instance.tick?.(dt);
     renderer.render(scene, camera);
+    throwIfAborted(signal);
     simulated += dt;
     if (simulated >= options.warmupSeconds || performance.now() - started >= options.maxWaitMs) return;
-    await sleep(options.stepMs);
+    await sleep(options.stepMs, signal);
   }
 }
 
@@ -266,24 +357,59 @@ async function computeMain2DEffectDeltaCropAsync(
   base: ImageData,
   active: ImageData,
   blendMode: Main2DEffectBlendMode,
+  signal?: AbortSignal,
 ): Promise<Main2DEffectDeltaCrop | null> {
+  throwIfAborted(signal);
   const worker = getEffectDeltaWorker();
   if (!worker) {
-    return computeMain2DEffectDeltaCrop(base, active, { blendMode });
+    return computeMain2DEffectDeltaCrop(base, active, { blendMode, signal });
   }
 
   const id = ++effectDeltaWorkerRequestId;
   const baseCopy = new Uint8ClampedArray(base.data);
+  throwIfAborted(signal);
   const activeCopy = new Uint8ClampedArray(active.data);
   const baseBuffer = baseCopy.buffer as ArrayBuffer;
   const activeBuffer = activeCopy.buffer as ArrayBuffer;
 
   return new Promise<Main2DEffectDeltaCrop | null>((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
+    let settled = false;
+    let timeout = 0;
+    let handleAbort: () => void = () => undefined;
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      signal?.removeEventListener("abort", handleAbort);
+    };
+    const finishResolve = (delta: Main2DEffectDeltaCrop | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(delta);
+    };
+    const finishReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+    handleAbort = () => {
       pendingEffectDeltaRequests.delete(id);
-      reject(new Error("Effect delta worker timed out"));
+      if (pendingEffectDeltaRequests.size === 0) {
+        effectDeltaWorker?.terminate();
+        effectDeltaWorker = null;
+      }
+      finishReject(createAbortError());
+    };
+    timeout = window.setTimeout(() => {
+      pendingEffectDeltaRequests.delete(id);
+      if (pendingEffectDeltaRequests.size === 0) {
+        effectDeltaWorker?.terminate();
+        effectDeltaWorker = null;
+      }
+      finishReject(new Error("Effect delta worker timed out"));
     }, 8000);
-    pendingEffectDeltaRequests.set(id, { resolve, reject, timeout });
+    signal?.addEventListener("abort", handleAbort, { once: true });
+    pendingEffectDeltaRequests.set(id, { resolve: finishResolve, reject: finishReject, timeout });
     worker.postMessage(
       {
         id,
@@ -296,8 +422,9 @@ async function computeMain2DEffectDeltaCropAsync(
       [baseBuffer, activeBuffer],
     );
   }).catch((err) => {
+    if (isAbortError(err)) throw err;
     console.warn("Effect delta worker failed; falling back to main thread", err);
-    return computeMain2DEffectDeltaCrop(base, active, { blendMode });
+    return computeMain2DEffectDeltaCrop(base, active, { blendMode, signal });
   });
 }
 
@@ -305,8 +432,10 @@ async function diffAndCrop(
   base: ImageData,
   active: ImageData,
   blendMode: Main2DEffectBlendMode,
+  signal?: AbortSignal,
 ): Promise<{ canvas: HTMLCanvasElement; crop: { x: number; y: number; width: number; height: number } } | null> {
-  const delta = await computeMain2DEffectDeltaCropAsync(base, active, blendMode);
+  const delta = await computeMain2DEffectDeltaCropAsync(base, active, blendMode, signal);
+  throwIfAborted(signal);
   if (!delta) return null;
 
   const fullCanvas = document.createElement("canvas");
@@ -314,6 +443,7 @@ async function diffAndCrop(
   fullCanvas.height = base.height;
   const fullCtx = fullCanvas.getContext("2d");
   if (!fullCtx) return null;
+  throwIfAborted(signal);
   fullCtx.putImageData(new ImageData(delta.data as unknown as ImageDataArray, base.width, base.height), 0, 0);
 
   const cropCanvas = document.createElement("canvas");
@@ -332,40 +462,70 @@ async function diffAndCrop(
     delta.crop.width,
     delta.crop.height,
   );
+  throwIfAborted(signal);
   return { canvas: cropCanvas, crop: delta.crop };
 }
 
-function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+function canvasToBlob(canvas: HTMLCanvasElement, signal?: AbortSignal): Promise<Blob> {
+  throwIfAborted(signal);
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let handleAbort: () => void = () => undefined;
+    const cleanup = () => {
+      signal?.removeEventListener("abort", handleAbort);
+    };
+    handleAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(createAbortError());
+    };
+    signal?.addEventListener("abort", handleAbort, { once: true });
     canvas.toBlob((blob) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (signal?.aborted) {
+        reject(createAbortError());
+        return;
+      }
       if (blob) resolve(blob);
       else reject(new Error("Failed to encode effect overlay"));
     }, "image/png");
   });
 }
 
-async function uploadBlob(dir: string, filename: string, blob: Blob): Promise<UploadFileResponse> {
+async function uploadBlob(dir: string, filename: string, blob: Blob, signal?: AbortSignal): Promise<UploadFileResponse> {
+  throwIfAborted(signal);
   const form = new FormData();
   form.append("dir", dir);
   form.append("filename", filename);
   form.append("file", blob, filename);
-  const response = await fetch("/api/files/upload", { method: "POST", body: form });
+  const response = await fetch("/api/files/upload", { method: "POST", body: form, signal });
   if (!response.ok) throw new Error(`Failed to upload ${filename}: ${response.status}`);
+  throwIfAborted(signal);
   const data = (await response.json()) as UploadFileResponse;
   return { ...data, url: resolveToposyncUrl(data.url) };
 }
 
-async function fetchJson<T>(url: string): Promise<T | null> {
-  const response = await fetch(url);
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T | null> {
+  throwIfAborted(signal);
+  const response = await fetch(url, { signal });
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
+  throwIfAborted(signal);
   return response.json();
 }
 
-async function fileExists(path: string): Promise<boolean> {
-  const response = await fetch(`/api/files/exists?path=${encodeURIComponent(path)}`);
+async function fileExists(path: string, signal?: AbortSignal): Promise<boolean> {
+  throwIfAborted(signal);
+  const response = await fetch(`/api/files/exists?path=${encodeURIComponent(path)}`, { signal });
   if (!response.ok) throw new Error(`Failed to check ${path}: ${response.status}`);
-  const data = (await response.json().catch(() => null)) as { exists?: unknown } | null;
+  throwIfAborted(signal);
+  const data = (await response.json().catch(() => {
+    throwIfAborted(signal);
+    return null;
+  })) as { exists?: unknown } | null;
   return Boolean(data && data.exists === true);
 }
 
@@ -399,7 +559,9 @@ async function captureEffectOverlay(args: {
   environmentElements: CompositionElement[];
   target: Main2DEffectTarget;
   elementTypesById: Record<string, ElementType>;
+  signal?: AbortSignal;
 }): Promise<Omit<Main2DEffectOverlayManifest, "url"> & { blob: Blob } | null> {
+  throwIfAborted(args.signal);
   const view: ViewSettings = {
     wallHeightPreset: "high",
     wallHeight: 2.7,
@@ -422,14 +584,17 @@ async function captureEffectOverlay(args: {
       view,
       compositionId: args.compositionId,
       hideElementIds: hideIds,
+      signal: args.signal,
     });
     try {
       await warmupCapture(renderer, scene, camera, instances, {
         warmupSeconds: args.target.warmupSeconds ?? 0.35,
         maxWaitMs: 5000,
         stepMs: 50,
-      });
+      }, args.signal);
+      throwIfAborted(args.signal);
       renderer.render(scene, camera);
+      throwIfAborted(args.signal);
       return captureImageData(renderer, args.renderWidth, args.renderHeight);
     } finally {
       disposeInstances(scene, instances);
@@ -438,11 +603,13 @@ async function captureEffectOverlay(args: {
 
   try {
     const baseData = await renderScene(args.target.baseElement ?? null);
+    throwIfAborted(args.signal);
     const activeData = await renderScene(args.target.element);
+    throwIfAborted(args.signal);
     if (!baseData || !activeData) return null;
 
     const blendMode = args.target.blendMode ?? "source-over";
-    const diff = await diffAndCrop(baseData, activeData, blendMode);
+    const diff = await diffAndCrop(baseData, activeData, blendMode, args.signal);
     if (!diff) return null;
 
     const spanX = Math.max(1e-6, args.bounds.maxX - args.bounds.minX);
@@ -451,14 +618,14 @@ async function captureEffectOverlay(args: {
     const z = args.bounds.minZ + (diff.crop.y / args.renderHeight) * spanZ;
     const width = (diff.crop.width / args.renderWidth) * spanX;
     const height = (diff.crop.height / args.renderHeight) * spanZ;
-    const blob = await canvasToBlob(diff.canvas);
+    const blob = await canvasToBlob(diff.canvas, args.signal);
     return { id: args.target.id, x, z, width, height, blendMode, blob };
   } finally {
     renderer.dispose();
   }
 }
 
-const inflight = new Map<string, Promise<Main2DEffectRenderManifest>>();
+const inflight = new Map<string, InflightEntry<Main2DEffectRenderManifest>>();
 
 export async function getOrCreateMain2DEffectManifest(args: {
   compositionId: string;
@@ -467,7 +634,9 @@ export async function getOrCreateMain2DEffectManifest(args: {
   bounds: BoundsXZ;
   targets: Main2DEffectTarget[];
   maximumRenderSize?: number;
+  signal?: AbortSignal;
 }): Promise<Main2DEffectRenderManifest> {
+  throwIfAborted(args.signal);
   const targets = args.targets;
   const targetElementIds = new Set(targets.map((target) => target.element.id));
   const environmentElements = environmentElementsForEffects(args.elements, args.elementTypesById, targetElementIds);
@@ -487,17 +656,22 @@ export async function getOrCreateMain2DEffectManifest(args: {
       .sort((a, b) => a.id.localeCompare(b.id)),
   });
   const signature = (await sha256Hex(signatureInput)).slice(0, 24);
+  throwIfAborted(args.signal);
   const prefix = manifestFilePrefix(args.compositionId, signature);
   const manifestFilename = `${prefix}_manifest.json`;
   const manifestPath = `${EFFECT_RENDER_DIR_ID}/${manifestFilename}`;
   const manifestUrl = `/files/${encodeURIComponent(EFFECT_RENDER_DIR_ID)}/${encodeURIComponent(manifestFilename)}`;
   const inflightKey = `${args.compositionId}:${signature}`;
   const existing = inflight.get(inflightKey);
-  if (existing) return existing;
+  if (existing) return subscribeToInflight(existing, args.signal);
+
+  const controller = new AbortController();
+  const signal = controller.signal;
 
   const promise = (async () => {
-    if (await fileExists(manifestPath)) {
-      const existingManifest = await fetchJson<Main2DEffectRenderManifest>(manifestUrl);
+    throwIfAborted(signal);
+    if (await fileExists(manifestPath, signal)) {
+      const existingManifest = await fetchJson<Main2DEffectRenderManifest>(manifestUrl, signal);
       if (existingManifest) return existingManifest;
     }
 
@@ -506,6 +680,7 @@ export async function getOrCreateMain2DEffectManifest(args: {
     const effects: Main2DEffectOverlayManifest[] = [];
 
     for (const target of targets) {
+      throwIfAborted(signal);
       const captured = await captureEffectOverlay({
         compositionId: args.compositionId,
         bounds: args.bounds,
@@ -514,10 +689,11 @@ export async function getOrCreateMain2DEffectManifest(args: {
         environmentElements,
         target,
         elementTypesById: args.elementTypesById,
+        signal,
       });
       if (!captured) continue;
       const filename = `${prefix}_${target.id.replace(/[^a-zA-Z0-9_.-]/g, "_")}.png`;
-      const uploaded = await uploadBlob(EFFECT_RENDER_DIR_ID, filename, captured.blob);
+      const uploaded = await uploadBlob(EFFECT_RENDER_DIR_ID, filename, captured.blob, signal);
       effects.push({
         id: captured.id,
         url: uploaded.url,
@@ -540,14 +716,20 @@ export async function getOrCreateMain2DEffectManifest(args: {
     };
 
     const manifestBlob = new Blob([JSON.stringify(manifest)], { type: "application/json" });
-    await uploadBlob(EFFECT_RENDER_DIR_ID, manifestFilename, manifestBlob);
+    await uploadBlob(EFFECT_RENDER_DIR_ID, manifestFilename, manifestBlob, signal);
     return manifest;
   })();
 
-  inflight.set(inflightKey, promise);
-  try {
-    return await promise;
-  } finally {
-    inflight.delete(inflightKey);
-  }
+  const entry: InflightEntry<Main2DEffectRenderManifest> = { promise, controller, subscribers: 0, settled: false };
+  inflight.set(inflightKey, entry);
+  void promise
+    .finally(() => {
+      entry.settled = true;
+      if (inflight.get(inflightKey) === entry) inflight.delete(inflightKey);
+    })
+    .catch(() => {
+      // The caller handles the original promise; this branch only prevents an
+      // unhandled rejection from the cleanup chain.
+    });
+  return subscribeToInflight(entry, args.signal);
 }

@@ -145,3 +145,15 @@ test("computeMain2DEffectDeltaCrop returns null when nothing changed", () => {
   const active = buffer(2, 2, Array.from({ length: 4 }, () => [10, 10, 10, 255]));
   assert.equal(computeMain2DEffectDeltaCrop(base, active), null);
 });
+
+test("computeMain2DEffectDeltaCrop respects an aborted signal", () => {
+  const base = buffer(2, 2, Array.from({ length: 4 }, () => [10, 10, 10, 255]));
+  const active = buffer(2, 2, Array.from({ length: 4 }, () => [20, 20, 20, 255]));
+  const controller = new AbortController();
+  controller.abort();
+
+  assert.throws(
+    () => computeMain2DEffectDeltaCrop(base, active, { signal: controller.signal }),
+    (err: any) => err?.name === "AbortError",
+  );
+});

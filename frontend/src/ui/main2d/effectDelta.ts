@@ -11,6 +11,19 @@ export type Main2DEffectDeltaCrop = {
   crop: { x: number; y: number; width: number; height: number };
 };
 
+function createAbortError(): Error {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("Aborted", "AbortError") as unknown as Error;
+  }
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw createAbortError();
+}
+
 function alphaRequirementForIncrease(delta: number, base: number): number {
   if (delta <= 0) return 0;
   const headroom = 255 - base;
@@ -32,11 +45,12 @@ function solveScreenChannel(base: number, delta: number, alpha: number): number 
 export function computeMain2DEffectDeltaCrop(
   base: Main2DEffectPixelBuffer,
   active: Main2DEffectPixelBuffer,
-  options: { blendMode?: Main2DEffectBlendMode } = {},
+  options: { blendMode?: Main2DEffectBlendMode; signal?: AbortSignal } = {},
 ): Main2DEffectDeltaCrop | null {
   if (base.width !== active.width || base.height !== active.height || base.data.length !== active.data.length) {
     throw new Error("Effect buffers must have matching dimensions");
   }
+  throwIfAborted(options.signal);
   const blendMode = options.blendMode ?? "source-over";
   const width = base.width;
   const height = base.height;
@@ -49,6 +63,7 @@ export function computeMain2DEffectDeltaCrop(
   let maxY = -1;
 
   for (let y = 0; y < height; y += 1) {
+    if ((y & 15) === 0) throwIfAborted(options.signal);
     for (let x = 0; x < width; x += 1) {
       const idx = (y * width + x) * 4;
       const baseAlpha = baseData[idx + 3] / 255;
@@ -91,6 +106,7 @@ export function computeMain2DEffectDeltaCrop(
     }
   }
 
+  throwIfAborted(options.signal);
   if (maxX < minX || maxY < minY) return null;
 
   const pad = 2;

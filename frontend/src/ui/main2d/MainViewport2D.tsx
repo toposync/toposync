@@ -8,6 +8,7 @@ import type {
   NotificationRenderer,
 } from "@toposync/plugin-api";
 
+import { isAbortError } from "../../util/api";
 import { i18n } from "../../util/i18n";
 import { Notification2DPinView } from "../notifications/Notification2DPinView";
 import { Icon } from "../Icon";
@@ -449,6 +450,7 @@ export function MainViewport2D({
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
 
@@ -457,23 +459,25 @@ export function MainViewport2D({
       setLoading(false);
       return () => {
         cancelled = true;
+        controller.abort();
       };
     }
 
-    void getOrCreateMain2DRenderManifest({ compositionId, elements: renderableElements, elementTypesById })
+    void getOrCreateMain2DRenderManifest({ compositionId, elements: renderableElements, elementTypesById, signal: controller.signal })
       .then((m) => {
         if (cancelled) return;
         setManifest(m);
         setLoading(false);
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted || isAbortError(err)) return;
         setError(err instanceof Error ? err.message : String(err));
         setLoading(false);
       });
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [compositionId, elementTypesById, renderableElementsLayoutKey]);
 

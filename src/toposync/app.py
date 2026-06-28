@@ -4305,11 +4305,22 @@ def create_app() -> FastAPI:
 
     @app.get("/api/notifications")
     async def list_notifications(
-        request: Request, before: int | None = None, limit: int = 50
+        request: Request,
+        before: int | None = None,
+        limit: int = 50,
+        priority: list[str] | None = Query(default=None),
+        notification_type: list[str] | None = Query(default=None, alias="type"),
+        query: str | None = None,
     ) -> dict[str, Any]:
         _require(request, action="core:notifications:read")
         runtime: NotificationsRuntime = request.app.state.notifications
-        items, next_cursor = await runtime.list(before=before, limit=limit)
+        items, next_cursor = await runtime.list(
+            before=before,
+            limit=limit,
+            priorities=priority,
+            types=notification_type,
+            query=query,
+        )
         return {"notifications": items, "next_cursor": next_cursor}
 
     @app.get("/api/notifications/count")

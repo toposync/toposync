@@ -772,6 +772,16 @@ export type NotificationsPage = {
   next_cursor: number | null;
 };
 
+export type NotificationPriority = "low" | "medium" | "high";
+
+export type NotificationsListParams = {
+  before?: number | null;
+  limit?: number;
+  priorities?: NotificationPriority[];
+  types?: string[];
+  query?: string;
+};
+
 export type NotificationsCount = {
   total: number;
   by_priority: { low: number; medium: number; high: number };
@@ -1639,10 +1649,25 @@ export async function deleteComposition(compositionId: string): Promise<DeleteCo
   return res.json();
 }
 
-export async function listNotifications(before: number | null = null, limit = 40): Promise<NotificationsPage> {
+export async function listNotifications(
+  paramsOrBefore: NotificationsListParams | number | null = null,
+  limit = 40,
+): Promise<NotificationsPage> {
+  const listParams: NotificationsListParams =
+    typeof paramsOrBefore === "object" && paramsOrBefore !== null
+      ? paramsOrBefore
+      : { before: paramsOrBefore, limit };
   const params = new URLSearchParams();
-  if (before != null) params.set("before", String(before));
-  params.set("limit", String(limit));
+  if (listParams.before != null) params.set("before", String(listParams.before));
+  params.set("limit", String(listParams.limit ?? limit));
+  for (const priority of listParams.priorities ?? []) {
+    params.append("priority", priority);
+  }
+  for (const type of listParams.types ?? []) {
+    if (type.trim()) params.append("type", type.trim());
+  }
+  const query = String(listParams.query ?? "").trim();
+  if (query) params.set("query", query);
   const res = await fetch(`/api/notifications?${params.toString()}`);
   if (!res.ok) throw new Error(`Failed to list notifications: ${res.status}`);
   const body = (await res.json()) as { notifications?: Notification[]; next_cursor?: number | null };

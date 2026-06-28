@@ -63,9 +63,14 @@ import {
 import { getPreviousPathname, navigate, replace, usePathname } from "./router";
 import { Viewport2D } from "./Viewport2D";
 import { createMeasurementLineElementType } from "./editor/measurementLineElementType";
-import { builtinNotificationRenderers } from "./notifications/pipelinesNotifications";
+import { builtinNotificationRenderers, notificationPriority } from "./notifications/pipelinesNotifications";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
-import { MainScreen } from "./screens/MainScreen";
+import {
+  MainScreen,
+  NOTIFICATIONS_FILTER_STORAGE_KEY,
+  loadNotificationsFilter,
+  type NotificationsFilter,
+} from "./screens/MainScreen";
 import { PipelinesScreen } from "./screens/PipelinesScreen";
 import { ProcessingServersScreen } from "./screens/ProcessingServersScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
@@ -202,22 +207,35 @@ function notificationCreatedMillis(notification: Notification): number {
   return parseIsoMillis(notification.createdAt);
 }
 
-function sortNotificationsByCreatedDesc(notifications: readonly Notification[]): Notification[] {
-  const out = [...notifications];
-  out.sort((left, right) => {
-    const rightTs = notificationCreatedMillis(right);
-    const leftTs = notificationCreatedMillis(left);
-    if (leftTs !== rightTs) {
-      return rightTs - leftTs;
-    }
-    const rightUpdated = parseIsoMillis(right.updatedAt);
-    const leftUpdated = parseIsoMillis(left.updatedAt);
-    if (leftUpdated !== rightUpdated) {
-      return rightUpdated - leftUpdated;
-    }
-    return asString(right.id, "").localeCompare(asString(left.id, ""));
-  });
-  return out;
+function compareNotificationsByCreatedDesc(left: Notification, right: Notification): number {
+  const rightTs = notificationCreatedMillis(right);
+  const leftTs = notificationCreatedMillis(left);
+  if (leftTs !== rightTs) {
+    return rightTs - leftTs;
+  }
+  const rightUpdated = parseIsoMillis(right.updatedAt);
+  const leftUpdated = parseIsoMillis(left.updatedAt);
+  if (leftUpdated !== rightUpdated) {
+    return rightUpdated - leftUpdated;
+  }
+  return asString(right.id, "").localeCompare(asString(left.id, ""));
+}
+
+function sortNotificationIdsByCreatedDesc(
+  ids: Iterable<string>,
+  byId: Record<string, Notification>,
+): string[] {
+  return Array.from(new Set(ids))
+    .filter((id) => Boolean(byId[id]))
+    .sort((leftId, rightId) => compareNotificationsByCreatedDesc(byId[leftId], byId[rightId]));
+}
+
+function notificationMatchesFilter(notification: Notification, filter: NotificationsFilter): boolean {
+  if (!filter.priorities.includes(notificationPriority(notification))) return false;
+  if (filter.types.length > 0 && !filter.types.includes(notification.type)) return false;
+  const query = filter.query.trim().toLowerCase();
+  if (!query) return true;
+  return `${notification.title ?? ""}\n${notification.description ?? ""}`.toLowerCase().includes(query);
 }
 
 function isOpenRealtimeNotification(notification: Notification | null | undefined): boolean {
@@ -276,6 +294,59 @@ type AppProps = {
   onLogout: () => Promise<void>;
 };
 
+type NotificationsState = {
+  byId: Record<string, Notification>;
+  visibleIds: string[];
+};
+
+function mergeNotificationPage(
+  prev: NotificationsState,
+  pageNotifications: readonly Notification[],
+  options: { replaceVisible: boolean; filter: NotificationsFilter },
+): NotificationsState {
+  const byId = { ...prev.byId };
+  for (const notification of pageNotifications) {
+    const existing = byId[notification.id];
+    byId[notification.id] = existing ? { ...existing, ...notification } : notification;
+  }
+
+  const pageIds = pageNotifications.map((notification) => notification.id);
+  const pageIdSet = new Set(pageIds);
+  const retainedVisibleIds = options.replaceVisible
+    ? prev.visibleIds.filter((id) => {
+        if (pageIdSet.has(id)) return false;
+        const notification = byId[id];
+        return notification ? notificationMatchesFilter(notification, options.filter) : false;
+      })
+    : prev.visibleIds;
+  const nextIds = [...retainedVisibleIds, ...pageIds];
+
+  return {
+    byId,
+    visibleIds: sortNotificationIdsByCreatedDesc(nextIds, byId),
+  };
+}
+
+function upsertNotificationInState(
+  prev: NotificationsState,
+  next: Notification,
+  filter: NotificationsFilter,
+): NotificationsState {
+  const existing = prev.byId[next.id];
+  const merged = existing ? { ...existing, ...next } : next;
+  const byId = { ...prev.byId, [next.id]: merged };
+  const visible = new Set(prev.visibleIds);
+  if (notificationMatchesFilter(merged, filter)) {
+    visible.add(next.id);
+  } else {
+    visible.delete(next.id);
+  }
+  return {
+    byId,
+    visibleIds: sortNotificationIdsByCreatedDesc(visible, byId),
+  };
+}
+
 export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElement {
   const pathname = usePathname();
   const [screen, setScreen] = useState<Screen>("main");
@@ -287,7 +358,11 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [pipelineOperatorPanelsByOperatorId, setPipelineOperatorPanelsByOperatorId] = useState<Record<string, PipelineOperatorPanel>>({});
   const [renderViewsById, setRenderViewsById] = useState<Record<string, RenderViewDefinition>>({});
   const [themesById, setThemesById] = useState<Record<string, ThemeDefinition>>({});
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notificationsState, setNotificationsState] = useState<NotificationsState>({
+    byId: {},
+    visibleIds: [],
+  });
+  const [notificationsFilter, setNotificationsFilter] = useState<NotificationsFilter>(() => loadNotificationsFilter());
   const [notificationsCursor, setNotificationsCursor] = useState<number | null>(null);
   const [notificationsHasMore, setNotificationsHasMore] = useState(true);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
@@ -301,7 +376,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const lastUserInteractionTsRef = useRef<number>(Date.now());
   const hasManualNotificationSelectionRef = useRef(false);
   const markNotificationsViewedInFlightRef = useRef<Promise<void> | null>(null);
-  const notificationsInitialLoadStartedRef = useRef(false);
+  const notificationsFilterRef = useRef<NotificationsFilter>(notificationsFilter);
+  const notificationsListRequestRef = useRef(0);
   const mainViewportReadyMarkedRef = useRef(false);
   const extensionRecordsPromiseRef = useRef<Promise<ExtensionRecord[]> | null>(null);
   const activatedExtensionIdsRef = useRef<Set<string>>(new Set());
@@ -352,6 +428,22 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   useLayoutEffect(() => {
     redoStackRef.current = redoStack;
   }, [redoStack]);
+
+  useLayoutEffect(() => {
+    notificationsFilterRef.current = notificationsFilter;
+    try {
+      localStorage.setItem(NOTIFICATIONS_FILTER_STORAGE_KEY, JSON.stringify(notificationsFilter));
+    } catch {
+      // ignore
+    }
+  }, [notificationsFilter]);
+
+  const notifications = useMemo(
+    () => notificationsState.visibleIds.map((id) => notificationsState.byId[id]).filter((item): item is Notification => Boolean(item)),
+    [notificationsState],
+  );
+
+  const activeNotification = activeNotificationId ? notificationsState.byId[activeNotificationId] ?? null : null;
 
   const resetHistory = useCallback(() => {
     historyGroupRef.current = { depth: 0, snapshot: null, changed: false };
@@ -652,25 +744,12 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   }, []);
 
   const upsertNotification = useCallback((next: Notification, _op: "insert" | "update") => {
-    setNotifications((prev) => {
-      const idx = prev.findIndex((n) => n.id === next.id);
-      if (idx === -1) {
-        return sortNotificationsByCreatedDesc([next, ...prev]);
-      }
-
-      const prevEntry = prev[idx];
-      const merged = { ...prevEntry, ...next };
-      const out = prev.map((n, i) => (i === idx ? merged : n));
-      return sortNotificationsByCreatedDesc(out);
-    });
+    setNotificationsState((prev) => upsertNotificationInState(prev, next, notificationsFilterRef.current));
   }, []);
 
   const activeNotificationIsOpenRealtime = useMemo(() => {
-    if (!activeNotificationId) return false;
-    return isOpenRealtimeNotification(
-      notifications.find((notification) => notification.id === activeNotificationId),
-    );
-  }, [activeNotificationId, notifications]);
+    return isOpenRealtimeNotification(activeNotification);
+  }, [activeNotification]);
 
   useEffect(() => {
     if (!backendAvailable) return;
@@ -692,55 +771,61 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   useEffect(() => {
     if (!backendAvailable) return;
     if (!mainViewportReady) {
-      if (!notificationsInitialLoadStartedRef.current) setNotificationsLoading(true);
+      setNotificationsLoading(true);
       return;
     }
-    if (notificationsInitialLoadStartedRef.current) return;
 
     let cancelled = false;
+    const requestId = notificationsListRequestRef.current + 1;
+    notificationsListRequestRef.current = requestId;
     setNotificationsLoading(true);
-    const cancelIdle = scheduleIdle(() => {
-      if (cancelled || notificationsInitialLoadStartedRef.current) return;
-      notificationsInitialLoadStartedRef.current = true;
-      void (async () => {
-        try {
-          const page = await listNotifications(null, 40);
-          if (cancelled) return;
-          markToposyncPerformance("notifications-page-loaded", {
-            page: "initial",
-            count: page.notifications?.length ?? 0,
-            hasMore: page.next_cursor != null,
-          });
-          setNotifications((prev) => {
-            const pageNotifications = page.notifications ?? [];
-            const existing = new Set(pageNotifications.map((n) => n.id));
-            const liveOnly = prev.filter((n) => !existing.has(n.id));
-            return sortNotificationsByCreatedDesc([...pageNotifications, ...liveOnly]);
-          });
-          setNotificationsCursor(page.next_cursor ?? null);
-          setNotificationsHasMore(page.next_cursor != null);
-        } catch (err) {
-          console.error("Failed to load notifications", err);
-        } finally {
-          if (!cancelled) setNotificationsLoading(false);
-        }
-      })();
-    }, 1600);
+    setNotificationsCursor(null);
+    setNotificationsHasMore(true);
+    setNotificationsState((prev) => ({ ...prev, visibleIds: [] }));
+
+    void (async () => {
+      try {
+        const page = await listNotifications({
+          before: null,
+          limit: 40,
+          priorities: notificationsFilter.priorities,
+          types: notificationsFilter.types,
+          query: notificationsFilter.query,
+        });
+        if (cancelled || notificationsListRequestRef.current !== requestId) return;
+        markToposyncPerformance("notifications-page-loaded", {
+          page: "initial",
+          count: page.notifications?.length ?? 0,
+          hasMore: page.next_cursor != null,
+        });
+        setNotificationsState((prev) =>
+          mergeNotificationPage(prev, page.notifications ?? [], {
+            replaceVisible: true,
+            filter: notificationsFilter,
+          }),
+        );
+        setNotificationsCursor(page.next_cursor ?? null);
+        setNotificationsHasMore(page.next_cursor != null);
+      } catch (err) {
+        console.error("Failed to load notifications", err);
+      } finally {
+        if (!cancelled && notificationsListRequestRef.current === requestId) setNotificationsLoading(false);
+      }
+    })();
 
     return () => {
       cancelled = true;
-      cancelIdle();
     };
-  }, [backendAvailable, mainViewportReady]);
+  }, [backendAvailable, mainViewportReady, notificationsFilter]);
 
   useEffect(() => {
-    if (notifications.length === 0) {
-      if (activeNotificationId) setActiveNotificationId(null);
+    if (activeNotificationId && notificationsState.byId[activeNotificationId]) return;
+    if (notifications.length > 0) {
+      setActiveNotificationId(notifications[0].id);
       return;
     }
-    if (activeNotificationId && notifications.some((n) => n.id === activeNotificationId)) return;
-    setActiveNotificationId(notifications[0].id);
-  }, [activeNotificationId, notifications]);
+    if (activeNotificationId) setActiveNotificationId(null);
+  }, [activeNotificationId, notifications, notificationsState.byId]);
 
   useEffect(() => {
     if (!backendAvailable) return;
@@ -1248,9 +1333,18 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     if (notificationsLoading) return;
     if (!notificationsHasMore) return;
 
+    const requestId = notificationsListRequestRef.current;
+    const filter = notificationsFilterRef.current;
     setNotificationsLoading(true);
     try {
-      const page = await listNotifications(notificationsCursor, 40);
+      const page = await listNotifications({
+        before: notificationsCursor,
+        limit: 40,
+        priorities: filter.priorities,
+        types: filter.types,
+        query: filter.query,
+      });
+      if (notificationsListRequestRef.current !== requestId) return;
       markToposyncPerformance("notifications-page-loaded", {
         page: "next",
         count: page.notifications.length,
@@ -1259,16 +1353,16 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       setNotificationsCursor(page.next_cursor ?? null);
       setNotificationsHasMore(page.next_cursor != null);
       if (page.notifications.length === 0) return;
-      setNotifications((prev) => {
-        const existing = new Set(prev.map((n) => n.id));
-        const toAdd = page.notifications.filter((n) => !existing.has(n.id));
-        if (toAdd.length === 0) return prev;
-        return sortNotificationsByCreatedDesc([...prev, ...toAdd]);
-      });
+      setNotificationsState((prev) =>
+        mergeNotificationPage(prev, page.notifications, {
+          replaceVisible: false,
+          filter,
+        }),
+      );
     } catch (err) {
       console.error("Failed to load more notifications", err);
     } finally {
-      setNotificationsLoading(false);
+      if (notificationsListRequestRef.current === requestId) setNotificationsLoading(false);
     }
   }, [backendAvailable, notificationsCursor, notificationsHasMore, notificationsLoading]);
 
@@ -1417,9 +1511,12 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           notifications={notifications}
           notificationsCount={notificationsCount}
           notificationsHasMore={notificationsHasMore}
+          notificationsFilter={notificationsFilter}
           activeNotificationId={activeNotificationId}
+          activeNotification={activeNotification}
           notificationsLoading={notificationsLoading}
           renderViews={Object.values(renderViewsById)}
+          onNotificationsFilterChange={setNotificationsFilter}
           onSelectNotification={selectNotification}
           onLoadMoreNotifications={loadMoreNotifications}
           onNotificationsViewed={markNotificationsAsViewed}

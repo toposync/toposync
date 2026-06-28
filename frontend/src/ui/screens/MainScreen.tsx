@@ -43,9 +43,12 @@ type Props = {
   notifications: Notification[];
   notificationsCount: NotificationsCount;
   notificationsHasMore: boolean;
+  notificationsFilter: NotificationsFilter;
   activeNotificationId: string | null;
+  activeNotification: Notification | null;
   notificationsLoading: boolean;
   renderViews: RenderViewDefinition[];
+  onNotificationsFilterChange: React.Dispatch<React.SetStateAction<NotificationsFilter>>;
   onSelectNotification: (notificationId: string) => void;
   onLoadMoreNotifications: () => void;
   onNotificationsViewed: () => void;
@@ -143,7 +146,8 @@ function notificationPayload(notification: Notification): Record<string, unknown
   return asRecord(notification.payload);
 }
 
-function notificationIsOpenRealtime(notification: Notification): boolean {
+function notificationIsOpenRealtime(notification: Notification | null | undefined): boolean {
+  if (!notification) return false;
   const payload = notificationPayload(notification);
   return asTrimmedString(payload.status).toLowerCase() === "open" && payload.realtime === true;
 }
@@ -178,20 +182,18 @@ function withLiveDuration(notification: Notification, nowMs: number): Notificati
 }
 
 const NOTIFICATIONS_OPEN_STORAGE_KEY = "toposync.notifications_open.v1";
-const NOTIFICATIONS_FILTER_STORAGE_KEY = "toposync.notifications_filter.v2";
-const FILTERED_NOTIFICATIONS_VISIBLE_TARGET = 12;
-const FILTERED_NOTIFICATIONS_AUTO_PAGE_LIMIT = 30;
+export const NOTIFICATIONS_FILTER_STORAGE_KEY = "toposync.notifications_filter.v2";
 
-type Priority = "low" | "medium" | "high";
+export type Priority = "low" | "medium" | "high";
 const ALL_PRIORITIES: Priority[] = ["high", "medium", "low"];
 
-type NotificationsFilter = {
+export type NotificationsFilter = {
   priorities: Priority[];
   types: string[]; // empty array = "all types"
   query: string;
 };
 
-const DEFAULT_FILTER: NotificationsFilter = {
+export const DEFAULT_NOTIFICATIONS_FILTER: NotificationsFilter = {
   priorities: ["high"],
   types: [],
   query: "",
@@ -224,24 +226,24 @@ function shouldAutoCloseNotificationsAfterSelect(): boolean {
   }
 }
 
-function loadNotificationsFilter(): NotificationsFilter {
-  if (typeof window === "undefined") return { ...DEFAULT_FILTER };
+export function loadNotificationsFilter(): NotificationsFilter {
+  if (typeof window === "undefined") return { ...DEFAULT_NOTIFICATIONS_FILTER };
   try {
     const raw = localStorage.getItem(NOTIFICATIONS_FILTER_STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_FILTER };
+    if (!raw) return { ...DEFAULT_NOTIFICATIONS_FILTER };
     const parsed = JSON.parse(raw) as Partial<NotificationsFilter>;
     const priorities = Array.isArray(parsed.priorities)
       ? parsed.priorities.filter((p): p is Priority => p === "low" || p === "medium" || p === "high")
-      : DEFAULT_FILTER.priorities;
+      : DEFAULT_NOTIFICATIONS_FILTER.priorities;
     const types = Array.isArray(parsed.types) ? parsed.types.filter((t): t is string => typeof t === "string" && t.length > 0) : [];
     const query = typeof parsed.query === "string" ? parsed.query : "";
     return {
-      priorities: priorities.length > 0 ? priorities : DEFAULT_FILTER.priorities,
+      priorities: priorities.length > 0 ? priorities : DEFAULT_NOTIFICATIONS_FILTER.priorities,
       types,
       query,
     };
   } catch {
-    return { ...DEFAULT_FILTER };
+    return { ...DEFAULT_NOTIFICATIONS_FILTER };
   }
 }
 
@@ -282,9 +284,12 @@ export function MainScreen({
   notifications,
   notificationsCount,
   notificationsHasMore,
+  notificationsFilter,
   activeNotificationId,
+  activeNotification: activeNotificationRaw,
   notificationsLoading,
   renderViews,
+  onNotificationsFilterChange,
   onSelectNotification,
   onLoadMoreNotifications,
   onNotificationsViewed,
@@ -309,7 +314,8 @@ export function MainScreen({
   const [fullscreenNotificationImageOpen, setFullscreenNotificationImageOpen] = useState(false);
   const [fullscreenNotificationImageIndex, setFullscreenNotificationImageIndex] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
-  const [filter, setFilter] = useState<NotificationsFilter>(() => loadNotificationsFilter());
+  const filter = notificationsFilter;
+  const setFilter = onNotificationsFilterChange;
   const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
   const [notificationsNowMs, setNotificationsNowMs] = useState(() => Date.now());
   const filterPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -326,7 +332,6 @@ export function MainScreen({
   const notificationScrollRef = useRef<HTMLDivElement | null>(null);
   const notificationSentinelRef = useRef<HTMLDivElement | null>(null);
   const streamsOverlayTimerRef = useRef<number | null>(null);
-  const autoFilteredPageRequestsRef = useRef(0);
   const notificationPaginationUserEngagedRef = useRef(false);
 
   const clearStreamsOverlayTimer = useCallback(() => {
@@ -353,8 +358,8 @@ export function MainScreen({
   }, [clearStreamsOverlayTimer, renderMode]);
 
   const hasOpenRealtimeNotifications = useMemo(
-    () => notifications.some(notificationIsOpenRealtime),
-    [notifications],
+    () => notifications.some(notificationIsOpenRealtime) || notificationIsOpenRealtime(activeNotificationRaw),
+    [activeNotificationRaw, notifications],
   );
 
   useEffect(() => {
@@ -409,10 +414,10 @@ export function MainScreen({
     };
   }, [clearStreamsOverlayTimer, renderMode, scheduleStreamsOverlayHide]);
 
-  const activeNotification = useMemo(() => {
-    if (!activeNotificationId) return null;
-    return displayNotifications.find((n) => n.id === activeNotificationId) ?? null;
-  }, [activeNotificationId, displayNotifications]);
+  const activeNotification = useMemo(
+    () => (activeNotificationRaw ? withLiveDuration(activeNotificationRaw, notificationsNowMs) : null),
+    [activeNotificationRaw, notificationsNowMs],
+  );
 
   const activeNotificationImages = useMemo(() => {
     if (!activeNotification) return [];
@@ -569,15 +574,6 @@ export function MainScreen({
   }, [notificationsOpen, notificationsCount.unread_total, onNotificationsViewed]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(NOTIFICATIONS_FILTER_STORAGE_KEY, JSON.stringify(filter));
-    } catch {
-      // ignore
-    }
-  }, [filter]);
-
-  useEffect(() => {
-    autoFilteredPageRequestsRef.current = 0;
     notificationPaginationUserEngagedRef.current = false;
   }, [filter]);
 
@@ -668,36 +664,9 @@ export function MainScreen({
     return Array.from(seen).sort();
   }, [displayNotifications]);
 
-  const matchesFilter = useCallback(
-    (n: Notification): boolean => {
-      const prio = notificationPriority(n);
-      if (!filter.priorities.includes(prio)) return false;
-      if (filter.types.length > 0 && !filter.types.includes(n.type)) return false;
-      const q = filter.query.trim().toLowerCase();
-      if (q) {
-        const haystack = `${n.title ?? ""}\n${n.description ?? ""}`.toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-      return true;
-    },
-    [filter],
-  );
-
-  const visibleNotifications = useMemo(() => {
-    return displayNotifications.filter((n) => {
-      if (matchesFilter(n)) return true;
-      // Always keep the actively-selected notification visible so the
-      // selection isn't silently lost when the user tightens the filter.
-      return Boolean(activeNotificationId && n.id === activeNotificationId);
-    });
-  }, [activeNotificationId, displayNotifications, matchesFilter]);
+  const visibleNotifications = displayNotifications;
 
   const filterRestrictive = useMemo(() => isFilterRestrictive(filter), [filter]);
-
-  const filteredLoadedCount = useMemo(
-    () => displayNotifications.reduce((acc, n) => (matchesFilter(n) ? acc + 1 : acc), 0),
-    [displayNotifications, matchesFilter],
-  );
 
   const badgeLabel = useMemo(() => {
     const unreadCount = filter.priorities.reduce(
@@ -707,50 +676,6 @@ export function MainScreen({
     if (unreadCount <= 0) return null;
     return unreadCount > 999 ? "999+" : String(unreadCount);
   }, [filter, notificationsCount]);
-
-  const hiddenByFilterCount = useMemo(() => {
-    if (!filterRestrictive) return 0;
-    return displayNotifications.length - filteredLoadedCount;
-  }, [filterRestrictive, displayNotifications.length, filteredLoadedCount]);
-
-  const selectedPriorityTotal = useMemo(
-    () => filter.priorities.reduce((acc, prio) => acc + (notificationsCount.by_priority[prio] ?? 0), 0),
-    [filter.priorities, notificationsCount.by_priority],
-  );
-
-  const filterHasNonPriorityConstraints = filter.types.length > 0 || filter.query.trim().length > 0;
-
-  // A restrictive filter is applied to the pages already loaded in the browser.
-  // Keep paging in the background until the panel has enough matching rows, or
-  // until a small cap prevents rare searches from scanning the whole history.
-  useEffect(() => {
-    if (!notificationsOpen) return;
-    if (!filterRestrictive) return;
-    if (notificationsLoading) return;
-    if (!notificationsHasMore) return;
-    if (filteredLoadedCount >= FILTERED_NOTIFICATIONS_VISIBLE_TARGET) return;
-    if (!filterHasNonPriorityConstraints && notificationsCount.total > 0 && filteredLoadedCount >= selectedPriorityTotal) return;
-    if (autoFilteredPageRequestsRef.current >= FILTERED_NOTIFICATIONS_AUTO_PAGE_LIMIT) return;
-
-    autoFilteredPageRequestsRef.current += 1;
-    const win = window as WindowWithIdleCallback;
-    if (typeof win.requestIdleCallback === "function") {
-      const handle = win.requestIdleCallback(() => onLoadMoreNotifications(), { timeout: 1500 });
-      return () => win.cancelIdleCallback?.(handle);
-    }
-    const handle = window.setTimeout(() => onLoadMoreNotifications(), 180);
-    return () => window.clearTimeout(handle);
-  }, [
-    notificationsOpen,
-    filterRestrictive,
-    notificationsLoading,
-    notificationsHasMore,
-    filteredLoadedCount,
-    filterHasNonPriorityConstraints,
-    notificationsCount.total,
-    selectedPriorityTotal,
-    onLoadMoreNotifications,
-  ]);
 
   // Close the filter popover when clicking outside.
   useEffect(() => {
@@ -778,7 +703,7 @@ export function MainScreen({
       const has = prev.priorities.includes(prio);
       const next = has ? prev.priorities.filter((p) => p !== prio) : [...prev.priorities, prio];
       // Don't allow zero priorities — falls back to default.
-      return { ...prev, priorities: next.length > 0 ? next : DEFAULT_FILTER.priorities };
+      return { ...prev, priorities: next.length > 0 ? next : DEFAULT_NOTIFICATIONS_FILTER.priorities };
     });
   }, []);
 
@@ -790,7 +715,7 @@ export function MainScreen({
     });
   }, []);
 
-  const clearFilter = useCallback(() => setFilter({ ...DEFAULT_FILTER }), []);
+  const clearFilter = useCallback(() => setFilter({ ...DEFAULT_NOTIFICATIONS_FILTER }), []);
   const noteNotificationPaginationUserEngagement = useCallback(() => {
     notificationPaginationUserEngagedRef.current = true;
   }, []);
@@ -1140,13 +1065,7 @@ export function MainScreen({
               {visibleNotifications.length === 0 ? (
                 <div className="card">
                   <div className="cardBody">
-                    {filterRestrictive && hiddenByFilterCount > 0
-                      ? t(
-                          "core.ui.notifications.filtered_empty",
-                          { count: hiddenByFilterCount },
-                          "{{count}} notifications hidden by filter.",
-                        )
-                      : t("core.ui.notifications_empty")}
+                    {t("core.ui.notifications_empty")}
                   </div>
                   {filterRestrictive ? (
                     <button type="button" className="notificationsFilterLink" onClick={clearFilter}>

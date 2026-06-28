@@ -212,3 +212,148 @@ def test_notifications_viewed_endpoint_does_not_reset_on_list(
         assert next_count.json()["total"] == 2
         assert next_count.json()["unread_total"] == 1
         assert next_count.json()["unread_by_priority"] == {"low": 1, "medium": 0, "high": 0}
+
+
+def test_notifications_endpoint_filters_priority_before_pagination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
+    monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: [])
+
+    with TestClient(create_app()) as client:
+        notifications: NotificationsRuntime = client.app.state.notifications
+
+        for i in range(55):
+            notifications.store.upsert(
+                type="pipelines.event" if i % 2 else "security.event",
+                title=f"Garage medium {i}",
+                description="filtered target",
+                payload={"priority": "medium", "camera": "garage"},
+                now=1_000 + i,
+            )
+
+        for i in range(160):
+            notifications.store.upsert(
+                type="pipelines.event",
+                title=f"Recent low {i}",
+                description="recent noise",
+                payload={"priority": "low"},
+                now=2_000 + i,
+            )
+
+        unfiltered = client.get("/api/notifications?limit=40")
+        assert unfiltered.status_code == 200
+        unfiltered_items = unfiltered.json()["notifications"]
+        assert len(unfiltered_items) == 40
+        assert {item["payload"].get("priority") for item in unfiltered_items} == {"low"}
+
+        filtered = client.get("/api/notifications?priority=medium&limit=40")
+        assert filtered.status_code == 200
+        filtered_body = filtered.json()
+        filtered_items = filtered_body["notifications"]
+        assert len(filtered_items) == 40
+        assert {item["payload"].get("priority") for item in filtered_items} == {"medium"}
+        assert filtered_body["next_cursor"] is not None
+
+        next_page = client.get(
+            f"/api/notifications?priority=medium&before={filtered_body['next_cursor']}&limit=40"
+        )
+        assert next_page.status_code == 200
+        next_items = next_page.json()["notifications"]
+        assert len(next_items) == 15
+        assert {item["payload"].get("priority") for item in next_items} == {"medium"}
+
+
+def test_notifications_endpoint_combines_priority_type_and_query_filters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
+    monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: [])
+
+    with TestClient(create_app()) as client:
+        notifications: NotificationsRuntime = client.app.state.notifications
+        notifications.store.upsert(
+            type="security.event",
+            title="Garage person",
+            description="target match",
+            payload={"priority": "medium"},
+            now=1_000,
+        )
+        notifications.store.upsert(
+            type="security.event",
+            title="Kitchen person",
+            description="target miss",
+            payload={"priority": "medium"},
+            now=1_001,
+        )
+        notifications.store.upsert(
+            type="pipelines.event",
+            title="Garage pipeline",
+            description="target type miss",
+            payload={"priority": "medium"},
+            now=1_002,
+        )
+        notifications.store.upsert(
+            type="security.event",
+            title="Garage low",
+            description="target priority miss",
+            payload={"priority": "low"},
+            now=1_003,
+        )
+
+        res = client.get("/api/notifications?priority=medium&type=security.event&query=garage")
+        assert res.status_code == 200
+        items = res.json()["notifications"]
+        assert [item["title"] for item in items] == ["Garage person"]
+
+
+def test_notifications_endpoint_medium_priority_includes_missing_or_invalid_payload_priority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
+    monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: [])
+
+    with TestClient(create_app()) as client:
+        notifications: NotificationsRuntime = client.app.state.notifications
+        notifications.store.upsert(
+            type="pipelines.event",
+            title="Missing priority",
+            payload={},
+            now=1_000,
+        )
+        notifications.store.upsert(
+            type="pipelines.event",
+            title="Invalid priority",
+            payload={"priority": "urgent"},
+            now=1_001,
+        )
+        notifications.store.upsert(
+            type="pipelines.event",
+            title="Explicit medium",
+            payload={"priority": "medium"},
+            now=1_002,
+        )
+        notifications.store.upsert(
+            type="pipelines.event",
+            title="Low priority",
+            payload={"priority": "low"},
+            now=1_003,
+        )
+
+        medium = client.get("/api/notifications?priority=medium")
+        assert medium.status_code == 200
+        assert [item["title"] for item in medium.json()["notifications"]] == [
+            "Explicit medium",
+            "Invalid priority",
+            "Missing priority",
+        ]
+
+        invalid = client.get("/api/notifications?priority=urgent")
+        assert invalid.status_code == 200
+        assert invalid.json() == {"notifications": [], "next_cursor": None}

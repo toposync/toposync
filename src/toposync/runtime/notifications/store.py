@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS notification_state (
 """
 
 _LAST_VIEWED_SEQ_KEY = "last_viewed_seq"
+_PRIORITY_BUCKET_SQL = """
+CASE LOWER(COALESCE(json_extract(payload_json, '$.priority'), ''))
+  WHEN 'low' THEN 'low'
+  WHEN 'high' THEN 'high'
+  ELSE 'medium'
+END
+"""
+_VALID_PRIORITY_BUCKETS = {"low", "medium", "high"}
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -62,6 +70,24 @@ def _archived_dedupe_key(dedupe_key: str, notification_id: str) -> str:
         return raw
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
     return f"{dedupe_key[:450]}:archived:{digest}"
+
+
+def _clean_strings(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    if not values:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,32 +188,65 @@ class NotificationStore:
         return self._row_to_record(row) if row is not None else None
 
     def list(
-        self, *, before: int | None = None, limit: int = 50
+        self,
+        *,
+        before: int | None = None,
+        limit: int = 50,
+        priorities: list[str] | tuple[str, ...] | None = None,
+        types: list[str] | tuple[str, ...] | None = None,
+        query: str | None = None,
     ) -> tuple[list[NotificationRecord], int | None]:
         limit = max(1, min(250, int(limit)))
         before_n = int(before) if before is not None else None
-        with self._lock:
-            if before_n is None:
-                cur = self._conn.execute(
-                    """
-                    SELECT seq, id, type, title, description, image_path, payload_json, created_at, updated_at, dedupe_key
-                    FROM notification
-                    ORDER BY seq DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                )
+        where_sql: list[str] = []
+        params: list[Any] = []
+
+        if before_n is not None:
+            where_sql.append("seq < ?")
+            params.append(before_n)
+
+        requested_priorities = _clean_strings(priorities)
+        if requested_priorities:
+            priority_buckets = [
+                value.lower()
+                for value in requested_priorities
+                if value.lower() in _VALID_PRIORITY_BUCKETS
+            ]
+            priority_buckets = list(dict.fromkeys(priority_buckets))
+            if priority_buckets:
+                placeholders = ", ".join("?" for _ in priority_buckets)
+                where_sql.append(f"{_PRIORITY_BUCKET_SQL} IN ({placeholders})")
+                params.extend(priority_buckets)
             else:
-                cur = self._conn.execute(
-                    """
-                    SELECT seq, id, type, title, description, image_path, payload_json, created_at, updated_at, dedupe_key
-                    FROM notification
-                    WHERE seq < ?
-                    ORDER BY seq DESC
-                    LIMIT ?
-                    """,
-                    (before_n, limit),
-                )
+                where_sql.append("1 = 0")
+
+        requested_types = _clean_strings(types)
+        if requested_types:
+            placeholders = ", ".join("?" for _ in requested_types)
+            where_sql.append(f"type IN ({placeholders})")
+            params.extend(requested_types)
+
+        query_value = str(query or "").strip()
+        if query_value:
+            like = f"%{_escape_like(query_value)}%"
+            where_sql.append(
+                "(title LIKE ? ESCAPE '\\' COLLATE NOCASE OR description LIKE ? ESCAPE '\\' COLLATE NOCASE)"
+            )
+            params.extend([like, like])
+
+        where_clause = f"WHERE {' AND '.join(where_sql)}" if where_sql else ""
+        params.append(limit)
+        with self._lock:
+            cur = self._conn.execute(
+                f"""
+                SELECT seq, id, type, title, description, image_path, payload_json, created_at, updated_at, dedupe_key
+                FROM notification
+                {where_clause}
+                ORDER BY seq DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            )
             rows = cur.fetchall()
 
         records = [self._row_to_record(r) for r in rows]

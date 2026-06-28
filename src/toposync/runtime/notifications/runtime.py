@@ -37,9 +37,22 @@ class NotificationsRuntime:
         self.broadcaster = EventBroadcaster()
 
     async def list(
-        self, *, before: int | None = None, limit: int = 50
+        self,
+        *,
+        before: int | None = None,
+        limit: int = 50,
+        priorities: list[str] | tuple[str, ...] | None = None,
+        types: list[str] | tuple[str, ...] | None = None,
+        query: str | None = None,
     ) -> tuple[list[dict[str, Any]], int | None]:
-        records, next_cursor = await asyncio.to_thread(self.store.list, before=before, limit=limit)
+        records, next_cursor = await asyncio.to_thread(
+            self.store.list,
+            before=before,
+            limit=limit,
+            priorities=priorities,
+            types=types,
+            query=query,
+        )
         return ([_to_public(r) for r in records], next_cursor)
 
     async def count_by_priority(self) -> dict[str, int]:

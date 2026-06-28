@@ -205,7 +205,7 @@ def _is_hard_capture_open_error(message: str) -> bool:
     )
 
 
-_GLOBAL_CAMERA_HUB = get_global_camera_hub()
+_GLOBAL_CAMERA_HUB = get_global_camera_hub(frame_grabber_factory=_frame_grabber_factory)
 
 
 @dataclass(frozen=True, slots=True)

@@ -33,6 +33,9 @@ class CameraHub:
         self._entries: dict[str, _HubEntry] = {}
         self._starting: dict[str, asyncio.Event] = {}
 
+    def set_frame_grabber_factory(self, frame_grabber_factory: Callable[..., Any]) -> None:
+        self._frame_grabber_factory = frame_grabber_factory
+
     async def acquire(
         self,
         *,
@@ -198,11 +201,14 @@ def _default_frame_grabber_factory(rtsp_url: str, *, target_fps: float, backend:
 _GLOBAL_CAMERA_HUB: CameraHub | None = None
 
 
-def get_global_camera_hub() -> CameraHub:
+def get_global_camera_hub(
+    *, frame_grabber_factory: Callable[..., Any] | None = None
+) -> CameraHub:
     global _GLOBAL_CAMERA_HUB
+    factory = frame_grabber_factory or _default_frame_grabber_factory
     if _GLOBAL_CAMERA_HUB is None:
         _GLOBAL_CAMERA_HUB = CameraHub(
-            frame_grabber_factory=_default_frame_grabber_factory,
+            frame_grabber_factory=factory,
             start_timeout_s=_read_env_float(
                 "TOPOSYNC_CAMERA_HUB_START_TIMEOUT_S",
                 12.0,
@@ -210,6 +216,8 @@ def get_global_camera_hub() -> CameraHub:
                 max_value=120.0,
             ),
         )
+    elif frame_grabber_factory is not None:
+        _GLOBAL_CAMERA_HUB.set_frame_grabber_factory(factory)
     return _GLOBAL_CAMERA_HUB
 
 

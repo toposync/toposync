@@ -1,18 +1,116 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
+import sqlite3
+import threading
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pytest
 
-from toposync.app import create_app
+from toposync.app import (
+    CLIENT_CLOSED_REQUEST_STATUS,
+    _RequestConcurrencyLimiter,
+    _run_cancelable_request_work,
+    create_app,
+)
 import toposync.extensions.manager as ext_manager_mod
 from toposync.runtime.notifications import NotificationsRuntime
 
 
 class _TestCancelled(Exception):
     pass
+
+
+class _FakeDisconnectRequest:
+    def __init__(self) -> None:
+        self.disconnected = False
+
+    async def is_disconnected(self) -> bool:
+        return self.disconnected
+
+
+def test_notification_store_backfills_priority_bucket_from_legacy_payload(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    db_path = data_dir / "notifications" / "notifications.sqlite3"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE notification (
+          seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+          id           TEXT NOT NULL UNIQUE,
+          type         TEXT NOT NULL,
+          title        TEXT NOT NULL,
+          description  TEXT NOT NULL,
+          image_path   TEXT,
+          payload_json TEXT NOT NULL,
+          created_at   REAL NOT NULL,
+          updated_at   REAL NOT NULL,
+          dedupe_key   TEXT
+        );
+        CREATE UNIQUE INDEX idx_notification_dedupe_key ON notification(dedupe_key);
+        CREATE INDEX idx_notification_seq_desc ON notification(seq DESC);
+        CREATE TABLE notification_state (
+          key   TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        """
+    )
+    rows = [
+        ("low-1", "pipelines.event", "Low", {"priority": "low"}, 1_000.0),
+        ("missing-1", "pipelines.event", "Missing", {}, 1_001.0),
+        ("invalid-1", "pipelines.event", "Invalid", {"priority": "urgent"}, 1_002.0),
+        ("high-1", "pipelines.event", "High", {"priority": "high"}, 1_003.0),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO notification(id, type, title, description, image_path, payload_json, created_at, updated_at, dedupe_key)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                nid,
+                ntype,
+                title,
+                "",
+                None,
+                json.dumps(payload, separators=(",", ":")),
+                ts,
+                ts,
+                None,
+            )
+            for nid, ntype, title, payload, ts in rows
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    notifications = NotificationsRuntime(data_dir=data_dir)
+    medium_items, _cursor = notifications.store.list(limit=10, priorities=["medium"])
+    assert [item.title for item in medium_items] == ["Invalid", "Missing"]
+    assert [item.priority_bucket for item in medium_items] == ["medium", "medium"]
+    assert notifications.store.count_by_priority() == {"low": 1, "medium": 2, "high": 1}
+
+    state_row = notifications.store._conn.execute(
+        "SELECT value FROM notification_state WHERE key = 'priority_bucket_backfill_v1'"
+    ).fetchone()
+    assert state_row is not None
+    assert state_row["value"] == "1"
+
+    plan_rows = notifications.store._conn.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT seq FROM notification
+        WHERE priority_bucket IN (?)
+        ORDER BY seq DESC
+        LIMIT ?
+        """,
+        ("medium", 10),
+    ).fetchall()
+    assert any("idx_notification_priority_seq" in str(row[3]) for row in plan_rows)
 
 
 def test_close_open_pipeline_notifications_marks_stale_open_as_closed(tmp_path: Path) -> None:
@@ -172,6 +270,45 @@ def test_notifications_unviewed_count_resets_after_mark_viewed(tmp_path: Path) -
     asyncio.run(scenario())
 
 
+def test_notifications_upsert_updates_and_preserves_priority_bucket(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+        first = await notifications.upsert(
+            type="pipelines.event",
+            title="Initial",
+            payload={"priority": "low"},
+            dedupe_key="pipeline:test:priority",
+        )
+        changed = await notifications.upsert(
+            type="pipelines.event",
+            title="Changed",
+            payload={"priority": "high"},
+            dedupe_key="pipeline:test:priority",
+        )
+        preserved = await notifications.upsert(
+            type="pipelines.event",
+            title="Preserved",
+            dedupe_key="pipeline:test:priority",
+        )
+
+        assert changed["id"] == first["id"]
+        assert changed["priority"] == "high"
+        assert changed["payload"]["priority"] == "high"
+        assert preserved["id"] == first["id"]
+        assert preserved["priority"] == "high"
+        assert preserved["payload"]["priority"] == "high"
+
+        counts = await notifications.count_summary()
+        assert counts["by_priority"] == {"low": 0, "medium": 0, "high": 1}
+
+        high_items, _cursor = await notifications.list(priorities=["high"], limit=10)
+        assert [item["title"] for item in high_items] == ["Preserved"]
+        medium_items, _cursor = await notifications.list(priorities=["medium"], limit=10)
+        assert medium_items == []
+
+    asyncio.run(scenario())
+
+
 def test_notifications_viewed_endpoint_does_not_reset_on_list(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -257,8 +394,8 @@ def test_notification_store_cancel_check_interrupts_sqlite_read_and_restores_han
     with pytest.raises(_TestCancelled):
         notifications.store.list(
             limit=40,
-            priorities=["medium"],
-            query="scan",
+            priorities=["low"],
+            query="not-present",
             cancel_check=cancel_after_query_starts,
         )
 
@@ -266,6 +403,108 @@ def test_notification_store_cancel_check_interrupts_sqlite_read_and_restores_han
     items, cursor = notifications.store.list(limit=5, priorities=["low"])
     assert len(items) == 5
     assert cursor is not None
+
+
+def test_notification_store_reads_do_not_wait_for_write_lock(tmp_path: Path) -> None:
+    notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+    notifications.store.upsert(type="pipelines.event", title="Initial", payload={"priority": "medium"})
+
+    done = threading.Event()
+    errors: list[BaseException] = []
+    result: list[tuple[list[object], int | None]] = []
+
+    def read_in_thread() -> None:
+        try:
+            result.append(notifications.store.list(limit=1, priorities=["medium"]))
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+        finally:
+            done.set()
+
+    notifications.store._lock.acquire()
+    try:
+        thread = threading.Thread(target=read_in_thread)
+        thread.start()
+        assert done.wait(1.0)
+        thread.join(timeout=1.0)
+    finally:
+        notifications.store._lock.release()
+
+    assert errors == []
+    assert len(result) == 1
+    assert len(result[0][0]) == 1
+
+
+def test_cancelable_request_limiter_cancels_before_work_starts() -> None:
+    async def scenario() -> None:
+        limiter = asyncio.Semaphore(1)
+        await limiter.acquire()
+        request = _FakeDisconnectRequest()
+        work_ran = False
+
+        def work(_check_cancelled):
+            nonlocal work_ran
+            work_ran = True
+            return {"ok": True}
+
+        task = asyncio.create_task(_run_cancelable_request_work(request, work, limiter=limiter))
+        await asyncio.sleep(0.12)
+        assert not work_ran
+        request.disconnected = True
+
+        with pytest.raises(HTTPException) as exc_info:
+            await task
+        assert exc_info.value.status_code == CLIENT_CLOSED_REQUEST_STATUS
+        assert not work_ran
+        limiter.release()
+
+    asyncio.run(scenario())
+
+
+def test_request_concurrency_limiter_can_prefer_latest_waiter() -> None:
+    async def scenario() -> None:
+        limiter = _RequestConcurrencyLimiter(1, prefer_latest=True)
+        await limiter.acquire()
+        order: list[str] = []
+
+        async def waiter(name: str) -> None:
+            await limiter.acquire()
+            try:
+                order.append(name)
+            finally:
+                limiter.release()
+
+        first = asyncio.create_task(waiter("first"))
+        await asyncio.sleep(0)
+        second = asyncio.create_task(waiter("second"))
+        await asyncio.sleep(0)
+
+        limiter.release()
+        await asyncio.gather(first, second)
+
+        assert order == ["second", "first"]
+
+    asyncio.run(scenario())
+
+
+def test_cancelable_request_limiters_are_independent_by_family() -> None:
+    async def scenario() -> None:
+        list_limiter = asyncio.Semaphore(1)
+        detail_limiter = asyncio.Semaphore(1)
+        await list_limiter.acquire()
+
+        def work(_check_cancelled):
+            return {"detail": True}
+
+        result = await _run_cancelable_request_work(
+            _FakeDisconnectRequest(),
+            work,
+            limiter=detail_limiter,
+        )
+        assert result == {"detail": True}
+        list_limiter.release()
+
+    asyncio.run(scenario())
 
 
 def test_notifications_endpoint_filters_priority_before_pagination(
@@ -302,6 +541,7 @@ def test_notifications_endpoint_filters_priority_before_pagination(
         unfiltered_items = unfiltered.json()["notifications"]
         assert len(unfiltered_items) == 40
         assert {item["payload"].get("priority") for item in unfiltered_items} == {"low"}
+        assert {item["priority"] for item in unfiltered_items} == {"low"}
 
         filtered = client.get("/api/notifications?priority=medium&limit=40")
         assert filtered.status_code == 200
@@ -309,6 +549,7 @@ def test_notifications_endpoint_filters_priority_before_pagination(
         filtered_items = filtered_body["notifications"]
         assert len(filtered_items) == 40
         assert {item["payload"].get("priority") for item in filtered_items} == {"medium"}
+        assert {item["priority"] for item in filtered_items} == {"medium"}
         assert filtered_body["next_cursor"] is not None
 
         next_page = client.get(
@@ -318,6 +559,7 @@ def test_notifications_endpoint_filters_priority_before_pagination(
         next_items = next_page.json()["notifications"]
         assert len(next_items) == 15
         assert {item["payload"].get("priority") for item in next_items} == {"medium"}
+        assert {item["priority"] for item in next_items} == {"medium"}
 
 
 def test_notifications_endpoint_combines_priority_type_and_query_filters(
@@ -363,6 +605,7 @@ def test_notifications_endpoint_combines_priority_type_and_query_filters(
         assert res.status_code == 200
         items = res.json()["notifications"]
         assert [item["title"] for item in items] == ["Garage person"]
+        assert [item["priority"] for item in items] == ["medium"]
 
 
 def test_notifications_endpoint_medium_priority_includes_missing_or_invalid_payload_priority(
@@ -407,6 +650,10 @@ def test_notifications_endpoint_medium_priority_includes_missing_or_invalid_payl
             "Invalid priority",
             "Missing priority",
         ]
+        by_title = {item["title"]: item for item in medium.json()["notifications"]}
+        assert {item["priority"] for item in by_title.values()} == {"medium"}
+        assert by_title["Invalid priority"]["payload"]["priority"] == "urgent"
+        assert "priority" not in by_title["Missing priority"]["payload"]
 
         invalid = client.get("/api/notifications?priority=urgent")
         assert invalid.status_code == 200

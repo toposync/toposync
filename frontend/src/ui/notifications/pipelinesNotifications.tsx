@@ -368,7 +368,7 @@ function createPipelines3DOverlay(
   let lastX: number | null = null;
   let lastZ: number | null = null;
 
-  const initialPriorityHex = priorityHex(normalizePriority(asRecord(notification.payload).priority));
+  const initialPriorityHex = priorityHex(notificationPriority(notification));
   const trailMaterial = new THREE.MeshBasicMaterial({ color: initialPriorityHex, transparent: true, opacity: 0.9 });
   trailMaterial.depthTest = false;
   trailMaterial.depthWrite = false;
@@ -524,7 +524,7 @@ function createPipelines3DOverlay(
 
   function applyStyleFromNotification(next: Notification): void {
     const payload = asRecord(next.payload);
-    const prio = normalizePriority(payload.priority);
+    const prio = notificationPriority(next);
     const colorHex = priorityHex(prio);
     const lifecycle = asString(payload.lifecycle, "").trim().toLowerCase();
     const closed = lifecycle === "close" || asString(payload.status, "").trim().toLowerCase() === "closed";
@@ -606,6 +606,7 @@ function createPipelines3DOverlay(
 }
 
 export function notificationPriority(notification: Notification): Priority {
+  if (notification.priority) return normalizePriority(notification.priority);
   const payload = asRecord(notification.payload);
   return normalizePriority(payload.priority);
 }
@@ -721,7 +722,7 @@ function createPipelines2DOverlay(
       x: last.x,
       z: last.z,
       trail: trail.map((p) => ({ x: p.x, z: p.z })),
-      priority: normalizePriority(payload.priority),
+      priority: notificationPriority(current),
       closed,
     };
   }

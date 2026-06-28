@@ -903,6 +903,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     if (!backendAvailable) return;
 
     let closed = false;
+    // This global stream is intentionally separate from the selected-notification stream below.
+    // The list/cache must keep receiving global realtime updates while details track one item.
     const es = new EventSource("/api/notifications/stream");
     es.onmessage = (ev) => {
       try {
@@ -913,9 +915,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         upsertNotification(notif, op);
 
         if (op === "insert") {
-          const payload = (notif.payload && typeof notif.payload === "object" ? notif.payload : {}) as Record<string, unknown>;
-          const rawPrio = typeof payload.priority === "string" ? payload.priority.toLowerCase() : "";
-          const bucket: "low" | "medium" | "high" = rawPrio === "low" || rawPrio === "high" ? rawPrio : "medium";
+          const bucket = notificationPriority(notif);
           setNotificationsCount((prev) => ({
             total: prev.total + 1,
             by_priority: { ...prev.by_priority, [bucket]: prev.by_priority[bucket] + 1 },
@@ -967,6 +967,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         if (activeNotificationFetchAbortRef.current === controller) activeNotificationFetchAbortRef.current = null;
       });
 
+    // Keep this selected-notification stream separate from the global list stream above.
+    // Changing selection should only replace this stream, not the global notification stream.
     const es = new EventSource(`/api/notifications/${encodeURIComponent(activeNotificationId)}/stream`);
     es.onmessage = (ev) => {
       try {

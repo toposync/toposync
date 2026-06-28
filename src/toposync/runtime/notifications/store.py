@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS notification (
   description  TEXT NOT NULL,
   image_path   TEXT,
   payload_json TEXT NOT NULL,
+  priority_bucket TEXT NOT NULL DEFAULT 'medium',
   created_at   REAL NOT NULL,
   updated_at   REAL NOT NULL,
   dedupe_key   TEXT
@@ -40,11 +41,16 @@ CREATE TABLE IF NOT EXISTS notification_state (
 """
 
 _LAST_VIEWED_SEQ_KEY = "last_viewed_seq"
+_PRIORITY_BUCKET_BACKFILL_KEY = "priority_bucket_backfill_v1"
 _SQLITE_PROGRESS_INTERRUPT_OPCODES = 100
 _PRIORITY_BUCKET_SQL = """
-CASE LOWER(COALESCE(json_extract(payload_json, '$.priority'), ''))
-  WHEN 'low' THEN 'low'
-  WHEN 'high' THEN 'high'
+CASE
+  WHEN json_valid(payload_json) THEN
+    CASE LOWER(COALESCE(json_extract(payload_json, '$.priority'), ''))
+      WHEN 'low' THEN 'low'
+      WHEN 'high' THEN 'high'
+      ELSE 'medium'
+    END
   ELSE 'medium'
 END
 """
@@ -52,9 +58,20 @@ _VALID_PRIORITY_BUCKETS = {"low", "medium", "high"}
 _CancelCheck = Callable[[], None]
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
+def _connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    if read_only:
+        db_uri = f"{db_path.resolve().as_uri()}?mode=ro"
+        conn = sqlite3.connect(
+            db_uri,
+            check_same_thread=False,
+            isolation_level=None,
+            uri=True,
+        )
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("PRAGMA temp_store=MEMORY")
+    else:
+        conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -65,6 +82,13 @@ def _payload_is_closed(payload: dict[str, Any] | None) -> bool:
     status = str(payload.get("status") or "").strip().lower()
     lifecycle = str(payload.get("lifecycle") or "").strip().lower()
     return status == "closed" or lifecycle == "close"
+
+
+def _normalize_priority_bucket(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw == "low" or raw == "high":
+        return raw
+    return "medium"
 
 
 def _archived_dedupe_key(dedupe_key: str, notification_id: str) -> str:
@@ -102,6 +126,7 @@ class NotificationRecord:
     description: str
     image_path: str | None
     payload: dict[str, Any]
+    priority_bucket: str
     created_at: float
     updated_at: float
     dedupe_key: str | None = None
@@ -136,14 +161,22 @@ class NotificationStore:
                     "created_at": "REAL",
                     "updated_at": "REAL",
                     "dedupe_key": "TEXT",
+                    "priority_bucket": "TEXT NOT NULL DEFAULT 'medium'",
                 },
             )
+            self._backfill_priority_bucket_unlocked()
 
             self._conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_dedupe_key ON notification(dedupe_key)"
             )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_notification_seq_desc ON notification(seq DESC)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_notification_priority_seq ON notification(priority_bucket, seq DESC)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_notification_type_seq ON notification(type, seq DESC)"
             )
             self._conn.execute(
                 """
@@ -154,11 +187,28 @@ class NotificationStore:
                 """
             )
 
+    def _backfill_priority_bucket_unlocked(self) -> None:
+        if self._get_state_int_unlocked(_PRIORITY_BUCKET_BACKFILL_KEY, 0) == 1:
+            return
+        self._conn.execute(
+            f"""
+            UPDATE notification
+            SET priority_bucket = {_PRIORITY_BUCKET_SQL}
+            WHERE priority_bucket IS NULL
+               OR priority_bucket NOT IN ('low', 'medium', 'high')
+               OR priority_bucket != {_PRIORITY_BUCKET_SQL}
+            """
+        )
+        self._set_state_int_unlocked(_PRIORITY_BUCKET_BACKFILL_KEY, 1)
+
     def _row_to_record(self, row: sqlite3.Row) -> NotificationRecord:
         try:
             payload = json.loads(row["payload_json"]) if row["payload_json"] else {}
         except Exception:
             payload = {}
+        priority_bucket = str(row["priority_bucket"] or "").strip().lower()
+        if priority_bucket not in _VALID_PRIORITY_BUCKETS:
+            priority_bucket = "medium"
 
         return NotificationRecord(
             seq=int(row["seq"]),
@@ -168,6 +218,7 @@ class NotificationStore:
             description=str(row["description"] or ""),
             image_path=str(row["image_path"]) if row["image_path"] else None,
             payload=payload if isinstance(payload, dict) else {},
+            priority_bucket=priority_bucket,
             created_at=float(row["created_at"] or 0.0),
             updated_at=float(row["updated_at"] or 0.0),
             dedupe_key=str(row["dedupe_key"]) if row["dedupe_key"] else None,
@@ -175,42 +226,53 @@ class NotificationStore:
 
     def _run_read(
         self,
-        work: Callable[[], Any],
+        work: Callable[[sqlite3.Connection], Any],
         *,
         cancel_check: _CancelCheck | None = None,
     ) -> Any:
-        if cancel_check is None:
-            with self._lock:
-                return work()
-
-        cancel_check()
-        while True:
+        if cancel_check is not None:
             cancel_check()
-            if self._lock.acquire(timeout=0.05):
-                break
 
         def progress() -> int:
             try:
-                cancel_check()
+                if cancel_check is not None:
+                    cancel_check()
             except Exception:
                 return 1
             return 0
 
+        conn = _connect(self.path, read_only=True)
         try:
-            cancel_check()
-            self._conn.set_progress_handler(progress, _SQLITE_PROGRESS_INTERRUPT_OPCODES)
-            try:
-                result = work()
+            if cancel_check is not None:
                 cancel_check()
+                conn.set_progress_handler(progress, _SQLITE_PROGRESS_INTERRUPT_OPCODES)
+            try:
+                result = work(conn)
+                if cancel_check is not None:
+                    cancel_check()
                 return result
             except sqlite3.OperationalError as exc:
                 if "interrupted" in str(exc).lower():
-                    cancel_check()
+                    if cancel_check is not None:
+                        cancel_check()
                 raise
             finally:
-                self._conn.set_progress_handler(None, 0)
+                if cancel_check is not None:
+                    conn.set_progress_handler(None, 0)
         finally:
-            self._lock.release()
+            conn.close()
+
+    def _get_row_unlocked(self, conn: sqlite3.Connection, notification_id: str) -> sqlite3.Row | None:
+        cur = conn.execute(
+            """
+            SELECT seq, id, type, title, description, image_path, payload_json, priority_bucket, created_at, updated_at, dedupe_key
+            FROM notification
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (notification_id,),
+        )
+        return cur.fetchone()
 
     def get(
         self,
@@ -222,17 +284,8 @@ class NotificationStore:
         if not nid:
             return None
 
-        def read() -> sqlite3.Row | None:
-            cur = self._conn.execute(
-                """
-                SELECT seq, id, type, title, description, image_path, payload_json, created_at, updated_at, dedupe_key
-                FROM notification
-                WHERE id = ?
-                LIMIT 1
-                """,
-                (nid,),
-            )
-            return cur.fetchone()
+        def read(conn: sqlite3.Connection) -> sqlite3.Row | None:
+            return self._get_row_unlocked(conn, nid)
 
         row = self._run_read(read, cancel_check=cancel_check)
         return self._row_to_record(row) if row is not None else None
@@ -266,7 +319,7 @@ class NotificationStore:
             priority_buckets = list(dict.fromkeys(priority_buckets))
             if priority_buckets:
                 placeholders = ", ".join("?" for _ in priority_buckets)
-                where_sql.append(f"{_PRIORITY_BUCKET_SQL} IN ({placeholders})")
+                where_sql.append(f"priority_bucket IN ({placeholders})")
                 params.extend(priority_buckets)
             else:
                 where_sql.append("1 = 0")
@@ -288,10 +341,10 @@ class NotificationStore:
         where_clause = f"WHERE {' AND '.join(where_sql)}" if where_sql else ""
         params.append(limit)
 
-        def read() -> list[sqlite3.Row]:
-            cur = self._conn.execute(
+        def read(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+            cur = conn.execute(
                 f"""
-                SELECT seq, id, type, title, description, image_path, payload_json, created_at, updated_at, dedupe_key
+                SELECT seq, id, type, title, description, image_path, payload_json, priority_bucket, created_at, updated_at, dedupe_key
                 FROM notification
                 {where_clause}
                 ORDER BY seq DESC
@@ -332,6 +385,11 @@ class NotificationStore:
             if payload is not None
             else None
         )
+        priority_bucket = (
+            _normalize_priority_bucket(incoming_payload.get("priority"))
+            if payload is not None
+            else None
+        )
         ts = float(now or time.time())
 
         with self._lock:
@@ -368,14 +426,16 @@ class NotificationStore:
                               description = ?,
                               image_path = COALESCE(?, image_path),
                               payload_json = COALESCE(?, payload_json),
+                              priority_bucket = COALESCE(?, priority_bucket),
                               updated_at = ?
                             WHERE id = ?
                             """,
-                            (ntype, ttl, desc, image_path, blob, ts, nid),
+                            (ntype, ttl, desc, image_path, blob, priority_bucket, ts, nid),
                         )
-                        rec = self.get(nid)
-                        if rec is None:
+                        row_after_update = self._get_row_unlocked(self._conn, nid)
+                        if row_after_update is None:
                             raise RuntimeError("Failed to read notification after update")
+                        rec = self._row_to_record(row_after_update)
                         return rec, False
 
             nid = uuid.uuid4().hex
@@ -387,19 +447,39 @@ class NotificationStore:
             self._conn.execute(
                 """
                 INSERT INTO notification(
-                  id, type, title, description, image_path, payload_json, created_at, updated_at, dedupe_key
+                  id, type, title, description, image_path, payload_json, priority_bucket, created_at, updated_at, dedupe_key
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (nid, ntype, ttl, desc, image_path, blob_insert, ts, ts, dedupe or None),
+                (
+                    nid,
+                    ntype,
+                    ttl,
+                    desc,
+                    image_path,
+                    blob_insert,
+                    _normalize_priority_bucket(incoming_payload.get("priority")),
+                    ts,
+                    ts,
+                    dedupe or None,
+                ),
             )
-            rec = self.get(nid)
-            if rec is None:
+            row_after_insert = self._get_row_unlocked(self._conn, nid)
+            if row_after_insert is None:
                 raise RuntimeError("Failed to read notification after insert")
+            rec = self._row_to_record(row_after_insert)
             return rec, True
 
     def _get_state_int_unlocked(self, key: str, default: int = 0) -> int:
-        cur = self._conn.execute(
+        return self._get_state_int_unlocked_on(self._conn, key, default)
+
+    def _get_state_int_unlocked_on(
+        self,
+        conn: sqlite3.Connection,
+        key: str,
+        default: int = 0,
+    ) -> int:
+        cur = conn.execute(
             "SELECT value FROM notification_state WHERE key = ? LIMIT 1",
             (key,),
         )
@@ -434,7 +514,7 @@ class NotificationStore:
     def last_viewed_seq(self, *, cancel_check: _CancelCheck | None = None) -> int:
         return int(
             self._run_read(
-                lambda: self._get_state_int_unlocked(_LAST_VIEWED_SEQ_KEY, 0),
+                lambda conn: self._get_state_int_unlocked_on(conn, _LAST_VIEWED_SEQ_KEY, 0),
                 cancel_check=cancel_check,
             )
         )
@@ -457,47 +537,40 @@ class NotificationStore:
         """Aggregate counts per priority bucket. Buckets match the frontend
         normalization: anything that is not exactly "low", "medium", or "high"
         is bucketed as "medium" so totals always sum to total."""
-        params: tuple[Any, ...]
-        where_sql = ""
-        if after_seq is not None:
-            where_sql = "WHERE seq > ?"
-            params = (int(after_seq),)
-        else:
-            params = ()
-
-        def read() -> list[sqlite3.Row]:
-            cur = self._conn.execute(
-                f"""
-                SELECT
-                  CASE LOWER(COALESCE(json_extract(payload_json, '$.priority'), ''))
-                    WHEN 'low' THEN 'low'
-                    WHEN 'high' THEN 'high'
-                    ELSE 'medium'
-                  END AS bucket,
-                  COUNT(*) AS n
-                FROM notification
-                {where_sql}
-                GROUP BY bucket
-                """,
-                params,
-            )
-            return cur.fetchall()
-
-        rows = self._run_read(read, cancel_check=cancel_check)
         out = {"low": 0, "medium": 0, "high": 0}
-        for row in rows:
-            bucket = str(row["bucket"]) if row["bucket"] is not None else "medium"
-            if bucket not in out:
-                bucket = "medium"
-            out[bucket] += int(row["n"] or 0)
-        return out
+
+        def read(conn: sqlite3.Connection) -> dict[str, int]:
+            for bucket in ("low", "medium", "high"):
+                if cancel_check is not None:
+                    cancel_check()
+                params: tuple[Any, ...]
+                if after_seq is None:
+                    where_sql = "priority_bucket = ?"
+                    params = (bucket,)
+                else:
+                    where_sql = "priority_bucket = ? AND seq > ?"
+                    params = (bucket, int(after_seq))
+                cur = conn.execute(
+                    f"""
+                    SELECT COUNT(*) AS n
+                    FROM notification
+                    WHERE {where_sql}
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
+                out[bucket] = int(row["n"] or 0) if row is not None else 0
+            return out
+
+        return self._run_read(read, cancel_check=cancel_check)
 
     def list_open_pipeline_notifications(self, *, limit: int = 5000) -> list[NotificationRecord]:
         limit_n = max(1, min(50_000, int(limit)))
-        with self._lock:
-            cur = self._conn.execute(
+
+        def read(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+            cur = conn.execute(
                 """
-                SELECT seq, id, type, title, description, image_path, payload_json, created_at, updated_at, dedupe_key
+                SELECT seq, id, type, title, description, image_path, payload_json, priority_bucket, created_at, updated_at, dedupe_key
                 FROM notification
                 WHERE
                   type LIKE 'pipelines.%'
@@ -508,8 +581,9 @@ class NotificationStore:
                 """,
                 (limit_n,),
             )
-            rows = cur.fetchall()
+            return cur.fetchall()
 
+        rows = self._run_read(read)
         records = [self._row_to_record(r) for r in rows]
         out: list[NotificationRecord] = []
         for rec in records:

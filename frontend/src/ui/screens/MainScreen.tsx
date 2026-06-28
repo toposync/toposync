@@ -453,7 +453,7 @@ export function MainScreen({
     const updatedAt = formatDateTimeLong(locale, activeNotification.updatedAt);
 
     push(t("core.ui.notifications.details.meta.type", {}, "Type"), activeNotification.type);
-    push(t("core.ui.notifications.details.meta.priority", {}, "Priority"), payload.priority);
+    push(t("core.ui.notifications.details.meta.priority", {}, "Priority"), notificationPriority(activeNotification));
     push(t("core.ui.notifications.details.meta.status", {}, "Status"), payload.status);
     push(t("core.ui.notifications.details.meta.lifecycle", {}, "Lifecycle"), payload.lifecycle);
     push(t("core.ui.notifications.details.meta.pipeline", {}, "Pipeline"), payload.pipeline_name);

@@ -62,6 +62,7 @@ export type Notification = {
   imageUrl?: string;
   createdAt?: string;
   updatedAt?: string;
+  priority?: "low" | "medium" | "high";
   payload?: unknown;
 };
 

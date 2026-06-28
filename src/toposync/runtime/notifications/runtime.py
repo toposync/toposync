@@ -31,6 +31,7 @@ def _to_public(rec: NotificationRecord) -> dict[str, Any]:
         "imageUrl": image_url,
         "createdAt": _iso(rec.created_at),
         "updatedAt": _iso(rec.updated_at),
+        "priority": rec.priority_bucket,
         "payload": rec.payload,
     }
 

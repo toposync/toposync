@@ -9,7 +9,9 @@ import os
 import re
 import threading
 import uuid
+from collections import deque
 from contextlib import asynccontextmanager, suppress
+from functools import partial
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, TypeVar
 
@@ -112,6 +114,10 @@ DEFAULT_PIPELINES_TELEMETRY_METRICS = [
     METRIC_AI_CONDITION_CONFIDENCE,
 ]
 CLIENT_CLOSED_REQUEST_STATUS = 499
+NOTIFICATIONS_LIST_READ_CONCURRENCY = 4
+NOTIFICATIONS_COUNT_READ_CONCURRENCY = 2
+NOTIFICATIONS_DETAIL_READ_CONCURRENCY = 8
+REQUEST_DISCONNECT_POLL_SECONDS = 0.01
 _RequestWorkResult = TypeVar("_RequestWorkResult")
 
 
@@ -119,17 +125,71 @@ class _RequestWorkCancelled(Exception):
     pass
 
 
+class _RequestConcurrencyLimiter:
+    def __init__(self, limit: int, *, prefer_latest: bool = False) -> None:
+        self._limit = max(1, int(limit))
+        self._prefer_latest = bool(prefer_latest)
+        self._active = 0
+        self._waiters: deque[asyncio.Future[None]] = deque()
+        self._lock = threading.Lock()
+
+    async def acquire(self) -> None:
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            if self._active < self._limit:
+                self._active += 1
+                return
+            future: asyncio.Future[None] = loop.create_future()
+            self._waiters.append(future)
+
+        try:
+            await future
+        except BaseException:
+            with self._lock:
+                if future.done() and not future.cancelled():
+                    self._release_unlocked()
+                else:
+                    future.cancel()
+                    with suppress(ValueError):
+                        self._waiters.remove(future)
+            raise
+
+    def release(self) -> None:
+        with self._lock:
+            self._release_unlocked()
+
+    def _release_unlocked(self) -> None:
+        while self._waiters:
+            future = self._waiters.pop() if self._prefer_latest else self._waiters.popleft()
+            if future.done():
+                continue
+            future.set_result(None)
+            return
+        if self._active <= 0:
+            raise ValueError("Request concurrency limiter released too many times")
+        self._active -= 1
+
+
 def _client_closed_request_exception() -> HTTPException:
     return HTTPException(status_code=CLIENT_CLOSED_REQUEST_STATUS, detail="Client closed request")
+
+
+async def _request_is_disconnected(request: Request, cancel_event: threading.Event) -> bool:
+    try:
+        if await request.is_disconnected():
+            cancel_event.set()
+            return True
+    except Exception:
+        logger.debug("Failed to check request disconnect", exc_info=True)
+    return False
 
 
 async def _watch_request_disconnect(request: Request, cancel_event: threading.Event) -> bool:
     try:
         while not cancel_event.is_set():
-            if await request.is_disconnected():
-                cancel_event.set()
+            if await _request_is_disconnected(request, cancel_event):
                 return True
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(REQUEST_DISCONNECT_POLL_SECONDS)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -148,11 +208,22 @@ def _drain_cancelled_request_work(future: asyncio.Future[Any]) -> None:
         logger.debug("Cancelled request work finished with an error", exc_info=True)
 
 
+def _release_limiter_after_request_work(
+    limiter: asyncio.Semaphore,
+    future: asyncio.Future[Any],
+) -> None:
+    limiter.release()
+
+
 async def _run_cancelable_request_work(
     request: Request,
     work: Callable[[Callable[[], None]], _RequestWorkResult],
+    *,
+    limiter: asyncio.Semaphore | None = None,
 ) -> _RequestWorkResult:
     cancel_event = threading.Event()
+    limiter_acquired = False
+    work_future: asyncio.Future[_RequestWorkResult] | None = None
 
     def check_cancelled() -> None:
         if cancel_event.is_set():
@@ -163,13 +234,50 @@ async def _run_cancelable_request_work(
         return work(check_cancelled)
 
     loop = asyncio.get_running_loop()
-    work_future = loop.run_in_executor(None, run)
     disconnect_task = asyncio.create_task(
         _watch_request_disconnect(request, cancel_event),
         name="toposync.request.disconnect-watch",
     )
 
     try:
+        if limiter is not None:
+            acquire_task = asyncio.create_task(
+                limiter.acquire(),
+                name="toposync.request.limiter-acquire",
+            )
+            try:
+                done, _pending = await asyncio.wait(
+                    {acquire_task, disconnect_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if acquire_task in done:
+                    await acquire_task
+                    limiter_acquired = True
+                    if await _request_is_disconnected(request, cancel_event):
+                        raise _client_closed_request_exception()
+                    check_cancelled()
+                else:
+                    disconnected = False
+                    if disconnect_task in done:
+                        disconnected = bool(await disconnect_task)
+                    if disconnected:
+                        cancel_event.set()
+                        raise _client_closed_request_exception()
+                    await acquire_task
+                    limiter_acquired = True
+                    if await _request_is_disconnected(request, cancel_event):
+                        raise _client_closed_request_exception()
+                    check_cancelled()
+            finally:
+                if not limiter_acquired and not acquire_task.done():
+                    acquire_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await acquire_task
+
+        if await _request_is_disconnected(request, cancel_event):
+            raise _client_closed_request_exception()
+
+        work_future = loop.run_in_executor(None, run)
         done, _pending = await asyncio.wait(
             {work_future, disconnect_task},
             return_when=asyncio.FIRST_COMPLETED,
@@ -190,10 +298,18 @@ async def _run_cancelable_request_work(
         raise _client_closed_request_exception() from exc
     except asyncio.CancelledError:
         cancel_event.set()
-        work_future.add_done_callback(_drain_cancelled_request_work)
+        if work_future is not None:
+            work_future.add_done_callback(_drain_cancelled_request_work)
         raise
     finally:
         cancel_event.set()
+        if limiter_acquired and limiter is not None:
+            if work_future is not None and not work_future.done():
+                work_future.add_done_callback(
+                    partial(_release_limiter_after_request_work, limiter)
+                )
+            else:
+                limiter.release()
         if not disconnect_task.done():
             disconnect_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -1044,6 +1160,17 @@ async def _lifespan(app: FastAPI):
     app.state.config_store = config_store
     app.state.auth = auth
     app.state.notifications = notifications
+    app.state.notification_read_limiters = {
+        "list": _RequestConcurrencyLimiter(
+            NOTIFICATIONS_LIST_READ_CONCURRENCY,
+            prefer_latest=True,
+        ),
+        "count": _RequestConcurrencyLimiter(NOTIFICATIONS_COUNT_READ_CONCURRENCY),
+        "detail": _RequestConcurrencyLimiter(
+            NOTIFICATIONS_DETAIL_READ_CONCURRENCY,
+            prefer_latest=True,
+        ),
+    }
     app.state.pipeline_operator_registry = operator_registry
     app.state.pipeline_graph_compiler = pipeline_compiler
     pipeline_stats_store = PipelineStatsStore()
@@ -4326,7 +4453,11 @@ def create_app() -> FastAPI:
             )
             return {"notifications": items, "next_cursor": next_cursor}
 
-        return await _run_cancelable_request_work(request, build_response)
+        return await _run_cancelable_request_work(
+            request,
+            build_response,
+            limiter=request.app.state.notification_read_limiters["list"],
+        )
 
     @app.get("/api/notifications/count")
     async def count_notifications(request: Request) -> dict[str, Any]:
@@ -4336,7 +4467,11 @@ def create_app() -> FastAPI:
         def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
             return runtime.count_summary_sync(cancel_check=check_cancelled)
 
-        return await _run_cancelable_request_work(request, build_response)
+        return await _run_cancelable_request_work(
+            request,
+            build_response,
+            limiter=request.app.state.notification_read_limiters["count"],
+        )
 
     @app.post("/api/notifications/viewed")
     async def mark_notifications_viewed(request: Request) -> dict[str, Any]:
@@ -4424,7 +4559,11 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="Unknown notification")
             return notif
 
-        return await _run_cancelable_request_work(request, build_response)
+        return await _run_cancelable_request_work(
+            request,
+            build_response,
+            limiter=request.app.state.notification_read_limiters["detail"],
+        )
 
     frontend_dir = _resolve_frontend_dir()
     if frontend_dir:

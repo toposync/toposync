@@ -45,6 +45,12 @@ EXTENSIONS: tuple[dict[str, object], ...] = (
         "optional_source_dirs": (),
     },
     {
+        "name": "cinematic",
+        "package": "toposync_ext_cinematic",
+        "required_files": ("toposync_ext_cinematic/extension.json",),
+        "optional_source_dirs": (),
+    },
+    {
         "name": "vision",
         "package": "toposync_ext_vision",
         "required_files": ("toposync_ext_vision/extension.json",),

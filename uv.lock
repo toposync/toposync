@@ -2521,6 +2521,7 @@ extensions = [
     { name = "onnxruntime" },
     { name = "toposync-ext-ai" },
     { name = "toposync-ext-cameras" },
+    { name = "toposync-ext-cinematic" },
     { name = "toposync-ext-home-assistant" },
     { name = "toposync-ext-images" },
     { name = "toposync-ext-models" },
@@ -2549,6 +2550,7 @@ extensions = [
     { name = "onnxruntime", specifier = ">=1.20" },
     { name = "toposync-ext-ai", editable = "extensions/ai" },
     { name = "toposync-ext-cameras", editable = "extensions/cameras" },
+    { name = "toposync-ext-cinematic", editable = "extensions/cinematic" },
     { name = "toposync-ext-home-assistant", editable = "extensions/home_assistant" },
     { name = "toposync-ext-images", editable = "extensions/images" },
     { name = "toposync-ext-models", editable = "extensions/models" },
@@ -2595,6 +2597,17 @@ requires-dist = [
     { name = "pillow", specifier = ">=10,<13" },
     { name = "toposync-core", specifier = ">=0.3.0" },
 ]
+
+[[package]]
+name = "toposync-ext-cinematic"
+version = "0.7.10"
+source = { editable = "extensions/cinematic" }
+dependencies = [
+    { name = "toposync-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-home-assistant"

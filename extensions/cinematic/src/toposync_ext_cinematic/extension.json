@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "id": "com.toposync.cinematic",
+  "name": "Cinematic",
+  "version": "0.1.0",
+  "description": "Toposync extension for event-directed camera transmission."
+}

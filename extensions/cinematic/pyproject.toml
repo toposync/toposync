@@ -1,0 +1,19 @@
+[project]
+name = "toposync-ext-cinematic"
+version = "0.7.10"
+description = "Toposync first-party extension: cinematic event-directed camera transmission."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["toposync-core>=0.3.0"]
+
+[project.entry-points."toposync.extensions"]
+cinematic = "toposync_ext_cinematic.plugin:CinematicExtension"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/toposync_ext_cinematic"]

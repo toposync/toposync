@@ -26,6 +26,7 @@ RUN mkdir -p /wheelhouse \
  && uv build --wheel --out-dir /wheelhouse extensions/images \
  && uv build --wheel --out-dir /wheelhouse extensions/home_assistant \
  && uv build --wheel --out-dir /wheelhouse extensions/cameras \
+ && uv build --wheel --out-dir /wheelhouse extensions/cinematic \
  && uv build --wheel --out-dir /wheelhouse extensions/vision \
  && uv build --wheel --out-dir /wheelhouse extensions/spatial_video \
  && uv build --wheel --out-dir /wheelhouse extensions/streaming

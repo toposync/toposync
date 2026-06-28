@@ -30,6 +30,7 @@ extensions = [
   "toposync-ext-home-assistant",
   "toposync-ext-images",
   "toposync-ext-cameras",
+  "toposync-ext-cinematic",
   "toposync-ext-vision",
   "toposync-ext-streaming",
   "toposync-ext-ai",
@@ -45,6 +46,7 @@ toposync-ext-models = { path = "extensions/models", editable = true }
 toposync-ext-home-assistant = { path = "extensions/home_assistant", editable = true }
 toposync-ext-images = { path = "extensions/images", editable = true }
 toposync-ext-cameras = { path = "extensions/cameras", editable = true }
+toposync-ext-cinematic = { path = "extensions/cinematic", editable = true }
 toposync-ext-vision = { path = "extensions/vision", editable = true }
 toposync-ext-streaming = { path = "extensions/streaming", editable = true }
 toposync-ext-ai = { path = "extensions/ai", editable = true }

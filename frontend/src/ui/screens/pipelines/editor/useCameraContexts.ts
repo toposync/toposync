@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { CameraContextsResponse } from "../../../../util/api";
-import { getCameraContexts } from "../../../../util/api";
+import { getCameraContexts, isAbortError } from "../../../../util/api";
 
 import type { CameraAreaOption } from "../types";
 
@@ -22,19 +22,21 @@ export function useCameraContexts(interactiveCameraId: string): Result {
     if (cameraContextsErrorById[cameraId]) return;
 
     let cancelled = false;
+    const controller = new AbortController();
     void (async () => {
       try {
-        const contexts = await getCameraContexts(cameraId);
-        if (cancelled) return;
+        const contexts = await getCameraContexts(cameraId, { signal: controller.signal });
+        if (cancelled || controller.signal.aborted) return;
         setCameraContextsById((prev) => ({ ...prev, [cameraId]: contexts }));
       } catch (err: any) {
-        if (cancelled) return;
+        if (cancelled || isAbortError(err)) return;
         setCameraContextsErrorById((prev) => ({ ...prev, [cameraId]: String(err?.message ?? err) }));
       }
     })();
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [interactiveCameraId, cameraContextsById, cameraContextsErrorById]);
 

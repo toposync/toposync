@@ -67,6 +67,7 @@ from .onvif import (
 NotificationPriority = Literal["low", "medium", "high"]
 
 EXTENSION_ID = "com.toposync.cameras"
+CLIENT_CLOSED_REQUEST_STATUS = 499
 DEFAULT_CAMERA_DETECTION_MODEL_ID = "rfdetr_det_medium"
 PIPELINE_NAME_MAX_LENGTH = 120
 CAMERA_PIPELINE_PRESETS = (
@@ -82,6 +83,13 @@ CAMERA_MAPPING_REQUIRED_PRESETS = {
     "presence_area",
     "vehicle_stopped",
 }
+
+
+async def _raise_if_request_disconnected(request: Request) -> None:
+    if await request.is_disconnected():
+        raise HTTPException(status_code=CLIENT_CLOSED_REQUEST_STATUS, detail="Client closed request")
+
+
 NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
 VEHICLE_STOPPED_OBJECT_CATEGORIES = ["car", "truck", "bus", "motorcycle"]
 VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
@@ -2203,17 +2211,21 @@ class CamerasExtension(BaseExtension):
 
         @app.get("/api/cameras/cameras/{camera_id}/contexts")
         async def camera_contexts(request: Request, camera_id: str) -> dict[str, Any]:
+            await _raise_if_request_disconnected(request)
             cid = str(camera_id or "").strip()
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
 
             store = _config_store(request)
             cfg = await store.get_config()
+            await _raise_if_request_disconnected(request)
 
             compositions_out: list[dict[str, Any]] = []
             for composition in cfg.compositions:
+                await _raise_if_request_disconnected(request)
                 camera_elements: list[dict[str, Any]] = []
                 for element in composition.elements:
+                    await _raise_if_request_disconnected(request)
                     props = element.props if isinstance(element.props, dict) else {}
                     if str(props.get("camera_id", "")).strip() != cid:
                         continue
@@ -2237,6 +2249,7 @@ class CamerasExtension(BaseExtension):
 
                 areas: list[dict[str, Any]] = []
                 for element in composition.elements:
+                    await _raise_if_request_disconnected(request)
                     if str(element.type or "").strip() != "com.toposync.structural.area":
                         continue
                     props = element.props if isinstance(element.props, dict) else {}
@@ -2245,6 +2258,7 @@ class CamerasExtension(BaseExtension):
                         continue
                     points: list[dict[str, float]] = []
                     for vertex in vertices:
+                        await _raise_if_request_disconnected(request)
                         if not isinstance(vertex, dict):
                             continue
                         try:

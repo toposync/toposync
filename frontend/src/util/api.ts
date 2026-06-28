@@ -2298,8 +2298,13 @@ export async function getCameraOnvifEvents(
   };
 }
 
-export async function getCameraContexts(cameraId: string): Promise<CameraContextsResponse> {
-  const res = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/contexts`);
+export async function getCameraContexts(
+  cameraId: string,
+  options: AbortableRequestOptions = {},
+): Promise<CameraContextsResponse> {
+  const res = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/contexts`, {
+    signal: options.signal,
+  });
   if (!res.ok) throw new Error(`Failed to fetch camera contexts: ${res.status}`);
   return res.json();
 }

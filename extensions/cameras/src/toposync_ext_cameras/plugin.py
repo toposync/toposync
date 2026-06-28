@@ -63,6 +63,7 @@ from .settings import (
     get_camera_source_origin,
     get_camera_source_origin_type,
     iter_camera_devices,
+    iter_camera_sources,
     normalize_cameras_settings,
 )
 from .onvif import (
@@ -1814,6 +1815,52 @@ class CamerasExtension(BaseExtension):
         services.register("cameras.ptz.stop", _svc_ptz_stop)
         app.state.camera_source_health_store = get_global_source_health_store()
         capture_service = get_global_camera_capture_service()
+
+        async def _svc_cameras_catalog_list() -> dict[str, Any]:
+            store = getattr(app.state, "config_store", None)
+            if store is None:
+                return {"cameras": []}
+            settings = await store.get_settings()
+            ext = normalize_cameras_settings(settings.extensions.get(EXTENSION_ID, {}))
+            cameras: list[dict[str, Any]] = []
+            for device in iter_camera_devices(ext):
+                camera_id = str(device.get("id") or "").strip()
+                if not camera_id:
+                    continue
+                sources: list[dict[str, Any]] = []
+                for source in iter_camera_sources(device):
+                    source_id = str(source.get("id") or "").strip()
+                    if not source_id:
+                        continue
+                    origin = get_camera_source_origin(source)
+                    video = source.get("video") if isinstance(source.get("video"), dict) else {}
+                    sources.append(
+                        {
+                            "id": source_id,
+                            "name": str(source.get("name") or "").strip(),
+                            "kind": str(source.get("kind") or "video").strip() or "video",
+                            "role": str(source.get("role") or "").strip(),
+                            "view_id": str(source.get("view_id") or "").strip(),
+                            "enabled": bool(source.get("enabled", True)),
+                            "is_default": bool(source.get("is_default")),
+                            "transport": str(origin.get("type") or "").strip(),
+                            "width": video.get("width"),
+                            "height": video.get("height"),
+                            "fps": video.get("fps"),
+                        }
+                    )
+                cameras.append(
+                    {
+                        "id": camera_id,
+                        "name": str(device.get("name") or "").strip(),
+                        "enabled": bool(device.get("enabled", True)),
+                        "clock_domain": str(device.get("clock_domain") or "").strip(),
+                        "sources": sources,
+                    }
+                )
+            return {"cameras": cameras}
+
+        services.register("cameras.catalog.list", _svc_cameras_catalog_list)
 
         def _capture_dependencies() -> PipelineRuntimeDependencies:
             store = getattr(app.state, "config_store", None)

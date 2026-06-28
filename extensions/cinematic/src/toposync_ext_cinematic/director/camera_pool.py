@@ -19,6 +19,7 @@ class CameraPoolFrame:
     fresh: bool = False
     stale: bool = False
     capture: dict[str, Any] = field(default_factory=dict)
+    source_health: dict[str, Any] = field(default_factory=dict)
     resolved: dict[str, Any] = field(default_factory=dict)
     error: str = ""
 
@@ -118,6 +119,7 @@ class CameraPool:
             fresh=bool(payload.get("fresh")) and not stale,
             stale=stale,
             capture=dict(payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}),
+            source_health=dict(payload.get("source_health") if isinstance(payload.get("source_health"), dict) else {}),
             resolved=dict(resolved),
         )
 

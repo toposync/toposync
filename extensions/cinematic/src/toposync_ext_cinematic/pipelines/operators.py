@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from toposync.runtime.pipelines.execution import SourceOperatorRuntime
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME
 from toposync.runtime.pipelines.operator_registry import (
     OperatorRegistry,
@@ -12,9 +12,9 @@ from toposync.runtime.pipelines.operator_registry import (
     metadata_path_hint,
     payload_path_hint,
 )
-from toposync.runtime.pipelines.runtime import Lifecycle
 
 from ..constants import EXTENSION_ID, OPERATOR_ID_DIRECTOR_SOURCE
+from ..director.runtime import CinematicDirectorRuntime
 
 
 Priority = Literal["low", "medium", "high"]
@@ -117,46 +117,9 @@ class CinematicDirectorSourceConfig(BaseModel):
         return out
 
 
-class CinematicDirectorSourceRuntime(SourceOperatorRuntime):
-    def __init__(self, config: dict[str, object]) -> None:
-        self._config = CinematicDirectorSourceConfig.model_validate(config)
-        self._gate_open = True
-        self._gate_known = False
-
-    async def produce(self, context) -> object | None:  # noqa: ANN001
-        await self._consume_gate_packets(context)
-        return None
-
-    async def idle_sleep(self, context) -> None:  # noqa: ANN001
-        await context.sleep(max(0.1, 1.0 / float(self._config.fps)))
-
-    async def _consume_gate_packets(self, context) -> None:  # noqa: ANN001
-        gate_channel = context.inputs.get("gate")
-        if gate_channel is None:
-            self._gate_open = True
-            self._gate_known = True
-            return
-
-        if not self._gate_known:
-            self._gate_open = False
-
-        while True:
-            result = await gate_channel.get(timeout_s=0.0, cancel_event=context.cancel_event)
-            if not result.accepted:
-                break
-            packet = result.item
-            if packet is None:
-                continue
-            value = packet.payload.get("gate_open")
-            if isinstance(value, bool):
-                self._gate_open = value
-                self._gate_known = True
-            elif packet.lifecycle == Lifecycle.OPEN:
-                self._gate_open = True
-                self._gate_known = True
-            elif packet.lifecycle == Lifecycle.CLOSE:
-                self._gate_open = False
-                self._gate_known = True
+class CinematicDirectorSourceRuntime(CinematicDirectorRuntime):
+    def __init__(self, config: dict[str, object], dependencies: PipelineRuntimeDependencies) -> None:
+        super().__init__(CinematicDirectorSourceConfig.model_validate(config), dependencies)
 
 
 def _expression_hints() -> list[object]:
@@ -208,5 +171,5 @@ def register_cinematic_pipeline_operators(registry: OperatorRegistry) -> None:
         expression_hints=_expression_hints(),
         share_strategy="never",
         owner=EXTENSION_ID,
-        runtime_factory=lambda config, _deps: CinematicDirectorSourceRuntime(config),
+        runtime_factory=lambda config, deps: CinematicDirectorSourceRuntime(config, deps),
     )

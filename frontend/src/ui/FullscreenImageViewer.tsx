@@ -17,6 +17,7 @@ type Props = {
   index: number;
   onIndexChange: (index: number) => void;
   onClose: () => void;
+  onImageError?: (url: string) => void;
 };
 
 function getFullscreenElement(): Element | null {
@@ -75,7 +76,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || tag === "select" || Boolean((target as HTMLElement).isContentEditable);
 }
 
-export function FullscreenImageViewer({ open, items, index, onIndexChange, onClose }: Props): React.ReactElement | null {
+export function FullscreenImageViewer({ open, items, index, onIndexChange, onClose, onImageError }: Props): React.ReactElement | null {
   const { t } = i18n.useI18n();
   const total = items.length;
   const currentIndex = total > 0 ? Math.max(0, Math.min(index, total - 1)) : 0;
@@ -96,6 +97,11 @@ export function FullscreenImageViewer({ open, items, index, onIndexChange, onClo
     onClose();
     exitFullscreenIfActive();
   }, [onClose]);
+
+  useEffect(() => {
+    if (!open || total > 0) return;
+    close();
+  }, [close, open, total]);
 
   useEffect(() => {
     if (!open || index === currentIndex) return;
@@ -171,7 +177,12 @@ export function FullscreenImageViewer({ open, items, index, onIndexChange, onClo
         </button>
 
         <div className="fullscreenImageViewerImageBox">
-          <img className="fullscreenImageViewerImage" src={activeItem.url} alt={activeItem.label || ""} />
+          <img
+            className="fullscreenImageViewerImage"
+            src={activeItem.url}
+            alt={activeItem.label || ""}
+            onError={() => onImageError?.(activeItem.url)}
+          />
         </div>
 
         <button

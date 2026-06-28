@@ -311,6 +311,7 @@ export function MainScreen({
   const [imageModal, setImageModal] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
   const [isNotificationDetailsOpen, setIsNotificationDetailsOpen] = useState(false);
   const [notificationImageIndex, setNotificationImageIndex] = useState(0);
+  const [failedNotificationImageUrls, setFailedNotificationImageUrls] = useState<Set<string>>(() => new Set());
   const [fullscreenNotificationImageOpen, setFullscreenNotificationImageOpen] = useState(false);
   const [fullscreenNotificationImageIndex, setFullscreenNotificationImageIndex] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
@@ -421,8 +422,8 @@ export function MainScreen({
 
   const activeNotificationImages = useMemo(() => {
     if (!activeNotification) return [];
-    return notificationImageItems(activeNotification);
-  }, [activeNotification]);
+    return notificationImageItems(activeNotification).filter((item) => !failedNotificationImageUrls.has(item.url.trim()));
+  }, [activeNotification, failedNotificationImageUrls]);
 
   const activeNotificationImage = activeNotificationImages[notificationImageIndex] ?? null;
 
@@ -519,6 +520,17 @@ export function MainScreen({
     requestFullscreenImageViewer();
     setFullscreenNotificationImageIndex(index);
     setFullscreenNotificationImageOpen(true);
+  }, []);
+
+  const markNotificationImageFailed = useCallback((url: string) => {
+    const key = url.trim();
+    if (!key) return;
+    setFailedNotificationImageUrls((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
   }, []);
 
   const showPrevNotificationImage = useCallback(() => {
@@ -1082,7 +1094,8 @@ export function MainScreen({
                 const priorityClass =
                   priority === "high" ? "isHigh" : priority === "low" ? "isLow" : "isMedium";
                 const isActive = Boolean(activeNotificationId && n.id === activeNotificationId);
-                const thumbUrl = notificationThumbnailUrl(n);
+                const rawThumbUrl = notificationThumbnailUrl(n);
+                const thumbUrl = rawThumbUrl && !failedNotificationImageUrls.has(rawThumbUrl.trim()) ? rawThumbUrl : null;
                 return (
                   <button
                     className={["card", "cardButton", "notificationCard", isActive ? "isActive" : ""].filter(Boolean).join(" ")}
@@ -1120,7 +1133,14 @@ export function MainScreen({
                       </div>
 
                       {thumbUrl ? (
-                        <img className="notificationCardThumb" src={thumbUrl} alt="" loading="lazy" draggable={false} />
+                        <img
+                          className="notificationCardThumb"
+                          src={thumbUrl}
+                          alt=""
+                          loading="lazy"
+                          draggable={false}
+                          onError={() => markNotificationImageFailed(thumbUrl)}
+                        />
                       ) : null}
                     </div>
                   </button>
@@ -1318,7 +1338,12 @@ export function MainScreen({
                     aria-label={t("core.ui.image_viewer.open", {}, "Open image fullscreen")}
                     title={t("core.ui.image_viewer.open", {}, "Open image fullscreen")}
                   >
-                    <img className="notificationGalleryImage" src={activeNotificationImage.url} alt="" />
+                    <img
+                      className="notificationGalleryImage"
+                      src={activeNotificationImage.url}
+                      alt=""
+                      onError={() => markNotificationImageFailed(activeNotificationImage.url)}
+                    />
                   </button>
 
                   <button
@@ -1356,7 +1381,13 @@ export function MainScreen({
                         title={item.label}
                         aria-label={item.label}
                       >
-                        <img src={item.url} alt="" className="notificationGalleryThumbImage" loading="lazy" />
+                        <img
+                          src={item.url}
+                          alt=""
+                          className="notificationGalleryThumbImage"
+                          loading="lazy"
+                          onError={() => markNotificationImageFailed(item.url)}
+                        />
                       </button>
                     ))}
                   </div>
@@ -1393,6 +1424,7 @@ export function MainScreen({
         index={fullscreenNotificationImageIndex}
         onIndexChange={setFullscreenNotificationImageIndex}
         onClose={() => setFullscreenNotificationImageOpen(false)}
+        onImageError={markNotificationImageFailed}
       />
 
       <Modal

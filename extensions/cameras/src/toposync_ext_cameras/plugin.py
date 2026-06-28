@@ -28,11 +28,20 @@ from toposync.runtime.event_bus import EventBus
 from toposync.runtime.processing_diagnostics import collect_processing_server_diagnostics
 from toposync.runtime.pipelines.compiler import GraphCompileError, PipelineGraphCompiler
 from toposync.runtime.pipelines.distributed import HttpProcessingTransport, ProcessingTransportError
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
 from toposync.runtime.pipelines.templates import safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
 
-from .pipelines.operators import register_camera_pipeline_operators
+from .pipelines.operators import (
+    CameraSourceConfig,
+    ResolvedCameraSource,
+    _camera_hub_key,
+    _resolve_camera_source,
+    register_camera_pipeline_operators,
+)
+from .processing.camera_hub import get_global_camera_hub
 from .processing.mapping import ControlPointMapper
 from .pipelines.postprocess import (  # noqa: PLC2701
     _parse_calibrated_views_as_control_point_sets,
@@ -65,6 +74,8 @@ from .onvif import (
 
 
 NotificationPriority = Literal["low", "medium", "high"]
+RtspSnapshotTransportPolicy = Literal["tcp", "udp", "auto"]
+RtspSnapshotCaptureModePolicy = Literal["auto", "first_frame_first", "keyframe_first"]
 
 EXTENSION_ID = "com.toposync.cameras"
 CLIENT_CLOSED_REQUEST_STATUS = 499
@@ -83,6 +94,22 @@ CAMERA_MAPPING_REQUIRED_PRESETS = {
     "presence_area",
     "vehicle_stopped",
 }
+
+
+def _normalize_snapshot_transport_policy(value: Any) -> RtspSnapshotTransportPolicy:
+    text = str(value or "").strip().lower()
+    if text in {"tcp", "udp", "auto"}:
+        return text  # type: ignore[return-value]
+    return "auto"
+
+
+def _normalize_snapshot_capture_mode_policy(value: Any) -> RtspSnapshotCaptureModePolicy:
+    text = str(value or "").strip().lower()
+    if text in {"first_frame_first", "first-frame-first", "first"}:
+        return "first_frame_first"
+    if text in {"keyframe_first", "keyframe-first", "key"}:
+        return "keyframe_first"
+    return "auto"
 
 
 async def _raise_if_request_disconnected(request: Request) -> None:
@@ -107,6 +134,18 @@ class RtspSnapshotRequest(BaseModel):
     username: str = ""
     password: str = ""
     timeout_ms: int = Field(default=9000, ge=1500, le=30000)
+    transport_policy: RtspSnapshotTransportPolicy = "auto"
+    capture_mode_policy: RtspSnapshotCaptureModePolicy = "auto"
+
+    @field_validator("transport_policy", mode="before")
+    @classmethod
+    def _normalize_transport_policy(cls, value: Any) -> str:
+        return _normalize_snapshot_transport_policy(value)
+
+    @field_validator("capture_mode_policy", mode="before")
+    @classmethod
+    def _normalize_capture_mode_policy(cls, value: Any) -> str:
+        return _normalize_snapshot_capture_mode_policy(value)
 
 
 class RtspProbeRequest(BaseModel):
@@ -608,6 +647,14 @@ class RtspSnapshotResult:
     source: str
     transport: str
     capture_mode: str
+    backend: str = "ffmpeg"
+
+
+@dataclass(frozen=True, slots=True)
+class WarmSnapshotResult:
+    blob: bytes
+    backend: str
+    frame_age_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -616,6 +663,13 @@ class SnapshotCacheEntry:
     created_ts: float
     frame_ts: float
     headers: dict[str, str]
+
+
+@dataclass(slots=True)
+class SnapshotHubLeaseEntry:
+    hub_key: str
+    grabber: Any
+    expires_ts: float
 
 
 def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
@@ -630,7 +684,46 @@ def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
     return max(min_value, min(max_value, value))
 
 
-async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> RtspSnapshotResult:
+def _is_hevc_codec_hint(codec_hint: str) -> bool:
+    text = str(codec_hint or "").strip().lower()
+    return text in {"hevc", "h265", "h.265", "h-265"} or "hevc" in text or "h265" in text
+
+
+def _snapshot_capture_modes(
+    *,
+    codec_hint: str = "",
+    policy: RtspSnapshotCaptureModePolicy = "auto",
+) -> list[tuple[str, list[str]]]:
+    keyframe = ("keyframe", ["-skip_frame", "nokey"])
+    first_frame = ("first_frame", [])
+    if policy == "keyframe_first":
+        return [keyframe, first_frame]
+    if policy == "first_frame_first":
+        return [first_frame, keyframe]
+    if _is_hevc_codec_hint(codec_hint):
+        return [keyframe, first_frame]
+    return [first_frame, keyframe]
+
+
+def _snapshot_transports(policy: RtspSnapshotTransportPolicy) -> list[tuple[str, list[str]]]:
+    if policy == "tcp":
+        return [("tcp", ["-rtsp_transport", "tcp"])]
+    if policy == "udp":
+        return [("udp", ["-rtsp_transport", "udp"])]
+    return [
+        ("tcp", ["-rtsp_transport", "tcp"]),
+        ("udp", ["-rtsp_transport", "udp"]),
+    ]
+
+
+async def _ffmpeg_snapshot(
+    rtsp_url: str,
+    *,
+    timeout_ms: int,
+    transport_policy: RtspSnapshotTransportPolicy = "auto",
+    capture_mode_policy: RtspSnapshotCaptureModePolicy = "auto",
+    codec_hint: str = "",
+) -> RtspSnapshotResult:
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path is None:
         raise HTTPException(status_code=500, detail="ffmpeg is required to capture RTSP snapshots")
@@ -638,18 +731,16 @@ async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> RtspSnapshotRes
     timeout_s = max(1.5, float(timeout_ms) / 1000.0)
 
     # Some RTSP servers misbehave when clients negotiate audio+video; for snapshots we only need video.
-    # Prefer keyframes so HEVC restreams do not return a fast but damaged pre-IDR gray frame.
-    # A few servers only work reliably over UDP even when TCP is requested, and a first-frame fallback
-    # keeps compatibility with streams that do not expose useful keyframe metadata to FFmpeg.
-    capture_modes: list[tuple[str, list[str]]] = [
-        ("keyframe", ["-skip_frame", "nokey"]),
-        ("first_frame", []),
-    ]
+    # HEVC restreams can return a fast but damaged pre-IDR gray frame, so auto mode keeps keyframes
+    # first only for HEVC/H.265. H.264 and unknown streams prefer first-frame capture to avoid waiting
+    # for a long GOP on a cold connection.
+    capture_modes = _snapshot_capture_modes(codec_hint=codec_hint, policy=capture_mode_policy)
+    transports = _snapshot_transports(transport_policy)
     attempts: list[tuple[str, str, str, str, list[str], list[str]]] = []
     for capture_mode, capture_args in capture_modes:
         for source, url in _rtsp_url_candidates(rtsp_url):
-            attempts.append((source, "tcp", capture_mode, url, ["-rtsp_transport", "tcp"], capture_args))
-            attempts.append((source, "udp", capture_mode, url, ["-rtsp_transport", "udp"], capture_args))
+            for transport, rtsp_args in transports:
+                attempts.append((source, transport, capture_mode, url, rtsp_args, capture_args))
 
     started = time.monotonic()
     deadline = started + timeout_s
@@ -726,6 +817,34 @@ async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> RtspSnapshotRes
             )
 
     raise HTTPException(status_code=502, detail=last_error)
+
+
+async def _wait_for_grabber_frame(
+    grabber: Any,
+    *,
+    wait_ms: int,
+) -> tuple[Any | None, float]:
+    deadline = time.monotonic() + max(0.0, float(wait_ms) / 1000.0)
+    while True:
+        try:
+            frame, frame_ts = grabber.get_latest()
+        except Exception:
+            return None, 0.0
+        if frame is not None:
+            return frame, float(frame_ts or 0.0)
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            return None, 0.0
+        await asyncio.sleep(min(0.1, max(0.01, remaining)))
+
+
+def _encode_snapshot_frame(frame: Any, *, frame_ts: float) -> WarmSnapshotResult:
+    blob, _ext, _mime = _encode_image_bytes(frame, fmt="jpg", jpeg_quality=85)
+    age_seconds: float | None = None
+    if frame_ts > 0.0:
+        age_seconds = max(0.0, time.time() - float(frame_ts))
+    return WarmSnapshotResult(blob=blob, backend="camera-hub", frame_age_seconds=age_seconds)
 
 
 async def _ffmpeg_rtsp_probe(rtsp_url: str, *, timeout_ms: int) -> RtspProbeResponse:
@@ -951,6 +1070,179 @@ class CamerasExtension(BaseExtension):
             os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_FFMPEG_CONCURRENCY", "2") or "2"
         )
         snapshot_ffmpeg_sema = asyncio.Semaphore(max(1, snapshot_ffmpeg_concurrency))
+        snapshot_warm_wait_ms = _env_int(
+            "TOPOSYNC_CAMERA_SNAPSHOT_WARM_WAIT_MS",
+            5000,
+            min_value=0,
+            max_value=30000,
+        )
+        try:
+            snapshot_warm_lease_ttl_s = float(
+                os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_WARM_LEASE_TTL_S", "30") or "30"
+            )
+        except Exception:
+            snapshot_warm_lease_ttl_s = 30.0
+        snapshot_warm_lease_ttl_s = max(0.05, min(300.0, snapshot_warm_lease_ttl_s))
+        snapshot_hub_leases: dict[str, SnapshotHubLeaseEntry] = {}
+        snapshot_hub_release_tasks: dict[str, asyncio.Task[None]] = {}
+        snapshot_hub_lock = asyncio.Lock()
+
+        def _camera_source_codec_hint(source: dict[str, Any]) -> str:
+            video = source.get("video") if isinstance(source.get("video"), dict) else {}
+            return str(video.get("codec") or "").strip()
+
+        def _camera_source_fps_hint(source: dict[str, Any]) -> float:
+            video = source.get("video") if isinstance(source.get("video"), dict) else {}
+            try:
+                fps = float(video.get("fps") or 5.0)
+            except Exception:
+                fps = 5.0
+            if not math.isfinite(fps):
+                fps = 5.0
+            return max(1.0, min(60.0, fps))
+
+        async def _snapshot_hub_release_loop(cache_key: str) -> None:
+            while True:
+                release_hub_key = ""
+                async with snapshot_hub_lock:
+                    entry = snapshot_hub_leases.get(cache_key)
+                    if entry is None:
+                        if snapshot_hub_release_tasks.get(cache_key) is asyncio.current_task():
+                            snapshot_hub_release_tasks.pop(cache_key, None)
+                        return
+                    delay_s = float(entry.expires_ts) - time.time()
+                    if delay_s <= 0.0:
+                        release_hub_key = entry.hub_key
+                        snapshot_hub_leases.pop(cache_key, None)
+                        if snapshot_hub_release_tasks.get(cache_key) is asyncio.current_task():
+                            snapshot_hub_release_tasks.pop(cache_key, None)
+                        break
+                await asyncio.sleep(max(0.05, min(delay_s, snapshot_warm_lease_ttl_s)))
+
+            if release_hub_key:
+                try:
+                    await get_global_camera_hub().release(key=release_hub_key)
+                except Exception:
+                    return
+
+        def _ensure_snapshot_hub_release_task(cache_key: str) -> None:
+            task = snapshot_hub_release_tasks.get(cache_key)
+            if task is not None and not task.done():
+                return
+            snapshot_hub_release_tasks[cache_key] = asyncio.create_task(
+                _snapshot_hub_release_loop(cache_key),
+                name=f"toposync.camera_snapshot_lease:{cache_key}",
+            )
+
+        async def _shutdown_snapshot_hub_leases() -> None:
+            tasks = list(snapshot_hub_release_tasks.values())
+            for task in tasks:
+                task.cancel()
+            release_keys: list[str] = []
+            async with snapshot_hub_lock:
+                release_keys = [entry.hub_key for entry in snapshot_hub_leases.values()]
+                snapshot_hub_leases.clear()
+                snapshot_hub_release_tasks.clear()
+            for hub_key in release_keys:
+                try:
+                    await get_global_camera_hub().release(key=hub_key)
+                except Exception:
+                    pass
+
+        register_extension_shutdown_callback(app, _shutdown_snapshot_hub_leases)
+
+        async def _resolve_camera_snapshot_source(
+            request: Request,
+            *,
+            camera_id: str,
+            source_id: str,
+            source: dict[str, Any],
+        ) -> ResolvedCameraSource:
+            try:
+                deps = PipelineRuntimeDependencies(
+                    config_store=_config_store(request),
+                    services=_services(request),
+                )
+                return await _resolve_camera_source(
+                    CameraSourceConfig(camera_id=camera_id, source_id=source_id, backend="auto"),
+                    deps,
+                )
+            except Exception:
+                url = await _resolve_camera_rtsp_url_for_probe(
+                    request,
+                    camera_id,
+                    source_id=source_id,
+                )
+                return ResolvedCameraSource(
+                    rtsp_url=url,
+                    fps=_camera_source_fps_hint(source),
+                    camera_id=camera_id,
+                    camera_name="",
+                    source_id=source_id or str(source.get("id") or "").strip() or "default",
+                    source_name=str(source.get("name") or "").strip(),
+                    view_id=str(source.get("view_id") or "").strip(),
+                    role=str(source.get("role") or "").strip() or "custom",
+                    clock_domain=f"device:{camera_id}" if camera_id else "device:adhoc",
+                    transport=get_camera_source_origin_type(source),
+                    used_ingest=False,
+                    ingest_mode="direct",
+                )
+
+        async def _capture_warm_camera_snapshot(
+            *,
+            cache_key: str,
+            resolved: ResolvedCameraSource,
+        ) -> WarmSnapshotResult | None:
+            hub_key = _camera_hub_key(
+                camera_id=resolved.camera_id,
+                source_id=resolved.source_id,
+                rtsp_url=resolved.rtsp_url,
+                backend="auto",
+            )
+            expires_ts = time.time() + snapshot_warm_lease_ttl_s
+            old_hub_key = ""
+            grabber: Any | None = None
+            async with snapshot_hub_lock:
+                lease = snapshot_hub_leases.get(cache_key)
+                if lease is not None and lease.hub_key == hub_key:
+                    lease.expires_ts = expires_ts
+                    grabber = lease.grabber
+                    _ensure_snapshot_hub_release_task(cache_key)
+                elif lease is not None:
+                    old_hub_key = lease.hub_key
+                    snapshot_hub_leases.pop(cache_key, None)
+
+            if old_hub_key:
+                try:
+                    await get_global_camera_hub().release(key=old_hub_key)
+                except Exception:
+                    pass
+
+            if grabber is None:
+                try:
+                    grabber = await get_global_camera_hub().acquire(
+                        key=hub_key,
+                        rtsp_url=resolved.rtsp_url,
+                        target_fps=resolved.fps,
+                        backend="auto",
+                    )
+                except Exception:
+                    return None
+                async with snapshot_hub_lock:
+                    snapshot_hub_leases[cache_key] = SnapshotHubLeaseEntry(
+                        hub_key=hub_key,
+                        grabber=grabber,
+                        expires_ts=expires_ts,
+                    )
+                    _ensure_snapshot_hub_release_task(cache_key)
+
+            frame, frame_ts = await _wait_for_grabber_frame(grabber, wait_ms=snapshot_warm_wait_ms)
+            if frame is None:
+                return None
+            try:
+                return _encode_snapshot_frame(frame, frame_ts=frame_ts)
+            except Exception:
+                return None
 
         onvif_discover_lock = asyncio.Lock()
         onvif_discover_cache_at = 0.0
@@ -2152,7 +2444,7 @@ class CamerasExtension(BaseExtension):
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
             key = hashlib.sha256(url.encode("utf-8", errors="ignore")).hexdigest()[:24]
-            cache_key = f"rtsp:{key}"
+            cache_key = f"rtsp:{key}:{body.transport_policy}:{body.capture_mode_policy}"
             lock = _get_lock(cache_key)
             async with lock:
                 now = time.time()
@@ -2163,9 +2455,15 @@ class CamerasExtension(BaseExtension):
                     )
 
                 async with snapshot_ffmpeg_sema:
-                    result = await _ffmpeg_snapshot(url, timeout_ms=body.timeout_ms)
+                    result = await _ffmpeg_snapshot(
+                        url,
+                        timeout_ms=body.timeout_ms,
+                        transport_policy=body.transport_policy,
+                        capture_mode_policy=body.capture_mode_policy,
+                    )
             headers = {
                 "Cache-Control": "no-store",
+                "X-Toposync-Snapshot-Backend": result.backend,
                 "X-Toposync-Snapshot-Source": result.source,
                 "X-Toposync-Snapshot-Transport": result.transport,
                 "X-Toposync-Snapshot-Mode": result.capture_mode,
@@ -2205,16 +2503,49 @@ class CamerasExtension(BaseExtension):
                         content=cached.blob, media_type="image/jpeg", headers=cached.headers
                     )
 
-                url = await _resolve_camera_rtsp_url_for_probe(
+                codec_hint = _camera_source_codec_hint(source)
+                resolved = await _resolve_camera_snapshot_source(
                     request,
-                    cid,
+                    camera_id=cid,
                     source_id=resolved_source_id,
+                    source=source,
                 )
 
+                warm = await _capture_warm_camera_snapshot(
+                    cache_key=cache_key,
+                    resolved=resolved,
+                )
+                if warm is not None:
+                    headers = {
+                        "Cache-Control": "no-store",
+                        "X-Toposync-Snapshot-Backend": warm.backend,
+                        "X-Toposync-Snapshot-Source": "configured",
+                        "X-Toposync-Snapshot-Transport": "shared",
+                        "X-Toposync-Snapshot-Mode": "latest_frame",
+                    }
+                    if warm.frame_age_seconds is not None:
+                        headers["X-Toposync-Snapshot-Frame-Age-Seconds"] = (
+                            f"{float(warm.frame_age_seconds):.3f}"
+                        )
+                    snapshot_cache[cache_key] = SnapshotCacheEntry(
+                        blob=warm.blob,
+                        created_ts=time.time(),
+                        frame_ts=time.time(),
+                        headers=headers,
+                    )
+                    return Response(content=warm.blob, media_type="image/jpeg", headers=headers)
+
                 async with snapshot_ffmpeg_sema:
-                    result = await _ffmpeg_snapshot(url, timeout_ms=snapshot_timeout_ms)
+                    result = await _ffmpeg_snapshot(
+                        resolved.rtsp_url,
+                        timeout_ms=snapshot_timeout_ms,
+                        transport_policy="tcp",
+                        capture_mode_policy="auto",
+                        codec_hint=codec_hint,
+                    )
                 headers = {
                     "Cache-Control": "no-store",
+                    "X-Toposync-Snapshot-Backend": result.backend,
                     "X-Toposync-Snapshot-Source": result.source,
                     "X-Toposync-Snapshot-Transport": result.transport,
                     "X-Toposync-Snapshot-Mode": result.capture_mode,

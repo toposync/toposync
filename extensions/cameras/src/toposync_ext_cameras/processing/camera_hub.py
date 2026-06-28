@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -172,3 +174,45 @@ class CameraHub:
                 },
             )
         return out
+
+
+def _read_env_float(name: str, fallback: float, *, min_value: float, max_value: float) -> float:
+    raw = str(os.getenv(name, "") or "").strip()
+    if not raw:
+        return float(fallback)
+    try:
+        value = float(raw)
+    except Exception:
+        return float(fallback)
+    if not math.isfinite(value):
+        return float(fallback)
+    return max(float(min_value), min(float(max_value), float(value)))
+
+
+def _default_frame_grabber_factory(rtsp_url: str, *, target_fps: float, backend: str) -> Any:
+    from .frame_grabber import FrameGrabber
+
+    return FrameGrabber(rtsp_url, target_fps=float(target_fps), backend=str(backend))
+
+
+_GLOBAL_CAMERA_HUB: CameraHub | None = None
+
+
+def get_global_camera_hub() -> CameraHub:
+    global _GLOBAL_CAMERA_HUB
+    if _GLOBAL_CAMERA_HUB is None:
+        _GLOBAL_CAMERA_HUB = CameraHub(
+            frame_grabber_factory=_default_frame_grabber_factory,
+            start_timeout_s=_read_env_float(
+                "TOPOSYNC_CAMERA_HUB_START_TIMEOUT_S",
+                12.0,
+                min_value=1.0,
+                max_value=120.0,
+            ),
+        )
+    return _GLOBAL_CAMERA_HUB
+
+
+def set_global_camera_hub_for_tests(hub: CameraHub | None) -> None:
+    global _GLOBAL_CAMERA_HUB
+    _GLOBAL_CAMERA_HUB = hub

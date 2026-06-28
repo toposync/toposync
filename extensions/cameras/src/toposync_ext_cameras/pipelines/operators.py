@@ -43,7 +43,7 @@ from toposync.runtime.pipelines.telemetry import (
 )
 
 from ..processing.frame_grabber import FrameGrabber
-from ..processing.camera_hub import CameraHub
+from ..processing.camera_hub import get_global_camera_hub
 from ..processing.motion import MotionDetector
 from ..processing.motion_bgsub import AdaptiveBackgroundMotionDetector
 from ..processing.motion_sample_bg import SampleBackgroundMotionDetector
@@ -205,15 +205,7 @@ def _is_hard_capture_open_error(message: str) -> bool:
     )
 
 
-_GLOBAL_CAMERA_HUB = CameraHub(
-    frame_grabber_factory=_frame_grabber_factory,
-    start_timeout_s=_read_env_float(
-        "TOPOSYNC_CAMERA_HUB_START_TIMEOUT_S",
-        12.0,
-        min_value=1.0,
-        max_value=120.0,
-    ),
-)
+_GLOBAL_CAMERA_HUB = get_global_camera_hub()
 
 
 @dataclass(frozen=True, slots=True)

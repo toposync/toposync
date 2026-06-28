@@ -34,11 +34,17 @@ from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
 from toposync.runtime.pipelines.templates import safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
 
+from .capture_service import (
+    CameraCaptureRequest,
+    camera_capture_lease_as_dict,
+    camera_capture_resolved_as_dict,
+)
 from .pipelines.operators import (
     CameraSourceConfig,
     ResolvedCameraSource,
     _camera_hub_key,
     _resolve_camera_source,
+    get_global_camera_capture_service,
     register_camera_pipeline_operators,
 )
 from .processing.camera_hub import get_global_camera_hub
@@ -1807,6 +1813,135 @@ class CamerasExtension(BaseExtension):
         services.register("cameras.ptz.continuous_move", _svc_ptz_continuous_move)
         services.register("cameras.ptz.stop", _svc_ptz_stop)
         app.state.camera_source_health_store = get_global_source_health_store()
+        capture_service = get_global_camera_capture_service()
+
+        def _capture_dependencies() -> PipelineRuntimeDependencies:
+            store = getattr(app.state, "config_store", None)
+            if store is None:
+                raise RuntimeError("Toposync config_store not available")
+            return PipelineRuntimeDependencies(config_store=store, services=services)
+
+        def _capture_request(
+            *,
+            owner_id: str,
+            camera_id: str = "",
+            source_id: str = "",
+            rtsp_url: str = "",
+            username: str = "",
+            password: str = "",
+            backend: str = "auto",
+            fps: float | None = None,
+            pipeline_name: str = "",
+            node_id: str = "",
+        ) -> CameraCaptureRequest:
+            return CameraCaptureRequest(
+                owner_id=owner_id,
+                camera_id=camera_id,
+                source_id=source_id,
+                rtsp_url=rtsp_url,
+                username=username,
+                password=password,
+                backend=backend,
+                fps=fps,
+                pipeline_name=pipeline_name,
+                node_id=node_id,
+            )
+
+        async def _svc_capture_resolve(
+            *,
+            owner_id: str = "service:resolve",
+            camera_id: str = "",
+            source_id: str = "",
+            rtsp_url: str = "",
+            username: str = "",
+            password: str = "",
+            backend: str = "auto",
+            fps: float | None = None,
+            pipeline_name: str = "",
+            node_id: str = "",
+        ) -> dict[str, Any]:
+            resolved = await capture_service.resolve(
+                _capture_request(
+                    owner_id=owner_id,
+                    camera_id=camera_id,
+                    source_id=source_id,
+                    rtsp_url=rtsp_url,
+                    username=username,
+                    password=password,
+                    backend=backend,
+                    fps=fps,
+                    pipeline_name=pipeline_name,
+                    node_id=node_id,
+                ),
+                _capture_dependencies(),
+            )
+            return camera_capture_resolved_as_dict(resolved)
+
+        async def _svc_capture_open(
+            *,
+            owner_id: str,
+            camera_id: str = "",
+            source_id: str = "",
+            rtsp_url: str = "",
+            username: str = "",
+            password: str = "",
+            backend: str = "auto",
+            fps: float | None = None,
+            pipeline_name: str = "",
+            node_id: str = "",
+        ) -> dict[str, Any]:
+            lease = await capture_service.open(
+                _capture_request(
+                    owner_id=owner_id,
+                    camera_id=camera_id,
+                    source_id=source_id,
+                    rtsp_url=rtsp_url,
+                    username=username,
+                    password=password,
+                    backend=backend,
+                    fps=fps,
+                    pipeline_name=pipeline_name,
+                    node_id=node_id,
+                ),
+                _capture_dependencies(),
+            )
+            return camera_capture_lease_as_dict(lease)
+
+        async def _svc_capture_get_latest(
+            *,
+            lease_id: str,
+            min_frame_ts: float = 0.0,
+        ) -> dict[str, Any]:
+            frame = await capture_service.get_latest(
+                lease_id=str(lease_id or "").strip(),
+                min_frame_ts=float(min_frame_ts or 0.0),
+            )
+            return {
+                "lease_id": frame.lease_id,
+                "frame": frame.frame,
+                "frame_ts": frame.frame_ts,
+                "width": frame.width,
+                "height": frame.height,
+                "fresh": frame.fresh,
+                "released": frame.released,
+                "metrics": frame.metrics,
+                "source_health": frame.source_health,
+                "resolved": frame.resolved,
+            }
+
+        async def _svc_capture_release(*, lease_id: str) -> dict[str, Any]:
+            await capture_service.release(str(lease_id or "").strip())
+            return {"ok": True}
+
+        async def _svc_capture_release_owner(*, owner_id: str) -> dict[str, Any]:
+            await capture_service.release_owner(str(owner_id or "").strip())
+            return {"ok": True}
+
+        services.register("cameras.capture.resolve", _svc_capture_resolve)
+        services.register("cameras.capture.open", _svc_capture_open)
+        services.register("cameras.capture.get_latest", _svc_capture_get_latest)
+        services.register("cameras.capture.release", _svc_capture_release)
+        services.register("cameras.capture.release_owner", _svc_capture_release_owner)
 
         def _svc_source_health_snapshot(
             *,

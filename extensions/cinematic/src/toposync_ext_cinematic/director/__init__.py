@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .camera_pool import CameraPool, CameraPoolFrame
 from .selector import select_next_shot
 from .state import (
     CameraCandidate,
@@ -14,6 +15,8 @@ from .state import (
 
 __all__ = [
     "CameraCandidate",
+    "CameraPool",
+    "CameraPoolFrame",
     "CutPolicy",
     "DirectorMode",
     "DirectorState",

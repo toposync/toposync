@@ -618,6 +618,18 @@ class SnapshotCacheEntry:
     headers: dict[str, str]
 
 
+def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = int(default)
+    else:
+        value = int(default)
+    return max(min_value, min(max_value, value))
+
+
 async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> RtspSnapshotResult:
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path is None:
@@ -929,6 +941,12 @@ class CamerasExtension(BaseExtension):
         snapshot_cache: dict[str, SnapshotCacheEntry] = {}
         snapshot_locks: dict[str, asyncio.Lock] = {}
         snapshot_cache_ttl_s = float(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_TTL_S", "0.8") or "0.8")
+        snapshot_timeout_ms = _env_int(
+            "TOPOSYNC_CAMERA_SNAPSHOT_TIMEOUT_MS",
+            25000,
+            min_value=1500,
+            max_value=60000,
+        )
         snapshot_ffmpeg_concurrency = int(
             os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_FFMPEG_CONCURRENCY", "2") or "2"
         )
@@ -2194,7 +2212,7 @@ class CamerasExtension(BaseExtension):
                 )
 
                 async with snapshot_ffmpeg_sema:
-                    result = await _ffmpeg_snapshot(url, timeout_ms=9000)
+                    result = await _ffmpeg_snapshot(url, timeout_ms=snapshot_timeout_ms)
                 headers = {
                     "Cache-Control": "no-store",
                     "X-Toposync-Snapshot-Source": result.source,

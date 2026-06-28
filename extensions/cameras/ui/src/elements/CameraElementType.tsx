@@ -47,6 +47,8 @@ import type {
   CameraConnectionType,
   CameraControlPoint,
   CameraControlPointSet,
+  CameraProjectionBoundaryEdge,
+  CameraProjectionBoundaryPoint,
   CameraProjectionCornerKey,
   CameraProjectionRefinementPoint,
   CameraProjectionWorldQuad,
@@ -889,11 +891,15 @@ function CameraEditor({
 }
 
 const CALIBRATION_CORNERS: CameraProjectionCornerKey[] = ["top_left", "top_right", "bottom_right", "bottom_left"];
+const CALIBRATION_BOUNDARY_EDGES: CameraProjectionBoundaryEdge[] = ["top", "right", "bottom", "left"];
 const MAX_CALIBRATION_REFINEMENT_POINTS = 24;
+const MAX_CALIBRATION_BOUNDARY_POINTS = 32;
+const MAX_CALIBRATION_BOUNDARY_POINTS_PER_EDGE = 8;
 const CALIBRATION_PREVIEW_GRID_DIVISIONS = 34;
 const LOCAL_REFINEMENT_SIGMA_UV = 0.22;
 const LOCAL_REFINEMENT_EDGE_LOW = 0.015;
 const LOCAL_REFINEMENT_EDGE_HIGH = 0.12;
+const BOUNDARY_REFINEMENT_FALLOFF_UV = 0.48;
 
 type CalibrationDragState =
   | {
@@ -901,6 +907,7 @@ type CalibrationDragState =
       startWorld: { x: number; z: number };
       startQuad: CameraProjectionWorldQuad;
       startRefinementPoints: CameraProjectionRefinementPoint[];
+      startBoundaryPoints: CameraProjectionBoundaryPoint[];
     }
   | {
       kind: "corner";
@@ -913,10 +920,18 @@ type CalibrationDragState =
       startAngle: number;
       startQuad: CameraProjectionWorldQuad;
       startRefinementPoints: CameraProjectionRefinementPoint[];
+      startBoundaryPoints: CameraProjectionBoundaryPoint[];
       snappedDelta: number;
     }
   | {
       kind: "refinement";
+      pointId: string;
+      pointerStartWorld: { x: number; z: number };
+      created: boolean;
+      moved: boolean;
+    }
+  | {
+      kind: "boundary";
       pointId: string;
       pointerStartWorld: { x: number; z: number };
       created: boolean;
@@ -929,6 +944,8 @@ type CalibrationHoverState =
   | { kind: "rotate" }
   | { kind: "refinement"; pointId: string }
   | { kind: "new_refinement"; image: { x: number; y: number }; world: { x: number; z: number } }
+  | { kind: "boundary"; pointId: string }
+  | { kind: "new_boundary"; edge: CameraProjectionBoundaryEdge; t: number; image: { x: number; y: number }; world: { x: number; z: number } }
   | null;
 
 type CalibrationRotateHandleInfo = {
@@ -1005,12 +1022,68 @@ function refinementPointsForView(view: CameraCalibratedView): CameraProjectionRe
   return view.projection_model.refinement?.points ?? [];
 }
 
+function boundaryPointsForView(view: CameraCalibratedView): CameraProjectionBoundaryPoint[] {
+  return view.projection_model.boundary_refinement?.points ?? [];
+}
+
 function cloneRefinementPoints(points: CameraProjectionRefinementPoint[]): CameraProjectionRefinementPoint[] {
   return points.map((point) => ({
     id: point.id,
     image: { ...point.image },
     world: { ...point.world },
   }));
+}
+
+function boundaryImageForEdge(edge: CameraProjectionBoundaryEdge, t: number): { x: number; y: number } {
+  const normalizedT = clamp(t, 0, 1);
+  switch (edge) {
+    case "top":
+      return { x: normalizedT, y: 0 };
+    case "right":
+      return { x: 1, y: normalizedT };
+    case "bottom":
+      return { x: 1 - normalizedT, y: 1 };
+    case "left":
+      return { x: 0, y: 1 - normalizedT };
+  }
+}
+
+function cloneBoundaryPoints(points: CameraProjectionBoundaryPoint[]): CameraProjectionBoundaryPoint[] {
+  return points.map((point) => ({
+    id: point.id,
+    edge: point.edge,
+    t: point.t,
+    image: { ...point.image },
+    world: { ...point.world },
+  }));
+}
+
+function normalizeBoundaryPoints(points: CameraProjectionBoundaryPoint[]): CameraProjectionBoundaryPoint[] {
+  const perEdge = new Map<CameraProjectionBoundaryEdge, number>();
+  const normalized: CameraProjectionBoundaryPoint[] = [];
+  for (const point of points) {
+    if (!CALIBRATION_BOUNDARY_EDGES.includes(point.edge)) continue;
+    if (
+      !Number.isFinite(point.t) ||
+      point.t < 0 ||
+      point.t > 1 ||
+      !Number.isFinite(point.world.x) ||
+      !Number.isFinite(point.world.z)
+    ) {
+      continue;
+    }
+    const edgeCount = perEdge.get(point.edge) ?? 0;
+    if (edgeCount >= MAX_CALIBRATION_BOUNDARY_POINTS_PER_EDGE || normalized.length >= MAX_CALIBRATION_BOUNDARY_POINTS) continue;
+    perEdge.set(point.edge, edgeCount + 1);
+    normalized.push({
+      id: point.id || createUniqueId(),
+      edge: point.edge,
+      t: point.t,
+      image: boundaryImageForEdge(point.edge, point.t),
+      world: { x: point.world.x, z: point.world.z },
+    });
+  }
+  return normalized;
 }
 
 function withRefinementPoints(
@@ -1050,10 +1123,53 @@ function withRefinementPoints(
   };
 }
 
+function withBoundaryPoints(
+  view: CameraCalibratedView,
+  points: CameraProjectionBoundaryPoint[],
+  status: "ready" | "estimated" = "ready",
+): CameraCalibratedView {
+  const normalized = normalizeBoundaryPoints(points);
+  return {
+    ...view,
+    projection_model: {
+      ...view.projection_model,
+      boundary_refinement: normalized.length > 0 ? { model: "edge_handles_v1", points: normalized } : null,
+    },
+    projection_quality: {
+      ...(view.projection_quality ?? {}),
+      status,
+      estimated: status === "estimated",
+    },
+  };
+}
+
+function withRefinementAndBoundaryPoints(
+  view: CameraCalibratedView,
+  refinementPoints: CameraProjectionRefinementPoint[],
+  boundaryPoints: CameraProjectionBoundaryPoint[],
+  status: "ready" | "estimated" = "ready",
+): CameraCalibratedView {
+  return withBoundaryPoints(withRefinementPoints(view, refinementPoints, status), boundaryPoints, status);
+}
+
 function translateRefinementPoints(
   points: CameraProjectionRefinementPoint[],
   delta: { x: number; z: number },
 ): CameraProjectionRefinementPoint[] {
+  return points.map((point) => ({
+    ...point,
+    image: { ...point.image },
+    world: {
+      x: point.world.x + delta.x,
+      z: point.world.z + delta.z,
+    },
+  }));
+}
+
+function translateBoundaryPoints(
+  points: CameraProjectionBoundaryPoint[],
+  delta: { x: number; z: number },
+): CameraProjectionBoundaryPoint[] {
   return points.map((point) => ({
     ...point,
     image: { ...point.image },
@@ -1080,6 +1196,18 @@ function rotateRefinementPoints(
   center: { x: number; z: number },
   radians: number,
 ): CameraProjectionRefinementPoint[] {
+  return points.map((point) => ({
+    ...point,
+    image: { ...point.image },
+    world: rotateWorldPoint(point.world, center, radians),
+  }));
+}
+
+function rotateBoundaryPoints(
+  points: CameraProjectionBoundaryPoint[],
+  center: { x: number; z: number },
+  radians: number,
+): CameraProjectionBoundaryPoint[] {
   return points.map((point) => ({
     ...point,
     image: { ...point.image },
@@ -1339,6 +1467,88 @@ function localRefinementDelta(view: CameraCalibratedView, hImageToWorld: number[
   return { x: edge * (totalX / totalWeight), z: edge * (totalZ / totalWeight) };
 }
 
+function boundaryAxis(edge: CameraProjectionBoundaryEdge, image: { x: number; y: number }): number {
+  if (edge === "top" || edge === "right") return edge === "top" ? image.x : image.y;
+  return edge === "bottom" ? 1 - image.x : 1 - image.y;
+}
+
+function boundaryDistance(edge: CameraProjectionBoundaryEdge, image: { x: number; y: number }): number {
+  switch (edge) {
+    case "top":
+      return image.y;
+    case "right":
+      return 1 - image.x;
+    case "bottom":
+      return 1 - image.y;
+    case "left":
+      return image.x;
+  }
+}
+
+function boundaryInfluence(edge: CameraProjectionBoundaryEdge, image: { x: number; y: number }): number {
+  const distance = boundaryDistance(edge, image);
+  if (distance <= 1e-9) return 1;
+  const normalized = clamp(distance / BOUNDARY_REFINEMENT_FALLOFF_UV, 0, 1);
+  const eased = normalized * normalized * (3 - 2 * normalized);
+  return 1 - eased;
+}
+
+function boundaryDeltaAtEdge(
+  points: Array<CameraProjectionBoundaryPoint & { delta: { x: number; z: number } }>,
+  edge: CameraProjectionBoundaryEdge,
+  t: number,
+): { x: number; z: number } {
+  const edgePoints = points
+    .filter((point) => point.edge === edge)
+    .sort((a, b) => a.t - b.t);
+  if (edgePoints.length === 0) return { x: 0, z: 0 };
+  const anchors = [
+    { t: 0, delta: { x: 0, z: 0 } },
+    ...edgePoints.map((point) => ({ t: point.t, delta: point.delta })),
+    { t: 1, delta: { x: 0, z: 0 } },
+  ];
+  const normalizedT = clamp(t, 0, 1);
+  for (let index = 0; index < anchors.length - 1; index += 1) {
+    const left = anchors[index];
+    const right = anchors[index + 1];
+    if (normalizedT < left.t || normalizedT > right.t) continue;
+    const span = right.t - left.t;
+    const local = span > 1e-9 ? (normalizedT - left.t) / span : 0;
+    return {
+      x: left.delta.x + (right.delta.x - left.delta.x) * local,
+      z: left.delta.z + (right.delta.z - left.delta.z) * local,
+    };
+  }
+  return anchors[anchors.length - 1].delta;
+}
+
+function boundaryRefinementDelta(view: CameraCalibratedView, hImageToWorld: number[], image: { x: number; y: number }): { x: number; z: number } {
+  const sourcePoints = boundaryPointsForView(view);
+  if (sourcePoints.length === 0) return { x: 0, z: 0 };
+  const displacements: Array<CameraProjectionBoundaryPoint & { delta: { x: number; z: number } }> = [];
+  for (const point of sourcePoints) {
+    const boundaryImage = boundaryImageForEdge(point.edge, point.t);
+    const base = mapCalibrationHomography(hImageToWorld, boundaryImage);
+    if (!base) continue;
+    displacements.push({
+      ...point,
+      image: boundaryImage,
+      delta: { x: point.world.x - base.x, z: point.world.z - base.y },
+    });
+  }
+  if (displacements.length === 0) return { x: 0, z: 0 };
+  let totalX = 0;
+  let totalZ = 0;
+  for (const edge of CALIBRATION_BOUNDARY_EDGES) {
+    const t = boundaryAxis(edge, image);
+    const delta = boundaryDeltaAtEdge(displacements, edge, t);
+    const influence = boundaryInfluence(edge, image);
+    totalX += delta.x * influence;
+    totalZ += delta.z * influence;
+  }
+  return { x: totalX, z: totalZ };
+}
+
 function mapCalibrationImageToWorld(
   view: CameraCalibratedView,
   hImageToWorld: number[],
@@ -1346,8 +1556,47 @@ function mapCalibrationImageToWorld(
 ): { x: number; z: number } | null {
   const base = mapCalibrationHomography(hImageToWorld, image);
   if (!base) return null;
-  const delta = localRefinementDelta(view, hImageToWorld, image);
-  return { x: base.x + delta.x, z: base.y + delta.z };
+  const boundaryDelta = boundaryRefinementDelta(view, hImageToWorld, image);
+  const refinementDelta = localRefinementDelta(view, hImageToWorld, image);
+  return { x: base.x + boundaryDelta.x + refinementDelta.x, z: base.y + boundaryDelta.z + refinementDelta.z };
+}
+
+function calibrationGridCoordinates(view: CameraCalibratedView, divisions: number): { xs: number[]; ys: number[] } {
+  const xs = new Set<number>();
+  const ys = new Set<number>();
+  for (let index = 0; index <= divisions; index += 1) {
+    xs.add(index / divisions);
+    ys.add(index / divisions);
+  }
+  for (const point of boundaryPointsForView(view)) {
+    const image = boundaryImageForEdge(point.edge, point.t);
+    xs.add(Number(image.x.toFixed(8)));
+    ys.add(Number(image.y.toFixed(8)));
+  }
+  return {
+    xs: [...xs].sort((a, b) => a - b),
+    ys: [...ys].sort((a, b) => a - b),
+  };
+}
+
+function triangleSignedArea(a: { x: number; z: number }, b: { x: number; z: number }, c: { x: number; z: number }): number {
+  return ((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x)) / 2;
+}
+
+function calibrationMeshHasFoldover(mesh: CalibrationMeshData): boolean {
+  let sign = 0;
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const a = mesh.vertices[mesh.indices[index]];
+    const b = mesh.vertices[mesh.indices[index + 1]];
+    const c = mesh.vertices[mesh.indices[index + 2]];
+    if (!a || !b || !c) continue;
+    const area = triangleSignedArea(a.world, b.world, c.world);
+    if (!Number.isFinite(area) || Math.abs(area) <= 1e-9) return true;
+    const currentSign = Math.sign(area);
+    if (sign === 0) sign = currentSign;
+    else if (currentSign !== sign) return true;
+  }
+  return false;
 }
 
 function buildCalibrationMesh(view: CameraCalibratedView, divisions = CALIBRATION_PREVIEW_GRID_DIVISIONS): CalibrationMeshData | null {
@@ -1363,13 +1612,14 @@ function buildCalibrationMesh(view: CameraCalibratedView, divisions = CALIBRATIO
   const vertices: CalibrationMeshVertex[] = [];
   const indices: number[] = [];
   const vertexByGrid = new Map<string, number>();
+  const grid = calibrationGridCoordinates(view, divisions);
   const getVertex = (gx: number, gy: number): number | null => {
     const key = `${gx}:${gy}`;
     const existing = vertexByGrid.get(key);
     if (existing != null) return existing;
     const image = {
-      x: left + ((right - left) * gx) / divisions,
-      y: top + ((bottom - top) * gy) / divisions,
+      x: left + (right - left) * grid.xs[gx],
+      y: top + (bottom - top) * grid.ys[gy],
     };
     const world = mapCalibrationImageToWorld(view, hImageToWorld, image);
     if (!world) return null;
@@ -1379,8 +1629,8 @@ function buildCalibrationMesh(view: CameraCalibratedView, divisions = CALIBRATIO
     return index;
   };
 
-  for (let gy = 0; gy < divisions; gy += 1) {
-    for (let gx = 0; gx < divisions; gx += 1) {
+  for (let gy = 0; gy < grid.ys.length - 1; gy += 1) {
+    for (let gx = 0; gx < grid.xs.length - 1; gx += 1) {
       const a = getVertex(gx, gy);
       const b = getVertex(gx + 1, gy);
       const c = getVertex(gx + 1, gy + 1);
@@ -1389,7 +1639,9 @@ function buildCalibrationMesh(view: CameraCalibratedView, divisions = CALIBRATIO
       indices.push(a, b, c, a, c, d);
     }
   }
-  return indices.length >= 3 ? { vertices, indices } : null;
+  if (indices.length < 3) return null;
+  const mesh = { vertices, indices };
+  return calibrationMeshHasFoldover(mesh) ? null : mesh;
 }
 
 function barycentricForWorldPoint(
@@ -1470,6 +1722,104 @@ function nearestRefinementPointByScreen(
   return best?.point ?? null;
 }
 
+function nearestBoundaryPointByScreen(
+  screen: { x: number; y: number },
+  view: CameraCalibratedView,
+  viewport: Viewport2DContext,
+  thresholdPx: number,
+): CameraProjectionBoundaryPoint | null {
+  let best: { point: CameraProjectionBoundaryPoint; distanceSquared: number } | null = null;
+  for (const point of boundaryPointsForView(view)) {
+    const pointScreen = viewport.worldToScreen(point.world);
+    const distanceSquared = screenDistanceSquared(screen, pointScreen);
+    if (distanceSquared > thresholdPx * thresholdPx) continue;
+    if (!best || distanceSquared < best.distanceSquared) best = { point, distanceSquared };
+  }
+  return best?.point ?? null;
+}
+
+function canAddBoundaryPoint(view: CameraCalibratedView, edge: CameraProjectionBoundaryEdge): boolean {
+  const points = boundaryPointsForView(view);
+  if (points.length >= MAX_CALIBRATION_BOUNDARY_POINTS) return false;
+  return points.filter((point) => point.edge === edge).length < MAX_CALIBRATION_BOUNDARY_POINTS_PER_EDGE;
+}
+
+function distanceSquaredToSegment(
+  point: { x: number; y: number },
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+): { distanceSquared: number; t: number } {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared <= 1e-12) return { distanceSquared: screenDistanceSquared(point, start), t: 0 };
+  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1);
+  const projected = { x: start.x + dx * t, y: start.y + dy * t };
+  return { distanceSquared: screenDistanceSquared(point, projected), t };
+}
+
+function boundaryWorldPoint(view: CameraCalibratedView, imageToWorld: number[], edge: CameraProjectionBoundaryEdge, t: number): { x: number; z: number } | null {
+  return mapCalibrationImageToWorld(view, imageToWorld, boundaryImageForEdge(edge, t));
+}
+
+function resolveBoundaryGhostByScreen(
+  screen: { x: number; y: number },
+  view: CameraCalibratedView,
+  viewport: Viewport2DContext,
+  thresholdPx: number,
+): Extract<CalibrationHoverState, { kind: "new_boundary" }> | null {
+  const imageToWorld = estimateCalibrationImageToWorld(view);
+  if (!imageToWorld) return null;
+  let best: { edge: CameraProjectionBoundaryEdge; t: number; world: { x: number; z: number }; distanceSquared: number } | null = null;
+  const samplesPerEdge = 64;
+  for (const edge of CALIBRATION_BOUNDARY_EDGES) {
+    if (!canAddBoundaryPoint(view, edge)) continue;
+    let previous = boundaryWorldPoint(view, imageToWorld, edge, 0);
+    if (!previous) continue;
+    for (let index = 1; index <= samplesPerEdge; index += 1) {
+      const endT = index / samplesPerEdge;
+      const current = boundaryWorldPoint(view, imageToWorld, edge, endT);
+      if (!current) continue;
+      const previousScreen = viewport.worldToScreen(previous);
+      const currentScreen = viewport.worldToScreen(current);
+      const segment = distanceSquaredToSegment(screen, previousScreen, currentScreen);
+      if (segment.distanceSquared <= thresholdPx * thresholdPx && (!best || segment.distanceSquared < best.distanceSquared)) {
+        const t = (index - 1 + segment.t) / samplesPerEdge;
+        const world = boundaryWorldPoint(view, imageToWorld, edge, t);
+        if (world) best = { edge, t, world, distanceSquared: segment.distanceSquared };
+      }
+      previous = current;
+    }
+  }
+  if (!best) return null;
+  return {
+    kind: "new_boundary",
+    edge: best.edge,
+    t: best.t,
+    image: boundaryImageForEdge(best.edge, best.t),
+    world: best.world,
+  };
+}
+
+function deformedBoundaryScreenPoints(
+  view: CameraCalibratedView,
+  viewport: Viewport2DContext,
+  samplesPerEdge = 48,
+): Array<{ x: number; y: number }> {
+  const imageToWorld = estimateCalibrationImageToWorld(view);
+  if (!imageToWorld) {
+    return worldQuadPoints(view.projection_model.world_quad).map((point) => viewport.worldToScreen(point));
+  }
+  const points: Array<{ x: number; y: number }> = [];
+  for (const edge of CALIBRATION_BOUNDARY_EDGES) {
+    for (let index = 0; index < samplesPerEdge; index += 1) {
+      const world = boundaryWorldPoint(view, imageToWorld, edge, index / samplesPerEdge);
+      if (world) points.push(viewport.worldToScreen(world));
+    }
+  }
+  return points.length >= 4 ? points : worldQuadPoints(view.projection_model.world_quad).map((point) => viewport.worldToScreen(point));
+}
+
 function CameraCalibrationModal({
   open,
   onClose,
@@ -1543,7 +1893,7 @@ function CameraCalibrationModal({
 
   useEffect(() => {
     if (!open) return;
-    const baseViews = initialViews.length
+    const baseViews: CameraCalibratedView[] = initialViews.length
       ? initialViews.map((view) => ({
           ...view,
           pose_reference: view.pose_reference ? { ...view.pose_reference } : null,
@@ -1560,6 +1910,9 @@ function CameraCalibrationModal({
             world_quad: cloneWorldQuad(view.projection_model.world_quad),
             refinement: view.projection_model.refinement?.points.length
               ? { model: "local_rbf_v1", points: cloneRefinementPoints(view.projection_model.refinement.points) }
+              : null,
+            boundary_refinement: view.projection_model.boundary_refinement?.points.length
+              ? { model: "edge_handles_v1", points: cloneBoundaryPoints(view.projection_model.boundary_refinement.points) }
               : null,
           },
           projection_quality: { ...(view.projection_quality ?? {}) },
@@ -1700,10 +2053,11 @@ function CameraCalibrationModal({
   function updateSelectedProjection(
     nextQuad: CameraProjectionWorldQuad,
     nextRefinementPoints: CameraProjectionRefinementPoint[],
+    nextBoundaryPoints: CameraProjectionBoundaryPoint[],
     status: "ready" | "estimated" = "ready",
   ) {
     updateSelectedView((view) =>
-      withRefinementPoints(
+      withRefinementAndBoundaryPoints(
         {
           ...view,
           projection_model: {
@@ -1717,6 +2071,7 @@ function CameraCalibrationModal({
           },
         },
         nextRefinementPoints,
+        nextBoundaryPoints,
         status,
       ),
     );
@@ -1724,6 +2079,10 @@ function CameraCalibrationModal({
 
   function updateSelectedRefinementPoints(updater: (points: CameraProjectionRefinementPoint[]) => CameraProjectionRefinementPoint[]) {
     updateSelectedView((view) => withRefinementPoints(view, updater(cloneRefinementPoints(refinementPointsForView(view)))));
+  }
+
+  function updateSelectedBoundaryPoints(updater: (points: CameraProjectionBoundaryPoint[]) => CameraProjectionBoundaryPoint[]) {
+    updateSelectedView((view) => withBoundaryPoints(view, updater(cloneBoundaryPoints(boundaryPointsForView(view)))));
   }
 
   async function waitForPtzToSettle(sourceId: string): Promise<PanTiltZoomState | null> {
@@ -1869,6 +2228,10 @@ function CameraCalibrationModal({
         if (screenDistanceSquared(event.screen, rotateInfo.handleScreen) <= rotateInfo.hitRadiusPx * rotateInfo.hitRadiusPx) {
           return { kind: "rotate" };
         }
+        const boundaryPoint = nearestBoundaryPointByScreen(event.screen, view, viewport, 12);
+        if (boundaryPoint) return { kind: "boundary", pointId: boundaryPoint.id };
+        const boundaryGhost = resolveBoundaryGhostByScreen(event.screen, view, viewport, 11);
+        if (boundaryGhost) return boundaryGhost;
         const refinementPoint = nearestRefinementPointByScreen(event.screen, view, viewport, 12);
         if (refinementPoint) return { kind: "refinement", pointId: refinementPoint.id };
         const centerScreen = viewport.worldToScreen(quadCenter(quad));
@@ -1916,6 +2279,7 @@ function CameraCalibrationModal({
               startAngle: Math.atan2(event.world.z - rotateInfo.centerWorld.z, event.world.x - rotateInfo.centerWorld.x),
               startQuad: cloneWorldQuad(quad),
               startRefinementPoints: cloneRefinementPoints(refinementPointsForView(currentView)),
+              startBoundaryPoints: cloneBoundaryPoints(boundaryPointsForView(currentView)),
               snappedDelta: 0,
             };
           } else if (hover?.kind === "move") {
@@ -1924,10 +2288,19 @@ function CameraCalibrationModal({
               startWorld: { x: event.world.x, z: event.world.z },
               startQuad: cloneWorldQuad(quad),
               startRefinementPoints: cloneRefinementPoints(refinementPointsForView(currentView)),
+              startBoundaryPoints: cloneBoundaryPoints(boundaryPointsForView(currentView)),
             };
           } else if (hover?.kind === "refinement") {
             dragStateRef.current = {
               kind: "refinement",
+              pointId: hover.pointId,
+              pointerStartWorld: { x: event.world.x, z: event.world.z },
+              created: false,
+              moved: false,
+            };
+          } else if (hover?.kind === "boundary") {
+            dragStateRef.current = {
+              kind: "boundary",
               pointId: hover.pointId,
               pointerStartWorld: { x: event.world.x, z: event.world.z },
               created: false,
@@ -1950,6 +2323,25 @@ function CameraCalibrationModal({
               created: true,
               moved: false,
             };
+          } else if (hover?.kind === "new_boundary") {
+            const pointId = createUniqueId();
+            updateSelectedBoundaryPoints((points) => [
+              ...points,
+              {
+                id: pointId,
+                edge: hover.edge,
+                t: hover.t,
+                image: { x: hover.image.x, y: hover.image.y },
+                world: { x: event.world.x, z: event.world.z },
+              },
+            ]);
+            dragStateRef.current = {
+              kind: "boundary",
+              pointId,
+              pointerStartWorld: { x: event.world.x, z: event.world.z },
+              created: true,
+              moved: false,
+            };
           } else {
             dragStateRef.current = null;
           }
@@ -1960,6 +2352,9 @@ function CameraCalibrationModal({
           const drag = dragStateRef.current;
           if (event.kind === "up" && drag?.kind === "refinement" && !drag.created && !drag.moved) {
             updateSelectedRefinementPoints((points) => points.filter((point) => point.id !== drag.pointId));
+          }
+          if (event.kind === "up" && drag?.kind === "boundary" && !drag.created && !drag.moved) {
+            updateSelectedBoundaryPoints((points) => points.filter((point) => point.id !== drag.pointId));
           }
           dragStateRef.current = null;
           setDragging(false);
@@ -1984,6 +2379,7 @@ function CameraCalibrationModal({
           updateSelectedProjection(
             rotateWorldQuad(drag.startQuad, snappedDelta),
             rotateRefinementPoints(drag.startRefinementPoints, drag.centerWorld, snappedDelta),
+            rotateBoundaryPoints(drag.startBoundaryPoints, drag.centerWorld, snappedDelta),
           );
           return;
         }
@@ -2006,11 +2402,34 @@ function CameraCalibrationModal({
           );
           return;
         }
+        if (drag.kind === "boundary") {
+          const movedThresholdWorld = Math.max(0.01, 4 / Math.max(1, viewportScaleRef.current));
+          const moved =
+            drag.moved ||
+            Math.hypot(event.world.x - drag.pointerStartWorld.x, event.world.z - drag.pointerStartWorld.z) > movedThresholdWorld;
+          dragStateRef.current = { ...drag, moved };
+          updateSelectedBoundaryPoints((points) =>
+            points.map((point) =>
+              point.id === drag.pointId
+                ? {
+                    ...point,
+                    image: boundaryImageForEdge(point.edge, point.t),
+                    world: { x: event.world.x, z: event.world.z },
+                  }
+                : point,
+            ),
+          );
+          return;
+        }
         const delta = {
           x: event.world.x - drag.startWorld.x,
           z: event.world.z - drag.startWorld.z,
         };
-        updateSelectedProjection(translateWorldQuad(drag.startQuad, delta), translateRefinementPoints(drag.startRefinementPoints, delta));
+        updateSelectedProjection(
+          translateWorldQuad(drag.startQuad, delta),
+          translateRefinementPoints(drag.startRefinementPoints, delta),
+          translateBoundaryPoints(drag.startBoundaryPoints, delta),
+        );
       },
       renderOverlay2D: ({ ctx, viewport }) => {
         viewportRef.current = viewport;
@@ -2021,6 +2440,7 @@ function CameraCalibrationModal({
         if (!currentView) return;
         const quad = currentView.projection_model.world_quad;
         const points = worldQuadPoints(quad).map((point) => viewport.worldToScreen(point));
+        const contourPoints = deformedBoundaryScreenPoints(currentView, viewport);
         const rotateInfo = calibrationRotateHandleInfo(quad, viewport);
         const activeDrag = dragStateRef.current;
         const hover = hoverStateRef.current;
@@ -2042,13 +2462,15 @@ function CameraCalibrationModal({
           ctx.fill();
         }
         ctx.globalAlpha = 1;
-        ctx.beginPath();
-        ctx.moveTo(points[0].x, points[0].y);
-        for (const point of points.slice(1)) ctx.lineTo(point.x, point.y);
-        ctx.closePath();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = "rgba(56,189,248,0.95)";
-        ctx.stroke();
+        if (contourPoints.length >= 4) {
+          ctx.beginPath();
+          ctx.moveTo(contourPoints[0].x, contourPoints[0].y);
+          for (const point of contourPoints.slice(1)) ctx.lineTo(point.x, point.y);
+          ctx.closePath();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = "rgba(56,189,248,0.95)";
+          ctx.stroke();
+        }
         const centerHot = activeDrag?.kind === "move" || hover?.kind === "move";
         ctx.save();
         ctx.shadowColor = centerHot ? "rgba(56,189,248,0.42)" : "rgba(0,0,0,0)";
@@ -2114,6 +2536,53 @@ function CameraCalibrationModal({
           ctx.fillStyle = "rgba(241,245,249,0.96)";
           ctx.fillText(text, rotateInfo.handleScreen.x, y0 + boxHeight / 2);
         }
+        for (const boundaryPoint of boundaryPointsForView(currentView)) {
+          const point = viewport.worldToScreen(boundaryPoint.world);
+          const hot =
+            (activeDrag?.kind === "boundary" && activeDrag.pointId === boundaryPoint.id) ||
+            (hover?.kind === "boundary" && hover.pointId === boundaryPoint.id);
+          ctx.save();
+          ctx.translate(point.x, point.y);
+          ctx.shadowColor = hot ? "rgba(45,212,191,0.42)" : "rgba(0,0,0,0)";
+          ctx.shadowBlur = hot ? 10 : 0;
+          ctx.beginPath();
+          ctx.moveTo(0, hot ? -9 : -8);
+          ctx.lineTo(hot ? 9 : 8, 0);
+          ctx.lineTo(0, hot ? 9 : 8);
+          ctx.lineTo(hot ? -9 : -8, 0);
+          ctx.closePath();
+          ctx.fillStyle = hot ? "rgba(45,212,191,0.96)" : "rgba(20,184,166,0.86)";
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.lineWidth = hot ? 2.4 : 1.8;
+          ctx.strokeStyle = "rgba(15,23,42,0.9)";
+          ctx.stroke();
+          ctx.restore();
+        }
+        if (hover?.kind === "new_boundary" && !activeDrag) {
+          const point = viewport.worldToScreen(hover.world);
+          ctx.save();
+          ctx.setLineDash([5, 4]);
+          ctx.lineWidth = 1.9;
+          ctx.strokeStyle = "rgba(45,212,191,0.92)";
+          ctx.fillStyle = "rgba(45,212,191,0.15)";
+          ctx.beginPath();
+          ctx.moveTo(point.x, point.y - 10);
+          ctx.lineTo(point.x + 10, point.y);
+          ctx.lineTo(point.x, point.y + 10);
+          ctx.lineTo(point.x - 10, point.y);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.moveTo(point.x - 5, point.y);
+          ctx.lineTo(point.x + 5, point.y);
+          ctx.moveTo(point.x, point.y - 5);
+          ctx.lineTo(point.x, point.y + 5);
+          ctx.stroke();
+          ctx.restore();
+        }
         for (const refinementPoint of refinementPointsForView(currentView)) {
           const point = viewport.worldToScreen(refinementPoint.world);
           const hot =
@@ -2173,7 +2642,7 @@ function CameraCalibrationModal({
         if (movingToViewId) return "default";
         if (dragStateRef.current) return "grabbing";
         if (hoverStateRef.current?.kind === "move") return "move";
-        if (hoverStateRef.current?.kind === "new_refinement") return "crosshair";
+        if (hoverStateRef.current?.kind === "new_refinement" || hoverStateRef.current?.kind === "new_boundary") return "crosshair";
         if (hoverStateRef.current) return "grab";
         return "default";
       },
@@ -2184,6 +2653,9 @@ function CameraCalibrationModal({
 
   const selectedQuality = selectedView ? summarizeCalibratedViewQuality(selectedView) : null;
   const compatibleRoles = selectedView?.stream_scope?.compatible_roles?.length ? selectedView.stream_scope.compatible_roles : ["main", "sub"];
+  const invalidMeshViewLabels = views
+    .filter((view) => !buildCalibrationMesh(view))
+    .map((view, index) => view.label.trim() || t("ext.cameras.calibration.view_label", { index: index + 1 }));
 
   return (
     <SubModal
@@ -2309,6 +2781,16 @@ function CameraCalibrationModal({
           />
         </div>
 
+        {invalidMeshViewLabels.length > 0 ? (
+          <div className="errorText" role="status">
+            {t(
+              "ext.cameras.calibration.invalid_boundary_mesh",
+              { views: invalidMeshViewLabels.join(", ") },
+              "A deformação criou uma malha inválida em: {{views}}. Ajuste os pontos antes de salvar.",
+            )}
+          </div>
+        ) : null}
+
         {selectedView ? (
           <div className="card" style={{ marginBottom: 0 }}>
             <div className="cardBody" style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12 }}>
@@ -2346,6 +2828,7 @@ function CameraCalibrationModal({
           <button
             className="primaryButton"
             type="button"
+            disabled={invalidMeshViewLabels.length > 0}
             onClick={() => {
               onSave(
                 views.map((view, index) => ({
@@ -2364,6 +2847,9 @@ function CameraCalibrationModal({
                     image_region: defaultImageRegion(),
                     refinement: view.projection_model.refinement?.points.length
                       ? { model: "local_rbf_v1", points: cloneRefinementPoints(view.projection_model.refinement.points) }
+                      : null,
+                    boundary_refinement: view.projection_model.boundary_refinement?.points.length
+                      ? { model: "edge_handles_v1", points: cloneBoundaryPoints(view.projection_model.boundary_refinement.points) }
                       : null,
                   },
                 })),

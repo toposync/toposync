@@ -9,6 +9,8 @@ import type {
   CameraIngestMode,
   CameraOnvifConfig,
   CameraPoseReference,
+  CameraProjectionBoundaryEdge,
+  CameraProjectionBoundaryPoint,
   CameraProjectionModel,
   CameraProjectionRefinementPoint,
   CameraProjectionWorldQuad,
@@ -18,6 +20,10 @@ import type {
   CameraSourceRole,
   CameraStreamProfile,
 } from "./types";
+
+const BOUNDARY_EDGES: CameraProjectionBoundaryEdge[] = ["top", "right", "bottom", "left"];
+const MAX_PROJECTION_BOUNDARY_POINTS = 32;
+const MAX_PROJECTION_BOUNDARY_POINTS_PER_EDGE = 8;
 
 export function readString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
@@ -203,6 +209,51 @@ function readProjectionRefinement(value: unknown): CameraProjectionModel["refine
   return points.length > 0 ? { model: "local_rbf_v1", points } : null;
 }
 
+export function imagePointForBoundaryEdge(edge: CameraProjectionBoundaryEdge, t: number): { x: number; y: number } {
+  const normalizedT = Math.max(0, Math.min(1, t));
+  switch (edge) {
+    case "top":
+      return { x: normalizedT, y: 0 };
+    case "right":
+      return { x: 1, y: normalizedT };
+    case "bottom":
+      return { x: 1 - normalizedT, y: 1 };
+    case "left":
+      return { x: 0, y: 1 - normalizedT };
+  }
+}
+
+function readBoundaryEdge(value: unknown): CameraProjectionBoundaryEdge | null {
+  const normalized = readString(value).trim();
+  return BOUNDARY_EDGES.includes(normalized as CameraProjectionBoundaryEdge) ? (normalized as CameraProjectionBoundaryEdge) : null;
+}
+
+function readProjectionBoundaryRefinement(value: unknown): CameraProjectionModel["boundary_refinement"] {
+  const record = readRecord(value);
+  if (readString(record.model, "edge_handles_v1").trim() !== "edge_handles_v1") return null;
+  const rawPoints = Array.isArray(record.points) ? record.points : [];
+  const points: CameraProjectionBoundaryPoint[] = [];
+  const perEdge = new Map<CameraProjectionBoundaryEdge, number>();
+  for (let index = 0; index < rawPoints.length && points.length < MAX_PROJECTION_BOUNDARY_POINTS; index += 1) {
+    const item = readRecord(rawPoints[index]);
+    const edge = readBoundaryEdge(item.edge);
+    const t = readFiniteNumber(item.t, NaN);
+    const world = readWorldPoint(item.world);
+    if (!edge || !Number.isFinite(t) || t < 0 || t > 1 || !world) continue;
+    const currentEdgeCount = perEdge.get(edge) ?? 0;
+    if (currentEdgeCount >= MAX_PROJECTION_BOUNDARY_POINTS_PER_EDGE) continue;
+    perEdge.set(edge, currentEdgeCount + 1);
+    points.push({
+      id: readString(item.id).trim() || createUniqueId(),
+      edge,
+      t,
+      image: imagePointForBoundaryEdge(edge, t),
+      world,
+    });
+  }
+  return points.length > 0 ? { model: "edge_handles_v1", points } : null;
+}
+
 export function readProjectionModel(value: unknown, fallbackCenter?: { x: number; z: number }): CameraProjectionModel {
   const record = readRecord(value);
   return {
@@ -210,6 +261,7 @@ export function readProjectionModel(value: unknown, fallbackCenter?: { x: number
     image_region: readImageRegion(record.image_region),
     world_quad: readWorldQuad(record.world_quad) ?? createDefaultWorldQuad(fallbackCenter ?? { x: 0, z: 0 }, { estimated: true }),
     refinement: readProjectionRefinement(record.refinement),
+    boundary_refinement: readProjectionBoundaryRefinement(record.boundary_refinement),
   };
 }
 
@@ -235,6 +287,7 @@ export function createDefaultCalibratedView(
         image_region: defaultImageRegion(),
         world_quad: createDefaultWorldQuad(center, { estimated }),
         refinement: null,
+        boundary_refinement: null,
       },
     projection_quality: {
       status: estimated ? "estimated" : "incomplete",
@@ -287,6 +340,12 @@ export function controlPointSetFromCalibratedView(view: CameraCalibratedView): C
       { id: "bottom_left", label: "D", image: { x: region.top_left.x, y: region.bottom_right.y }, world: quad.bottom_left },
     ],
     refinement_points: view.projection_model.refinement?.points.map((point) => ({ ...point, image: { ...point.image }, world: { ...point.world } })) ?? [],
+    boundary_refinement_points:
+      view.projection_model.boundary_refinement?.points.map((point) => ({
+        ...point,
+        image: { ...point.image },
+        world: { ...point.world },
+      })) ?? [],
   };
 }
 
@@ -332,6 +391,9 @@ export function calibratedViewsFromControlPointSets(controlPointSets: CameraCont
             bottom_left: firstFour[3].world!,
           },
           refinement: set.refinement_points?.length ? { model: "local_rbf_v1", points: set.refinement_points } : null,
+          boundary_refinement: set.boundary_refinement_points?.length
+            ? { model: "edge_handles_v1", points: set.boundary_refinement_points }
+            : null,
         },
         projection_quality: { status: "ready", estimated: false, note: null },
       };

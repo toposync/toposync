@@ -27,6 +27,7 @@ from toposync.runtime.pipelines.safe_expression import SafeExpression
 from toposync.runtime.services import ServiceRegistry
 
 from ..processing.mapping import (
+    ControlPointBoundaryRefinementPoint,
     ControlPointMapper,
     ControlPointPair,
     ControlPointRefinementPoint,
@@ -35,6 +36,7 @@ from ..processing.mapping import (
     PanTiltZoomState,
     PoseReference,
     PoseSelectionConfig,
+    compute_boundary_refinement_points_signature,
     compute_control_points_signature,
     compute_refinement_points_signature,
     normalize_move_status,
@@ -758,12 +760,36 @@ class CameraMappingProjectionRefinement(BaseModel):
     points: list[CameraMappingProjectionRefinementPoint] = Field(default_factory=list, max_length=24)
 
 
+class CameraMappingProjectionBoundaryPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    edge: Literal["top", "right", "bottom", "left"]
+    t: float = Field(ge=0.0, le=1.0)
+    image: CameraMappingControlPointImage | None = None
+    world: CameraMappingControlPointWorld
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _validate_id(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("id is required")
+        return normalized
+
+
+class CameraMappingProjectionBoundaryRefinement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: Literal["edge_handles_v1"] = "edge_handles_v1"
+    points: list[CameraMappingProjectionBoundaryPoint] = Field(default_factory=list, max_length=32)
+
+
 class CameraMappingProjectionModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["image_quad_on_world"] = "image_quad_on_world"
     image_region: CameraMappingImageRegion = Field(default_factory=CameraMappingImageRegion)
     world_quad: CameraMappingWorldQuad
     refinement: CameraMappingProjectionRefinement | None = None
+    boundary_refinement: CameraMappingProjectionBoundaryRefinement | None = None
 
 
 class CameraMappingStreamScope(BaseModel):
@@ -3310,6 +3336,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
     ) -> ControlPointMapper | None:
         points_signature = compute_control_points_signature(control_point_set.control_points)
         refinement_signature = compute_refinement_points_signature(control_point_set.refinement_points)
+        boundary_signature = compute_boundary_refinement_points_signature(control_point_set.boundary_refinement_points)
         cache_key = "|".join(
             [
                 str(camera_id or "<inline>").strip() or "<inline>",
@@ -3317,6 +3344,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 control_point_set.id,
                 points_signature,
                 refinement_signature,
+                boundary_signature,
                 self._homography_config_signature,
             ]
         )
@@ -3328,6 +3356,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 list(control_point_set.control_points),
                 config=self._homography_config,
                 refinement_points=control_point_set.refinement_points,
+                boundary_refinement_points=control_point_set.boundary_refinement_points,
             )
         except Exception:
             mapper = None
@@ -4666,6 +4695,66 @@ def _parse_refinement_points(value: Any) -> tuple[ControlPointRefinementPoint, .
     return tuple(out)
 
 
+def _boundary_image_for_edge(edge: str, t: float) -> tuple[float, float]:
+    normalized_t = max(0.0, min(1.0, float(t)))
+    if edge == "top":
+        return normalized_t, 0.0
+    if edge == "right":
+        return 1.0, normalized_t
+    if edge == "bottom":
+        return 1.0 - normalized_t, 1.0
+    return 0.0, 1.0 - normalized_t
+
+
+def _parse_boundary_refinement_points(value: Any) -> tuple[ControlPointBoundaryRefinementPoint, ...]:
+    rec = value if isinstance(value, dict) else {}
+    if str(rec.get("model") or "edge_handles_v1").strip() != "edge_handles_v1":
+        return ()
+    raw_points = rec.get("points")
+    if not isinstance(raw_points, list):
+        return ()
+
+    out: list[ControlPointBoundaryRefinementPoint] = []
+    per_edge: dict[str, int] = {}
+    valid_edges = {"top", "right", "bottom", "left"}
+    for index, item in enumerate(raw_points):
+        if len(out) >= 32:
+            break
+        point = item if isinstance(item, dict) else {}
+        edge = str(point.get("edge") or "").strip()
+        world = point.get("world") if isinstance(point.get("world"), dict) else {}
+        try:
+            t = float(point.get("t"))
+            world_x = float(world.get("x"))
+            world_z = float(world.get("z"))
+        except Exception:
+            continue
+        if edge not in valid_edges:
+            continue
+        if not all(math.isfinite(value) for value in (t, world_x, world_z)):
+            continue
+        if not 0.0 <= t <= 1.0:
+            continue
+        edge_count = per_edge.get(edge, 0)
+        if edge_count >= 8:
+            continue
+        per_edge[edge] = edge_count + 1
+        image_u, image_v = _boundary_image_for_edge(edge, t)
+        point_id = str(point.get("id") or "").strip() or f"boundary-{index + 1}"
+        out.append(
+            ControlPointBoundaryRefinementPoint(
+                id=point_id,
+                edge=edge,  # type: ignore[arg-type]
+                t=t,
+                image_u=image_u,
+                image_v=image_v,
+                world_x=world_x,
+                world_z=world_z,
+            )
+        )
+    return tuple(out)
+
+
 def _control_point_set_from_calibrated_view_record(value: Any, *, index: int = 0) -> ControlPointSet | None:
     rec = value if isinstance(value, dict) else {}
     view_id = str(rec.get("id") or "").strip()
@@ -4723,6 +4812,7 @@ def _control_point_set_from_calibrated_view_record(value: Any, *, index: int = 0
         pose_reference=_parse_pose_reference(rec.get("pose_reference")),
         control_points=control_points,
         refinement_points=_parse_refinement_points(projection_model.get("refinement")),
+        boundary_refinement_points=_parse_boundary_refinement_points(projection_model.get("boundary_refinement")),
     )
 
 

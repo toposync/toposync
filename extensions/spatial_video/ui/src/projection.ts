@@ -1,4 +1,4 @@
-import type { CameraControlPointSet, MediaContentRect, ProjectionMeshData, Vector2, WorldPoint } from "./types";
+import type { CameraControlPointSet, CameraProjectionBoundaryEdge, CameraProjectionBoundaryPoint, MediaContentRect, ProjectionMeshData, Vector2, WorldPoint } from "./types";
 
 export type ProjectionStrategyId = "homography_grid" | "constrained_trapezoid";
 export type ProjectionMeshDensity = 34 | 64 | 96;
@@ -28,8 +28,10 @@ const TRAPEZOID_IMAGE_PADDING = 0.04;
 const LOCAL_REFINEMENT_SIGMA_UV = 0.22;
 const LOCAL_REFINEMENT_EDGE_LOW = 0.015;
 const LOCAL_REFINEMENT_EDGE_HIGH = 0.12;
+const BOUNDARY_REFINEMENT_FALLOFF_UV = 0.48;
 const MIN_MEDIA_CONTENT_RECT_SIZE = 1e-5;
 const FULL_MEDIA_CONTENT_RECT: MediaContentRect = { x: 0, y: 0, width: 1, height: 1 };
+const BOUNDARY_EDGES: CameraProjectionBoundaryEdge[] = ["top", "right", "bottom", "left"];
 
 function finiteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -96,6 +98,42 @@ function validRefinementPairs(set: CameraControlPointSet): Pair[] {
   return out;
 }
 
+function boundaryImageForEdge(edge: CameraProjectionBoundaryEdge, t: number): Vector2 {
+  const normalizedT = clamp(t, 0, 1);
+  switch (edge) {
+    case "top":
+      return { x: normalizedT, y: 0 };
+    case "right":
+      return { x: 1, y: normalizedT };
+    case "bottom":
+      return { x: 1 - normalizedT, y: 1 };
+    case "left":
+      return { x: 0, y: 1 - normalizedT };
+  }
+}
+
+function validBoundaryPoints(set: CameraControlPointSet): CameraProjectionBoundaryPoint[] {
+  const out: CameraProjectionBoundaryPoint[] = [];
+  const perEdge = new Map<CameraProjectionBoundaryEdge, number>();
+  for (const point of set.boundary_refinement_points ?? []) {
+    if (!BOUNDARY_EDGES.includes(point.edge)) continue;
+    if (!finiteNumber(point.t) || point.t < 0 || point.t > 1) continue;
+    const world = point.world;
+    if (!world || !finiteNumber(world.x) || !finiteNumber(world.z)) continue;
+    const edgeCount = perEdge.get(point.edge) ?? 0;
+    if (edgeCount >= 8 || out.length >= 32) continue;
+    perEdge.set(point.edge, edgeCount + 1);
+    out.push({
+      id: String(point.id || `boundary-${out.length + 1}`),
+      edge: point.edge,
+      t: point.t,
+      image: boundaryImageForEdge(point.edge, point.t),
+      world: { x: world.x, z: world.z },
+    });
+  }
+  return out;
+}
+
 export function controlPointSetProjectionSignature(set: CameraControlPointSet): string {
   const base = validBasePairs(set)
     .map((pair) => `${pair.image.x.toFixed(6)},${pair.image.y.toFixed(6)}>${pair.world.x.toFixed(6)},${pair.world.z.toFixed(6)}`)
@@ -103,7 +141,10 @@ export function controlPointSetProjectionSignature(set: CameraControlPointSet): 
   const refinement = validRefinementPairs(set)
     .map((pair) => `${pair.image.x.toFixed(6)},${pair.image.y.toFixed(6)}>${pair.world.x.toFixed(6)},${pair.world.z.toFixed(6)}`)
     .join(";");
-  return `${base}|${refinement}`;
+  const boundary = validBoundaryPoints(set)
+    .map((point) => `${point.edge},${point.t.toFixed(6)}>${point.world.x.toFixed(6)},${point.world.z.toFixed(6)}`)
+    .join(";");
+  return `${base}|${refinement}|${boundary}`;
 }
 
 function convexHull(points: Vector2[]): Vector2[] {
@@ -278,6 +319,27 @@ function finalizeProjectionMesh(meshData: ProjectionMeshData, options: Projectio
   return applyClipToProjectionMesh(uvMapped, options?.clipPolygon);
 }
 
+function meshHasFoldover(meshData: ProjectionMeshData): boolean {
+  let sign = 0;
+  for (let index = 0; index < meshData.indices.length; index += 3) {
+    const aIndex = meshData.indices[index] * 3;
+    const bIndex = meshData.indices[index + 1] * 3;
+    const cIndex = meshData.indices[index + 2] * 3;
+    const ax = meshData.positions[aIndex];
+    const az = meshData.positions[aIndex + 2];
+    const bx = meshData.positions[bIndex];
+    const bz = meshData.positions[bIndex + 2];
+    const cx = meshData.positions[cIndex];
+    const cz = meshData.positions[cIndex + 2];
+    const area = ((bx - ax) * (cz - az) - (bz - az) * (cx - ax)) / 2;
+    if (!Number.isFinite(area) || Math.abs(area) <= 1e-9) return true;
+    const currentSign = Math.sign(area);
+    if (sign === 0) sign = currentSign;
+    else if (currentSign !== sign) return true;
+  }
+  return false;
+}
+
 function solveLinearSystem(matrix: number[][], rhs: number[]): number[] | null {
   const n = rhs.length;
   const a = matrix.map((row, i) => [...row, rhs[i]]);
@@ -436,11 +498,109 @@ function localRefinementDelta(set: CameraControlPointSet, hImageToWorld: number[
   return { x: edge * (totalX / totalWeight), y: edge * (totalY / totalWeight) };
 }
 
+function boundaryAxis(edge: CameraProjectionBoundaryEdge, image: Vector2): number {
+  if (edge === "top" || edge === "right") return edge === "top" ? image.x : image.y;
+  return edge === "bottom" ? 1 - image.x : 1 - image.y;
+}
+
+function boundaryDistance(edge: CameraProjectionBoundaryEdge, image: Vector2): number {
+  switch (edge) {
+    case "top":
+      return image.y;
+    case "right":
+      return 1 - image.x;
+    case "bottom":
+      return 1 - image.y;
+    case "left":
+      return image.x;
+  }
+}
+
+function boundaryInfluence(edge: CameraProjectionBoundaryEdge, image: Vector2): number {
+  const distance = boundaryDistance(edge, image);
+  if (distance <= 1e-9) return 1;
+  const normalized = clamp(distance / BOUNDARY_REFINEMENT_FALLOFF_UV, 0, 1);
+  const eased = normalized * normalized * (3 - 2 * normalized);
+  return 1 - eased;
+}
+
+function boundaryDeltaAtEdge(
+  points: Array<CameraProjectionBoundaryPoint & { delta: Vector2 }>,
+  edge: CameraProjectionBoundaryEdge,
+  t: number,
+): Vector2 {
+  const edgePoints = points.filter((point) => point.edge === edge).sort((a, b) => a.t - b.t);
+  if (edgePoints.length === 0) return { x: 0, y: 0 };
+  const anchors = [
+    { t: 0, delta: { x: 0, y: 0 } },
+    ...edgePoints.map((point) => ({ t: point.t, delta: point.delta })),
+    { t: 1, delta: { x: 0, y: 0 } },
+  ];
+  const normalizedT = clamp(t, 0, 1);
+  for (let index = 0; index < anchors.length - 1; index += 1) {
+    const left = anchors[index];
+    const right = anchors[index + 1];
+    if (normalizedT < left.t || normalizedT > right.t) continue;
+    const span = right.t - left.t;
+    const local = span > 1e-9 ? (normalizedT - left.t) / span : 0;
+    return {
+      x: left.delta.x + (right.delta.x - left.delta.x) * local,
+      y: left.delta.y + (right.delta.y - left.delta.y) * local,
+    };
+  }
+  return anchors[anchors.length - 1].delta;
+}
+
+function boundaryRefinementDelta(set: CameraControlPointSet, hImageToWorld: number[], image: Vector2): Vector2 {
+  const points = validBoundaryPoints(set);
+  if (points.length === 0) return { x: 0, y: 0 };
+  const displacements: Array<CameraProjectionBoundaryPoint & { delta: Vector2 }> = [];
+  for (const point of points) {
+    const imagePoint = boundaryImageForEdge(point.edge, point.t);
+    const base = mapHomography(hImageToWorld, imagePoint);
+    if (!base) continue;
+    displacements.push({
+      ...point,
+      image: imagePoint,
+      delta: { x: point.world.x - base.x, y: point.world.z - base.y },
+    });
+  }
+  if (displacements.length === 0) return { x: 0, y: 0 };
+  let totalX = 0;
+  let totalY = 0;
+  for (const edge of BOUNDARY_EDGES) {
+    const delta = boundaryDeltaAtEdge(displacements, edge, boundaryAxis(edge, image));
+    const influence = boundaryInfluence(edge, image);
+    totalX += delta.x * influence;
+    totalY += delta.y * influence;
+  }
+  return { x: totalX, y: totalY };
+}
+
 function mapImageToWorldWithRefinement(set: CameraControlPointSet, hImageToWorld: number[], image: Vector2): WorldPoint | null {
   const base = mapHomography(hImageToWorld, image);
   if (!base) return null;
+  const boundaryDelta = boundaryRefinementDelta(set, hImageToWorld, image);
   const delta = localRefinementDelta(set, hImageToWorld, image);
-  return { x: base.x + delta.x, z: base.y + delta.y };
+  return { x: base.x + boundaryDelta.x + delta.x, z: base.y + boundaryDelta.y + delta.y };
+}
+
+function projectionGridCoordinates(set: CameraControlPointSet, divisions: number): { xs: number[]; ys: number[] } {
+  const xs = new Set<number>();
+  const ys = new Set<number>();
+  for (let index = 0; index <= divisions; index += 1) {
+    xs.add(index / divisions);
+    ys.add(index / divisions);
+  }
+  for (const point of validBoundaryPoints(set)) {
+    const image = boundaryImageForEdge(point.edge, point.t);
+    xs.add(Number(image.x.toFixed(8)));
+    ys.add(Number(image.y.toFixed(8)));
+  }
+  return {
+    xs: [...xs].sort((a, b) => a - b),
+    ys: [...ys].sort((a, b) => a - b),
+  };
 }
 
 function controlWorldSpan(pairs: Pair[]): number {
@@ -653,14 +813,15 @@ export const homographyGridProjectionStrategy: ProjectionStrategy = {
     const uvs: number[] = [];
     const indices: number[] = [];
     const vertexByGrid = new Map<string, number>();
+    const grid = projectionGridCoordinates(set, gridDivisions);
 
     const getVertex = (gx: number, gy: number): number | null => {
       const key = pointKey(gx, gy);
       const existing = vertexByGrid.get(key);
       if (existing != null) return existing;
 
-      const u = gx / gridDivisions;
-      const v = gy / gridDivisions;
+      const u = grid.xs[gx];
+      const v = grid.ys[gy];
       const world = mapImageToWorldWithRefinement(set, estimate.hImageToWorld, { x: u, y: v });
       if (!world) return null;
       const index = vertices.length / 3;
@@ -670,9 +831,9 @@ export const homographyGridProjectionStrategy: ProjectionStrategy = {
       return index;
     };
 
-    for (let gy = 0; gy < gridDivisions; gy += 1) {
-      for (let gx = 0; gx < gridDivisions; gx += 1) {
-        const center = { x: (gx + 0.5) / gridDivisions, y: (gy + 0.5) / gridDivisions };
+    for (let gy = 0; gy < grid.ys.length - 1; gy += 1) {
+      for (let gx = 0; gx < grid.xs.length - 1; gx += 1) {
+        const center = { x: (grid.xs[gx] + grid.xs[gx + 1]) / 2, y: (grid.ys[gy] + grid.ys[gy + 1]) / 2 };
         if (!pointInPolygon(center, hull)) continue;
         const a = getVertex(gx, gy);
         const b = getVertex(gx + 1, gy);
@@ -684,14 +845,13 @@ export const homographyGridProjectionStrategy: ProjectionStrategy = {
     }
 
     if (indices.length < 3) return null;
-    return finalizeProjectionMesh(
-      {
-        positions: new Float32Array(vertices),
-        uvs: new Float32Array(uvs),
-        indices: new Uint32Array(indices),
-      },
-      options,
-    );
+    const meshData = {
+      positions: new Float32Array(vertices),
+      uvs: new Float32Array(uvs),
+      indices: new Uint32Array(indices),
+    };
+    if (meshHasFoldover(meshData)) return null;
+    return finalizeProjectionMesh(meshData, options);
   },
 };
 

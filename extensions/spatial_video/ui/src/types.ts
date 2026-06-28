@@ -24,6 +24,16 @@ export type CameraProjectionRefinementPoint = {
   world: WorldPoint;
 };
 
+export type CameraProjectionBoundaryEdge = "top" | "right" | "bottom" | "left";
+
+export type CameraProjectionBoundaryPoint = {
+  id: string;
+  edge: CameraProjectionBoundaryEdge;
+  t: number;
+  image: Vector2;
+  world: WorldPoint;
+};
+
 export type CameraControlPointSet = {
   id: string;
   label: string;
@@ -34,6 +44,7 @@ export type CameraControlPointSet = {
   };
   control_points?: CameraControlPoint[];
   refinement_points?: CameraProjectionRefinementPoint[];
+  boundary_refinement_points?: CameraProjectionBoundaryPoint[];
 };
 
 export type AreaClip = {

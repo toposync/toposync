@@ -1889,6 +1889,7 @@ class CamerasExtension(BaseExtension):
                 mapper = ControlPointMapper(
                     list(control_point_set.control_points),
                     refinement_points=control_point_set.refinement_points,
+                    boundary_refinement_points=control_point_set.boundary_refinement_points,
                 )
             except RuntimeError as exc:
                 raise HTTPException(status_code=501, detail=str(exc)) from exc

@@ -23,8 +23,9 @@ from toposync.runtime.pipelines import (
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
-from toposync_ext_cameras.processing.mapping import ControlPointMapper, ControlPointPair
+from toposync_ext_cameras.processing.mapping import ControlPointBoundaryRefinementPoint, ControlPointMapper, ControlPointPair
 from toposync_ext_cameras.pipelines.postprocess import (
+    CameraMappingConfig,
     CameraMappingRuntime,
     VelocityEstimationRuntime,
 )
@@ -204,6 +205,125 @@ def test_camera_mapping_runtime_applies_calibrated_view_refinement_to_world_payl
         assert payload["mapping"]["quality"]["number_of_points"] == 4
 
     asyncio.run(scenario())
+
+
+def test_control_point_mapper_applies_boundary_refinement_on_edge() -> None:
+    mapper = ControlPointMapper(
+        [
+            ControlPointPair(image_u=0.0, image_v=0.0, world_x=0.0, world_z=0.0),
+            ControlPointPair(image_u=1.0, image_v=0.0, world_x=10.0, world_z=0.0),
+            ControlPointPair(image_u=1.0, image_v=1.0, world_x=10.0, world_z=10.0),
+            ControlPointPair(image_u=0.0, image_v=1.0, world_x=0.0, world_z=10.0),
+        ],
+        boundary_refinement_points=[
+            ControlPointBoundaryRefinementPoint(
+                id="left-mid",
+                edge="left",
+                t=0.5,
+                image_u=0.0,
+                image_v=0.5,
+                world_x=-2.0,
+                world_z=5.0,
+            )
+        ],
+    )
+
+    edge = mapper.map(0.0, 0.5)
+    near_edge = mapper.map(0.1, 0.5)
+    far_inside = mapper.map(0.8, 0.5)
+    inverse = mapper.map_world_to_image(-2.0, 5.0)
+
+    assert edge == pytest.approx((-2.0, 5.0), abs=1e-6)
+    assert near_edge is not None
+    assert far_inside is not None
+    assert near_edge[0] < 1.0
+    assert far_inside[0] == pytest.approx(8.0, abs=0.05)
+    assert inverse == pytest.approx((0.0, 0.5), abs=1e-5)
+
+
+def test_camera_mapping_runtime_applies_calibrated_view_boundary_refinement_to_world_payload() -> None:
+    async def scenario() -> None:
+        runtime = CameraMappingRuntime(
+            {
+                "calibrated_views": [
+                    {
+                        "id": "main",
+                        "label": "Main",
+                        "projection_model": {
+                            "type": "image_quad_on_world",
+                            "image_region": {"top_left": {"x": 0.0, "y": 0.0}, "bottom_right": {"x": 1.0, "y": 1.0}},
+                            "world_quad": {
+                                "top_left": {"x": 0.0, "z": 0.0},
+                                "top_right": {"x": 10.0, "z": 0.0},
+                                "bottom_right": {"x": 10.0, "z": 10.0},
+                                "bottom_left": {"x": 0.0, "z": 10.0},
+                            },
+                            "boundary_refinement": {
+                                "model": "edge_handles_v1",
+                                "points": [
+                                    {
+                                        "id": "left-mid",
+                                        "edge": "left",
+                                        "t": 0.5,
+                                        "image": {"x": 0.0, "y": 0.5},
+                                        "world": {"x": -2.0, "z": 5.0},
+                                    }
+                                ],
+                            },
+                        },
+                    }
+                ]
+            },
+            PipelineRuntimeDependencies(),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "subject": {"bbox01": [0.0, 0.1, 0.0, 0.5]},
+            },
+        )
+
+        outputs = await runtime.process_packet(packet, None)
+        payload = outputs[0].payload
+
+        assert payload["world"]["x"] == pytest.approx(-2.0, abs=1e-6)
+        assert payload["world"]["z"] == pytest.approx(5.0, abs=1e-6)
+
+    asyncio.run(scenario())
+
+
+def test_camera_mapping_config_rejects_invalid_boundary_refinement() -> None:
+    base_view = {
+        "id": "main",
+        "label": "Main",
+        "projection_model": {
+            "type": "image_quad_on_world",
+            "image_region": {"top_left": {"x": 0.0, "y": 0.0}, "bottom_right": {"x": 1.0, "y": 1.0}},
+            "world_quad": {
+                "top_left": {"x": 0.0, "z": 0.0},
+                "top_right": {"x": 10.0, "z": 0.0},
+                "bottom_right": {"x": 10.0, "z": 10.0},
+                "bottom_left": {"x": 0.0, "z": 10.0},
+            },
+            "boundary_refinement": {
+                "model": "edge_handles_v1",
+                "points": [{"id": "bad", "edge": "middle", "t": 0.5, "world": {"x": 0.0, "z": 5.0}}],
+            },
+        },
+    }
+
+    with pytest.raises(Exception):
+        CameraMappingConfig.model_validate({"calibrated_views": [base_view]})
+
+    invalid_t_view = dict(base_view)
+    invalid_t_view["projection_model"] = dict(base_view["projection_model"])
+    invalid_t_view["projection_model"]["boundary_refinement"] = {
+        "model": "edge_handles_v1",
+        "points": [{"id": "bad", "edge": "left", "t": 1.5, "world": {"x": 0.0, "z": 5.0}}],
+    }
+    with pytest.raises(Exception):
+        CameraMappingConfig.model_validate({"calibrated_views": [invalid_t_view]})
 
 
 def _pipeline_runtime(

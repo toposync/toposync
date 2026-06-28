@@ -181,6 +181,7 @@ export type CameraControlPointSet = {
   pose_reference?: CameraPoseReference | null;
   control_points: CameraControlPoint[];
   refinement_points?: CameraProjectionRefinementPoint[];
+  boundary_refinement_points?: CameraProjectionBoundaryPoint[];
 };
 
 export type CameraMappingQuality = {
@@ -210,11 +211,27 @@ export type CameraProjectionRefinement = {
   points: CameraProjectionRefinementPoint[];
 };
 
+export type CameraProjectionBoundaryEdge = "top" | "right" | "bottom" | "left";
+
+export type CameraProjectionBoundaryPoint = {
+  id: string;
+  edge: CameraProjectionBoundaryEdge;
+  t: number;
+  image: { x: number; y: number };
+  world: { x: number; z: number };
+};
+
+export type CameraProjectionBoundaryRefinement = {
+  model: "edge_handles_v1";
+  points: CameraProjectionBoundaryPoint[];
+};
+
 export type CameraProjectionModel = {
   type: "image_quad_on_world";
   image_region: CameraImageRegion;
   world_quad: CameraProjectionWorldQuad;
   refinement?: CameraProjectionRefinement | null;
+  boundary_refinement?: CameraProjectionBoundaryRefinement | null;
 };
 
 export type CameraCalibratedView = {

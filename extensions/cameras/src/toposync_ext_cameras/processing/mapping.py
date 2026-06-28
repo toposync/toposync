@@ -15,6 +15,7 @@ except Exception:  # noqa: BLE001
 HomographyMethod = Literal["usac_magsac", "usac_default", "ransac", "dlt"]
 FallbackMode = Literal["default_set", "nearest_set", "none"]
 MotionPolicyMode = Literal["skip_when_moving", "use_last_idle_pose", "allow_when_confident"]
+BoundaryRefinementEdge = Literal["top", "right", "bottom", "left"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +29,17 @@ class ControlPointPair:
 @dataclass(frozen=True, slots=True)
 class ControlPointRefinementPoint:
     id: str
+    image_u: float
+    image_v: float
+    world_x: float
+    world_z: float
+
+
+@dataclass(frozen=True, slots=True)
+class ControlPointBoundaryRefinementPoint:
+    id: str
+    edge: BoundaryRefinementEdge
+    t: float
     image_u: float
     image_v: float
     world_x: float
@@ -62,6 +74,7 @@ class ControlPointSet:
     pose_reference: PoseReference | None
     control_points: tuple[ControlPointPair, ...]
     refinement_points: tuple[ControlPointRefinementPoint, ...] = ()
+    boundary_refinement_points: tuple[ControlPointBoundaryRefinementPoint, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +303,26 @@ def compute_refinement_points_signature(
     return hashlib.sha256(raw).hexdigest()
 
 
+def compute_boundary_refinement_points_signature(
+    boundary_refinement_points: list[ControlPointBoundaryRefinementPoint] | tuple[ControlPointBoundaryRefinementPoint, ...],
+) -> str:
+    raw = "\n".join(
+        "|".join(
+            [
+                str(point.id or "").strip(),
+                str(point.edge or "").strip(),
+                f"{float(point.t):.12g}",
+                f"{float(point.image_u):.12g}",
+                f"{float(point.image_v):.12g}",
+                f"{float(point.world_x):.12g}",
+                f"{float(point.world_z):.12g}",
+            ]
+        )
+        for point in boundary_refinement_points
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def estimate_homography_world_to_image(
     pairs: list[ControlPointPair] | tuple[ControlPointPair, ...],
     config: HomographyEstimationConfig | None = None,
@@ -452,10 +485,25 @@ class _LocalRefinementDisplacement:
     delta_z: float
 
 
+@dataclass(frozen=True, slots=True)
+class _BoundaryRefinementDisplacement:
+    id: str
+    edge: BoundaryRefinementEdge
+    t: float
+    image_u: float
+    image_v: float
+    world_x: float
+    world_z: float
+    delta_x: float
+    delta_z: float
+
+
 LOCAL_REFINEMENT_SIGMA_UV = 0.22
 LOCAL_REFINEMENT_EDGE_LOW = 0.015
 LOCAL_REFINEMENT_EDGE_HIGH = 0.12
 LOCAL_REFINEMENT_EPSILON = 1e-9
+BOUNDARY_REFINEMENT_FALLOFF_UV = 0.48
+BOUNDARY_REFINEMENT_EDGES: tuple[BoundaryRefinementEdge, ...] = ("top", "right", "bottom", "left")
 
 
 class ControlPointMapper:
@@ -464,13 +512,20 @@ class ControlPointMapper:
         pairs: list[ControlPointPair],
         config: HomographyEstimationConfig | None = None,
         refinement_points: list[ControlPointRefinementPoint] | tuple[ControlPointRefinementPoint, ...] = (),
+        boundary_refinement_points: list[ControlPointBoundaryRefinementPoint]
+        | tuple[ControlPointBoundaryRefinementPoint, ...] = (),
     ) -> None:
         estimate = estimate_homography_world_to_image(pairs, config=config)
         self._pairs = tuple(pairs)
         self._refinement_points = tuple(refinement_points)
+        self._boundary_refinement_points = tuple(boundary_refinement_points)
         self._estimate = estimate
         self._H_world_to_image = estimate.H_world_to_image
         self._H_image_to_world = estimate.H_image_to_world
+        self._boundary_refinement_displacements = _boundary_refinement_displacements(
+            self._H_image_to_world,
+            self._boundary_refinement_points,
+        )
         self._refinement_displacements = _local_refinement_displacements(
             self._H_image_to_world,
             self._refinement_points,
@@ -486,12 +541,13 @@ class ControlPointMapper:
         base = apply_homography(self._H_image_to_world, u, v)
         if base is None:
             return None
+        boundary_delta = _boundary_refinement_delta(self._boundary_refinement_displacements, float(u), float(v))
         delta = _local_refinement_delta(self._refinement_displacements, float(u), float(v))
-        return float(base[0]) + delta[0], float(base[1]) + delta[1]
+        return float(base[0]) + boundary_delta[0] + delta[0], float(base[1]) + boundary_delta[1] + delta[1]
 
     def map_world_to_image(self, x: float, z: float) -> tuple[float, float] | None:
         base = apply_homography(self._H_world_to_image, x, z)
-        if base is None or not self._refinement_displacements:
+        if base is None or (not self._refinement_displacements and not self._boundary_refinement_displacements):
             return base
         return _invert_refined_image_point(self, float(x), float(z), base)
 
@@ -515,6 +571,58 @@ def _local_refinement_displacements(
             continue
         out.append(
             _LocalRefinementDisplacement(
+                image_u=image_u,
+                image_v=image_v,
+                world_x=world_x,
+                world_z=world_z,
+                delta_x=world_x - float(base[0]),
+                delta_z=world_z - float(base[1]),
+            )
+        )
+    return tuple(out)
+
+
+def _boundary_image_for_edge(edge: str, t: float) -> tuple[float, float]:
+    normalized_t = max(0.0, min(1.0, float(t)))
+    if edge == "top":
+        return normalized_t, 0.0
+    if edge == "right":
+        return 1.0, normalized_t
+    if edge == "bottom":
+        return 1.0 - normalized_t, 1.0
+    return 0.0, 1.0 - normalized_t
+
+
+def _boundary_refinement_displacements(
+    H_image_to_world: Any,
+    boundary_refinement_points: tuple[ControlPointBoundaryRefinementPoint, ...],
+) -> tuple[_BoundaryRefinementDisplacement, ...]:
+    out: list[_BoundaryRefinementDisplacement] = []
+    per_edge: dict[str, int] = {}
+    for point in boundary_refinement_points:
+        edge = str(point.edge or "").strip()
+        if edge not in BOUNDARY_REFINEMENT_EDGES:
+            continue
+        t = float(point.t)
+        world_x = float(point.world_x)
+        world_z = float(point.world_z)
+        if not all(math.isfinite(value) for value in (t, world_x, world_z)):
+            continue
+        if not 0.0 <= t <= 1.0:
+            continue
+        edge_count = per_edge.get(edge, 0)
+        if edge_count >= 8 or len(out) >= 32:
+            continue
+        per_edge[edge] = edge_count + 1
+        image_u, image_v = _boundary_image_for_edge(edge, t)
+        base = apply_homography(H_image_to_world, image_u, image_v)
+        if base is None:
+            continue
+        out.append(
+            _BoundaryRefinementDisplacement(
+                id=str(point.id or "").strip(),
+                edge=edge,  # type: ignore[arg-type]
+                t=t,
                 image_u=image_u,
                 image_v=image_v,
                 world_x=world_x,
@@ -565,6 +673,75 @@ def _local_refinement_delta(
         return 0.0, 0.0
     edge = _local_refinement_edge_falloff(float(u), float(v))
     return edge * (total_x / total_weight), edge * (total_z / total_weight)
+
+
+def _boundary_axis(edge: BoundaryRefinementEdge, u: float, v: float) -> float:
+    if edge == "top":
+        return float(u)
+    if edge == "right":
+        return float(v)
+    if edge == "bottom":
+        return 1.0 - float(u)
+    return 1.0 - float(v)
+
+
+def _boundary_distance(edge: BoundaryRefinementEdge, u: float, v: float) -> float:
+    if edge == "top":
+        return float(v)
+    if edge == "right":
+        return 1.0 - float(u)
+    if edge == "bottom":
+        return 1.0 - float(v)
+    return float(u)
+
+
+def _boundary_influence(edge: BoundaryRefinementEdge, u: float, v: float) -> float:
+    distance = _boundary_distance(edge, u, v)
+    if distance <= 1e-9:
+        return 1.0
+    normalized = max(0.0, min(1.0, distance / BOUNDARY_REFINEMENT_FALLOFF_UV))
+    eased = normalized * normalized * (3.0 - 2.0 * normalized)
+    return 1.0 - eased
+
+
+def _boundary_delta_at_edge(
+    displacements: tuple[_BoundaryRefinementDisplacement, ...],
+    edge: BoundaryRefinementEdge,
+    t: float,
+) -> tuple[float, float]:
+    edge_points = sorted((point for point in displacements if point.edge == edge), key=lambda point: point.t)
+    if not edge_points:
+        return 0.0, 0.0
+    anchors: list[tuple[float, float, float]] = [(0.0, 0.0, 0.0)]
+    anchors.extend((point.t, point.delta_x, point.delta_z) for point in edge_points)
+    anchors.append((1.0, 0.0, 0.0))
+    normalized_t = max(0.0, min(1.0, float(t)))
+    for index in range(len(anchors) - 1):
+        left_t, left_x, left_z = anchors[index]
+        right_t, right_x, right_z = anchors[index + 1]
+        if normalized_t < left_t or normalized_t > right_t:
+            continue
+        span = right_t - left_t
+        local = (normalized_t - left_t) / span if span > 1e-9 else 0.0
+        return left_x + (right_x - left_x) * local, left_z + (right_z - left_z) * local
+    return anchors[-1][1], anchors[-1][2]
+
+
+def _boundary_refinement_delta(
+    displacements: tuple[_BoundaryRefinementDisplacement, ...],
+    u: float,
+    v: float,
+) -> tuple[float, float]:
+    if not displacements:
+        return 0.0, 0.0
+    total_x = 0.0
+    total_z = 0.0
+    for edge in BOUNDARY_REFINEMENT_EDGES:
+        delta_x, delta_z = _boundary_delta_at_edge(displacements, edge, _boundary_axis(edge, u, v))
+        influence = _boundary_influence(edge, u, v)
+        total_x += delta_x * influence
+        total_z += delta_z * influence
+    return total_x, total_z
 
 
 def _invert_refined_image_point(

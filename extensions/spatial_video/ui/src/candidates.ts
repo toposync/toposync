@@ -1,7 +1,11 @@
 import type { CompositionElement, ElementType } from "@toposync/plugin-api";
 
 import { resolveAreaClipForElement } from "./areaClip";
-import type { CameraControlPointSet, CameraLiveView, ProjectionCandidate } from "./types";
+import type { CameraControlPointSet, CameraLiveView, CameraProjectionBoundaryEdge, ProjectionCandidate } from "./types";
+
+const BOUNDARY_EDGES: CameraProjectionBoundaryEdge[] = ["top", "right", "bottom", "left"];
+const MAX_BOUNDARY_POINTS = 32;
+const MAX_BOUNDARY_POINTS_PER_EDGE = 8;
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -39,6 +43,48 @@ function readRefinementPoints(value: unknown): CameraControlPointSet["refinement
     out.push({
       id: readString(point.id) || `refinement-${out.length + 1}`,
       image: { x: Number(image.x), y: Number(image.y) },
+      world: { x: Number(world.x), z: Number(world.z) },
+    });
+  }
+  return out;
+}
+
+function boundaryImageForEdge(edge: CameraProjectionBoundaryEdge, t: number): { x: number; y: number } {
+  const normalizedT = Math.max(0, Math.min(1, t));
+  switch (edge) {
+    case "top":
+      return { x: normalizedT, y: 0 };
+    case "right":
+      return { x: 1, y: normalizedT };
+    case "bottom":
+      return { x: 1 - normalizedT, y: 1 };
+    case "left":
+      return { x: 0, y: 1 - normalizedT };
+  }
+}
+
+function readBoundaryRefinementPoints(value: unknown): CameraControlPointSet["boundary_refinement_points"] {
+  const rec = readRecord(value);
+  if (readString(rec.model || "edge_handles_v1") !== "edge_handles_v1") return [];
+  const rawPoints = Array.isArray(rec.points) ? rec.points : [];
+  const out: NonNullable<CameraControlPointSet["boundary_refinement_points"]> = [];
+  const perEdge = new Map<CameraProjectionBoundaryEdge, number>();
+  for (const item of rawPoints) {
+    if (out.length >= MAX_BOUNDARY_POINTS) break;
+    const point = readRecord(item);
+    const edge = readString(point.edge) as CameraProjectionBoundaryEdge;
+    if (!BOUNDARY_EDGES.includes(edge)) continue;
+    const t = Number(point.t);
+    const world = readRecord(point.world);
+    if (!Number.isFinite(t) || t < 0 || t > 1 || !hasNumberPair(world, ["x", "z"])) continue;
+    const edgeCount = perEdge.get(edge) ?? 0;
+    if (edgeCount >= MAX_BOUNDARY_POINTS_PER_EDGE) continue;
+    perEdge.set(edge, edgeCount + 1);
+    out.push({
+      id: readString(point.id) || `boundary-${out.length + 1}`,
+      edge,
+      t,
+      image: boundaryImageForEdge(edge, t),
       world: { x: Number(world.x), z: Number(world.z) },
     });
   }
@@ -102,6 +148,7 @@ export function mappedControlPointSets(element: CompositionElement): CameraContr
           },
         ],
         refinement_points: readRefinementPoints(projection.refinement),
+        boundary_refinement_points: readBoundaryRefinementPoints(projection.boundary_refinement),
       };
     })
     .filter((item): item is CameraControlPointSet => Boolean(item));

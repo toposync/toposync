@@ -8,7 +8,7 @@ import numpy
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, SinkRuntime, SourceOperatorRuntime
-from toposync.runtime.pipelines.images import normalize_artifact_name
+from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, normalize_artifact_name
 from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, OperatorRegistry
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
@@ -227,6 +227,7 @@ def register_streaming_pipeline_operators(registry: OperatorRegistry) -> None:
         capabilities=["streaming", "sink", "realtime"],
         defaults=PublishVideoConfig(publication_enabled=True).model_dump(mode="json"),
         share_strategy="never",
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
         requires_media_fields=["ts", "width", "height"],
         input_modalities=["video"],
         owner=EXTENSION_ID,

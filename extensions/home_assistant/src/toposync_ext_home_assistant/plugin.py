@@ -4,8 +4,9 @@ import asyncio
 import logging
 import json
 import time
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
 
 import httpx
 import websockets
@@ -24,6 +25,127 @@ from .pipelines import register_home_assistant_pipeline_operators
 
 EXTENSION_ID = "com.toposync.home_assistant"
 logger = logging.getLogger("toposync.ext.home_assistant")
+CLIENT_CLOSED_REQUEST_STATUS = 499
+HA_SERVERS_READ_CONCURRENCY = 4
+HA_REGISTRY_READ_CONCURRENCY = 2
+HA_SERVICES_READ_CONCURRENCY = 2
+HA_REQUEST_DISCONNECT_POLL_SECONDS = 0.05
+_RequestWorkResult = TypeVar("_RequestWorkResult")
+
+
+class _RequestWorkCancelled(Exception):
+    pass
+
+
+def _client_closed_request_exception() -> HTTPException:
+    return HTTPException(status_code=CLIENT_CLOSED_REQUEST_STATUS, detail="Client closed request")
+
+
+async def _watch_request_disconnect(request: Request, cancel_event: asyncio.Event) -> bool:
+    try:
+        while not cancel_event.is_set():
+            if await request.is_disconnected():
+                cancel_event.set()
+                return True
+            await asyncio.sleep(HA_REQUEST_DISCONNECT_POLL_SECONDS)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.debug("Failed to monitor Home Assistant request disconnect", exc_info=True)
+    return False
+
+
+async def _run_cancelable_home_assistant_read(
+    request: Request,
+    work: Callable[[Callable[[], None]], Awaitable[_RequestWorkResult]],
+    *,
+    limiter: asyncio.Semaphore | None = None,
+) -> _RequestWorkResult:
+    cancel_event = asyncio.Event()
+    limiter_acquired = False
+    work_task: asyncio.Task[_RequestWorkResult] | None = None
+
+    def check_cancelled() -> None:
+        if cancel_event.is_set():
+            raise _RequestWorkCancelled()
+
+    async def run() -> _RequestWorkResult:
+        check_cancelled()
+        return await work(check_cancelled)
+
+    disconnect_task = asyncio.create_task(
+        _watch_request_disconnect(request, cancel_event),
+        name="toposync.home-assistant.request.disconnect-watch",
+    )
+
+    try:
+        if limiter is not None:
+            acquire_task = asyncio.create_task(
+                limiter.acquire(),
+                name="toposync.home-assistant.request.limiter-acquire",
+            )
+            try:
+                done, _pending = await asyncio.wait(
+                    {acquire_task, disconnect_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if acquire_task in done:
+                    await acquire_task
+                    limiter_acquired = True
+                    check_cancelled()
+                else:
+                    disconnected = disconnect_task in done and bool(await disconnect_task)
+                    if disconnected:
+                        cancel_event.set()
+                        raise _client_closed_request_exception()
+                    await acquire_task
+                    limiter_acquired = True
+                    check_cancelled()
+            finally:
+                if not limiter_acquired and not acquire_task.done():
+                    acquire_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await acquire_task
+
+        if await request.is_disconnected():
+            cancel_event.set()
+            raise _client_closed_request_exception()
+
+        work_task = asyncio.create_task(run(), name="toposync.home-assistant.request.work")
+        done, _pending = await asyncio.wait(
+            {work_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if work_task in done:
+            return await work_task
+
+        disconnected = disconnect_task in done and bool(await disconnect_task)
+        if disconnected:
+            cancel_event.set()
+            if work_task is not None:
+                work_task.cancel()
+                with suppress(asyncio.CancelledError, _RequestWorkCancelled):
+                    await work_task
+            raise _client_closed_request_exception()
+
+        return await work_task
+    except _RequestWorkCancelled as exc:
+        raise _client_closed_request_exception() from exc
+    except asyncio.CancelledError:
+        cancel_event.set()
+        if work_task is not None and not work_task.done():
+            work_task.cancel()
+            with suppress(asyncio.CancelledError, _RequestWorkCancelled):
+                await work_task
+        raise
+    finally:
+        cancel_event.set()
+        if limiter_acquired and limiter is not None:
+            limiter.release()
+        if not disconnect_task.done():
+            disconnect_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await disconnect_task
 
 
 class RegistryResponse(BaseModel):
@@ -110,6 +232,9 @@ class HomeAssistantExtension(BaseExtension):
         self._state_tracked: dict[str, set[str]] = {}
         self._state_stop: dict[str, asyncio.Event] = {}
         self._state_server_sig: dict[str, tuple[str, str, str]] = {}
+        self._servers_read_limiter = asyncio.Semaphore(HA_SERVERS_READ_CONCURRENCY)
+        self._registry_read_limiter = asyncio.Semaphore(HA_REGISTRY_READ_CONCURRENCY)
+        self._services_read_limiter = asyncio.Semaphore(HA_SERVICES_READ_CONCURRENCY)
 
     def capabilities(self) -> dict[str, Any]:
         return {
@@ -143,16 +268,25 @@ class HomeAssistantExtension(BaseExtension):
                     return s
             raise HTTPException(status_code=404, detail="Unknown Home Assistant server")
 
-        async def fetch_registry(server: HomeAssistantServer) -> RegistryResponse:
+        async def fetch_registry(
+            server: HomeAssistantServer,
+            check_cancelled: Callable[[], None] | None = None,
+        ) -> RegistryResponse:
+            def _check_cancelled() -> None:
+                if check_cancelled is not None:
+                    check_cancelled()
+
             now = time.time()
             cached = self._registry_cache.get(server.id)
             if cached and now - cached.at < 10:
                 return cached.data
 
+            _check_cancelled()
             ws_url = server.websocketUrl
             try:
                 async with websockets.connect(ws_url, open_timeout=8, close_timeout=2, max_size=2**23) as ws:
                     hello_raw = await asyncio.wait_for(ws.recv(), timeout=8)
+                    _check_cancelled()
                     if not isinstance(hello_raw, str):
                         raise HTTPException(status_code=502, detail="HA websocket error")
                     try:
@@ -163,8 +297,10 @@ class HomeAssistantExtension(BaseExtension):
                         raise HTTPException(status_code=502, detail="HA websocket error")
 
                     await ws.send(json.dumps({"type": "auth", "access_token": server.apiKey}))
+                    _check_cancelled()
 
                     auth_reply_raw = await asyncio.wait_for(ws.recv(), timeout=8)
+                    _check_cancelled()
                     if not isinstance(auth_reply_raw, str):
                         raise HTTPException(status_code=502, detail="HA websocket auth error")
                     try:
@@ -176,12 +312,14 @@ class HomeAssistantExtension(BaseExtension):
 
                     await ws.send(json.dumps({"id": 1, "type": "config/entity_registry/list"}))
                     await ws.send(json.dumps({"id": 2, "type": "config/device_registry/list"}))
+                    _check_cancelled()
 
                     entities: list[dict[str, Any]] | None = None
                     devices: list[dict[str, Any]] | None = None
 
                     for _ in range(50):
                         msg_raw = await asyncio.wait_for(ws.recv(), timeout=10)
+                        _check_cancelled()
                         if not isinstance(msg_raw, str):
                             continue
                         try:
@@ -201,6 +339,8 @@ class HomeAssistantExtension(BaseExtension):
 
                     if entities is None or devices is None:
                         raise HTTPException(status_code=502, detail="HA registry timeout")
+            except _RequestWorkCancelled:
+                raise
             except HTTPException:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -209,6 +349,7 @@ class HomeAssistantExtension(BaseExtension):
             out_entities: list[dict[str, Any]] = []
             device_entities: dict[str, list[str]] = {}
             for e in entities:
+                _check_cancelled()
                 if not isinstance(e, dict):
                     continue
                 entity_id = str(e.get("entity_id", "")).strip()
@@ -236,6 +377,7 @@ class HomeAssistantExtension(BaseExtension):
 
             out_devices: list[dict[str, Any]] = []
             for d in devices:
+                _check_cancelled()
                 if not isinstance(d, dict):
                     continue
                 did = str(d.get("id", "")).strip()
@@ -249,14 +391,32 @@ class HomeAssistantExtension(BaseExtension):
             return resp
 
         @app.get("/api/home_assistant/servers", response_model=list[HomeAssistantServerPublic])
-        async def ha_servers() -> list[HomeAssistantServerPublic]:
-            servers = await list_servers()
-            return [s.public() for s in servers]
+        async def ha_servers(request: Request) -> list[HomeAssistantServerPublic]:
+            async def _work(check_cancelled: Callable[[], None]) -> list[HomeAssistantServerPublic]:
+                check_cancelled()
+                servers = await list_servers()
+                check_cancelled()
+                return [s.public() for s in servers]
+
+            return await _run_cancelable_home_assistant_read(
+                request,
+                _work,
+                limiter=self._servers_read_limiter,
+            )
 
         @app.get("/api/home_assistant/{server_id}/registry", response_model=RegistryResponse)
-        async def ha_registry(server_id: str) -> RegistryResponse:
-            server = await get_server(server_id)
-            return await fetch_registry(server)
+        async def ha_registry(request: Request, server_id: str) -> RegistryResponse:
+            async def _work(check_cancelled: Callable[[], None]) -> RegistryResponse:
+                check_cancelled()
+                server = await get_server(server_id)
+                check_cancelled()
+                return await fetch_registry(server, check_cancelled)
+
+            return await _run_cancelable_home_assistant_read(
+                request,
+                _work,
+                limiter=self._registry_read_limiter,
+            )
 
         @app.post("/api/home_assistant/{server_id}/states")
         async def ha_states(server_id: str, body: StatesRequest) -> dict[str, Any]:
@@ -307,58 +467,74 @@ class HomeAssistantExtension(BaseExtension):
             return out
 
         @app.get("/api/home_assistant/{server_id}/services", response_model=list[HomeAssistantServicePublic])
-        async def ha_services(server_id: str, domain: str = "") -> list[HomeAssistantServicePublic]:
-            server = await get_server(server_id)
-            client = self._http
-            if client is None:
-                raise HTTPException(status_code=500, detail="HA client not ready")
-            try:
-                res = await client.get(
-                    f"{server.apiBase}/services",
-                    headers={"Authorization": f"Bearer {server.apiKey}"},
-                )
-            except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=502, detail="HA services request failed") from exc
-            if res.status_code == 401:
-                raise HTTPException(status_code=401, detail="HA auth failed")
-            if res.status_code >= 400:
-                raise HTTPException(status_code=502, detail=f"HA services request failed: {res.status_code}")
-            try:
-                payload = res.json()
-            except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=502, detail="HA services response invalid") from exc
-            if not isinstance(payload, list):
-                return []
-
-            domain_filter = str(domain or "").strip().lower()
-            services_out: list[HomeAssistantServicePublic] = []
-            for block in payload:
-                if not isinstance(block, dict):
-                    continue
-                domain_name = str(block.get("domain", "")).strip().lower()
-                if not domain_name:
-                    continue
-                if domain_filter and domain_name != domain_filter:
-                    continue
-                raw_services = block.get("services")
-                if not isinstance(raw_services, dict):
-                    continue
-                for service_name_raw, meta_raw in raw_services.items():
-                    service_name = str(service_name_raw or "").strip()
-                    if not service_name:
-                        continue
-                    meta = meta_raw if isinstance(meta_raw, dict) else {}
-                    services_out.append(
-                        HomeAssistantServicePublic(
-                            domain=domain_name,
-                            service=service_name,
-                            name=str(meta.get("name", "")).strip(),
-                            description=str(meta.get("description", "")).strip(),
-                        )
+        async def ha_services(
+            request: Request,
+            server_id: str,
+            domain: str = "",
+        ) -> list[HomeAssistantServicePublic]:
+            async def _work(check_cancelled: Callable[[], None]) -> list[HomeAssistantServicePublic]:
+                check_cancelled()
+                server = await get_server(server_id)
+                client = self._http
+                if client is None:
+                    raise HTTPException(status_code=500, detail="HA client not ready")
+                check_cancelled()
+                try:
+                    res = await client.get(
+                        f"{server.apiBase}/services",
+                        headers={"Authorization": f"Bearer {server.apiKey}"},
                     )
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(status_code=502, detail="HA services request failed") from exc
+                check_cancelled()
+                if res.status_code == 401:
+                    raise HTTPException(status_code=401, detail="HA auth failed")
+                if res.status_code >= 400:
+                    raise HTTPException(status_code=502, detail=f"HA services request failed: {res.status_code}")
+                try:
+                    payload = res.json()
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(status_code=502, detail="HA services response invalid") from exc
+                if not isinstance(payload, list):
+                    return []
 
-            services_out.sort(key=lambda item: ((item.name or item.service).lower(), item.service.lower()))
-            return services_out
+                domain_filter = str(domain or "").strip().lower()
+                services_out: list[HomeAssistantServicePublic] = []
+                for block in payload:
+                    check_cancelled()
+                    if not isinstance(block, dict):
+                        continue
+                    domain_name = str(block.get("domain", "")).strip().lower()
+                    if not domain_name:
+                        continue
+                    if domain_filter and domain_name != domain_filter:
+                        continue
+                    raw_services = block.get("services")
+                    if not isinstance(raw_services, dict):
+                        continue
+                    for service_name_raw, meta_raw in raw_services.items():
+                        check_cancelled()
+                        service_name = str(service_name_raw or "").strip()
+                        if not service_name:
+                            continue
+                        meta = meta_raw if isinstance(meta_raw, dict) else {}
+                        services_out.append(
+                            HomeAssistantServicePublic(
+                                domain=domain_name,
+                                service=service_name,
+                                name=str(meta.get("name", "")).strip(),
+                                description=str(meta.get("description", "")).strip(),
+                            )
+                        )
+
+                services_out.sort(key=lambda item: ((item.name or item.service).lower(), item.service.lower()))
+                return services_out
+
+            return await _run_cancelable_home_assistant_read(
+                request,
+                _work,
+                limiter=self._services_read_limiter,
+            )
 
         async def _call_service(server: HomeAssistantServer, domain: str, service: str, data: dict[str, Any]) -> Any:
             client = self._http

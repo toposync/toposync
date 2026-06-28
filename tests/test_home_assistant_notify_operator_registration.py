@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from importlib.metadata import EntryPoint
 from pathlib import Path
 from typing import Any
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import httpx
 import pytest
 
 from toposync.app import create_app
-from toposync_ext_home_assistant.plugin import EXTENSION_ID
+from toposync_ext_home_assistant.plugin import EXTENSION_ID, _run_cancelable_home_assistant_read
 import toposync.extensions.manager as ext_manager_mod
 
 
@@ -184,3 +186,62 @@ def test_home_assistant_set_state_service_posts_to_states(
             },
         }
     ]
+
+
+def test_home_assistant_cancelable_read_cancels_active_work() -> None:
+    async def _run() -> None:
+        disconnect_now = asyncio.Event()
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+        limiter = asyncio.Semaphore(1)
+
+        class _FakeRequest:
+            async def is_disconnected(self) -> bool:
+                return disconnect_now.is_set()
+
+        async def _work(check_cancelled):
+            check_cancelled()
+            started.set()
+            disconnect_now.set()
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _run_cancelable_home_assistant_read(_FakeRequest(), _work, limiter=limiter)  # type: ignore[arg-type]
+
+        assert exc_info.value.status_code == 499
+        assert started.is_set()
+        assert cancelled.is_set()
+        await asyncio.wait_for(limiter.acquire(), timeout=0.1)
+        limiter.release()
+
+    asyncio.run(_run())
+
+
+def test_home_assistant_cancelable_read_does_not_start_after_disconnect_while_waiting() -> None:
+    async def _run() -> None:
+        limiter = asyncio.Semaphore(1)
+        await limiter.acquire()
+        started = False
+
+        class _FakeRequest:
+            async def is_disconnected(self) -> bool:
+                return True
+
+        async def _work(check_cancelled):
+            nonlocal started
+            check_cancelled()
+            started = True
+            return None
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _run_cancelable_home_assistant_read(_FakeRequest(), _work, limiter=limiter)  # type: ignore[arg-type]
+
+        assert exc_info.value.status_code == 499
+        assert started is False
+        limiter.release()
+
+    asyncio.run(_run())

@@ -2377,15 +2377,22 @@ export async function validateFilterExpression(
   return (await res.json()) as FilterExpressionValidateResponse;
 }
 
-export async function listHomeAssistantServers(): Promise<HomeAssistantServerInfo[]> {
-  const res = await fetch("/api/home_assistant/servers");
+export async function listHomeAssistantServers(
+  options: AbortableRequestOptions = {},
+): Promise<HomeAssistantServerInfo[]> {
+  const res = await fetch("/api/home_assistant/servers", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to list Home Assistant servers: ${res.status}`);
   const body = await res.json();
   return Array.isArray(body) ? (body as HomeAssistantServerInfo[]) : [];
 }
 
-export async function getHomeAssistantRegistry(serverId: string): Promise<HomeAssistantRegistryResponse> {
-  const res = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/registry`);
+export async function getHomeAssistantRegistry(
+  serverId: string,
+  options: AbortableRequestOptions = {},
+): Promise<HomeAssistantRegistryResponse> {
+  const res = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/registry`, {
+    signal: options.signal,
+  });
   if (!res.ok) throw new Error(`Failed to load Home Assistant registry: ${res.status}`);
   const body = await res.json();
   return {
@@ -2400,12 +2407,14 @@ export async function getHomeAssistantRegistry(serverId: string): Promise<HomeAs
 
 export async function listHomeAssistantServices(
   serverId: string,
-  options?: { domain?: string },
+  options: { domain?: string; signal?: AbortSignal } = {},
 ): Promise<HomeAssistantServiceInfo[]> {
   const query = new URLSearchParams();
   if (options?.domain) query.set("domain", options.domain);
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
-  const res = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/services${suffix}`);
+  const res = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/services${suffix}`, {
+    signal: options.signal,
+  });
   if (!res.ok) throw new Error(`Failed to list Home Assistant services: ${res.status}`);
   const body = await res.json();
   return Array.isArray(body) ? (body as HomeAssistantServiceInfo[]) : [];

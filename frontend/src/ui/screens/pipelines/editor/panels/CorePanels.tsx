@@ -4,6 +4,7 @@ import CreatableSelect from "react-select/creatable";
 
 import {
   getHomeAssistantRegistry,
+  isAbortError,
   listHomeAssistantServers,
   listHomeAssistantServices,
   type HomeAssistantRegistryResponse,
@@ -1580,25 +1581,27 @@ export function HomeAssistantBooleanStateConfigCard({ config, showAdvanced, onUp
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoadingServers(true);
     setServersError(null);
 
-    void listHomeAssistantServers()
+    void listHomeAssistantServers({ signal: controller.signal })
       .then((payload) => {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
         setServers(Array.isArray(payload) ? payload : []);
       })
       .catch((error) => {
-        if (cancelled) return;
+        if (cancelled || isAbortError(error)) return;
         setServersError(String(error instanceof Error ? error.message : error || "unknown error"));
       })
       .finally(() => {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
         setLoadingServers(false);
       });
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, []);
 
@@ -1611,25 +1614,27 @@ export function HomeAssistantBooleanStateConfigCard({ config, showAdvanced, onUp
     }
 
     let cancelled = false;
+    const controller = new AbortController();
     setLoadingRegistry(true);
     setRegistryError(null);
 
-    void getHomeAssistantRegistry(serverId)
+    void getHomeAssistantRegistry(serverId, { signal: controller.signal })
       .then((payload) => {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
         setRegistry(payload);
       })
       .catch((error) => {
-        if (cancelled) return;
+        if (cancelled || isAbortError(error)) return;
         setRegistryError(String(error instanceof Error ? error.message : error || "unknown error"));
       })
       .finally(() => {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
         setLoadingRegistry(false);
       });
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [serverId, targetMode]);
 
@@ -1895,25 +1900,27 @@ export function HomeAssistantNotifyConfigCard({ config, showAdvanced, onUpdateCo
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoadingServers(true);
     setServersError(null);
 
-    void listHomeAssistantServers()
+    void listHomeAssistantServers({ signal: controller.signal })
       .then((payload) => {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
         setServers(Array.isArray(payload) ? payload : []);
       })
       .catch((error) => {
-        if (cancelled) return;
+        if (cancelled || isAbortError(error)) return;
         setServersError(String(error instanceof Error ? error.message : error || "unknown error"));
       })
       .finally(() => {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
         setLoadingServers(false);
       });
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, []);
 
@@ -1926,25 +1933,30 @@ export function HomeAssistantNotifyConfigCard({ config, showAdvanced, onUpdateCo
     }
 
     let cancelled = false;
+    const controller = new AbortController();
     setLoadingNotifyServices(true);
     setNotifyServicesError(null);
 
-    void listHomeAssistantServices(serverId, { domain: "notify" })
+    void listHomeAssistantServices(serverId, {
+      domain: "notify",
+      signal: controller.signal,
+    })
       .then((payload) => {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
         setNotifyServices(Array.isArray(payload) ? payload : []);
       })
       .catch((error) => {
-        if (cancelled) return;
+        if (cancelled || isAbortError(error)) return;
         setNotifyServicesError(String(error instanceof Error ? error.message : error || "unknown error"));
       })
       .finally(() => {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
         setLoadingNotifyServices(false);
       });
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [serverId]);
 

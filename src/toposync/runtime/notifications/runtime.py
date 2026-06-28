@@ -3,11 +3,15 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from .events import EventBroadcaster
 from .store import NotificationRecord, NotificationStore
+
+
+_CancelCheck = Callable[[], None]
 
 
 def _iso(ts: float) -> str:
@@ -45,27 +49,52 @@ class NotificationsRuntime:
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
     ) -> tuple[list[dict[str, Any]], int | None]:
-        records, next_cursor = await asyncio.to_thread(
-            self.store.list,
+        return await asyncio.to_thread(
+            self.list_sync,
             before=before,
             limit=limit,
             priorities=priorities,
             types=types,
             query=query,
         )
+
+    def list_sync(
+        self,
+        *,
+        before: int | None = None,
+        limit: int = 50,
+        priorities: list[str] | tuple[str, ...] | None = None,
+        types: list[str] | tuple[str, ...] | None = None,
+        query: str | None = None,
+        cancel_check: _CancelCheck | None = None,
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        records, next_cursor = self.store.list(
+            before=before,
+            limit=limit,
+            priorities=priorities,
+            types=types,
+            query=query,
+            cancel_check=cancel_check,
+        )
+        if cancel_check is not None:
+            cancel_check()
         return ([_to_public(r) for r in records], next_cursor)
 
     async def count_by_priority(self) -> dict[str, int]:
         return await asyncio.to_thread(self.store.count_by_priority)
 
     async def count_summary(self) -> dict[str, Any]:
-        total_by_priority, last_viewed_seq = await asyncio.to_thread(
-            lambda: (self.store.count_by_priority(), self.store.last_viewed_seq())
-        )
-        unread_by_priority = await asyncio.to_thread(
-            self.store.count_by_priority,
+        return await asyncio.to_thread(self.count_summary_sync)
+
+    def count_summary_sync(self, *, cancel_check: _CancelCheck | None = None) -> dict[str, Any]:
+        total_by_priority = self.store.count_by_priority(cancel_check=cancel_check)
+        last_viewed_seq = self.store.last_viewed_seq(cancel_check=cancel_check)
+        unread_by_priority = self.store.count_by_priority(
             after_seq=last_viewed_seq,
+            cancel_check=cancel_check,
         )
+        if cancel_check is not None:
+            cancel_check()
         return {
             "total": sum(total_by_priority.values()),
             "by_priority": total_by_priority,
@@ -78,7 +107,17 @@ class NotificationsRuntime:
         return await self.count_summary()
 
     async def get(self, notification_id: str) -> dict[str, Any] | None:
-        rec = await asyncio.to_thread(self.store.get, notification_id)
+        return await asyncio.to_thread(self.get_sync, notification_id)
+
+    def get_sync(
+        self,
+        notification_id: str,
+        *,
+        cancel_check: _CancelCheck | None = None,
+    ) -> dict[str, Any] | None:
+        rec = self.store.get(notification_id, cancel_check=cancel_check)
+        if cancel_check is not None:
+            cancel_check()
         return _to_public(rec) if rec is not None else None
 
     async def upsert(

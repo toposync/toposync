@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS notification_state (
 """
 
 _LAST_VIEWED_SEQ_KEY = "last_viewed_seq"
+_SQLITE_PROGRESS_INTERRUPT_OPCODES = 100
 _PRIORITY_BUCKET_SQL = """
 CASE LOWER(COALESCE(json_extract(payload_json, '$.priority'), ''))
   WHEN 'low' THEN 'low'
@@ -47,6 +49,7 @@ CASE LOWER(COALESCE(json_extract(payload_json, '$.priority'), ''))
 END
 """
 _VALID_PRIORITY_BUCKETS = {"low", "medium", "high"}
+_CancelCheck = Callable[[], None]
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -170,11 +173,56 @@ class NotificationStore:
             dedupe_key=str(row["dedupe_key"]) if row["dedupe_key"] else None,
         )
 
-    def get(self, notification_id: str) -> NotificationRecord | None:
+    def _run_read(
+        self,
+        work: Callable[[], Any],
+        *,
+        cancel_check: _CancelCheck | None = None,
+    ) -> Any:
+        if cancel_check is None:
+            with self._lock:
+                return work()
+
+        cancel_check()
+        while True:
+            cancel_check()
+            if self._lock.acquire(timeout=0.05):
+                break
+
+        def progress() -> int:
+            try:
+                cancel_check()
+            except Exception:
+                return 1
+            return 0
+
+        try:
+            cancel_check()
+            self._conn.set_progress_handler(progress, _SQLITE_PROGRESS_INTERRUPT_OPCODES)
+            try:
+                result = work()
+                cancel_check()
+                return result
+            except sqlite3.OperationalError as exc:
+                if "interrupted" in str(exc).lower():
+                    cancel_check()
+                raise
+            finally:
+                self._conn.set_progress_handler(None, 0)
+        finally:
+            self._lock.release()
+
+    def get(
+        self,
+        notification_id: str,
+        *,
+        cancel_check: _CancelCheck | None = None,
+    ) -> NotificationRecord | None:
         nid = notification_id.strip()
         if not nid:
             return None
-        with self._lock:
+
+        def read() -> sqlite3.Row | None:
             cur = self._conn.execute(
                 """
                 SELECT seq, id, type, title, description, image_path, payload_json, created_at, updated_at, dedupe_key
@@ -184,7 +232,9 @@ class NotificationStore:
                 """,
                 (nid,),
             )
-            row = cur.fetchone()
+            return cur.fetchone()
+
+        row = self._run_read(read, cancel_check=cancel_check)
         return self._row_to_record(row) if row is not None else None
 
     def list(
@@ -195,6 +245,7 @@ class NotificationStore:
         priorities: list[str] | tuple[str, ...] | None = None,
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
+        cancel_check: _CancelCheck | None = None,
     ) -> tuple[list[NotificationRecord], int | None]:
         limit = max(1, min(250, int(limit)))
         before_n = int(before) if before is not None else None
@@ -236,7 +287,8 @@ class NotificationStore:
 
         where_clause = f"WHERE {' AND '.join(where_sql)}" if where_sql else ""
         params.append(limit)
-        with self._lock:
+
+        def read() -> list[sqlite3.Row]:
             cur = self._conn.execute(
                 f"""
                 SELECT seq, id, type, title, description, image_path, payload_json, created_at, updated_at, dedupe_key
@@ -247,8 +299,9 @@ class NotificationStore:
                 """,
                 tuple(params),
             )
-            rows = cur.fetchall()
+            return cur.fetchall()
 
+        rows = self._run_read(read, cancel_check=cancel_check)
         records = [self._row_to_record(r) for r in rows]
         next_cursor = records[-1].seq if records else None
         return records, next_cursor
@@ -378,9 +431,13 @@ class NotificationStore:
         except Exception:
             return 0
 
-    def last_viewed_seq(self) -> int:
-        with self._lock:
-            return self._get_state_int_unlocked(_LAST_VIEWED_SEQ_KEY, 0)
+    def last_viewed_seq(self, *, cancel_check: _CancelCheck | None = None) -> int:
+        return int(
+            self._run_read(
+                lambda: self._get_state_int_unlocked(_LAST_VIEWED_SEQ_KEY, 0),
+                cancel_check=cancel_check,
+            )
+        )
 
     def mark_all_viewed(self) -> int:
         with self._lock:
@@ -391,7 +448,12 @@ class NotificationStore:
             self._set_state_int_unlocked(_LAST_VIEWED_SEQ_KEY, seq)
             return seq
 
-    def count_by_priority(self, *, after_seq: int | None = None) -> dict[str, int]:
+    def count_by_priority(
+        self,
+        *,
+        after_seq: int | None = None,
+        cancel_check: _CancelCheck | None = None,
+    ) -> dict[str, int]:
         """Aggregate counts per priority bucket. Buckets match the frontend
         normalization: anything that is not exactly "low", "medium", or "high"
         is bucketed as "medium" so totals always sum to total."""
@@ -403,7 +465,7 @@ class NotificationStore:
         else:
             params = ()
 
-        with self._lock:
+        def read() -> list[sqlite3.Row]:
             cur = self._conn.execute(
                 f"""
                 SELECT
@@ -419,7 +481,9 @@ class NotificationStore:
                 """,
                 params,
             )
-            rows = cur.fetchall()
+            return cur.fetchall()
+
+        rows = self._run_read(read, cancel_check=cancel_check)
         out = {"low": 0, "medium": 0, "high": 0}
         for row in rows:
             bucket = str(row["bucket"]) if row["bucket"] is not None else "medium"

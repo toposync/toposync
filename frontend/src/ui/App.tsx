@@ -31,6 +31,7 @@ import {
   getNotification,
   getNotificationsCount,
   getSettings,
+  isAbortError,
   listCompositions,
   listNotifications,
   markNotificationsViewed,
@@ -99,6 +100,7 @@ type Composition = {
 };
 
 const SAVE_DEBOUNCE_MS = 400;
+const NOTIFICATIONS_QUERY_DEBOUNCE_MS = 250;
 const VIEW_SETTINGS_STORAGE_KEY = "toposync.view.v1";
 const RENDER_MODE_STORAGE_KEY = "toposync.render_mode.v1";
 const SPATIAL_VIDEO_EXTENSION_ID = "com.toposync.spatial_video";
@@ -238,6 +240,19 @@ function notificationMatchesFilter(notification: Notification, filter: Notificat
   return `${notification.title ?? ""}\n${notification.description ?? ""}`.toLowerCase().includes(query);
 }
 
+function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function notificationFilterFacetsEqual(left: NotificationsFilter, right: NotificationsFilter): boolean {
+  return stringArraysEqual(left.priorities, right.priorities) && stringArraysEqual(left.types, right.types);
+}
+
+function notificationFiltersEqual(left: NotificationsFilter, right: NotificationsFilter): boolean {
+  return notificationFilterFacetsEqual(left, right) && left.query === right.query;
+}
+
 function isOpenRealtimeNotification(notification: Notification | null | undefined): boolean {
   if (!notification) return false;
   const payload = asRecord(notification.payload);
@@ -363,6 +378,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     visibleIds: [],
   });
   const [notificationsFilter, setNotificationsFilter] = useState<NotificationsFilter>(() => loadNotificationsFilter());
+  const [notificationsRequestFilter, setNotificationsRequestFilter] = useState<NotificationsFilter>(notificationsFilter);
   const [notificationsCursor, setNotificationsCursor] = useState<number | null>(null);
   const [notificationsHasMore, setNotificationsHasMore] = useState(true);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
@@ -376,8 +392,13 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const lastUserInteractionTsRef = useRef<number>(Date.now());
   const hasManualNotificationSelectionRef = useRef(false);
   const markNotificationsViewedInFlightRef = useRef<Promise<void> | null>(null);
-  const notificationsFilterRef = useRef<NotificationsFilter>(notificationsFilter);
+  const notificationsFilterRef = useRef<NotificationsFilter>(notificationsRequestFilter);
   const notificationsListRequestRef = useRef(0);
+  const notificationsListAbortRef = useRef<AbortController | null>(null);
+  const notificationsMoreAbortRef = useRef<AbortController | null>(null);
+  const notificationsCountAbortRef = useRef<AbortController | null>(null);
+  const activeNotificationFetchAbortRef = useRef<AbortController | null>(null);
+  const activeNotificationRefreshAbortRef = useRef<AbortController | null>(null);
   const mainViewportReadyMarkedRef = useRef(false);
   const extensionRecordsPromiseRef = useRef<Promise<ExtensionRecord[]> | null>(null);
   const activatedExtensionIdsRef = useRef<Set<string>>(new Set());
@@ -430,7 +451,6 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   }, [redoStack]);
 
   useLayoutEffect(() => {
-    notificationsFilterRef.current = notificationsFilter;
     try {
       localStorage.setItem(NOTIFICATIONS_FILTER_STORAGE_KEY, JSON.stringify(notificationsFilter));
     } catch {
@@ -438,12 +458,54 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     }
   }, [notificationsFilter]);
 
+  useLayoutEffect(() => {
+    notificationsFilterRef.current = notificationsRequestFilter;
+  }, [notificationsRequestFilter]);
+
   const notifications = useMemo(
     () => notificationsState.visibleIds.map((id) => notificationsState.byId[id]).filter((item): item is Notification => Boolean(item)),
     [notificationsState],
   );
 
   const activeNotification = activeNotificationId ? notificationsState.byId[activeNotificationId] ?? null : null;
+
+  const abortNotificationListRequests = useCallback(() => {
+    notificationsListAbortRef.current?.abort();
+    notificationsListAbortRef.current = null;
+    notificationsMoreAbortRef.current?.abort();
+    notificationsMoreAbortRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      abortNotificationListRequests();
+      notificationsCountAbortRef.current?.abort();
+      notificationsCountAbortRef.current = null;
+      activeNotificationFetchAbortRef.current?.abort();
+      activeNotificationFetchAbortRef.current = null;
+      activeNotificationRefreshAbortRef.current?.abort();
+      activeNotificationRefreshAbortRef.current = null;
+    };
+  }, [abortNotificationListRequests]);
+
+  useEffect(() => {
+    const currentRequestFilter = notificationsFilterRef.current;
+    if (notificationFiltersEqual(currentRequestFilter, notificationsFilter)) return;
+
+    abortNotificationListRequests();
+    if (backendAvailable && mainViewportReady) setNotificationsLoading(true);
+
+    if (!notificationFilterFacetsEqual(currentRequestFilter, notificationsFilter)) {
+      setNotificationsRequestFilter(notificationsFilter);
+      return;
+    }
+
+    const handle = window.setTimeout(() => {
+      setNotificationsRequestFilter(notificationsFilter);
+    }, NOTIFICATIONS_QUERY_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(handle);
+  }, [abortNotificationListRequests, backendAvailable, mainViewportReady, notificationsFilter]);
 
   const resetHistory = useCallback(() => {
     historyGroupRef.current = { depth: 0, snapshot: null, changed: false };
@@ -753,18 +815,23 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
 
   useEffect(() => {
     if (!backendAvailable) return;
-    let cancelled = false;
+    notificationsCountAbortRef.current?.abort();
+    const controller = new AbortController();
+    notificationsCountAbortRef.current = controller;
     void (async () => {
       try {
-        const count = await getNotificationsCount();
-        if (cancelled) return;
+        const count = await getNotificationsCount({ signal: controller.signal });
+        if (controller.signal.aborted) return;
         setNotificationsCount(count);
       } catch (err) {
+        if (isAbortError(err)) return;
         console.error("Failed to load notifications count", err);
+      } finally {
+        if (notificationsCountAbortRef.current === controller) notificationsCountAbortRef.current = null;
       }
     })();
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [backendAvailable]);
 
@@ -775,7 +842,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       return;
     }
 
-    let cancelled = false;
+    abortNotificationListRequests();
+    const controller = new AbortController();
+    notificationsListAbortRef.current = controller;
     const requestId = notificationsListRequestRef.current + 1;
     notificationsListRequestRef.current = requestId;
     setNotificationsLoading(true);
@@ -788,11 +857,12 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         const page = await listNotifications({
           before: null,
           limit: 40,
-          priorities: notificationsFilter.priorities,
-          types: notificationsFilter.types,
-          query: notificationsFilter.query,
+          priorities: notificationsRequestFilter.priorities,
+          types: notificationsRequestFilter.types,
+          query: notificationsRequestFilter.query,
+          signal: controller.signal,
         });
-        if (cancelled || notificationsListRequestRef.current !== requestId) return;
+        if (controller.signal.aborted || notificationsListRequestRef.current !== requestId) return;
         markToposyncPerformance("notifications-page-loaded", {
           page: "initial",
           count: page.notifications?.length ?? 0,
@@ -801,22 +871,24 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         setNotificationsState((prev) =>
           mergeNotificationPage(prev, page.notifications ?? [], {
             replaceVisible: true,
-            filter: notificationsFilter,
+            filter: notificationsRequestFilter,
           }),
         );
         setNotificationsCursor(page.next_cursor ?? null);
         setNotificationsHasMore(page.next_cursor != null);
       } catch (err) {
+        if (isAbortError(err)) return;
         console.error("Failed to load notifications", err);
       } finally {
-        if (!cancelled && notificationsListRequestRef.current === requestId) setNotificationsLoading(false);
+        if (notificationsListAbortRef.current === controller) notificationsListAbortRef.current = null;
+        if (!controller.signal.aborted && notificationsListRequestRef.current === requestId) setNotificationsLoading(false);
       }
     })();
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, [backendAvailable, mainViewportReady, notificationsFilter]);
+  }, [abortNotificationListRequests, backendAvailable, mainViewportReady, notificationsRequestFilter]);
 
   useEffect(() => {
     if (activeNotificationId && notificationsState.byId[activeNotificationId]) return;
@@ -879,14 +951,20 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     if (!activeNotificationId) return;
 
     let closed = false;
-    let cancelled = false;
-    void getNotification(activeNotificationId)
+    activeNotificationFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    activeNotificationFetchAbortRef.current = controller;
+    void getNotification(activeNotificationId, { signal: controller.signal })
       .then((notif) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         upsertNotification(notif, "update");
       })
       .catch((err) => {
+        if (isAbortError(err)) return;
         console.warn("Failed to fetch active notification", err);
+      })
+      .finally(() => {
+        if (activeNotificationFetchAbortRef.current === controller) activeNotificationFetchAbortRef.current = null;
       });
 
     const es = new EventSource(`/api/notifications/${encodeURIComponent(activeNotificationId)}/stream`);
@@ -907,7 +985,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     };
 
     return () => {
-      cancelled = true;
+      controller.abort();
       closed = true;
       es.close();
     };
@@ -918,23 +996,29 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     if (!activeNotificationId) return;
     if (!activeNotificationIsOpenRealtime) return;
 
-    let cancelled = false;
     const refreshActiveNotification = () => {
-      void getNotification(activeNotificationId)
+      activeNotificationRefreshAbortRef.current?.abort();
+      const controller = new AbortController();
+      activeNotificationRefreshAbortRef.current = controller;
+      void getNotification(activeNotificationId, { signal: controller.signal })
         .then((notif) => {
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
           upsertNotification(notif, "update");
         })
         .catch((err) => {
-          if (cancelled) return;
+          if (isAbortError(err)) return;
           console.warn("Failed to refresh active notification", err);
+        })
+        .finally(() => {
+          if (activeNotificationRefreshAbortRef.current === controller) activeNotificationRefreshAbortRef.current = null;
         });
     };
 
     const handle = window.setInterval(refreshActiveNotification, 2500);
     return () => {
-      cancelled = true;
       window.clearInterval(handle);
+      activeNotificationRefreshAbortRef.current?.abort();
+      activeNotificationRefreshAbortRef.current = null;
     };
   }, [activeNotificationId, activeNotificationIsOpenRealtime, backendAvailable, upsertNotification]);
 
@@ -1335,6 +1419,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
 
     const requestId = notificationsListRequestRef.current;
     const filter = notificationsFilterRef.current;
+    notificationsMoreAbortRef.current?.abort();
+    const controller = new AbortController();
+    notificationsMoreAbortRef.current = controller;
     setNotificationsLoading(true);
     try {
       const page = await listNotifications({
@@ -1343,8 +1430,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         priorities: filter.priorities,
         types: filter.types,
         query: filter.query,
+        signal: controller.signal,
       });
-      if (notificationsListRequestRef.current !== requestId) return;
+      if (controller.signal.aborted || notificationsListRequestRef.current !== requestId) return;
       markToposyncPerformance("notifications-page-loaded", {
         page: "next",
         count: page.notifications.length,
@@ -1360,9 +1448,11 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         }),
       );
     } catch (err) {
+      if (isAbortError(err)) return;
       console.error("Failed to load more notifications", err);
     } finally {
-      if (notificationsListRequestRef.current === requestId) setNotificationsLoading(false);
+      if (notificationsMoreAbortRef.current === controller) notificationsMoreAbortRef.current = null;
+      if (!controller.signal.aborted && notificationsListRequestRef.current === requestId) setNotificationsLoading(false);
     }
   }, [backendAvailable, notificationsCursor, notificationsHasMore, notificationsLoading]);
 

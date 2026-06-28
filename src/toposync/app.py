@@ -4314,20 +4314,29 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         _require(request, action="core:notifications:read")
         runtime: NotificationsRuntime = request.app.state.notifications
-        items, next_cursor = await runtime.list(
-            before=before,
-            limit=limit,
-            priorities=priority,
-            types=notification_type,
-            query=query,
-        )
-        return {"notifications": items, "next_cursor": next_cursor}
+
+        def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
+            items, next_cursor = runtime.list_sync(
+                before=before,
+                limit=limit,
+                priorities=priority,
+                types=notification_type,
+                query=query,
+                cancel_check=check_cancelled,
+            )
+            return {"notifications": items, "next_cursor": next_cursor}
+
+        return await _run_cancelable_request_work(request, build_response)
 
     @app.get("/api/notifications/count")
     async def count_notifications(request: Request) -> dict[str, Any]:
         _require(request, action="core:notifications:read")
         runtime: NotificationsRuntime = request.app.state.notifications
-        return await runtime.count_summary()
+
+        def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
+            return runtime.count_summary_sync(cancel_check=check_cancelled)
+
+        return await _run_cancelable_request_work(request, build_response)
 
     @app.post("/api/notifications/viewed")
     async def mark_notifications_viewed(request: Request) -> dict[str, Any]:
@@ -4336,7 +4345,7 @@ def create_app() -> FastAPI:
         return await runtime.mark_all_viewed()
 
     @app.get("/api/notifications/stream")
-    async def notifications_stream(request: Request) -> StreamingResponse:  # noqa: ARG001
+    async def notifications_stream(request: Request) -> StreamingResponse:
         _require(request, action="core:notifications:stream")
         runtime: NotificationsRuntime = request.app.state.notifications
         q = runtime.broadcaster.subscribe()
@@ -4346,17 +4355,27 @@ def create_app() -> FastAPI:
                 yield "retry: 1000\n\n"
                 yield "event: ready\ndata: {}\n\n"
                 while True:
-                    event = await q.get()
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        event = await asyncio.wait_for(q.get(), timeout=15)
+                    except asyncio.TimeoutError:
+                        yield ": ping\n\n"
+                        continue
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             except asyncio.CancelledError:
                 raise
             finally:
                 runtime.broadcaster.unsubscribe(q)
 
-        return StreamingResponse(gen(), media_type="text/event-stream")
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/notifications/{notification_id}/stream")
-    async def notification_stream(request: Request, notification_id: str) -> StreamingResponse:  # noqa: ARG001
+    async def notification_stream(request: Request, notification_id: str) -> StreamingResponse:
         _require(request, action="core:notifications:stream")
         runtime: NotificationsRuntime = request.app.state.notifications
         wanted = notification_id.strip()
@@ -4370,7 +4389,13 @@ def create_app() -> FastAPI:
                 yield "retry: 1000\n\n"
                 yield "event: ready\ndata: {}\n\n"
                 while True:
-                    event = await q.get()
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        event = await asyncio.wait_for(q.get(), timeout=15)
+                    except asyncio.TimeoutError:
+                        yield ": ping\n\n"
+                        continue
                     notif = event.get("notification") if isinstance(event, dict) else None
                     if not isinstance(notif, dict):
                         continue
@@ -4382,16 +4407,24 @@ def create_app() -> FastAPI:
             finally:
                 runtime.broadcaster.unsubscribe(q)
 
-        return StreamingResponse(gen(), media_type="text/event-stream")
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/notifications/{notification_id}")
     async def get_notification(request: Request, notification_id: str) -> dict[str, Any]:
         _require(request, action="core:notifications:read")
         runtime: NotificationsRuntime = request.app.state.notifications
-        notif = await runtime.get(notification_id)
-        if notif is None:
-            raise HTTPException(status_code=404, detail="Unknown notification")
-        return notif
+
+        def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
+            notif = runtime.get_sync(notification_id, cancel_check=check_cancelled)
+            if notif is None:
+                raise HTTPException(status_code=404, detail="Unknown notification")
+            return notif
+
+        return await _run_cancelable_request_work(request, build_response)
 
     frontend_dir = _resolve_frontend_dir()
     if frontend_dir:

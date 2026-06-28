@@ -780,6 +780,11 @@ export type NotificationsListParams = {
   priorities?: NotificationPriority[];
   types?: string[];
   query?: string;
+  signal?: AbortSignal;
+};
+
+export type AbortableRequestOptions = {
+  signal?: AbortSignal;
 };
 
 export type NotificationsCount = {
@@ -1342,6 +1347,14 @@ async function _parseHttpError(res: Response, fallback: string): Promise<string>
   return fallback;
 }
 
+export function isAbortError(err: unknown): boolean {
+  if (typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "AbortError") return true;
+  if (err && typeof err === "object" && "name" in err) {
+    return String((err as { name?: unknown }).name) === "AbortError";
+  }
+  return false;
+}
+
 export async function getAuthStatus(): Promise<AuthStatus> {
   const res = await fetch("/api/auth/status");
   if (!res.ok) throw new Error(`Failed to load auth status: ${res.status}`);
@@ -1668,14 +1681,14 @@ export async function listNotifications(
   }
   const query = String(listParams.query ?? "").trim();
   if (query) params.set("query", query);
-  const res = await fetch(`/api/notifications?${params.toString()}`);
+  const res = await fetch(`/api/notifications?${params.toString()}`, { signal: listParams.signal });
   if (!res.ok) throw new Error(`Failed to list notifications: ${res.status}`);
   const body = (await res.json()) as { notifications?: Notification[]; next_cursor?: number | null };
   return { notifications: body.notifications ?? [], next_cursor: body.next_cursor ?? null };
 }
 
-export async function getNotificationsCount(): Promise<NotificationsCount> {
-  const res = await fetch("/api/notifications/count");
+export async function getNotificationsCount(options: AbortableRequestOptions = {}): Promise<NotificationsCount> {
+  const res = await fetch("/api/notifications/count", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to count notifications: ${res.status}`);
   const body = (await res.json()) as Partial<NotificationsCount>;
   const by = body.by_priority ?? { low: 0, medium: 0, high: 0 };
@@ -1720,8 +1733,11 @@ export async function markNotificationsViewed(): Promise<NotificationsCount> {
   };
 }
 
-export async function getNotification(notificationId: string): Promise<Notification> {
-  const res = await fetch(`/api/notifications/${encodeURIComponent(notificationId)}`);
+export async function getNotification(
+  notificationId: string,
+  options: AbortableRequestOptions = {},
+): Promise<Notification> {
+  const res = await fetch(`/api/notifications/${encodeURIComponent(notificationId)}`, { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to fetch notification ${notificationId}: ${res.status}`);
   return res.json();
 }

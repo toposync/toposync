@@ -11,6 +11,10 @@ import toposync.extensions.manager as ext_manager_mod
 from toposync.runtime.notifications import NotificationsRuntime
 
 
+class _TestCancelled(Exception):
+    pass
+
+
 def test_close_open_pipeline_notifications_marks_stale_open_as_closed(tmp_path: Path) -> None:
     async def scenario() -> None:
         notifications = NotificationsRuntime(data_dir=tmp_path / "data")
@@ -212,6 +216,56 @@ def test_notifications_viewed_endpoint_does_not_reset_on_list(
         assert next_count.json()["total"] == 2
         assert next_count.json()["unread_total"] == 1
         assert next_count.json()["unread_by_priority"] == {"low": 1, "medium": 0, "high": 0}
+
+
+def test_notification_store_cancel_check_interrupts_before_read(tmp_path: Path) -> None:
+    notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+    notifications.store.upsert(type="pipelines.event", title="Initial", payload={"priority": "medium"})
+
+    def cancel_check() -> None:
+        raise _TestCancelled()
+
+    with pytest.raises(_TestCancelled):
+        notifications.store.get("missing", cancel_check=cancel_check)
+
+    with pytest.raises(_TestCancelled):
+        notifications.store.list(limit=10, cancel_check=cancel_check)
+
+    with pytest.raises(_TestCancelled):
+        notifications.store.count_by_priority(cancel_check=cancel_check)
+
+
+def test_notification_store_cancel_check_interrupts_sqlite_read_and_restores_handler(tmp_path: Path) -> None:
+    notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+    for i in range(5_000):
+        notifications.store.upsert(
+            type="pipelines.event",
+            title=f"Noise {i}",
+            description="scan target",
+            payload={"priority": "low"},
+            now=1_000 + i,
+        )
+
+    calls = 0
+
+    def cancel_after_query_starts() -> None:
+        nonlocal calls
+        calls += 1
+        if calls >= 4:
+            raise _TestCancelled()
+
+    with pytest.raises(_TestCancelled):
+        notifications.store.list(
+            limit=40,
+            priorities=["medium"],
+            query="scan",
+            cancel_check=cancel_after_query_starts,
+        )
+
+    assert calls >= 4
+    items, cursor = notifications.store.list(limit=5, priorities=["low"])
+    assert len(items) == 5
+    assert cursor is not None
 
 
 def test_notifications_endpoint_filters_priority_before_pagination(

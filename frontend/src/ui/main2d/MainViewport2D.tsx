@@ -343,6 +343,7 @@ export function MainViewport2D({
   useEffect(() => {
     const sources: EventSource[] = [];
     const pollTimers: number[] = [];
+    const restControllers = new Map<string, AbortController>();
     let cancelled = false;
 
     setHomeAssistantLiveStates({});
@@ -370,19 +371,26 @@ export function MainViewport2D({
     };
 
     async function fetchInitialStates(serverId: string, entityIds: string[]) {
-      if (entityIds.length === 0) return;
+      if (cancelled || entityIds.length === 0) return;
+      restControllers.get(serverId)?.abort();
+      const controller = new AbortController();
+      restControllers.set(serverId, controller);
       try {
         const response = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/states`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ entity_ids: entityIds }),
+          signal: controller.signal,
         });
         if (!response.ok) return;
         const data = await response.json();
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
         upsertSnapshot(serverId, data);
-      } catch {
-        // ignore
+      } catch (err) {
+        if (isAbortError(err)) return;
+        // Best-effort fallback; SSE remains the primary realtime path.
+      } finally {
+        if (restControllers.get(serverId) === controller) restControllers.delete(serverId);
       }
     }
 
@@ -437,6 +445,8 @@ export function MainViewport2D({
 
     return () => {
       cancelled = true;
+      for (const controller of restControllers.values()) controller.abort();
+      restControllers.clear();
       for (const eventSource of sources) {
         try {
           eventSource.close();

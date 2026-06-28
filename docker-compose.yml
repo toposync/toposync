@@ -1,6 +1,6 @@
 services:
   toposync:
-    image: ${TOPOSYNC_IMAGE:-ghcr.io/toposync/toposync:0.7.9}
+    image: ${TOPOSYNC_IMAGE:-ghcr.io/toposync/toposync:0.7.10}
     ports:
       - "${TOPOSYNC_PORT:-8000}:8000"
     volumes:

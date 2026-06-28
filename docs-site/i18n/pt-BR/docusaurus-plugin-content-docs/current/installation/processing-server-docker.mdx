@@ -17,13 +17,13 @@ Use este caminho quando quiser rodar um processing server isolado em Docker.
 A imagem padrão é:
 
 ```text
-ghcr.io/toposync/toposync:0.7.9
+ghcr.io/toposync/toposync:0.7.10
 ```
 
 Use a imagem CUDA em hosts Linux com aceleração NVIDIA:
 
 ```text
-ghcr.io/toposync/toposync:0.7.9-cuda
+ghcr.io/toposync/toposync:0.7.10-cuda
 ```
 
 Para suporte por arquitetura e GPU, consulte [Compatibilidade](architecture-support.mdx).
@@ -39,13 +39,13 @@ Para suporte por arquitetura e GPU, consulte [Compatibilidade](architecture-supp
 Baixe a imagem CPU:
 
 ```bash
-docker pull ghcr.io/toposync/toposync:0.7.9
+docker pull ghcr.io/toposync/toposync:0.7.10
 ```
 
 Para CUDA:
 
 ```bash
-docker pull ghcr.io/toposync/toposync:0.7.9-cuda
+docker pull ghcr.io/toposync/toposync:0.7.10-cuda
 ```
 
 ## Como Rodar
@@ -60,7 +60,7 @@ docker run --rm -d \
   --no-healthcheck \
   -p 49321:49321 \
   -v "$PWD/toposync-processing-data:/data" \
-  ghcr.io/toposync/toposync:0.7.9 \
+  ghcr.io/toposync/toposync:0.7.10 \
   toposync processing-serve --host 0.0.0.0 --port 49321 --data-dir /data
 ```
 
@@ -74,7 +74,7 @@ docker run --rm -d \
   -e TOPOSYNC_PROCESSING_PASSWORD='<senha-forte>' \
   -p 49321:49321 \
   -v "$PWD/toposync-processing-data:/data" \
-  ghcr.io/toposync/toposync:0.7.9 \
+  ghcr.io/toposync/toposync:0.7.10 \
   toposync processing-serve --host 0.0.0.0 --port 49321 --data-dir /data
 ```
 
@@ -89,7 +89,7 @@ Crie um arquivo `docker-compose.processing.yml` na sua pasta de deploy:
 ```yaml
 services:
   toposync-processing:
-    image: ghcr.io/toposync/toposync:0.7.9
+    image: ghcr.io/toposync/toposync:0.7.10
     command:
       - toposync
       - processing-serve
@@ -129,7 +129,7 @@ Suba o serviço:
 docker compose -f docker-compose.processing.yml up -d
 ```
 
-Para CUDA, troque a imagem para `ghcr.io/toposync/toposync:0.7.9-cuda` e
+Para CUDA, troque a imagem para `ghcr.io/toposync/toposync:0.7.10-cuda` e
 adicione a reserva de dispositivo NVIDIA usada no guia Docker CUDA.
 
 ## Como Acessar

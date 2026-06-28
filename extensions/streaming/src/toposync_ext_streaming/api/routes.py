@@ -2626,7 +2626,12 @@ def _url_has_loopback_host(url: str | None) -> bool:
         host = str(urllib_parse.urlsplit(str(url or "")).hostname or "").strip().lower()
     except Exception:
         return False
-    return host in {"localhost", "::1"} or host.startswith("127.")
+    return _host_is_loopback(host)
+
+
+def _host_is_loopback(host: str | None) -> bool:
+    normalized = str(host or "").strip().lower()
+    return normalized in {"localhost", "::1"} or normalized.startswith("127.")
 
 
 def _url_host_for_rtsp(url: str | None) -> str:
@@ -2940,10 +2945,17 @@ async def _build_home_assistant_camera_item(
             blocking_errors.append(f"Failed to resolve remote Home Assistant camera playback: {exc}")
     else:
         engine_path = resolve_output_engine_path(transmission, output)
+        home_assistant_rtsp_host = _home_assistant_rtsp_host(request)
         rtsp_url = await _engine_manager(request).get_read_url_for_path(
             engine_path,
-            host=_home_assistant_rtsp_host(request),
+            host=home_assistant_rtsp_host,
         )
+        if _url_has_loopback_host(rtsp_url) and not _host_is_loopback(home_assistant_rtsp_host):
+            blocking_errors.append(
+                "Local streaming engine returned a loopback RTSP URL for Home Assistant camera playback; "
+                "enable engine.expose_to_lan and set TOPOSYNC_HOME_ASSISTANT_RTSP_HOST to a host reachable by Home Assistant."
+            )
+            rtsp_url = None
         redacted_rtsp_url = _redact_url_credentials(rtsp_url)
 
     role = variant.role if variant is not None else None

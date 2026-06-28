@@ -72,7 +72,12 @@ def _settings(*, direct_main: bool = False) -> AppSettings:
     )
 
 
-def _create_client(tmp_path: Path, *, direct_main: bool = False) -> TestClient:
+def _create_client(
+    tmp_path: Path,
+    *,
+    direct_main: bool = False,
+    base_url: str = "http://127.0.0.1",
+) -> TestClient:
     data_dir = tmp_path / "data"
     paths = UserDataPaths(
         data_dir=data_dir,
@@ -92,7 +97,7 @@ def _create_client(tmp_path: Path, *, direct_main: bool = False) -> TestClient:
     app.state.streaming_runtime_state = TransmissionRuntimeState()
     app.state.streaming_publisher_manager = PublisherManager(data_dir=paths.data_dir)
     app.include_router(create_streaming_router())
-    return TestClient(app)
+    return TestClient(app, base_url=base_url)
 
 
 async def _set_transmissions_host_server(
@@ -702,6 +707,21 @@ def test_home_assistant_camera_manifest_preserves_live_view_stream_variants(tmp_
     assert {item["variant_id"] for item in camera["variants"]} == {"main", "sub", "zoom"}
     assert "10.0.0.10" not in camera["rtsp_url"]
     assert "secret" not in res.text
+
+
+def test_home_assistant_camera_manifest_blocks_local_loopback_for_container_host(tmp_path: Path) -> None:
+    client = _create_client(tmp_path, base_url="http://toposync")
+    generated = client.post("/api/streams/camera-live-views/generate", json={"camera_id": "front"}).json()
+    live_view = generated["camera_live_views"][0]
+
+    res = client.get("/api/streams/home-assistant/cameras")
+
+    assert res.status_code == 200, res.text
+    camera = next(item for item in res.json()["cameras"] if item["live_view_id"] == live_view["id"])
+    assert camera["rtsp_url"] is None
+    assert camera["capabilities"]["rtsp"] is False
+    assert "Local streaming engine returned a loopback RTSP URL" in " ".join(camera["blocking_errors"])
+    assert "TOPOSYNC_HOME_ASSISTANT_RTSP_HOST" in " ".join(camera["blocking_errors"])
 
 
 def test_home_assistant_camera_manifest_resolves_remote_transmission_rtsp(

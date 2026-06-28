@@ -729,6 +729,15 @@ All endpoints are under `/api/streams`.
 ### Home Assistant
 - `GET /api/streams/home-assistant/cameras`
 
+For Home Assistant running in Docker Compose, the RTSP URL in this manifest must
+use a host reachable from the Home Assistant container. Enable
+`engine.expose_to_lan`, restart the streaming engine, and set
+`TOPOSYNC_HOME_ASSISTANT_RTSP_HOST` to the Compose service name or another
+container-reachable hostname, for example `toposync`. If the endpoint would
+otherwise return a loopback RTSP URL for a non-loopback request host, the
+manifest omits `rtsp_url` and reports a blocking error instead of publishing an
+unusable `rtsp://127.0.0.1:...` URL.
+
 ### Distributed settings
 - `GET /api/streams/distributed/settings/{server_id}`
 
@@ -968,6 +977,10 @@ To enable LAN viewers:
 
 Notes:
 - `GET /api/streams/transmissions/{id}/urls` chooses the host component based on the current request host when `expose_to_lan` is enabled.
+- `GET /api/streams/home-assistant/cameras` follows the same rule, but a
+  Compose-based Home Assistant often needs `TOPOSYNC_HOME_ASSISTANT_RTSP_HOST`
+  so the advertised RTSP host is the Toposync service name visible from the Home
+  Assistant container.
 - If MediaMTX runs behind Docker/NAT, advertise the reachable LAN host with `TOPOSYNC_STREAMING_WEBRTC_ADDITIONAL_HOSTS` and publish the static ICE UDP port configured by `TOPOSYNC_STREAMING_WEBRTC_LOCAL_UDP_ADDRESS`.
 - MediaMTX still restricts publishing and API access to localhost IPs; LAN exposure is for viewer playback only.
 

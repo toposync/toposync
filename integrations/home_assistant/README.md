@@ -52,6 +52,14 @@ Each entity is created from `GET /api/streams/home-assistant/cameras`.
 `source=home_assistant_entity` and returns the internal Toposync/MediaMTX RTSP
 URL for the selected `output_id`/`quality_profile_id`.
 
+For Docker Compose, that RTSP URL must be reachable from the Home Assistant
+container. Configure Toposync streaming with `engine.expose_to_lan=true`,
+restart the streaming engine, and set `TOPOSYNC_HOME_ASSISTANT_RTSP_HOST` to
+the Toposync service name visible inside the Compose network, for example
+`toposync`. If Toposync would otherwise advertise a loopback RTSP URL to a
+non-loopback Home Assistant request, the camera manifest reports a blocking
+error instead of creating a broken `rtsp://127.0.0.1:...` camera stream.
+
 Native WebRTC is present as an opt-in scaffold and should stay disabled until
 the Toposync `/api/streams/transmissions/{id}/webrtc/offer` path is validated
 with Home Assistant Cloud relay/TURN in a real environment.

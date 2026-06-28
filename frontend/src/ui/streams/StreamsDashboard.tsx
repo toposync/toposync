@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type Hls from "hls.js";
 
 import {
+  isAbortError,
   getStreamingCameraLiveViewPlayback,
   getStreamingRuntimeHealth,
   heartbeatStreamingTransmissionDemand,
@@ -9,6 +10,7 @@ import {
   postStreamingPlaybackEvents,
   primeStreamingTransmissionDemand,
   updateStreamingCameraLiveView,
+  type AbortableRequestOptions,
   type StreamingCameraLiveContext,
   type StreamingCameraLiveVariant,
   type StreamingCameraLiveView,
@@ -675,6 +677,15 @@ function asErrorMessage(error: unknown): string {
   return String(error || i18n.t("core.ui.streams.error_unknown", {}, "unknown error"));
 }
 
+function createAbortError(): Error {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("Aborted", "AbortError") as unknown as Error;
+  }
+  const error = new Error("Aborted");
+  error.name = "AbortError";
+  return error;
+}
+
 function isHlsAuthProbeErrorMessage(message: string): boolean {
   const lowered = String(message || "").toLowerCase();
   return lowered.includes("(401)") || lowered.includes("(403)") || lowered.includes("media_token_expired");
@@ -776,22 +787,26 @@ function hlsAttributeUris(playlistText: string): string[] {
   return out;
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+async function fetchWithTimeout(url: string, init: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
   const abortController = new AbortController();
+  const handleAbort = () => abortController.abort();
   const timeoutId = window.setTimeout(() => abortController.abort(), HLS_BROWSER_PROBE_TIMEOUT_MS);
   try {
+    if (signal?.aborted) abortController.abort();
+    else signal?.addEventListener("abort", handleAbort, { once: true });
     return await fetch(url, { ...init, signal: abortController.signal });
   } finally {
+    signal?.removeEventListener("abort", handleAbort);
     window.clearTimeout(timeoutId);
   }
 }
 
-async function fetchHlsPlaylistText(url: string, authHeader: string | null): Promise<string> {
+async function fetchHlsPlaylistText(url: string, authHeader: string | null, signal?: AbortSignal): Promise<string> {
   const headers: Record<string, string> = {
     accept: "application/vnd.apple.mpegurl, application/x-mpegurl, text/plain, */*",
   };
   if (authHeader) headers.authorization = authHeader;
-  const response = await fetchWithTimeout(url, { cache: "no-store", headers });
+  const response = await fetchWithTimeout(url, { cache: "no-store", headers }, signal);
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
       throw new Error(`Secure HLS URL expired or was rejected (${response.status}).`);
@@ -808,14 +823,15 @@ async function fetchHlsPlaylistText(url: string, authHeader: string | null): Pro
 async function probeBrowserHlsPlayback(
   masterPlaylistUrl: string,
   authHeader: string | null,
+  signal?: AbortSignal,
 ): Promise<{ mediaPlaylistUrl: string; tailSegmentUrl: string; mediaSequence: string | null; targetDuration: string | null }> {
-  const masterText = await fetchHlsPlaylistText(masterPlaylistUrl, authHeader);
+  const masterText = await fetchHlsPlaylistText(masterPlaylistUrl, authHeader, signal);
   const masterUris = hlsPlaylistUris(masterText);
   const mediaPlaylistUrl =
     masterText.includes("#EXT-X-STREAM-INF") && masterUris.length
       ? resolveHlsRelativeUrl(masterPlaylistUrl, masterUris[0])
       : masterPlaylistUrl;
-  const mediaText = mediaPlaylistUrl === masterPlaylistUrl ? masterText : await fetchHlsPlaylistText(mediaPlaylistUrl, authHeader);
+  const mediaText = mediaPlaylistUrl === masterPlaylistUrl ? masterText : await fetchHlsPlaylistText(mediaPlaylistUrl, authHeader, signal);
   const mediaUris = hlsPlaylistUris(mediaText);
   const attributeUris = hlsAttributeUris(mediaText);
   const tailCandidates = [...mediaUris, ...attributeUris].filter((uri) => !uri.startsWith("data:"));
@@ -826,7 +842,7 @@ async function probeBrowserHlsPlayback(
   const tailSegmentUrl = resolveHlsRelativeUrl(mediaPlaylistUrl, tailUri);
   const headers: Record<string, string> = { range: "bytes=0-1", accept: "*/*" };
   if (authHeader) headers.authorization = authHeader;
-  const response = await fetchWithTimeout(tailSegmentUrl, { cache: "no-store", headers });
+  const response = await fetchWithTimeout(tailSegmentUrl, { cache: "no-store", headers }, signal);
   if (!response.ok && response.status !== 206) {
     if (response.status === 401 || response.status === 403) {
       throw new Error(`Secure HLS URL expired or was rejected (${response.status}).`);
@@ -1686,7 +1702,7 @@ function StreamTilePlayer({
   onTransportPreferenceChange: (preference: StreamTransportPreference) => void;
   onVariantOverrideChange: (variantId: string) => void;
   onSetVariantDefault: () => Promise<void>;
-  onRefreshUrls: () => Promise<void>;
+  onRefreshUrls: (options?: AbortableRequestOptions) => Promise<void>;
   onOpenPtz: () => void;
   onDisplayContextChange?: (context: "pip" | "fullscreen" | null) => void;
 }): React.ReactElement {
@@ -1964,6 +1980,8 @@ function StreamTilePlayer({
   useEffect(() => {
     if (typeof window === "undefined") return;
     let cancelled = false;
+    const playbackAbortController = new AbortController();
+    const playbackSignal = playbackAbortController.signal;
     let nativeCleanup: (() => void) | null = null;
     let retryTimerId: number | null = null;
     let attempt = 0;
@@ -2015,7 +2033,7 @@ function StreamTilePlayer({
 
       const sample = async () => {
         try {
-          const probe = await probeBrowserHlsPlayback(sourceUrl, hlsAuthHeader);
+          const probe = await probeBrowserHlsPlayback(sourceUrl, hlsAuthHeader, playbackSignal);
           if (cancelled) return;
           const liveKey = `${probe.mediaSequence || ""}|${probe.tailSegmentUrl || ""}`;
           const targetDurationMs = Math.max(2000, Number(probe.targetDuration || 0) * 1000 || 4000);
@@ -2356,7 +2374,7 @@ function StreamTilePlayer({
     };
 
     const probeHlsUrlForBrowser = async (sourceUrl: string): Promise<void> => {
-      const probe = await probeBrowserHlsPlayback(sourceUrl, hlsAuthHeader);
+      const probe = await probeBrowserHlsPlayback(sourceUrl, hlsAuthHeader, playbackSignal);
       const summary = [
         "ok",
         probe.mediaSequence ? `seq ${probe.mediaSequence}` : null,
@@ -2793,7 +2811,12 @@ function StreamTilePlayer({
         message,
         data: withTransportTelemetry({ output_id: hlsOutputId ?? outputId }),
       });
-      await onRefreshUrlsRef.current();
+      try {
+        await onRefreshUrlsRef.current({ signal: playbackSignal });
+      } catch (refreshError) {
+        if (cancelled || isAbortError(refreshError)) return true;
+        throw refreshError;
+      }
       return true;
     };
 
@@ -3187,6 +3210,7 @@ function StreamTilePlayer({
       setPlaybackWarmupUntilMs(0);
       return () => {
         cancelled = true;
+        playbackAbortController.abort();
         destroyPlayback();
       };
     }
@@ -3196,6 +3220,7 @@ function StreamTilePlayer({
 
     return () => {
       cancelled = true;
+      playbackAbortController.abort();
       recordWebPlaybackEvent("stop", { severity: "debug" });
       playbackSessionIdRef.current = null;
       destroyPlayback();
@@ -3520,6 +3545,10 @@ export function StreamsDashboard({
   );
   const [savingVariantDefaultByLiveViewId, setSavingVariantDefaultByLiveViewId] = useState<Record<string, boolean>>({});
   const [displayContextByLiveViewId, setDisplayContextByLiveViewId] = useState<Record<string, StreamingCameraLiveContext>>({});
+  const mountedRef = useRef(true);
+  const liveViewsRequestRef = useRef<AbortController | null>(null);
+  const runtimeHealthRequestRef = useRef<AbortController | null>(null);
+  const playbackRequestControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   const [tabVisible, setTabVisible] = useState<boolean>(() => {
     if (typeof document === "undefined") return true;
@@ -3570,20 +3599,39 @@ export function StreamsDashboard({
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      liveViewsRequestRef.current?.abort();
+      runtimeHealthRequestRef.current?.abort();
+      for (const controller of playbackRequestControllersRef.current.values()) controller.abort();
+      playbackRequestControllersRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
+    let firstLoadPending = true;
 
     const loadLiveViews = async (isFirstLoad: boolean) => {
-      if (isFirstLoad) setLoading(true);
+      const shouldSetLoading = firstLoadPending || isFirstLoad;
+      if (shouldSetLoading) setLoading(true);
+      liveViewsRequestRef.current?.abort();
+      const controller = new AbortController();
+      liveViewsRequestRef.current = controller;
       try {
-        const payload = await listStreamingCameraLiveViews();
-        if (cancelled) return;
+        const payload = await listStreamingCameraLiveViews({ signal: controller.signal });
+        if (cancelled || controller.signal.aborted) return;
+        firstLoadPending = false;
         setLiveViews(Array.isArray(payload) ? payload : []);
         setError(null);
       } catch (loadError) {
-        if (cancelled) return;
+        if (cancelled || isAbortError(loadError)) return;
+        firstLoadPending = false;
         setError(asErrorMessage(loadError));
       } finally {
-        if (!cancelled && isFirstLoad) setLoading(false);
+        if (liveViewsRequestRef.current === controller) liveViewsRequestRef.current = null;
+        if (!cancelled && !controller.signal.aborted && shouldSetLoading) setLoading(false);
       }
     };
 
@@ -3594,6 +3642,7 @@ export function StreamsDashboard({
 
     return () => {
       cancelled = true;
+      liveViewsRequestRef.current?.abort();
       window.clearInterval(intervalId);
     };
   }, []);
@@ -3665,6 +3714,78 @@ export function StreamsDashboard({
     [contextForLiveView, currentPageItems, variantOverrideByLiveViewId],
   );
 
+  const refreshPlaybackForKey = useCallback(
+    async (params: {
+      liveViewId: string;
+      playbackKey: string;
+      context: StreamingCameraLiveContext;
+      variantId: string | null;
+      signal?: AbortSignal;
+      throwOnError?: boolean;
+    }): Promise<StreamingCameraLiveViewPlaybackResponse | null> => {
+      const externalSignal = params.signal;
+      const throwOnError = Boolean(params.throwOnError);
+      if (externalSignal?.aborted) {
+        if (throwOnError) throw createAbortError();
+        return null;
+      }
+
+      playbackRequestControllersRef.current.get(params.playbackKey)?.abort();
+      const controller = new AbortController();
+      const handleExternalAbort = () => controller.abort();
+      if (externalSignal) externalSignal.addEventListener("abort", handleExternalAbort, { once: true });
+      playbackRequestControllersRef.current.set(params.playbackKey, controller);
+      setPlaybackLoadingByKey((previous) => ({ ...previous, [params.playbackKey]: true }));
+
+      try {
+        const payload = await getStreamingCameraLiveViewPlayback(params.liveViewId, {
+          context: params.context,
+          variantId: params.variantId,
+          signal: controller.signal,
+        });
+        if (!mountedRef.current || controller.signal.aborted) return null;
+        setPlaybackByKey((previous) => ({ ...previous, [params.playbackKey]: payload }));
+        setPlaybackErrorByKey((previous) => {
+          if (!previous[params.playbackKey]) return previous;
+          const next = { ...previous };
+          delete next[params.playbackKey];
+          return next;
+        });
+        return payload;
+      } catch (loadError) {
+        if (isAbortError(loadError)) {
+          if (throwOnError) throw loadError;
+          return null;
+        }
+        if (mountedRef.current) {
+          setPlaybackErrorByKey((previous) => ({
+            ...previous,
+            [params.playbackKey]: asErrorMessage(loadError),
+          }));
+        }
+        if (throwOnError) throw loadError;
+        return null;
+      } finally {
+        externalSignal?.removeEventListener("abort", handleExternalAbort);
+        if (playbackRequestControllersRef.current.get(params.playbackKey) === controller) {
+          playbackRequestControllersRef.current.delete(params.playbackKey);
+          if (mountedRef.current) {
+            setPlaybackLoadingByKey((previous) => ({ ...previous, [params.playbackKey]: false }));
+          }
+        }
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const visibleKeys = tabVisible ? new Set(currentPagePlaybackKeys) : new Set<string>();
+    for (const [playbackKey, controller] of playbackRequestControllersRef.current.entries()) {
+      if (visibleKeys.has(playbackKey)) continue;
+      controller.abort();
+    }
+  }, [currentPagePlaybackKeys, tabVisible]);
+
   useEffect(() => {
     for (const liveView of currentPageItems) {
       const liveViewId = String(liveView.id || "").trim();
@@ -3674,29 +3795,16 @@ export function StreamsDashboard({
       const playbackKey = playbackKeyFor(liveViewId, playbackContext, variantId);
       if (playbackByKey[playbackKey]) continue;
       if (playbackLoadingByKey[playbackKey]) continue;
+      if (playbackRequestControllersRef.current.has(playbackKey)) continue;
 
-      setPlaybackLoadingByKey((previous) => ({ ...previous, [playbackKey]: true }));
-      void getStreamingCameraLiveViewPlayback(liveViewId, { context: playbackContext, variantId })
-        .then((payload) => {
-          setPlaybackByKey((previous) => ({ ...previous, [playbackKey]: payload }));
-          setPlaybackErrorByKey((previous) => {
-            if (!previous[playbackKey]) return previous;
-            const next = { ...previous };
-            delete next[playbackKey];
-            return next;
-          });
-        })
-        .catch((loadError) => {
-          setPlaybackErrorByKey((previous) => ({
-            ...previous,
-            [playbackKey]: asErrorMessage(loadError),
-          }));
-        })
-        .finally(() => {
-          setPlaybackLoadingByKey((previous) => ({ ...previous, [playbackKey]: false }));
+      void refreshPlaybackForKey({
+        liveViewId,
+        playbackKey,
+        context: playbackContext,
+        variantId,
       });
     }
-  }, [contextForLiveView, currentPageItems, playbackByKey, playbackLoadingByKey, variantOverrideByLiveViewId]);
+  }, [contextForLiveView, currentPageItems, playbackByKey, playbackLoadingByKey, refreshPlaybackForKey, variantOverrideByLiveViewId]);
 
   const currentPageTransmissionIds = useMemo(
     () =>
@@ -3709,7 +3817,6 @@ export function StreamsDashboard({
   useEffect(() => {
     if (!tabVisible || currentPagePlaybackKeys.length === 0) return;
 
-    const inFlight = new Set<string>();
     const renewSignedUrls = () => {
       const nowUnix = Date.now() / 1000;
       for (const playbackKey of currentPagePlaybackKeys) {
@@ -3723,37 +3830,23 @@ export function StreamsDashboard({
             typeof output.renew_after_unix === "number" &&
             nowUnix >= Number(output.renew_after_unix),
         );
-        if (!signedHlsOutput || !liveViewId || inFlight.has(playbackKey)) continue;
+        if (!signedHlsOutput || !liveViewId || playbackRequestControllersRef.current.has(playbackKey)) continue;
 
-        inFlight.add(playbackKey);
         const keyParts = parsePlaybackKey(playbackKey);
         const context = keyParts.context || basePlaybackContext;
-        void getStreamingCameraLiveViewPlayback(liveViewId, { context, variantId: keyParts.variantId })
-          .then((payload) => {
-            setPlaybackByKey((previous) => ({ ...previous, [playbackKey]: payload }));
-            setPlaybackErrorByKey((previous) => {
-              if (!previous[playbackKey]) return previous;
-              const next = { ...previous };
-              delete next[playbackKey];
-              return next;
-            });
-          })
-          .catch((loadError) => {
-            setPlaybackErrorByKey((previous) => ({
-              ...previous,
-              [playbackKey]: asErrorMessage(loadError),
-            }));
-          })
-          .finally(() => {
-            inFlight.delete(playbackKey);
-          });
+        void refreshPlaybackForKey({
+          liveViewId,
+          playbackKey,
+          context,
+          variantId: keyParts.variantId,
+        });
       }
     };
 
     renewSignedUrls();
     const interval = window.setInterval(renewSignedUrls, 10_000);
     return () => window.clearInterval(interval);
-  }, [basePlaybackContext, currentPagePlaybackKeys, playbackByKey, tabVisible]);
+  }, [basePlaybackContext, currentPagePlaybackKeys, playbackByKey, refreshPlaybackForKey, tabVisible]);
 
   useEffect(() => {
     if (!tabVisible || currentPageTransmissionIds.length === 0) {
@@ -3763,9 +3856,12 @@ export function StreamsDashboard({
     let cancelled = false;
     const visibleIds = new Set(currentPageTransmissionIds);
     const loadRuntimeHealth = async () => {
+      runtimeHealthRequestRef.current?.abort();
+      const controller = new AbortController();
+      runtimeHealthRequestRef.current = controller;
       try {
-        const payload = await getStreamingRuntimeHealth();
-        if (cancelled) return;
+        const payload = await getStreamingRuntimeHealth({ signal: controller.signal });
+        if (cancelled || controller.signal.aborted) return;
         const next: Record<string, StreamingRuntimeTransmissionHealth> = {};
         for (const item of payload.transmissions ?? []) {
           const transmissionId = String(item.transmission_id || "").trim();
@@ -3775,8 +3871,10 @@ export function StreamsDashboard({
         setRuntimeHealthByTransmissionId((previous) => ({ ...previous, ...next }));
         setRuntimeHealthError(null);
       } catch (loadError) {
-        if (cancelled) return;
+        if (cancelled || isAbortError(loadError)) return;
         setRuntimeHealthError(asErrorMessage(loadError));
+      } finally {
+        if (runtimeHealthRequestRef.current === controller) runtimeHealthRequestRef.current = null;
       }
     };
 
@@ -3787,6 +3885,7 @@ export function StreamsDashboard({
 
     return () => {
       cancelled = true;
+      runtimeHealthRequestRef.current?.abort();
       window.clearInterval(intervalId);
     };
   }, [currentPageTransmissionIds, tabVisible]);
@@ -4026,29 +4125,15 @@ export function StreamsDashboard({
                     });
                   }}
                   onSetVariantDefault={() => saveDefaultVariantForUse(liveView, playbackContext, variantOverrideId)}
-                  onRefreshUrls={async () => {
-                    setPlaybackLoadingByKey((previous) => ({ ...previous, [playbackKey]: true }));
-                    try {
-                      const payload = await getStreamingCameraLiveViewPlayback(liveViewId, {
-                        context: playbackContext,
-                        variantId: variantOverrideId,
-                      });
-                      setPlaybackByKey((previous) => ({ ...previous, [playbackKey]: payload }));
-                      setPlaybackErrorByKey((previous) => {
-                        if (!previous[playbackKey]) return previous;
-                        const next = { ...previous };
-                        delete next[playbackKey];
-                        return next;
-                      });
-                    } catch (refreshError) {
-                      setPlaybackErrorByKey((previous) => ({
-                        ...previous,
-                        [playbackKey]: asErrorMessage(refreshError),
-                      }));
-                      throw refreshError;
-                    } finally {
-                      setPlaybackLoadingByKey((previous) => ({ ...previous, [playbackKey]: false }));
-                    }
+                  onRefreshUrls={async (options?: AbortableRequestOptions) => {
+                    await refreshPlaybackForKey({
+                      liveViewId,
+                      playbackKey,
+                      context: playbackContext,
+                      variantId: variantOverrideId,
+                      signal: options?.signal,
+                      throwOnError: true,
+                    });
                   }}
                   onOpenPtz={() => {
                     if (transmissionId) setPtzOverlay({ transmissionId, label: transmissionName });

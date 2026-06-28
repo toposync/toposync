@@ -2411,24 +2411,27 @@ export async function listHomeAssistantServices(
   return Array.isArray(body) ? (body as HomeAssistantServiceInfo[]) : [];
 }
 
-export async function listStreamingTransmissions(): Promise<StreamingTransmission[]> {
-  const res = await fetch("/api/streams/transmissions");
+export async function listStreamingTransmissions(options: AbortableRequestOptions = {}): Promise<StreamingTransmission[]> {
+  const res = await fetch("/api/streams/transmissions", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to list streaming transmissions: ${res.status}`);
   return (await res.json()) as StreamingTransmission[];
 }
 
-export async function listStreamingCameraLiveViews(): Promise<StreamingCameraLiveView[]> {
-  const res = await fetch("/api/streams/live-views");
+export async function listStreamingCameraLiveViews(options: AbortableRequestOptions = {}): Promise<StreamingCameraLiveView[]> {
+  const res = await fetch("/api/streams/live-views", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to list live cameras: ${res.status}`);
   return (await res.json()) as StreamingCameraLiveView[];
 }
 
-export async function listStreamingPublications(cameraId?: string): Promise<StreamingStreamPublication[]> {
+export async function listStreamingPublications(
+  cameraId?: string,
+  options: AbortableRequestOptions = {},
+): Promise<StreamingStreamPublication[]> {
   const params = new URLSearchParams();
   const normalizedCameraId = String(cameraId || "").trim();
   if (normalizedCameraId) params.set("camera_id", normalizedCameraId);
   const query = params.toString();
-  const res = await fetch(`/api/streams/publications${query ? `?${query}` : ""}`);
+  const res = await fetch(`/api/streams/publications${query ? `?${query}` : ""}`, { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to list streaming publications: ${res.status}`);
   return (await res.json()) as StreamingStreamPublication[];
 }
@@ -2472,6 +2475,7 @@ export async function updateStreamingCameraLiveView(
 export type StreamingCameraLivePlaybackOptions = {
   context?: StreamingCameraLiveContext;
   variantId?: string | null;
+  signal?: AbortSignal;
 };
 
 export async function getStreamingCameraLiveViewPlayback(
@@ -2485,13 +2489,14 @@ export async function getStreamingCameraLiveViewPlayback(
   const query = params.toString();
   const res = await fetch(
     `/api/streams/live-views/${encodeURIComponent(liveViewId)}/playback${query ? `?${query}` : ""}`,
+    { signal: options.signal },
   );
   if (!res.ok) throw new Error(`Failed to resolve live camera playback for ${liveViewId}: ${res.status}`);
   return (await res.json()) as StreamingCameraLiveViewPlaybackResponse;
 }
 
-export async function getStreamingQualityProfiles(): Promise<StreamingQualityProfilesResponse> {
-  const res = await fetch("/api/streams/quality-profiles");
+export async function getStreamingQualityProfiles(options: AbortableRequestOptions = {}): Promise<StreamingQualityProfilesResponse> {
+  const res = await fetch("/api/streams/quality-profiles", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to fetch streaming quality profiles: ${res.status}`);
   return (await res.json()) as StreamingQualityProfilesResponse;
 }
@@ -2500,6 +2505,8 @@ export type StreamingTransmissionUrlSelectionOptions = {
   outputId?: string | null;
   qualityProfileId?: StreamingQualityProfileId | null;
 };
+
+export type StreamingTransmissionUrlRequestOptions = StreamingTransmissionUrlSelectionOptions & AbortableRequestOptions;
 
 function streamingTransmissionUrlSelectionQuery(options?: StreamingTransmissionUrlSelectionOptions): string {
   const params = new URLSearchParams();
@@ -2513,17 +2520,19 @@ function streamingTransmissionUrlSelectionQuery(options?: StreamingTransmissionU
 
 export async function getStreamingTransmissionUrls(
   transmissionId: string,
-  options?: StreamingTransmissionUrlSelectionOptions,
+  options?: StreamingTransmissionUrlRequestOptions,
 ): Promise<StreamingTransmissionUrlsResponse> {
   const query = streamingTransmissionUrlSelectionQuery(options);
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/urls${query}`);
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/urls${query}`, {
+    signal: options?.signal,
+  });
   if (!res.ok) throw new Error(`Failed to fetch streaming URLs for ${transmissionId}: ${res.status}`);
   return (await res.json()) as StreamingTransmissionUrlsResponse;
 }
 
 export async function getStreamingTransmissionPlaybackPlan(
   transmissionId: string,
-  options?: StreamingTransmissionUrlSelectionOptions & {
+  options?: StreamingTransmissionUrlRequestOptions & {
     client?: "app" | "web" | "ha_ingress" | "ha_entity";
     context?: StreamingCameraLiveContext;
     lowLatency?: boolean;
@@ -2540,7 +2549,9 @@ export async function getStreamingTransmissionPlaybackPlan(
   if (context) params.set("context", context);
   if (options?.lowLatency) params.set("low_latency", "true");
   const query = params.toString() ? `?${params.toString()}` : "";
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/playback-plan${query}`);
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/playback-plan${query}`, {
+    signal: options?.signal,
+  });
   if (!res.ok) throw new Error(`Failed to fetch streaming playback plan for ${transmissionId}: ${res.status}`);
   return (await res.json()) as StreamingPlaybackPlanResponse;
 }
@@ -2579,8 +2590,11 @@ export async function heartbeatStreamingTransmissionDemand(
 
 export async function getStreamingTransmissionCameraPresets(
   transmissionId: string,
+  options: AbortableRequestOptions = {},
 ): Promise<StreamingTransmissionCameraPresetsResponse> {
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/presets`);
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/presets`, {
+    signal: options.signal,
+  });
   if (!res.ok) {
     throw new Error(await _parseHttpError(res, `Failed to fetch PTZ presets for ${transmissionId}: ${res.status}`));
   }
@@ -2604,8 +2618,11 @@ export async function gotoStreamingTransmissionCameraPreset(
 
 export async function getStreamingTransmissionCameraStatus(
   transmissionId: string,
+  options: AbortableRequestOptions = {},
 ): Promise<StreamingTransmissionCameraStatusResponse> {
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/status`);
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/status`, {
+    signal: options.signal,
+  });
   if (!res.ok) {
     throw new Error(await _parseHttpError(res, `Failed to fetch PTZ status for ${transmissionId}: ${res.status}`));
   }
@@ -2642,20 +2659,20 @@ export async function stopStreamingTransmissionCamera(
   return (await res.json()) as { ok: boolean };
 }
 
-export async function getStreamingOutputsRuntime(): Promise<StreamingOutputsRuntimeResponse> {
-  const res = await fetch("/api/streams/runtime/outputs");
+export async function getStreamingOutputsRuntime(options: AbortableRequestOptions = {}): Promise<StreamingOutputsRuntimeResponse> {
+  const res = await fetch("/api/streams/runtime/outputs", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to fetch streaming runtime outputs: ${res.status}`);
   return (await res.json()) as StreamingOutputsRuntimeResponse;
 }
 
-export async function getStreamingRuntimeHealth(): Promise<StreamingRuntimeHealthResponse> {
-  const res = await fetch("/api/streams/runtime/health");
+export async function getStreamingRuntimeHealth(options: AbortableRequestOptions = {}): Promise<StreamingRuntimeHealthResponse> {
+  const res = await fetch("/api/streams/runtime/health", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to fetch streaming runtime health: ${res.status}`);
   return (await res.json()) as StreamingRuntimeHealthResponse;
 }
 
-export async function getStreamingRuntimePipelines(): Promise<StreamingRuntimePipelinesResponse> {
-  const res = await fetch("/api/streams/runtime/pipelines");
+export async function getStreamingRuntimePipelines(options: AbortableRequestOptions = {}): Promise<StreamingRuntimePipelinesResponse> {
+  const res = await fetch("/api/streams/runtime/pipelines", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to fetch streaming runtime pipelines: ${res.status}`);
   return (await res.json()) as StreamingRuntimePipelinesResponse;
 }

@@ -5,6 +5,7 @@ import {
   getStreamingTransmissionCameraPresets,
   getStreamingTransmissionCameraStatus,
   gotoStreamingTransmissionCameraPreset,
+  isAbortError,
   moveStreamingTransmissionCamera,
   stopStreamingTransmissionCamera,
   type StreamingTransmissionCameraPreset,
@@ -131,6 +132,7 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
   const stopInFlightRef = useRef(false);
   const statusRefreshTimerRef = useRef<number | null>(null);
   const statusRefreshInFlightRef = useRef(false);
+  const statusRefreshAbortControllerRef = useRef<AbortController | null>(null);
   const presetsRef = useRef<StreamingTransmissionCameraPreset[]>([]);
   const ptzEnabledRef = useRef(false);
 
@@ -185,17 +187,23 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
       if (statusRefreshInFlightRef.current) return;
       statusRefreshInFlightRef.current = true;
       void (async () => {
+        statusRefreshAbortControllerRef.current?.abort();
+        const controller = new AbortController();
+        statusRefreshAbortControllerRef.current = controller;
         try {
           const tid = lastTransmissionIdRef.current || transmissionId.trim();
           if (!tid) return;
-          const refreshed = await getStreamingTransmissionCameraStatus(tid);
+          const refreshed = await getStreamingTransmissionCameraStatus(tid, { signal: controller.signal });
+          if (controller.signal.aborted) return;
           const nextStatus = refreshed.status ?? null;
           setStatus(nextStatus);
           const matched = pickMatchingPresetToken(presetsRef.current, nextStatus);
           setSelectedPresetToken(matched || "");
-        } catch {
+        } catch (error) {
+          if (isAbortError(error)) return;
           // ignore
         } finally {
+          if (statusRefreshAbortControllerRef.current === controller) statusRefreshAbortControllerRef.current = null;
           statusRefreshInFlightRef.current = false;
         }
       })();
@@ -286,7 +294,14 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
   };
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      if (statusRefreshTimerRef.current !== null) {
+        window.clearTimeout(statusRefreshTimerRef.current);
+        statusRefreshTimerRef.current = null;
+      }
+      statusRefreshAbortControllerRef.current?.abort();
+      return;
+    }
     setPosition(null);
     setDragging(false);
     setCommandError(null);
@@ -296,11 +311,13 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
       window.clearTimeout(statusRefreshTimerRef.current);
       statusRefreshTimerRef.current = null;
     }
+    statusRefreshAbortControllerRef.current?.abort();
   }, [open, transmissionId]);
 
   useEffect(() => {
     if (!open || !transmissionId.trim()) return;
     let cancelled = false;
+    const controller = new AbortController();
 
     setPresetsLoading(true);
     setPresetsError(null);
@@ -312,23 +329,23 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
     void (async () => {
       try {
         const [presetsRes, statusRes] = await Promise.allSettled([
-          getStreamingTransmissionCameraPresets(transmissionId),
-          getStreamingTransmissionCameraStatus(transmissionId),
+          getStreamingTransmissionCameraPresets(transmissionId, { signal: controller.signal }),
+          getStreamingTransmissionCameraStatus(transmissionId, { signal: controller.signal }),
         ]);
 
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
 
         const nextPresets =
           presetsRes.status === "fulfilled" && Array.isArray(presetsRes.value.presets) ? presetsRes.value.presets : [];
         setPresets(nextPresets);
-        if (presetsRes.status === "rejected") setPresetsError(asErrorMessage(presetsRes.reason));
+        if (presetsRes.status === "rejected" && !isAbortError(presetsRes.reason)) setPresetsError(asErrorMessage(presetsRes.reason));
 
         const nextStatus =
           statusRes.status === "fulfilled" && statusRes.value && typeof statusRes.value.status === "object"
             ? statusRes.value.status
             : null;
         setStatus(nextStatus);
-        if (statusRes.status === "rejected") setStatusError(asErrorMessage(statusRes.reason));
+        if (statusRes.status === "rejected" && !isAbortError(statusRes.reason)) setStatusError(asErrorMessage(statusRes.reason));
 
         const selected = pickMatchingPresetToken(nextPresets, nextStatus);
         setSelectedPresetToken(selected || "");
@@ -342,6 +359,7 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [open, transmissionId]);
 
@@ -419,11 +437,18 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
     try {
       await gotoStreamingTransmissionCameraPreset(transmissionId, next);
       setCommandError(null);
+      statusRefreshAbortControllerRef.current?.abort();
+      const controller = new AbortController();
+      statusRefreshAbortControllerRef.current = controller;
       try {
-        const refreshed = await getStreamingTransmissionCameraStatus(transmissionId);
+        const refreshed = await getStreamingTransmissionCameraStatus(transmissionId, { signal: controller.signal });
+        if (controller.signal.aborted) return;
         setStatus(refreshed.status ?? null);
-      } catch {
+      } catch (error) {
+        if (isAbortError(error)) return;
         // ignore
+      } finally {
+        if (statusRefreshAbortControllerRef.current === controller) statusRefreshAbortControllerRef.current = null;
       }
     } catch (error) {
       setCommandError(asErrorMessage(error));

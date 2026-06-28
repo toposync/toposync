@@ -31,6 +31,7 @@ class CinematicDirectorSourceConfig(BaseModel):
     priority_filter: list[Priority] = Field(default_factory=list)
     include_pipelines: list[str] = Field(default_factory=list)
     exclude_pipelines: list[str] = Field(default_factory=list)
+    pipeline_camera_map: dict[str, str] = Field(default_factory=dict)
     manual_camera_priorities: dict[str, int] = Field(default_factory=dict)
     manual_event_type_priorities: dict[str, int] = Field(default_factory=dict)
     preferred_source_role: SourceRole = "auto"
@@ -97,6 +98,22 @@ class CinematicDirectorSourceConfig(BaseModel):
             if not text:
                 continue
             out[text] = int(value)
+        return out
+
+    @field_validator("pipeline_camera_map", mode="before")
+    @classmethod
+    def _normalize_text_map(cls, values: Any) -> dict[str, str]:
+        if values is None:
+            return {}
+        if not isinstance(values, dict):
+            return values
+        out: dict[str, str] = {}
+        for key, value in (values or {}).items():
+            pipeline_name = str(key or "").strip()
+            camera_id = str(value or "").strip()
+            if not pipeline_name or not camera_id:
+                continue
+            out[pipeline_name] = camera_id
         return out
 
 

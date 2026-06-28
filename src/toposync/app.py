@@ -1241,6 +1241,25 @@ async def _lifespan(app: FastAPI):
 
     notifications = NotificationsRuntime(data_dir=config_store.paths.data_dir)
     services.register("notifications.upsert", notifications.upsert)
+
+    async def _notifications_list_service(
+        *,
+        before: int | None = None,
+        limit: int = 50,
+        priorities: list[str] | tuple[str, ...] | None = None,
+        types: list[str] | tuple[str, ...] | None = None,
+        query: str | None = None,
+    ) -> dict[str, Any]:
+        items, next_cursor = await notifications.list(
+            before=before,
+            limit=limit,
+            priorities=priorities,
+            types=types,
+            query=query,
+        )
+        return {"notifications": items, "next_cursor": next_cursor}
+
+    services.register("notifications.list", _notifications_list_service)
     try:
         closed = await notifications.close_open_pipeline_notifications(reason="runtime_restart")
         if closed:

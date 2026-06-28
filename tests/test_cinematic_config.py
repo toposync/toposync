@@ -19,6 +19,7 @@ def test_cinematic_director_config_defaults_are_open_by_default() -> None:
     assert config.preferred_source_role == "auto"
     assert config.warmup_mode == "off"
     assert config.max_warm_cameras == 0
+    assert config.pipeline_camera_map == {}
     assert config.ignore_own_pipeline_events is True
 
 
@@ -34,6 +35,7 @@ def test_cinematic_director_config_normalizes_user_filters() -> None:
             "priority_filter": [" HIGH ", "low", "high"],
             "include_pipelines": [" person-front ", "person-front", ""],
             "exclude_pipelines": "debug-pipeline",
+            "pipeline_camera_map": {" person-front ": " front ", "empty": "", "": "ignored"},
             "manual_camera_priorities": {" front ": 3, "": 99},
             "manual_event_type_priorities": {" person ": 10},
         }
@@ -43,5 +45,6 @@ def test_cinematic_director_config_normalizes_user_filters() -> None:
     assert config.priority_filter == ["high", "low"]
     assert config.include_pipelines == ["person-front"]
     assert config.exclude_pipelines == ["debug-pipeline"]
+    assert config.pipeline_camera_map == {"person-front": "front"}
     assert config.manual_camera_priorities == {"front": 3}
     assert config.manual_event_type_priorities == {"person": 10}

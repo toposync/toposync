@@ -14,6 +14,7 @@ from toposync.runtime.pipelines.packet_contract import build_media_descriptor, b
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 
 from ..constants import OPERATOR_ID_DIRECTOR_SOURCE
+from ..status import get_cinematic_status_store
 from .camera_pool import CameraPool, CameraPoolFrame
 from .event_feed import NotificationEventFeed
 from .selector import select_next_shot
@@ -46,8 +47,11 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
         self._catalog_loaded_at = 0.0
         self._pending_camera_id = ""
         self._pending_started_at = 0.0
+        self._last_pipeline_name = ""
+        self._last_node_id = ""
 
     async def produce(self, context: Any) -> Packet | None:
+        self._remember_context(context)
         await self._consume_gate_packets(context)
         now = time.time()
         self._state.demand_active = bool(self._gate_open)
@@ -59,15 +63,25 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
         cameras = await self._camera_candidates(context, events=events, now=now)
         decision = select_next_shot(self._state, cameras, events, self._config, now)
         if decision is None:
+            self._publish_status(context, now=now, reason="no_decision")
             return None
 
         selection = await self._select_frame_for_decision(decision, cameras, context, now=now)
         if selection is None:
+            self._publish_status(context, now=now, decision=decision, reason="waiting_frame")
             return None
 
         packet = self._packet_for_selection(selection, context, now=now)
         self._apply_selection(selection, now=now)
         self._stream_open = True
+        self._publish_status(
+            context,
+            now=now,
+            decision=selection.decision,
+            frame=selection.frame,
+            cut=selection.cut,
+            lifecycle=packet.lifecycle.value,
+        )
         return packet
 
     async def idle_sleep(self, context: Any) -> None:
@@ -78,6 +92,20 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
             await self._camera_pool.release_all()
         self._stream_open = False
         self._state = DirectorState(demand_active=False)
+        get_cinematic_status_store().update(
+            pipeline_name=self._last_pipeline_name,
+            node_id=self._last_node_id,
+            payload={
+                "demand_active": False,
+                "mode": "no_demand",
+                "stream_open": False,
+                "lifecycle": "close",
+                "cut_reason": "shutdown",
+                "active_camera_id": None,
+                "active_source_id": None,
+                "pending_camera_id": None,
+            },
+        )
 
     async def _consume_gate_packets(self, context: Any) -> None:
         gate_channel = context.inputs.get("gate")
@@ -443,6 +471,12 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
         self._pending_camera_id = ""
         self._pending_started_at = 0.0
         self._state = DirectorState(demand_active=False)
+        self._publish_status(
+            context,
+            now=now,
+            reason=reason,
+            lifecycle=close_packet.lifecycle.value if close_packet is not None else "idle",
+        )
         return close_packet
 
     def _close_packet(self, context: Any, *, now: float, reason: str) -> Packet:
@@ -483,6 +517,72 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
         pipeline = str(getattr(context, "pipeline_name", "") or "").strip() or "pipeline"
         node = str(getattr(context, "node_id", "") or "").strip() or "director"
         return f"cinematic:{pipeline}:{node}"
+
+    def _remember_context(self, context: Any) -> None:
+        self._last_pipeline_name = str(getattr(context, "pipeline_name", "") or "").strip()
+        self._last_node_id = str(getattr(context, "node_id", "") or "").strip()
+
+    def _publish_status(
+        self,
+        context: Any,
+        *,
+        now: float,
+        decision: ShotDecision | None = None,
+        frame: CameraPoolFrame | None = None,
+        cut: bool = False,
+        lifecycle: str = "update",
+        reason: str = "",
+    ) -> None:
+        self._remember_context(context)
+        active_event = self._state.active_events_by_key.get(
+            str(decision.event_key if decision is not None else self._state.active_event_key or "").strip()
+        )
+        frame_ts = float(frame.frame_ts or 0.0) if frame is not None else 0.0
+        pool = self._camera_pool
+        capture_errors = dict(pool.last_error_by_camera_id) if pool is not None else {}
+        cut_reason = str(
+            reason
+            or (decision.reason if decision is not None else "")
+            or "idle"
+        ).strip()
+        payload: dict[str, Any] = {
+            "demand_active": bool(self._state.demand_active),
+            "gate_known": bool(self._gate_known),
+            "stream_open": bool(self._stream_open),
+            "lifecycle": lifecycle,
+            "mode": str(decision.mode if decision is not None else self._state.mode or "no_demand"),
+            "cut": bool(cut),
+            "cut_reason": cut_reason,
+            "active_camera_id": str(
+                frame.camera_id if frame is not None else self._state.active_camera_id or ""
+            ).strip()
+            or None,
+            "active_source_id": str(
+                frame.source_id if frame is not None else self._state.active_source_id or ""
+            ).strip()
+            or None,
+            "pending_camera_id": self._pending_camera_id or None,
+            "active_event_key": str(
+                decision.event_key if decision is not None else self._state.active_event_key or ""
+            ).strip()
+            or None,
+            "active_event": _event_as_payload(active_event) if active_event is not None else None,
+            "frame_ts": frame_ts or None,
+            "frame_age_seconds": max(0.0, now - frame_ts) if frame_ts > 0.0 else None,
+            "frame_width": int(frame.width or 0) if frame is not None else None,
+            "frame_height": int(frame.height or 0) if frame is not None else None,
+            "recent_cuts_last_minute": len(
+                [item for item in self._state.recent_cut_timestamps if float(item) >= (now - 60.0)]
+            ),
+            "active_events": len(self._state.active_events_by_key),
+            "capture_errors": capture_errors,
+            "last_error": next(reversed(capture_errors.values()), "") if capture_errors else "",
+        }
+        get_cinematic_status_store().update(
+            pipeline_name=self._last_pipeline_name,
+            node_id=self._last_node_id,
+            payload=payload,
+        )
 
 
 def _select_catalog_source(raw_sources: Any, *, preferred_role: str) -> dict[str, Any]:

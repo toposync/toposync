@@ -11,7 +11,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ..api.models import StreamingEngineSettings
 from . import MEDIAMTX_VERSION
@@ -19,6 +19,11 @@ from .mediamtx_binary import extract_mediamtx_binary
 from .mediamtx_config import MediaMTXPathAuth, MediaMTXResolvedPorts, render_mediamtx_config
 from .mediamtx_processes import kill_mediamtx_processes_for_config_path
 from .platform import detect_mediamtx_platform
+
+PortResolutionPolicy = Literal["stable", "flexible"]
+
+PORT_RELEASE_TIMEOUT_SECONDS = 2.0
+PORT_RELEASE_POLL_SECONDS = 0.1
 
 
 def _split_env_list(name: str) -> list[str]:
@@ -104,6 +109,9 @@ class MediaMtxEngineStatus:
     warnings: tuple[str, ...]
     restart_count: int
     metrics_enabled: bool = True
+    port_policy: str = "flexible"
+    port_resolution: str = "preferred"
+    port_blocking_errors: tuple[str, ...] = ()
 
 
 class MediaMtxEngineManager:
@@ -129,6 +137,9 @@ class MediaMtxEngineManager:
         )
         self._metrics_enabled = True
         self._warnings: tuple[str, ...] = ()
+        self._port_policy = "flexible"
+        self._port_resolution = "preferred"
+        self._port_blocking_errors: tuple[str, ...] = ()
 
         self._config_hash: str | None = None
         self._platform_key: str | None = None
@@ -169,16 +180,47 @@ class MediaMtxEngineManager:
                 self._reset_restart_backoff_locked()
                 return self._status_locked()
 
-            config = self._resolve_runtime_config(
+            bind_host = _bind_host_for_engine_settings(engine_settings)
+            running = self._is_running_locked()
+            stable_ports = self._ports if running and bind_host == self._bind_host else None
+            port_policy = self._port_policy_for_start_locked(
+                engine_settings,
+                running=running,
+            )
+            if running and stable_ports is None:
+                previous_ports = self._ports
+                previous_bind_host = self._bind_host
+                await self._stop_locked(clear_error=False)
+                await self._wait_for_ports_available_locked(
+                    bind_host=previous_bind_host,
+                    ports=previous_ports,
+                    timeout_s=PORT_RELEASE_TIMEOUT_SECONDS,
+                )
+
+            config = await self._resolve_runtime_config_with_reclaim_locked(
                 engine_settings,
                 path_auth=path_auth,
-                preserve_ports_if_running=True,
+                port_policy=port_policy,
+                stable_ports=stable_ports,
             )
             if self._is_running_locked() and self._config_hash == config.config_hash:
                 return self._status_locked()
 
             if self._is_running_locked():
+                previous_ports = self._ports
+                previous_bind_host = self._bind_host
                 await self._stop_locked(clear_error=False)
+                if stable_ports is not None:
+                    await self._ensure_ports_available_after_stop_locked(
+                        bind_host=previous_bind_host,
+                        ports=previous_ports,
+                    )
+                else:
+                    await self._wait_for_ports_available_locked(
+                        bind_host=previous_bind_host,
+                        ports=previous_ports,
+                        timeout_s=PORT_RELEASE_TIMEOUT_SECONDS,
+                    )
 
             if not self._can_attempt_restart_locked(now_monotonic):
                 return self._status_locked()
@@ -211,16 +253,47 @@ class MediaMtxEngineManager:
                 self._reset_restart_backoff_locked()
                 return self._status_locked()
 
-            config = self._resolve_runtime_config(
+            bind_host = _bind_host_for_engine_settings(engine_settings)
+            running = self._is_running_locked()
+            stable_ports = self._ports if running and bind_host == self._bind_host else None
+            port_policy = "stable" if running else self._port_policy_for_start_locked(
+                engine_settings,
+                running=running,
+            )
+            if running and stable_ports is None:
+                previous_ports = self._ports
+                previous_bind_host = self._bind_host
+                await self._stop_locked(clear_error=False)
+                await self._wait_for_ports_available_locked(
+                    bind_host=previous_bind_host,
+                    ports=previous_ports,
+                    timeout_s=PORT_RELEASE_TIMEOUT_SECONDS,
+                )
+
+            config = await self._resolve_runtime_config_with_reclaim_locked(
                 engine_settings,
                 path_auth=path_auth,
-                preserve_ports_if_running=False,
+                port_policy=port_policy,
+                stable_ports=stable_ports,
             )
             if self._is_running_locked() and self._config_hash == config.config_hash:
                 return self._status_locked()
 
             if self._is_running_locked():
+                previous_ports = self._ports
+                previous_bind_host = self._bind_host
                 await self._stop_locked(clear_error=False)
+                if stable_ports is not None:
+                    await self._ensure_ports_available_after_stop_locked(
+                        bind_host=previous_bind_host,
+                        ports=previous_ports,
+                    )
+                else:
+                    await self._wait_for_ports_available_locked(
+                        bind_host=previous_bind_host,
+                        ports=previous_ports,
+                        timeout_s=PORT_RELEASE_TIMEOUT_SECONDS,
+                    )
 
             if not self._can_attempt_restart_locked(now_monotonic):
                 return self._status_locked()
@@ -251,14 +324,33 @@ class MediaMtxEngineManager:
                 self._reset_restart_backoff_locked()
                 return self._status_locked()
 
-            config = self._resolve_runtime_config(
-                engine_settings,
-                path_auth=path_auth,
-                preserve_ports_if_running=False,
-            )
+            previous_ports = self._ports
+            previous_bind_host = self._bind_host
+            was_running = self._is_running_locked()
             await self._stop_locked(clear_error=False)
+            if was_running:
+                if _bind_host_for_engine_settings(engine_settings) == previous_bind_host:
+                    await self._ensure_ports_available_after_stop_locked(
+                        bind_host=previous_bind_host,
+                        ports=previous_ports,
+                    )
+                else:
+                    await self._wait_for_ports_available_locked(
+                        bind_host=previous_bind_host,
+                        ports=previous_ports,
+                        timeout_s=PORT_RELEASE_TIMEOUT_SECONDS,
+                    )
             if not self._can_attempt_restart_locked(now_monotonic):
                 return self._status_locked()
+
+            bind_host = _bind_host_for_engine_settings(engine_settings)
+            stable_ports = previous_ports if was_running and bind_host == previous_bind_host else None
+            config = await self._resolve_runtime_config_with_reclaim_locked(
+                engine_settings,
+                path_auth=path_auth,
+                port_policy="stable",
+                stable_ports=stable_ports,
+            )
             try:
                 await self._start_locked(config=config)
             except Exception as exc:
@@ -341,6 +433,9 @@ class MediaMtxEngineManager:
                 "urls": urls,
                 "warnings": list(status.warnings),
                 "restart_count": status.restart_count,
+                "port_policy": status.port_policy,
+                "port_resolution": status.port_resolution,
+                "port_blocking_errors": list(status.port_blocking_errors),
             }
 
     def _is_running_locked(self) -> bool:
@@ -372,6 +467,9 @@ class MediaMtxEngineManager:
             test_path=self._test_path,
             warnings=tuple(warnings),
             restart_count=int(self._restart_count),
+            port_policy=str(self._port_policy or "flexible"),
+            port_resolution=str(self._port_resolution or "preferred"),
+            port_blocking_errors=tuple(self._port_blocking_errors),
         )
 
     def _urls_for_path_locked(self, *, path_slug: str, host: str | None) -> dict[str, str]:
@@ -424,6 +522,9 @@ class MediaMtxEngineManager:
             self._bind_host = config.bind_host
             self._ports = config.ports
             self._warnings = config.warnings + tuple(extra_warnings)
+            self._port_policy = config.port_policy
+            self._port_resolution = "reclaimed" if extra_warnings else config.port_resolution
+            self._port_blocking_errors = config.port_blocking_errors
             self._config_hash = config.config_hash
             self._platform_key = config.platform_key
             self._binary_path = config.binary_path
@@ -479,6 +580,7 @@ class MediaMtxEngineManager:
         self._started_at_unix = None
         self._config_hash = None
         self._warnings = ()
+        self._port_blocking_errors = ()
         self._publish_credentials_by_path.clear()
         self._read_auth_by_path.clear()
         if clear_error:
@@ -508,19 +610,171 @@ class MediaMtxEngineManager:
                 pass
             self._log_file = None
 
+    def _port_policy_for_start_locked(
+        self,
+        engine_settings: StreamingEngineSettings,
+        *,
+        running: bool,
+    ) -> PortResolutionPolicy:
+        if running:
+            return "stable"
+        if _strict_port_contract_active(engine_settings):
+            return "stable"
+        return "flexible"
+
+    async def _resolve_runtime_config_with_reclaim_locked(
+        self,
+        engine_settings: StreamingEngineSettings,
+        *,
+        path_auth: dict[str, tuple[str, str] | MediaMTXPathAuth] | None = None,
+        port_policy: PortResolutionPolicy,
+        stable_ports: MediaMtxPorts | None,
+    ) -> _RuntimeConfig:
+        try:
+            config = self._resolve_runtime_config(
+                engine_settings,
+                path_auth=path_auth,
+                port_policy=port_policy,
+                stable_ports=stable_ports,
+            )
+        except MediaMtxPortResolutionError as exc:
+            killed_pids = await self._reclaim_stale_mediamtx_locked()
+            if killed_pids:
+                await self._wait_for_preferred_ports_available_locked(
+                    engine_settings,
+                    stable_ports=stable_ports,
+                    timeout_s=PORT_RELEASE_TIMEOUT_SECONDS,
+                )
+                try:
+                    config = self._resolve_runtime_config(
+                        engine_settings,
+                        path_auth=path_auth,
+                        port_policy=port_policy,
+                        stable_ports=stable_ports,
+                        extra_warnings=(_format_auto_reclaim_warning(killed_pids),),
+                        forced_resolution="reclaimed",
+                    )
+                except MediaMtxPortResolutionError as retry_exc:
+                    self._mark_port_blocked_locked(retry_exc.blocking_errors)
+                    raise
+                return config
+            self._mark_port_blocked_locked(exc.blocking_errors)
+            raise
+
+        if port_policy == "flexible" and config.warnings:
+            killed_pids = await self._reclaim_stale_mediamtx_locked()
+            if killed_pids:
+                await self._wait_for_preferred_ports_available_locked(
+                    engine_settings,
+                    stable_ports=stable_ports,
+                    timeout_s=PORT_RELEASE_TIMEOUT_SECONDS,
+                )
+                config = self._resolve_runtime_config(
+                    engine_settings,
+                    path_auth=path_auth,
+                    port_policy=port_policy,
+                    stable_ports=stable_ports,
+                    extra_warnings=(_format_auto_reclaim_warning(killed_pids),),
+                    forced_resolution="reclaimed",
+                )
+        return config
+
+    async def _wait_for_ports_available_locked(
+        self,
+        *,
+        bind_host: str,
+        ports: MediaMtxPorts,
+        timeout_s: float,
+    ) -> tuple[str, ...]:
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        errors: tuple[str, ...] = ()
+        while True:
+            errors = tuple(_port_blocking_errors(bind_host=bind_host, ports=ports))
+            if not errors or time.monotonic() >= deadline:
+                return errors
+            await asyncio.sleep(PORT_RELEASE_POLL_SECONDS)
+
+    async def _wait_for_preferred_ports_available_locked(
+        self,
+        engine_settings: StreamingEngineSettings,
+        *,
+        stable_ports: MediaMtxPorts | None,
+        timeout_s: float,
+    ) -> tuple[str, ...]:
+        bind_host = _bind_host_for_engine_settings(engine_settings)
+        ports = stable_ports or _preferred_ports_for_engine_settings(engine_settings)
+        return await self._wait_for_ports_available_locked(
+            bind_host=bind_host,
+            ports=ports,
+            timeout_s=timeout_s,
+        )
+
+    async def _ensure_ports_available_after_stop_locked(
+        self,
+        *,
+        bind_host: str,
+        ports: MediaMtxPorts,
+    ) -> None:
+        errors = await self._wait_for_ports_available_locked(
+            bind_host=bind_host,
+            ports=ports,
+            timeout_s=PORT_RELEASE_TIMEOUT_SECONDS,
+        )
+        if errors:
+            killed_pids = await self._reclaim_stale_mediamtx_locked()
+            if killed_pids:
+                errors = await self._wait_for_ports_available_locked(
+                    bind_host=bind_host,
+                    ports=ports,
+                    timeout_s=PORT_RELEASE_TIMEOUT_SECONDS,
+                )
+        if errors:
+            exc = MediaMtxPortResolutionError(tuple(errors))
+            self._mark_port_blocked_locked(exc.blocking_errors)
+            raise exc
+
+    async def _reclaim_stale_mediamtx_locked(self) -> list[int]:
+        config_path = self._data_dir / "runtime" / "streaming" / "mediamtx.yml"
+        if not config_path.exists():
+            return []
+        current_pid = self._process.pid if self._process is not None and self._process.pid else None
+        killed_pids = await asyncio.to_thread(
+            kill_mediamtx_processes_for_config_path,
+            str(config_path),
+            exclude_pids={int(current_pid)} if current_pid else None,
+        )
+        if killed_pids:
+            await asyncio.sleep(0.4)
+        return killed_pids
+
+    def _mark_port_blocked_locked(self, blocking_errors: tuple[str, ...]) -> None:
+        errors = tuple(str(item or "").strip() for item in blocking_errors if str(item or "").strip())
+        self._port_policy = "stable"
+        self._port_resolution = "blocked"
+        self._port_blocking_errors = errors
+        if errors:
+            self._last_error = errors[0]
+
     def _resolve_runtime_config(
         self,
         engine_settings: StreamingEngineSettings,
         *,
         path_auth: dict[str, tuple[str, str] | MediaMTXPathAuth] | None = None,
-        preserve_ports_if_running: bool = False,
+        port_policy: PortResolutionPolicy,
+        stable_ports: MediaMtxPorts | None = None,
+        extra_warnings: tuple[str, ...] = (),
+        forced_resolution: str | None = None,
     ) -> _RuntimeConfig:
-        expose_to_lan = bool(engine_settings.expose_to_lan)
-        bind_host = "0.0.0.0" if expose_to_lan else "127.0.0.1"
+        bind_host = _bind_host_for_engine_settings(engine_settings)
 
-        if preserve_ports_if_running and self._is_running_locked() and bind_host == self._bind_host:
-            ports = self._ports
+        if stable_ports is not None:
+            if not (self._is_running_locked() and bind_host == self._bind_host):
+                errors = tuple(_port_blocking_errors(bind_host=bind_host, ports=stable_ports))
+                if errors:
+                    raise MediaMtxPortResolutionError(errors)
+            ports = stable_ports
             warnings: tuple[str, ...] = ()
+            resolution = "preserved"
         else:
             preferred = engine_settings.preferred_ports
             ports, warnings = _resolve_ports(
@@ -531,9 +785,18 @@ class MediaMtxEngineManager:
                 preferred_webrtc_udp=int(getattr(preferred, "webrtc_udp", 18762)),
                 preferred_api=int(preferred.api),
                 preferred_metrics=int(getattr(preferred, "metrics", 9998)),
+                allow_fallback=port_policy == "flexible",
             )
+            resolution = "fallback" if warnings else "preferred"
+        if extra_warnings:
+            warnings = tuple([*warnings, *extra_warnings])
+        if forced_resolution:
+            resolution = str(forced_resolution)
 
-        version = str(getattr(engine_settings, "mediamtx_version", MEDIAMTX_VERSION) or MEDIAMTX_VERSION).strip() or MEDIAMTX_VERSION
+        version = (
+            str(getattr(engine_settings, "mediamtx_version", MEDIAMTX_VERSION) or MEDIAMTX_VERSION).strip()
+            or MEDIAMTX_VERSION
+        )
         self._mediamtx_version = version
         self._metrics_enabled = bool(getattr(engine_settings, "metrics_enabled", True))
 
@@ -625,6 +888,9 @@ class MediaMtxEngineManager:
             bind_host=bind_host,
             ports=ports,
             warnings=warnings,
+            port_policy=port_policy,
+            port_resolution=resolution,
+            port_blocking_errors=(),
             platform_key=platform.key,
             binary_path=binary,
             config_text=config_text,
@@ -710,9 +976,15 @@ class MediaMtxEngineManager:
             self._restart_attempts_monotonic.popleft()
         attempts = len(self._restart_attempts_monotonic)
         if attempts > self._max_restarts_per_minute:
-            self._start_backoff_seconds = min(30.0, max(5.0, self._start_backoff_seconds * 1.7 if self._start_backoff_seconds else 5.0))
+            self._start_backoff_seconds = min(
+                30.0,
+                max(5.0, self._start_backoff_seconds * 1.7 if self._start_backoff_seconds else 5.0),
+            )
         else:
-            self._start_backoff_seconds = min(20.0, max(1.0, self._start_backoff_seconds * 1.8 if self._start_backoff_seconds else 1.0))
+            self._start_backoff_seconds = min(
+                20.0,
+                max(1.0, self._start_backoff_seconds * 1.8 if self._start_backoff_seconds else 1.0),
+            )
         self._next_start_attempt_monotonic = float(now_monotonic) + float(self._start_backoff_seconds)
 
     def _reset_restart_backoff_locked(self) -> None:
@@ -767,12 +1039,112 @@ class _RuntimeConfig:
     bind_host: str
     ports: MediaMtxPorts
     warnings: tuple[str, ...]
+    port_policy: PortResolutionPolicy
+    port_resolution: str
+    port_blocking_errors: tuple[str, ...]
     platform_key: str
     binary_path: Path
     config_text: str
     config_hash: str
     publish_credentials_by_path: dict[str, tuple[str, str]]
     read_auth_by_path: dict[str, tuple[str, str]]
+
+
+class MediaMtxPortResolutionError(RuntimeError):
+    def __init__(self, blocking_errors: tuple[str, ...]) -> None:
+        self.blocking_errors = tuple(
+            str(item or "").strip() for item in blocking_errors if str(item or "").strip()
+        )
+        super().__init__(" ".join(self.blocking_errors) or "MediaMTX port contract is blocked.")
+
+
+def _bind_host_for_engine_settings(engine_settings: StreamingEngineSettings) -> str:
+    return "0.0.0.0" if bool(engine_settings.expose_to_lan) else "127.0.0.1"
+
+
+def _preferred_ports_for_engine_settings(engine_settings: StreamingEngineSettings) -> MediaMtxPorts:
+    preferred = engine_settings.preferred_ports
+    return MediaMtxPorts(
+        rtsp=int(preferred.rtsp),
+        hls=int(preferred.hls),
+        webrtc=int(preferred.webrtc),
+        webrtc_udp=int(getattr(preferred, "webrtc_udp", 18762)),
+        api=int(preferred.api),
+        metrics=int(getattr(preferred, "metrics", 9998)),
+        rtp=50000,
+        rtcp=50001,
+    )
+
+
+def _env_port_contract_names() -> tuple[str, ...]:
+    return (
+        "TOPOSYNC_EXPECTED_RTSP_PORT",
+        "TOPOSYNC_EXPECTED_HLS_PORT",
+        "TOPOSYNC_EXPECTED_WEBRTC_PORT",
+        "TOPOSYNC_EXPECTED_WEBRTC_UDP_PORT",
+        "TOPOSYNC_EXPECTED_MEDIAMTX_API_PORT",
+    )
+
+
+def _strict_port_contract_active(engine_settings: StreamingEngineSettings) -> bool:
+    target = str(os.getenv("TOPOSYNC_DEPLOYMENT_TARGET") or "").strip().lower()
+    if target == "home_assistant_addon":
+        return True
+    if any(str(os.getenv(name) or "").strip() for name in _env_port_contract_names()):
+        return True
+    if str(os.getenv("TOPOSYNC_HOME_ASSISTANT_RTSP_HOST") or "").strip():
+        return True
+    strict_env = str(os.getenv("TOPOSYNC_STREAMING_STRICT_PORTS") or "").strip().lower()
+    if bool(engine_settings.expose_to_lan) and strict_env in {"1", "true", "yes", "on"}:
+        return True
+    return False
+
+
+def _port_unavailable_message(
+    *,
+    label: str,
+    bind_host: str,
+    port: int,
+    suffix: str = "",
+) -> str:
+    target = suffix or f" port {int(port)}"
+    return (
+        f"Port contract blocked: {label}{target} is unavailable on {bind_host}. "
+        "Stop the external process using it, run /api/streams/engine/reclaim if it is a stale "
+        "Toposync MediaMTX process, or change streaming preferred_ports explicitly."
+    )
+
+
+def _port_reserved_message(*, label: str, port: int) -> str:
+    return (
+        f"Port contract blocked: {label} port {int(port)} is already assigned to another "
+        "MediaMTX listener in this configuration. Change streaming preferred_ports explicitly."
+    )
+
+
+def _port_blocking_errors(*, bind_host: str, ports: MediaMtxPorts) -> list[str]:
+    checks: list[tuple[str, str, int, bool]] = [
+        ("RTSP", bind_host, int(ports.rtsp), False),
+        ("HLS", bind_host, int(ports.hls), False),
+        ("WebRTC", bind_host, int(ports.webrtc), False),
+        ("API", bind_host, int(ports.api), False),
+        ("Metrics", "127.0.0.1", int(ports.metrics), False),
+        ("WebRTC UDP", bind_host, int(ports.webrtc_udp), True),
+        ("RTP", bind_host, int(ports.rtp), True),
+        ("RTCP", bind_host, int(ports.rtcp), True),
+    ]
+    errors: list[str] = []
+    seen: set[tuple[str, int, bool]] = set()
+    for label, host, port, udp in checks:
+        key = (host, int(port), udp)
+        if key in seen:
+            errors.append(_port_reserved_message(label=label, port=port))
+            continue
+        seen.add(key)
+        available = _can_bind_udp(host, port) if udp else _can_bind(host, port)
+        if not available:
+            errors.append(_port_unavailable_message(label=label, bind_host=host, port=port))
+    return errors
 
 
 def _resolve_ports(
@@ -784,36 +1156,73 @@ def _resolve_ports(
     preferred_webrtc_udp: int,
     preferred_api: int,
     preferred_metrics: int,
+    allow_fallback: bool = True,
 ) -> tuple[MediaMtxPorts, tuple[str, ...]]:
     used: set[int] = set()
     warnings: list[str] = []
 
-    rtsp, changed = _pick_port(bind_host=bind_host, preferred=preferred_rtsp, used=used)
+    rtsp, changed = _pick_port(
+        bind_host=bind_host,
+        preferred=preferred_rtsp,
+        used=used,
+        label="RTSP",
+        allow_fallback=allow_fallback,
+    )
     used.add(rtsp)
     if changed:
         warnings.append(f"RTSP port {preferred_rtsp} unavailable; using {rtsp}.")
 
-    hls, changed = _pick_port(bind_host=bind_host, preferred=preferred_hls, used=used)
+    hls, changed = _pick_port(
+        bind_host=bind_host,
+        preferred=preferred_hls,
+        used=used,
+        label="HLS",
+        allow_fallback=allow_fallback,
+    )
     used.add(hls)
     if changed:
         warnings.append(f"HLS port {preferred_hls} unavailable; using {hls}.")
 
-    webrtc, changed = _pick_port(bind_host=bind_host, preferred=preferred_webrtc, used=used)
+    webrtc, changed = _pick_port(
+        bind_host=bind_host,
+        preferred=preferred_webrtc,
+        used=used,
+        label="WebRTC",
+        allow_fallback=allow_fallback,
+    )
     used.add(webrtc)
     if changed:
         warnings.append(f"WebRTC port {preferred_webrtc} unavailable; using {webrtc}.")
 
-    webrtc_udp, udp_changed = _pick_udp_port(bind_host=bind_host, preferred=preferred_webrtc_udp, used=used)
+    webrtc_udp, udp_changed = _pick_udp_port(
+        bind_host=bind_host,
+        preferred=preferred_webrtc_udp,
+        used=used,
+        label="WebRTC UDP",
+        allow_fallback=allow_fallback,
+    )
     used.add(webrtc_udp)
     if udp_changed:
         warnings.append(f"WebRTC UDP port {preferred_webrtc_udp} unavailable; using {webrtc_udp}.")
 
-    api, changed = _pick_port(bind_host=bind_host, preferred=preferred_api, used=used)
+    api, changed = _pick_port(
+        bind_host=bind_host,
+        preferred=preferred_api,
+        used=used,
+        label="API",
+        allow_fallback=allow_fallback,
+    )
     used.add(api)
     if changed:
         warnings.append(f"API port {preferred_api} unavailable; using {api}.")
 
-    metrics, changed = _pick_port(bind_host="127.0.0.1", preferred=preferred_metrics, used=used)
+    metrics, changed = _pick_port(
+        bind_host="127.0.0.1",
+        preferred=preferred_metrics,
+        used=used,
+        label="Metrics",
+        allow_fallback=allow_fallback,
+    )
     used.add(metrics)
     if changed:
         warnings.append(f"Metrics port {preferred_metrics} unavailable; using {metrics}.")
@@ -821,7 +1230,12 @@ def _resolve_ports(
     # MediaMTX defaults to RTP/RTCP (UDP) on 8000/8001 and fails to start if they're already in use.
     # Since 8000 is commonly taken by dev servers, we automatically pick a free consecutive pair.
     preferred_rtp = 50000
-    rtp, rtcp, udp_changed = _pick_udp_ports_pair(bind_host=bind_host, preferred=preferred_rtp, used=used)
+    rtp, rtcp, udp_changed = _pick_udp_ports_pair(
+        bind_host=bind_host,
+        preferred=preferred_rtp,
+        used=used,
+        allow_fallback=allow_fallback,
+    )
     if udp_changed:
         warnings.append(f"RTP/RTCP port pair {preferred_rtp}/{preferred_rtp + 1} unavailable; using {rtp}/{rtcp}.")
 
@@ -837,10 +1251,26 @@ def _resolve_ports(
     ), tuple(warnings)
 
 
-def _pick_port(*, bind_host: str, preferred: int, used: set[int]) -> tuple[int, bool]:
+def _pick_port(
+    *,
+    bind_host: str,
+    preferred: int,
+    used: set[int],
+    label: str,
+    allow_fallback: bool,
+) -> tuple[int, bool]:
     normalized = max(1, min(65535, int(preferred)))
-    if normalized not in used and _can_bind(bind_host, normalized):
+    if normalized in used:
+        if not allow_fallback:
+            raise MediaMtxPortResolutionError(
+                (_port_reserved_message(label=label, port=normalized),)
+            )
+    elif _can_bind(bind_host, normalized):
         return normalized, False
+    elif not allow_fallback:
+        raise MediaMtxPortResolutionError(
+            (_port_unavailable_message(label=label, bind_host=bind_host, port=normalized),)
+        )
 
     for candidate in range(max(1024, normalized + 1), min(65535, normalized + 300)):
         if candidate in used:
@@ -856,10 +1286,26 @@ def _pick_port(*, bind_host: str, preferred: int, used: set[int]) -> tuple[int, 
     return dynamic, True
 
 
-def _pick_udp_port(*, bind_host: str, preferred: int, used: set[int]) -> tuple[int, bool]:
+def _pick_udp_port(
+    *,
+    bind_host: str,
+    preferred: int,
+    used: set[int],
+    label: str,
+    allow_fallback: bool,
+) -> tuple[int, bool]:
     normalized = max(1, min(65535, int(preferred)))
-    if normalized not in used and _can_bind_udp(bind_host, normalized):
+    if normalized in used:
+        if not allow_fallback:
+            raise MediaMtxPortResolutionError(
+                (_port_reserved_message(label=label, port=normalized),)
+            )
+    elif _can_bind_udp(bind_host, normalized):
         return normalized, False
+    elif not allow_fallback:
+        raise MediaMtxPortResolutionError(
+            (_port_unavailable_message(label=label, bind_host=bind_host, port=normalized),)
+        )
 
     for candidate in range(max(1024, normalized + 1), min(65535, normalized + 300)):
         if candidate in used:
@@ -894,6 +1340,8 @@ def _can_bind(bind_host: str, port: int) -> bool:
 
         try:
             with socket.socket(family, socket.SOCK_STREAM) as sock:
+                with contextlib.suppress(OSError):
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6") and hasattr(socket, "IPV6_V6ONLY"):
                     with contextlib.suppress(OSError):
                         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
@@ -905,7 +1353,13 @@ def _can_bind(bind_host: str, port: int) -> bool:
     return True
 
 
-def _pick_udp_ports_pair(*, bind_host: str, preferred: int, used: set[int]) -> tuple[int, int, bool]:
+def _pick_udp_ports_pair(
+    *,
+    bind_host: str,
+    preferred: int,
+    used: set[int],
+    allow_fallback: bool,
+) -> tuple[int, int, bool]:
     """Pick a free consecutive RTP/RTCP UDP port pair.
 
     MediaMTX requires RTP/RTCP ports to be consecutive.
@@ -927,6 +1381,18 @@ def _pick_udp_ports_pair(*, bind_host: str, preferred: int, used: set[int]) -> t
         used.add(normalized)
         used.add(normalized + 1)
         return normalized, normalized + 1, False
+
+    if not allow_fallback:
+        raise MediaMtxPortResolutionError(
+            (
+                _port_unavailable_message(
+                    label="RTP/RTCP",
+                    bind_host=bind_host,
+                    port=normalized,
+                    suffix=f" pair {normalized}/{normalized + 1}",
+                ),
+            )
+        )
 
     for candidate in range(normalized + 2, min(65534, normalized + 2000), 2):
         if ok(candidate):

@@ -14,10 +14,12 @@ from .const import (
     DATA_CLIENT,
     DATA_FRONTEND_REGISTERED,
     DATA_MANIFEST,
+    DATA_MANIFEST_CACHE,
     DATA_PUBLIC_URL,
     DOMAIN,
 )
 from .frontend import async_setup_frontend, async_unload_frontend
+from .manifest import ToposyncManifestCache
 
 PLATFORMS = [Platform.CAMERA]
 
@@ -37,6 +39,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     domain_data[entry.entry_id] = {
         DATA_CLIENT: client,
         DATA_MANIFEST: manifest,
+        DATA_MANIFEST_CACHE: ToposyncManifestCache(client, manifest=manifest),
         DATA_AUTH_STATUS: auth_status,
         DATA_PUBLIC_URL: str(
             entry.data.get(CONF_PUBLIC_URL) or entry.data[CONF_URL]

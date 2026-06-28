@@ -33,7 +33,7 @@ from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
 from toposync.runtime.pipelines.templates import camera_names_by_id, safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
 
-from ..streaming.engine_manager import MediaMtxEngineManager
+from ..streaming.engine_manager import MediaMtxEngineManager, MediaMtxPortResolutionError
 from ..streaming.go2rtc_binary import extract_go2rtc_binary, find_installed_go2rtc_binary
 from ..streaming.go2rtc_manager import Go2RtcSidecarManager, Go2RtcSidecarStatus
 from ..streaming.camera_ingest import (
@@ -852,7 +852,19 @@ def _build_network_contract(
             media_url_origin=media_url_origin,
         )
 
-    fail_on_mismatch = _env_bool("TOPOSYNC_FAIL_STREAM_URLS_ON_PORT_MISMATCH")
+    explicit_expected_ports = any(
+        value is not None
+        for value in (
+            expected_ports.direct_api,
+            expected_ports.rtsp,
+            expected_ports.hls,
+            expected_ports.webrtc,
+            expected_ports.webrtc_udp,
+            expected_ports.api,
+        )
+    )
+    strict_contract = environment == "home_assistant_addon" or explicit_expected_ports
+    fail_on_mismatch = _env_bool("TOPOSYNC_FAIL_STREAM_URLS_ON_PORT_MISMATCH") or strict_contract
     status: Literal["ok", "port_mismatch", "proxy_required", "proxy_unavailable"] = "ok"
 
     def compare_port(
@@ -869,11 +881,16 @@ def _build_network_contract(
         actual = getattr(actual_ports, key)
         if expected is None or actual is None or int(expected) == int(actual):
             return
-        message = f"{label} active port {actual} does not match expected add-on port {expected}."
+        expected_label = (
+            "expected add-on port"
+            if environment == "home_assistant_addon"
+            else "expected streaming port"
+        )
+        message = f"{label} active port {actual} does not match {expected_label} {expected}."
         warnings.append(message)
         if status == "ok":
             status = "port_mismatch"
-        if blocking_when_failed and fail_on_mismatch:
+        if (blocking_when_failed and fail_on_mismatch) or strict_contract:
             blocking_errors.append(message)
 
     compare_port(
@@ -6165,6 +6182,10 @@ def create_streaming_router() -> APIRouter:
                     path_auth=path_auth,
                     path_configs=path_configs,
                 )
+        except MediaMtxPortResolutionError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Streaming engine port contract is blocked: {exc}"
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to apply streaming settings: {exc}"
@@ -6289,6 +6310,7 @@ def create_streaming_router() -> APIRouter:
 
         warnings: list[str] = []
         warnings.extend(list(status.warnings))
+        warnings.extend(list(status.port_blocking_errors))
         if not settings.engine.enabled:
             warnings.append("Engine is disabled in settings.")
         if settings.engine.enabled and not status.running:
@@ -6366,6 +6388,9 @@ def create_streaming_router() -> APIRouter:
             warnings=warnings,
             restart_count=status.restart_count,
             orphan_pids=orphan_pids,
+            port_policy=status.port_policy if status.port_policy in {"stable", "flexible"} else "flexible",
+            port_resolution=status.port_resolution,
+            port_blocking_errors=list(status.port_blocking_errors),
         )
 
     @router.post("/engine/download", response_model=StreamingEngineStatusResponse)
@@ -6428,6 +6453,10 @@ def create_streaming_router() -> APIRouter:
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
+        except MediaMtxPortResolutionError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Streaming engine port contract is blocked: {exc}"
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to start streaming engine: {exc}"
@@ -6489,6 +6518,10 @@ def create_streaming_router() -> APIRouter:
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
+        except MediaMtxPortResolutionError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Streaming engine port contract is blocked: {exc}"
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to restart streaming engine: {exc}"
@@ -6544,6 +6577,12 @@ def create_streaming_router() -> APIRouter:
                     ),
                     path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
                 )
+            except MediaMtxPortResolutionError as exc:
+                suffix = f" (killed {len(killed_pids)} stale process(es))" if killed_pids else ""
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Streaming engine port contract is blocked: {exc}{suffix}",
+                ) from exc
             except Exception as exc:
                 suffix = f" (killed {len(killed_pids)} stale process(es))" if killed_pids else ""
                 raise HTTPException(
@@ -6876,6 +6915,10 @@ def create_streaming_router() -> APIRouter:
             await _apply_streaming_engine_state(request, settings=saved)
         except HTTPException:
             raise
+        except MediaMtxPortResolutionError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Streaming engine port contract is blocked: {exc}"
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to apply streaming settings: {exc}"
@@ -6923,6 +6966,10 @@ def create_streaming_router() -> APIRouter:
             await _apply_streaming_engine_state(request, settings=saved)
         except HTTPException:
             raise
+        except MediaMtxPortResolutionError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Streaming engine port contract is blocked: {exc}"
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to apply streaming settings: {exc}"
@@ -7123,6 +7170,10 @@ def create_streaming_router() -> APIRouter:
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
+        except MediaMtxPortResolutionError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Streaming engine port contract is blocked: {exc}"
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to apply streaming settings: {exc}"
@@ -7214,6 +7265,10 @@ def create_streaming_router() -> APIRouter:
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
+        except MediaMtxPortResolutionError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Streaming engine port contract is blocked: {exc}"
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to apply streaming settings: {exc}"
@@ -7283,6 +7338,10 @@ def create_streaming_router() -> APIRouter:
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
+        except MediaMtxPortResolutionError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Streaming engine port contract is blocked: {exc}"
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to apply streaming settings: {exc}"
@@ -7354,6 +7413,10 @@ def create_streaming_router() -> APIRouter:
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
+        except MediaMtxPortResolutionError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Streaming engine port contract is blocked: {exc}"
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to apply streaming settings: {exc}"
@@ -7402,6 +7465,10 @@ def create_streaming_router() -> APIRouter:
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
+        except MediaMtxPortResolutionError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Streaming engine port contract is blocked: {exc}"
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to apply streaming settings: {exc}"
@@ -8658,6 +8725,11 @@ def create_streaming_router() -> APIRouter:
                     ),
                     path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
                 )
+            except MediaMtxPortResolutionError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Streaming engine port contract is blocked: {exc}",
+                ) from exc
             except Exception as exc:
                 raise HTTPException(
                     status_code=500, detail=f"Failed to rotate ingest credentials: {exc}"

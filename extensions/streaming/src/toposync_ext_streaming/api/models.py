@@ -1034,6 +1034,9 @@ class StreamingEngineStatusResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     restart_count: int = Field(default=0, ge=0)
     orphan_pids: list[int] = Field(default_factory=list)
+    port_policy: Literal["stable", "flexible"] = "flexible"
+    port_resolution: str = "preferred"
+    port_blocking_errors: list[str] = Field(default_factory=list)
 
 
 class StreamingMseSidecarStatusResponse(BaseModel):

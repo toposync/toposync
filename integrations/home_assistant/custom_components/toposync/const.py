@@ -14,6 +14,7 @@ DEFAULT_EMBED_HEIGHT = "720px"
 
 DATA_CLIENT = "client"
 DATA_MANIFEST = "manifest"
+DATA_MANIFEST_CACHE = "manifest_cache"
 DATA_AUTH_STATUS = "auth_status"
 DATA_PUBLIC_URL = "public_url"
 DATA_FRONTEND_REGISTERED = "__frontend_registered"

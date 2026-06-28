@@ -121,6 +121,7 @@ PIPELINE_TELEMETRY_AGGREGATE_NUMERIC_READ_CONCURRENCY = 2
 PIPELINE_TELEMETRY_AGGREGATE_IMAGE_MARKERS_READ_CONCURRENCY = 1
 PIPELINE_TELEMETRY_NUMERIC_READ_CONCURRENCY = 4
 PIPELINE_TELEMETRY_IMAGE_MARKERS_READ_CONCURRENCY = 2
+PIPELINE_PREVIEW_FRAME_CONCURRENCY = 2
 REQUEST_DISCONNECT_POLL_SECONDS = 0.01
 _RequestWorkResult = TypeVar("_RequestWorkResult")
 
@@ -219,6 +220,19 @@ def _release_limiter_after_request_work(
     limiter.release()
 
 
+async def _cancel_and_drain_async_request_work(task: asyncio.Task[Any]) -> None:
+    if not task.done():
+        task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        return
+    except _RequestWorkCancelled:
+        return
+    except Exception:
+        logger.debug("Cancelled async request work finished with an error", exc_info=True)
+
+
 async def _run_cancelable_request_work(
     request: Request,
     work: Callable[[Callable[[], None]], _RequestWorkResult],
@@ -314,6 +328,101 @@ async def _run_cancelable_request_work(
                 )
             else:
                 limiter.release()
+        if not disconnect_task.done():
+            disconnect_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await disconnect_task
+
+
+async def _run_cancelable_async_request_work(
+    request: Request,
+    work: Callable[[Callable[[], None]], Awaitable[_RequestWorkResult]],
+    *,
+    limiter: asyncio.Semaphore | None = None,
+) -> _RequestWorkResult:
+    cancel_event = threading.Event()
+    limiter_acquired = False
+    work_task: asyncio.Task[_RequestWorkResult] | None = None
+
+    def check_cancelled() -> None:
+        if cancel_event.is_set():
+            raise _RequestWorkCancelled()
+
+    async def run() -> _RequestWorkResult:
+        check_cancelled()
+        return await work(check_cancelled)
+
+    disconnect_task = asyncio.create_task(
+        _watch_request_disconnect(request, cancel_event),
+        name="toposync.request.disconnect-watch",
+    )
+
+    try:
+        if limiter is not None:
+            acquire_task = asyncio.create_task(
+                limiter.acquire(),
+                name="toposync.request.limiter-acquire",
+            )
+            try:
+                done, _pending = await asyncio.wait(
+                    {acquire_task, disconnect_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if acquire_task in done:
+                    await acquire_task
+                    limiter_acquired = True
+                    if await _request_is_disconnected(request, cancel_event):
+                        raise _client_closed_request_exception()
+                    check_cancelled()
+                else:
+                    disconnected = False
+                    if disconnect_task in done:
+                        disconnected = bool(await disconnect_task)
+                    if disconnected:
+                        cancel_event.set()
+                        raise _client_closed_request_exception()
+                    await acquire_task
+                    limiter_acquired = True
+                    if await _request_is_disconnected(request, cancel_event):
+                        raise _client_closed_request_exception()
+                    check_cancelled()
+            finally:
+                if not limiter_acquired and not acquire_task.done():
+                    acquire_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await acquire_task
+
+        if await _request_is_disconnected(request, cancel_event):
+            raise _client_closed_request_exception()
+
+        work_task = asyncio.create_task(run(), name="toposync.request.async-work")
+        done, _pending = await asyncio.wait(
+            {work_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if work_task in done:
+            return await work_task
+
+        disconnected = False
+        if disconnect_task in done:
+            disconnected = bool(await disconnect_task)
+        if disconnected:
+            cancel_event.set()
+            await _cancel_and_drain_async_request_work(work_task)
+            raise _client_closed_request_exception()
+
+        return await work_task
+    except _RequestWorkCancelled as exc:
+        raise _client_closed_request_exception() from exc
+    except asyncio.CancelledError:
+        cancel_event.set()
+        if work_task is not None:
+            await _cancel_and_drain_async_request_work(work_task)
+        raise
+    finally:
+        cancel_event.set()
+        if limiter_acquired and limiter is not None:
+            limiter.release()
         if not disconnect_task.done():
             disconnect_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -1193,6 +1302,10 @@ async def _lifespan(app: FastAPI):
             prefer_latest=True,
         ),
     }
+    app.state.pipeline_preview_frame_limiter = _RequestConcurrencyLimiter(
+        PIPELINE_PREVIEW_FRAME_CONCURRENCY,
+        prefer_latest=True,
+    )
     app.state.pipeline_operator_registry = operator_registry
     app.state.pipeline_graph_compiler = pipeline_compiler
     pipeline_stats_store = PipelineStatsStore()
@@ -3340,87 +3453,109 @@ def create_app() -> FastAPI:
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
 
-        try:
-            preview_pipeline = prepare_preview_pipeline(pipeline=body.pipeline, registry=registry)
-        except PipelinePreviewError as exc:
-            fallback_response = _pipeline_preview_fallback_response(request, body.fallback_snapshot)
-            if fallback_response is not None:
-                return fallback_response
-            raise HTTPException(
-                status_code=409 if exc.code == "preview_requires_fallback" else 400,
-                detail=exc.detail,
-            ) from exc
-
-        try:
-            compiled = compiler.compile_pipeline(preview_pipeline)
-        except GraphCompileError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        loop = asyncio.get_running_loop()
-        captured_image: asyncio.Future[Any] = loop.create_future()
-
-        async def _collector(packet: Any, _node_id: str, _pipeline_name: str) -> None:
-            if captured_image.done():
-                return
-            image = resolve_preview_packet_image(packet)
-            if image is None:
-                return
-            captured_image.set_result(image)
-
-        deps = _build_preview_runtime_dependencies(request, collector=_collector)
-        preview_registry = build_preview_registry(registry)
-        runtime = PipelineRuntime(
-            compiled=compiled,
-            registry=preview_registry,
-            dependencies=deps,
-            logger=logging.getLogger("toposync.pipelines.preview"),
-        )
-
-        try:
-            await runtime.start()
+        async def build_response(check_cancelled: Callable[[], None]) -> Response:
+            check_cancelled()
             try:
-                image = await asyncio.wait_for(captured_image, timeout=float(body.timeout_seconds))
-            except TimeoutError as exc:
+                preview_pipeline = prepare_preview_pipeline(pipeline=body.pipeline, registry=registry)
+            except PipelinePreviewError as exc:
                 fallback_response = _pipeline_preview_fallback_response(
-                    request, body.fallback_snapshot
+                    request,
+                    body.fallback_snapshot,
                 )
                 if fallback_response is not None:
                     return fallback_response
                 raise HTTPException(
-                    status_code=504,
-                    detail=(
-                        "Timed out waiting for a preview frame. Check the camera source or leave the pipeline "
-                        "running until this point so a stored snapshot can be collected."
-                    ),
+                    status_code=409 if exc.code == "preview_requires_fallback" else 400,
+                    detail=exc.detail,
                 ) from exc
-        finally:
-            await runtime.stop()
 
-        if image is None:
-            fallback_response = _pipeline_preview_fallback_response(request, body.fallback_snapshot)
-            if fallback_response is not None:
-                return fallback_response
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Preview execution finished without an in-memory image. Leave the pipeline running until this "
-                    "point so a stored snapshot can be collected, then try again."
-                ),
+            check_cancelled()
+            try:
+                compiled = compiler.compile_pipeline(preview_pipeline)
+            except GraphCompileError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            check_cancelled()
+            loop = asyncio.get_running_loop()
+            captured_image: asyncio.Future[Any] = loop.create_future()
+
+            async def _collector(packet: Any, _node_id: str, _pipeline_name: str) -> None:
+                if captured_image.done():
+                    return
+                image = resolve_preview_packet_image(packet)
+                if image is None:
+                    return
+                captured_image.set_result(image)
+
+            deps = _build_preview_runtime_dependencies(request, collector=_collector)
+            preview_registry = build_preview_registry(registry)
+            runtime = PipelineRuntime(
+                compiled=compiled,
+                registry=preview_registry,
+                dependencies=deps,
+                logger=logging.getLogger("toposync.pipelines.preview"),
             )
 
-        blob, _ext, mime_type = await asyncio.to_thread(
-            _encode_image_bytes,
-            image,
-            fmt=str(body.format or "png"),
-            jpeg_quality=int(body.jpeg_quality),
-        )
-        return Response(
-            content=blob,
-            media_type=mime_type,
-            headers={
-                "Cache-Control": "no-store",
-                "X-Toposync-Pipeline-Preview-Mode": "runtime",
-            },
+            try:
+                check_cancelled()
+                await runtime.start()
+                try:
+                    image = await asyncio.wait_for(
+                        captured_image,
+                        timeout=float(body.timeout_seconds),
+                    )
+                except TimeoutError as exc:
+                    fallback_response = _pipeline_preview_fallback_response(
+                        request,
+                        body.fallback_snapshot,
+                    )
+                    if fallback_response is not None:
+                        return fallback_response
+                    raise HTTPException(
+                        status_code=504,
+                        detail=(
+                            "Timed out waiting for a preview frame. Check the camera source or leave the pipeline "
+                            "running until this point so a stored snapshot can be collected."
+                        ),
+                    ) from exc
+            finally:
+                await runtime.stop()
+
+            check_cancelled()
+            if image is None:
+                fallback_response = _pipeline_preview_fallback_response(
+                    request,
+                    body.fallback_snapshot,
+                )
+                if fallback_response is not None:
+                    return fallback_response
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Preview execution finished without an in-memory image. Leave the pipeline running until "
+                        "this point so a stored snapshot can be collected, then try again."
+                    ),
+                )
+
+            blob, _ext, mime_type = await asyncio.to_thread(
+                _encode_image_bytes,
+                image,
+                fmt=str(body.format or "png"),
+                jpeg_quality=int(body.jpeg_quality),
+            )
+            return Response(
+                content=blob,
+                media_type=mime_type,
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Toposync-Pipeline-Preview-Mode": "runtime",
+                },
+            )
+
+        return await _run_cancelable_async_request_work(
+            request,
+            build_response,
+            limiter=request.app.state.pipeline_preview_frame_limiter,
         )
 
     @app.post(

@@ -1820,6 +1820,18 @@ function deformedBoundaryScreenPoints(
   return points.length >= 4 ? points : worldQuadPoints(view.projection_model.world_quad).map((point) => viewport.worldToScreen(point));
 }
 
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
+}
+
+function isUndoRedoKeyboardShortcut(event: KeyboardEvent): boolean {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return false;
+  const key = event.key.toLowerCase();
+  return key === "z" || key === "y";
+}
+
 function CameraCalibrationModal({
   open,
   onClose,
@@ -1893,6 +1905,15 @@ function CameraCalibrationModal({
 
   useEffect(() => {
     if (!open) return;
+
+    function preventCompositionHistoryShortcut(event: KeyboardEvent): void {
+      if (!isUndoRedoKeyboardShortcut(event) || isEditableKeyboardTarget(event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    }
+
+    window.addEventListener("keydown", preventCompositionHistoryShortcut, true);
     const baseViews: CameraCalibratedView[] = initialViews.length
       ? initialViews.map((view) => ({
           ...view,
@@ -1921,6 +1942,7 @@ function CameraCalibrationModal({
     setViews(baseViews);
     setSelectedViewId(baseViews[0]?.id ?? null);
     if (baseViews[0]) void selectView(baseViews[0]);
+    return () => window.removeEventListener("keydown", preventCompositionHistoryShortcut, true);
   }, [element.position, initialViews, open, t]);
 
   const loadCalibrationSnapshotFromSourceAsync = useCallback(

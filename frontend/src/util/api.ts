@@ -2208,11 +2208,15 @@ export async function getPipelinesTelemetryImageMarkers(
   return res.json();
 }
 
-export async function compilePipeline(pipeline: Pipeline): Promise<PipelineCompileOutput> {
+export async function compilePipeline(
+  pipeline: Pipeline,
+  options?: { signal?: AbortSignal },
+): Promise<PipelineCompileOutput> {
   const res = await fetch("/api/pipelines/compile", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ pipeline }),
+    signal: options?.signal,
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -2222,11 +2226,15 @@ export async function compilePipeline(pipeline: Pipeline): Promise<PipelineCompi
   return res.json();
 }
 
-export async function compilePipelinePython(pipeline: Pipeline): Promise<PipelineCompilePythonOutput> {
+export async function compilePipelinePython(
+  pipeline: Pipeline,
+  options?: { signal?: AbortSignal },
+): Promise<PipelineCompilePythonOutput> {
   const res = await fetch("/api/pipelines/compile-python", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ pipeline }),
+    signal: options?.signal,
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -16,6 +16,14 @@ from .runtime import DropPolicy
 
 class GraphCompileError(ValueError):
     pass
+
+
+CancelCheck = Callable[[], None]
+
+
+def _check_cancelled(cancel_check: CancelCheck | None) -> None:
+    if cancel_check is not None:
+        cancel_check()
 
 
 class GraphEndpoint(BaseModel):
@@ -124,7 +132,13 @@ class PipelineGraphCompiler:
     def __init__(self, registry: OperatorRegistry) -> None:
         self._registry = registry
 
-    def compile_pipeline(self, pipeline: Pipeline) -> CompiledPipeline:
+    def compile_pipeline(
+        self,
+        pipeline: Pipeline,
+        *,
+        cancel_check: CancelCheck | None = None,
+    ) -> CompiledPipeline:
+        _check_cancelled(cancel_check)
         try:
             graph = PipelineGraphSpec.model_validate(pipeline.graph)
         except Exception as exc:  # noqa: BLE001
@@ -132,6 +146,7 @@ class PipelineGraphCompiler:
 
         node_map: dict[str, PipelineGraphNode] = {}
         for node in graph.nodes:
+            _check_cancelled(cancel_check)
             if node.id in node_map:
                 raise GraphCompileError(f"Duplicate node id: {node.id}")
             node_map[node.id] = node
@@ -143,6 +158,7 @@ class PipelineGraphCompiler:
         target_port_seen: set[tuple[str, str]] = set()
 
         for edge in edge_list:
+            _check_cancelled(cancel_check)
             src = edge.source.node
             dst = edge.target.node
             if src not in node_map:
@@ -166,6 +182,7 @@ class PipelineGraphCompiler:
         output_ports_by_node: dict[str, set[str]] = {}
 
         for node in graph.nodes:
+            _check_cancelled(cancel_check)
             operator = self._registry.get(node.operator_id)
             if operator is None:
                 raise GraphCompileError(f"Unknown operator id: {node.operator_id}")
@@ -193,6 +210,7 @@ class PipelineGraphCompiler:
                 )
 
         for edge in edge_list:
+            _check_cancelled(cancel_check)
             src_ports = output_ports_by_node[edge.source.node]
             if edge.source.port not in src_ports:
                 raise GraphCompileError(
@@ -208,6 +226,7 @@ class PipelineGraphCompiler:
             seen: set[str] = set()
             q: deque[str] = deque(adjacency.get(start_node_id, ()))
             while q:
+                _check_cancelled(cancel_check)
                 node_id = q.popleft()
                 if node_id in seen:
                     continue
@@ -219,6 +238,7 @@ class PipelineGraphCompiler:
             return False
 
         for node in graph.nodes:
+            _check_cancelled(cancel_check)
             if node.operator_id != "vision.detect":
                 continue
             cfg = normalized_config_by_node.get(node.id, {})
@@ -232,13 +252,17 @@ class PipelineGraphCompiler:
                 )
 
         topological_order = _topological_sort(
-            node_map=node_map, adjacency=adjacency, indegree=indegree
+            node_map=node_map,
+            adjacency=adjacency,
+            indegree=indegree,
+            cancel_check=cancel_check,
         )
         signature_by_node: dict[str, str] = {}
         compiled_nodes: list[CompiledNode] = []
         compiled_edges: list[CompiledEdge] = []
 
         for node_id in topological_order:
+            _check_cancelled(cancel_check)
             node = node_map[node_id]
             incoming = incoming_edges.get(node_id, [])
             upstream = sorted(
@@ -279,6 +303,7 @@ class PipelineGraphCompiler:
             )
 
         for edge in edge_list:
+            _check_cancelled(cancel_check)
             compiled_edges.append(
                 CompiledEdge(
                     source_node_id=edge.source.node,
@@ -299,11 +324,20 @@ class PipelineGraphCompiler:
             limits=dict(graph.limits),
         )
 
-    def compile_many(self, pipelines: list[Pipeline]) -> CompilationReport:
-        compiled = [self.compile_pipeline(pipeline) for pipeline in pipelines]
+    def compile_many(
+        self,
+        pipelines: list[Pipeline],
+        *,
+        cancel_check: CancelCheck | None = None,
+    ) -> CompilationReport:
+        compiled = [
+            self.compile_pipeline(pipeline, cancel_check=cancel_check) for pipeline in pipelines
+        ]
         grouped: dict[str, list[SharedNodeOccurrence]] = defaultdict(list)
         for pipeline in compiled:
+            _check_cancelled(cancel_check)
             for node in pipeline.nodes:
+                _check_cancelled(cancel_check)
                 if not node.shareable:
                     continue
                 grouped[node.signature].append(
@@ -329,15 +363,18 @@ def _topological_sort(
     node_map: dict[str, PipelineGraphNode],
     adjacency: dict[str, set[str]],
     indegree: dict[str, int],
+    cancel_check: CancelCheck | None = None,
 ) -> list[str]:
     queue = deque(sorted([node_id for node_id, degree in indegree.items() if degree == 0]))
     order: list[str] = []
     local_indegree = dict(indegree)
 
     while queue:
+        _check_cancelled(cancel_check)
         current = queue.popleft()
         order.append(current)
         for nxt in sorted(adjacency.get(current, set())):
+            _check_cancelled(cancel_check)
             local_indegree[nxt] -= 1
             if local_indegree[nxt] == 0:
                 queue.append(nxt)

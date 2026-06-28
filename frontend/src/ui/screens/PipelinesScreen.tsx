@@ -25,6 +25,7 @@ import {
   listPipelineOperators,
   listPipelines,
   listProcessingServers,
+  isAbortError,
   putPipeline,
   resetPipelineStats,
 } from "../../util/api";
@@ -455,6 +456,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     }
 
     let cancelled = false;
+    const controller = new AbortController();
     setRecommendationsLoading(true);
     setRecommendationsError(null);
 
@@ -467,11 +469,14 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               setRecommendationsError(null);
               return;
             }
-            const output = await compilePipelinePython({
-              ...draft,
-              editor_mode: "python",
-              python_source: pythonText,
-            });
+            const output = await compilePipelinePython(
+              {
+                ...draft,
+                editor_mode: "python",
+                python_source: pythonText,
+              },
+              { signal: controller.signal },
+            );
             if (cancelled) return;
             setRecommendations(Array.isArray(output.alerts) ? output.alerts : []);
             setRecommendationsError(null);
@@ -485,12 +490,15 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
             setRecommendationsError(resolved.message);
             return;
           }
-          const output = await compilePipeline({ ...draft, graph: resolved.graph });
+          const output = await compilePipeline(
+            { ...draft, graph: resolved.graph },
+            { signal: controller.signal },
+          );
           if (cancelled) return;
           setRecommendations(Array.isArray(output.alerts) ? output.alerts : []);
           setRecommendationsError(null);
         } catch (err: any) {
-          if (cancelled) return;
+          if (cancelled || isAbortError(err)) return;
           setRecommendations([]);
           setRecommendationsError(String(err?.message ?? err));
         } finally {
@@ -505,6 +513,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     return () => {
       cancelled = true;
       window.clearTimeout(handle);
+      controller.abort();
     };
   }, [draft, mode, interactiveGraph.graph, graphText, pythonText]);
 

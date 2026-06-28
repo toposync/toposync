@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +9,14 @@ from .compiler import CompiledPipeline
 from .images import MAIN_ARTIFACT_NAME, normalize_artifact_name
 from .operator_registry import OperatorRegistry
 from .runtime import DropPolicy
+
+
+CancelCheck = Callable[[], None]
+
+
+def _check_cancelled(cancel_check: CancelCheck | None) -> None:
+    if cancel_check is not None:
+        cancel_check()
 
 
 class PipelineAlert(BaseModel):
@@ -27,7 +35,9 @@ def analyze_compiled_pipeline(
     pipeline: CompiledPipeline,
     registry: OperatorRegistry,
     context: dict[str, Any] | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> list[PipelineAlert]:
+    _check_cancelled(cancel_check)
     nodes_by_id = {node.node_id: node for node in pipeline.nodes}
     edges = list(pipeline.edges)
     order_index = {node_id: idx for idx, node_id in enumerate(pipeline.topological_order)}
@@ -35,11 +45,13 @@ def analyze_compiled_pipeline(
     incoming: dict[str, list[Any]] = {}
     outgoing: dict[str, list[Any]] = {}
     for edge in edges:
+        _check_cancelled(cancel_check)
         outgoing.setdefault(edge.source_node_id, []).append(edge)
         incoming.setdefault(edge.target_node_id, []).append(edge)
 
     capabilities_by_node_id: dict[str, set[str]] = {}
     for node in pipeline.nodes:
+        _check_cancelled(cancel_check)
         operator = registry.get(node.operator_id)
         caps = operator.definition.capabilities if operator is not None else []
         capabilities_by_node_id[node.node_id] = {
@@ -51,6 +63,7 @@ def analyze_compiled_pipeline(
         found: set[str] = set()
         q: deque[str] = deque([start_node_id])
         while q:
+            _check_cancelled(cancel_check)
             current = q.popleft()
             for edge in incoming.get(current, []):
                 src = str(edge.source_node_id)
@@ -68,6 +81,7 @@ def analyze_compiled_pipeline(
         q: deque[str] = deque([start_node_id])
         out: list[str] = []
         while q:
+            _check_cancelled(cancel_check)
             current = q.popleft()
             for edge in incoming.get(current, []):
                 src = str(edge.source_node_id)
@@ -83,6 +97,7 @@ def analyze_compiled_pipeline(
         q: deque[str] = deque([start_node_id])
         out: list[str] = []
         while q:
+            _check_cancelled(cancel_check)
             current = q.popleft()
             for edge in outgoing.get(current, []):
                 dst = str(edge.target_node_id)
@@ -113,6 +128,7 @@ def analyze_compiled_pipeline(
         node = nodes_by_id.get(node_id)
         upstream_nodes: list[dict[str, Any]] = []
         for upstream_id in _upstream_nodes(node_id):
+            _check_cancelled(cancel_check)
             upstream = nodes_by_id.get(upstream_id)
             if upstream is None:
                 continue
@@ -139,6 +155,7 @@ def analyze_compiled_pipeline(
     # Extension/operator-owned diagnostics. Toposync aggregates these without
     # hard-coding domain-specific requirements in the core analyzer.
     for node_id in pipeline.topological_order:
+        _check_cancelled(cancel_check)
         node = nodes_by_id.get(node_id)
         if node is None:
             continue
@@ -159,6 +176,7 @@ def analyze_compiled_pipeline(
                 else:
                     diagnostic_context[key] = value
         for diagnostic in diagnostics:
+            _check_cancelled(cancel_check)
             alerts.append(
                 PipelineAlert(
                     severity=diagnostic.severity,
@@ -175,12 +193,14 @@ def analyze_compiled_pipeline(
     available_payload_keys_out: dict[str, set[str]] = {}
     available_artifacts_out: dict[str, set[str]] = {}
     for node_id in pipeline.topological_order:
+        _check_cancelled(cancel_check)
         node = nodes_by_id.get(node_id)
         if node is None:
             continue
         upstream_payload_keys: set[str] = set()
         upstream_artifacts: set[str] = set()
         for edge in incoming.get(node_id, []):
+            _check_cancelled(cancel_check)
             upstream_payload_keys.update(
                 available_payload_keys_out.get(str(edge.source_node_id), set())
             )
@@ -252,6 +272,7 @@ def analyze_compiled_pipeline(
         available_artifacts_out[node_id] = upstream_artifacts
 
     for detect_node_id in _node_ids_by_operator("vision.detect"):
+        _check_cancelled(cancel_check)
         cfg = _resolve_config(detect_node_id)
         emit_mode = str(cfg.get("emit_mode") or "events").strip().lower()
         if emit_mode == "event":
@@ -281,6 +302,7 @@ def analyze_compiled_pipeline(
 
     # Tracking defaults: too-aggressive closing and unthrottled update emission cause flicker under drops.
     for tracking_node_id in _node_ids_by_operator("vision.track"):
+        _check_cancelled(cancel_check)
         cfg = _resolve_config(tracking_node_id)
         try:
             close_after = float(cfg.get("close_after_seconds") or 0.0)
@@ -332,6 +354,7 @@ def analyze_compiled_pipeline(
 
     # Notify requires stored artifact references (it never stores images itself).
     for notify_node_id in _node_ids_by_operator("core.notify"):
+        _check_cancelled(cancel_check)
         store_nodes = [
             nid
             for nid in _upstream_nodes(notify_node_id)
@@ -373,6 +396,7 @@ def analyze_compiled_pipeline(
 
     # Velocity/areas require a world mapping.
     for velocity_node_id in _node_ids_by_operator("camera.velocity_estimation"):
+        _check_cancelled(cancel_check)
         if not _node_has_upstream_operator(velocity_node_id, "camera.camera_mapping"):
             alerts.append(
                 PipelineAlert(
@@ -409,6 +433,7 @@ def analyze_compiled_pipeline(
                 break
 
     for area_node_id in _node_ids_by_operator("camera.area_restriction"):
+        _check_cancelled(cancel_check)
         if not _node_has_upstream_operator(area_node_id, "camera.camera_mapping"):
             alerts.append(
                 PipelineAlert(
@@ -423,6 +448,7 @@ def analyze_compiled_pipeline(
 
     # Debug is great locally, but can destroy realtime performance when left enabled.
     for debug_node_id in _node_ids_by_operator("core.debug"):
+        _check_cancelled(cancel_check)
         cfg = _resolve_config(debug_node_id)
         if bool(cfg.get("enabled", False)):
             alerts.append(
@@ -458,6 +484,7 @@ def analyze_compiled_pipeline(
         "vision.segment_instances",
     }
     for store_node_id in _node_ids_by_operator("core.store_images"):
+        _check_cancelled(cancel_check)
         cfg = _resolve_config(store_node_id)
         if not bool(cfg.get("drop_data_after_store", True)):
             continue
@@ -501,6 +528,7 @@ def analyze_compiled_pipeline(
 
         # Warn only when a downstream post-process step might consume the same artifacts that Store Images could drop.
         for node_id in downstream:
+            _check_cancelled(cancel_check)
             node = nodes_by_id.get(node_id)
             if node is None or node.operator_id not in data_consumers:
                 continue
@@ -522,8 +550,10 @@ def analyze_compiled_pipeline(
         # Storing artifacts that are never produced upstream usually indicates a broken config.
         produced: set[str] = set()
         for edge in incoming.get(store_node_id, []):
+            _check_cancelled(cancel_check)
             produced.update(available_artifacts_out.get(str(edge.source_node_id), set()))
         for nid in _upstream_nodes(store_node_id):
+            _check_cancelled(cancel_check)
             output_name = _resolve_config(nid).get("output_artifact_name")
             if output_name:
                 produced.add(normalize_artifact_name(output_name))
@@ -553,10 +583,12 @@ def analyze_compiled_pipeline(
     if split_nodes:
         reachable_after_split: set[str] = set()
         for split_id in split_nodes:
+            _check_cancelled(cancel_check)
             reachable_after_split.add(split_id)
             reachable_after_split.update(_downstream_nodes(split_id))
 
         for edge in edges:
+            _check_cancelled(cancel_check)
             if edge.source_node_id not in reachable_after_split:
                 continue
             if (

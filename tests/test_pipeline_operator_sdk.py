@@ -89,6 +89,92 @@ def test_pipeline_compiler_detects_reusable_signatures_across_pipelines() -> Non
     assert any(len(occurrences) == 2 for occurrences in report.shared_signatures.values())
 
 
+def test_pipeline_compiler_cancel_check_interrupts_compile_many() -> None:
+    registry = OperatorRegistry()
+    registry.register_operator(
+        operator_id="test.source",
+        config_model=ThresholdConfig,
+        inputs=[],
+        outputs=[{"name": "out"}],
+        defaults={"threshold": 0.4},
+        capabilities=["source"],
+    )
+    registry.register_operator(
+        operator_id="test.filter",
+        config_model=ThresholdConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        defaults={"threshold": 0.6},
+    )
+    nodes = [{"id": "source", "operator": "test.source", "config": {}}]
+    edges = []
+    previous = "source"
+    for index in range(64):
+        node_id = f"filter_{index:02d}"
+        nodes.append({"id": node_id, "operator": "test.filter", "config": {}})
+        edges.append({"from": {"node": previous, "port": "out"}, "to": {"node": node_id, "port": "in"}})
+        previous = node_id
+
+    cancel_checks = 0
+
+    def cancel_check() -> None:
+        nonlocal cancel_checks
+        cancel_checks += 1
+        if cancel_checks >= 8:
+            raise RuntimeError("cancelled")
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        PipelineGraphCompiler(registry).compile_many(
+            [Pipeline(name="cancel_compile", graph={"schema_version": 1, "nodes": nodes, "edges": edges})],
+            cancel_check=cancel_check,
+        )
+    assert cancel_checks >= 8
+
+
+def test_pipeline_recommendations_cancel_check_interrupts_analysis() -> None:
+    registry = OperatorRegistry()
+    registry.register_operator(
+        operator_id="test.source",
+        config_model=ThresholdConfig,
+        inputs=[],
+        outputs=[{"name": "out"}],
+        defaults={"threshold": 0.4},
+        capabilities=["source"],
+    )
+    registry.register_operator(
+        operator_id="test.filter",
+        config_model=ThresholdConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        defaults={"threshold": 0.6},
+    )
+    pipeline = Pipeline(
+        name="cancel_recommendations",
+        graph={
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.source", "config": {}},
+                {"id": "filter", "operator": "test.filter", "config": {}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "filter", "port": "in"}}
+            ],
+        },
+    )
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+    cancel_checks = 0
+
+    def cancel_check() -> None:
+        nonlocal cancel_checks
+        cancel_checks += 1
+        if cancel_checks >= 3:
+            raise RuntimeError("cancelled")
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        analyze_compiled_pipeline(pipeline=compiled, registry=registry, cancel_check=cancel_check)
+    assert cancel_checks >= 3
+
+
 def test_pipeline_compiler_rejects_unknown_operator_and_cycle() -> None:
     registry = OperatorRegistry()
     registry.register_operator(

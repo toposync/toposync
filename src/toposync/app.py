@@ -122,6 +122,7 @@ PIPELINE_TELEMETRY_AGGREGATE_IMAGE_MARKERS_READ_CONCURRENCY = 1
 PIPELINE_TELEMETRY_NUMERIC_READ_CONCURRENCY = 4
 PIPELINE_TELEMETRY_IMAGE_MARKERS_READ_CONCURRENCY = 2
 PIPELINE_PREVIEW_FRAME_CONCURRENCY = 2
+PIPELINE_COMPILE_CONCURRENCY = 2
 REQUEST_DISCONNECT_POLL_SECONDS = 0.01
 _RequestWorkResult = TypeVar("_RequestWorkResult")
 
@@ -1304,6 +1305,10 @@ async def _lifespan(app: FastAPI):
     }
     app.state.pipeline_preview_frame_limiter = _RequestConcurrencyLimiter(
         PIPELINE_PREVIEW_FRAME_CONCURRENCY,
+        prefer_latest=True,
+    )
+    app.state.pipeline_compile_limiter = _RequestConcurrencyLimiter(
+        PIPELINE_COMPILE_CONCURRENCY,
         prefer_latest=True,
     )
     app.state.pipeline_operator_registry = operator_registry
@@ -3292,75 +3297,98 @@ def create_app() -> FastAPI:
         _require(request, action="core:pipelines:compile")
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
-        pipeline = body.pipeline
-        if str(getattr(pipeline, "editor_mode", "json")) == "python":
-            source = str(getattr(pipeline, "python_source", "") or "")
-            if not source.strip():
-                raise HTTPException(
-                    status_code=400, detail="python_source is required when editor_mode='python'"
-                )
-            try:
-                graph = compile_python_source_to_graph(
-                    python_source=source,
-                    pipeline_name=pipeline.name,
-                    registry=registry,
-                    filename=f"<pipeline:{pipeline.name}>",
-                )
-            except PythonDslCompileError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            pipeline = pipeline.model_copy(update={"graph": graph})
-        try:
-            compiled = compiler.compile_many([pipeline])
-        except GraphCompileError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not compiled.pipelines:
-            return PipelineCompileResponse(pipeline={}, shared_signatures={})
-        pipeline = compiled.pipelines[0]
-        compiled_dict = {
-            "name": pipeline.name,
-            "schema_version": pipeline.schema_version,
-            "topological_order": list(pipeline.topological_order),
-            "nodes": [
-                {
-                    "id": node.node_id,
-                    "operator_id": node.operator_id,
-                    "normalized_config": node.normalized_config,
-                    "signature": node.signature,
-                    "shareable": node.shareable,
-                }
-                for node in pipeline.nodes
-            ],
-            "edges": [
-                {
-                    "source_node_id": edge.source_node_id,
-                    "source_port": edge.source_port,
-                    "target_node_id": edge.target_node_id,
-                    "target_port": edge.target_port,
-                    "channel_maxsize": edge.channel_maxsize,
-                    "channel_drop_policy": edge.channel_drop_policy.value,
-                }
-                for edge in pipeline.edges
-            ],
-        }
-        shared_signatures = {
-            signature: [
-                {
-                    "pipeline_name": occ.pipeline_name,
-                    "node_id": occ.node_id,
-                    "signature": occ.signature,
-                }
-                for occ in occurrences
-            ]
-            for signature, occurrences in compiled.shared_signatures.items()
-        }
         config_store: ConfigStore = request.app.state.config_store
-        alerts = analyze_compiled_pipeline(
-            pipeline=pipeline,
-            registry=registry,
-            context=await _build_pipeline_diagnostics_context(config_store),
-        )
-        return PipelineCompileResponse(
-            pipeline=compiled_dict, shared_signatures=shared_signatures, alerts=alerts
+
+        async def build_response(check_cancelled: Callable[[], None]) -> PipelineCompileResponse:
+            pipeline = body.pipeline
+            check_cancelled()
+            if str(getattr(pipeline, "editor_mode", "json")) == "python":
+                source = str(getattr(pipeline, "python_source", "") or "")
+                if not source.strip():
+                    raise HTTPException(
+                        status_code=400,
+                        detail="python_source is required when editor_mode='python'",
+                    )
+                try:
+                    graph = await asyncio.to_thread(
+                        compile_python_source_to_graph,
+                        python_source=source,
+                        pipeline_name=pipeline.name,
+                        registry=registry,
+                        filename=f"<pipeline:{pipeline.name}>",
+                    )
+                except PythonDslCompileError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                check_cancelled()
+                pipeline = pipeline.model_copy(update={"graph": graph})
+            try:
+                compiled = await asyncio.to_thread(
+                    compiler.compile_many,
+                    [pipeline],
+                    cancel_check=check_cancelled,
+                )
+            except GraphCompileError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            check_cancelled()
+            if not compiled.pipelines:
+                return PipelineCompileResponse(pipeline={}, shared_signatures={})
+            pipeline = compiled.pipelines[0]
+            compiled_dict = {
+                "name": pipeline.name,
+                "schema_version": pipeline.schema_version,
+                "topological_order": list(pipeline.topological_order),
+                "nodes": [
+                    {
+                        "id": node.node_id,
+                        "operator_id": node.operator_id,
+                        "normalized_config": node.normalized_config,
+                        "signature": node.signature,
+                        "shareable": node.shareable,
+                    }
+                    for node in pipeline.nodes
+                ],
+                "edges": [
+                    {
+                        "source_node_id": edge.source_node_id,
+                        "source_port": edge.source_port,
+                        "target_node_id": edge.target_node_id,
+                        "target_port": edge.target_port,
+                        "channel_maxsize": edge.channel_maxsize,
+                        "channel_drop_policy": edge.channel_drop_policy.value,
+                    }
+                    for edge in pipeline.edges
+                ],
+            }
+            shared_signatures = {
+                signature: [
+                    {
+                        "pipeline_name": occ.pipeline_name,
+                        "node_id": occ.node_id,
+                        "signature": occ.signature,
+                    }
+                    for occ in occurrences
+                ]
+                for signature, occurrences in compiled.shared_signatures.items()
+            }
+            check_cancelled()
+            context = await _build_pipeline_diagnostics_context(config_store)
+            check_cancelled()
+            alerts = await asyncio.to_thread(
+                analyze_compiled_pipeline,
+                pipeline=pipeline,
+                registry=registry,
+                context=context,
+                cancel_check=check_cancelled,
+            )
+            check_cancelled()
+            return PipelineCompileResponse(
+                pipeline=compiled_dict, shared_signatures=shared_signatures, alerts=alerts
+            )
+
+        return await _run_cancelable_async_request_work(
+            request,
+            build_response,
+            limiter=request.app.state.pipeline_compile_limiter,
         )
 
     @app.post("/api/pipelines/compile-python", response_model=PipelineCompilePythonResponse)
@@ -3370,79 +3398,104 @@ def create_app() -> FastAPI:
         _require(request, action="core:pipelines:compile")
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
-
-        pipeline = body.pipeline
-        source = str(getattr(pipeline, "python_source", "") or "")
-        if not source.strip():
-            raise HTTPException(status_code=400, detail="python_source is required")
-
-        try:
-            graph = compile_python_source_to_graph(
-                python_source=source,
-                pipeline_name=pipeline.name,
-                registry=registry,
-                filename=f"<pipeline:{pipeline.name}>",
-            )
-        except PythonDslCompileError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        try:
-            compiled = compiler.compile_many([pipeline.model_copy(update={"graph": graph})])
-        except GraphCompileError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        if not compiled.pipelines:
-            return PipelineCompilePythonResponse(graph=graph, pipeline={}, shared_signatures={})
-
-        compiled_pipeline = compiled.pipelines[0]
-        compiled_dict = {
-            "name": compiled_pipeline.name,
-            "schema_version": compiled_pipeline.schema_version,
-            "topological_order": list(compiled_pipeline.topological_order),
-            "nodes": [
-                {
-                    "id": node.node_id,
-                    "operator_id": node.operator_id,
-                    "normalized_config": node.normalized_config,
-                    "signature": node.signature,
-                    "shareable": node.shareable,
-                }
-                for node in compiled_pipeline.nodes
-            ],
-            "edges": [
-                {
-                    "source_node_id": edge.source_node_id,
-                    "source_port": edge.source_port,
-                    "target_node_id": edge.target_node_id,
-                    "target_port": edge.target_port,
-                    "channel_maxsize": edge.channel_maxsize,
-                    "channel_drop_policy": edge.channel_drop_policy.value,
-                }
-                for edge in compiled_pipeline.edges
-            ],
-        }
-        shared_signatures = {
-            signature: [
-                {
-                    "pipeline_name": occ.pipeline_name,
-                    "node_id": occ.node_id,
-                    "signature": occ.signature,
-                }
-                for occ in occurrences
-            ]
-            for signature, occurrences in compiled.shared_signatures.items()
-        }
         config_store: ConfigStore = request.app.state.config_store
-        alerts = analyze_compiled_pipeline(
-            pipeline=compiled_pipeline,
-            registry=registry,
-            context=await _build_pipeline_diagnostics_context(config_store),
-        )
-        return PipelineCompilePythonResponse(
-            graph=graph,
-            pipeline=compiled_dict,
-            shared_signatures=shared_signatures,
-            alerts=alerts,
+
+        async def build_response(
+            check_cancelled: Callable[[], None],
+        ) -> PipelineCompilePythonResponse:
+            pipeline = body.pipeline
+            source = str(getattr(pipeline, "python_source", "") or "")
+            if not source.strip():
+                raise HTTPException(status_code=400, detail="python_source is required")
+
+            check_cancelled()
+            try:
+                graph = await asyncio.to_thread(
+                    compile_python_source_to_graph,
+                    python_source=source,
+                    pipeline_name=pipeline.name,
+                    registry=registry,
+                    filename=f"<pipeline:{pipeline.name}>",
+                )
+            except PythonDslCompileError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            check_cancelled()
+            try:
+                compiled = await asyncio.to_thread(
+                    compiler.compile_many,
+                    [pipeline.model_copy(update={"graph": graph})],
+                    cancel_check=check_cancelled,
+                )
+            except GraphCompileError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            check_cancelled()
+            if not compiled.pipelines:
+                return PipelineCompilePythonResponse(
+                    graph=graph, pipeline={}, shared_signatures={}
+                )
+
+            compiled_pipeline = compiled.pipelines[0]
+            compiled_dict = {
+                "name": compiled_pipeline.name,
+                "schema_version": compiled_pipeline.schema_version,
+                "topological_order": list(compiled_pipeline.topological_order),
+                "nodes": [
+                    {
+                        "id": node.node_id,
+                        "operator_id": node.operator_id,
+                        "normalized_config": node.normalized_config,
+                        "signature": node.signature,
+                        "shareable": node.shareable,
+                    }
+                    for node in compiled_pipeline.nodes
+                ],
+                "edges": [
+                    {
+                        "source_node_id": edge.source_node_id,
+                        "source_port": edge.source_port,
+                        "target_node_id": edge.target_node_id,
+                        "target_port": edge.target_port,
+                        "channel_maxsize": edge.channel_maxsize,
+                        "channel_drop_policy": edge.channel_drop_policy.value,
+                    }
+                    for edge in compiled_pipeline.edges
+                ],
+            }
+            shared_signatures = {
+                signature: [
+                    {
+                        "pipeline_name": occ.pipeline_name,
+                        "node_id": occ.node_id,
+                        "signature": occ.signature,
+                    }
+                    for occ in occurrences
+                ]
+                for signature, occurrences in compiled.shared_signatures.items()
+            }
+            check_cancelled()
+            context = await _build_pipeline_diagnostics_context(config_store)
+            check_cancelled()
+            alerts = await asyncio.to_thread(
+                analyze_compiled_pipeline,
+                pipeline=compiled_pipeline,
+                registry=registry,
+                context=context,
+                cancel_check=check_cancelled,
+            )
+            check_cancelled()
+            return PipelineCompilePythonResponse(
+                graph=graph,
+                pipeline=compiled_dict,
+                shared_signatures=shared_signatures,
+                alerts=alerts,
+            )
+
+        return await _run_cancelable_async_request_work(
+            request,
+            build_response,
+            limiter=request.app.state.pipeline_compile_limiter,
         )
 
     @app.post("/api/pipelines/preview/frame")

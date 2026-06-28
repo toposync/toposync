@@ -368,6 +368,39 @@ def test_pipeline_compile_limiter_cancels_waiter_before_work_starts(
         asyncio.run(scenario(client.app.state.pipeline_compile_limiter))
 
 
+def test_processing_server_status_limiter_cancels_waiter_before_work_starts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario(limiter) -> None:  # noqa: ANN001
+        for _ in range(4):
+            await limiter.acquire()
+        request = _FakeDisconnectRequest()
+        work_ran = False
+
+        async def work(_check_cancelled):  # noqa: ANN001
+            nonlocal work_ran
+            work_ran = True
+            return {"ok": True}
+
+        task = asyncio.create_task(
+            _run_cancelable_async_request_work(request, work, limiter=limiter)
+        )
+        await asyncio.sleep(0.12)
+        assert not work_ran
+        request.disconnected = True
+
+        with pytest.raises(HTTPException) as exc_info:
+            await task
+        assert exc_info.value.status_code == CLIENT_CLOSED_REQUEST_STATUS
+        assert not work_ran
+        for _ in range(4):
+            limiter.release()
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        asyncio.run(scenario(client.app.state.processing_server_status_limiter))
+
+
 def test_pipelines_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         res = client.get("/api/pipelines")

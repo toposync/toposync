@@ -336,28 +336,42 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     const serverId = String(draft.processing_server_id ?? "local").trim().toLowerCase() || "local";
     let canceled = false;
     let didCompleteInitialLoad = false;
+    let currentController: AbortController | null = null;
+    let timer: number | null = null;
     setSelectedServerStatus(null);
     setSelectedServerStatusLoading(true);
 
+    const scheduleNextLoad = () => {
+      if (canceled) return;
+      timer = window.setTimeout(() => void loadStatus(), 5000);
+    };
+
     const loadStatus = async () => {
+      const controller = new AbortController();
+      currentController = controller;
       const showLoading = !didCompleteInitialLoad;
       if (showLoading) setSelectedServerStatusLoading(true);
       try {
-        const status = await getProcessingServerStatus(serverId);
-        if (!canceled) setSelectedServerStatus(status);
+        const status = await getProcessingServerStatus(serverId, { signal: controller.signal });
+        if (!canceled && !controller.signal.aborted) setSelectedServerStatus(status);
       } catch (err: any) {
+        if (canceled || controller.signal.aborted || isAbortError(err)) return;
         if (!canceled) setSelectedServerStatus({ ok: false, error: String(err?.message ?? err) });
       } finally {
-        didCompleteInitialLoad = true;
-        if (!canceled && showLoading) setSelectedServerStatusLoading(false);
+        if (currentController === controller) currentController = null;
+        if (!controller.signal.aborted) {
+          didCompleteInitialLoad = true;
+          if (!canceled && showLoading) setSelectedServerStatusLoading(false);
+        }
+        scheduleNextLoad();
       }
     };
 
     void loadStatus();
-    const timer = window.setInterval(() => void loadStatus(), 5000);
     return () => {
       canceled = true;
-      window.clearInterval(timer);
+      currentController?.abort();
+      if (timer !== null) window.clearTimeout(timer);
     };
   }, [draft?.name, draft?.processing_server_id]);
 

@@ -123,6 +123,7 @@ PIPELINE_TELEMETRY_NUMERIC_READ_CONCURRENCY = 4
 PIPELINE_TELEMETRY_IMAGE_MARKERS_READ_CONCURRENCY = 2
 PIPELINE_PREVIEW_FRAME_CONCURRENCY = 2
 PIPELINE_COMPILE_CONCURRENCY = 2
+PROCESSING_SERVER_STATUS_CONCURRENCY = 4
 REQUEST_DISCONNECT_POLL_SECONDS = 0.01
 _RequestWorkResult = TypeVar("_RequestWorkResult")
 
@@ -1311,6 +1312,10 @@ async def _lifespan(app: FastAPI):
         PIPELINE_COMPILE_CONCURRENCY,
         prefer_latest=True,
     )
+    app.state.processing_server_status_limiter = _RequestConcurrencyLimiter(
+        PROCESSING_SERVER_STATUS_CONCURRENCY,
+        prefer_latest=True,
+    )
     app.state.pipeline_operator_registry = operator_registry
     app.state.pipeline_graph_compiler = pipeline_compiler
     pipeline_stats_store = PipelineStatsStore()
@@ -2355,44 +2360,58 @@ def create_app() -> FastAPI:
     ) -> ProcessingServerStatusResponse:
         _require(request, action="core:processing_servers:read")
         config_store: ConfigStore = request.app.state.config_store
-        sid = str(server_id or "").strip().lower()
-        servers = await config_store.list_processing_servers()
-        server = next((item for item in servers if item.id == sid), None)
-        if server is None:
-            raise HTTPException(status_code=404, detail="Unknown processing server")
 
-        if server.kind != "http":
-            status: dict[str, Any] = {"kind": server.kind, "id": server.id}
-            try:
-                status.update(
-                    await collect_processing_server_diagnostics(
-                        data_dir=str(config_store.paths.data_dir)
+        async def build_response(
+            check_cancelled: Callable[[], None],
+        ) -> ProcessingServerStatusResponse:
+            sid = str(server_id or "").strip().lower()
+            check_cancelled()
+            servers = await config_store.list_processing_servers()
+            check_cancelled()
+            server = next((item for item in servers if item.id == sid), None)
+            if server is None:
+                raise HTTPException(status_code=404, detail="Unknown processing server")
+
+            if server.kind != "http":
+                status: dict[str, Any] = {"kind": server.kind, "id": server.id}
+                try:
+                    status.update(
+                        await collect_processing_server_diagnostics(
+                            data_dir=str(config_store.paths.data_dir)
+                        )
                     )
-                )
-            except Exception:
-                pass
-            return ProcessingServerStatusResponse(ok=True, status=status)
+                except Exception:
+                    pass
+                check_cancelled()
+                return ProcessingServerStatusResponse(ok=True, status=status)
 
-        try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=5.0,
-            )
-        except ProcessingTransportError as exc:
-            return ProcessingServerStatusResponse(ok=False, error=str(exc))
-
-        try:
-            status = await transport.status()
-            return ProcessingServerStatusResponse(ok=True, status=status)
-        except Exception as exc:  # noqa: BLE001
-            return ProcessingServerStatusResponse(ok=False, error=str(exc))
-        finally:
             try:
-                await transport.close()
-            except Exception:
-                pass
+                transport = HttpProcessingTransport(
+                    base_url=server.url,
+                    username=getattr(server, "username", ""),
+                    password=getattr(server, "password", ""),
+                    timeout_s=5.0,
+                )
+            except ProcessingTransportError as exc:
+                return ProcessingServerStatusResponse(ok=False, error=str(exc))
+
+            try:
+                status = await transport.status()
+            except Exception as exc:  # noqa: BLE001
+                return ProcessingServerStatusResponse(ok=False, error=str(exc))
+            finally:
+                try:
+                    await transport.close()
+                except Exception:
+                    pass
+            check_cancelled()
+            return ProcessingServerStatusResponse(ok=True, status=status)
+
+        return await _run_cancelable_async_request_work(
+            request,
+            build_response,
+            limiter=request.app.state.processing_server_status_limiter,
+        )
 
     @app.post(
         "/api/processing-servers/{server_id}/vision/manifests/import",

@@ -1767,8 +1767,13 @@ export async function deleteProcessingServer(serverId: string): Promise<Processi
   return res.json();
 }
 
-export async function getProcessingServerStatus(serverId: string): Promise<ProcessingServerStatus> {
-  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/status`);
+export async function getProcessingServerStatus(
+  serverId: string,
+  options: AbortableRequestOptions = {},
+): Promise<ProcessingServerStatus> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/status`, {
+    signal: options.signal,
+  });
   if (!res.ok) throw new Error(`Failed to fetch processing server status ${serverId}: ${res.status}`);
   return res.json();
 }

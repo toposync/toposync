@@ -1742,8 +1742,10 @@ export async function getNotification(
   return res.json();
 }
 
-export async function listProcessingServers(): Promise<ProcessingServer[]> {
-  const res = await fetch("/api/processing-servers");
+export async function listProcessingServers(
+  options: AbortableRequestOptions = {},
+): Promise<ProcessingServer[]> {
+  const res = await fetch("/api/processing-servers", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to list processing servers: ${res.status}`);
   const body = (await res.json()) as { servers?: ProcessingServer[] };
   return body.servers ?? [];
@@ -2006,8 +2008,8 @@ export async function uploadProcessingServerVisionModelArtifact(
   });
 }
 
-export async function listPipelines(): Promise<Pipeline[]> {
-  const res = await fetch("/api/pipelines");
+export async function listPipelines(options: AbortableRequestOptions = {}): Promise<Pipeline[]> {
+  const res = await fetch("/api/pipelines", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to list pipelines: ${res.status}`);
   const body = (await res.json()) as { pipelines?: Pipeline[] };
   return body.pipelines ?? [];
@@ -2260,8 +2262,10 @@ export async function applyPipelineTemplateToCameras(
   return res.json();
 }
 
-export async function listCamerasIndex(): Promise<CamerasIndexResponse> {
-  const res = await fetch("/api/cameras/index");
+export async function listCamerasIndex(
+  options: AbortableRequestOptions = {},
+): Promise<CamerasIndexResponse> {
+  const res = await fetch("/api/cameras/index", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to list cameras index: ${res.status}`);
   const body = (await res.json()) as { cameras?: CameraSummary[] };
   return { cameras: Array.isArray(body.cameras) ? body.cameras : [] };
@@ -2342,8 +2346,10 @@ export async function fetchPipelinePreviewFrame(
   return response.blob();
 }
 
-export async function listPipelineOperators(): Promise<PipelineOperatorDefinition[]> {
-  const res = await fetch("/api/pipelines/operators");
+export async function listPipelineOperators(
+  options: AbortableRequestOptions = {},
+): Promise<PipelineOperatorDefinition[]> {
+  const res = await fetch("/api/pipelines/operators", { signal: options.signal });
   if (!res.ok) throw new Error(`Failed to list pipeline operators: ${res.status}`);
   const body = (await res.json()) as { operators?: PipelineOperatorDefinition[] };
   return body.operators ?? [];

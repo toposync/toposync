@@ -211,16 +211,20 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     [draft?.graph, interactiveSteps, operatorsById],
   );
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (options?: { signal?: AbortSignal }) => {
     setLoading(true);
     setError(null);
     try {
       const [pipelineList, serverList, operatorList, cameras] = await Promise.all([
-        listPipelines(),
-        listProcessingServers(),
-        listPipelineOperators(),
-        listCamerasIndex().catch(() => ({ cameras: [] })),
+        listPipelines({ signal: options?.signal }),
+        listProcessingServers({ signal: options?.signal }),
+        listPipelineOperators({ signal: options?.signal }),
+        listCamerasIndex({ signal: options?.signal }).catch((err) => {
+          if (isAbortError(err)) throw err;
+          return { cameras: [] };
+        }),
       ]);
+      if (options?.signal?.aborted) return;
       setPipelines(sortPipelinesForDisplay(pipelineList));
       setServers(serverList);
       setOperators(operatorList);
@@ -234,14 +238,20 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
         return null;
       });
     } catch (err: any) {
+      if (options?.signal?.aborted || isAbortError(err)) return;
       setError(String(err?.message ?? err));
     } finally {
+      if (options?.signal?.aborted) return;
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void reload();
+    const controller = new AbortController();
+    void reload({ signal: controller.signal });
+    return () => {
+      controller.abort();
+    };
   }, [reload]);
 
   useEffect(() => {

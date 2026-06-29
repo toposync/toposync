@@ -11,6 +11,7 @@ DirectorBehavior = Literal["rotation_with_events", "primary_with_events"]
 SourceRole = Literal["main", "sub", "zoom", "auto"]
 WarmupMode = Literal["off", "next_idle", "event_high", "adaptive"]
 ResizeMode = Literal["contain", "none"]
+DemandGateScope = Literal["transmission", "output"]
 
 
 class CinematicWizardOptionalParameters(BaseModel):
@@ -49,6 +50,7 @@ class CinematicWizardOptionalParameters(BaseModel):
 
     demand_gate_output_id: str = ""
     demand_gate_quality_profile_id: str = ""
+    demand_gate_scope: DemandGateScope = "transmission"
     demand_gate_poll_interval_ms: int = Field(default=500, ge=100, le=10_000)
     demand_gate_fail_open: bool = True
     resize_mode: ResizeMode = "contain"
@@ -114,6 +116,16 @@ class CinematicWizardOptionalParameters(BaseModel):
                 self.camera_ids = [camera_id for camera_id in self.camera_ids if camera_id != primary_camera_id]
         if self.cameras_mode in {"include", "exclude"} and not self.camera_ids:
             raise ValueError("camera_ids is required when cameras_mode is include or exclude")
+        if (
+            "demand_gate_scope" not in self.model_fields_set
+            and (self.demand_gate_output_id or self.demand_gate_quality_profile_id)
+        ):
+            self.demand_gate_scope = "output"
+        if self.demand_gate_scope != "output":
+            self.demand_gate_output_id = ""
+            self.demand_gate_quality_profile_id = ""
+        elif not self.demand_gate_output_id and not self.demand_gate_quality_profile_id:
+            self.demand_gate_scope = "transmission"
         return self
 
 

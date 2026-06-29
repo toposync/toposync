@@ -2,6 +2,7 @@ export type CameraMode = "all" | "include" | "exclude";
 export type DirectorBehavior = "rotation_with_events" | "primary_with_events";
 export type Priority = "silent" | "low" | "medium" | "high";
 export type ResizeMode = "contain" | "none";
+export type DemandGateScope = "transmission" | "output";
 export type SourceRole = "auto" | "main" | "sub" | "zoom";
 
 export type Transmission = {
@@ -84,6 +85,7 @@ export type CinematicWizardCreatePipelineRequest = {
     stale_frame_max_age_seconds?: number;
     resize_mode?: ResizeMode;
     writer_priority?: number;
+    demand_gate_scope?: DemandGateScope;
     demand_gate_output_id?: string;
     demand_gate_quality_profile_id?: string;
   };

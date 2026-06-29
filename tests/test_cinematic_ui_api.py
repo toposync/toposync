@@ -127,6 +127,9 @@ def test_cinematic_wizard_graph_uses_demand_director_publish_chain() -> None:
     assert graph["edges"][0]["drop_policy"] == "drop_oldest"
     assert graph["edges"][1]["maxsize"] == 1
     assert graph["edges"][1]["drop_policy"] == "latest_only"
+    assert graph["nodes"][0]["config"]["demand_scope"] == "transmission"
+    assert graph["nodes"][0]["config"]["output_id"] == ""
+    assert graph["nodes"][0]["config"]["quality_profile_id"] == ""
     assert graph["nodes"][1]["config"]["behavior"] == "rotation_with_events"
     assert graph["nodes"][1]["config"]["camera_ids"] == ["front"]
     assert graph["nodes"][2]["config"]["resize_mode"] == "none"

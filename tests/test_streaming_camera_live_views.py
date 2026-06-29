@@ -685,8 +685,72 @@ def test_pipeline_publication_syncs_upstream_demand_gate(tmp_path: Path) -> None
     nodes = {item["id"]: item for item in pipeline.graph["nodes"]}
     assert nodes["publish"]["config"]["transmission_id"] == transmission["id"]
     assert nodes["demand"]["config"]["transmission_id"] == transmission["id"]
-    assert nodes["demand"]["config"]["output_id"] == variant["output_id"] == "hls_stable_apple_tv"
-    assert nodes["demand"]["config"]["quality_profile_id"] == variant["quality_profile_id"] == "stable_apple_tv"
+    assert variant["output_id"] == "hls_stable_apple_tv"
+    assert variant["quality_profile_id"] == "stable_apple_tv"
+    assert nodes["demand"]["config"]["demand_scope"] == "transmission"
+    assert nodes["demand"]["config"]["output_id"] == ""
+    assert nodes["demand"]["config"]["quality_profile_id"] == ""
+
+
+def test_pipeline_publication_preserves_explicit_upstream_demand_output(tmp_path: Path) -> None:
+    client = _create_client(tmp_path)
+
+    async def _add_pipeline() -> None:
+        await client.app.state.config_store.create_pipeline(
+            Pipeline(
+                name="cinematic_specific_output",
+                enabled=True,
+                processing_server_id="local",
+                editor_mode="interactive",
+                graph={
+                    "schema_version": 1,
+                    "nodes": [
+                        {
+                            "id": "demand",
+                            "operator": "stream.demand_gate",
+                            "config": {
+                                "transmission_id": "draft-cinematic",
+                                "demand_scope": "output",
+                                "output_id": "hls_quad_grid",
+                                "quality_profile_id": "quad_grid",
+                                "poll_interval_ms": 500,
+                                "fail_open": True,
+                            },
+                        },
+                        {"id": "director", "operator": "test.director", "config": {}},
+                        {
+                            "id": "publish",
+                            "operator": "stream.publish_video",
+                            "config": {
+                                "transmission_id": "draft-cinematic",
+                                "publication_enabled": True,
+                                "publication_role": "custom",
+                                "publication_label": "Cinematic Specific",
+                            },
+                        },
+                    ],
+                    "edges": [
+                        {"from": {"node": "demand", "port": "out"}, "to": {"node": "director", "port": "gate"}},
+                        {"from": {"node": "director", "port": "out"}, "to": {"node": "publish", "port": "in"}},
+                    ],
+                },
+            )
+        )
+
+    asyncio.run(_add_pipeline())
+
+    res = client.post("/api/streams/reconcile")
+
+    assert res.status_code == 200, res.text
+    pipeline = next(
+        item
+        for item in asyncio.run(client.app.state.config_store.list_pipelines())
+        if item.name == "cinematic_specific_output"
+    )
+    nodes = {item["id"]: item for item in pipeline.graph["nodes"]}
+    assert nodes["demand"]["config"]["demand_scope"] == "output"
+    assert nodes["demand"]["config"]["output_id"] == "hls_quad_grid"
+    assert nodes["demand"]["config"]["quality_profile_id"] == "quad_grid"
 
 
 def test_pipeline_publish_video_groups_roles_by_manual_live_view_label(tmp_path: Path) -> None:

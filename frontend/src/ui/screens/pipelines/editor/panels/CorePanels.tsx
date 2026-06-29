@@ -1699,11 +1699,153 @@ type NotifyProps = {
   onUpdateConfig: UpdateConfig;
 };
 
+type DemandGateProps = {
+  config: Record<string, unknown>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
 type PublishVideoProps = {
   config: Record<string, unknown>;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
+
+function demandGateScope(config: Record<string, unknown>): "transmission" | "output" {
+  const raw = String((config as any).demand_scope ?? "").trim().toLowerCase();
+  if (raw === "output") return "output";
+  if (raw === "transmission" || raw === "auto") return "transmission";
+  const outputId = String((config as any).output_id ?? "").trim();
+  const qualityProfileId = String((config as any).quality_profile_id ?? "").trim();
+  return outputId || qualityProfileId ? "output" : "transmission";
+}
+
+export function DemandGateConfigCard({ config, showAdvanced, onUpdateConfig }: DemandGateProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const scope = demandGateScope(config);
+  const transmissionId = String((config as any).transmission_id ?? "").trim();
+  const outputId = String((config as any).output_id ?? "").trim();
+  const qualityProfileId = String((config as any).quality_profile_id ?? "").trim();
+  const pollIntervalRaw = Number((config as any).poll_interval_ms ?? 500);
+  const pollIntervalMs = Number.isFinite(pollIntervalRaw) ? Math.max(100, Math.min(10_000, Math.round(pollIntervalRaw))) : 500;
+  const failOpen = Boolean((config as any).fail_open ?? true);
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <div className="pipelinesStepHint">
+        {t(
+          "core.ui.pipelines.panels.demand_gate.summary",
+          {},
+          "Starts the next step only while this transmission has viewers or active demand.",
+        )}
+      </div>
+      <div className="pipelinesStepHint">
+        {scope === "output"
+          ? t("core.ui.pipelines.panels.demand_gate.scope_hint.output", {}, "Advanced: demand is restricted to one output.")
+          : t("core.ui.pipelines.panels.demand_gate.scope_hint.transmission", {}, "Automatic: any viewer of the connected transmission opens the gate.")}
+      </div>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.demand_gate.scope", {}, "Demand scope")}</span>
+            <select
+              className="pipelinesSelect"
+              value={scope}
+              onChange={(event) => {
+                const nextScope = String(event.target.value || "transmission") === "output" ? "output" : "transmission";
+                onUpdateConfig((prev) => {
+                  const next = { ...prev, demand_scope: nextScope };
+                  if (nextScope !== "output") {
+                    (next as any).output_id = "";
+                    (next as any).quality_profile_id = "";
+                  }
+                  return next;
+                });
+              }}
+            >
+              <option value="transmission">
+                {t("core.ui.pipelines.panels.demand_gate.scope.transmission", {}, "Any viewer of this transmission")}
+              </option>
+              <option value="output">
+                {t("core.ui.pipelines.panels.demand_gate.scope.output", {}, "Specific output")}
+              </option>
+            </select>
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.demand_gate.transmission_id", {}, "Transmission ID")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={transmissionId}
+              placeholder={t("core.ui.pipelines.panels.demand_gate.transmission_id_placeholder", {}, "managed automatically")}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, transmission_id: String(event.target.value || "").trim() }))}
+            />
+          </label>
+
+          {scope === "output" ? (
+            <>
+              <label className="pipelinesLabel">
+                <span>{t("core.ui.pipelines.panels.demand_gate.output_id", {}, "Output ID")}</span>
+                <input
+                  className="pipelinesInput"
+                  type="text"
+                  value={outputId}
+                  placeholder={t("core.ui.pipelines.panels.demand_gate.output_id_placeholder", {}, "hls_output_id")}
+                  onChange={(event) => onUpdateConfig((prev) => ({ ...prev, output_id: String(event.target.value || "").trim() }))}
+                />
+              </label>
+              <label className="pipelinesLabel">
+                <span>{t("core.ui.pipelines.panels.demand_gate.quality_profile_id", {}, "Quality profile ID")}</span>
+                <input
+                  className="pipelinesInput"
+                  type="text"
+                  value={qualityProfileId}
+                  placeholder={t("core.ui.pipelines.panels.demand_gate.quality_profile_id_placeholder", {}, "quality_profile_id")}
+                  onChange={(event) =>
+                    onUpdateConfig((prev) => ({ ...prev, quality_profile_id: String(event.target.value || "").trim() }))
+                  }
+                />
+              </label>
+            </>
+          ) : null}
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.demand_gate.poll_interval_ms", {}, "Polling interval (ms)")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={100}
+              max={10_000}
+              step={100}
+              value={pollIntervalMs}
+              onChange={(value) => {
+                const normalized = Number.isFinite(value) ? Math.max(100, Math.min(10_000, Math.round(value))) : 500;
+                onUpdateConfig((prev) => ({ ...prev, poll_interval_ms: normalized }));
+              }}
+            />
+          </label>
+
+          <label className="pipelinesLabel pipelinesCheckboxRow">
+            <input
+              type="checkbox"
+              checked={failOpen}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fail_open: event.target.checked }))}
+            />
+            <span>{t("core.ui.pipelines.panels.demand_gate.fail_open", {}, "Fail open if demand cannot be checked")}</span>
+          </label>
+          <div className="pipelinesStepHint">
+            {t(
+              "core.ui.pipelines.panels.demand_gate.advanced_hint",
+              {},
+              "Leave the scope automatic unless you intentionally want this gate to follow one technical stream output.",
+            )}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
 
 export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }: PublishVideoProps): React.ReactElement {
   const { t } = i18n.useI18n();

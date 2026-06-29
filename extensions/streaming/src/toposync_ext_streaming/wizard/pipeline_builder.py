@@ -91,6 +91,15 @@ def build_streaming_wizard_graph(
     demand_gate_fail_open = _coerce_bool(options.get("demand_gate_fail_open"), default=True)
     demand_gate_output_id = _safe_text(options.get("demand_gate_output_id"))
     demand_gate_quality_profile_id = _safe_text(options.get("demand_gate_quality_profile_id"))
+    demand_gate_scope_default = "output" if demand_gate_output_id or demand_gate_quality_profile_id else "transmission"
+    demand_gate_scope = _pick_choice(
+        options.get("demand_gate_scope"),
+        allowed={"transmission", "output"},
+        default=demand_gate_scope_default,
+    )
+    if demand_gate_scope != "output":
+        demand_gate_output_id = ""
+        demand_gate_quality_profile_id = ""
     demand_gate_poll_interval_ms = _coerce_int(
         options.get("demand_gate_poll_interval_ms"),
         default=500,
@@ -144,6 +153,7 @@ def build_streaming_wizard_graph(
                 "operator": "stream.demand_gate",
                 "config": {
                     "transmission_id": transmission_id,
+                    "demand_scope": demand_gate_scope,
                     "output_id": demand_gate_output_id,
                     "quality_profile_id": demand_gate_quality_profile_id,
                     "poll_interval_ms": int(demand_gate_poll_interval_ms),

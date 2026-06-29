@@ -1338,6 +1338,25 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.cinematic_director.advanced_hint":
       "Pipeline filters, camera maps, manual priorities, and other expert settings remain available in JSON mode.",
 
+    "core.ui.pipelines.panels.demand_gate.summary":
+      "Starts the next step only while this transmission has viewers or active demand.",
+    "core.ui.pipelines.panels.demand_gate.scope_hint.transmission":
+      "Automatic: any viewer of the connected transmission opens the gate.",
+    "core.ui.pipelines.panels.demand_gate.scope_hint.output": "Advanced: demand is restricted to one output.",
+    "core.ui.pipelines.panels.demand_gate.scope": "Demand scope",
+    "core.ui.pipelines.panels.demand_gate.scope.transmission": "Any viewer of this transmission",
+    "core.ui.pipelines.panels.demand_gate.scope.output": "Specific output",
+    "core.ui.pipelines.panels.demand_gate.transmission_id": "Transmission ID",
+    "core.ui.pipelines.panels.demand_gate.transmission_id_placeholder": "managed automatically",
+    "core.ui.pipelines.panels.demand_gate.output_id": "Output ID",
+    "core.ui.pipelines.panels.demand_gate.output_id_placeholder": "hls_output_id",
+    "core.ui.pipelines.panels.demand_gate.quality_profile_id": "Quality profile ID",
+    "core.ui.pipelines.panels.demand_gate.quality_profile_id_placeholder": "quality_profile_id",
+    "core.ui.pipelines.panels.demand_gate.poll_interval_ms": "Polling interval (ms)",
+    "core.ui.pipelines.panels.demand_gate.fail_open": "Fail open if demand cannot be checked",
+    "core.ui.pipelines.panels.demand_gate.advanced_hint":
+      "Leave the scope automatic unless you intentionally want this gate to follow one technical stream output.",
+
     "core.ui.pipelines.panels.camera_mapping.hint":
       "Uses control points defined in your compositions to map image → world coordinates. Configure control points in the Composition editor.",
     "core.ui.pipelines.panels.camera_mapping.select_camera_error":
@@ -3545,6 +3564,25 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.cinematic_director.ignore_own_pipeline_events": "Ignorar eventos deste fluxo cinemático",
     "core.ui.pipelines.panels.cinematic_director.advanced_hint":
       "Filtros por pipeline, mapeamentos de câmera, prioridades manuais e outros ajustes especialistas continuam disponíveis no modo JSON.",
+
+    "core.ui.pipelines.panels.demand_gate.summary":
+      "Inicia a próxima etapa apenas enquanto esta transmissão tiver espectadores ou demanda ativa.",
+    "core.ui.pipelines.panels.demand_gate.scope_hint.transmission":
+      "Automático: qualquer espectador da transmissão conectada abre o gate.",
+    "core.ui.pipelines.panels.demand_gate.scope_hint.output": "Avançado: a demanda fica restrita a uma saída.",
+    "core.ui.pipelines.panels.demand_gate.scope": "Escopo da demanda",
+    "core.ui.pipelines.panels.demand_gate.scope.transmission": "Qualquer espectador desta transmissão",
+    "core.ui.pipelines.panels.demand_gate.scope.output": "Saída específica",
+    "core.ui.pipelines.panels.demand_gate.transmission_id": "ID da transmissão",
+    "core.ui.pipelines.panels.demand_gate.transmission_id_placeholder": "gerenciado automaticamente",
+    "core.ui.pipelines.panels.demand_gate.output_id": "ID da saída",
+    "core.ui.pipelines.panels.demand_gate.output_id_placeholder": "hls_output_id",
+    "core.ui.pipelines.panels.demand_gate.quality_profile_id": "ID do perfil de qualidade",
+    "core.ui.pipelines.panels.demand_gate.quality_profile_id_placeholder": "quality_profile_id",
+    "core.ui.pipelines.panels.demand_gate.poll_interval_ms": "Intervalo de consulta (ms)",
+    "core.ui.pipelines.panels.demand_gate.fail_open": "Abrir se a demanda não puder ser verificada",
+    "core.ui.pipelines.panels.demand_gate.advanced_hint":
+      "Deixe o escopo automático, salvo quando você quiser que este gate siga uma saída técnica específica.",
 
     "core.ui.pipelines.panels.camera_mapping.hint":
       "Usa pontos de controle definidos nas composições para mapear coordenadas imagem → mundo. Configure pontos de controle no editor de Composição.",

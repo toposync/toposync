@@ -11,6 +11,7 @@ import {
   CinematicDirectorConfigCard,
   DebounceConfigCard,
   DebugConfigCard,
+  DemandGateConfigCard,
   FilterConfigCard,
   HomeAssistantBooleanStateConfigCard,
   HomeAssistantNotifyConfigCard,
@@ -374,6 +375,9 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "home_assistant.boolean_state") {
     return <HomeAssistantBooleanStateConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "stream.demand_gate") {
+    return <DemandGateConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "stream.publish_video") {
     return <PublishVideoConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;

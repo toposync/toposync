@@ -40,11 +40,23 @@ def build_cinematic_wizard_graph(
 
     options = optional_parameters if isinstance(optional_parameters, dict) else {}
     director_config = _director_config(options)
+    demand_gate_output_id = _safe_text(options.get("demand_gate_output_id"))
+    demand_gate_quality_profile_id = _safe_text(options.get("demand_gate_quality_profile_id"))
+    demand_gate_scope_default = "output" if demand_gate_output_id or demand_gate_quality_profile_id else "transmission"
+    demand_gate_scope = _pick_choice(
+        options.get("demand_gate_scope"),
+        allowed={"transmission", "output"},
+        default=demand_gate_scope_default,
+    )
+    if demand_gate_scope != "output":
+        demand_gate_output_id = ""
+        demand_gate_quality_profile_id = ""
 
     demand_config = {
         "transmission_id": transmission,
-        "output_id": _safe_text(options.get("demand_gate_output_id")),
-        "quality_profile_id": _safe_text(options.get("demand_gate_quality_profile_id")),
+        "demand_scope": demand_gate_scope,
+        "output_id": demand_gate_output_id,
+        "quality_profile_id": demand_gate_quality_profile_id,
         "poll_interval_ms": _coerce_int(
             options.get("demand_gate_poll_interval_ms"),
             default=500,

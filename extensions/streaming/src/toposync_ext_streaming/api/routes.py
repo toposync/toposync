@@ -5993,12 +5993,17 @@ def _sync_demand_gates_for_publication_targets(
             continue
         transmission_id, output_id, quality_profile_id = publication_targets[reachable_publications[0]]
         cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
-        next_cfg = {
-            **cfg,
-            "transmission_id": transmission_id,
-            "output_id": output_id,
-            "quality_profile_id": quality_profile_id,
-        }
+        demand_scope = str(cfg.get("demand_scope") or "").strip().lower()
+        use_specific_output = demand_scope == "output"
+        next_cfg = {**cfg, "transmission_id": transmission_id}
+        if use_specific_output:
+            next_cfg["demand_scope"] = "output"
+            next_cfg["output_id"] = str(cfg.get("output_id") or "").strip() or output_id
+            next_cfg["quality_profile_id"] = str(cfg.get("quality_profile_id") or "").strip() or quality_profile_id
+        else:
+            next_cfg["demand_scope"] = "transmission"
+            next_cfg["output_id"] = ""
+            next_cfg["quality_profile_id"] = ""
         if next_cfg == cfg:
             continue
         node["config"] = next_cfg

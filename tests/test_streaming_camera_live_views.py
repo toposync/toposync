@@ -622,6 +622,73 @@ def test_pipeline_publish_video_without_camera_generates_generic_live_view(tmp_p
     assert pipeline.graph["nodes"][0]["config"]["transmission_id"] == transmission["id"]
 
 
+def test_pipeline_publication_syncs_upstream_demand_gate(tmp_path: Path) -> None:
+    client = _create_client(tmp_path)
+
+    async def _add_pipeline() -> None:
+        await client.app.state.config_store.create_pipeline(
+            Pipeline(
+                name="cinematic_real",
+                enabled=True,
+                processing_server_id="local",
+                editor_mode="interactive",
+                graph={
+                    "schema_version": 1,
+                    "nodes": [
+                        {
+                            "id": "demand",
+                            "operator": "stream.demand_gate",
+                            "config": {
+                                "transmission_id": "draft-cinematic",
+                                "output_id": "hls_draft",
+                                "quality_profile_id": "",
+                                "poll_interval_ms": 500,
+                                "fail_open": True,
+                            },
+                        },
+                        {"id": "director", "operator": "test.director", "config": {}},
+                        {
+                            "id": "publish",
+                            "operator": "stream.publish_video",
+                            "config": {
+                                "transmission_id": "draft-cinematic",
+                                "publication_enabled": True,
+                                "publication_role": "custom",
+                                "publication_label": "Cinematic Real",
+                            },
+                        },
+                    ],
+                    "edges": [
+                        {"from": {"node": "demand", "port": "out"}, "to": {"node": "director", "port": "gate"}},
+                        {"from": {"node": "director", "port": "out"}, "to": {"node": "publish", "port": "in"}},
+                    ],
+                },
+            )
+        )
+
+    asyncio.run(_add_pipeline())
+
+    res = client.post("/api/streams/reconcile")
+
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    publication = next(item for item in payload["publications"] if item["owner_kind"] == "pipeline_output")
+    transmission = next(item for item in payload["transmissions"] if item.get("publication_id") == publication["id"])
+    live_view = next(item for item in payload["camera_live_views"] if item["name"] == "cinematic_real")
+    variant = live_view["variants"][0]
+
+    pipeline = next(
+        item
+        for item in asyncio.run(client.app.state.config_store.list_pipelines())
+        if item.name == "cinematic_real"
+    )
+    nodes = {item["id"]: item for item in pipeline.graph["nodes"]}
+    assert nodes["publish"]["config"]["transmission_id"] == transmission["id"]
+    assert nodes["demand"]["config"]["transmission_id"] == transmission["id"]
+    assert nodes["demand"]["config"]["output_id"] == variant["output_id"] == "hls_stable_apple_tv"
+    assert nodes["demand"]["config"]["quality_profile_id"] == variant["quality_profile_id"] == "stable_apple_tv"
+
+
 def test_pipeline_publish_video_groups_roles_by_manual_live_view_label(tmp_path: Path) -> None:
     client = _create_client(tmp_path)
 

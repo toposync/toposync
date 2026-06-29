@@ -32,6 +32,15 @@ class _FrameSelection:
     cut: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _StatusFrameSnapshot:
+    camera_id: str
+    source_id: str
+    frame_ts: float
+    width: int
+    height: int
+
+
 class CinematicDirectorRuntime(SourceOperatorRuntime):
     def __init__(self, config: Any, dependencies: PipelineRuntimeDependencies) -> None:
         self._config = config
@@ -49,6 +58,7 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
         self._pending_started_at = 0.0
         self._last_pipeline_name = ""
         self._last_node_id = ""
+        self._last_status_frame: _StatusFrameSnapshot | None = None
 
     async def produce(self, context: Any) -> Packet | None:
         self._remember_context(context)
@@ -91,6 +101,7 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
         if self._camera_pool is not None:
             await self._camera_pool.release_all()
         self._stream_open = False
+        self._last_status_frame = None
         self._state = DirectorState(demand_active=False)
         get_cinematic_status_store().update(
             pipeline_name=self._last_pipeline_name,
@@ -470,6 +481,7 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
         self._stream_open = False
         self._pending_camera_id = ""
         self._pending_started_at = 0.0
+        self._last_status_frame = None
         self._state = DirectorState(demand_active=False)
         self._publish_status(
             context,
@@ -537,7 +549,13 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
         active_event = self._state.active_events_by_key.get(
             str(decision.event_key if decision is not None else self._state.active_event_key or "").strip()
         )
-        frame_ts = float(frame.frame_ts or 0.0) if frame is not None else 0.0
+        status_frame = _status_snapshot_from_frame(frame)
+        if status_frame is not None:
+            self._last_status_frame = status_frame
+        elif self._stream_open:
+            status_frame = self._last_status_frame
+
+        frame_ts = float(status_frame.frame_ts or 0.0) if status_frame is not None else 0.0
         pool = self._camera_pool
         capture_errors = dict(pool.last_error_by_camera_id) if pool is not None else {}
         cut_reason = str(
@@ -545,6 +563,8 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
             or (decision.reason if decision is not None else "")
             or "idle"
         ).strip()
+        if cut_reason == "waiting_frame" and status_frame is not None and self._stream_open:
+            cut_reason = str(decision.reason if decision is not None else "").strip() or "frame_hold"
         payload: dict[str, Any] = {
             "demand_active": bool(self._state.demand_active),
             "gate_known": bool(self._gate_known),
@@ -554,11 +574,11 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
             "cut": bool(cut),
             "cut_reason": cut_reason,
             "active_camera_id": str(
-                frame.camera_id if frame is not None else self._state.active_camera_id or ""
+                status_frame.camera_id if status_frame is not None else self._state.active_camera_id or ""
             ).strip()
             or None,
             "active_source_id": str(
-                frame.source_id if frame is not None else self._state.active_source_id or ""
+                status_frame.source_id if status_frame is not None else self._state.active_source_id or ""
             ).strip()
             or None,
             "pending_camera_id": self._pending_camera_id or None,
@@ -569,8 +589,8 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
             "active_event": _event_as_payload(active_event) if active_event is not None else None,
             "frame_ts": frame_ts or None,
             "frame_age_seconds": max(0.0, now - frame_ts) if frame_ts > 0.0 else None,
-            "frame_width": int(frame.width or 0) if frame is not None else None,
-            "frame_height": int(frame.height or 0) if frame is not None else None,
+            "frame_width": int(status_frame.width or 0) if status_frame is not None else None,
+            "frame_height": int(status_frame.height or 0) if status_frame is not None else None,
             "recent_cuts_last_minute": len(
                 [item for item in self._state.recent_cut_timestamps if float(item) >= (now - 60.0)]
             ),
@@ -616,6 +636,18 @@ def _frame_is_usable(frame: CameraPoolFrame) -> bool:
         and not bool(frame.stale)
         and float(frame.frame_ts or 0.0) > 0.0
         and not str(frame.error or "").strip()
+    )
+
+
+def _status_snapshot_from_frame(frame: CameraPoolFrame | None) -> _StatusFrameSnapshot | None:
+    if frame is None or float(frame.frame_ts or 0.0) <= 0.0:
+        return None
+    return _StatusFrameSnapshot(
+        camera_id=str(frame.camera_id or "").strip(),
+        source_id=str(frame.source_id or "").strip(),
+        frame_ts=float(frame.frame_ts),
+        width=int(frame.width or 0),
+        height=int(frame.height or 0),
     )
 
 

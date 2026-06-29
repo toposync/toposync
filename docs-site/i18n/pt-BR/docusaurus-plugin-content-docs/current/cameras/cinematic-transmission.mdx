@@ -36,6 +36,14 @@ stream.demand_gate -> cinematic.director_source -> stream.publish_video
 O pipeline gerado continua sendo um pipeline normal. Você pode inspecionar,
 desabilitar ou ajustar configurações avançadas depois.
 
+Antes de abrir o wizard, crie ou escolha uma transmissão de Streaming no mesmo
+servidor de processamento. O wizard da Cinemática vincula essa transmissão a um
+novo pipeline; ele não cria uma entrada de live view de câmera por si só. Por
+isso, a aba **Transmissões -> Playback** pode não mostrar um player cinemático
+quando não existem live views de câmera. Valide a saída cinemática pelo status
+do runtime de Streaming, pelas URLs assinadas da transmissão ou pelo endpoint
+`still.jpg` da transmissão enquanto houver demanda ativa.
+
 ## Eventos e cortes {/* #events-and-cuts */}
 
 O diretor observa notificações do Toposync e transforma essas notificações em
@@ -125,7 +133,13 @@ Limites atuais:
 | Eventos não trocam câmeras | Confirme que as notificações incluem camera id ou configure o mapa pipeline para câmera. |
 | A mesma câmera continua selecionada | Confira filtros de câmera, filtros de prioridade e se outras câmeras têm frames recentes. |
 | A imagem fica preta ao iniciar | Um aquecimento curto pode ser normal durante a troca. Se persistir, veja os diagnósticos da Cinemática e o status do runtime de Streaming. |
+| A aba Playback de Transmissões não mostra player cinemático | Essa aba lista links de debug de live views de câmera. Confira a transmissão cinemática pelo runtime health, por `/api/streams/transmissions/{id}/urls` ou por `still.jpg` enquanto houver demanda ativa. |
 
 O painel de configurações da Cinemática é o primeiro lugar para olhar. Ele mostra
 status do runtime, diagnósticos, câmera ativa e último motivo de corte sem abrir
 captura adicional de câmera por si só.
+
+Para um smoke test prático, mantenha a demanda de viewer aberta e confira se o
+runtime de Streaming está `live` e `healthy`, se os frames do publisher estão
+subindo e se `publisher_last_error` está vazio. A resposta de `still.jpg` deve
+incluir `x-toposync-frame-state: live` quando o frame selecionado é atual.

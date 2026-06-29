@@ -1,6 +1,9 @@
 # Toposync Cinematic Extension
 
-First-party Toposync extension for event-directed camera transmission foundations.
+First-party Toposync extension for demand-scoped, event-directed camera
+transmission.
 
-This initial package registers the `cinematic.director_source` pipeline operator
-and the pure director selection model used by later runtime phases.
+It registers the `cinematic.director_source` pipeline operator, director
+runtime, event feed integration, camera-pool reuse over the Cameras extension,
+settings wizard, status panel, and diagnostics used to publish one cinematic
+Streaming transmission from normal Toposync pipelines.

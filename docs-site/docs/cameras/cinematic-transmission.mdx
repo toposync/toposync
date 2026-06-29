@@ -35,6 +35,14 @@ stream.demand_gate -> cinematic.director_source -> stream.publish_video
 The generated pipeline is still a normal pipeline. You can inspect it, disable
 it, or edit advanced settings later.
 
+Before opening the wizard, create or choose a Streaming transmission on the same
+processing server. The Cinematic wizard links that transmission to a new
+pipeline; it does not create a camera live-view entry by itself. As a result,
+the **Streaming -> Playback** tab may not show a cinematic player unless camera
+live views also exist. Validate the cinematic output through Streaming runtime
+health, signed transmission URLs, or the transmission `still.jpg` endpoint while
+demand is active.
+
 ## Events and cuts {/* #events-and-cuts */}
 
 The director watches Toposync notifications and turns them into shot candidates.
@@ -123,7 +131,13 @@ Current limits:
 | Events do not change cameras | Confirm notifications include a camera id or configure the pipeline-to-camera map. |
 | The same camera stays selected | Check camera filters, priority filters, and whether other cameras have fresh frames. |
 | The image is black while starting | A short warmup can be normal during handoff. If it persists, check the Cinematic diagnostics and the Streaming runtime status. |
+| Streaming Playback has no cinematic player | That tab lists camera live-view debug links. Check the cinematic transmission through runtime health, `/api/streams/transmissions/{id}/urls`, or `still.jpg` while demand is active. |
 
 The Cinematic settings panel is the first place to look. It shows runtime status,
 diagnostics, the active camera, and the latest cut reason without opening
 additional camera capture by itself.
+
+For a practical smoke test, keep viewer demand open, then check that Streaming
+runtime health is `live` and `healthy`, publisher frames are increasing, and
+`publisher_last_error` is empty. The `still.jpg` response should include
+`x-toposync-frame-state: live` when the selected frame is current.

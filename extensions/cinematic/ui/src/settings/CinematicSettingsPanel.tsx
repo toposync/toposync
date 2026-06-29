@@ -80,7 +80,7 @@ function CinematicSettingsPanelContent({ i18n, api }: { i18n: HostI18n; api: Hos
   }, [api, refreshNonce]);
 
   const items = Array.isArray(status?.items) ? status.items : [];
-  const primaryStatus = items[0] ?? null;
+  const sortedItems = useMemo(() => [...items].sort(compareStatusItems), [items]);
   const issues = Array.isArray(diagnostics?.issues) ? diagnostics.issues : [];
 
   return (
@@ -117,8 +117,15 @@ function CinematicSettingsPanelContent({ i18n, api }: { i18n: HostI18n; api: Hos
       <div className="card" style={{ marginTop: 12 }}>
         <div className="cardBody">
           <div className="modalSectionTitle">{t("ext.cinematic.status.title", {}, "Status")}</div>
-          {primaryStatus ? (
-            <StatusPreview item={primaryStatus} t={t} />
+          {sortedItems.length > 0 ? (
+            <div style={{ display: "grid", gap: 12 }}>
+              {sortedItems.map((item) => (
+                <div key={item.key} style={{ display: "grid", gap: 8 }}>
+                  <div className="cardMeta" style={{ wordBreak: "break-word" }}>{statusItemLabel(item)}</div>
+                  <StatusPreview item={item} t={t} />
+                </div>
+              ))}
+            </div>
           ) : (
             <div className="cardMeta">{t("ext.cinematic.status.empty", {}, "Nenhum diretor cinemático ativo ainda.")}</div>
           )}
@@ -160,6 +167,22 @@ function CinematicSettingsPanelContent({ i18n, api }: { i18n: HostI18n; api: Hos
       />
     </div>
   );
+}
+
+function compareStatusItems(left: CinematicStatusItem, right: CinematicStatusItem): number {
+  const leftScore = statusItemScore(left);
+  const rightScore = statusItemScore(right);
+  if (leftScore !== rightScore) return rightScore - leftScore;
+  return Number(right.updated_at || 0) - Number(left.updated_at || 0);
+}
+
+function statusItemScore(item: CinematicStatusItem): number {
+  return (item.demand_active ? 8 : 0) + (item.stream_open ? 4 : 0) + (item.frame_ts ? 2 : 0);
+}
+
+function statusItemLabel(item: CinematicStatusItem): string {
+  const raw = String(item.node_id || item.pipeline_name || item.key || "").trim();
+  return raw.replace(/^isolated_/, "").replace(/__director$/, "") || "-";
 }
 
 function StatusPreview({ item, t }: { item: CinematicStatusItem; t: TranslateFn }): React.ReactElement {

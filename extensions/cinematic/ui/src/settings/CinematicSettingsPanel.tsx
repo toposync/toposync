@@ -16,6 +16,7 @@ import type {
   CinematicStatusItem,
   CinematicStatusResponse,
   CinematicWizardCreatePipelineResponse,
+  DirectorBehavior,
   Priority,
   ResizeMode,
   SourceRole,
@@ -24,8 +25,10 @@ import type {
 import { SubModal } from "./SubModal";
 
 const CINEMATIC_EXTENSION_ID = "com.toposync.cinematic";
-const PRIORITIES: Priority[] = ["high", "medium", "low"];
 const CAMERA_MODES: CameraMode[] = ["all", "include", "exclude"];
+const BEHAVIORS: DirectorBehavior[] = ["rotation_with_events", "primary_with_events"];
+
+type PriorityMinimum = "all" | Priority;
 
 type TranslateFn = ReturnType<HostI18n["useI18n"]>["t"];
 
@@ -142,17 +145,17 @@ function CinematicSettingsPanelContent({ i18n, api }: { i18n: HostI18n; api: Hos
               {issues.map((issue) => (
                 <div key={issue.code} className="settingsInlinePanel">
                   <div className="rowWrap" style={{ gap: 8, justifyContent: "space-between" }}>
-                    <div className="cardTitle">{issue.code}</div>
-                    <span className="cardMeta">{issue.severity}</span>
+                    <div className="cardTitle">{diagnosticIssueTitle(issue.code, t)}</div>
+                    <span className="cardMeta">{severityLabel(issue.severity, t)}</span>
                   </div>
-                  <div className="cardMeta" style={{ marginTop: 4 }}>{issue.message}</div>
+                  <div className="cardMeta" style={{ marginTop: 4 }}>{diagnosticIssueMessage(issue.code, issue.message, t)}</div>
                 </div>
               ))}
             </div>
           )}
           {diagnostics?.counts ? (
             <div className="cardMeta" style={{ marginTop: 10 }}>
-              {Object.entries(diagnostics.counts).map(([key, value]) => `${key}: ${value}`).join(" | ")}
+              {Object.entries(diagnostics.counts).map(([key, value]) => `${diagnosticCountLabel(key, t)}: ${value}`).join(" | ")}
             </div>
           ) : null}
         </div>
@@ -197,14 +200,15 @@ function StatusPreview({ item, t }: { item: CinematicStatusItem; t: TranslateFn 
         <div className="rowWrap" style={{ justifyContent: "space-between", gap: 8 }}>
           <div>
             <div className="cardTitle">{t("ext.cinematic.status.cut_reason", {}, "Motivo do corte")}</div>
-            <div className="cardMeta" style={{ marginTop: 4 }}>{item.cut_reason || "-"}</div>
+            <div className="cardMeta" style={{ marginTop: 4 }}>{cutReasonLabel(item.cut_reason, t)}</div>
           </div>
           <span className="cardMeta">{item.demand_active ? t("ext.cinematic.status.demand_on", {}, "Demanda ativa") : t("ext.cinematic.status.demand_off", {}, "Sem demanda")}</span>
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
         <Metric title={t("ext.cinematic.status.camera", {}, "Câmera")} value={source ? `${camera} / ${source}` : camera} />
-        <Metric title={t("ext.cinematic.status.mode", {}, "Modo")} value={item.mode || "-"} />
+        <Metric title={t("ext.cinematic.status.behavior", {}, "Comportamento")} value={behaviorLabel(item.behavior, t)} />
+        <Metric title={t("ext.cinematic.status.mode", {}, "Modo")} value={modeLabel(item.mode, t)} />
         <Metric title={t("ext.cinematic.status.frame", {}, "Frame")} value={frameLabel} />
         <Metric title={t("ext.cinematic.status.event", {}, "Evento")} value={item.active_event_key || "-"} />
       </div>
@@ -220,6 +224,63 @@ function Metric({ title, value }: { title: string; value: string }): React.React
       <div style={{ marginTop: 4, wordBreak: "break-word" }}>{value}</div>
     </div>
   );
+}
+
+function behaviorLabel(behavior: string | undefined, t: TranslateFn): string {
+  if (behavior === "primary_with_events") {
+    return t("ext.cinematic.wizard.behavior.primary_with_events", {}, "Câmera principal e destacar eventos");
+  }
+  if (behavior === "rotation_with_events") {
+    return t("ext.cinematic.wizard.behavior.rotation_with_events", {}, "Rotacionar câmeras e destacar eventos");
+  }
+  return "-";
+}
+
+function severityLabel(severity: string | undefined, t: TranslateFn): string {
+  const normalized = String(severity || "").trim();
+  if (!normalized) return "-";
+  return t(`ext.cinematic.diagnostics.severity.${normalized}`, {}, normalized);
+}
+
+function diagnosticIssueTitle(code: string | undefined, t: TranslateFn): string {
+  const normalized = String(code || "").trim();
+  if (!normalized) return "-";
+  return t(`ext.cinematic.diagnostics.issue.${normalized}.title`, {}, normalized);
+}
+
+function diagnosticIssueMessage(code: string | undefined, message: string | undefined, t: TranslateFn): string {
+  const normalized = String(code || "").trim();
+  if (!normalized) return String(message || "").trim() || "-";
+  return t(`ext.cinematic.diagnostics.issue.${normalized}.message`, {}, String(message || "").trim() || normalized);
+}
+
+function diagnosticCountLabel(key: string, t: TranslateFn): string {
+  const normalized = String(key || "").trim();
+  if (!normalized) return "-";
+  return t(`ext.cinematic.diagnostics.count.${normalized}`, {}, normalized);
+}
+
+function modeLabel(mode: string | undefined, t: TranslateFn): string {
+  const normalized = String(mode || "").trim();
+  if (!normalized) return "-";
+  return t(`ext.cinematic.status.mode.${normalized}`, {}, normalized);
+}
+
+function cutReasonLabel(reason: string | undefined, t: TranslateFn): string {
+  const normalized = String(reason || "").trim();
+  if (!normalized) return "-";
+  return t(`ext.cinematic.status.cut_reason.${normalized}`, {}, normalized);
+}
+
+function wizardWarningLabel(warning: string, t: TranslateFn): string {
+  const normalized = String(warning || "").trim();
+  if (normalized === "Transmission is disabled. Enable it to publish frames.") {
+    return t("ext.cinematic.wizard.warning.transmission_disabled", {}, normalized);
+  }
+  if (normalized === "One or more required operators are unavailable.") {
+    return t("ext.cinematic.wizard.warning.missing_operator", {}, normalized);
+  }
+  return normalized;
 }
 
 function CinematicWizard({
@@ -247,9 +308,11 @@ function CinematicWizard({
   const [transmissionId, setTransmissionId] = useState("");
   const [pipelineName, setPipelineName] = useState("");
   const [enabled, setEnabled] = useState(true);
+  const [behavior, setBehavior] = useState<DirectorBehavior>("rotation_with_events");
+  const [primaryCameraId, setPrimaryCameraId] = useState("");
   const [cameraMode, setCameraMode] = useState<CameraMode>("all");
   const [cameraIds, setCameraIds] = useState<string[]>([]);
-  const [priorities, setPriorities] = useState<Priority[]>([...PRIORITIES]);
+  const [priorityMinimum, setPriorityMinimum] = useState<PriorityMinimum>("all");
   const [fps, setFps] = useState("8");
   const [width, setWidth] = useState("1280");
   const [height, setHeight] = useState("720");
@@ -273,9 +336,11 @@ function CinematicWizard({
     setTransmissionId("");
     setPipelineName("");
     setEnabled(true);
+    setBehavior("rotation_with_events");
+    setPrimaryCameraId("");
     setCameraMode("all");
     setCameraIds([]);
-    setPriorities([...PRIORITIES]);
+    setPriorityMinimum("all");
 
     void (async () => {
       try {
@@ -287,6 +352,8 @@ function CinematicWizard({
         setTransmissions(nextTransmissions);
         setCameras(nextCameras);
         setTransmissionId(String(nextTransmissions[0]?.id || ""));
+        const firstUsableCamera = nextCameras.find(isUsableCamera) ?? nextCameras[0];
+        setPrimaryCameraId(String(firstUsableCamera?.id || ""));
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setLoadError(err instanceof Error ? err.message : String(err));
@@ -302,14 +369,42 @@ function CinematicWizard({
     () => transmissions.find((item) => String(item.id || "") === transmissionId) ?? null,
     [transmissionId, transmissions]
   );
+  const availableCameras = useMemo(() => cameras.filter(isUsableCamera), [cameras]);
+  const selectedCameraIds = useMemo(
+    () => normalizeSelectedCameraIds(cameraIds, { behavior, cameraMode, primaryCameraId }),
+    [behavior, cameraIds, cameraMode, primaryCameraId]
+  );
+  const summary = useMemo(
+    () =>
+      directorSummary({
+        t,
+        behavior,
+        cameraMode,
+        selectedCameraIds,
+        availableCameras,
+        primaryCameraId,
+        priorityMinimum
+      }),
+    [availableCameras, behavior, cameraMode, primaryCameraId, priorityMinimum, selectedCameraIds, t]
+  );
   const canPickCameras = cameraMode !== "all";
+
+  useEffect(() => {
+    if (!open || behavior !== "primary_with_events") return;
+    if (primaryCameraId && availableCameras.some((camera) => camera.id === primaryCameraId)) return;
+    setPrimaryCameraId(String(availableCameras[0]?.id || ""));
+  }, [availableCameras, behavior, open, primaryCameraId]);
 
   async function submit(): Promise<void> {
     if (!transmissionId.trim()) {
       setCreateError(t("ext.cinematic.wizard.select_transmission", {}, "Selecione uma transmissão."));
       return;
     }
-    if (cameraMode !== "all" && cameraIds.length === 0) {
+    if (behavior === "primary_with_events" && !primaryCameraId.trim()) {
+      setCreateError(t("ext.cinematic.wizard.select_primary_camera", {}, "Selecione a câmera principal."));
+      return;
+    }
+    if (cameraMode !== "all" && selectedCameraIds.length === 0) {
       setCreateError(t("ext.cinematic.wizard.select_camera", {}, "Selecione pelo menos uma câmera."));
       return;
     }
@@ -317,15 +412,17 @@ function CinematicWizard({
     setCreateBusy(true);
     setCreateError(null);
     try {
-      const priority_filter = priorities.length === PRIORITIES.length ? [] : priorities;
+      const priority_filter = priorityFilterForMinimum(priorityMinimum);
       const response = await createCinematicPipeline(api, {
         transmission_id: transmissionId.trim(),
         optional_parameters: {
           pipeline_name: pipelineName.trim() || undefined,
           enabled,
           processing_server_id: selectedTransmission?.host_server_id || "local",
+          behavior,
           cameras_mode: cameraMode,
-          camera_ids: cameraMode === "all" ? [] : cameraIds,
+          camera_ids: cameraMode === "all" ? [] : selectedCameraIds,
+          primary_camera_id: behavior === "primary_with_events" ? primaryCameraId.trim() : "",
           priority_filter,
           pipeline_camera_map: parsePipelineMap(pipelineMap),
           preferred_source_role: sourceRole,
@@ -365,7 +462,7 @@ function CinematicWizard({
             <div className="cardTitle">{t("ext.cinematic.wizard.created", {}, "Pipeline criado.")}</div>
             <div className="cardMeta" style={{ marginTop: 4 }}>{created.pipeline_name}</div>
           </div>
-          {created.warnings?.map((warning) => <div key={warning} className="cardMeta">{warning}</div>)}
+          {created.warnings?.map((warning) => <div key={warning} className="cardMeta">{wizardWarningLabel(warning, t)}</div>)}
           <div className="rowWrap" style={{ justifyContent: "flex-end", gap: 8 }}>
             <button className="chipButton" type="button" onClick={onClose}>
               {t("ext.cinematic.common.close", {}, "Fechar")}
@@ -382,7 +479,7 @@ function CinematicWizard({
           {loadError ? <div className="errorText">{loadError}</div> : null}
           {createError ? <div className="errorText">{createError}</div> : null}
           {!loading && transmissions.length === 0 ? <div className="cardMeta">{t("ext.cinematic.wizard.no_transmissions", {}, "Nenhuma transmissão configurada em Streaming.")}</div> : null}
-          {!loading && cameras.length === 0 ? <div className="cardMeta">{t("ext.cinematic.wizard.no_cameras", {}, "Nenhuma câmera configurada.")}</div> : null}
+          {!loading && availableCameras.length === 0 ? <div className="cardMeta">{t("ext.cinematic.wizard.no_cameras", {}, "Nenhuma câmera configurada.")}</div> : null}
 
           <div className="field">
             <label className="label">{t("ext.cinematic.wizard.transmission", {}, "Transmissão")}</label>
@@ -410,6 +507,39 @@ function CinematicWizard({
           </div>
 
           <div className="field">
+            <label className="label">{t("ext.cinematic.wizard.behavior", {}, "Modo da transmissão")}</label>
+            <div className="rowWrap" style={{ gap: 8 }}>
+              {BEHAVIORS.map((item) => (
+                <button
+                  key={item}
+                  className={`chipButton${behavior === item ? " isActive" : ""}`}
+                  type="button"
+                  aria-pressed={behavior === item}
+                  onClick={() => setBehavior(item)}
+                >
+                  {t(`ext.cinematic.wizard.behavior.${item}`, {}, item)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {behavior === "primary_with_events" ? (
+            <div className="field">
+              <label className="label">{t("ext.cinematic.wizard.primary_camera", {}, "Câmera principal")}</label>
+              <select
+                className="input"
+                value={primaryCameraId}
+                onChange={(event) => setPrimaryCameraId(event.target.value)}
+                disabled={availableCameras.length === 0}
+              >
+                {availableCameras.map((camera) => (
+                  <option key={camera.id} value={camera.id}>{cameraLabel(camera)}</option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
+          <div className="field">
             <label className="label">{t("ext.cinematic.wizard.camera_mode", {}, "Câmeras")}</label>
             <div className="rowWrap" style={{ gap: 8 }}>
               {CAMERA_MODES.map((mode) => (
@@ -428,21 +558,22 @@ function CinematicWizard({
 
           {canPickCameras ? (
             <div style={{ display: "grid", gap: 6, maxHeight: 170, overflow: "auto" }}>
-              {cameras.map((camera) => {
+              {availableCameras.map((camera) => {
                 const selected = cameraIds.includes(camera.id);
+                const lockedPrimary = behavior === "primary_with_events" && camera.id === primaryCameraId;
                 return (
                   <label key={camera.id} className="chipButton" style={{ justifyContent: "flex-start" }}>
                     <input
                       type="checkbox"
-                      checked={selected}
+                      checked={lockedPrimary ? cameraMode === "include" : selected}
+                      disabled={lockedPrimary}
                       onChange={(event) => {
                         setCameraIds((current) =>
                           event.target.checked ? [...current, camera.id] : current.filter((item) => item !== camera.id)
                         );
                       }}
                     />
-                    <span>{camera.name || camera.id}</span>
-                    <span className="cardMeta">{camera.id}</span>
+                    <span>{cameraLabel(camera)}</span>
                   </label>
                 );
               })}
@@ -450,23 +581,21 @@ function CinematicWizard({
           ) : null}
 
           <div className="field">
-            <label className="label">{t("ext.cinematic.wizard.priorities", {}, "Prioridades de notificação")}</label>
-            <div className="rowWrap" style={{ gap: 8 }}>
-              {PRIORITIES.map((priority) => (
-                <label key={priority} className="chipButton">
-                  <input
-                    type="checkbox"
-                    checked={priorities.includes(priority)}
-                    onChange={(event) => {
-                      setPriorities((current) =>
-                        event.target.checked ? [...current, priority] : current.filter((item) => item !== priority)
-                      );
-                    }}
-                  />
-                  <span>{priority}</span>
-                </label>
-              ))}
-            </div>
+            <label className="label">{t("ext.cinematic.wizard.priority_minimum", {}, "Prioridade mínima de evento")}</label>
+            <select
+              className="input"
+              value={priorityMinimum}
+              onChange={(event) => setPriorityMinimum(event.target.value as PriorityMinimum)}
+            >
+              <option value="all">{t("ext.cinematic.wizard.priority_minimum.all", {}, "Todas")}</option>
+              <option value="medium">{t("ext.cinematic.wizard.priority_minimum.medium", {}, "Média ou alta")}</option>
+              <option value="high">{t("ext.cinematic.wizard.priority_minimum.high", {}, "Alta")}</option>
+            </select>
+          </div>
+
+          <div className="settingsInlinePanel">
+            <div className="label">{t("ext.cinematic.wizard.summary", {}, "Resumo")}</div>
+            <div style={{ marginTop: 4 }}>{summary}</div>
           </div>
 
           <details>
@@ -476,25 +605,25 @@ function CinematicWizard({
               <TextField label={t("ext.cinematic.wizard.width", {}, "Largura")} value={width} onChange={setWidth} />
               <TextField label={t("ext.cinematic.wizard.height", {}, "Altura")} value={height} onChange={setHeight} />
               <TextField label={t("ext.cinematic.wizard.writer_priority", {}, "Prioridade de escrita")} value={writerPriority} onChange={setWriterPriority} />
-              <TextField label="Idle dwell" value={idleDwellSeconds} onChange={setIdleDwellSeconds} />
-              <TextField label="Event min" value={eventMinSeconds} onChange={setEventMinSeconds} />
-              <TextField label="Cut cooldown" value={cutCooldownSeconds} onChange={setCutCooldownSeconds} />
-              <TextField label="Close hold" value={closeHoldSeconds} onChange={setCloseHoldSeconds} />
-              <TextField label="Sticky current" value={currentStickySeconds} onChange={setCurrentStickySeconds} />
+              <TextField label={t("ext.cinematic.wizard.idle_dwell", {}, "Intervalo de rotação")} value={idleDwellSeconds} onChange={setIdleDwellSeconds} />
+              <TextField label={t("ext.cinematic.wizard.event_min", {}, "Permanência mínima em evento")} value={eventMinSeconds} onChange={setEventMinSeconds} />
+              <TextField label={t("ext.cinematic.wizard.cut_cooldown", {}, "Intervalo mínimo entre cortes")} value={cutCooldownSeconds} onChange={setCutCooldownSeconds} />
+              <TextField label={t("ext.cinematic.wizard.close_hold", {}, "Permanência após encerramento")} value={closeHoldSeconds} onChange={setCloseHoldSeconds} />
+              <TextField label={t("ext.cinematic.wizard.current_sticky", {}, "Preferência pela câmera atual")} value={currentStickySeconds} onChange={setCurrentStickySeconds} />
               <div className="field">
                 <label className="label">{t("ext.cinematic.wizard.resize", {}, "Redimensionar")}</label>
                 <select className="input" value={resizeMode} onChange={(event) => setResizeMode(event.target.value as ResizeMode)}>
-                  <option value="contain">contain</option>
-                  <option value="none">none</option>
+                  <option value="contain">{t("ext.cinematic.wizard.resize.contain", {}, "Ajustar à transmissão")}</option>
+                  <option value="none">{t("ext.cinematic.wizard.resize.none", {}, "Não redimensionar")}</option>
                 </select>
               </div>
               <div className="field">
                 <label className="label">{t("ext.cinematic.wizard.source_role", {}, "Papel da fonte")}</label>
                 <select className="input" value={sourceRole} onChange={(event) => setSourceRole(event.target.value as SourceRole)}>
-                  <option value="auto">auto</option>
-                  <option value="main">main</option>
-                  <option value="sub">sub</option>
-                  <option value="zoom">zoom</option>
+                  <option value="auto">{t("ext.cinematic.wizard.source_role.auto", {}, "Automático")}</option>
+                  <option value="main">{t("ext.cinematic.wizard.source_role.main", {}, "Principal")}</option>
+                  <option value="sub">{t("ext.cinematic.wizard.source_role.sub", {}, "Baixa resolução")}</option>
+                  <option value="zoom">{t("ext.cinematic.wizard.source_role.zoom", {}, "Zoom")}</option>
                 </select>
               </div>
             </div>
@@ -531,6 +660,97 @@ function TextField({ label, value, onChange }: { label: string; value: string; o
       <label className="label">{label}</label>
       <input className="input" value={value} onChange={(event) => onChange(event.target.value)} />
     </div>
+  );
+}
+
+function isUsableCamera(camera: CameraIndexItem): boolean {
+  if (!camera || !String(camera.id || "").trim()) return false;
+  if (camera.enabled === false) return false;
+  const sources = Array.isArray(camera.sources) ? camera.sources : [];
+  if (!sources.length) return true;
+  return sources.some((source) => {
+    const kind = String(source.kind || "video").trim().toLowerCase();
+    return kind === "video" && source.enabled !== false;
+  });
+}
+
+function cameraLabel(camera: CameraIndexItem): string {
+  return String(camera.name || camera.id || "").trim() || "-";
+}
+
+function normalizeSelectedCameraIds(
+  cameraIds: string[],
+  {
+    behavior,
+    cameraMode,
+    primaryCameraId
+  }: { behavior: DirectorBehavior; cameraMode: CameraMode; primaryCameraId: string }
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of cameraIds) {
+    const cameraId = String(item || "").trim();
+    if (!cameraId || seen.has(cameraId)) continue;
+    if (behavior === "primary_with_events" && cameraMode === "exclude" && cameraId === primaryCameraId) continue;
+    seen.add(cameraId);
+    out.push(cameraId);
+  }
+  if (behavior === "primary_with_events" && cameraMode === "include") {
+    const primary = String(primaryCameraId || "").trim();
+    if (primary && !seen.has(primary)) out.unshift(primary);
+  }
+  return out;
+}
+
+function priorityFilterForMinimum(priorityMinimum: PriorityMinimum): Priority[] {
+  if (priorityMinimum === "high") return ["high"];
+  if (priorityMinimum === "medium") return ["high", "medium"];
+  return [];
+}
+
+function directorSummary({
+  t,
+  behavior,
+  cameraMode,
+  selectedCameraIds,
+  availableCameras,
+  primaryCameraId,
+  priorityMinimum
+}: {
+  t: TranslateFn;
+  behavior: DirectorBehavior;
+  cameraMode: CameraMode;
+  selectedCameraIds: string[];
+  availableCameras: CameraIndexItem[];
+  primaryCameraId: string;
+  priorityMinimum: PriorityMinimum;
+}): string {
+  const cameraCount =
+    cameraMode === "include"
+      ? selectedCameraIds.length
+      : cameraMode === "exclude"
+        ? Math.max(0, availableCameras.length - selectedCameraIds.length)
+        : availableCameras.length;
+  const priorityLabel = t(
+    `ext.cinematic.wizard.priority_summary.${priorityMinimum}`,
+    {},
+    priorityMinimum === "high" ? "alta" : priorityMinimum === "medium" ? "média ou alta" : "qualquer prioridade"
+  );
+  const cameraCountLabel = cameraCount === 1
+    ? t("ext.cinematic.wizard.camera_count.one", {}, "1 câmera")
+    : t("ext.cinematic.wizard.camera_count.many", { count: cameraCount }, `${cameraCount} câmeras`);
+  if (behavior === "primary_with_events") {
+    const primary = availableCameras.find((camera) => camera.id === primaryCameraId);
+    return t(
+      "ext.cinematic.wizard.summary.primary",
+      { camera: cameraLabel(primary ?? { id: primaryCameraId }), camera_count: cameraCountLabel, priority: priorityLabel },
+      `Vai manter ${cameraLabel(primary ?? { id: primaryCameraId })} e cortar para eventos de ${priorityLabel} entre ${cameraCountLabel}.`
+    );
+  }
+  return t(
+    "ext.cinematic.wizard.summary.rotation",
+    { camera_count: cameraCountLabel, priority: priorityLabel },
+    `Vai alternar entre ${cameraCountLabel} e destacar eventos de ${priorityLabel}.`
   );
 }
 

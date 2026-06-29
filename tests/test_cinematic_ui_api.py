@@ -127,6 +127,7 @@ def test_cinematic_wizard_graph_uses_demand_director_publish_chain() -> None:
     assert graph["edges"][0]["drop_policy"] == "drop_oldest"
     assert graph["edges"][1]["maxsize"] == 1
     assert graph["edges"][1]["drop_policy"] == "latest_only"
+    assert graph["nodes"][1]["config"]["behavior"] == "rotation_with_events"
     assert graph["nodes"][1]["config"]["camera_ids"] == ["front"]
     assert graph["nodes"][2]["config"]["resize_mode"] == "none"
     assert graph["nodes"][2]["config"]["writer_priority"] == 6
@@ -152,6 +153,7 @@ def test_cinematic_wizard_endpoint_creates_pipeline(tmp_path: Path) -> None:
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["pipeline_name"] == "cinematic_front"
+        assert body["behavior"] == "rotation_with_events"
         assert body["camera_ids"] == ["front"]
 
         pipeline_model = asyncio.run(client.app.state.config_store.get_pipeline("cinematic_front"))
@@ -160,10 +162,44 @@ def test_cinematic_wizard_endpoint_creates_pipeline(tmp_path: Path) -> None:
         director_config = _node_config(pipeline, OPERATOR_ID_DIRECTOR_SOURCE)
         publish_config = _node_config(pipeline, "stream.publish_video")
         assert director_config["cameras_mode"] == "include"
+        assert director_config["behavior"] == "rotation_with_events"
         assert director_config["priority_filter"] == ["high"]
         assert publish_config["transmission_id"] == "tx_cinematic"
         assert publish_config["resize_mode"] == "none"
         assert publish_config["writer_priority"] == 4
+
+
+def test_cinematic_wizard_endpoint_creates_primary_behavior_pipeline(tmp_path: Path) -> None:
+    with _create_client(tmp_path) as client:
+        response = client.post(
+            "/api/cinematic/wizard/create-pipeline",
+            json={
+                "transmission_id": "tx_cinematic",
+                "optional_parameters": {
+                    "pipeline_name": "cinematic_primary",
+                    "behavior": "primary_with_events",
+                    "primary_camera_id": "front",
+                    "cameras_mode": "include",
+                    "camera_ids": ["side"],
+                    "priority_filter": ["high", "medium"],
+                },
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["behavior"] == "primary_with_events"
+        assert body["primary_camera_id"] == "front"
+        assert body["camera_ids"] == ["front", "side"]
+
+        pipeline_model = asyncio.run(client.app.state.config_store.get_pipeline("cinematic_primary"))
+        assert pipeline_model is not None
+        pipeline = pipeline_model.model_dump(mode="json")
+        director_config = _node_config(pipeline, OPERATOR_ID_DIRECTOR_SOURCE)
+        assert director_config["behavior"] == "primary_with_events"
+        assert director_config["primary_camera_id"] == "front"
+        assert director_config["camera_ids"] == ["front", "side"]
+        assert director_config["priority_filter"] == ["high", "medium"]
 
 
 def test_cinematic_wizard_endpoint_rejects_unknown_camera(tmp_path: Path) -> None:
@@ -176,6 +212,24 @@ def test_cinematic_wizard_endpoint_rejects_unknown_camera(tmp_path: Path) -> Non
                     "pipeline_name": "cinematic_missing",
                     "cameras_mode": "include",
                     "camera_ids": ["missing"],
+                },
+            },
+        )
+
+        assert response.status_code == 404
+        assert "Camera not found" in response.text
+
+
+def test_cinematic_wizard_endpoint_rejects_unknown_primary_camera(tmp_path: Path) -> None:
+    with _create_client(tmp_path) as client:
+        response = client.post(
+            "/api/cinematic/wizard/create-pipeline",
+            json={
+                "transmission_id": "tx_cinematic",
+                "optional_parameters": {
+                    "pipeline_name": "cinematic_missing_primary",
+                    "behavior": "primary_with_events",
+                    "primary_camera_id": "missing",
                 },
             },
         )

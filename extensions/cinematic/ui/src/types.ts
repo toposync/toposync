@@ -1,4 +1,5 @@
 export type CameraMode = "all" | "include" | "exclude";
+export type DirectorBehavior = "rotation_with_events" | "primary_with_events";
 export type Priority = "low" | "medium" | "high";
 export type ResizeMode = "contain" | "none";
 export type SourceRole = "auto" | "main" | "sub" | "zoom";
@@ -14,6 +15,7 @@ export type Transmission = {
 export type CameraIndexItem = {
   id: string;
   name?: string;
+  enabled?: boolean;
   sources?: Array<{ id?: string; name?: string; enabled?: boolean; kind?: string; role?: string }>;
 };
 
@@ -36,6 +38,8 @@ export type CinematicStatusItem = {
   frame_width?: number | null;
   frame_height?: number | null;
   active_events?: number;
+  behavior?: DirectorBehavior;
+  primary_camera_id?: string | null;
   last_error?: string;
 };
 
@@ -59,8 +63,10 @@ export type CinematicWizardCreatePipelineRequest = {
     pipeline_name?: string;
     enabled?: boolean;
     processing_server_id?: string;
+    behavior?: DirectorBehavior;
     cameras_mode?: CameraMode;
     camera_ids?: string[];
+    primary_camera_id?: string;
     priority_filter?: Priority[];
     pipeline_camera_map?: Record<string, string>;
     preferred_source_role?: SourceRole;
@@ -86,7 +92,9 @@ export type CinematicWizardCreatePipelineRequest = {
 export type CinematicWizardCreatePipelineResponse = {
   pipeline_name: string;
   transmission_id: string;
+  behavior: DirectorBehavior;
   cameras_mode: CameraMode;
+  primary_camera_id?: string;
   camera_ids: string[];
   processing_server_id: string;
   engine_running: boolean;

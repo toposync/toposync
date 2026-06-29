@@ -9,8 +9,10 @@ from toposync_ext_cinematic.pipelines import CinematicDirectorSourceConfig
 def test_cinematic_director_config_defaults_are_open_by_default() -> None:
     config = CinematicDirectorSourceConfig()
 
+    assert config.behavior == "rotation_with_events"
     assert config.cameras_mode == "all"
     assert config.camera_ids == []
+    assert config.primary_camera_id == ""
     assert config.priority_filter == []
     assert config.idle_dwell_seconds == pytest.approx(8.0)
     assert config.event_min_seconds == pytest.approx(10.0)
@@ -26,6 +28,33 @@ def test_cinematic_director_config_defaults_are_open_by_default() -> None:
 def test_cinematic_director_config_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         CinematicDirectorSourceConfig.model_validate({"unknown": True})
+
+
+def test_cinematic_director_config_requires_primary_camera_for_primary_behavior() -> None:
+    with pytest.raises(ValidationError):
+        CinematicDirectorSourceConfig.model_validate({"behavior": "primary_with_events"})
+
+
+def test_cinematic_director_config_keeps_primary_camera_eligible() -> None:
+    included = CinematicDirectorSourceConfig.model_validate(
+        {
+            "behavior": "primary_with_events",
+            "primary_camera_id": "front",
+            "cameras_mode": "include",
+            "camera_ids": ["garage"],
+        }
+    )
+    excluded = CinematicDirectorSourceConfig.model_validate(
+        {
+            "behavior": "primary_with_events",
+            "primary_camera_id": "front",
+            "cameras_mode": "exclude",
+            "camera_ids": ["front", "garage"],
+        }
+    )
+
+    assert included.camera_ids == ["front", "garage"]
+    assert excluded.camera_ids == ["garage"]
 
 
 def test_cinematic_director_config_normalizes_user_filters() -> None:

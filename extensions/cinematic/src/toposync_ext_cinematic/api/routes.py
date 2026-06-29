@@ -146,9 +146,11 @@ def create_cinematic_router() -> APIRouter:
         optional = body.optional_parameters
         optional_payload = optional.model_dump(mode="python", exclude_none=True) if optional is not None else {}
         camera_ids = [str(item or "").strip() for item in optional_payload.get("camera_ids", []) if str(item or "").strip()]
-        if camera_ids:
+        primary_camera_id = str(optional_payload.get("primary_camera_id") or "").strip()
+        selected_camera_ids = list(dict.fromkeys([*camera_ids, *([primary_camera_id] if primary_camera_id else [])]))
+        if selected_camera_ids:
             known_camera_ids = {str(item.get("id") or "").strip() for item in _camera_devices_from_settings(app_settings.extensions)}
-            missing_camera_ids = [camera_id for camera_id in camera_ids if camera_id not in known_camera_ids]
+            missing_camera_ids = [camera_id for camera_id in selected_camera_ids if camera_id not in known_camera_ids]
             if missing_camera_ids:
                 raise HTTPException(status_code=404, detail=f"Camera not found: {missing_camera_ids[0]}")
 
@@ -219,13 +221,13 @@ def create_cinematic_router() -> APIRouter:
             warnings.append("Transmission is disabled. Enable it to publish frames.")
         if not all(_operator_registry(request).get(operator_id) is not None for operator_id in _REQUIRED_OPERATORS):
             warnings.append("One or more required operators are unavailable.")
-        if optional_payload.get("cameras_mode") in {"include", "exclude"} and not camera_ids:
-            warnings.append("Camera filter is empty; the director will fall back to all available cameras.")
 
         return CinematicWizardCreatePipelineResponse(
             pipeline_name=pipeline_name,
             transmission_id=body.transmission_id,
+            behavior=optional.behavior if optional is not None else "rotation_with_events",
             cameras_mode=optional.cameras_mode if optional is not None else "all",
+            primary_camera_id=primary_camera_id,
             camera_ids=camera_ids,
             processing_server_id=processing_server_id,
             engine_running=False,

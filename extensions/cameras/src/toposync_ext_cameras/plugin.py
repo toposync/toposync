@@ -2127,6 +2127,7 @@ class CamerasExtension(BaseExtension):
                     {
                         "id": cid,
                         "name": str(flattened.get("name") or "").strip(),
+                        "enabled": bool(flattened.get("enabled", True)),
                         "control": flattened.get("control")
                         if isinstance(flattened.get("control"), dict)
                         else {"type": "none"},

@@ -87,9 +87,27 @@ def build_cinematic_wizard_graph(
 
 
 def _director_config(options: dict[str, Any]) -> dict[str, Any]:
+    behavior = _pick_choice(
+        options.get("behavior"),
+        allowed={"rotation_with_events", "primary_with_events"},
+        default="rotation_with_events",
+    )
+    cameras_mode = _pick_choice(options.get("cameras_mode"), allowed={"all", "include", "exclude"}, default="all")
+    primary_camera_id = _safe_text(options.get("primary_camera_id"))
+    camera_ids = _text_list(options.get("camera_ids"))
+    if cameras_mode == "all":
+        camera_ids = []
+    elif behavior == "primary_with_events" and primary_camera_id:
+        if cameras_mode == "include" and primary_camera_id not in camera_ids:
+            camera_ids.insert(0, primary_camera_id)
+        if cameras_mode == "exclude":
+            camera_ids = [camera_id for camera_id in camera_ids if camera_id != primary_camera_id]
+
     return {
-        "cameras_mode": _pick_choice(options.get("cameras_mode"), allowed={"all", "include", "exclude"}, default="all"),
-        "camera_ids": _text_list(options.get("camera_ids")),
+        "behavior": behavior,
+        "cameras_mode": cameras_mode,
+        "camera_ids": camera_ids,
+        "primary_camera_id": primary_camera_id,
         "priority_filter": _priority_list(options.get("priority_filter")),
         "include_pipelines": _text_list(options.get("include_pipelines")),
         "exclude_pipelines": _text_list(options.get("exclude_pipelines")),

@@ -111,6 +111,93 @@ def test_selector_respects_include_and_exclude_camera_filters() -> None:
     assert excluded.camera_id == "kitchen"
 
 
+def test_selector_primary_behavior_starts_on_primary_camera() -> None:
+    state = DirectorState(demand_active=True, mode="idle")
+
+    decision = select_next_shot(
+        state,
+        _cameras(),
+        [],
+        _config(behavior="primary_with_events", primary_camera_id="front"),
+        now=20.0,
+    )
+
+    assert decision is not None
+    assert decision.camera_id == "front"
+    assert decision.reason == "primary_idle"
+
+
+def test_selector_primary_behavior_returns_to_primary_after_event_hold() -> None:
+    state = DirectorState(
+        demand_active=True,
+        mode="event",
+        active_camera_id="garage",
+        active_source_id="main",
+        active_event_key="garage-person",
+        hold_until=30.0,
+        interruptible_after=25.0,
+        shot_started_at=10.0,
+    )
+
+    held = select_next_shot(
+        state,
+        _cameras(),
+        [],
+        _config(behavior="primary_with_events", primary_camera_id="front"),
+        now=20.0,
+    )
+    returned = select_next_shot(
+        state,
+        _cameras(),
+        [],
+        _config(behavior="primary_with_events", primary_camera_id="front"),
+        now=31.0,
+    )
+
+    assert held is not None
+    assert held.camera_id == "garage"
+    assert held.reason == "event_hold"
+    assert returned is not None
+    assert returned.camera_id == "front"
+    assert returned.reason == "primary_return"
+
+
+def test_selector_primary_behavior_falls_back_when_primary_unavailable() -> None:
+    state = DirectorState(demand_active=True, mode="idle")
+    cameras = [
+        CameraCandidate(camera_id="front", source_id="main", available=False),
+        CameraCandidate(camera_id="garage", source_id="main", last_seen_at=2.0),
+    ]
+
+    decision = select_next_shot(
+        state,
+        cameras,
+        [],
+        _config(behavior="primary_with_events", primary_camera_id="front"),
+        now=20.0,
+    )
+
+    assert decision is not None
+    assert decision.camera_id == "garage"
+    assert decision.reason == "primary_unavailable"
+
+
+def test_selector_ignores_events_without_resolved_camera() -> None:
+    state = DirectorState(demand_active=True, mode="idle")
+
+    decision = select_next_shot(
+        state,
+        _cameras(),
+        [_event("missing-camera", "", priority="high")],
+        _config(behavior="primary_with_events", primary_camera_id="front"),
+        now=20.0,
+    )
+
+    assert decision is not None
+    assert decision.camera_id == "front"
+    assert decision.reason == "primary_idle"
+
+
 def test_selector_prefers_high_priority_event() -> None:
     state = DirectorState(
         demand_active=True,

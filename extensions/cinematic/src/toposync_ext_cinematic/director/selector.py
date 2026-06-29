@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from ..constants import OPERATOR_ID_DIRECTOR_SOURCE
@@ -36,10 +37,24 @@ def select_next_shot(
     if best_event is not None:
         return _decision_for_event(best_event, eligible_cameras[best_event.camera_id], state, policy, config, now)
 
+    if _director_behavior(config) == "primary_with_events":
+        return _decision_for_primary_idle(eligible_cameras, state, policy, config, now)
+
     if _should_keep_current_idle(state, eligible_cameras, policy, now):
         return _decision_keep_current(state, now=now, mode="idle", reason="idle_hold")
 
     return _decision_for_next_idle_camera(eligible_cameras, state, policy, config, now)
+
+
+def _director_behavior(config: Any) -> str:
+    behavior = str(getattr(config, "behavior", "rotation_with_events") or "").strip().lower()
+    if behavior == "primary_with_events":
+        return behavior
+    return "rotation_with_events"
+
+
+def _primary_camera_id(config: Any) -> str:
+    return str(getattr(config, "primary_camera_id", "") or "").strip()
 
 
 def _eligible_cameras(
@@ -295,6 +310,53 @@ def _decision_for_next_idle_camera(
         reason="idle_round",
         event_key="",
         score=float(_camera_priority(selected, config)),
+        hold_until=float(now) + policy.idle_dwell_seconds,
+        interruptible_after=float(now) + policy.cut_cooldown_seconds,
+        framing_hint={"mode": "full_frame"},
+    )
+
+
+def _decision_for_primary_idle(
+    eligible_cameras: dict[str, CameraCandidate],
+    state: DirectorState,
+    policy: CutPolicy,
+    config: Any,
+    now: float,
+) -> ShotDecision:
+    primary_camera_id = _primary_camera_id(config)
+    primary_camera = eligible_cameras.get(primary_camera_id)
+    if primary_camera is None:
+        if _should_keep_current_idle(state, eligible_cameras, policy, now):
+            return _decision_keep_current(state, now=now, mode="idle", reason="primary_unavailable_hold")
+        return replace(
+            _decision_for_next_idle_camera(eligible_cameras, state, policy, config, now),
+            reason="primary_unavailable",
+        )
+
+    if state.active_camera_id == primary_camera.camera_id:
+        return _decision_keep_current(state, now=now, mode="idle", reason="primary_hold")
+
+    if (
+        state.mode == "event"
+        and state.active_camera_id in eligible_cameras
+        and float(now) < float(state.hold_until or 0.0)
+    ):
+        return _decision_keep_current(state, now=now, mode="event", reason="event_hold")
+
+    if (
+        state.active_camera_id
+        and state.active_camera_id in eligible_cameras
+        and float(now) < float(state.interruptible_after or 0.0)
+    ):
+        return _decision_keep_current(state, now=now, mode=state.mode, reason="primary_return_cooldown")
+
+    return ShotDecision(
+        camera_id=primary_camera.camera_id,
+        source_id=primary_camera.source_id,
+        mode="idle",
+        reason="primary_return" if state.active_camera_id else "primary_idle",
+        event_key="",
+        score=float(_camera_priority(primary_camera, config)),
         hold_until=float(now) + policy.idle_dwell_seconds,
         interruptible_after=float(now) + policy.cut_cooldown_seconds,
         framing_hint={"mode": "full_frame"},

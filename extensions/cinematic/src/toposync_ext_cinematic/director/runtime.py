@@ -375,9 +375,11 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
             capture["source_health"] = dict(frame.source_health)
         active_event = self._state.active_events_by_key.get(decision.event_key)
         cinematic = {
+            "behavior": str(getattr(self._config, "behavior", "rotation_with_events") or "rotation_with_events"),
             "mode": decision.mode,
             "cut_reason": decision.reason,
             "active_camera_id": camera_id,
+            "primary_camera_id": str(getattr(self._config, "primary_camera_id", "") or "").strip() or None,
             "active_event_key": decision.event_key or None,
             "framing": dict(decision.framing_hint or {"mode": "full_frame"}),
             "score": float(decision.score),
@@ -440,6 +442,7 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
                 "camera_name": camera_name or None,
                 "camera_source_id": source_id or None,
                 "cinematic_mode": decision.mode,
+                "cinematic_behavior": str(getattr(self._config, "behavior", "rotation_with_events") or "rotation_with_events"),
                 "cinematic_cut_reason": decision.reason,
                 "cinematic_event_key": decision.event_key or None,
                 "capture_backend": str(capture.get("backend") or ""),
@@ -509,9 +512,11 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
                 "camera_id": camera_id or None,
                 "camera_source_id": source_id or None,
                 "cinematic": {
+                    "behavior": str(getattr(self._config, "behavior", "rotation_with_events") or "rotation_with_events"),
                     "mode": "no_demand",
                     "cut_reason": reason,
                     "active_camera_id": camera_id or None,
+                    "primary_camera_id": str(getattr(self._config, "primary_camera_id", "") or "").strip() or None,
                     "active_event_key": self._state.active_event_key or None,
                     "framing": {"mode": "full_frame"},
                 },
@@ -521,6 +526,7 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
                 "camera_id": camera_id or None,
                 "camera_source_id": source_id or None,
                 "cinematic_mode": "no_demand",
+                "cinematic_behavior": str(getattr(self._config, "behavior", "rotation_with_events") or "rotation_with_events"),
                 "cinematic_cut_reason": reason,
             },
         )
@@ -570,6 +576,8 @@ class CinematicDirectorRuntime(SourceOperatorRuntime):
             "gate_known": bool(self._gate_known),
             "stream_open": bool(self._stream_open),
             "lifecycle": lifecycle,
+            "behavior": str(getattr(self._config, "behavior", "rotation_with_events") or "rotation_with_events"),
+            "primary_camera_id": str(getattr(self._config, "primary_camera_id", "") or "").strip() or None,
             "mode": str(decision.mode if decision is not None else self._state.mode or "no_demand"),
             "cut": bool(cut),
             "cut_reason": cut_reason,

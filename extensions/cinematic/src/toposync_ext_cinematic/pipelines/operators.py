@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME
@@ -19,6 +19,7 @@ from ..director.runtime import CinematicDirectorRuntime
 
 Priority = Literal["low", "medium", "high"]
 CameraMode = Literal["all", "include", "exclude"]
+DirectorBehavior = Literal["rotation_with_events", "primary_with_events"]
 SourceRole = Literal["main", "sub", "zoom", "auto"]
 WarmupMode = Literal["off", "next_idle", "event_high", "adaptive"]
 
@@ -26,8 +27,10 @@ WarmupMode = Literal["off", "next_idle", "event_high", "adaptive"]
 class CinematicDirectorSourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    behavior: DirectorBehavior = "rotation_with_events"
     cameras_mode: CameraMode = "all"
     camera_ids: list[str] = Field(default_factory=list)
+    primary_camera_id: str = ""
     priority_filter: list[Priority] = Field(default_factory=list)
     include_pipelines: list[str] = Field(default_factory=list)
     exclude_pipelines: list[str] = Field(default_factory=list)
@@ -67,6 +70,11 @@ class CinematicDirectorSourceConfig(BaseModel):
             out.append(text)
             seen.add(text)
         return out
+
+    @field_validator("primary_camera_id", mode="before")
+    @classmethod
+    def _normalize_primary_camera_id(cls, value: Any) -> str:
+        return str(value or "").strip()
 
     @field_validator("priority_filter", mode="before")
     @classmethod
@@ -116,6 +124,18 @@ class CinematicDirectorSourceConfig(BaseModel):
             out[pipeline_name] = camera_id
         return out
 
+    @model_validator(mode="after")
+    def _validate_behavior(self) -> "CinematicDirectorSourceConfig":
+        if self.behavior == "primary_with_events":
+            primary_camera_id = str(self.primary_camera_id or "").strip()
+            if not primary_camera_id:
+                raise ValueError("primary_camera_id is required when behavior is primary_with_events")
+            if self.cameras_mode == "include" and primary_camera_id not in self.camera_ids:
+                self.camera_ids.insert(0, primary_camera_id)
+            if self.cameras_mode == "exclude" and primary_camera_id in self.camera_ids:
+                self.camera_ids = [camera_id for camera_id in self.camera_ids if camera_id != primary_camera_id]
+        return self
+
 
 class CinematicDirectorSourceRuntime(CinematicDirectorRuntime):
     def __init__(self, config: dict[str, object], dependencies: PipelineRuntimeDependencies) -> None:
@@ -125,6 +145,7 @@ class CinematicDirectorSourceRuntime(CinematicDirectorRuntime):
 def _expression_hints() -> list[object]:
     return [
         payload_path_hint("payload.cinematic", value_type="object", description="Cinematic director metadata."),
+        payload_path_hint("payload.cinematic.behavior", value_type="string", description="Configured director behavior."),
         payload_path_hint("payload.cinematic.mode", value_type="string", description="Current director mode."),
         payload_path_hint("payload.cinematic.cut_reason", value_type="string", description="Reason for the current cut."),
         payload_path_hint("payload.cinematic.active_camera_id", value_type="string", description="Camera currently selected by the director."),

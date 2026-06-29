@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Priority = Literal["low", "medium", "high"]
 CameraMode = Literal["all", "include", "exclude"]
+DirectorBehavior = Literal["rotation_with_events", "primary_with_events"]
 SourceRole = Literal["main", "sub", "zoom", "auto"]
 WarmupMode = Literal["off", "next_idle", "event_high", "adaptive"]
 ResizeMode = Literal["contain", "none"]
@@ -19,8 +20,10 @@ class CinematicWizardOptionalParameters(BaseModel):
     enabled: bool = True
     processing_server_id: str | None = None
 
+    behavior: DirectorBehavior = "rotation_with_events"
     cameras_mode: CameraMode = "all"
     camera_ids: list[str] = Field(default_factory=list)
+    primary_camera_id: str = ""
     priority_filter: list[Priority] = Field(default_factory=list)
     include_pipelines: list[str] = Field(default_factory=list)
     exclude_pipelines: list[str] = Field(default_factory=list)
@@ -55,6 +58,7 @@ class CinematicWizardOptionalParameters(BaseModel):
     @field_validator(
         "pipeline_name",
         "processing_server_id",
+        "primary_camera_id",
         "demand_gate_output_id",
         "demand_gate_quality_profile_id",
         "publication_label",
@@ -94,10 +98,18 @@ class CinematicWizardOptionalParameters(BaseModel):
 
     @model_validator(mode="after")
     def _validate_camera_selection(self) -> "CinematicWizardOptionalParameters":
-        if self.cameras_mode in {"include", "exclude"} and not self.camera_ids:
-            raise ValueError("camera_ids is required when cameras_mode is include or exclude")
         if self.cameras_mode == "all":
             self.camera_ids = []
+        if self.behavior == "primary_with_events":
+            primary_camera_id = str(self.primary_camera_id or "").strip()
+            if not primary_camera_id:
+                raise ValueError("primary_camera_id is required when behavior is primary_with_events")
+            if self.cameras_mode == "include" and primary_camera_id not in self.camera_ids:
+                self.camera_ids.insert(0, primary_camera_id)
+            if self.cameras_mode == "exclude" and primary_camera_id in self.camera_ids:
+                self.camera_ids = [camera_id for camera_id in self.camera_ids if camera_id != primary_camera_id]
+        if self.cameras_mode in {"include", "exclude"} and not self.camera_ids:
+            raise ValueError("camera_ids is required when cameras_mode is include or exclude")
         return self
 
 
@@ -121,7 +133,9 @@ class CinematicWizardCreatePipelineResponse(BaseModel):
 
     pipeline_name: str
     transmission_id: str
+    behavior: DirectorBehavior = "rotation_with_events"
     cameras_mode: CameraMode
+    primary_camera_id: str = ""
     camera_ids: list[str] = Field(default_factory=list)
     processing_server_id: str = "local"
     engine_running: bool = False

@@ -259,6 +259,61 @@ async def _run_handoff_uses_pending_frame_and_releases_old_camera() -> None:
     assert services.released == ["lease-front"]
 
 
+def test_director_primary_behavior_opens_primary_camera() -> None:
+    asyncio.run(_run_primary_behavior_opens_primary_camera())
+
+
+async def _run_primary_behavior_opens_primary_camera() -> None:
+    services = _Services()
+    services.catalog.append(
+        {
+            "id": "garage",
+            "name": "Garage",
+            "enabled": True,
+            "sources": [{"id": "main", "kind": "video", "role": "main", "enabled": True}],
+        }
+    )
+    services.push_frame("garage")
+    runtime = _runtime(services, behavior="primary_with_events", primary_camera_id="garage")
+
+    packet = await runtime.produce(_Context())
+
+    assert packet is not None
+    assert packet.payload["camera_id"] == "garage"
+    assert packet.payload["cinematic"]["behavior"] == "primary_with_events"
+    assert packet.payload["cinematic"]["cut_reason"] == "primary_idle"
+
+
+def test_director_keeps_current_frame_when_event_camera_has_no_frame() -> None:
+    asyncio.run(_run_keeps_current_frame_when_event_camera_has_no_frame())
+
+
+async def _run_keeps_current_frame_when_event_camera_has_no_frame() -> None:
+    services = _Services()
+    services.catalog.append(
+        {
+            "id": "garage",
+            "name": "Garage",
+            "enabled": True,
+            "sources": [{"id": "main", "kind": "video", "role": "main", "enabled": True}],
+        }
+    )
+    services.push_frame("front")
+    runtime = _runtime(services)
+    context = _Context()
+
+    first = await runtime.produce(context)
+    services.notifications = [_notification("garage")]
+    services.push_frame("front")
+    second = await runtime.produce(context)
+
+    assert first is not None
+    assert second is not None
+    assert second.payload["camera_id"] == "front"
+    assert second.payload["cinematic"]["cut_reason"] == "handoff_wait"
+    assert "lease-front" not in services.released
+
+
 def test_director_skips_non_fresh_frame() -> None:
     asyncio.run(_run_skips_non_fresh_frame())
 

@@ -127,6 +127,7 @@ async def _raise_if_request_disconnected(request: Request) -> None:
 NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
 VEHICLE_STOPPED_OBJECT_CATEGORIES = ["car", "truck", "bus", "motorcycle"]
 VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
+VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS = 1.25
 PRESET_PIPELINE_NAME_PARTS = {
     "people_simple": "deteccao_simples_de_pessoas",
     "people_individual": "evento_individual_de_pessoas",
@@ -427,6 +428,7 @@ class CameraPipelinePresetRequest(BaseModel):
     composition_id: str = ""
     area_id: str = ""
     stopped_speed_threshold: float | None = Field(default=None, ge=0.0, le=1000.0)
+    min_stationary_seconds: float | None = Field(default=None, ge=0.0, le=3600.0)
     notification_title: str = ""
     notification_description: str = ""
     notification_priority: NotificationPriority = "medium"
@@ -3001,6 +3003,7 @@ class CamerasExtension(BaseExtension):
             composition_id: str,
             area_restriction_config: dict[str, Any] | None,
             stopped_speed_threshold: float | None,
+            min_stationary_seconds: float | None,
             notification_title: str,
             notification_description: str,
             notification_priority: NotificationPriority,
@@ -3153,6 +3156,14 @@ class CamerasExtension(BaseExtension):
                         parsed_threshold = VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
                     if math.isfinite(parsed_threshold):
                         speed_threshold = max(0.0, parsed_threshold)
+                stationary_seconds = VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS
+                if min_stationary_seconds is not None:
+                    try:
+                        parsed_stationary_seconds = float(min_stationary_seconds)
+                    except Exception:
+                        parsed_stationary_seconds = VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS
+                    if math.isfinite(parsed_stationary_seconds):
+                        stationary_seconds = max(0.0, parsed_stationary_seconds)
 
                 tail_nodes.append(
                     {
@@ -3237,18 +3248,20 @@ class CamerasExtension(BaseExtension):
                 ]
                 notify_nodes = [
                     {
-                        "id": "stopped_lifecycle",
-                        "operator": "core.lifecycle_from_boolean",
+                        "id": "stationary_event",
+                        "operator": "core.stationary_event",
                         "config": {
-                            "field": "payload.velocity.stopped",
                             "key_field": "payload.subject.id",
-                        },
-                    },
-                    {
-                        "id": "stopped_event_filter",
-                        "operator": "core.filter",
-                        "config": {
-                            "expression": 'payload.velocity.stopped or lifecycle == "close"'
+                            "stopped_field": "payload.velocity.stopped",
+                            "valid_field": "payload.velocity.valid",
+                            "speed_field": "payload.velocity.speed_mps",
+                            "max_speed_mps": speed_threshold,
+                            "min_stationary_seconds": stationary_seconds,
+                            "min_valid_samples": 3,
+                            "max_stationary_distance_m": 0.35,
+                            "require_arrival": True,
+                            "arrival_min_distance_m": 0.50,
+                            "close_after_moving_seconds": 0.75,
                         },
                     },
                     {
@@ -3272,7 +3285,7 @@ class CamerasExtension(BaseExtension):
                             "notification_type": "pipelines.tracking",
                             "title": notification_title or "{{camera_name}}: veículo parado",
                             "description": notification_description
-                            or "{{subject.category}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h",
+                            or "{{subject.category}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h - {{payload.stationary_event.stationary_seconds}} s",
                             "priority": notification_priority,
                             "dedupe_key_template": "{{subject.id}}",
                         },
@@ -3289,8 +3302,7 @@ class CamerasExtension(BaseExtension):
                     _linear_edges(
                         [
                             "velocity",
-                            "stopped_lifecycle",
-                            "stopped_event_filter",
+                            "stationary_event",
                             "notify_debounce",
                             "notify_crop",
                             "notify_store",
@@ -3298,6 +3310,19 @@ class CamerasExtension(BaseExtension):
                         ]
                     )
                 )
+                for edge in edges:
+                    from_node = edge.get("from") if isinstance(edge, dict) else None
+                    if not isinstance(from_node, dict):
+                        continue
+                    source_node = str(from_node.get("node") or "")
+                    if source_node in {
+                        "velocity",
+                        "storage_throttle",
+                        "stationary_event",
+                        "notify_debounce",
+                    }:
+                        edge["maxsize"] = 32 if source_node == "velocity" else 8
+                        edge["drop_policy"] = "keyed_latest_only"
                 return {"schema_version": 1, "nodes": nodes, "edges": edges}
 
             raise ValueError("Unknown preset")
@@ -3447,6 +3472,7 @@ class CamerasExtension(BaseExtension):
                     composition_id=composition_id,
                     area_restriction_config=area_restriction_config,
                     stopped_speed_threshold=body.stopped_speed_threshold,
+                    min_stationary_seconds=body.min_stationary_seconds,
                     notification_title=str(body.notification_title or "").strip(),
                     notification_description=str(body.notification_description or "").strip(),
                     notification_priority=body.notification_priority,

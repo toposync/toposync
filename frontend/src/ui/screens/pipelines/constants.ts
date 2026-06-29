@@ -10,6 +10,7 @@ export const PIPELINE_PRESET_OPERATOR_IDS = [
   "camera.motion_bgsub_adaptive",
   "camera.motion_sample_bg",
   "camera.motion_gate",
+  "core.stationary_event",
   "core.lifecycle_from_boolean",
   "core.fps_reducer",
   "camera.image_crop",
@@ -261,7 +262,8 @@ export const PIPELINE_OPERATOR_UX = {
 
   "core.category_gate": { group: "rules", level: "advanced", order: 10 },
   "core.filter": { group: "rules", level: "advanced", order: 20 },
-  "core.lifecycle_from_boolean": { group: "rules", level: "advanced", order: 30 },
+  "core.stationary_event": { group: "rules", level: "basic", order: 30 },
+  "core.lifecycle_from_boolean": { group: "rules", level: "advanced", order: 40 },
   "core.passthrough": { group: "rules", level: "advanced", order: 900 },
   "dist.target_filter": { group: "rules", level: "advanced", order: 910 },
 
@@ -324,6 +326,7 @@ export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "ai.smart_crop": "Crop with AI",
   "core.category_gate": "Filter by category",
   "core.filter": "Apply rule",
+  "core.stationary_event": "Confirm stop",
   "camera.camera_mapping": "Map position in space",
   "camera.area_restriction": "Filter by area",
   "camera.velocity_estimation": "Calculate speed",

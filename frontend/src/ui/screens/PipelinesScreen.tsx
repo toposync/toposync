@@ -322,9 +322,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
   useEffect(() => {
     if (mode !== "interactive") return;
+    if (interactiveWarning) return;
     if (!interactiveGraph.graph) return;
     setGraphText(jsonPretty(interactiveGraph.graph));
-  }, [mode, interactiveGraph.graph]);
+  }, [interactiveWarning, mode, interactiveGraph.graph]);
 
   useEffect(() => {
     if (!draft) {
@@ -451,6 +452,16 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     if (!draft) return { ok: false, message: t("core.ui.pipelines.error.no_selection") };
 
     if (mode === "interactive") {
+      if (interactiveWarning) {
+        return {
+          ok: false,
+          message: t(
+            "core.ui.pipelines.editor.error.non_linear_interactive_save_blocked",
+            {},
+            "This graph is not compatible with interactive editing. Switch to JSON mode before saving so the existing links are preserved.",
+          ),
+        };
+      }
       if (!interactiveGraph.graph) {
         return { ok: false, message: interactiveGraph.error || "Interactive graph is invalid." };
       }
@@ -507,7 +518,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
             return;
           }
 
-          const resolved = resolveGraphFromActiveMode();
+          const resolved =
+            mode === "interactive" && interactiveWarning && isRecord(draft.graph)
+              ? { ok: true as const, graph: draft.graph }
+              : resolveGraphFromActiveMode();
           if (!resolved.ok) {
             if (cancelled) return;
             setRecommendations([]);
@@ -539,7 +553,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       window.clearTimeout(handle);
       controller.abort();
     };
-  }, [draft, mode, interactiveGraph.graph, graphText, pythonText]);
+  }, [draft, mode, interactiveGraph.graph, graphText, interactiveWarning, pythonText]);
 
   useEffect(() => {
     if (!draft) {

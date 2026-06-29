@@ -205,6 +205,7 @@ function modelPreparationLabel(item: DetectionModelCatalogItem | null, t: Transl
 }
 
 const VEHICLE_STOPPED_DEFAULT_SPEED_KMH = 1.0;
+const VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS = 1.25;
 const NOTIFICATION_PRIORITIES: CameraNotificationPriority[] = ["low", "medium", "high"];
 
 function compositionIdForArea(compositions: CameraContextComposition[], areaId: string): string {
@@ -248,6 +249,7 @@ export function CameraPipelinePresetModal({
   const [compositionId, setCompositionId] = useState("");
   const [areaId, setAreaId] = useState("");
   const [stoppedSpeedKmh, setStoppedSpeedKmh] = useState(VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
+  const [minStationarySeconds, setMinStationarySeconds] = useState(VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS);
   const [notificationPriority, setNotificationPriority] = useState<CameraNotificationPriority>("medium");
   const [enabled, setEnabled] = useState(true);
   const [processingServerId, setProcessingServerId] = useState("local");
@@ -286,6 +288,7 @@ export function CameraPipelinePresetModal({
     setCompositionId(mappedCompositions[0]?.id ?? "");
     setAreaId("");
     setStoppedSpeedKmh(VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
+    setMinStationarySeconds(VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS);
     setNotificationPriority("medium");
     setEnabled(sourceHasVideoOrigin(camera, nextSource));
     setProcessingServerId("local");
@@ -378,6 +381,8 @@ export function CameraPipelinePresetModal({
         area_id: preset === "vehicle_stopped" ? areaId : "",
         stopped_speed_threshold:
           preset === "vehicle_stopped" ? Math.max(0, Number(stoppedSpeedKmh) || 0) / 3.6 : undefined,
+        min_stationary_seconds:
+          preset === "vehicle_stopped" ? Math.max(0, Number(minStationarySeconds) || 0) : undefined,
         notification_priority: notificationPriority,
       });
       onCreated(response.pipeline_name);
@@ -751,7 +756,7 @@ export function CameraPipelinePresetModal({
               </select>
             </div>
             <div className="field">
-              <label className="label">{t("ext.cameras.pipeline_preset.stopped_speed", {}, "Stopped sensitivity (km/h)")}</label>
+              <label className="label">{t("ext.cameras.pipeline_preset.stopped_speed", {}, "Maximum speed to count as stopped (km/h)")}</label>
               <input
                 className="input"
                 type="number"
@@ -761,6 +766,21 @@ export function CameraPipelinePresetModal({
                 onChange={(event) => {
                   const next = Number(event.target.value);
                   setStoppedSpeedKmh(Number.isFinite(next) ? next : VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
+                }}
+                disabled={creating}
+              />
+            </div>
+            <div className="field">
+              <label className="label">{t("ext.cameras.pipeline_preset.min_stationary_seconds", {}, "Minimum stopped time (seconds)")}</label>
+              <input
+                className="input"
+                type="number"
+                min="0"
+                step="0.25"
+                value={String(minStationarySeconds)}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  setMinStationarySeconds(Number.isFinite(next) ? next : VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS);
                 }}
                 disabled={creating}
               />
@@ -817,7 +837,7 @@ export function CameraPipelinePresetModal({
               ? t(
                   "ext.cameras.pipeline_preset.vehicle_stopped.summary",
                   {},
-                  "Uses motion, vehicle detection, tracking, mapping, optional area restriction, speed estimation, regular image storage and notification when the vehicle stops.",
+                  "Uses motion, vehicle detection, tracking, mapping, optional area restriction, speed estimation, regular image storage and notification as soon as a stop is confirmed.",
                 )
               : t(
                   "ext.cameras.pipeline_preset.people_individual.summary",

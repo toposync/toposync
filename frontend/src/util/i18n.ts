@@ -806,6 +806,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.ai.smart_crop": "Crop with AI",
     "core.ui.pipelines.operator_name.core.category_gate": "Filter by category",
     "core.ui.pipelines.operator_name.core.filter": "Apply rule",
+    "core.ui.pipelines.operator_name.core.stationary_event": "Confirm stop",
     "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Create event from condition",
     "core.ui.pipelines.operator_name.camera.camera_mapping": "Map position in space",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Filter by area",
@@ -888,6 +889,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Lets packets pass or blocks them according to detected object categories.",
     "core.ui.pipelines.operator_description.core.filter":
       "Applies a safe rule over payload and metadata, keeping only matching packets.",
+    "core.ui.pipelines.operator_description.core.stationary_event":
+      "Confirms that a tracked subject really stopped before opening a lifecycle event.",
     "core.ui.pipelines.operator_description.core.lifecycle_from_boolean":
       "Converts a true or false condition into open, update, and close events.",
     "core.ui.pipelines.operator_description.camera.camera_mapping":
@@ -962,13 +965,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.editor.step.parallel_sink_hint":
       "This step branches off the previous data step and does not feed the next steps.",
     "core.ui.pipelines.editor.warning.non_linear_graph":
-      "Graph is not compatible with interactive step ordering. Interactive mode loaded node list order and will rewrite edges.",
+      "Graph is not compatible with interactive step ordering. Switch to JSON mode before saving to preserve links.",
     "core.ui.pipelines.editor.warning.multiple_starts":
-      "Graph has multiple starts. Interactive mode loaded node list order and will rewrite edges.",
+      "Graph has multiple starts. Switch to JSON mode before saving to preserve links.",
     "core.ui.pipelines.editor.warning.cycle":
-      "Graph contains a cycle. Interactive mode loaded node list order and will rewrite edges.",
+      "Graph contains a cycle. Switch to JSON mode before saving to preserve links.",
     "core.ui.pipelines.editor.warning.disconnected":
-      "Graph has disconnected segments. Interactive mode loaded node list order and will rewrite edges.",
+      "Graph has disconnected segments. Switch to JSON mode before saving to preserve links.",
+    "core.ui.pipelines.editor.error.non_linear_interactive_save_blocked":
+      "This graph is not compatible with interactive editing. Switch to JSON mode before saving so the existing links are preserved.",
 
     "core.ui.pipelines.template_apply.title": "Apply template",
     "core.ui.pipelines.template_apply.title_with_name": "Apply template: {{name}}",
@@ -1264,6 +1269,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.camera_source.backend.auto": "Auto (recommended)",
     "core.ui.pipelines.panels.camera_source.hint_backend":
       "Auto selects the best available backend and falls back automatically if one fails to initialize.",
+
+    "core.ui.pipelines.panels.stationary_event.max_speed": "Maximum stopped speed (km/h)",
+    "core.ui.pipelines.panels.stationary_event.min_stationary_seconds": "Minimum stopped time (seconds)",
+    "core.ui.pipelines.panels.stationary_event.min_valid_samples": "Minimum valid samples",
+    "core.ui.pipelines.panels.stationary_event.require_arrival": "Require observed arrival before stop",
+    "core.ui.pipelines.panels.stationary_event.hint":
+      "Opens the event quickly, but only after the subject stays below the speed limit with enough valid samples.",
+    "core.ui.pipelines.panels.stationary_event.key_field": "Subject key field",
+    "core.ui.pipelines.panels.stationary_event.stopped_field": "Stopped boolean field",
 
     "core.ui.pipelines.panels.cinematic_director.behavior": "Transmission mode",
     "core.ui.pipelines.panels.cinematic_director.behavior.rotation_with_events": "Rotate cameras and highlight events",
@@ -2988,6 +3002,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.ai.smart_crop": "Recortar com IA",
     "core.ui.pipelines.operator_name.core.category_gate": "Filtrar por categoria",
     "core.ui.pipelines.operator_name.core.filter": "Aplicar regra",
+    "core.ui.pipelines.operator_name.core.stationary_event": "Confirmar parada",
     "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Criar evento por condição",
     "core.ui.pipelines.operator_name.camera.camera_mapping": "Mapear posição no ambiente",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Filtrar por área",
@@ -3070,6 +3085,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Deixa passar ou bloqueia pacotes conforme as categorias de objeto detectadas.",
     "core.ui.pipelines.operator_description.core.filter":
       "Aplica uma regra segura sobre payload e metadata, mantendo apenas os pacotes que combinam.",
+    "core.ui.pipelines.operator_description.core.stationary_event":
+      "Confirma que um sujeito rastreado realmente parou antes de abrir um evento com lifecycle.",
     "core.ui.pipelines.operator_description.core.lifecycle_from_boolean":
       "Converte uma condição verdadeira ou falsa em eventos de abertura, atualização e fechamento.",
     "core.ui.pipelines.operator_description.camera.camera_mapping":
@@ -3145,13 +3162,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.editor.step.parallel_sink_hint":
       "Esta etapa ramifica da etapa anterior de dados e não alimenta as próximas etapas.",
     "core.ui.pipelines.editor.warning.non_linear_graph":
-      "O grafo não é compatível com a ordenação interativa de etapas. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
+      "O grafo não é compatível com a ordenação interativa de etapas. Troque para o modo JSON antes de salvar para preservar as ligações.",
     "core.ui.pipelines.editor.warning.multiple_starts":
-      "O grafo tem múltiplos inícios. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
+      "O grafo tem múltiplos inícios. Troque para o modo JSON antes de salvar para preservar as ligações.",
     "core.ui.pipelines.editor.warning.cycle":
-      "O grafo contém um ciclo. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
+      "O grafo contém um ciclo. Troque para o modo JSON antes de salvar para preservar as ligações.",
     "core.ui.pipelines.editor.warning.disconnected":
-      "O grafo tem segmentos desconectados. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
+      "O grafo tem segmentos desconectados. Troque para o modo JSON antes de salvar para preservar as ligações.",
+    "core.ui.pipelines.editor.error.non_linear_interactive_save_blocked":
+      "Este grafo não é compatível com edição interativa. Troque para o modo JSON antes de salvar para preservar as ligações existentes.",
 
     "core.ui.pipelines.template_apply.title": "Aplicar template",
     "core.ui.pipelines.template_apply.title_with_name": "Aplicar template: {{name}}",
@@ -3450,6 +3469,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.camera_source.backend.auto": "Auto (recomendado)",
     "core.ui.pipelines.panels.camera_source.hint_backend":
       "Auto seleciona o melhor backend disponível e faz fallback automaticamente se um falhar ao iniciar.",
+
+    "core.ui.pipelines.panels.stationary_event.max_speed": "Velocidade máxima parado (km/h)",
+    "core.ui.pipelines.panels.stationary_event.min_stationary_seconds": "Tempo mínimo parado (segundos)",
+    "core.ui.pipelines.panels.stationary_event.min_valid_samples": "Mínimo de amostras válidas",
+    "core.ui.pipelines.panels.stationary_event.require_arrival": "Exigir chegada observada antes da parada",
+    "core.ui.pipelines.panels.stationary_event.hint":
+      "Abre o evento rapidamente, mas só depois que o sujeito fica abaixo do limite de velocidade com amostras válidas suficientes.",
+    "core.ui.pipelines.panels.stationary_event.key_field": "Campo de identificação do sujeito",
+    "core.ui.pipelines.panels.stationary_event.stopped_field": "Campo booleano de parado",
 
     "core.ui.pipelines.panels.cinematic_director.behavior": "Modo da transmissão",
     "core.ui.pipelines.panels.cinematic_director.behavior.rotation_with_events": "Rotacionar câmeras e destacar eventos",

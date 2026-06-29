@@ -18,6 +18,7 @@ import {
   PublishVideoConfigCard,
   VelocityThrottleConfigCard,
   ScheduleGateConfigCard,
+  StationaryEventConfigCard,
   StoreImagesConfigCard,
   ThrottleConfigCard,
 } from "./CorePanels";
@@ -185,6 +186,9 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "core.filter") {
     return <FilterConfigCard config={config} steps={steps} index={index} operatorsById={operatorsById} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "core.stationary_event") {
+    return <StationaryEventConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "camera.camera_mapping") {
     return (

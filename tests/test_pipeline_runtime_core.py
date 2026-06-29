@@ -17,6 +17,7 @@ from toposync.runtime.pipelines import (
     SourceOperatorRuntime,
     TransformOperatorRuntime,
 )
+from toposync.runtime.pipelines.operators_core import StationaryEventRuntime
 
 
 class _OnePacketSourceRuntime(SourceOperatorRuntime):
@@ -45,6 +46,174 @@ def test_packet_creation_and_artifact_attachment() -> None:
     assert "main" in enriched.artifacts
     assert enriched.artifacts["main"].reference == "files/cam/1.jpg"
     assert enriched.packet_id == packet.packet_id
+
+
+def test_stationary_event_does_not_open_from_single_slow_sample() -> None:
+    async def scenario() -> None:
+        runtime = StationaryEventRuntime(
+            {
+                "require_arrival": False,
+                "min_stationary_seconds": 1.25,
+                "min_valid_samples": 3,
+            }
+        )
+        packet = Packet.create(
+            stream_id="camera",
+            lifecycle=Lifecycle.UPDATE,
+            payload={
+                "frame_ts": 1.0,
+                "subject": {"id": "subject-1"},
+                "velocity": {"valid": True, "stopped": True, "speed_mps": 0.01},
+                "world": {"x": 0.0, "z": 0.0},
+            },
+        )
+
+        assert await runtime.process_packet(packet, context=None) == []
+
+    asyncio.run(scenario())
+
+
+def test_stationary_event_opens_after_short_confirmed_stop() -> None:
+    async def scenario() -> None:
+        runtime = StationaryEventRuntime(
+            {
+                "require_arrival": False,
+                "min_stationary_seconds": 1.25,
+                "min_valid_samples": 3,
+                "max_stationary_distance_m": 0.35,
+            }
+        )
+
+        def make_packet(frame_ts: float, world_x: float) -> Packet:
+            return Packet.create(
+                stream_id="camera",
+                lifecycle=Lifecycle.UPDATE,
+                payload={
+                    "frame_ts": frame_ts,
+                    "subject": {"id": "subject-1"},
+                    "velocity": {"valid": True, "stopped": True, "speed_mps": 0.01},
+                    "world": {"x": world_x, "z": 0.0},
+                },
+            )
+
+        outputs: list[Packet] = []
+        for packet in [
+            make_packet(1.0, 0.0),
+            make_packet(1.6, 0.03),
+            make_packet(2.3, 0.04),
+        ]:
+            outputs.extend(await runtime.process_packet(packet, context=None))
+
+        assert len(outputs) == 1
+        assert outputs[0].lifecycle == Lifecycle.OPEN
+        stationary = outputs[0].payload.get("stationary_event")
+        assert isinstance(stationary, dict)
+        assert stationary.get("confirmed") is True
+        assert stationary.get("sample_count") == 3
+        assert stationary.get("distance_m") == 0.04
+
+    asyncio.run(scenario())
+
+
+def test_stationary_event_requires_arrival_when_configured() -> None:
+    async def scenario() -> None:
+        runtime = StationaryEventRuntime(
+            {
+                "require_arrival": True,
+                "min_stationary_seconds": 1.25,
+                "min_valid_samples": 3,
+            }
+        )
+
+        def make_packet(frame_ts: float) -> Packet:
+            return Packet.create(
+                stream_id="camera",
+                lifecycle=Lifecycle.UPDATE,
+                payload={
+                    "frame_ts": frame_ts,
+                    "subject": {"id": "subject-1"},
+                    "velocity": {"valid": True, "stopped": True, "speed_mps": 0.01},
+                    "world": {"x": 0.0, "z": 0.0},
+                },
+            )
+
+        outputs: list[Packet] = []
+        for packet in [make_packet(1.0), make_packet(1.7), make_packet(2.4), make_packet(3.1)]:
+            outputs.extend(await runtime.process_packet(packet, context=None))
+
+        assert outputs == []
+
+    asyncio.run(scenario())
+
+
+def test_stationary_event_rejects_large_stationary_window_displacement() -> None:
+    async def scenario() -> None:
+        runtime = StationaryEventRuntime(
+            {
+                "require_arrival": False,
+                "min_stationary_seconds": 1.25,
+                "min_valid_samples": 3,
+                "max_stationary_distance_m": 0.20,
+            }
+        )
+
+        def make_packet(frame_ts: float, world_x: float) -> Packet:
+            return Packet.create(
+                stream_id="camera",
+                lifecycle=Lifecycle.UPDATE,
+                payload={
+                    "frame_ts": frame_ts,
+                    "subject": {"id": "subject-1"},
+                    "velocity": {"valid": True, "stopped": True, "speed_mps": 0.01},
+                    "world": {"x": world_x, "z": 0.0},
+                },
+            )
+
+        outputs: list[Packet] = []
+        for packet in [make_packet(1.0, 0.0), make_packet(1.7, 0.30), make_packet(2.4, 0.31)]:
+            outputs.extend(await runtime.process_packet(packet, context=None))
+
+        assert outputs == []
+
+    asyncio.run(scenario())
+
+
+def test_stationary_event_closes_after_sustained_movement() -> None:
+    async def scenario() -> None:
+        runtime = StationaryEventRuntime(
+            {
+                "require_arrival": False,
+                "min_stationary_seconds": 1.0,
+                "min_valid_samples": 3,
+                "close_after_moving_seconds": 0.75,
+            }
+        )
+
+        def make_packet(frame_ts: float, stopped: bool, speed_mps: float, world_x: float) -> Packet:
+            return Packet.create(
+                stream_id="camera",
+                lifecycle=Lifecycle.UPDATE,
+                payload={
+                    "frame_ts": frame_ts,
+                    "subject": {"id": "subject-1"},
+                    "velocity": {"valid": True, "stopped": stopped, "speed_mps": speed_mps},
+                    "world": {"x": world_x, "z": 0.0},
+                },
+            )
+
+        outputs: list[Packet] = []
+        for packet in [
+            make_packet(1.0, True, 0.01, 0.0),
+            make_packet(1.5, True, 0.01, 0.0),
+            make_packet(2.1, True, 0.01, 0.0),
+            make_packet(2.5, False, 1.0, 0.2),
+            make_packet(3.3, False, 1.0, 1.0),
+        ]:
+            outputs.extend(await runtime.process_packet(packet, context=None))
+
+        assert [packet.lifecycle for packet in outputs] == [Lifecycle.OPEN, Lifecycle.CLOSE]
+
+    asyncio.run(scenario())
 
 
 def test_runtime_snapshot_includes_last_node_error() -> None:

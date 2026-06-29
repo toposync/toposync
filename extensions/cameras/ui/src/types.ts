@@ -327,6 +327,7 @@ export type CameraPipelinePresetRequest = {
   composition_id?: string;
   area_id?: string;
   stopped_speed_threshold?: number;
+  min_stationary_seconds?: number;
   notification_title?: string;
   notification_description?: string;
   notification_priority?: CameraNotificationPriority;

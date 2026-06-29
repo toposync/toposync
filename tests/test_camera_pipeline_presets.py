@@ -610,8 +610,7 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
             "core.velocity_throttle",
             "vision.crop_objects",
             "core.store_images",
-            "core.lifecycle_from_boolean",
-            "core.filter",
+            "core.stationary_event",
             "core.debounce",
             "vision.crop_objects",
             "core.store_images",
@@ -633,18 +632,27 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
         assert throttle.get("moving_interval_seconds") == 2.0
         assert throttle.get("stopped_interval_seconds") == 10.0
 
-        lifecycle = _node_config_by_id(pipeline, "stopped_lifecycle")
-        assert lifecycle.get("field") == "payload.velocity.stopped"
-        assert lifecycle.get("key_field") == "payload.subject.id"
-        assert _node_config_by_id(pipeline, "stopped_event_filter").get("expression") == (
-            'payload.velocity.stopped or lifecycle == "close"'
-        )
+        stationary = _node_config_by_id(pipeline, "stationary_event")
+        assert stationary.get("key_field") == "payload.subject.id"
+        assert stationary.get("stopped_field") == "payload.velocity.stopped"
+        assert stationary.get("valid_field") == "payload.velocity.valid"
+        assert stationary.get("speed_field") == "payload.velocity.speed_mps"
+        assert stationary.get("max_speed_mps") == pytest.approx(1.0 / 3.6)
+        assert stationary.get("min_stationary_seconds") == pytest.approx(1.25)
+        assert stationary.get("min_valid_samples") == 3
+        assert stationary.get("require_arrival") is True
         assert _node_config_by_id(pipeline, "notify_debounce").get("key_field") == "payload.subject.id"
 
         notify = _node_config(pipeline, "core.notify")
         assert notify.get("dedupe_key_template") == "{{subject.id}}"
         assert notify.get("title") == "{{camera_name}}: veículo parado"
         assert notify.get("priority") == "high"
+
+        res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert res.status_code == 200, res.text
+        alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
+        assert "split_stream_latest_only_channel" not in alert_codes
+        assert "split_stream_small_channel" not in alert_codes
 
 
 def test_camera_pipeline_vehicle_stopped_area_uses_area_composition_and_restriction(
@@ -661,6 +669,7 @@ def test_camera_pipeline_vehicle_stopped_area_uses_area_composition_and_restrict
                 "preset": "vehicle_stopped",
                 "area_id": "area-1",
                 "stopped_speed_threshold": 0.5,
+                "min_stationary_seconds": 2.0,
             },
         )
         assert res.status_code == 200, res.text
@@ -674,6 +683,9 @@ def test_camera_pipeline_vehicle_stopped_area_uses_area_composition_and_restrict
         assert _node_config(pipeline, "camera.velocity_estimation").get(
             "stopped_speed_threshold"
         ) == pytest.approx(0.5)
+        assert _node_config_by_id(pipeline, "stationary_event").get(
+            "min_stationary_seconds"
+        ) == pytest.approx(2.0)
 
         area = _node_config(pipeline, "camera.area_restriction")
         assert area.get("include_area_names") == ["Gate"]

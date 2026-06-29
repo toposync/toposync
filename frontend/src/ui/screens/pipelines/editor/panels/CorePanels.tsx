@@ -465,6 +465,106 @@ type VelocityThrottleProps = {
   onUpdateConfig: UpdateConfig;
 };
 
+type StationaryEventProps = {
+  config: Record<string, unknown>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
+export function StationaryEventConfigCard({
+  config,
+  showAdvanced,
+  onUpdateConfig,
+}: StationaryEventProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const maxSpeedMpsRaw = Number((config as any).max_speed_mps ?? 1.0 / 3.6);
+  const maxSpeedKmh = Number.isFinite(maxSpeedMpsRaw) ? maxSpeedMpsRaw * 3.6 : 1.0;
+  const minStationarySeconds = Number((config as any).min_stationary_seconds ?? 1.25);
+  const minValidSamples = Number((config as any).min_valid_samples ?? 3);
+  const requireArrival = Boolean((config as any).require_arrival ?? false);
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.stationary_event.max_speed")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={4000}
+          step={0.05}
+          value={Number.isFinite(maxSpeedKmh) ? Math.max(0, maxSpeedKmh) : 1.0}
+          onChange={(kmh) => {
+            const mps = Number.isFinite(kmh) ? Math.max(0, kmh) / 3.6 : 0;
+            onUpdateConfig((prev) => ({ ...prev, max_speed_mps: mps }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.stationary_event.min_stationary_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={3600}
+          step={0.25}
+          value={Number.isFinite(minStationarySeconds) ? Math.max(0, minStationarySeconds) : 1.25}
+          onChange={(seconds) => {
+            onUpdateConfig((prev) => ({ ...prev, min_stationary_seconds: Number.isFinite(seconds) ? Math.max(0, seconds) : 0 }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.stationary_event.min_valid_samples")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={1}
+          max={10000}
+          step={1}
+          value={Number.isFinite(minValidSamples) ? Math.max(1, Math.round(minValidSamples)) : 3}
+          onChange={(samples) => {
+            onUpdateConfig((prev) => ({ ...prev, min_valid_samples: Number.isFinite(samples) ? Math.max(1, Math.round(samples)) : 1 }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel pipelinesCheckboxLabel">
+        <input
+          type="checkbox"
+          checked={requireArrival}
+          onChange={(event) => {
+            onUpdateConfig((prev) => ({ ...prev, require_arrival: event.target.checked }));
+          }}
+        />
+        <span>{t("core.ui.pipelines.panels.stationary_event.require_arrival")}</span>
+      </label>
+
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stationary_event.hint")}</div>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.stationary_event.key_field")}</span>
+            <input
+              className="pipelinesInput"
+              value={textConfigValue((config as any).key_field) || "payload.subject.id"}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, key_field: event.target.value }))}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.stationary_event.stopped_field")}</span>
+            <input
+              className="pipelinesInput"
+              value={textConfigValue((config as any).stopped_field) || "payload.velocity.stopped"}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, stopped_field: event.target.value }))}
+            />
+          </label>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 type CinematicDirectorProps = {
   config: Record<string, unknown>;
   camerasIndex: CamerasIndexResponse;

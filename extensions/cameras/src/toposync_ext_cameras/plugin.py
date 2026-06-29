@@ -94,12 +94,14 @@ CAMERA_PIPELINE_PRESETS = (
     "people_quiet",
     "presence_area",
     "vehicle_stopped",
+    "person_stopped",
 )
 CAMERA_MAPPING_REQUIRED_PRESETS = {
     "people_individual",
     "people_quiet",
     "presence_area",
     "vehicle_stopped",
+    "person_stopped",
 }
 
 
@@ -126,14 +128,16 @@ async def _raise_if_request_disconnected(request: Request) -> None:
 
 NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
 VEHICLE_STOPPED_OBJECT_CATEGORIES = ["car", "truck", "bus", "motorcycle"]
-VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
-VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS = 1.25
+PERSON_STOPPED_OBJECT_CATEGORIES = ["person"]
+STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
+STOPPED_DEFAULT_MIN_STATIONARY_SECONDS = 1.25
 PRESET_PIPELINE_NAME_PARTS = {
     "people_simple": "deteccao_simples_de_pessoas",
     "people_individual": "evento_individual_de_pessoas",
     "people_quiet": "presenca_agrupada_de_pessoas",
     "presence_area": "presenca_agrupada_em_area",
     "vehicle_stopped": "veiculo_parou",
+    "person_stopped": "pessoa_parou",
 }
 
 
@@ -419,6 +423,7 @@ class CameraPipelinePresetRequest(BaseModel):
         "people_quiet",
         "presence_area",
         "vehicle_stopped",
+        "person_stopped",
     ]
     source_id: str = ""
     pipeline_name: str = ""
@@ -431,14 +436,16 @@ class CameraPipelinePresetRequest(BaseModel):
     min_stationary_seconds: float | None = Field(default=None, ge=0.0, le=3600.0)
     notification_title: str = ""
     notification_description: str = ""
-    notification_priority: NotificationPriority = "medium"
+    notification_priority: NotificationPriority | None = None
 
     @field_validator("notification_priority", mode="before")
     @classmethod
-    def _normalize_notification_priority(cls, value: Any) -> str:
-        raw = "medium" if value is None else str(value).strip().lower()
+    def _normalize_notification_priority(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        raw = str(value).strip().lower()
         if not raw:
-            return "medium"
+            return None
         if raw not in NOTIFICATION_PRIORITIES:
             raise ValueError("notification_priority must be one of: low, medium, high")
         return raw
@@ -3010,6 +3017,8 @@ class CamerasExtension(BaseExtension):
         ) -> dict[str, Any]:
             if preset == "vehicle_stopped":
                 detect_categories = VEHICLE_STOPPED_OBJECT_CATEGORIES
+            elif preset == "person_stopped":
+                detect_categories = PERSON_STOPPED_OBJECT_CATEGORIES
             elif preset in {"people_quiet", "presence_area"}:
                 detect_categories = ["person", "dog", "cat"]
             else:
@@ -3134,12 +3143,12 @@ class CamerasExtension(BaseExtension):
                 node_ids = [str(node["id"]) for node in nodes]
                 return {"schema_version": 1, "nodes": nodes, "edges": _linear_edges(node_ids)}
 
-            if preset in {"presence_area", "vehicle_stopped"}:
+            if preset in {"presence_area", "vehicle_stopped", "person_stopped"}:
                 if not composition_id:
                     raise ValueError(f"composition_id is required for {preset}")
                 tail_nodes = []
 
-                if preset == "vehicle_stopped" and area_restriction_config:
+                if preset in {"vehicle_stopped", "person_stopped"} and area_restriction_config:
                     tail_nodes.append(
                         {
                             "id": "area",
@@ -3148,20 +3157,20 @@ class CamerasExtension(BaseExtension):
                         }
                     )
 
-                speed_threshold = VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
+                speed_threshold = STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
                 if stopped_speed_threshold is not None:
                     try:
                         parsed_threshold = float(stopped_speed_threshold)
                     except Exception:
-                        parsed_threshold = VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
+                        parsed_threshold = STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
                     if math.isfinite(parsed_threshold):
                         speed_threshold = max(0.0, parsed_threshold)
-                stationary_seconds = VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS
+                stationary_seconds = STOPPED_DEFAULT_MIN_STATIONARY_SECONDS
                 if min_stationary_seconds is not None:
                     try:
                         parsed_stationary_seconds = float(min_stationary_seconds)
                     except Exception:
-                        parsed_stationary_seconds = VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS
+                        parsed_stationary_seconds = STOPPED_DEFAULT_MIN_STATIONARY_SECONDS
                     if math.isfinite(parsed_stationary_seconds):
                         stationary_seconds = max(0.0, parsed_stationary_seconds)
 
@@ -3174,7 +3183,7 @@ class CamerasExtension(BaseExtension):
                             "min_elapsed_seconds": 0.05,
                             **(
                                 {"stopped_speed_threshold": speed_threshold}
-                                if preset == "vehicle_stopped"
+                                if preset in {"vehicle_stopped", "person_stopped"}
                                 else {}
                             ),
                         },
@@ -3229,23 +3238,6 @@ class CamerasExtension(BaseExtension):
                         "edges": _linear_edges(node_ids),
                     }
 
-                storage_nodes = [
-                    {
-                        "id": "storage_throttle",
-                        "operator": "core.velocity_throttle",
-                        "config": {
-                            "key_field": "payload.subject.id",
-                            "moving_interval_seconds": 2.0,
-                            "stopped_interval_seconds": 10.0,
-                        },
-                    },
-                    {"id": "storage_crop", "operator": "vision.crop_objects", "config": {}},
-                    {
-                        "id": "storage_store",
-                        "operator": "core.store_images",
-                        "config": {"format": "webp"},
-                    },
-                ]
                 notify_nodes = [
                     {
                         "id": "stationary_event",
@@ -3262,6 +3254,7 @@ class CamerasExtension(BaseExtension):
                             "require_arrival": True,
                             "arrival_min_distance_m": 0.50,
                             "close_after_moving_seconds": 0.75,
+                            "merge_moving_gap_seconds": 15.0,
                         },
                     },
                     {
@@ -3283,7 +3276,12 @@ class CamerasExtension(BaseExtension):
                         "operator": "core.notify",
                         "config": {
                             "notification_type": "pipelines.tracking",
-                            "title": notification_title or "{{camera_name}}: veículo parado",
+                            "title": notification_title
+                            or (
+                                "{{camera_name}}: pessoa parada"
+                                if preset == "person_stopped"
+                                else "{{camera_name}}: veículo parado"
+                            ),
                             "description": notification_description
                             or "{{subject.category}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h - {{payload.stationary_event.stationary_seconds}} s",
                             "priority": notification_priority,
@@ -3293,11 +3291,8 @@ class CamerasExtension(BaseExtension):
                 ]
                 nodes = [*base_nodes, *tail_nodes]
                 shared_node_ids = [str(node["id"]) for node in nodes]
-                nodes = [*nodes, *storage_nodes, *notify_nodes]
+                nodes = [*nodes, *notify_nodes]
                 edges = _linear_edges(shared_node_ids)
-                edges.extend(
-                    _linear_edges(["velocity", "storage_throttle", "storage_crop", "storage_store"])
-                )
                 edges.extend(
                     _linear_edges(
                         [
@@ -3317,7 +3312,6 @@ class CamerasExtension(BaseExtension):
                     source_node = str(from_node.get("node") or "")
                     if source_node in {
                         "velocity",
-                        "storage_throttle",
                         "stationary_event",
                         "notify_debounce",
                     }:
@@ -3416,7 +3410,7 @@ class CamerasExtension(BaseExtension):
             composition_id = str(body.composition_id or "").strip()
             area_restriction_config: dict[str, Any] | None = None
             if preset in CAMERA_MAPPING_REQUIRED_PRESETS:
-                if preset == "vehicle_stopped" and str(body.area_id or "").strip():
+                if preset in {"vehicle_stopped", "person_stopped"} and str(body.area_id or "").strip():
                     resolved_area = _resolve_mapped_camera_area(
                         cfg,
                         camera_id=cid,
@@ -3464,6 +3458,9 @@ class CamerasExtension(BaseExtension):
             )
 
             try:
+                notification_priority = body.notification_priority or (
+                    "high" if preset == "vehicle_stopped" else "medium"
+                )
                 graph = _build_camera_preset_graph(
                     preset=preset,
                     camera_id=cid,
@@ -3475,7 +3472,7 @@ class CamerasExtension(BaseExtension):
                     min_stationary_seconds=body.min_stationary_seconds,
                     notification_title=str(body.notification_title or "").strip(),
                     notification_description=str(body.notification_description or "").strip(),
-                    notification_priority=body.notification_priority,
+                    notification_priority=notification_priority,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc

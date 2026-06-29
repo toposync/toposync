@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS notification_state (
 """
 
 _LAST_VIEWED_SEQ_KEY = "last_viewed_seq"
-_PRIORITY_BUCKET_BACKFILL_KEY = "priority_bucket_backfill_v1"
+_PRIORITY_BUCKET_BACKFILL_KEY = "priority_bucket_backfill_v2"
 _SQLITE_PROGRESS_INTERRUPT_OPCODES = 100
 _PRIORITY_BUCKET_SQL = """
 CASE
@@ -49,12 +49,14 @@ CASE
     CASE LOWER(COALESCE(json_extract(payload_json, '$.priority'), ''))
       WHEN 'low' THEN 'low'
       WHEN 'high' THEN 'high'
+      WHEN 'silent' THEN 'silent'
       ELSE 'medium'
     END
   ELSE 'medium'
 END
 """
-_VALID_PRIORITY_BUCKETS = {"low", "medium", "high"}
+_VISIBLE_PRIORITY_BUCKETS = {"low", "medium", "high"}
+_VALID_PRIORITY_BUCKETS = {*_VISIBLE_PRIORITY_BUCKETS, "silent"}
 _CancelCheck = Callable[[], None]
 
 
@@ -86,7 +88,7 @@ def _payload_is_closed(payload: dict[str, Any] | None) -> bool:
 
 def _normalize_priority_bucket(value: Any) -> str:
     raw = str(value or "").strip().lower()
-    if raw == "low" or raw == "high":
+    if raw in _VALID_PRIORITY_BUCKETS:
         return raw
     return "medium"
 
@@ -195,7 +197,7 @@ class NotificationStore:
             UPDATE notification
             SET priority_bucket = {_PRIORITY_BUCKET_SQL}
             WHERE priority_bucket IS NULL
-               OR priority_bucket NOT IN ('low', 'medium', 'high')
+               OR priority_bucket NOT IN ('low', 'medium', 'high', 'silent')
                OR priority_bucket != {_PRIORITY_BUCKET_SQL}
             """
         )
@@ -298,6 +300,7 @@ class NotificationStore:
         priorities: list[str] | tuple[str, ...] | None = None,
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
+        include_silent: bool = False,
         cancel_check: _CancelCheck | None = None,
     ) -> tuple[list[NotificationRecord], int | None]:
         limit = max(1, min(250, int(limit)))
@@ -311,10 +314,13 @@ class NotificationStore:
 
         requested_priorities = _clean_strings(priorities)
         if requested_priorities:
+            allowed_priorities = (
+                _VALID_PRIORITY_BUCKETS if include_silent else _VISIBLE_PRIORITY_BUCKETS
+            )
             priority_buckets = [
                 value.lower()
                 for value in requested_priorities
-                if value.lower() in _VALID_PRIORITY_BUCKETS
+                if value.lower() in allowed_priorities
             ]
             priority_buckets = list(dict.fromkeys(priority_buckets))
             if priority_buckets:
@@ -323,6 +329,8 @@ class NotificationStore:
                 params.extend(priority_buckets)
             else:
                 where_sql.append("1 = 0")
+        elif not include_silent:
+            where_sql.append("priority_bucket IN ('low', 'medium', 'high')")
 
         requested_types = _clean_strings(types)
         if requested_types:
@@ -534,9 +542,11 @@ class NotificationStore:
         after_seq: int | None = None,
         cancel_check: _CancelCheck | None = None,
     ) -> dict[str, int]:
-        """Aggregate counts per priority bucket. Buckets match the frontend
-        normalization: anything that is not exactly "low", "medium", or "high"
-        is bucketed as "medium" so totals always sum to total."""
+        """Aggregate counts per visible priority bucket.
+
+        Silent notifications are persisted for internal event consumers but
+        intentionally excluded from user-facing notification totals.
+        """
         out = {"low": 0, "medium": 0, "high": 0}
 
         def read(conn: sqlite3.Connection) -> dict[str, int]:

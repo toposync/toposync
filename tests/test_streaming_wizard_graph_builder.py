@@ -212,6 +212,7 @@ def test_wizard_graph_can_gate_camera_source_by_stream_demand() -> None:
     assert "stream.demand_gate" in operators
     gate_config = _operator_config(graph, operator_id="stream.demand_gate")
     assert gate_config["transmission_id"] == "transmission_main"
+    assert gate_config["demand_scope"] == "output"
     assert gate_config["output_id"] == "hls_quad_grid"
     assert gate_config["quality_profile_id"] == "quad_grid"
 

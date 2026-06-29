@@ -42,6 +42,11 @@ from toposync.runtime.pipelines.telemetry import (
     METRIC_VISION_CONFIDENCE,
 )
 
+from ..capture_service import (
+    CameraCaptureRequest,
+    CameraCaptureService,
+    CameraCaptureTransientError,
+)
 from ..processing.frame_grabber import FrameGrabber
 from ..processing.camera_hub import get_global_camera_hub
 from ..processing.motion import MotionDetector
@@ -206,6 +211,62 @@ def _is_hard_capture_open_error(message: str) -> bool:
 
 
 _GLOBAL_CAMERA_HUB = get_global_camera_hub(frame_grabber_factory=_frame_grabber_factory)
+_GLOBAL_CAMERA_CAPTURE_SERVICE: CameraCaptureService | None = None
+_GLOBAL_CAMERA_CAPTURE_SERVICE_HUB: Any | None = None
+
+
+def get_global_camera_capture_service() -> CameraCaptureService:
+    global _GLOBAL_CAMERA_CAPTURE_SERVICE, _GLOBAL_CAMERA_CAPTURE_SERVICE_HUB
+    if _GLOBAL_CAMERA_CAPTURE_SERVICE is None or _GLOBAL_CAMERA_CAPTURE_SERVICE_HUB is not _GLOBAL_CAMERA_HUB:
+        _GLOBAL_CAMERA_CAPTURE_SERVICE = CameraCaptureService(
+            config_factory=lambda request: CameraSourceConfig(
+                camera_id=request.camera_id,
+                source_id=request.source_id,
+                rtsp_url=request.rtsp_url,
+                username=request.username,
+                password=request.password,
+                backend=request.backend,
+                fps=request.fps,
+            ),
+            resolve_source=_resolve_camera_source,
+            hub=_GLOBAL_CAMERA_HUB,
+            hub_key_builder=_camera_hub_key,
+            health_store=get_global_source_health_store(),
+            source_health_id_factory=source_health_source_id,
+            exception_detail=_exception_detail,
+            start_failure_backoff_s=_read_env_float(
+                "TOPOSYNC_CAMERA_SOURCE_START_BACKOFF_S",
+                10.0,
+                min_value=1.0,
+                max_value=300.0,
+            ),
+            backend_failover_s=_read_env_float(
+                "TOPOSYNC_CAMERA_SOURCE_BACKEND_FAILOVER_S",
+                180.0,
+                min_value=5.0,
+                max_value=900.0,
+            ),
+            backend_failover_cooldown_s=_read_env_float(
+                "TOPOSYNC_CAMERA_SOURCE_BACKEND_FAILOVER_COOLDOWN_S",
+                120.0,
+                min_value=5.0,
+                max_value=1_800.0,
+            ),
+            reacquire_after_s=_read_env_float(
+                "TOPOSYNC_CAMERA_SOURCE_REACQUIRE_AFTER_S",
+                15.0,
+                min_value=5.0,
+                max_value=300.0,
+            ),
+            reacquire_cooldown_s=_read_env_float(
+                "TOPOSYNC_CAMERA_SOURCE_REACQUIRE_COOLDOWN_S",
+                5.0,
+                min_value=1.0,
+                max_value=120.0,
+            ),
+        )
+        _GLOBAL_CAMERA_CAPTURE_SERVICE_HUB = _GLOBAL_CAMERA_HUB
+    return _GLOBAL_CAMERA_CAPTURE_SERVICE
 
 
 @dataclass(frozen=True, slots=True)
@@ -849,22 +910,43 @@ def _onvif_event_stream_id(config: OnvifEventSourceConfig, context: Any, event: 
 
 
 def _onvif_event_bool(event: dict[str, Any], item_name: str = "") -> bool | None:
+    value, _item_name = _onvif_event_bool_with_item(event, item_name=item_name)
+    return value
+
+
+def _onvif_event_bool_with_item(event: dict[str, Any], item_name: str = "") -> tuple[bool | None, str]:
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     wanted = str(item_name or "").strip()
-    values: list[Any] = []
+    values: list[tuple[str, Any]] = []
     if wanted:
-        values.append(data.get(wanted))
+        values.append((wanted, data.get(wanted)))
     else:
-        values.extend(data.values())
-    for value in values:
+        values.extend((str(key or "").strip(), value) for key, value in data.items())
+    for key, value in values:
         if isinstance(value, bool):
-            return value
+            return value, key
         text = str(value or "").strip().lower()
         if text in {"1", "true", "yes", "on"}:
-            return True
+            return True, key
         if text in {"0", "false", "no", "off"}:
-            return False
-    return None
+            return False, key
+    return None, wanted
+
+
+def _onvif_event_dict_key(value: Any) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, dict):
+        return ()
+    return tuple(sorted((str(key or ""), str(item or "")) for key, item in value.items()))
+
+
+def _onvif_event_state_key(event: dict[str, Any], *, item_name: str) -> tuple[Any, ...]:
+    return (
+        str(event.get("camera_id") or "").strip(),
+        str(event.get("topic") or "").strip(),
+        str(item_name or "").strip(),
+        _onvif_event_dict_key(event.get("source")),
+        _onvif_event_dict_key(event.get("key")),
+    )
 
 
 def _onvif_gate_telemetry_ts(payload: dict[str, Any]) -> float:
@@ -1008,11 +1090,14 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
 
 
 class OnvifEventSourceRuntime(SourceOperatorRuntime):
+    _MAX_BOOLEAN_STATE_KEYS = 512
+
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = OnvifEventSourceConfig.model_validate(config)
         self._dependencies = dependencies
         self._last_sequence = 0
         self._pending: list[Packet] = []
+        self._last_boolean_values: dict[tuple[Any, ...], bool] = {}
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         if self._pending:
@@ -1043,7 +1128,10 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
                 max_seen = sequence
             if not self._matches_event(event):
                 continue
-            self._pending.append(self._packet_for_event(event, context))
+            value, item_name = self._event_boolean_value(event)
+            if self._is_duplicate_boolean_event(event, item_name=item_name, value=value):
+                continue
+            self._pending.append(self._packet_for_event(event, context, boolean_value=value))
         self._last_sequence = max_seen
         if self._pending:
             return self._pending.pop(0)
@@ -1068,12 +1156,28 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
             return True
         return False
 
-    def _packet_for_event(self, event: dict[str, Any], context: Any) -> Packet:
+    def _event_boolean_value(self, event: dict[str, Any]) -> tuple[bool | None, str]:
         item_name = ""
         filters = list(self._config.event_filters or [])
         if len(filters) == 1:
             item_name = str(filters[0].item_name or "").strip()
-        value = _onvif_event_bool(event, item_name=item_name)
+        return _onvif_event_bool_with_item(event, item_name=item_name)
+
+    def _is_duplicate_boolean_event(self, event: dict[str, Any], *, item_name: str, value: bool | None) -> bool:
+        if value is None:
+            return False
+        key = _onvif_event_state_key(event, item_name=item_name)
+        previous = self._last_boolean_values.get(key)
+        if previous is value:
+            return True
+        self._last_boolean_values[key] = value
+        if len(self._last_boolean_values) > self._MAX_BOOLEAN_STATE_KEYS:
+            oldest_key = next(iter(self._last_boolean_values))
+            self._last_boolean_values.pop(oldest_key, None)
+        return False
+
+    def _packet_for_event(self, event: dict[str, Any], context: Any, *, boolean_value: bool | None) -> Packet:
+        value = boolean_value
         operation = str(event.get("operation") or "").strip().lower()
         lifecycle = Lifecycle.UPDATE
         if value is True:
@@ -1100,7 +1204,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = CameraSourceConfig.model_validate(config)
         self._dependencies = dependencies
-        self._grabber: FrameGrabber | None = None
+        self._capture_service = get_global_camera_capture_service()
+        self._capture_owner_id = f"camera.source:{uuid.uuid4().hex}"
+        self._lease_id = ""
+        self._grabber: Any | None = None
         self._grabber_started_monotonic = 0.0
         self._hub_key: str = ""
         self._last_ts = 0.0
@@ -1160,14 +1267,31 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         )
         self._last_backend_failover_monotonic = 0.0
 
-    async def _ensure_grabber(self) -> None:
+    async def _ensure_grabber(self, context) -> None:  # noqa: ANN001
         if self._grabber is not None:
             return
-        now_mono = time.monotonic()
-        if now_mono < self._start_retry_after_monotonic:
-            detail = str(self._last_start_error or "").strip() or "Camera capture startup cooldown active"
-            raise _CameraSourceTransientError(detail)
-        resolved = await _resolve_camera_source(self._config, self._dependencies)
+        try:
+            lease = await self._capture_service.open(
+                CameraCaptureRequest(
+                    owner_id=self._capture_owner_id,
+                    camera_id=self._config.camera_id,
+                    source_id=self._config.source_id,
+                    rtsp_url=self._config.rtsp_url,
+                    username=self._config.username,
+                    password=self._config.password,
+                    backend=self._config.backend,
+                    fps=self._config.fps,
+                    pipeline_name=str(getattr(context, "pipeline_name", "") or ""),
+                    node_id=str(getattr(context, "node_id", "") or ""),
+                ),
+                self._dependencies,
+            )
+        except CameraCaptureTransientError as exc:
+            self._last_start_error = str(exc)
+            if "backend=ffmpeg" in self._last_start_error:
+                self._backend_override = "ffmpeg"
+            raise _CameraSourceTransientError(str(exc)) from exc
+        resolved = lease.resolved
         self._waiting_for_source_config = False
         self._camera_id = resolved.camera_id
         self._camera_name = resolved.camera_name
@@ -1183,53 +1307,9 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._ingest_path = resolved.ingest_path
         self._ingest_warnings = tuple(resolved.ingest_warnings)
         self._ingest_blocking_errors = tuple(resolved.ingest_blocking_errors)
-        selected_backend = str(self._config.backend or "").strip().lower() or "auto"
-        if self._backend_override:
-            now_mono = time.monotonic()
-            if now_mono < self._backend_override_until_monotonic:
-                selected_backend = self._backend_override
-            else:
-                self._backend_override = None
-                self._backend_override_until_monotonic = 0.0
-
-        self._hub_key = _camera_hub_key(
-            camera_id=resolved.camera_id,
-            source_id=resolved.source_id,
-            rtsp_url=resolved.rtsp_url,
-            backend=selected_backend,
-        )
-        try:
-            self._grabber = await _GLOBAL_CAMERA_HUB.acquire(
-                key=self._hub_key,
-                rtsp_url=resolved.rtsp_url,
-                target_fps=float(resolved.fps),
-                backend=selected_backend,
-            )
-        except Exception as exc:
-            self._grabber = None
-            self._grabber_started_monotonic = 0.0
-            self._last_ts = 0.0
-            self._start_retry_after_monotonic = now_mono + self._start_failure_backoff_s
-            if self._config.backend in {"auto", "opencv"} and selected_backend != "ffmpeg":
-                self._backend_override = "ffmpeg"
-                self._backend_override_until_monotonic = max(
-                    self._backend_override_until_monotonic,
-                    now_mono + self._backend_failover_s,
-                )
-                self._last_backend_failover_monotonic = now_mono
-            transport_path = "ingest" if resolved.used_ingest else "direct rtsp"
-            backend_note = (
-                f" Will retry with backend={self._backend_override} for {self._backend_failover_s:.0f}s."
-                if self._backend_override
-                else ""
-            )
-            self._last_start_error = (
-                "Camera capture startup failed "
-                f"(camera_id={resolved.camera_id or '-'} path={transport_path} backend={selected_backend}): "
-                f"{_exception_detail(exc)}."
-                f"{backend_note}"
-            )
-            raise _CameraSourceTransientError(self._last_start_error) from exc
+        self._hub_key = lease.hub_key
+        self._lease_id = lease.lease_id
+        self._grabber = lease.grabber
         self._last_start_error = ""
         self._start_retry_after_monotonic = 0.0
         self._grabber_started_monotonic = time.monotonic()
@@ -1270,18 +1350,16 @@ class CameraSourceRuntime(SourceOperatorRuntime):
     async def _stop_grabber_if_needed(self) -> None:
         if self._grabber is None:
             return
-        hub_key = self._hub_key
-        source_health_id = self._source_health_id
         self._grabber = None
         self._grabber_started_monotonic = 0.0
         self._source_uses_ingest = False
         self._ingest_path = ""
         self._hub_key = ""
-        if hub_key:
-            await _GLOBAL_CAMERA_HUB.release(key=hub_key)
+        lease_id = self._lease_id
+        self._lease_id = ""
+        if lease_id:
+            await self._capture_service.release(lease_id)
         self._last_ts = 0.0
-        if source_health_id:
-            get_global_source_health_store().mark_shutdown(source_id=source_health_id)
 
     def _capture_metrics_snapshot(self) -> dict[str, Any]:
         if self._grabber is None:
@@ -1440,7 +1518,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
 
         try:
             self._record_source_health(context, status="starting")
-            await self._ensure_grabber()
+            await self._ensure_grabber(context)
         except _CameraSourcePendingError as exc:
             self._waiting_for_source_config = True
             if exc.ingest_mode:
@@ -1476,46 +1554,25 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         if self._grabber is None:
             return None
         self._waiting_for_source_config = False
-        frame, frame_ts = self._grabber.get_latest()
+        capture_frame = await self._capture_service.get_latest(self._lease_id, min_frame_ts=self._last_ts)
+        if capture_frame.released:
+            self._grabber = None
+            self._grabber_started_monotonic = 0.0
+            self._hub_key = ""
+            self._lease_id = ""
+            self._last_ts = 0.0
+        frame = capture_frame.frame
+        frame_ts = capture_frame.frame_ts
         if frame is None or not frame_ts:
-            capture_metrics = self._capture_metrics_snapshot()
-            self._record_source_health(context, status="starting", metrics=capture_metrics)
-            await self._maybe_reacquire_grabber(context, metrics=capture_metrics)
             return None
-        if frame_ts <= self._last_ts:
+        if not capture_frame.fresh:
             return None
         self._last_ts = frame_ts
 
-        height = (
-            int(getattr(frame, "shape", [0, 0])[0])
-            if getattr(frame, "shape", None) is not None
-            else 0
-        )
-        width = (
-            int(getattr(frame, "shape", [0, 0])[1])
-            if getattr(frame, "shape", None) is not None
-            else 0
-        )
+        height = int(capture_frame.height)
+        width = int(capture_frame.width)
         stream_suffix = ":".join(item for item in (self._camera_id, self._source_id) if item) or "adhoc"
-        capture_metrics = self._capture_metrics_snapshot()
-        source_health = self._record_source_health(
-            context,
-            metrics=capture_metrics,
-            frame_ts=float(frame_ts),
-        )
-        capture_metrics = {
-            **capture_metrics,
-            "source_id": source_health.get("source_id"),
-            "source_frame_age_seconds": source_health.get("source_frame_age_seconds"),
-            "source_status": source_health.get("status"),
-            "rtsp_transport": source_health.get("rtsp_transport") or self._transport or "rtsp",
-            "used_ingest": bool(source_health.get("used_ingest")),
-            "ingest_mode": source_health.get("ingest_mode") or self._ingest_mode,
-            "centralizer_server_id": source_health.get("centralizer_server_id"),
-            "ingest_path": source_health.get("ingest_path"),
-            "ingest_warnings": list(source_health.get("ingest_warnings") or []),
-            "ingest_blocking_errors": list(source_health.get("ingest_blocking_errors") or []),
-        }
+        capture_metrics = dict(capture_frame.metrics)
         frame_artifacts = {
             MAIN_ARTIFACT_NAME: Artifact(
                 name=MAIN_ARTIFACT_NAME,

@@ -16,11 +16,13 @@ CAMERA_PIPELINE_PRESET_MODEL_CONTRACTS = (
     "people_individual",
     "presence_area",
     "vehicle_stopped",
+    "person_stopped",
 )
 CAMERA_PIPELINE_PRESETS_REQUIRING_MAPPING = {
     "people_individual",
     "presence_area",
     "vehicle_stopped",
+    "person_stopped",
 }
 
 
@@ -293,6 +295,10 @@ def test_camera_pipeline_simple_preset_defaults_detection_to_rfdetr_medium_witho
         assert (
             overview["suggested_pipeline_names"]["vehicle_stopped"]
             == "entrada_principal_veiculo_parou"
+        )
+        assert (
+            overview["suggested_pipeline_names"]["person_stopped"]
+            == "entrada_principal_pessoa_parou"
         )
 
         res = client.post(
@@ -580,7 +586,7 @@ def test_camera_pipeline_vehicle_stopped_requires_mapping(
         assert "Mapping preset requires" in res.json()["detail"]
 
 
-def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notification(
+def test_camera_pipeline_vehicle_stopped_builds_confirmed_stop_notification(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -590,7 +596,7 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
 
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
-            json={"preset": "vehicle_stopped", "notification_priority": "high"},
+            json={"preset": "vehicle_stopped"},
         )
         assert res.status_code == 200, res.text
         pipeline_name = res.json()["pipeline_name"]
@@ -607,11 +613,7 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
             "camera.camera_mapping",
             "vision.track",
             "camera.velocity_estimation",
-            "core.velocity_throttle",
-            "vision.crop_objects",
-            "core.store_images",
-            "core.lifecycle_from_boolean",
-            "core.filter",
+            "core.stationary_event",
             "core.debounce",
             "vision.crop_objects",
             "core.store_images",
@@ -628,17 +630,19 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
         assert velocity.get("filter_mode") == "annotate"
         assert velocity.get("stopped_speed_threshold") == pytest.approx(1.0 / 3.6)
 
-        throttle = _node_config_by_id(pipeline, "storage_throttle")
-        assert throttle.get("key_field") == "payload.subject.id"
-        assert throttle.get("moving_interval_seconds") == 2.0
-        assert throttle.get("stopped_interval_seconds") == 10.0
-
-        lifecycle = _node_config_by_id(pipeline, "stopped_lifecycle")
-        assert lifecycle.get("field") == "payload.velocity.stopped"
-        assert lifecycle.get("key_field") == "payload.subject.id"
-        assert _node_config_by_id(pipeline, "stopped_event_filter").get("expression") == (
-            'payload.velocity.stopped or lifecycle == "close"'
-        )
+        stationary = _node_config_by_id(pipeline, "stationary_event")
+        assert stationary.get("key_field") == "payload.subject.id"
+        assert stationary.get("stopped_field") == "payload.velocity.stopped"
+        assert stationary.get("valid_field") == "payload.velocity.valid"
+        assert stationary.get("speed_field") == "payload.velocity.speed_mps"
+        assert stationary.get("max_speed_mps") == pytest.approx(1.0 / 3.6)
+        assert stationary.get("min_stationary_seconds") == pytest.approx(1.25)
+        assert stationary.get("min_valid_samples") == 3
+        assert stationary.get("require_arrival") is True
+        assert stationary.get("merge_moving_gap_seconds") == pytest.approx(15.0)
+        assert _node_config_by_id(pipeline, "storage_throttle") == {}
+        assert _node_config_by_id(pipeline, "storage_crop") == {}
+        assert _node_config_by_id(pipeline, "storage_store") == {}
         assert _node_config_by_id(pipeline, "notify_debounce").get("key_field") == "payload.subject.id"
 
         notify = _node_config(pipeline, "core.notify")
@@ -646,10 +650,85 @@ def test_camera_pipeline_vehicle_stopped_builds_velocity_storage_and_stop_notifi
         assert notify.get("title") == "{{camera_name}}: veículo parado"
         assert notify.get("priority") == "high"
 
+        res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert res.status_code == 200, res.text
+        alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
+        assert "split_stream_latest_only_channel" not in alert_codes
+        assert "split_stream_small_channel" not in alert_codes
 
-def test_camera_pipeline_vehicle_stopped_area_uses_area_composition_and_restriction(
+
+def test_camera_pipeline_person_stopped_builds_confirmed_stop_notification(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client)
+
+        res = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={"preset": "person_stopped"},
+        )
+        assert res.status_code == 200, res.text
+        pipeline_name = res.json()["pipeline_name"]
+        assert pipeline_name == "entrada_principal_pessoa_parou"
+
+        res = client.get(f"/api/pipelines/{pipeline_name}")
+        assert res.status_code == 200
+        pipeline = res.json()
+
+        assert _operator_ids(pipeline) == [
+            "camera.source",
+            "camera.motion_gate",
+            "vision.detect",
+            "camera.camera_mapping",
+            "vision.track",
+            "camera.velocity_estimation",
+            "core.stationary_event",
+            "core.debounce",
+            "vision.crop_objects",
+            "core.store_images",
+            "core.notify",
+        ]
+        detect = _vision_detect_config(pipeline)
+        assert detect.get("categories") == ["person"]
+        assert detect.get("confidence_threshold") == 0.25
+        assert _node_config(pipeline, "vision.track").get("tracker_id") == "byte_world"
+        assert _node_config(pipeline, "camera.camera_mapping").get("composition_id") == "yard"
+        assert _node_config(pipeline, "camera.area_restriction") == {}
+
+        velocity = _node_config(pipeline, "camera.velocity_estimation")
+        assert velocity.get("filter_mode") == "annotate"
+        assert velocity.get("stopped_speed_threshold") == pytest.approx(1.0 / 3.6)
+
+        stationary = _node_config_by_id(pipeline, "stationary_event")
+        assert stationary.get("key_field") == "payload.subject.id"
+        assert stationary.get("stopped_field") == "payload.velocity.stopped"
+        assert stationary.get("valid_field") == "payload.velocity.valid"
+        assert stationary.get("speed_field") == "payload.velocity.speed_mps"
+        assert stationary.get("max_speed_mps") == pytest.approx(1.0 / 3.6)
+        assert stationary.get("min_stationary_seconds") == pytest.approx(1.25)
+        assert stationary.get("min_valid_samples") == 3
+        assert stationary.get("require_arrival") is True
+        assert stationary.get("merge_moving_gap_seconds") == pytest.approx(15.0)
+
+        notify = _node_config(pipeline, "core.notify")
+        assert notify.get("dedupe_key_template") == "{{subject.id}}"
+        assert notify.get("title") == "{{camera_name}}: pessoa parada"
+        assert notify.get("priority") == "medium"
+
+        res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert res.status_code == 200, res.text
+        alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
+        assert "split_stream_latest_only_channel" not in alert_codes
+        assert "split_stream_small_channel" not in alert_codes
+
+
+@pytest.mark.parametrize("preset", ["vehicle_stopped", "person_stopped"])
+def test_camera_pipeline_stopped_area_uses_area_composition_and_restriction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    preset: str,
 ) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         _configure_camera(client)
@@ -658,9 +737,10 @@ def test_camera_pipeline_vehicle_stopped_area_uses_area_composition_and_restrict
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
             json={
-                "preset": "vehicle_stopped",
+                "preset": preset,
                 "area_id": "area-1",
                 "stopped_speed_threshold": 0.5,
+                "min_stationary_seconds": 2.0,
             },
         )
         assert res.status_code == 200, res.text
@@ -669,11 +749,24 @@ def test_camera_pipeline_vehicle_stopped_area_uses_area_composition_and_restrict
         res = client.get(f"/api/pipelines/{pipeline_name}")
         assert res.status_code == 200
         pipeline = res.json()
+        operators = _operator_ids(pipeline)
+        assert operators.index("camera.area_restriction") < operators.index(
+            "camera.velocity_estimation"
+        )
+        assert operators.index("camera.velocity_estimation") < operators.index(
+            "core.stationary_event"
+        )
+        assert _node_config_by_id(pipeline, "storage_throttle") == {}
+        assert _node_config_by_id(pipeline, "storage_crop") == {}
+        assert _node_config_by_id(pipeline, "storage_store") == {}
 
         assert _node_config(pipeline, "camera.camera_mapping").get("composition_id") == "yard"
         assert _node_config(pipeline, "camera.velocity_estimation").get(
             "stopped_speed_threshold"
         ) == pytest.approx(0.5)
+        assert _node_config_by_id(pipeline, "stationary_event").get(
+            "min_stationary_seconds"
+        ) == pytest.approx(2.0)
 
         area = _node_config(pipeline, "camera.area_restriction")
         assert area.get("include_area_names") == ["Gate"]

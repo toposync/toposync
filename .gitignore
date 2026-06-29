@@ -38,3 +38,4 @@ extensions/streaming/src/toposync_ext_streaming/bin/ffmpeg/**/ffmpeg*
 extensions/vision/models/
 
 *.temporary.*
+.playwright-mcp/*

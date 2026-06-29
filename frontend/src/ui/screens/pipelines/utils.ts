@@ -441,7 +441,8 @@ function isSourceOperator(definition: PipelineOperatorDefinition | null): boolea
 }
 
 function isGateControlOperator(definition: PipelineOperatorDefinition | null): boolean {
-  return operatorCapabilities(definition).has("gate_control");
+  const capabilities = operatorCapabilities(definition);
+  return capabilities.has("gate_control") && !capabilities.has("source");
 }
 
 function resolveGatePortName(definition: PipelineOperatorDefinition | null): string | null {
@@ -651,7 +652,7 @@ function readLinearNodeOrder(
         order: nodeIds,
         warning: interactiveWarning(
           "core.ui.pipelines.editor.warning.non_linear_graph",
-          "Graph is not compatible with interactive step ordering. Interactive mode loaded node list order and will rewrite edges.",
+          "Graph is not compatible with interactive step ordering. Switch to JSON mode before saving to preserve links.",
         ),
       };
     }
@@ -668,7 +669,7 @@ function readLinearNodeOrder(
       order: nodeIds,
       warning: interactiveWarning(
         "core.ui.pipelines.editor.warning.non_linear_graph",
-        "Graph is not compatible with interactive step ordering. Interactive mode loaded node list order and will rewrite edges.",
+        "Graph is not compatible with interactive step ordering. Switch to JSON mode before saving to preserve links.",
       ),
     };
   }
@@ -684,7 +685,7 @@ function readLinearNodeOrder(
       order: nodeIds,
       warning: interactiveWarning(
         "core.ui.pipelines.editor.warning.multiple_starts",
-        "Graph has multiple starts. Interactive mode loaded node list order and will rewrite edges.",
+        "Graph has multiple starts. Switch to JSON mode before saving to preserve links.",
       ),
     };
   }
@@ -698,7 +699,7 @@ function readLinearNodeOrder(
         order: nodeIds,
         warning: interactiveWarning(
           "core.ui.pipelines.editor.warning.cycle",
-          "Graph contains a cycle. Interactive mode loaded node list order and will rewrite edges.",
+          "Graph contains a cycle. Switch to JSON mode before saving to preserve links.",
         ),
       };
     }
@@ -713,7 +714,7 @@ function readLinearNodeOrder(
       order: nodeIds,
       warning: interactiveWarning(
         "core.ui.pipelines.editor.warning.disconnected",
-        "Graph has disconnected segments. Interactive mode loaded node list order and will rewrite edges.",
+        "Graph has disconnected segments. Switch to JSON mode before saving to preserve links.",
       ),
     };
   }
@@ -732,7 +733,7 @@ function readLinearNodeOrder(
       order: nodeIds,
       warning: interactiveWarning(
         "core.ui.pipelines.editor.warning.disconnected",
-        "Graph has disconnected segments. Interactive mode loaded node list order and will rewrite edges.",
+        "Graph has disconnected segments. Switch to JSON mode before saving to preserve links.",
       ),
     };
   }

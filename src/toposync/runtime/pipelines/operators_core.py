@@ -19,7 +19,7 @@ from .execution import (
     TransformOperatorRuntime,
 )
 from .images import MAIN_ARTIFACT_NAME
-from .operator_registry import OperatorRegistry
+from .operator_registry import OperatorRegistry, payload_path_hint
 from .packet_contract import build_media_descriptor, build_source_descriptor
 from .runtime import Artifact, Lifecycle, Packet
 from .operators_distributed import register_distributed_operators
@@ -110,6 +110,35 @@ class LifecycleFromBooleanConfig(BaseModel):
         default=True,
         description="When closed, drop UPDATE packets instead of passing them through.",
     )
+
+
+class StationaryEventConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key_field: str = Field(default="payload.subject.id")
+    stopped_field: str = Field(default="payload.velocity.stopped")
+    valid_field: str = Field(default="payload.velocity.valid")
+    speed_field: str = Field(default="payload.velocity.speed_mps")
+    max_speed_mps: float = Field(default=1.0 / 3.6, ge=0.0, le=1000.0)
+    min_stationary_seconds: float = Field(default=1.25, ge=0.0, le=3600.0)
+    min_valid_samples: int = Field(default=3, ge=1, le=10000)
+    max_stationary_distance_m: float = Field(default=0.35, ge=0.0, le=10000.0)
+    require_arrival: bool = Field(default=False)
+    arrival_min_distance_m: float = Field(default=0.50, ge=0.0, le=10000.0)
+    close_after_moving_seconds: float = Field(default=0.75, ge=0.0, le=3600.0)
+    merge_moving_gap_seconds: float = Field(default=0.0, ge=0.0, le=3600.0)
+
+
+@dataclass(slots=True)
+class _StationaryEventState:
+    first_seen_at: float | None = None
+    first_position: tuple[float, float] | None = None
+    candidate_since: float | None = None
+    candidate_position: tuple[float, float] | None = None
+    sample_count: int = 0
+    arrival_observed: bool = False
+    confirmed: bool = False
+    moving_since: float | None = None
+    last_event_packet: Packet | None = None
 
 
 _DEBUG_SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -953,6 +982,243 @@ def _resolve_bool_field(packet: Packet, field: str) -> bool | None:
     return None
 
 
+def _resolve_number_field(packet: Packet, field: str) -> float | None:
+    token = str(field or "").strip()
+    if not token:
+        return None
+    if token.startswith("payload."):
+        value = _deep_get(packet.payload, token[len("payload.") :])
+    elif token.startswith("metadata."):
+        value = _deep_get(packet.metadata, token[len("metadata.") :])
+    else:
+        value = _deep_get(packet.payload, token)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    if number != number or number in {float("inf"), float("-inf")}:
+        return None
+    return number
+
+
+def _resolve_packet_event_time(packet: Packet) -> float:
+    value = packet.payload.get("frame_ts")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        number = float(value)
+        if number == number and number not in {float("inf"), float("-inf")}:
+            return number
+    return float(packet.created_at)
+
+
+def _resolve_world_position(packet: Packet) -> tuple[float, float] | None:
+    world = packet.payload.get("world")
+    if not isinstance(world, dict):
+        return None
+    try:
+        x = float(world.get("x"))
+        z = float(world.get("z"))
+    except Exception:
+        return None
+    if x != x or z != z:
+        return None
+    return (x, z)
+
+
+def _distance_m(left: tuple[float, float] | None, right: tuple[float, float] | None) -> float:
+    if left is None or right is None:
+        return 0.0
+    dx = float(right[0]) - float(left[0])
+    dz = float(right[1]) - float(left[1])
+    return (dx * dx + dz * dz) ** 0.5
+
+
+class StationaryEventRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        parsed = StationaryEventConfig.model_validate(config)
+        self._config = parsed
+        self._state_by_key: dict[str, _StationaryEventState] = {}
+
+    def _annotate(
+        self,
+        packet: Packet,
+        *,
+        state: _StationaryEventState,
+        now: float,
+        distance_m: float,
+        reason: str,
+    ) -> Packet:
+        payload = dict(packet.payload)
+        candidate_since = state.candidate_since
+        stationary_seconds = max(0.0, now - candidate_since) if candidate_since is not None else 0.0
+        payload["stationary_event"] = {
+            "confirmed": bool(state.confirmed),
+            "candidate_since": float(candidate_since) if candidate_since is not None else None,
+            "sample_count": int(state.sample_count),
+            "stationary_seconds": float(stationary_seconds),
+            "distance_m": float(distance_m),
+            "arrival_observed": bool(state.arrival_observed),
+            "reason": str(reason or "").strip() or None,
+        }
+        return replace(packet, payload=payload)
+
+    def _reset_candidate(self, state: _StationaryEventState) -> None:
+        state.candidate_since = None
+        state.candidate_position = None
+        state.sample_count = 0
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        key = _resolve_key(packet, self._config.key_field)
+        state = self._state_by_key.setdefault(key, _StationaryEventState())
+        now = _resolve_packet_event_time(packet)
+        position = _resolve_world_position(packet)
+
+        if state.first_seen_at is None:
+            state.first_seen_at = now
+            state.first_position = position
+
+        if packet.lifecycle == Lifecycle.CLOSE:
+            self._state_by_key.pop(key, None)
+            if not state.confirmed:
+                return []
+            annotated = self._annotate(
+                packet,
+                state=state,
+                now=now,
+                distance_m=_distance_m(state.candidate_position, position),
+                reason="source_closed",
+            )
+            return [annotated.with_lifecycle(Lifecycle.CLOSE)]
+
+        valid = _resolve_bool_field(packet, self._config.valid_field)
+        if valid is False:
+            if not state.confirmed:
+                self._reset_candidate(state)
+            return []
+
+        speed = _resolve_number_field(packet, self._config.speed_field)
+        stopped = _resolve_bool_field(packet, self._config.stopped_field)
+        has_stopped_signal = stopped is not None or speed is not None
+        is_stationary = bool(stopped is True or (speed is not None and speed <= self._config.max_speed_mps))
+        is_moving = bool(stopped is False or (speed is not None and speed > self._config.max_speed_mps))
+
+        if is_moving:
+            state.arrival_observed = True
+        elif position is not None and _distance_m(state.first_position, position) >= self._config.arrival_min_distance_m:
+            state.arrival_observed = True
+
+        if not has_stopped_signal:
+            return []
+
+        if state.confirmed:
+            if (
+                is_stationary
+                and state.moving_since is not None
+                and self._config.merge_moving_gap_seconds > 0.0
+            ):
+                moving_seconds = max(0.0, now - float(state.moving_since))
+                close_after_seconds = (
+                    self._config.close_after_moving_seconds
+                    + self._config.merge_moving_gap_seconds
+                )
+                if moving_seconds >= close_after_seconds:
+                    annotated = self._annotate(
+                        packet,
+                        state=state,
+                        now=now,
+                        distance_m=_distance_m(state.candidate_position, position),
+                        reason="moving",
+                    )
+                    self._state_by_key.pop(key, None)
+                    return [annotated.with_lifecycle(Lifecycle.CLOSE)]
+
+            if is_moving:
+                if state.moving_since is None:
+                    state.moving_since = now
+                moving_seconds = max(0.0, now - float(state.moving_since))
+                close_after_seconds = (
+                    self._config.close_after_moving_seconds
+                    + self._config.merge_moving_gap_seconds
+                )
+                if moving_seconds >= close_after_seconds:
+                    annotated = self._annotate(
+                        packet,
+                        state=state,
+                        now=now,
+                        distance_m=_distance_m(state.candidate_position, position),
+                        reason="moving",
+                    )
+                    self._state_by_key.pop(key, None)
+                    return [annotated.with_lifecycle(Lifecycle.CLOSE)]
+                return []
+
+            moving_was_pending = (
+                state.moving_since is not None
+                and self._config.merge_moving_gap_seconds > 0.0
+                and max(0.0, now - float(state.moving_since))
+                >= self._config.close_after_moving_seconds
+            )
+            state.moving_since = None
+            if is_stationary:
+                state.sample_count += 1
+                distance_m = _distance_m(state.candidate_position, position)
+                annotated = self._annotate(
+                    packet,
+                    state=state,
+                    now=now,
+                    distance_m=distance_m,
+                    reason="merged_moving_gap" if moving_was_pending else "confirmed",
+                )
+                out = annotated.with_lifecycle(Lifecycle.UPDATE)
+                state.last_event_packet = out
+                return [out]
+            return []
+
+        if not is_stationary:
+            self._reset_candidate(state)
+            return []
+
+        if state.candidate_since is None:
+            state.candidate_since = now
+            state.candidate_position = position
+            state.sample_count = 0
+        state.sample_count += 1
+
+        distance_m = _distance_m(state.candidate_position, position)
+        stationary_seconds = max(0.0, now - float(state.candidate_since))
+        if distance_m > self._config.max_stationary_distance_m:
+            state.candidate_since = now
+            state.candidate_position = position
+            state.sample_count = 1
+            return []
+
+        if self._config.require_arrival and not state.arrival_observed:
+            return []
+        if state.sample_count < self._config.min_valid_samples:
+            return []
+        if stationary_seconds < self._config.min_stationary_seconds:
+            return []
+
+        state.confirmed = True
+        state.moving_since = None
+        annotated = self._annotate(
+            packet,
+            state=state,
+            now=now,
+            distance_m=distance_m,
+            reason="confirmed",
+        )
+        out = annotated.with_lifecycle(Lifecycle.OPEN)
+        state.last_event_packet = out
+        return [out]
+
+
 class LifecycleFromBooleanRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any]) -> None:
         parsed = LifecycleFromBooleanConfig.model_validate(config)
@@ -1121,6 +1387,36 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: LifecycleFromBooleanRuntime(config),
+    )
+    registry.register_operator(
+        operator_id="core.stationary_event",
+        description="Confirms that a tracked subject has really stopped before opening a lifecycle event.",
+        config_model=StationaryEventConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["lifecycle", "realtime", "event", "stationary"],
+        defaults=StationaryEventConfig().model_dump(),
+        produces_payload_keys=["stationary_event"],
+        expression_hints=[
+            payload_path_hint(
+                "payload.stationary_event.confirmed",
+                value_type="boolean",
+                description="Whether the stationary event has been confirmed.",
+            ),
+            payload_path_hint(
+                "payload.stationary_event.stationary_seconds",
+                value_type="number",
+                description="Confirmed candidate duration in seconds.",
+            ),
+            payload_path_hint(
+                "payload.stationary_event.distance_m",
+                value_type="number",
+                description="Distance moved during the stationary candidate window.",
+            ),
+        ],
+        share_strategy="by_signature",
+        owner="core",
+        runtime_factory=lambda config, _deps: StationaryEventRuntime(config),
     )
     registry.register_operator(
         operator_id="core.stream_state_snapshot",

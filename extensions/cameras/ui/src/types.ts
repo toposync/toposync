@@ -301,7 +301,8 @@ export type CameraPipelinePreset =
   | "people_individual"
   | "people_quiet"
   | "presence_area"
-  | "vehicle_stopped";
+  | "vehicle_stopped"
+  | "person_stopped";
 export type CameraNotificationPriority = "low" | "medium" | "high";
 
 export type CameraPipelineSummary = {
@@ -327,6 +328,7 @@ export type CameraPipelinePresetRequest = {
   composition_id?: string;
   area_id?: string;
   stopped_speed_threshold?: number;
+  min_stationary_seconds?: number;
   notification_title?: string;
   notification_description?: string;
   notification_priority?: CameraNotificationPriority;

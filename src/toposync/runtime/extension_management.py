@@ -78,6 +78,14 @@ RECOMMENDED_EXTENSIONS: tuple[RecommendedExtension, ...] = (
         category="camera",
     ),
     RecommendedExtension(
+        extension_id="com.toposync.cinematic",
+        name="Cinematic",
+        description="Cria uma fonte de video cinematica dirigida por eventos para pipelines.",
+        package="toposync-ext-cinematic",
+        pip_spec="toposync-ext-cinematic",
+        category="streaming",
+    ),
+    RecommendedExtension(
         extension_id="com.toposync.vision",
         name="Vision",
         description="Adiciona deteccao, tracking e segmentacao para pipelines.",

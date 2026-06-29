@@ -123,6 +123,10 @@ def test_stream_demand_gate_follows_heartbeat_lease() -> None:
     asyncio.run(_stream_demand_gate_heartbeat_scenario())
 
 
+def test_stream_demand_gate_transmission_scope_ignores_configured_output() -> None:
+    asyncio.run(_stream_demand_gate_transmission_scope_scenario())
+
+
 def test_writer_bridge_publishes_placeholder_when_selected_frame_is_stale() -> None:
     asyncio.run(_stale_placeholder_scenario())
 
@@ -396,6 +400,58 @@ async def _stream_demand_gate_heartbeat_scenario() -> None:
     assert closed_again is not None
     assert closed_again.lifecycle == Lifecycle.CLOSE
     assert closed_again.payload["reason"] == "no_active_demand"
+
+
+async def _stream_demand_gate_transmission_scope_scenario() -> None:
+    calls: list[dict[str, str]] = []
+
+    async def _snapshot(
+        *,
+        transmission_id: str,
+        output_id: str = "",
+        quality_profile_id: str = "",
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "transmission_id": transmission_id,
+                "output_id": output_id,
+                "quality_profile_id": quality_profile_id,
+            }
+        )
+        return {
+            "demand_active": True,
+            "reason": "active_demand",
+            "viewer_count_total": 1,
+            "matched_outputs": 4,
+        }
+
+    services = ServiceRegistry()
+    services.register("streaming.demand.snapshot", _snapshot)
+    gate = DemandGateRuntime(
+        {
+            "transmission_id": "transmission_prime",
+            "demand_scope": "transmission",
+            "output_id": "hls_stable_apple_tv",
+            "quality_profile_id": "stable_apple_tv",
+        },
+        PipelineRuntimeDependencies(services=services),
+    )
+
+    opened = await gate.produce(SimpleNamespace())
+
+    assert opened is not None
+    assert opened.lifecycle == Lifecycle.OPEN
+    assert opened.stream_id == "demand:transmission_prime"
+    assert opened.payload["demand_scope"] == "transmission"
+    assert opened.payload["output_id"] == ""
+    assert opened.payload["quality_profile_id"] == ""
+    assert calls == [
+        {
+            "transmission_id": "transmission_prime",
+            "output_id": "",
+            "quality_profile_id": "",
+        }
+    ]
 
 
 async def _stale_placeholder_scenario() -> None:

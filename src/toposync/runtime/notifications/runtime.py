@@ -49,6 +49,7 @@ class NotificationsRuntime:
         priorities: list[str] | tuple[str, ...] | None = None,
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
+        include_silent: bool = False,
     ) -> tuple[list[dict[str, Any]], int | None]:
         return await asyncio.to_thread(
             self.list_sync,
@@ -57,6 +58,7 @@ class NotificationsRuntime:
             priorities=priorities,
             types=types,
             query=query,
+            include_silent=include_silent,
         )
 
     def list_sync(
@@ -67,6 +69,7 @@ class NotificationsRuntime:
         priorities: list[str] | tuple[str, ...] | None = None,
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
+        include_silent: bool = False,
         cancel_check: _CancelCheck | None = None,
     ) -> tuple[list[dict[str, Any]], int | None]:
         records, next_cursor = self.store.list(
@@ -75,6 +78,7 @@ class NotificationsRuntime:
             priorities=priorities,
             types=types,
             query=query,
+            include_silent=include_silent,
             cancel_check=cancel_check,
         )
         if cancel_check is not None:
@@ -141,7 +145,10 @@ class NotificationsRuntime:
             dedupe_key=dedupe_key,
         )
         public = _to_public(rec)
-        self.broadcaster.publish({"op": "insert" if created else "update", "notification": public})
+        if rec.priority_bucket != "silent":
+            self.broadcaster.publish(
+                {"op": "insert" if created else "update", "notification": public}
+            )
         return public
 
     async def close_open_pipeline_notifications(

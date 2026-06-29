@@ -475,7 +475,11 @@ def test_core_notify_accumulates_stored_images_for_one_tracking_lifecycle(tmp_pa
             Packet.create(
                 stream_id="obj:camera-main:track-1",
                 lifecycle=Lifecycle.CLOSE,
-                payload={**common_payload, "frame_ts": 12.0},
+                payload={
+                    **common_payload,
+                    "frame_ts": 12.0,
+                    "stationary_event": {"confirmed": True, "reason": "merged_moving_gap"},
+                },
             ),
             _NotifyContext(),
         )
@@ -491,6 +495,9 @@ def test_core_notify_accumulates_stored_images_for_one_tracking_lifecycle(tmp_pa
             "first.jpg",
             "second.jpg",
         ]
+        data = payload.get("data")
+        assert isinstance(data, dict)
+        assert data.get("stationary_event") == {"confirmed": True, "reason": "merged_moving_gap"}
 
     asyncio.run(scenario())
 

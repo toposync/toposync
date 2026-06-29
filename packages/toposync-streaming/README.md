@@ -1,6 +1,6 @@
 # Toposync Streaming bundle
 
-Optional Toposync application bundle that installs the default `toposync` product plus the first-party `streaming` extension.
+Optional Toposync application bundle that installs the default `toposync` product plus the first-party `streaming` and `cinematic` extensions.
 
 Notes:
 

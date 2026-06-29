@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "com.toposync.cinematic",
+  "name": "Cinematic",
+  "version": "0.1.0",
+  "description": "Toposync extension for event-directed camera transmission.",
+  "api_prefixes": ["/api/cinematic"],
+  "frontend": {
+    "kind": "module-federation",
+    "remote_entry": "remoteEntry.js",
+    "scope": "cinematic",
+    "module": "./activate"
+  }
+}

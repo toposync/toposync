@@ -29,7 +29,7 @@ import { Modal } from "../Modal";
 import { StreamsPtzOverlay } from "./StreamsPtzOverlay";
 import { createJsmpegPlayer } from "./jsmpegPlayer";
 
-type GridMode = "1x1" | "2x2";
+type GridMode = "2x2" | "3x3";
 export type StreamsDashboardContext = StreamingCameraLiveContext;
 
 type Props = {
@@ -120,7 +120,7 @@ function readGridMode(): GridMode {
   if (typeof window === "undefined") return "2x2";
   try {
     const saved = String(localStorage.getItem(GRID_MODE_STORAGE_KEY) || "").trim();
-    return saved === "1x1" ? "1x1" : "2x2";
+    return saved === "3x3" ? "3x3" : "2x2";
   } catch {
     return "2x2";
   }
@@ -257,7 +257,7 @@ function qualityProfileIdForPreference(
   if (preference === "stable") return "stable_apple_tv";
   if (preference === "high") return "fullscreen_quality";
   if (preference === "diagnostic") return "diagnostic_low";
-  return gridMode === "2x2" ? "quad_grid" : "fullscreen_quality";
+  return gridMode === "2x2" || gridMode === "3x3" ? "quad_grid" : "fullscreen_quality";
 }
 
 function qualityPreferenceLabel(preference: StreamQualityPreference, t: TranslateFn): string {
@@ -3522,7 +3522,7 @@ export function StreamsDashboard({
   defaultContext,
 }: Props): React.ReactElement {
   const { t } = i18n.useI18n();
-  const [gridMode, setGridMode] = useState<GridMode>(() => (embedded ? "1x1" : readGridMode()));
+  const [gridMode, setGridMode] = useState<GridMode>(() => (embedded ? "2x2" : readGridMode()));
   const [pageIndex, setPageIndex] = useState(0);
 
   const [liveViews, setLiveViews] = useState<StreamingCameraLiveView[]>([]);
@@ -3658,9 +3658,9 @@ export function StreamsDashboard({
     });
   }, [cameraId, liveViewId, liveViews]);
 
-  const pageSize = embedded || gridMode === "1x1" ? 1 : 4;
+  const pageSize = embedded ? 1 : gridMode === "3x3" ? 9 : 4;
   const pageCount = Math.max(1, Math.ceil(enabledLiveViews.length / pageSize));
-  const basePlaybackContext: StreamingCameraLiveContext = embedded ? defaultContext ?? "large" : gridMode === "1x1" ? "large" : "thumbnail";
+  const basePlaybackContext: StreamingCameraLiveContext = embedded ? defaultContext ?? "large" : "thumbnail";
   const contextForLiveView = useCallback(
     (liveViewId: string): StreamingCameraLiveContext => displayContextByLiveViewId[liveViewId] ?? basePlaybackContext,
     [basePlaybackContext, displayContextByLiveViewId],
@@ -3937,7 +3937,7 @@ export function StreamsDashboard({
       ) : null}
 
       {!error && enabledLiveViews.length > 0 ? (
-        <div className={["streamsGrid", embedded || gridMode === "1x1" ? "is1x1" : "is2x2"].join(" ")}>
+        <div className={["streamsGrid", embedded ? "is1x1" : gridMode === "3x3" ? "is3x3" : "is2x2"].join(" ")}>
           {pageTiles.map((liveView, slotIndex) => {
             if (!liveView) {
               return <div key={`slot-empty-${slotIndex}`} className="streamsTile streamsTileEmpty" />;
@@ -4169,17 +4169,6 @@ export function StreamsDashboard({
         <div className="streamsHudGroup">
           <button
             type="button"
-            className={["chipButton", "streamsHudModeButton", gridMode === "1x1" ? "isActive" : ""].filter(Boolean).join(" ")}
-            aria-pressed={gridMode === "1x1"}
-            onClick={() => {
-              setGridMode("1x1");
-              setPageIndex(0);
-            }}
-          >
-            1x1
-          </button>
-          <button
-            type="button"
             className={["chipButton", "streamsHudModeButton", gridMode === "2x2" ? "isActive" : ""].filter(Boolean).join(" ")}
             aria-pressed={gridMode === "2x2"}
             onClick={() => {
@@ -4188,6 +4177,17 @@ export function StreamsDashboard({
             }}
           >
             2x2
+          </button>
+          <button
+            type="button"
+            className={["chipButton", "streamsHudModeButton", gridMode === "3x3" ? "isActive" : ""].filter(Boolean).join(" ")}
+            aria-pressed={gridMode === "3x3"}
+            onClick={() => {
+              setGridMode("3x3");
+              setPageIndex(0);
+            }}
+          >
+            3x3
           </button>
         </div>
 

@@ -8,8 +8,10 @@ import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldIns
 
 import {
   CategoryGateConfigCard,
+  CinematicDirectorConfigCard,
   DebounceConfigCard,
   DebugConfigCard,
+  DemandGateConfigCard,
   FilterConfigCard,
   HomeAssistantBooleanStateConfigCard,
   HomeAssistantNotifyConfigCard,
@@ -17,6 +19,7 @@ import {
   PublishVideoConfigCard,
   VelocityThrottleConfigCard,
   ScheduleGateConfigCard,
+  StationaryEventConfigCard,
   StoreImagesConfigCard,
   ThrottleConfigCard,
 } from "./CorePanels";
@@ -184,6 +187,9 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "core.filter") {
     return <FilterConfigCard config={config} steps={steps} index={index} operatorsById={operatorsById} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "core.stationary_event") {
+    return <StationaryEventConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "camera.camera_mapping") {
     return (
@@ -370,8 +376,23 @@ export function OperatorConfigPanel({
   if (operatorId === "home_assistant.boolean_state") {
     return <HomeAssistantBooleanStateConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
+  if (operatorId === "stream.demand_gate") {
+    return <DemandGateConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
   if (operatorId === "stream.publish_video") {
     return <PublishVideoConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "cinematic.director_source") {
+    return (
+      <CinematicDirectorConfigCard
+        config={config}
+        camerasIndex={camerasIndex}
+        cameraSelectOptions={cameraSelectOptions}
+        cameraSelectOptionById={cameraSelectOptionById}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+      />
+    );
   }
 
   return null;

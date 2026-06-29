@@ -18,6 +18,7 @@ from toposync.app import (
 )
 import toposync.extensions.manager as ext_manager_mod
 from toposync.runtime.notifications import NotificationsRuntime
+from toposync.runtime.pipelines.operators_sinks import NotifyConfig
 
 
 class _TestCancelled(Exception):
@@ -64,6 +65,7 @@ def test_notification_store_backfills_priority_bucket_from_legacy_payload(tmp_pa
         ("missing-1", "pipelines.event", "Missing", {}, 1_001.0),
         ("invalid-1", "pipelines.event", "Invalid", {"priority": "urgent"}, 1_002.0),
         ("high-1", "pipelines.event", "High", {"priority": "high"}, 1_003.0),
+        ("silent-1", "pipelines.event", "Silent", {"priority": "silent"}, 1_004.0),
     ]
     conn.executemany(
         """
@@ -93,9 +95,16 @@ def test_notification_store_backfills_priority_bucket_from_legacy_payload(tmp_pa
     assert [item.title for item in medium_items] == ["Invalid", "Missing"]
     assert [item.priority_bucket for item in medium_items] == ["medium", "medium"]
     assert notifications.store.count_by_priority() == {"low": 1, "medium": 2, "high": 1}
+    silent_items, _cursor = notifications.store.list(
+        limit=10,
+        priorities=["silent"],
+        include_silent=True,
+    )
+    assert [item.title for item in silent_items] == ["Silent"]
+    assert [item.priority_bucket for item in silent_items] == ["silent"]
 
     state_row = notifications.store._conn.execute(
-        "SELECT value FROM notification_state WHERE key = 'priority_bucket_backfill_v1'"
+        "SELECT value FROM notification_state WHERE key = 'priority_bucket_backfill_v2'"
     ).fetchone()
     assert state_row is not None
     assert state_row["value"] == "1"
@@ -111,6 +120,11 @@ def test_notification_store_backfills_priority_bucket_from_legacy_payload(tmp_pa
         ("medium", 10),
     ).fetchall()
     assert any("idx_notification_priority_seq" in str(row[3]) for row in plan_rows)
+
+
+def test_core_notify_accepts_silent_priority_without_making_it_default() -> None:
+    assert NotifyConfig().priority == "medium"
+    assert NotifyConfig.model_validate({"priority": "silent"}).priority == "silent"
 
 
 def test_close_open_pipeline_notifications_marks_stale_open_as_closed(tmp_path: Path) -> None:
@@ -305,6 +319,49 @@ def test_notifications_upsert_updates_and_preserves_priority_bucket(tmp_path: Pa
         assert [item["title"] for item in high_items] == ["Preserved"]
         medium_items, _cursor = await notifications.list(priorities=["medium"], limit=10)
         assert medium_items == []
+
+    asyncio.run(scenario())
+
+
+def test_silent_notifications_are_persisted_but_hidden_from_public_reads(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+        q = notifications.broadcaster.subscribe()
+        try:
+            silent = await notifications.upsert(
+                type="pipelines.event",
+                title="Silent motion",
+                payload={"priority": "silent", "camera_id": "front"},
+            )
+            visible = await notifications.upsert(
+                type="pipelines.event",
+                title="Visible motion",
+                payload={"priority": "low", "camera_id": "garage"},
+            )
+        finally:
+            notifications.broadcaster.unsubscribe(q)
+
+        assert silent["priority"] == "silent"
+        assert visible["priority"] == "low"
+        assert q.qsize() == 1
+        assert q.get_nowait()["notification"]["id"] == visible["id"]
+
+        public_items, _cursor = notifications.list_sync(limit=10)
+        assert [item["title"] for item in public_items] == ["Visible motion"]
+        explicit_silent, _cursor = notifications.list_sync(limit=10, priorities=["silent"])
+        assert explicit_silent == []
+        internal_items, _cursor = notifications.list_sync(
+            limit=10,
+            priorities=["silent"],
+            include_silent=True,
+        )
+        assert [item["title"] for item in internal_items] == ["Silent motion"]
+        assert notifications.count_summary_sync() == {
+            "total": 1,
+            "by_priority": {"low": 1, "medium": 0, "high": 0},
+            "unread_total": 1,
+            "unread_by_priority": {"low": 1, "medium": 0, "high": 0},
+        }
 
     asyncio.run(scenario())
 
@@ -658,3 +715,44 @@ def test_notifications_endpoint_medium_priority_includes_missing_or_invalid_payl
         invalid = client.get("/api/notifications?priority=urgent")
         assert invalid.status_code == 200
         assert invalid.json() == {"notifications": [], "next_cursor": None}
+
+
+def test_notifications_endpoint_excludes_silent_priority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
+    monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: [])
+
+    with TestClient(create_app()) as client:
+        notifications: NotificationsRuntime = client.app.state.notifications
+        notifications.store.upsert(
+            type="pipelines.event",
+            title="Silent event",
+            payload={"priority": "silent", "camera_id": "front"},
+            now=1_000,
+        )
+        notifications.store.upsert(
+            type="pipelines.event",
+            title="Visible event",
+            payload={"priority": "high", "camera_id": "garage"},
+            now=1_001,
+        )
+
+        unfiltered = client.get("/api/notifications?limit=40")
+        assert unfiltered.status_code == 200
+        assert [item["title"] for item in unfiltered.json()["notifications"]] == ["Visible event"]
+
+        explicit_silent = client.get("/api/notifications?priority=silent&limit=40")
+        assert explicit_silent.status_code == 200
+        assert explicit_silent.json() == {"notifications": [], "next_cursor": None}
+
+        count = client.get("/api/notifications/count")
+        assert count.status_code == 200
+        assert count.json() == {
+            "total": 1,
+            "by_priority": {"low": 0, "medium": 0, "high": 1},
+            "unread_total": 1,
+            "unread_by_priority": {"low": 0, "medium": 0, "high": 1},
+        }

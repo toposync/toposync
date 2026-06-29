@@ -26,7 +26,11 @@ from toposync_ext_cameras.onvif.events import (
     parse_pull_messages,
 )
 from toposync_ext_cameras.onvif import OnvifClient, OnvifError, OnvifEventsClient
-from toposync_ext_cameras.pipelines.operators import OnvifStateGateRuntime, register_camera_pipeline_operators
+from toposync_ext_cameras.pipelines.operators import (
+    OnvifEventSourceRuntime,
+    OnvifStateGateRuntime,
+    register_camera_pipeline_operators,
+)
 
 
 def test_parse_get_event_properties_extracts_boolean_states() -> None:
@@ -335,6 +339,96 @@ def test_onvif_state_gate_can_fail_open_when_configured() -> None:
         assert packet is not None
         assert packet.lifecycle == Lifecycle.OPEN
         assert packet.payload["gate_open"] is True
+
+    asyncio.run(scenario())
+
+
+def test_onvif_event_source_suppresses_repeated_boolean_state_values() -> None:
+    services = ServiceRegistry()
+    events = [
+        {
+            "sequence": 1,
+            "topic": "RuleEngine/PeopleDetector/People",
+            "operation": "Changed",
+            "source": {"VideoSourceConfigurationToken": "profile_1"},
+            "key": {},
+            "data": {"IsPeople": "true"},
+        },
+        {
+            "sequence": 2,
+            "topic": "RuleEngine/PeopleDetector/People",
+            "operation": "Changed",
+            "source": {"VideoSourceConfigurationToken": "profile_1"},
+            "key": {},
+            "data": {"IsPeople": "true"},
+        },
+        {
+            "sequence": 3,
+            "topic": "RuleEngine/PeopleDetector/People",
+            "operation": "Changed",
+            "source": {"VideoSourceConfigurationToken": "profile_1"},
+            "key": {},
+            "data": {"IsPeople": "false"},
+        },
+        {
+            "sequence": 4,
+            "topic": "RuleEngine/PeopleDetector/People",
+            "operation": "Changed",
+            "source": {"VideoSourceConfigurationToken": "profile_1"},
+            "key": {},
+            "data": {"IsPeople": "false"},
+        },
+        {
+            "sequence": 5,
+            "topic": "RuleEngine/PeopleDetector/People",
+            "operation": "Changed",
+            "source": {"VideoSourceConfigurationToken": "profile_1"},
+            "key": {},
+            "data": {"IsPeople": "true"},
+        },
+    ]
+
+    async def recent_events(*, camera_id: str, after_sequence: int, limit: int) -> dict[str, Any]:
+        assert camera_id == "cam1"
+        assert limit == 64
+        return {"events": [event for event in events if event["sequence"] > after_sequence]}
+
+    services.register("cameras.onvif_events.recent_events", recent_events)
+    runtime = OnvifEventSourceRuntime(
+        {
+            "camera_id": "cam1",
+            "event_filters": [
+                {
+                    "topic": "RuleEngine/PeopleDetector/People",
+                    "item_name": "IsPeople",
+                }
+            ],
+        },
+        PipelineRuntimeDependencies(services=services),
+    )
+
+    class Context:
+        pipeline_name = "garage_probe"
+        node_id = "onvif"
+
+    async def scenario() -> None:
+        packets = []
+        for _ in range(4):
+            packet = await runtime.produce(Context())
+            if packet is not None:
+                packets.append(packet)
+
+        assert [packet.lifecycle for packet in packets] == [
+            Lifecycle.OPEN,
+            Lifecycle.CLOSE,
+            Lifecycle.OPEN,
+        ]
+        assert [packet.payload["onvif_event"]["boolean_value"] for packet in packets] == [
+            True,
+            False,
+            True,
+        ]
+        assert await runtime.produce(Context()) is None
 
     asyncio.run(scenario())
 

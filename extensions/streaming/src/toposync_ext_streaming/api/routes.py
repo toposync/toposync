@@ -5903,6 +5903,7 @@ async def _sync_pipeline_output_publication_nodes(
         graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
         nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
         changed = False
+        publication_targets: dict[str, tuple[str, str, str]] = {}
         for node in nodes:
             if not isinstance(node, dict):
                 continue
@@ -5914,11 +5915,25 @@ async def _sync_pipeline_output_publication_nodes(
                 continue
             cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
             expected_transmission_id = _publication_transmission_id(publication)
-            if str(cfg.get("transmission_id") or "").strip() == expected_transmission_id:
-                continue
-            next_cfg = {**cfg, "transmission_id": expected_transmission_id}
-            node["config"] = next_cfg
-            changed = True
+            expected_output_id = f"hls_{_publication_quality_profile(publication)}"
+            expected_quality_profile_id = _publication_quality_profile(publication)
+            publication_targets[node_id] = (
+                expected_transmission_id,
+                expected_output_id,
+                expected_quality_profile_id,
+            )
+            if str(cfg.get("transmission_id") or "").strip() != expected_transmission_id:
+                next_cfg = {**cfg, "transmission_id": expected_transmission_id}
+                node["config"] = next_cfg
+                changed = True
+        if publication_targets:
+            updated_gate_ids = _sync_demand_gates_for_publication_targets(
+                graph=graph,
+                nodes=nodes,
+                publication_targets=publication_targets,
+            )
+            if updated_gate_ids:
+                changed = True
         if not changed:
             continue
         updated = pipeline.model_copy(update={"graph": graph})
@@ -5935,6 +5950,87 @@ async def _sync_pipeline_output_publication_nodes(
         except Exception:
             pass
     return changed_pipelines
+
+
+def _sync_demand_gates_for_publication_targets(
+    *,
+    graph: dict[str, Any],
+    nodes: list[Any],
+    publication_targets: dict[str, tuple[str, str, str]],
+) -> list[str]:
+    if not publication_targets:
+        return []
+    edges = graph.get("edges") if isinstance(graph.get("edges"), list) else []
+    downstream_by_node: dict[str, set[str]] = {}
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        source = edge.get("from")
+        target = edge.get("to")
+        if not isinstance(source, dict) or not isinstance(target, dict):
+            continue
+        source_node = str(source.get("node") or "").strip()
+        target_node = str(target.get("node") or "").strip()
+        if not source_node or not target_node:
+            continue
+        downstream_by_node.setdefault(source_node, set()).add(target_node)
+
+    changed_gate_ids: list[str] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("operator") or "").strip() != "stream.demand_gate":
+            continue
+        gate_id = str(node.get("id") or "").strip()
+        if not gate_id:
+            continue
+        reachable_publications = [
+            publish_node_id
+            for publish_node_id in publication_targets
+            if _graph_node_reaches(gate_id, publish_node_id, downstream_by_node)
+        ]
+        if len(reachable_publications) != 1:
+            continue
+        transmission_id, output_id, quality_profile_id = publication_targets[reachable_publications[0]]
+        cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+        demand_scope = str(cfg.get("demand_scope") or "").strip().lower()
+        use_specific_output = demand_scope == "output"
+        next_cfg = {**cfg, "transmission_id": transmission_id}
+        if use_specific_output:
+            next_cfg["demand_scope"] = "output"
+            next_cfg["output_id"] = str(cfg.get("output_id") or "").strip() or output_id
+            next_cfg["quality_profile_id"] = str(cfg.get("quality_profile_id") or "").strip() or quality_profile_id
+        else:
+            next_cfg["demand_scope"] = "transmission"
+            next_cfg["output_id"] = ""
+            next_cfg["quality_profile_id"] = ""
+        if next_cfg == cfg:
+            continue
+        node["config"] = next_cfg
+        changed_gate_ids.append(gate_id)
+    return changed_gate_ids
+
+
+def _graph_node_reaches(
+    source_node_id: str,
+    target_node_id: str,
+    downstream_by_node: dict[str, set[str]],
+) -> bool:
+    if source_node_id == target_node_id:
+        return True
+    seen: set[str] = set()
+    stack = [source_node_id]
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        for child in downstream_by_node.get(current, set()):
+            if child == target_node_id:
+                return True
+            if child not in seen:
+                stack.append(child)
+    return False
 
 
 async def _delete_camera_live_pipelines(

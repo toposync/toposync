@@ -1,0 +1,143 @@
+---
+title: Cinematic transmission
+description: "Use the optional cinematic director to publish one demand-driven video output that cuts between cameras from notifications."
+keywords: ["toposync", "local-first", "home automation", "cameras", "cinematic transmission", "streaming", "notifications"]
+image: /img/social-card.png
+sidebar_position: 2.7
+---
+
+# Cinematic transmission {/* #cinematic-transmission */}
+
+Cinematic transmission is an optional camera workflow. It publishes one video
+output and lets a director pick which camera should be on screen.
+
+Use it when you want a single monitoring stream that follows relevant activity.
+For ordinary camera tiles, keep using [Live viewing](live-viewing.mdx).
+
+## Default behavior {/* #default-behavior */}
+
+The default setup is conservative:
+
+- it can use every configured camera;
+- it accepts every notification priority;
+- it captures only while the stream has demand;
+- it keeps one active camera by default;
+- it emits only the latest frame, without building a backlog;
+- during idle time, it rotates through available cameras.
+
+Create it from **Settings -> Cinematic -> Create pipeline**. The wizard creates
+this graph:
+
+```text
+stream.demand_gate -> cinematic.director_source -> stream.publish_video
+```
+
+The generated pipeline is still a normal pipeline. You can inspect it, disable
+it, or edit advanced settings later.
+
+Before opening the wizard, create or choose a Streaming transmission on the same
+processing server. The Cinematic wizard links that transmission to a new
+pipeline; it does not create a camera live-view entry by itself. As a result,
+the **Streaming -> Playback** tab may not show a cinematic player unless camera
+live views also exist. Validate the cinematic output through Streaming runtime
+health, signed transmission URLs, or the transmission `still.jpg` endpoint while
+demand is active.
+
+## Events and cuts {/* #events-and-cuts */}
+
+The director watches Toposync notifications and turns them into shot candidates.
+It tries to resolve the camera from:
+
+- `payload.camera_id`;
+- `payload.source.device_id`;
+- `payload.data.camera_id`;
+- the notification subject;
+- an optional pipeline-to-camera map.
+
+Events are coalesced so repeated updates for the same notification, subject, or
+event do not force unnecessary cuts. The status panel shows the current camera,
+mode, active event, and cut reason.
+
+Example notification payload:
+
+```json
+{
+  "payload": {
+    "camera_id": "front_door",
+    "priority": "high",
+    "subject": {"id": "person-42", "type": "person"}
+  }
+}
+```
+
+## Filters {/* #filters */}
+
+By default, no filter is needed. Add filters only when the director should ignore
+part of the site.
+
+Examples:
+
+```json
+{
+  "cameras_mode": "include",
+  "camera_ids": ["front_door", "garage"],
+  "priority_filter": ["high", "medium"]
+}
+```
+
+```json
+{
+  "pipeline_camera_map": {
+    "front_person_detection": "front_door",
+    "driveway_vehicle_detection": "garage"
+  }
+}
+```
+
+Use `include` to limit the director to a few cameras. Use `exclude` when most
+cameras should be available but one or two are not useful for this stream.
+
+## Performance {/* #performance */}
+
+Cinematic transmission is demand-scoped. If nobody is watching the published
+stream, the demand gate stays closed and the director should not keep camera
+capture open.
+
+When there is demand, the director normally keeps one active camera. During a
+handoff it may prepare the next camera briefly, then release the old one. Keep
+the default FPS and resolution until the stream is stable; increasing both raises
+decode, resize, and publish cost.
+
+The pipeline edges use a latest-frame policy. This is intentional: a monitoring
+stream should show the most recent useful frame, not drain old frames after a
+slow period.
+
+## Limits {/* #limits */}
+
+Current limits:
+
+- no optical zoom or crop is applied yet;
+- framing metadata is present for future zoom/crop work;
+- the feature depends on Cameras, Streaming, and Notifications being available;
+- it does not replace normal camera live views;
+- it is best for one composed output, not for every dashboard tile.
+
+## Troubleshooting {/* #troubleshooting */}
+
+| Symptom | Check |
+| --- | --- |
+| No pipeline is created | Confirm Streaming has at least one transmission and Cameras has at least one camera. |
+| The stream stays idle | Confirm someone is viewing the output, or check the demand gate status. |
+| Events do not change cameras | Confirm notifications include a camera id or configure the pipeline-to-camera map. |
+| The same camera stays selected | Check camera filters, priority filters, and whether other cameras have fresh frames. |
+| The image is black while starting | A short warmup can be normal during handoff. If it persists, check the Cinematic diagnostics and the Streaming runtime status. |
+| Streaming Playback has no cinematic player | That tab lists camera live-view debug links. Check the cinematic transmission through runtime health, `/api/streams/transmissions/{id}/urls`, or `still.jpg` while demand is active. |
+
+The Cinematic settings panel is the first place to look. It shows runtime status,
+diagnostics, the active camera, and the latest cut reason without opening
+additional camera capture by itself.
+
+For a practical smoke test, keep viewer demand open, then check that Streaming
+runtime health is `live` and `healthy`, publisher frames are increasing, and
+`publisher_last_error` is empty. The `still.jpg` response should include
+`x-toposync-frame-state: live` when the selected frame is current.

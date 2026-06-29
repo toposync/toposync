@@ -250,6 +250,16 @@ const CAMERA_PIPELINE_PRESET_CARDS: {
     stepsFallback: "Movimento -> veículos -> velocidade -> imagem -> notificação",
   },
   {
+    id: "person_stopped",
+    requiresMapping: true,
+    titleKey: "ext.cameras.pipeline_preset.person_stopped.title",
+    titleFallback: "Pessoa parou",
+    descriptionKey: "ext.cameras.pipeline_preset.person_stopped.card_desc",
+    descriptionFallback: "Detecta pessoas, estima velocidade e notifica quando uma pessoa para.",
+    stepsKey: "ext.cameras.pipeline_preset.person_stopped.steps",
+    stepsFallback: "Movimento -> pessoas -> velocidade -> confirmação de parada -> notificação",
+  },
+  {
     id: "people_simple",
     requiresMapping: false,
     titleKey: "ext.cameras.pipeline_preset.people_simple.title",

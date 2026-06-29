@@ -34,11 +34,17 @@ from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
 from toposync.runtime.pipelines.templates import safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
 
+from .capture_service import (
+    CameraCaptureRequest,
+    camera_capture_lease_as_dict,
+    camera_capture_resolved_as_dict,
+)
 from .pipelines.operators import (
     CameraSourceConfig,
     ResolvedCameraSource,
     _camera_hub_key,
     _resolve_camera_source,
+    get_global_camera_capture_service,
     register_camera_pipeline_operators,
 )
 from .processing.camera_hub import get_global_camera_hub
@@ -57,6 +63,7 @@ from .settings import (
     get_camera_source_origin,
     get_camera_source_origin_type,
     iter_camera_devices,
+    iter_camera_sources,
     normalize_cameras_settings,
 )
 from .onvif import (
@@ -87,12 +94,14 @@ CAMERA_PIPELINE_PRESETS = (
     "people_quiet",
     "presence_area",
     "vehicle_stopped",
+    "person_stopped",
 )
 CAMERA_MAPPING_REQUIRED_PRESETS = {
     "people_individual",
     "people_quiet",
     "presence_area",
     "vehicle_stopped",
+    "person_stopped",
 }
 
 
@@ -119,13 +128,16 @@ async def _raise_if_request_disconnected(request: Request) -> None:
 
 NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
 VEHICLE_STOPPED_OBJECT_CATEGORIES = ["car", "truck", "bus", "motorcycle"]
-VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
+PERSON_STOPPED_OBJECT_CATEGORIES = ["person"]
+STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
+STOPPED_DEFAULT_MIN_STATIONARY_SECONDS = 1.25
 PRESET_PIPELINE_NAME_PARTS = {
     "people_simple": "deteccao_simples_de_pessoas",
     "people_individual": "evento_individual_de_pessoas",
     "people_quiet": "presenca_agrupada_de_pessoas",
     "presence_area": "presenca_agrupada_em_area",
     "vehicle_stopped": "veiculo_parou",
+    "person_stopped": "pessoa_parou",
 }
 
 
@@ -411,6 +423,7 @@ class CameraPipelinePresetRequest(BaseModel):
         "people_quiet",
         "presence_area",
         "vehicle_stopped",
+        "person_stopped",
     ]
     source_id: str = ""
     pipeline_name: str = ""
@@ -420,16 +433,19 @@ class CameraPipelinePresetRequest(BaseModel):
     composition_id: str = ""
     area_id: str = ""
     stopped_speed_threshold: float | None = Field(default=None, ge=0.0, le=1000.0)
+    min_stationary_seconds: float | None = Field(default=None, ge=0.0, le=3600.0)
     notification_title: str = ""
     notification_description: str = ""
-    notification_priority: NotificationPriority = "medium"
+    notification_priority: NotificationPriority | None = None
 
     @field_validator("notification_priority", mode="before")
     @classmethod
-    def _normalize_notification_priority(cls, value: Any) -> str:
-        raw = "medium" if value is None else str(value).strip().lower()
+    def _normalize_notification_priority(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        raw = str(value).strip().lower()
         if not raw:
-            return "medium"
+            return None
         if raw not in NOTIFICATION_PRIORITIES:
             raise ValueError("notification_priority must be one of: low, medium, high")
         return raw
@@ -1807,6 +1823,181 @@ class CamerasExtension(BaseExtension):
         services.register("cameras.ptz.continuous_move", _svc_ptz_continuous_move)
         services.register("cameras.ptz.stop", _svc_ptz_stop)
         app.state.camera_source_health_store = get_global_source_health_store()
+        capture_service = get_global_camera_capture_service()
+
+        async def _svc_cameras_catalog_list() -> dict[str, Any]:
+            store = getattr(app.state, "config_store", None)
+            if store is None:
+                return {"cameras": []}
+            settings = await store.get_settings()
+            ext = normalize_cameras_settings(settings.extensions.get(EXTENSION_ID, {}))
+            cameras: list[dict[str, Any]] = []
+            for device in iter_camera_devices(ext):
+                camera_id = str(device.get("id") or "").strip()
+                if not camera_id:
+                    continue
+                sources: list[dict[str, Any]] = []
+                for source in iter_camera_sources(device):
+                    source_id = str(source.get("id") or "").strip()
+                    if not source_id:
+                        continue
+                    origin = get_camera_source_origin(source)
+                    video = source.get("video") if isinstance(source.get("video"), dict) else {}
+                    sources.append(
+                        {
+                            "id": source_id,
+                            "name": str(source.get("name") or "").strip(),
+                            "kind": str(source.get("kind") or "video").strip() or "video",
+                            "role": str(source.get("role") or "").strip(),
+                            "view_id": str(source.get("view_id") or "").strip(),
+                            "enabled": bool(source.get("enabled", True)),
+                            "is_default": bool(source.get("is_default")),
+                            "transport": str(origin.get("type") or "").strip(),
+                            "width": video.get("width"),
+                            "height": video.get("height"),
+                            "fps": video.get("fps"),
+                        }
+                    )
+                cameras.append(
+                    {
+                        "id": camera_id,
+                        "name": str(device.get("name") or "").strip(),
+                        "enabled": bool(device.get("enabled", True)),
+                        "clock_domain": str(device.get("clock_domain") or "").strip(),
+                        "sources": sources,
+                    }
+                )
+            return {"cameras": cameras}
+
+        services.register("cameras.catalog.list", _svc_cameras_catalog_list)
+
+        def _capture_dependencies() -> PipelineRuntimeDependencies:
+            store = getattr(app.state, "config_store", None)
+            if store is None:
+                raise RuntimeError("Toposync config_store not available")
+            return PipelineRuntimeDependencies(config_store=store, services=services)
+
+        def _capture_request(
+            *,
+            owner_id: str,
+            camera_id: str = "",
+            source_id: str = "",
+            rtsp_url: str = "",
+            username: str = "",
+            password: str = "",
+            backend: str = "auto",
+            fps: float | None = None,
+            pipeline_name: str = "",
+            node_id: str = "",
+        ) -> CameraCaptureRequest:
+            return CameraCaptureRequest(
+                owner_id=owner_id,
+                camera_id=camera_id,
+                source_id=source_id,
+                rtsp_url=rtsp_url,
+                username=username,
+                password=password,
+                backend=backend,
+                fps=fps,
+                pipeline_name=pipeline_name,
+                node_id=node_id,
+            )
+
+        async def _svc_capture_resolve(
+            *,
+            owner_id: str = "service:resolve",
+            camera_id: str = "",
+            source_id: str = "",
+            rtsp_url: str = "",
+            username: str = "",
+            password: str = "",
+            backend: str = "auto",
+            fps: float | None = None,
+            pipeline_name: str = "",
+            node_id: str = "",
+        ) -> dict[str, Any]:
+            resolved = await capture_service.resolve(
+                _capture_request(
+                    owner_id=owner_id,
+                    camera_id=camera_id,
+                    source_id=source_id,
+                    rtsp_url=rtsp_url,
+                    username=username,
+                    password=password,
+                    backend=backend,
+                    fps=fps,
+                    pipeline_name=pipeline_name,
+                    node_id=node_id,
+                ),
+                _capture_dependencies(),
+            )
+            return camera_capture_resolved_as_dict(resolved)
+
+        async def _svc_capture_open(
+            *,
+            owner_id: str,
+            camera_id: str = "",
+            source_id: str = "",
+            rtsp_url: str = "",
+            username: str = "",
+            password: str = "",
+            backend: str = "auto",
+            fps: float | None = None,
+            pipeline_name: str = "",
+            node_id: str = "",
+        ) -> dict[str, Any]:
+            lease = await capture_service.open(
+                _capture_request(
+                    owner_id=owner_id,
+                    camera_id=camera_id,
+                    source_id=source_id,
+                    rtsp_url=rtsp_url,
+                    username=username,
+                    password=password,
+                    backend=backend,
+                    fps=fps,
+                    pipeline_name=pipeline_name,
+                    node_id=node_id,
+                ),
+                _capture_dependencies(),
+            )
+            return camera_capture_lease_as_dict(lease)
+
+        async def _svc_capture_get_latest(
+            *,
+            lease_id: str,
+            min_frame_ts: float = 0.0,
+        ) -> dict[str, Any]:
+            frame = await capture_service.get_latest(
+                lease_id=str(lease_id or "").strip(),
+                min_frame_ts=float(min_frame_ts or 0.0),
+            )
+            return {
+                "lease_id": frame.lease_id,
+                "frame": frame.frame,
+                "frame_ts": frame.frame_ts,
+                "width": frame.width,
+                "height": frame.height,
+                "fresh": frame.fresh,
+                "released": frame.released,
+                "metrics": frame.metrics,
+                "source_health": frame.source_health,
+                "resolved": frame.resolved,
+            }
+
+        async def _svc_capture_release(*, lease_id: str) -> dict[str, Any]:
+            await capture_service.release(str(lease_id or "").strip())
+            return {"ok": True}
+
+        async def _svc_capture_release_owner(*, owner_id: str) -> dict[str, Any]:
+            await capture_service.release_owner(str(owner_id or "").strip())
+            return {"ok": True}
+
+        services.register("cameras.capture.resolve", _svc_capture_resolve)
+        services.register("cameras.capture.open", _svc_capture_open)
+        services.register("cameras.capture.get_latest", _svc_capture_get_latest)
+        services.register("cameras.capture.release", _svc_capture_release)
+        services.register("cameras.capture.release_owner", _svc_capture_release_owner)
 
         def _svc_source_health_snapshot(
             *,
@@ -1945,6 +2136,7 @@ class CamerasExtension(BaseExtension):
                     {
                         "id": cid,
                         "name": str(flattened.get("name") or "").strip(),
+                        "enabled": bool(flattened.get("enabled", True)),
                         "control": flattened.get("control")
                         if isinstance(flattened.get("control"), dict)
                         else {"type": "none"},
@@ -2818,12 +3010,15 @@ class CamerasExtension(BaseExtension):
             composition_id: str,
             area_restriction_config: dict[str, Any] | None,
             stopped_speed_threshold: float | None,
+            min_stationary_seconds: float | None,
             notification_title: str,
             notification_description: str,
             notification_priority: NotificationPriority,
         ) -> dict[str, Any]:
             if preset == "vehicle_stopped":
                 detect_categories = VEHICLE_STOPPED_OBJECT_CATEGORIES
+            elif preset == "person_stopped":
+                detect_categories = PERSON_STOPPED_OBJECT_CATEGORIES
             elif preset in {"people_quiet", "presence_area"}:
                 detect_categories = ["person", "dog", "cat"]
             else:
@@ -2948,12 +3143,12 @@ class CamerasExtension(BaseExtension):
                 node_ids = [str(node["id"]) for node in nodes]
                 return {"schema_version": 1, "nodes": nodes, "edges": _linear_edges(node_ids)}
 
-            if preset in {"presence_area", "vehicle_stopped"}:
+            if preset in {"presence_area", "vehicle_stopped", "person_stopped"}:
                 if not composition_id:
                     raise ValueError(f"composition_id is required for {preset}")
                 tail_nodes = []
 
-                if preset == "vehicle_stopped" and area_restriction_config:
+                if preset in {"vehicle_stopped", "person_stopped"} and area_restriction_config:
                     tail_nodes.append(
                         {
                             "id": "area",
@@ -2962,14 +3157,22 @@ class CamerasExtension(BaseExtension):
                         }
                     )
 
-                speed_threshold = VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
+                speed_threshold = STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
                 if stopped_speed_threshold is not None:
                     try:
                         parsed_threshold = float(stopped_speed_threshold)
                     except Exception:
-                        parsed_threshold = VEHICLE_STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
+                        parsed_threshold = STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
                     if math.isfinite(parsed_threshold):
                         speed_threshold = max(0.0, parsed_threshold)
+                stationary_seconds = STOPPED_DEFAULT_MIN_STATIONARY_SECONDS
+                if min_stationary_seconds is not None:
+                    try:
+                        parsed_stationary_seconds = float(min_stationary_seconds)
+                    except Exception:
+                        parsed_stationary_seconds = STOPPED_DEFAULT_MIN_STATIONARY_SECONDS
+                    if math.isfinite(parsed_stationary_seconds):
+                        stationary_seconds = max(0.0, parsed_stationary_seconds)
 
                 tail_nodes.append(
                     {
@@ -2980,7 +3183,7 @@ class CamerasExtension(BaseExtension):
                             "min_elapsed_seconds": 0.05,
                             **(
                                 {"stopped_speed_threshold": speed_threshold}
-                                if preset == "vehicle_stopped"
+                                if preset in {"vehicle_stopped", "person_stopped"}
                                 else {}
                             ),
                         },
@@ -3035,37 +3238,23 @@ class CamerasExtension(BaseExtension):
                         "edges": _linear_edges(node_ids),
                     }
 
-                storage_nodes = [
-                    {
-                        "id": "storage_throttle",
-                        "operator": "core.velocity_throttle",
-                        "config": {
-                            "key_field": "payload.subject.id",
-                            "moving_interval_seconds": 2.0,
-                            "stopped_interval_seconds": 10.0,
-                        },
-                    },
-                    {"id": "storage_crop", "operator": "vision.crop_objects", "config": {}},
-                    {
-                        "id": "storage_store",
-                        "operator": "core.store_images",
-                        "config": {"format": "webp"},
-                    },
-                ]
                 notify_nodes = [
                     {
-                        "id": "stopped_lifecycle",
-                        "operator": "core.lifecycle_from_boolean",
+                        "id": "stationary_event",
+                        "operator": "core.stationary_event",
                         "config": {
-                            "field": "payload.velocity.stopped",
                             "key_field": "payload.subject.id",
-                        },
-                    },
-                    {
-                        "id": "stopped_event_filter",
-                        "operator": "core.filter",
-                        "config": {
-                            "expression": 'payload.velocity.stopped or lifecycle == "close"'
+                            "stopped_field": "payload.velocity.stopped",
+                            "valid_field": "payload.velocity.valid",
+                            "speed_field": "payload.velocity.speed_mps",
+                            "max_speed_mps": speed_threshold,
+                            "min_stationary_seconds": stationary_seconds,
+                            "min_valid_samples": 3,
+                            "max_stationary_distance_m": 0.35,
+                            "require_arrival": True,
+                            "arrival_min_distance_m": 0.50,
+                            "close_after_moving_seconds": 0.75,
+                            "merge_moving_gap_seconds": 15.0,
                         },
                     },
                     {
@@ -3087,9 +3276,14 @@ class CamerasExtension(BaseExtension):
                         "operator": "core.notify",
                         "config": {
                             "notification_type": "pipelines.tracking",
-                            "title": notification_title or "{{camera_name}}: veículo parado",
+                            "title": notification_title
+                            or (
+                                "{{camera_name}}: pessoa parada"
+                                if preset == "person_stopped"
+                                else "{{camera_name}}: veículo parado"
+                            ),
                             "description": notification_description
-                            or "{{subject.category}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h",
+                            or "{{subject.category}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h - {{payload.stationary_event.stationary_seconds}} s",
                             "priority": notification_priority,
                             "dedupe_key_template": "{{subject.id}}",
                         },
@@ -3097,17 +3291,13 @@ class CamerasExtension(BaseExtension):
                 ]
                 nodes = [*base_nodes, *tail_nodes]
                 shared_node_ids = [str(node["id"]) for node in nodes]
-                nodes = [*nodes, *storage_nodes, *notify_nodes]
+                nodes = [*nodes, *notify_nodes]
                 edges = _linear_edges(shared_node_ids)
-                edges.extend(
-                    _linear_edges(["velocity", "storage_throttle", "storage_crop", "storage_store"])
-                )
                 edges.extend(
                     _linear_edges(
                         [
                             "velocity",
-                            "stopped_lifecycle",
-                            "stopped_event_filter",
+                            "stationary_event",
                             "notify_debounce",
                             "notify_crop",
                             "notify_store",
@@ -3115,6 +3305,18 @@ class CamerasExtension(BaseExtension):
                         ]
                     )
                 )
+                for edge in edges:
+                    from_node = edge.get("from") if isinstance(edge, dict) else None
+                    if not isinstance(from_node, dict):
+                        continue
+                    source_node = str(from_node.get("node") or "")
+                    if source_node in {
+                        "velocity",
+                        "stationary_event",
+                        "notify_debounce",
+                    }:
+                        edge["maxsize"] = 32 if source_node == "velocity" else 8
+                        edge["drop_policy"] = "keyed_latest_only"
                 return {"schema_version": 1, "nodes": nodes, "edges": edges}
 
             raise ValueError("Unknown preset")
@@ -3208,7 +3410,7 @@ class CamerasExtension(BaseExtension):
             composition_id = str(body.composition_id or "").strip()
             area_restriction_config: dict[str, Any] | None = None
             if preset in CAMERA_MAPPING_REQUIRED_PRESETS:
-                if preset == "vehicle_stopped" and str(body.area_id or "").strip():
+                if preset in {"vehicle_stopped", "person_stopped"} and str(body.area_id or "").strip():
                     resolved_area = _resolve_mapped_camera_area(
                         cfg,
                         camera_id=cid,
@@ -3256,6 +3458,9 @@ class CamerasExtension(BaseExtension):
             )
 
             try:
+                notification_priority = body.notification_priority or (
+                    "high" if preset == "vehicle_stopped" else "medium"
+                )
                 graph = _build_camera_preset_graph(
                     preset=preset,
                     camera_id=cid,
@@ -3264,9 +3469,10 @@ class CamerasExtension(BaseExtension):
                     composition_id=composition_id,
                     area_restriction_config=area_restriction_config,
                     stopped_speed_threshold=body.stopped_speed_threshold,
+                    min_stationary_seconds=body.min_stationary_seconds,
                     notification_title=str(body.notification_title or "").strip(),
                     notification_description=str(body.notification_description or "").strip(),
-                    notification_priority=body.notification_priority,
+                    notification_priority=notification_priority,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -2807,6 +2807,11 @@ video {
   grid-template-rows: repeat(2, minmax(0, 1fr));
 }
 
+.streamsGrid.is3x3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+}
+
 .streamsTile {
   min-height: 0;
   border-radius: 0;
@@ -3892,6 +3897,11 @@ video {
   .streamsGrid.is2x2 {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: repeat(4, minmax(0, 1fr));
+  }
+
+  .streamsGrid.is3x3 {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(9, minmax(0, 1fr));
   }
 
   .streamsGrid {

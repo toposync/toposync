@@ -8,7 +8,7 @@ import numpy
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, SinkRuntime, SourceOperatorRuntime
-from toposync.runtime.pipelines.images import normalize_artifact_name
+from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, normalize_artifact_name
 from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, OperatorRegistry
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
@@ -85,10 +85,29 @@ class DemandGateConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     transmission_id: str = ""
+    demand_scope: Literal["transmission", "output"] = "transmission"
     output_id: str = ""
     quality_profile_id: str = ""
     poll_interval_ms: int = Field(default=500, ge=100, le=10_000)
     fail_open: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_scope(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        scope = str(data.get("demand_scope") or "").strip().lower()
+        if scope == "auto":
+            scope = "transmission"
+        if scope not in {"transmission", "output"}:
+            has_specific_output = bool(
+                str(data.get("output_id") or "").strip()
+                or str(data.get("quality_profile_id") or "").strip()
+            )
+            scope = "output" if has_specific_output else "transmission"
+        data["demand_scope"] = scope
+        return data
 
     @field_validator("transmission_id", "output_id", "quality_profile_id", mode="after")
     @classmethod
@@ -147,10 +166,11 @@ class DemandGateRuntime(SourceOperatorRuntime):
         self._last_open = is_open
         self._last_payload = payload
         lifecycle = Lifecycle.OPEN if is_open else Lifecycle.CLOSE
+        output_id, quality_profile_id = self._selected_demand_target()
         stream_id = _demand_gate_stream_id(
             self._config.transmission_id,
-            output_id=self._config.output_id,
-            quality_profile_id=self._config.quality_profile_id,
+            output_id=output_id,
+            quality_profile_id=quality_profile_id,
         )
         return Packet.create(
             stream_id=stream_id,
@@ -158,8 +178,9 @@ class DemandGateRuntime(SourceOperatorRuntime):
             payload={
                 "gate_open": bool(is_open),
                 "transmission_id": self._config.transmission_id,
-                "output_id": self._config.output_id,
-                "quality_profile_id": self._config.quality_profile_id,
+                "demand_scope": self._config.demand_scope,
+                "output_id": output_id,
+                "quality_profile_id": quality_profile_id,
                 **payload,
             },
         )
@@ -175,11 +196,12 @@ class DemandGateRuntime(SourceOperatorRuntime):
                 "reason": "services_unavailable",
             }
         try:
+            output_id, quality_profile_id = self._selected_demand_target()
             raw = await services.call(
                 "streaming.demand.snapshot",
                 transmission_id=self._config.transmission_id,
-                output_id=self._config.output_id,
-                quality_profile_id=self._config.quality_profile_id,
+                output_id=output_id,
+                quality_profile_id=quality_profile_id,
             )
         except Exception as exc:  # noqa: BLE001
             return bool(self._config.fail_open), {
@@ -198,6 +220,11 @@ class DemandGateRuntime(SourceOperatorRuntime):
             "hint_active": bool(snapshot.get("hint_active")),
             "matched_outputs": int(snapshot.get("matched_outputs") or 0),
         }
+
+    def _selected_demand_target(self) -> tuple[str, str]:
+        if self._config.demand_scope != "output":
+            return "", ""
+        return self._config.output_id, self._config.quality_profile_id
 
 
 def register_streaming_pipeline_operators(registry: OperatorRegistry) -> None:
@@ -227,6 +254,7 @@ def register_streaming_pipeline_operators(registry: OperatorRegistry) -> None:
         capabilities=["streaming", "sink", "realtime"],
         defaults=PublishVideoConfig(publication_enabled=True).model_dump(mode="json"),
         share_strategy="never",
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
         requires_media_fields=["ts", "width", "height"],
         input_modalities=["video"],
         owner=EXTENSION_ID,

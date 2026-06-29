@@ -381,12 +381,20 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.render_modal.option_2d.desc": "View the space from above with images and visual effects applied.",
     "core.ui.render_modal.option_vector2d.title": "2D (Plan)",
     "core.ui.render_modal.option_vector2d.desc": "Use a clean floor-plan view for spaces, icons, and states.",
-    "core.ui.render_modal.option_streams.title": "Live Cameras",
-    "core.ui.render_modal.option_streams.desc": "Watch enabled cameras in a paged grid.",
+    "core.ui.render_modal.option_streams.title": "Camera Grid",
+    "core.ui.render_modal.option_streams.desc": "Watch enabled cameras in a 2x2 or 3x3 paged grid.",
+    "core.ui.render_modal.option_camera_live.title": "Live Camera",
+    "core.ui.render_modal.option_camera_live.desc": "Focus on one live camera with a shareable link.",
     "core.ui.main2d.vector.effects_error": "Some effects could not be rendered.",
     "core.ui.main2d.vector.effects_loading": "Preparing effects...",
     "core.ui.viewport_loading.composition": "Loading composition...",
     "core.ui.viewport_loading.extensions": "Loading extensions...",
+
+    "core.ui.camera_live.selector_label": "Camera",
+    "core.ui.camera_live.select": "Select camera",
+    "core.ui.camera_live.modal_title": "Camera",
+    "core.ui.camera_live.empty_title": "No live cameras",
+    "core.ui.camera_live.empty_desc": "Create or enable a live view in Settings > Streams.",
 
     "core.ui.streams.unavailable": "Streaming extension unavailable.",
     "core.ui.streams.empty": "No live streams enabled. Create one in Settings > Streams.",
@@ -769,6 +777,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.source": "Start flow",
     "core.ui.pipelines.operator_name.core.synthetic_source": "Use synthetic source",
     "core.ui.pipelines.operator_name.core.demo_frame_sequence_source": "Use demo frames",
+    "core.ui.pipelines.operator_name.stream.demand_gate": "Demand gate",
+    "core.ui.pipelines.operator_name.vision.synthetic_detection_source": "Synthetic detection source",
     "core.ui.pipelines.operator_name.camera.source": "Use camera",
     "core.ui.pipelines.operator_name.core.schedule_gate": "Limit by schedule",
     "core.ui.pipelines.operator_name.camera.onvif_state_gate": "ONVIF condition",
@@ -804,6 +814,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.ai.smart_crop": "Crop with AI",
     "core.ui.pipelines.operator_name.core.category_gate": "Filter by category",
     "core.ui.pipelines.operator_name.core.filter": "Apply rule",
+    "core.ui.pipelines.operator_name.core.stationary_event": "Confirm stop",
     "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Create event from condition",
     "core.ui.pipelines.operator_name.camera.camera_mapping": "Map position in space",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Filter by area",
@@ -816,6 +827,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.home_assistant.notify": "Notify through Home Assistant",
     "core.ui.pipelines.operator_name.home_assistant.boolean_state": "Set Home Assistant boolean state",
     "core.ui.pipelines.operator_name.stream.publish_video": "Publish video",
+    "core.ui.pipelines.operator_name.cinematic.director_source": "Cinematic director",
     "core.ui.pipelines.operator_name.core.debug": "Inspect flow",
     "core.ui.pipelines.operator_name.core.stream_state_snapshot": "Capture stream state",
     "core.ui.pipelines.operator_name.core.passthrough": "Pass through flow",
@@ -823,6 +835,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.dist.remote_source": "Receive remote packets",
     "core.ui.pipelines.operator_name.dist.target_filter": "Route remote packets",
     "core.ui.pipelines.operator_name.dist.project_to_origin": "Send to origin",
+    "core.ui.pipelines.operator_description.stream.demand_gate":
+      "Opens downstream capture only while a live stream has viewers or active heartbeat leases.",
+    "core.ui.pipelines.operator_description.vision.synthetic_detection_source":
+      "Generates deterministic demo frames with synthetic detections for tests, onboarding, and smoke checks.",
     "core.ui.pipelines.operator_description.camera.source": "Reads frames from the selected camera or from an RTSP source.",
     "core.ui.pipelines.operator_description.core.schedule_gate": "Keeps the flow active only on the selected days and times.",
     "core.ui.pipelines.operator_description.camera.onvif_state_gate":
@@ -881,6 +897,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Lets packets pass or blocks them according to detected object categories.",
     "core.ui.pipelines.operator_description.core.filter":
       "Applies a safe rule over payload and metadata, keeping only matching packets.",
+    "core.ui.pipelines.operator_description.core.stationary_event":
+      "Confirms that a tracked subject really stopped before opening a lifecycle event.",
     "core.ui.pipelines.operator_description.core.lifecycle_from_boolean":
       "Converts a true or false condition into open, update, and close events.",
     "core.ui.pipelines.operator_description.camera.camera_mapping":
@@ -911,6 +929,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Keeps a Home Assistant boolean signal in sync with pipeline event lifecycle.",
     "core.ui.pipelines.operator_description.stream.publish_video":
       "Publishes this flow's frames as a camera variant or to an advanced video stream.",
+    "core.ui.pipelines.operator_description.cinematic.director_source":
+      "Creates one demand-driven video source that rotates cameras or keeps a main camera while cutting to event cameras.",
     "core.ui.pipelines.operator_description.ai.condition_filter":
       "Lets packets pass only when the visual condition is present.",
     "core.ui.pipelines.operator_description.ai.smart_crop":
@@ -953,13 +973,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.editor.step.parallel_sink_hint":
       "This step branches off the previous data step and does not feed the next steps.",
     "core.ui.pipelines.editor.warning.non_linear_graph":
-      "Graph is not compatible with interactive step ordering. Interactive mode loaded node list order and will rewrite edges.",
+      "Graph is not compatible with interactive step ordering. Switch to JSON mode before saving to preserve links.",
     "core.ui.pipelines.editor.warning.multiple_starts":
-      "Graph has multiple starts. Interactive mode loaded node list order and will rewrite edges.",
+      "Graph has multiple starts. Switch to JSON mode before saving to preserve links.",
     "core.ui.pipelines.editor.warning.cycle":
-      "Graph contains a cycle. Interactive mode loaded node list order and will rewrite edges.",
+      "Graph contains a cycle. Switch to JSON mode before saving to preserve links.",
     "core.ui.pipelines.editor.warning.disconnected":
-      "Graph has disconnected segments. Interactive mode loaded node list order and will rewrite edges.",
+      "Graph has disconnected segments. Switch to JSON mode before saving to preserve links.",
+    "core.ui.pipelines.editor.error.non_linear_interactive_save_blocked":
+      "This graph is not compatible with interactive editing. Switch to JSON mode before saving so the existing links are preserved.",
 
     "core.ui.pipelines.template_apply.title": "Apply template",
     "core.ui.pipelines.template_apply.title_with_name": "Apply template: {{name}}",
@@ -1132,9 +1154,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.description_template": "Description template",
     "core.ui.pipelines.panels.notify.description_placeholder": "Optional",
     "core.ui.pipelines.panels.notify.priority": "Priority",
+    "core.ui.pipelines.panels.notify.priority.silent": "Silent",
     "core.ui.pipelines.panels.notify.priority.low": "Low",
     "core.ui.pipelines.panels.notify.priority.medium": "Medium",
     "core.ui.pipelines.panels.notify.priority.high": "High",
+    "core.ui.pipelines.panels.notify.priority.silent_hint":
+      "Saved in history and can direct cinematic transmissions, but does not appear in the normal notifications list.",
     "core.ui.pipelines.panels.notify.realtime": "Realtime updates",
     "core.ui.pipelines.panels.notify.update_interval_seconds": "Update interval (seconds)",
     "core.ui.pipelines.panels.notify.update_interval_hint":
@@ -1252,6 +1277,87 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.camera_source.backend.auto": "Auto (recommended)",
     "core.ui.pipelines.panels.camera_source.hint_backend":
       "Auto selects the best available backend and falls back automatically if one fails to initialize.",
+
+    "core.ui.pipelines.panels.stationary_event.max_speed": "Maximum stopped speed (km/h)",
+    "core.ui.pipelines.panels.stationary_event.min_stationary_seconds": "Minimum stopped time (seconds)",
+    "core.ui.pipelines.panels.stationary_event.min_valid_samples": "Minimum valid samples",
+    "core.ui.pipelines.panels.stationary_event.require_arrival": "Require observed arrival before stop",
+    "core.ui.pipelines.panels.stationary_event.merge_moving_gap_seconds":
+      "Merge short maneuvers (seconds)",
+    "core.ui.pipelines.panels.stationary_event.hint":
+      "Opens the event quickly after confirmation and can keep the same event during brief maneuvers.",
+    "core.ui.pipelines.panels.stationary_event.key_field": "Subject key field",
+    "core.ui.pipelines.panels.stationary_event.stopped_field": "Stopped boolean field",
+
+    "core.ui.pipelines.panels.cinematic_director.behavior": "Transmission mode",
+    "core.ui.pipelines.panels.cinematic_director.behavior.rotation_with_events": "Rotate cameras and highlight events",
+    "core.ui.pipelines.panels.cinematic_director.behavior.primary_with_events": "Main camera and highlight events",
+    "core.ui.pipelines.panels.cinematic_director.behavior_hint.rotation":
+      "Shows one allowed camera at a time and cuts to event cameras when notifications arrive.",
+    "core.ui.pipelines.panels.cinematic_director.behavior_hint.primary":
+      "Keeps a main camera on screen and cuts away only while relevant events are active.",
+    "core.ui.pipelines.panels.cinematic_director.primary_camera": "Main camera",
+    "core.ui.pipelines.panels.cinematic_director.primary_camera_placeholder": "Select the main camera…",
+    "core.ui.pipelines.panels.cinematic_director.primary_required": "Select a main camera for this mode.",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope": "Cameras used",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.all": "All active cameras",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.include": "Only selected cameras",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.exclude": "All except selected cameras",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids": "Camera selection",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_placeholder": "Select cameras…",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.all": "Uses all {{count}} active cameras.",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.include": "Only selected cameras can appear.",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.exclude": "Selected cameras will be ignored.",
+    "core.ui.pipelines.panels.cinematic_director.camera_selection_required": "Select at least one camera for this mode.",
+    "core.ui.pipelines.panels.cinematic_director.no_cameras": "No active cameras found in the camera registry.",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum": "Minimum event priority",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.all": "All events, including silent",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.medium": "Medium or high",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.high": "High only",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.custom": "Custom in JSON",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum_hint":
+      "Silent events never appear in the notification list, but can still direct this transmission when all events are allowed.",
+    "core.ui.pipelines.panels.cinematic_director.source_role": "Preferred source",
+    "core.ui.pipelines.panels.cinematic_director.source_role.auto": "Automatic",
+    "core.ui.pipelines.panels.cinematic_director.source_role.main": "Main",
+    "core.ui.pipelines.panels.cinematic_director.source_role.sub": "Low resolution",
+    "core.ui.pipelines.panels.cinematic_director.source_role.zoom": "Zoom",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode": "Warmup",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.off": "Off",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.next_idle": "Next idle camera",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.event_high": "High-priority events",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.adaptive": "Adaptive",
+    "core.ui.pipelines.panels.cinematic_director.fps": "FPS",
+    "core.ui.pipelines.panels.cinematic_director.width": "Width",
+    "core.ui.pipelines.panels.cinematic_director.height": "Height",
+    "core.ui.pipelines.panels.cinematic_director.idle_dwell_seconds": "Rotation interval (seconds)",
+    "core.ui.pipelines.panels.cinematic_director.event_min_seconds": "Minimum event hold (seconds)",
+    "core.ui.pipelines.panels.cinematic_director.cut_cooldown_seconds": "Minimum time between cuts (seconds)",
+    "core.ui.pipelines.panels.cinematic_director.max_event_hold_seconds": "Maximum event hold (seconds)",
+    "core.ui.pipelines.panels.cinematic_director.max_cuts_per_minute": "Maximum cuts per minute",
+    "core.ui.pipelines.panels.cinematic_director.stale_frame_max_age_seconds": "Maximum frame age (seconds)",
+    "core.ui.pipelines.panels.cinematic_director.ignore_own_pipeline_events": "Ignore events from this cinematic flow",
+    "core.ui.pipelines.panels.cinematic_director.advanced_hint":
+      "Pipeline filters, camera maps, manual priorities, and other expert settings remain available in JSON mode.",
+
+    "core.ui.pipelines.panels.demand_gate.summary":
+      "Starts the next step only while this transmission has viewers or active demand.",
+    "core.ui.pipelines.panels.demand_gate.scope_hint.transmission":
+      "Automatic: any viewer of the connected transmission opens the gate.",
+    "core.ui.pipelines.panels.demand_gate.scope_hint.output": "Advanced: demand is restricted to one output.",
+    "core.ui.pipelines.panels.demand_gate.scope": "Demand scope",
+    "core.ui.pipelines.panels.demand_gate.scope.transmission": "Any viewer of this transmission",
+    "core.ui.pipelines.panels.demand_gate.scope.output": "Specific output",
+    "core.ui.pipelines.panels.demand_gate.transmission_id": "Transmission ID",
+    "core.ui.pipelines.panels.demand_gate.transmission_id_placeholder": "managed automatically",
+    "core.ui.pipelines.panels.demand_gate.output_id": "Output ID",
+    "core.ui.pipelines.panels.demand_gate.output_id_placeholder": "hls_output_id",
+    "core.ui.pipelines.panels.demand_gate.quality_profile_id": "Quality profile ID",
+    "core.ui.pipelines.panels.demand_gate.quality_profile_id_placeholder": "quality_profile_id",
+    "core.ui.pipelines.panels.demand_gate.poll_interval_ms": "Polling interval (ms)",
+    "core.ui.pipelines.panels.demand_gate.fail_open": "Fail open if demand cannot be checked",
+    "core.ui.pipelines.panels.demand_gate.advanced_hint":
+      "Leave the scope automatic unless you intentionally want this gate to follow one technical stream output.",
 
     "core.ui.pipelines.panels.camera_mapping.hint":
       "Uses control points defined in your compositions to map image → world coordinates. Configure control points in the Composition editor.",
@@ -2496,12 +2602,20 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.render_modal.option_2d.desc": "Veja o ambiente de cima com imagens e efeitos visuais aplicados.",
     "core.ui.render_modal.option_vector2d.title": "2D (Planta)",
     "core.ui.render_modal.option_vector2d.desc": "Use uma planta limpa para acompanhar espaços, ícones e estados.",
-    "core.ui.render_modal.option_streams.title": "Câmeras ao vivo",
-    "core.ui.render_modal.option_streams.desc": "Acompanhe as câmeras habilitadas em uma grade com paginação.",
+    "core.ui.render_modal.option_streams.title": "Grade de câmeras",
+    "core.ui.render_modal.option_streams.desc": "Acompanhe as câmeras habilitadas em uma grade 2x2 ou 3x3 com paginação.",
+    "core.ui.render_modal.option_camera_live.title": "Câmera ao vivo",
+    "core.ui.render_modal.option_camera_live.desc": "Foque em uma câmera ao vivo com um link compartilhável.",
     "core.ui.main2d.vector.effects_error": "Alguns efeitos não puderam ser renderizados.",
     "core.ui.main2d.vector.effects_loading": "Preparando efeitos...",
     "core.ui.viewport_loading.composition": "Carregando composição...",
     "core.ui.viewport_loading.extensions": "Carregando extensões...",
+
+    "core.ui.camera_live.selector_label": "Câmera",
+    "core.ui.camera_live.select": "Selecionar câmera",
+    "core.ui.camera_live.modal_title": "Câmera",
+    "core.ui.camera_live.empty_title": "Nenhuma câmera ao vivo",
+    "core.ui.camera_live.empty_desc": "Crie ou habilite uma live view em Configurações > Transmissões.",
 
     "core.ui.streams.unavailable": "Extensão de streaming indisponível.",
     "core.ui.streams.empty": "Nenhuma transmissão ao vivo habilitada. Crie em Configurações > Transmissões.",
@@ -2888,6 +3002,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.source": "Iniciar fluxo",
     "core.ui.pipelines.operator_name.core.synthetic_source": "Usar fonte sintética",
     "core.ui.pipelines.operator_name.core.demo_frame_sequence_source": "Usar frames de demonstração",
+    "core.ui.pipelines.operator_name.stream.demand_gate": "Controle de demanda",
+    "core.ui.pipelines.operator_name.vision.synthetic_detection_source": "Fonte sintética de detecção",
     "core.ui.pipelines.operator_name.camera.source": "Usar câmera",
     "core.ui.pipelines.operator_name.core.schedule_gate": "Limitar por horário",
     "core.ui.pipelines.operator_name.camera.onvif_state_gate": "Condição ONVIF",
@@ -2923,6 +3039,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.ai.smart_crop": "Recortar com IA",
     "core.ui.pipelines.operator_name.core.category_gate": "Filtrar por categoria",
     "core.ui.pipelines.operator_name.core.filter": "Aplicar regra",
+    "core.ui.pipelines.operator_name.core.stationary_event": "Confirmar parada",
     "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Criar evento por condição",
     "core.ui.pipelines.operator_name.camera.camera_mapping": "Mapear posição no ambiente",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Filtrar por área",
@@ -2935,6 +3052,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.home_assistant.notify": "Notificar no Home Assistant",
     "core.ui.pipelines.operator_name.home_assistant.boolean_state": "Estado booleano no Home Assistant",
     "core.ui.pipelines.operator_name.stream.publish_video": "Transmitir vídeo",
+    "core.ui.pipelines.operator_name.cinematic.director_source": "Diretor cinemático",
     "core.ui.pipelines.operator_name.core.debug": "Inspecionar fluxo",
     "core.ui.pipelines.operator_name.core.stream_state_snapshot": "Capturar estado do stream",
     "core.ui.pipelines.operator_name.core.passthrough": "Encaminhar fluxo",
@@ -2942,6 +3060,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.dist.remote_source": "Receber pacotes remotos",
     "core.ui.pipelines.operator_name.dist.target_filter": "Rotear pacotes remotos",
     "core.ui.pipelines.operator_name.dist.project_to_origin": "Enviar para origem",
+    "core.ui.pipelines.operator_description.stream.demand_gate":
+      "Abre a captura adiante apenas enquanto uma transmissão tem espectadores ou leases de heartbeat ativos.",
+    "core.ui.pipelines.operator_description.vision.synthetic_detection_source":
+      "Gera frames de demonstração determinísticos com detecções sintéticas para testes, onboarding e smoke checks.",
     "core.ui.pipelines.operator_description.camera.source": "Lê frames da câmera selecionada ou de uma fonte RTSP.",
     "core.ui.pipelines.operator_description.core.schedule_gate": "Deixa o fluxo ativo apenas nos dias e horários escolhidos.",
     "core.ui.pipelines.operator_description.camera.onvif_state_gate":
@@ -3000,6 +3122,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Deixa passar ou bloqueia pacotes conforme as categorias de objeto detectadas.",
     "core.ui.pipelines.operator_description.core.filter":
       "Aplica uma regra segura sobre payload e metadata, mantendo apenas os pacotes que combinam.",
+    "core.ui.pipelines.operator_description.core.stationary_event":
+      "Confirma que um sujeito rastreado realmente parou antes de abrir um evento com lifecycle.",
     "core.ui.pipelines.operator_description.core.lifecycle_from_boolean":
       "Converte uma condição verdadeira ou falsa em eventos de abertura, atualização e fechamento.",
     "core.ui.pipelines.operator_description.camera.camera_mapping":
@@ -3030,6 +3154,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Mantém um sinal booleano no Home Assistant sincronizado com o lifecycle do fluxo.",
     "core.ui.pipelines.operator_description.stream.publish_video":
       "Publica os frames deste fluxo como variante de câmera ou em uma transmissão avançada.",
+    "core.ui.pipelines.operator_description.cinematic.director_source":
+      "Cria uma fonte de vídeo sob demanda que alterna câmeras ou mantém uma câmera principal enquanto corta para câmeras com eventos.",
     "core.ui.pipelines.operator_description.ai.condition_filter":
       "Deixa passar apenas pacotes em que a condição visual está presente.",
     "core.ui.pipelines.operator_description.ai.smart_crop":
@@ -3073,13 +3199,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.editor.step.parallel_sink_hint":
       "Esta etapa ramifica da etapa anterior de dados e não alimenta as próximas etapas.",
     "core.ui.pipelines.editor.warning.non_linear_graph":
-      "O grafo não é compatível com a ordenação interativa de etapas. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
+      "O grafo não é compatível com a ordenação interativa de etapas. Troque para o modo JSON antes de salvar para preservar as ligações.",
     "core.ui.pipelines.editor.warning.multiple_starts":
-      "O grafo tem múltiplos inícios. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
+      "O grafo tem múltiplos inícios. Troque para o modo JSON antes de salvar para preservar as ligações.",
     "core.ui.pipelines.editor.warning.cycle":
-      "O grafo contém um ciclo. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
+      "O grafo contém um ciclo. Troque para o modo JSON antes de salvar para preservar as ligações.",
     "core.ui.pipelines.editor.warning.disconnected":
-      "O grafo tem segmentos desconectados. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
+      "O grafo tem segmentos desconectados. Troque para o modo JSON antes de salvar para preservar as ligações.",
+    "core.ui.pipelines.editor.error.non_linear_interactive_save_blocked":
+      "Este grafo não é compatível com edição interativa. Troque para o modo JSON antes de salvar para preservar as ligações existentes.",
 
     "core.ui.pipelines.template_apply.title": "Aplicar template",
     "core.ui.pipelines.template_apply.title_with_name": "Aplicar template: {{name}}",
@@ -3252,9 +3380,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.description_template": "Template da descrição",
     "core.ui.pipelines.panels.notify.description_placeholder": "Opcional",
     "core.ui.pipelines.panels.notify.priority": "Prioridade",
+    "core.ui.pipelines.panels.notify.priority.silent": "Silenciosa",
     "core.ui.pipelines.panels.notify.priority.low": "Baixa",
     "core.ui.pipelines.panels.notify.priority.medium": "Média",
     "core.ui.pipelines.panels.notify.priority.high": "Alta",
+    "core.ui.pipelines.panels.notify.priority.silent_hint":
+      "Salva no histórico e pode direcionar transmissões cinematográficas, mas não aparece na lista normal de notificações.",
     "core.ui.pipelines.panels.notify.realtime": "Atualizações em tempo real",
     "core.ui.pipelines.panels.notify.update_interval_seconds": "Intervalo de atualização (segundos)",
     "core.ui.pipelines.panels.notify.update_interval_hint":
@@ -3375,6 +3506,87 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.camera_source.backend.auto": "Auto (recomendado)",
     "core.ui.pipelines.panels.camera_source.hint_backend":
       "Auto seleciona o melhor backend disponível e faz fallback automaticamente se um falhar ao iniciar.",
+
+    "core.ui.pipelines.panels.stationary_event.max_speed": "Velocidade máxima parado (km/h)",
+    "core.ui.pipelines.panels.stationary_event.min_stationary_seconds": "Tempo mínimo parado (segundos)",
+    "core.ui.pipelines.panels.stationary_event.min_valid_samples": "Mínimo de amostras válidas",
+    "core.ui.pipelines.panels.stationary_event.require_arrival": "Exigir chegada observada antes da parada",
+    "core.ui.pipelines.panels.stationary_event.merge_moving_gap_seconds":
+      "Unir manobras curtas (segundos)",
+    "core.ui.pipelines.panels.stationary_event.hint":
+      "Abre o evento rapidamente após a confirmação e pode manter o mesmo evento durante manobras breves.",
+    "core.ui.pipelines.panels.stationary_event.key_field": "Campo de identificação do sujeito",
+    "core.ui.pipelines.panels.stationary_event.stopped_field": "Campo booleano de parado",
+
+    "core.ui.pipelines.panels.cinematic_director.behavior": "Modo da transmissão",
+    "core.ui.pipelines.panels.cinematic_director.behavior.rotation_with_events": "Rotacionar câmeras e destacar eventos",
+    "core.ui.pipelines.panels.cinematic_director.behavior.primary_with_events": "Câmera principal e destacar eventos",
+    "core.ui.pipelines.panels.cinematic_director.behavior_hint.rotation":
+      "Mostra uma câmera permitida por vez e corta para câmeras com eventos quando notificações chegam.",
+    "core.ui.pipelines.panels.cinematic_director.behavior_hint.primary":
+      "Mantém uma câmera principal na tela e corta para outras apenas enquanto eventos relevantes estão ativos.",
+    "core.ui.pipelines.panels.cinematic_director.primary_camera": "Câmera principal",
+    "core.ui.pipelines.panels.cinematic_director.primary_camera_placeholder": "Selecionar câmera principal…",
+    "core.ui.pipelines.panels.cinematic_director.primary_required": "Selecione uma câmera principal para este modo.",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope": "Câmeras usadas",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.all": "Todas as câmeras ativas",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.include": "Somente câmeras selecionadas",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.exclude": "Todas exceto câmeras selecionadas",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids": "Seleção de câmeras",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_placeholder": "Selecionar câmeras…",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.all": "Usa todas as {{count}} câmeras ativas.",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.include": "Somente as câmeras selecionadas podem aparecer.",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.exclude": "As câmeras selecionadas serão ignoradas.",
+    "core.ui.pipelines.panels.cinematic_director.camera_selection_required": "Selecione pelo menos uma câmera para este modo.",
+    "core.ui.pipelines.panels.cinematic_director.no_cameras": "Nenhuma câmera ativa encontrada no cadastro de câmeras.",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum": "Prioridade mínima de evento",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.all": "Todos os eventos, inclusive silenciosos",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.medium": "Média ou alta",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.high": "Somente alta",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.custom": "Personalizada no JSON",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum_hint":
+      "Eventos silenciosos nunca aparecem na lista de notificações, mas ainda podem direcionar esta transmissão quando todos os eventos estão permitidos.",
+    "core.ui.pipelines.panels.cinematic_director.source_role": "Fonte preferida",
+    "core.ui.pipelines.panels.cinematic_director.source_role.auto": "Automática",
+    "core.ui.pipelines.panels.cinematic_director.source_role.main": "Principal",
+    "core.ui.pipelines.panels.cinematic_director.source_role.sub": "Baixa resolução",
+    "core.ui.pipelines.panels.cinematic_director.source_role.zoom": "Zoom",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode": "Aquecimento",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.off": "Desligado",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.next_idle": "Próxima câmera em repouso",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.event_high": "Eventos de alta prioridade",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.adaptive": "Adaptativo",
+    "core.ui.pipelines.panels.cinematic_director.fps": "FPS",
+    "core.ui.pipelines.panels.cinematic_director.width": "Largura",
+    "core.ui.pipelines.panels.cinematic_director.height": "Altura",
+    "core.ui.pipelines.panels.cinematic_director.idle_dwell_seconds": "Intervalo de rotação (segundos)",
+    "core.ui.pipelines.panels.cinematic_director.event_min_seconds": "Permanência mínima em evento (segundos)",
+    "core.ui.pipelines.panels.cinematic_director.cut_cooldown_seconds": "Tempo mínimo entre cortes (segundos)",
+    "core.ui.pipelines.panels.cinematic_director.max_event_hold_seconds": "Permanência máxima em evento (segundos)",
+    "core.ui.pipelines.panels.cinematic_director.max_cuts_per_minute": "Máximo de cortes por minuto",
+    "core.ui.pipelines.panels.cinematic_director.stale_frame_max_age_seconds": "Idade máxima do frame (segundos)",
+    "core.ui.pipelines.panels.cinematic_director.ignore_own_pipeline_events": "Ignorar eventos deste fluxo cinemático",
+    "core.ui.pipelines.panels.cinematic_director.advanced_hint":
+      "Filtros por pipeline, mapeamentos de câmera, prioridades manuais e outros ajustes especialistas continuam disponíveis no modo JSON.",
+
+    "core.ui.pipelines.panels.demand_gate.summary":
+      "Inicia a próxima etapa apenas enquanto esta transmissão tiver espectadores ou demanda ativa.",
+    "core.ui.pipelines.panels.demand_gate.scope_hint.transmission":
+      "Automático: qualquer espectador da transmissão conectada abre o gate.",
+    "core.ui.pipelines.panels.demand_gate.scope_hint.output": "Avançado: a demanda fica restrita a uma saída.",
+    "core.ui.pipelines.panels.demand_gate.scope": "Escopo da demanda",
+    "core.ui.pipelines.panels.demand_gate.scope.transmission": "Qualquer espectador desta transmissão",
+    "core.ui.pipelines.panels.demand_gate.scope.output": "Saída específica",
+    "core.ui.pipelines.panels.demand_gate.transmission_id": "ID da transmissão",
+    "core.ui.pipelines.panels.demand_gate.transmission_id_placeholder": "gerenciado automaticamente",
+    "core.ui.pipelines.panels.demand_gate.output_id": "ID da saída",
+    "core.ui.pipelines.panels.demand_gate.output_id_placeholder": "hls_output_id",
+    "core.ui.pipelines.panels.demand_gate.quality_profile_id": "ID do perfil de qualidade",
+    "core.ui.pipelines.panels.demand_gate.quality_profile_id_placeholder": "quality_profile_id",
+    "core.ui.pipelines.panels.demand_gate.poll_interval_ms": "Intervalo de consulta (ms)",
+    "core.ui.pipelines.panels.demand_gate.fail_open": "Abrir se a demanda não puder ser verificada",
+    "core.ui.pipelines.panels.demand_gate.advanced_hint":
+      "Deixe o escopo automático, salvo quando você quiser que este gate siga uma saída técnica específica.",
 
     "core.ui.pipelines.panels.camera_mapping.hint":
       "Usa pontos de controle definidos nas composições para mapear coordenadas imagem → mundo. Configure pontos de controle no editor de Composição.",

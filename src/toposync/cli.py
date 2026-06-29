@@ -31,6 +31,36 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _env_optional_int(name: str, default: int | None = None) -> int | None:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+    if raw.lower() in {"none", "off", "false", "disabled"}:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else None
+
+
+def _uvicorn_graceful_shutdown_timeout(args: argparse.Namespace) -> int | None:
+    value = getattr(args, "graceful_shutdown_timeout", None)
+    return value if isinstance(value, int) and value > 0 else None
+
+
+def _add_shutdown_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--graceful-shutdown-timeout",
+        type=int,
+        default=_env_optional_int("TOPOSYNC_GRACEFUL_SHUTDOWN_TIMEOUT"),
+        help=(
+            "Seconds to wait for open HTTP connections during server shutdown. "
+            "Use 0 to keep Uvicorn's default indefinite wait."
+        ),
+    )
+
+
 def _print_check(ok: bool, message: str) -> None:
     marker = "OK" if ok else "FAIL"
     print(f"[{marker}] {message}")
@@ -211,6 +241,7 @@ def _run_extension_dev(args: argparse.Namespace) -> None:
         host=args.host,
         port=args.port,
         log_level=args.log_level,
+        timeout_graceful_shutdown=_uvicorn_graceful_shutdown_timeout(args),
     )
 
 
@@ -222,6 +253,7 @@ def main(argv: list[str] | None = None) -> None:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=_env_int("TOPOSYNC_BACKEND_PORT", 8000))
     serve.add_argument("--log-level", default="info")
+    _add_shutdown_argument(serve)
     serve.add_argument(
         "--data-dir",
         default=None,
@@ -242,6 +274,7 @@ def main(argv: list[str] | None = None) -> None:
     processing.add_argument("--host", default="127.0.0.1")
     processing.add_argument("--port", type=int, default=_env_int("TOPOSYNC_PROCESSING_PORT", DEFAULT_PROCESSING_PORT))
     processing.add_argument("--log-level", default="info")
+    _add_shutdown_argument(processing)
     processing.add_argument(
         "--data-dir",
         default=None,
@@ -264,6 +297,7 @@ def main(argv: list[str] | None = None) -> None:
     dev.add_argument("--host", default="127.0.0.1")
     dev.add_argument("--port", type=int, default=_env_int("TOPOSYNC_BACKEND_PORT", 8000))
     dev.add_argument("--log-level", default="info")
+    _add_shutdown_argument(dev)
 
     args = parser.parse_args(argv)
 
@@ -280,6 +314,7 @@ def main(argv: list[str] | None = None) -> None:
             host=args.host,
             port=args.port,
             log_level=args.log_level,
+            timeout_graceful_shutdown=_uvicorn_graceful_shutdown_timeout(args),
         )
     if args.command == "processing-serve":
         if args.data_dir:
@@ -291,6 +326,7 @@ def main(argv: list[str] | None = None) -> None:
             host=args.host,
             port=args.port,
             log_level=args.log_level,
+            timeout_graceful_shutdown=_uvicorn_graceful_shutdown_timeout(args),
         )
     if args.command == "extension":
         if args.extension_command == "doctor":

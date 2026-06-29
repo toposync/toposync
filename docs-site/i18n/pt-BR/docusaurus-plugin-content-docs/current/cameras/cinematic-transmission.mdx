@@ -1,0 +1,145 @@
+---
+title: Transmissão cinemática
+description: "Use o diretor cinemático opcional para publicar uma saída de vídeo sob demanda que corta entre câmeras a partir de notificações."
+keywords: ["toposync", "local-first", "automação residencial", "câmeras", "transmissão cinemática", "streaming", "notificações"]
+image: /img/social-card.png
+sidebar_position: 2.7
+---
+
+# Transmissão cinemática {/* #cinematic-transmission */}
+
+Transmissão cinemática é um workflow opcional de câmeras. Ela publica uma saída
+de vídeo e deixa um diretor escolher qual câmera deve aparecer.
+
+Use quando quiser uma transmissão única de monitoramento que acompanha atividade
+relevante. Para tiles comuns de câmera, continue usando
+[Transmissões ao vivo](live-viewing.mdx).
+
+## Comportamento padrão {/* #default-behavior */}
+
+A configuração padrão é conservadora:
+
+- pode usar todas as câmeras configuradas;
+- aceita todas as prioridades de notificação;
+- captura apenas enquanto a transmissão tem demanda;
+- mantém uma câmera ativa por padrão;
+- emite somente o frame mais recente, sem criar backlog;
+- em ociosidade, alterna entre as câmeras disponíveis.
+
+Crie em **Configurações -> Cinemática -> Criar pipeline**. O wizard cria este
+grafo:
+
+```text
+stream.demand_gate -> cinematic.director_source -> stream.publish_video
+```
+
+O pipeline gerado continua sendo um pipeline normal. Você pode inspecionar,
+desabilitar ou ajustar configurações avançadas depois.
+
+Antes de abrir o wizard, crie ou escolha uma transmissão de Streaming no mesmo
+servidor de processamento. O wizard da Cinemática vincula essa transmissão a um
+novo pipeline; ele não cria uma entrada de live view de câmera por si só. Por
+isso, a aba **Transmissões -> Playback** pode não mostrar um player cinemático
+quando não existem live views de câmera. Valide a saída cinemática pelo status
+do runtime de Streaming, pelas URLs assinadas da transmissão ou pelo endpoint
+`still.jpg` da transmissão enquanto houver demanda ativa.
+
+## Eventos e cortes {/* #events-and-cuts */}
+
+O diretor observa notificações do Toposync e transforma essas notificações em
+candidatos de tomada. Ele tenta resolver a câmera por:
+
+- `payload.camera_id`;
+- `payload.source.device_id`;
+- `payload.data.camera_id`;
+- o subject da notificação;
+- um mapa opcional de pipeline para câmera.
+
+Eventos são agrupados para que atualizações repetidas da mesma notificação,
+subject ou evento não forcem cortes desnecessários. O painel de status mostra a
+câmera atual, modo, evento ativo e motivo do corte.
+
+Exemplo de payload de notificação:
+
+```json
+{
+  "payload": {
+    "camera_id": "porta_frente",
+    "priority": "high",
+    "subject": {"id": "person-42", "type": "person"}
+  }
+}
+```
+
+## Filtros {/* #filters */}
+
+Por padrão, nenhum filtro é necessário. Adicione filtros apenas quando o diretor
+deve ignorar parte do ambiente.
+
+Exemplos:
+
+```json
+{
+  "cameras_mode": "include",
+  "camera_ids": ["porta_frente", "garagem"],
+  "priority_filter": ["high", "medium"]
+}
+```
+
+```json
+{
+  "pipeline_camera_map": {
+    "deteccao_pessoa_frente": "porta_frente",
+    "deteccao_veiculo_garagem": "garagem"
+  }
+}
+```
+
+Use `include` para limitar o diretor a algumas câmeras. Use `exclude` quando a
+maioria das câmeras deve ficar disponível, mas uma ou duas não fazem sentido
+para essa transmissão.
+
+## Performance {/* #performance */}
+
+A transmissão cinemática é escopada por demanda. Se ninguém está assistindo à
+saída publicada, o demand gate permanece fechado e o diretor não deve manter
+captura de câmera aberta.
+
+Quando há demanda, o diretor normalmente mantém uma câmera ativa. Durante uma
+troca, ele pode preparar brevemente a próxima câmera e depois liberar a antiga.
+Mantenha FPS e resolução padrão até a transmissão estar estável; aumentar ambos
+eleva custo de decode, resize e publicação.
+
+As arestas do pipeline usam política de frame mais recente. Isso é intencional:
+uma transmissão de monitoramento deve mostrar o frame útil mais atual, não
+esvaziar frames antigos depois de um período lento.
+
+## Limites {/* #limits */}
+
+Limites atuais:
+
+- zoom óptico ou crop ainda não são aplicados;
+- metadados de framing existem para zoom/crop futuro;
+- a funcionalidade depende de Câmeras, Streaming e Notificações disponíveis;
+- ela não substitui transmissões ao vivo normais de câmera;
+- funciona melhor como uma saída composta, não como todos os tiles do dashboard.
+
+## Solução de problemas {/* #troubleshooting */}
+
+| Sintoma | O que conferir |
+| --- | --- |
+| Nenhum pipeline é criado | Confirme que Streaming tem pelo menos uma transmissão e Câmeras tem pelo menos uma câmera. |
+| A transmissão fica ociosa | Confirme que alguém está visualizando a saída ou confira o status do demand gate. |
+| Eventos não trocam câmeras | Confirme que as notificações incluem camera id ou configure o mapa pipeline para câmera. |
+| A mesma câmera continua selecionada | Confira filtros de câmera, filtros de prioridade e se outras câmeras têm frames recentes. |
+| A imagem fica preta ao iniciar | Um aquecimento curto pode ser normal durante a troca. Se persistir, veja os diagnósticos da Cinemática e o status do runtime de Streaming. |
+| A aba Playback de Transmissões não mostra player cinemático | Essa aba lista links de debug de live views de câmera. Confira a transmissão cinemática pelo runtime health, por `/api/streams/transmissions/{id}/urls` ou por `still.jpg` enquanto houver demanda ativa. |
+
+O painel de configurações da Cinemática é o primeiro lugar para olhar. Ele mostra
+status do runtime, diagnósticos, câmera ativa e último motivo de corte sem abrir
+captura adicional de câmera por si só.
+
+Para um smoke test prático, mantenha a demanda de viewer aberta e confira se o
+runtime de Streaming está `live` e `healthy`, se os frames do publisher estão
+subindo e se `publisher_last_error` está vazio. A resposta de `still.jpg` deve
+incluir `x-toposync-frame-state: live` quando o frame selecionado é atual.

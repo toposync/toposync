@@ -34,7 +34,7 @@ Toposync currently has three related release trains.
 | Train | Repository | Packages or artifacts | Version policy |
 | --- | --- | --- | --- |
 | Core application | `toposync/toposync` | `toposync-core`, `toposync`, `toposync-streaming`, `toposync-vision-cuda`, `toposync-vision-directml` | Move together as one application version |
-| First-party extensions | `toposync/toposync` | `toposync-ext-structural`, `toposync-ext-models`, `toposync-ext-home-assistant`, `toposync-ext-images`, `toposync-ext-cameras`, `toposync-ext-vision`, `toposync-ext-streaming`, `toposync-ext-ai`, `toposync-ext-spatial-video` | Move together as one extension bundle version unless a deliberate split is documented |
+| First-party extensions | `toposync/toposync` | `toposync-ext-structural`, `toposync-ext-models`, `toposync-ext-home-assistant`, `toposync-ext-images`, `toposync-ext-cameras`, `toposync-ext-cinematic`, `toposync-ext-vision`, `toposync-ext-streaming`, `toposync-ext-ai`, `toposync-ext-spatial-video` | Move together as one extension bundle version unless a deliberate split is documented |
 | Home Assistant add-on | `toposync/toposync-homeassistant-addon` | `toposync/config.yaml`, add-on Docker image build inputs | Has its own add-on version and pins a published Toposync package |
 
 The add-on release normally follows the PyPI release. It should not point to a package version that is not already visible on PyPI.
@@ -273,6 +273,7 @@ for project in \
   extensions/home_assistant \
   extensions/images \
   extensions/cameras \
+  extensions/cinematic \
   extensions/vision \
   extensions/streaming \
   extensions/ai \
@@ -396,6 +397,7 @@ uv pip install \
   toposync-ext-home-assistant==E.F.G \
   toposync-ext-images==E.F.G \
   toposync-ext-cameras==E.F.G \
+  toposync-ext-cinematic==E.F.G \
   toposync-ext-vision==E.F.G \
   toposync-ext-streaming==E.F.G \
   toposync-ext-ai==E.F.G \

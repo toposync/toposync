@@ -8,7 +8,7 @@ from .state import EventCandidate, EventLifecycle, EventPriority
 
 
 Cursor = int | str | None
-_VALID_PRIORITIES: set[EventPriority] = {"low", "medium", "high"}
+_VALID_PRIORITIES: set[EventPriority] = {"silent", "low", "medium", "high"}
 _VALID_LIFECYCLES: set[EventLifecycle] = {"open", "update", "close"}
 
 
@@ -47,6 +47,7 @@ class NotificationEventFeed:
             limit=safe_limit,
             priorities=self._priority_filter or None,
             types=self._notification_types or None,
+            include_silent=True,
         )
         notifications, next_cursor = _normalize_list_response(raw)
         events = [

@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 DirectorMode = Literal["no_demand", "idle", "event", "handoff", "fallback"]
 EventLifecycle = Literal["open", "update", "close"]
-EventPriority = Literal["low", "medium", "high"]
+EventPriority = Literal["silent", "low", "medium", "high"]
 
 
 @dataclass(frozen=True, slots=True)

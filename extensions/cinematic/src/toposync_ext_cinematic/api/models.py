@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-Priority = Literal["low", "medium", "high"]
+Priority = Literal["silent", "low", "medium", "high"]
 CameraMode = Literal["all", "include", "exclude"]
 DirectorBehavior = Literal["rotation_with_events", "primary_with_events"]
 SourceRole = Literal["main", "sub", "zoom", "auto"]
@@ -77,7 +77,11 @@ class CinematicWizardOptionalParameters(BaseModel):
     @field_validator("priority_filter", mode="before")
     @classmethod
     def _normalize_priorities(cls, value: Any) -> list[str]:
-        return [item for item in _normalize_text_list(value) if item in {"low", "medium", "high"}]
+        return [
+            item
+            for item in _normalize_text_list(value)
+            if item in {"silent", "low", "medium", "high"}
+        ]
 
     @field_validator("pipeline_camera_map", mode="before")
     @classmethod

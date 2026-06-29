@@ -28,7 +28,7 @@ const CINEMATIC_EXTENSION_ID = "com.toposync.cinematic";
 const CAMERA_MODES: CameraMode[] = ["all", "include", "exclude"];
 const BEHAVIORS: DirectorBehavior[] = ["rotation_with_events", "primary_with_events"];
 
-type PriorityMinimum = "all" | Priority;
+type PriorityMinimum = "all" | "medium" | "high";
 
 type TranslateFn = ReturnType<HostI18n["useI18n"]>["t"];
 

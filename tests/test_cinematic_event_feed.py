@@ -84,6 +84,7 @@ async def _run_uses_notification_service_and_normalizes_event() -> None:
             "limit": 250,
             "priorities": ["high"],
             "types": ["pipelines.event"],
+            "include_silent": True,
         }
     ]
     assert batch.next_cursor == 7
@@ -256,3 +257,32 @@ async def _run_normalizes_closed_and_unknown_values() -> None:
     assert event.priority == "medium"
     assert event.lifecycle == "close"
     assert event.closed_at == pytest.approx(22.0)
+
+
+def test_notification_event_feed_keeps_silent_priority() -> None:
+    asyncio.run(_run_keeps_silent_priority())
+
+
+async def _run_keeps_silent_priority() -> None:
+    services = _Services(
+        [
+            _notification(
+                "silent",
+                priority="silent",
+                payload={
+                    "camera_id": "front",
+                    "priority": "silent",
+                    "lifecycle": "open",
+                    "event": {"started_ts": 10.0, "ts": 20.0},
+                },
+            )
+        ]
+    )
+    feed = NotificationEventFeed(services, _config())
+
+    batch = await feed.poll()
+
+    assert len(batch.events) == 1
+    event = batch.events[0]
+    assert event.priority == "silent"
+    assert event.camera_id == "front"

@@ -1,6 +1,6 @@
 export type CameraMode = "all" | "include" | "exclude";
 export type DirectorBehavior = "rotation_with_events" | "primary_with_events";
-export type Priority = "low" | "medium" | "high";
+export type Priority = "silent" | "low" | "medium" | "high";
 export type ResizeMode = "contain" | "none";
 export type SourceRole = "auto" | "main" | "sub" | "zoom";
 

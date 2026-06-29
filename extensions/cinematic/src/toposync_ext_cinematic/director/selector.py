@@ -7,7 +7,7 @@ from ..constants import OPERATOR_ID_DIRECTOR_SOURCE
 from .state import CameraCandidate, CutPolicy, DirectorState, EventCandidate, ShotDecision
 
 
-_PRIORITY_SCORE = {"high": 300.0, "medium": 200.0, "low": 100.0}
+_PRIORITY_SCORE = {"silent": 25.0, "low": 100.0, "medium": 200.0, "high": 300.0}
 _LIFECYCLE_SCORE = {"open": 50.0, "update": 20.0, "close": -20.0}
 
 
@@ -130,7 +130,7 @@ def _event_sort_key(
     now: float,
 ) -> tuple[float, int, int, float, int, int, float]:
     score = _event_score(event, camera, state, config, now)
-    priority_rank = {"low": 1, "medium": 2, "high": 3}.get(event.priority, 0)
+    priority_rank = _priority_rank(event.priority)
     lifecycle_rank = {"close": 1, "update": 2, "open": 3}.get(event.lifecycle, 0)
     updated = float(event.updated_at or event.opened_at or 0.0)
     current_camera_rank = 1 if event.camera_id == state.active_camera_id else 0
@@ -260,7 +260,10 @@ def _active_event_priority_rank(state: DirectorState) -> int:
 
 
 def _priority_rank(priority: str) -> int:
-    return {"low": 1, "medium": 2, "high": 3}.get(str(priority or "").strip(), 0)
+    return {"silent": 0, "low": 1, "medium": 2, "high": 3}.get(
+        str(priority or "").strip(),
+        0,
+    )
 
 
 def _cuts_per_minute_exceeded(state: DirectorState, policy: CutPolicy, now: float) -> bool:

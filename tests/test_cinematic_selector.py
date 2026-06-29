@@ -223,6 +223,31 @@ def test_selector_prefers_high_priority_event() -> None:
     assert decision.framing_hint["future_safe"] is True
 
 
+def test_selector_allows_silent_event_from_idle() -> None:
+    state = DirectorState(
+        demand_active=True,
+        mode="idle",
+        active_camera_id="front",
+        active_source_id="main",
+        shot_started_at=0.0,
+        last_cut_at=0.0,
+    )
+
+    decision = select_next_shot(
+        state,
+        _cameras(),
+        [_event("silent-garage", "garage", priority="silent", updated_at=30.0)],
+        _config(),
+        now=30.0,
+    )
+
+    assert decision is not None
+    assert decision.camera_id == "garage"
+    assert decision.mode == "event"
+    assert decision.reason == "event_open"
+    assert decision.event_key == "silent-garage"
+
+
 def test_selector_does_not_cut_for_same_event_update() -> None:
     active = _event("front-person", "front", priority="medium", lifecycle="open")
     state = DirectorState(
@@ -303,6 +328,60 @@ def test_selector_allows_high_priority_event_to_interrupt_low_priority_hold() ->
     assert decision is not None
     assert decision.camera_id == "garage"
     assert decision.reason == "event_open"
+
+
+def test_selector_treats_silent_as_lower_than_low_priority() -> None:
+    active = _event("front-silent", "front", priority="silent")
+    state = DirectorState(
+        demand_active=True,
+        mode="event",
+        active_camera_id="front",
+        active_source_id="main",
+        active_event_key="front-silent",
+        active_events_by_key={"front-silent": active},
+        hold_until=50.0,
+        interruptible_after=35.0,
+        last_cut_at=30.0,
+    )
+
+    decision = select_next_shot(
+        state,
+        _cameras(),
+        [_event("garage-low", "garage", priority="low", updated_at=36.0)],
+        _config(),
+        now=36.0,
+    )
+
+    assert decision is not None
+    assert decision.camera_id == "garage"
+    assert decision.reason == "event_open"
+
+
+def test_selector_does_not_allow_silent_to_interrupt_low_priority_hold() -> None:
+    active = _event("front-low", "front", priority="low")
+    state = DirectorState(
+        demand_active=True,
+        mode="event",
+        active_camera_id="front",
+        active_source_id="main",
+        active_event_key="front-low",
+        active_events_by_key={"front-low": active},
+        hold_until=50.0,
+        interruptible_after=35.0,
+        last_cut_at=30.0,
+    )
+
+    decision = select_next_shot(
+        state,
+        _cameras(),
+        [_event("garage-silent", "garage", priority="silent", updated_at=36.0)],
+        _config(),
+        now=36.0,
+    )
+
+    assert decision is not None
+    assert decision.camera_id == "front"
+    assert decision.reason == "event_hold"
 
 
 def test_selector_filters_priorities_pipelines_and_own_events() -> None:

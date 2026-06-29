@@ -1474,11 +1474,15 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
             onUpdateConfig((prev) => ({ ...prev, priority: nextPriority }));
           }}
         >
+          <option value="silent">{t("core.ui.pipelines.panels.notify.priority.silent")}</option>
           <option value="low">{t("core.ui.pipelines.panels.notify.priority.low")}</option>
           <option value="medium">{t("core.ui.pipelines.panels.notify.priority.medium")}</option>
           <option value="high">{t("core.ui.pipelines.panels.notify.priority.high")}</option>
         </select>
       </label>
+      {priority === "silent" ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.notify.priority.silent_hint")}</div>
+      ) : null}
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.notify.realtime")}</span>

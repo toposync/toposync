@@ -1132,9 +1132,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.description_template": "Description template",
     "core.ui.pipelines.panels.notify.description_placeholder": "Optional",
     "core.ui.pipelines.panels.notify.priority": "Priority",
+    "core.ui.pipelines.panels.notify.priority.silent": "Silent",
     "core.ui.pipelines.panels.notify.priority.low": "Low",
     "core.ui.pipelines.panels.notify.priority.medium": "Medium",
     "core.ui.pipelines.panels.notify.priority.high": "High",
+    "core.ui.pipelines.panels.notify.priority.silent_hint":
+      "Saved in history and can direct cinematic transmissions, but does not appear in the normal notifications list.",
     "core.ui.pipelines.panels.notify.realtime": "Realtime updates",
     "core.ui.pipelines.panels.notify.update_interval_seconds": "Update interval (seconds)",
     "core.ui.pipelines.panels.notify.update_interval_hint":
@@ -3252,9 +3255,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.description_template": "Template da descrição",
     "core.ui.pipelines.panels.notify.description_placeholder": "Opcional",
     "core.ui.pipelines.panels.notify.priority": "Prioridade",
+    "core.ui.pipelines.panels.notify.priority.silent": "Silenciosa",
     "core.ui.pipelines.panels.notify.priority.low": "Baixa",
     "core.ui.pipelines.panels.notify.priority.medium": "Média",
     "core.ui.pipelines.panels.notify.priority.high": "Alta",
+    "core.ui.pipelines.panels.notify.priority.silent_hint":
+      "Salva no histórico e pode direcionar transmissões cinematográficas, mas não aparece na lista normal de notificações.",
     "core.ui.pipelines.panels.notify.realtime": "Atualizações em tempo real",
     "core.ui.pipelines.panels.notify.update_interval_seconds": "Intervalo de atualização (segundos)",
     "core.ui.pipelines.panels.notify.update_interval_hint":

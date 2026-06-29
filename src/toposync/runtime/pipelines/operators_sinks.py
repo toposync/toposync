@@ -817,7 +817,7 @@ class NotifyConfig(BaseModel):
     notification_type: str = "pipelines.event"
     title: str = "{{subject.category}} detected"
     description: str = ""
-    priority: Literal["low", "medium", "high"] = "medium"
+    priority: Literal["silent", "low", "medium", "high"] = "medium"
     realtime: bool = True
     update_interval_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
     input_artifact_name: str = ""

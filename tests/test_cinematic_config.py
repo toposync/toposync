@@ -61,7 +61,7 @@ def test_cinematic_director_config_normalizes_user_filters() -> None:
     config = CinematicDirectorSourceConfig.model_validate(
         {
             "camera_ids": [" front ", "front", "", " back "],
-            "priority_filter": [" HIGH ", "low", "high"],
+            "priority_filter": [" HIGH ", "silent", "low", "high"],
             "include_pipelines": [" person-front ", "person-front", ""],
             "exclude_pipelines": "debug-pipeline",
             "pipeline_camera_map": {" person-front ": " front ", "empty": "", "": "ignored"},
@@ -71,7 +71,7 @@ def test_cinematic_director_config_normalizes_user_filters() -> None:
     )
 
     assert config.camera_ids == ["front", "back"]
-    assert config.priority_filter == ["high", "low"]
+    assert config.priority_filter == ["high", "silent", "low"]
     assert config.include_pipelines == ["person-front"]
     assert config.exclude_pipelines == ["debug-pipeline"]
     assert config.pipeline_camera_map == {"person-front": "front"}

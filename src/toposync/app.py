@@ -1249,6 +1249,7 @@ async def _lifespan(app: FastAPI):
         priorities: list[str] | tuple[str, ...] | None = None,
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
+        include_silent: bool = False,
     ) -> dict[str, Any]:
         items, next_cursor = await notifications.list(
             before=before,
@@ -1256,6 +1257,7 @@ async def _lifespan(app: FastAPI):
             priorities=priorities,
             types=types,
             query=query,
+            include_silent=include_silent,
         )
         return {"notifications": items, "next_cursor": next_cursor}
 

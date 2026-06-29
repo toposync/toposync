@@ -17,7 +17,7 @@ from ..constants import EXTENSION_ID, OPERATOR_ID_DIRECTOR_SOURCE
 from ..director.runtime import CinematicDirectorRuntime
 
 
-Priority = Literal["low", "medium", "high"]
+Priority = Literal["silent", "low", "medium", "high"]
 CameraMode = Literal["all", "include", "exclude"]
 DirectorBehavior = Literal["rotation_with_events", "primary_with_events"]
 SourceRole = Literal["main", "sub", "zoom", "auto"]
@@ -87,7 +87,7 @@ class CinematicDirectorSourceConfig(BaseModel):
         seen: set[str] = set()
         for item in values or []:
             text = str(item or "").strip().lower()
-            if text not in {"low", "medium", "high"} or text in seen:
+            if text not in {"silent", "low", "medium", "high"} or text in seen:
                 continue
             out.append(text)
             seen.add(text)

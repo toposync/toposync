@@ -206,7 +206,7 @@ def _text_list(value: Any) -> list[str]:
 
 
 def _priority_list(value: Any) -> list[str]:
-    return [item for item in _text_list(value) if item in {"low", "medium", "high"}]
+    return [item for item in _text_list(value) if item in {"silent", "low", "medium", "high"}]
 
 
 def _text_map(value: Any) -> dict[str, str]:

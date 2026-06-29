@@ -10,6 +10,7 @@ import {
   type HomeAssistantRegistryResponse,
   type HomeAssistantServerInfo,
   type HomeAssistantServiceInfo,
+  type CamerasIndexResponse,
   type PipelineStorageSummary,
   type PipelineOperatorDefinition,
 } from "../../../../../util/api";
@@ -463,6 +464,434 @@ type VelocityThrottleProps = {
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
+
+type CinematicDirectorProps = {
+  config: Record<string, unknown>;
+  camerasIndex: CamerasIndexResponse;
+  cameraSelectOptions: SelectOption[];
+  cameraSelectOptionById: Map<string, SelectOption>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
+type CinematicBehavior = "rotation_with_events" | "primary_with_events";
+type CinematicCameraMode = "all" | "include" | "exclude";
+type CinematicPriorityMinimum = "all" | "medium" | "high" | "custom";
+
+function cinematicBehavior(value: unknown): CinematicBehavior {
+  return String(value ?? "").trim() === "primary_with_events" ? "primary_with_events" : "rotation_with_events";
+}
+
+function cinematicCameraMode(value: unknown): CinematicCameraMode {
+  const raw = String(value ?? "").trim();
+  if (raw === "include" || raw === "exclude") return raw;
+  return "all";
+}
+
+function cleanStringList(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    const text = String(item ?? "").trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+
+function cameraOptionsForIds(ids: readonly string[], cameraSelectOptionById: Map<string, SelectOption>): SelectOption[] {
+  return ids.map((id) => cameraSelectOptionById.get(id) ?? { value: id, label: id });
+}
+
+function isCinematicUsableCamera(camera: CamerasIndexResponse["cameras"][number]): boolean {
+  if (!camera || !String(camera.id || "").trim()) return false;
+  if (camera.enabled === false) return false;
+  const sources = Array.isArray(camera.sources) ? camera.sources : [];
+  if (sources.length === 0) return true;
+  return sources.some((source) => {
+    const kind = String(source.kind || "video").trim().toLowerCase();
+    return kind === "video" && source.enabled !== false;
+  });
+}
+
+function buildCinematicCameraSelectOptions(
+  camerasIndex: CamerasIndexResponse,
+  fallbackOptions: SelectOption[],
+): SelectOption[] {
+  const cameras = Array.isArray(camerasIndex.cameras) ? camerasIndex.cameras : [];
+  const options = cameras
+    .filter(isCinematicUsableCamera)
+    .map((camera) => {
+      const name = String(camera.name || "").trim();
+      const id = String(camera.id || "").trim();
+      return { value: id, label: name && name !== id ? `${name} (${id})` : id };
+    })
+    .filter((option) => option.value.length > 0)
+    .sort((a, b) => a.label.localeCompare(b.label));
+  return cameras.length > 0 ? options : fallbackOptions;
+}
+
+function priorityMinimumFromFilter(value: unknown): CinematicPriorityMinimum {
+  const priorities = cleanStringList(value).map((item) => item.toLowerCase());
+  if (priorities.length === 0) return "all";
+  const key = [...new Set(priorities)].sort().join(",");
+  if (key === "high") return "high";
+  if (key === "high,medium") return "medium";
+  return "custom";
+}
+
+function priorityFilterForMinimum(value: CinematicPriorityMinimum): string[] {
+  if (value === "high") return ["high"];
+  if (value === "medium") return ["high", "medium"];
+  return [];
+}
+
+function normalizeCinematicCameraIds(
+  ids: readonly string[],
+  options: {
+    behavior: CinematicBehavior;
+    cameraMode: CinematicCameraMode;
+    primaryCameraId: string;
+  },
+): string[] {
+  const { behavior, cameraMode, primaryCameraId } = options;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    const text = String(id ?? "").trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  if (cameraMode === "all") return [];
+  if (behavior === "primary_with_events" && primaryCameraId) {
+    if (cameraMode === "include" && !seen.has(primaryCameraId)) out.unshift(primaryCameraId);
+    if (cameraMode === "exclude") return out.filter((id) => id !== primaryCameraId);
+  }
+  return out;
+}
+
+export function CinematicDirectorConfigCard({
+  config,
+  camerasIndex,
+  cameraSelectOptions,
+  cameraSelectOptionById,
+  showAdvanced,
+  onUpdateConfig,
+}: CinematicDirectorProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const cinematicCameraSelectOptions = useMemo(
+    () => buildCinematicCameraSelectOptions(camerasIndex, cameraSelectOptions),
+    [camerasIndex, cameraSelectOptions],
+  );
+  const cinematicCameraSelectOptionById = useMemo(() => {
+    const map = new Map<string, SelectOption>();
+    for (const option of cinematicCameraSelectOptions) map.set(option.value, option);
+    return map;
+  }, [cinematicCameraSelectOptions]);
+  const behavior = cinematicBehavior((config as any).behavior);
+  const cameraMode = cinematicCameraMode((config as any).cameras_mode);
+  const primaryCameraId = String((config as any).primary_camera_id ?? "").trim();
+  const cameraIds = normalizeCinematicCameraIds(cleanStringList((config as any).camera_ids), {
+    behavior,
+    cameraMode,
+    primaryCameraId,
+  });
+  const priorityMinimum = priorityMinimumFromFilter((config as any).priority_filter);
+  const selectedPrimaryCameraOption = primaryCameraId
+    ? cinematicCameraSelectOptionById.get(primaryCameraId) ??
+      cameraSelectOptionById.get(primaryCameraId) ?? { value: primaryCameraId, label: primaryCameraId }
+    : null;
+  const selectedCameraOptions = cameraOptionsForIds(cameraIds, cameraSelectOptionById);
+  const cameraCount = cinematicCameraSelectOptions.length;
+  const defaultPrimaryCameraId = cinematicCameraSelectOptions[0]?.value ?? "";
+  const fpsRaw = Number((config as any).fps ?? 8.0);
+  const widthRaw = Number((config as any).width ?? 1280);
+  const heightRaw = Number((config as any).height ?? 720);
+  const idleDwellRaw = Number((config as any).idle_dwell_seconds ?? 8.0);
+  const eventMinRaw = Number((config as any).event_min_seconds ?? 10.0);
+  const cutCooldownRaw = Number((config as any).cut_cooldown_seconds ?? 1.5);
+  const maxEventHoldRaw = Number((config as any).max_event_hold_seconds ?? 60.0);
+  const maxCutsRaw = Number((config as any).max_cuts_per_minute ?? 12);
+  const staleFrameRaw = Number((config as any).stale_frame_max_age_seconds ?? 2.0);
+  const sourceRoleRaw = String((config as any).preferred_source_role ?? "auto").trim();
+  const sourceRole = ["auto", "main", "sub", "zoom"].includes(sourceRoleRaw) ? sourceRoleRaw : "auto";
+  const warmupModeRaw = String((config as any).warmup_mode ?? "off").trim();
+  const warmupMode = ["off", "next_idle", "event_high", "adaptive"].includes(warmupModeRaw) ? warmupModeRaw : "off";
+  const behaviorOptions: SelectOption[] = [
+    {
+      value: "rotation_with_events",
+      label: t("core.ui.pipelines.panels.cinematic_director.behavior.rotation_with_events"),
+    },
+    {
+      value: "primary_with_events",
+      label: t("core.ui.pipelines.panels.cinematic_director.behavior.primary_with_events"),
+    },
+  ];
+  const selectedBehaviorOption = behaviorOptions.find((option) => option.value === behavior) ?? behaviorOptions[0] ?? null;
+  const cameraModeOptions: SelectOption[] = [
+    { value: "all", label: t("core.ui.pipelines.panels.cinematic_director.cameras_scope.all") },
+    { value: "include", label: t("core.ui.pipelines.panels.cinematic_director.cameras_scope.include") },
+    { value: "exclude", label: t("core.ui.pipelines.panels.cinematic_director.cameras_scope.exclude") },
+  ];
+  const selectedCameraModeOption = cameraModeOptions.find((option) => option.value === cameraMode) ?? cameraModeOptions[0] ?? null;
+  const priorityMinimumOptions: SelectOption[] = [
+    { value: "all", label: t("core.ui.pipelines.panels.cinematic_director.priority_minimum.all") },
+    { value: "medium", label: t("core.ui.pipelines.panels.cinematic_director.priority_minimum.medium") },
+    { value: "high", label: t("core.ui.pipelines.panels.cinematic_director.priority_minimum.high") },
+  ];
+  const priorityMinimumOptionsWithCustom =
+    priorityMinimum === "custom"
+      ? [
+          ...priorityMinimumOptions,
+          {
+            value: "custom",
+            label: t("core.ui.pipelines.panels.cinematic_director.priority_minimum.custom"),
+          },
+        ]
+      : priorityMinimumOptions;
+  const selectedPriorityMinimumOption =
+    priorityMinimumOptionsWithCustom.find((option) => option.value === priorityMinimum) ?? priorityMinimumOptions[0] ?? null;
+
+  useEffect(() => {
+    if (behavior !== "primary_with_events" || primaryCameraId || !defaultPrimaryCameraId) return;
+    onUpdateConfig((prev) => ({
+      ...prev,
+      primary_camera_id: defaultPrimaryCameraId,
+      camera_ids: normalizeCinematicCameraIds(cleanStringList((prev as any).camera_ids), {
+        behavior: "primary_with_events",
+        cameraMode: cinematicCameraMode((prev as any).cameras_mode),
+        primaryCameraId: defaultPrimaryCameraId,
+      }),
+    }));
+  }, [behavior, cameraMode, defaultPrimaryCameraId, onUpdateConfig, primaryCameraId]);
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.cinematic_director.behavior")}</span>
+        <Select<SelectOption, false>
+          styles={pipelinesReactSelectStyles}
+          options={behaviorOptions}
+          value={selectedBehaviorOption}
+          onChange={(value: SingleValue<SelectOption>) => {
+            const nextBehavior = cinematicBehavior(value?.value);
+            onUpdateConfig((prev) => {
+              const next = { ...prev, behavior: nextBehavior };
+              const nextMode = cinematicCameraMode((prev as any).cameras_mode);
+              const nextPrimary =
+                nextBehavior === "primary_with_events"
+                  ? String((prev as any).primary_camera_id ?? "").trim() || defaultPrimaryCameraId
+                  : "";
+              (next as any).primary_camera_id = nextPrimary;
+              (next as any).camera_ids = normalizeCinematicCameraIds(cleanStringList((prev as any).camera_ids), {
+                behavior: nextBehavior,
+                cameraMode: nextMode,
+                primaryCameraId: nextPrimary,
+              });
+              return next;
+            });
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">
+        {behavior === "primary_with_events"
+          ? t("core.ui.pipelines.panels.cinematic_director.behavior_hint.primary")
+          : t("core.ui.pipelines.panels.cinematic_director.behavior_hint.rotation")}
+      </div>
+
+      {behavior === "primary_with_events" ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.primary_camera")}</span>
+            <Select<SelectOption, false>
+              styles={pipelinesReactSelectStyles}
+              options={cinematicCameraSelectOptions}
+              value={selectedPrimaryCameraOption}
+              isDisabled={cinematicCameraSelectOptions.length === 0}
+              placeholder={t("core.ui.pipelines.panels.cinematic_director.primary_camera_placeholder")}
+              onChange={(value: SingleValue<SelectOption>) => {
+                onUpdateConfig((prev) => {
+                  const nextPrimary = value?.value ?? "";
+                  const nextMode = cinematicCameraMode((prev as any).cameras_mode);
+                  return {
+                    ...prev,
+                    primary_camera_id: nextPrimary,
+                    camera_ids: normalizeCinematicCameraIds(cleanStringList((prev as any).camera_ids), {
+                      behavior: "primary_with_events",
+                      cameraMode: nextMode,
+                      primaryCameraId: nextPrimary,
+                    }),
+                  };
+                });
+              }}
+            />
+          </label>
+          {!primaryCameraId ? (
+            <div className="pipelinesInlineError">
+              {t("core.ui.pipelines.panels.cinematic_director.primary_required")}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.cinematic_director.cameras_scope")}</span>
+        <Select<SelectOption, false>
+          styles={pipelinesReactSelectStyles}
+          options={cameraModeOptions}
+          value={selectedCameraModeOption}
+          onChange={(value: SingleValue<SelectOption>) => {
+            const nextMode = cinematicCameraMode(value?.value);
+            onUpdateConfig((prev) => ({
+              ...prev,
+              cameras_mode: nextMode,
+              camera_ids: normalizeCinematicCameraIds(cleanStringList((prev as any).camera_ids), {
+                behavior,
+                cameraMode: nextMode,
+                primaryCameraId,
+              }),
+            }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">
+        {cameraMode === "include"
+          ? t("core.ui.pipelines.panels.cinematic_director.camera_ids_hint.include")
+          : cameraMode === "exclude"
+            ? t("core.ui.pipelines.panels.cinematic_director.camera_ids_hint.exclude")
+            : t("core.ui.pipelines.panels.cinematic_director.camera_ids_hint.all", { count: cameraCount })}
+      </div>
+
+      {cameraMode !== "all" ? (
+        <label className="pipelinesLabel">
+          <span>{t("core.ui.pipelines.panels.cinematic_director.camera_ids")}</span>
+          <Select<SelectOption, true>
+            isMulti
+            styles={pipelinesReactSelectStyles}
+            options={cinematicCameraSelectOptions}
+            value={selectedCameraOptions}
+            placeholder={t("core.ui.pipelines.panels.cinematic_director.camera_ids_placeholder")}
+            onChange={(value: MultiValue<SelectOption>) => {
+              const selected = value.map((item) => item.value);
+              onUpdateConfig((prev) => ({
+                ...prev,
+                camera_ids: normalizeCinematicCameraIds(selected, {
+                  behavior,
+                  cameraMode,
+                  primaryCameraId,
+                }),
+              }));
+            }}
+          />
+        </label>
+      ) : null}
+      {cameraMode === "include" && selectedCameraOptions.length === 0 ? (
+        <div className="pipelinesInlineError">
+          {t("core.ui.pipelines.panels.cinematic_director.camera_selection_required")}
+        </div>
+      ) : null}
+
+      {cinematicCameraSelectOptions.length === 0 ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.cinematic_director.no_cameras")}</div>
+      ) : null}
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.cinematic_director.priority_minimum")}</span>
+        <Select<SelectOption, false>
+          styles={pipelinesReactSelectStyles}
+          options={priorityMinimumOptionsWithCustom}
+          value={selectedPriorityMinimumOption}
+          isOptionDisabled={(option) => option.value === "custom"}
+          onChange={(value: SingleValue<SelectOption>) => {
+            const nextValue = String(value?.value || "all") as CinematicPriorityMinimum;
+            if (nextValue === "custom") return;
+            onUpdateConfig((prev) => ({ ...prev, priority_filter: priorityFilterForMinimum(nextValue) }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.cinematic_director.priority_minimum_hint")}</div>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.source_role")}</span>
+            <select
+              className="pipelinesSelect"
+              value={sourceRole}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, preferred_source_role: String(event.target.value || "auto") }))}
+            >
+              <option value="auto">{t("core.ui.pipelines.panels.cinematic_director.source_role.auto")}</option>
+              <option value="main">{t("core.ui.pipelines.panels.cinematic_director.source_role.main")}</option>
+              <option value="sub">{t("core.ui.pipelines.panels.cinematic_director.source_role.sub")}</option>
+              <option value="zoom">{t("core.ui.pipelines.panels.cinematic_director.source_role.zoom")}</option>
+            </select>
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.warmup_mode")}</span>
+            <select
+              className="pipelinesSelect"
+              value={warmupMode}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, warmup_mode: String(event.target.value || "off") }))}
+            >
+              <option value="off">{t("core.ui.pipelines.panels.cinematic_director.warmup_mode.off")}</option>
+              <option value="next_idle">{t("core.ui.pipelines.panels.cinematic_director.warmup_mode.next_idle")}</option>
+              <option value="event_high">{t("core.ui.pipelines.panels.cinematic_director.warmup_mode.event_high")}</option>
+              <option value="adaptive">{t("core.ui.pipelines.panels.cinematic_director.warmup_mode.adaptive")}</option>
+            </select>
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.fps")}</span>
+            <PipelinesNumberInput className="pipelinesInput" min={1} max={60} step={1} value={Number.isFinite(fpsRaw) ? fpsRaw : 8} onChange={(value) => onUpdateConfig((prev) => ({ ...prev, fps: value }))} />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.width")}</span>
+            <PipelinesNumberInput className="pipelinesInput" min={160} max={7680} step={16} value={Number.isFinite(widthRaw) ? widthRaw : 1280} onChange={(value) => onUpdateConfig((prev) => ({ ...prev, width: value }))} />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.height")}</span>
+            <PipelinesNumberInput className="pipelinesInput" min={90} max={4320} step={16} value={Number.isFinite(heightRaw) ? heightRaw : 720} onChange={(value) => onUpdateConfig((prev) => ({ ...prev, height: value }))} />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.idle_dwell_seconds")}</span>
+            <PipelinesNumberInput className="pipelinesInput" min={2} max={120} step={1} value={Number.isFinite(idleDwellRaw) ? idleDwellRaw : 8} onChange={(value) => onUpdateConfig((prev) => ({ ...prev, idle_dwell_seconds: value }))} />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.event_min_seconds")}</span>
+            <PipelinesNumberInput className="pipelinesInput" min={1} max={300} step={1} value={Number.isFinite(eventMinRaw) ? eventMinRaw : 10} onChange={(value) => onUpdateConfig((prev) => ({ ...prev, event_min_seconds: value }))} />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.cut_cooldown_seconds")}</span>
+            <PipelinesNumberInput className="pipelinesInput" min={0} max={60} step={0.5} value={Number.isFinite(cutCooldownRaw) ? cutCooldownRaw : 1.5} onChange={(value) => onUpdateConfig((prev) => ({ ...prev, cut_cooldown_seconds: value }))} />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.max_event_hold_seconds")}</span>
+            <PipelinesNumberInput className="pipelinesInput" min={5} max={3600} step={5} value={Number.isFinite(maxEventHoldRaw) ? maxEventHoldRaw : 60} onChange={(value) => onUpdateConfig((prev) => ({ ...prev, max_event_hold_seconds: value }))} />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.max_cuts_per_minute")}</span>
+            <PipelinesNumberInput className="pipelinesInput" min={1} max={120} step={1} value={Number.isFinite(maxCutsRaw) ? maxCutsRaw : 12} onChange={(value) => onUpdateConfig((prev) => ({ ...prev, max_cuts_per_minute: Math.round(value) }))} />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.cinematic_director.stale_frame_max_age_seconds")}</span>
+            <PipelinesNumberInput className="pipelinesInput" min={0.1} max={30} step={0.1} value={Number.isFinite(staleFrameRaw) ? staleFrameRaw : 2} onChange={(value) => onUpdateConfig((prev) => ({ ...prev, stale_frame_max_age_seconds: value }))} />
+          </label>
+          <label className="pipelinesLabel pipelinesCheckboxRow">
+            <input
+              type="checkbox"
+              checked={Boolean((config as any).ignore_own_pipeline_events ?? true)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, ignore_own_pipeline_events: event.target.checked }))}
+            />
+            <span>{t("core.ui.pipelines.panels.cinematic_director.ignore_own_pipeline_events")}</span>
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.cinematic_director.advanced_hint")}</div>
+        </>
+      ) : null}
+    </div>
+  );
+}
 
 export function VelocityThrottleConfigCard({
   config,

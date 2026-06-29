@@ -769,6 +769,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.source": "Start flow",
     "core.ui.pipelines.operator_name.core.synthetic_source": "Use synthetic source",
     "core.ui.pipelines.operator_name.core.demo_frame_sequence_source": "Use demo frames",
+    "core.ui.pipelines.operator_name.stream.demand_gate": "Demand gate",
+    "core.ui.pipelines.operator_name.vision.synthetic_detection_source": "Synthetic detection source",
     "core.ui.pipelines.operator_name.camera.source": "Use camera",
     "core.ui.pipelines.operator_name.core.schedule_gate": "Limit by schedule",
     "core.ui.pipelines.operator_name.camera.onvif_state_gate": "ONVIF condition",
@@ -816,6 +818,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.home_assistant.notify": "Notify through Home Assistant",
     "core.ui.pipelines.operator_name.home_assistant.boolean_state": "Set Home Assistant boolean state",
     "core.ui.pipelines.operator_name.stream.publish_video": "Publish video",
+    "core.ui.pipelines.operator_name.cinematic.director_source": "Cinematic director",
     "core.ui.pipelines.operator_name.core.debug": "Inspect flow",
     "core.ui.pipelines.operator_name.core.stream_state_snapshot": "Capture stream state",
     "core.ui.pipelines.operator_name.core.passthrough": "Pass through flow",
@@ -823,6 +826,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.dist.remote_source": "Receive remote packets",
     "core.ui.pipelines.operator_name.dist.target_filter": "Route remote packets",
     "core.ui.pipelines.operator_name.dist.project_to_origin": "Send to origin",
+    "core.ui.pipelines.operator_description.stream.demand_gate":
+      "Opens downstream capture only while a live stream has viewers or active heartbeat leases.",
+    "core.ui.pipelines.operator_description.vision.synthetic_detection_source":
+      "Generates deterministic demo frames with synthetic detections for tests, onboarding, and smoke checks.",
     "core.ui.pipelines.operator_description.camera.source": "Reads frames from the selected camera or from an RTSP source.",
     "core.ui.pipelines.operator_description.core.schedule_gate": "Keeps the flow active only on the selected days and times.",
     "core.ui.pipelines.operator_description.camera.onvif_state_gate":
@@ -911,6 +918,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Keeps a Home Assistant boolean signal in sync with pipeline event lifecycle.",
     "core.ui.pipelines.operator_description.stream.publish_video":
       "Publishes this flow's frames as a camera variant or to an advanced video stream.",
+    "core.ui.pipelines.operator_description.cinematic.director_source":
+      "Creates one demand-driven video source that rotates cameras or keeps a main camera while cutting to event cameras.",
     "core.ui.pipelines.operator_description.ai.condition_filter":
       "Lets packets pass only when the visual condition is present.",
     "core.ui.pipelines.operator_description.ai.smart_crop":
@@ -1255,6 +1264,57 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.camera_source.backend.auto": "Auto (recommended)",
     "core.ui.pipelines.panels.camera_source.hint_backend":
       "Auto selects the best available backend and falls back automatically if one fails to initialize.",
+
+    "core.ui.pipelines.panels.cinematic_director.behavior": "Transmission mode",
+    "core.ui.pipelines.panels.cinematic_director.behavior.rotation_with_events": "Rotate cameras and highlight events",
+    "core.ui.pipelines.panels.cinematic_director.behavior.primary_with_events": "Main camera and highlight events",
+    "core.ui.pipelines.panels.cinematic_director.behavior_hint.rotation":
+      "Shows one allowed camera at a time and cuts to event cameras when notifications arrive.",
+    "core.ui.pipelines.panels.cinematic_director.behavior_hint.primary":
+      "Keeps a main camera on screen and cuts away only while relevant events are active.",
+    "core.ui.pipelines.panels.cinematic_director.primary_camera": "Main camera",
+    "core.ui.pipelines.panels.cinematic_director.primary_camera_placeholder": "Select the main camera…",
+    "core.ui.pipelines.panels.cinematic_director.primary_required": "Select a main camera for this mode.",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope": "Cameras used",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.all": "All active cameras",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.include": "Only selected cameras",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.exclude": "All except selected cameras",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids": "Camera selection",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_placeholder": "Select cameras…",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.all": "Uses all {{count}} active cameras.",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.include": "Only selected cameras can appear.",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.exclude": "Selected cameras will be ignored.",
+    "core.ui.pipelines.panels.cinematic_director.camera_selection_required": "Select at least one camera for this mode.",
+    "core.ui.pipelines.panels.cinematic_director.no_cameras": "No active cameras found in the camera registry.",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum": "Minimum event priority",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.all": "All events, including silent",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.medium": "Medium or high",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.high": "High only",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.custom": "Custom in JSON",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum_hint":
+      "Silent events never appear in the notification list, but can still direct this transmission when all events are allowed.",
+    "core.ui.pipelines.panels.cinematic_director.source_role": "Preferred source",
+    "core.ui.pipelines.panels.cinematic_director.source_role.auto": "Automatic",
+    "core.ui.pipelines.panels.cinematic_director.source_role.main": "Main",
+    "core.ui.pipelines.panels.cinematic_director.source_role.sub": "Low resolution",
+    "core.ui.pipelines.panels.cinematic_director.source_role.zoom": "Zoom",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode": "Warmup",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.off": "Off",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.next_idle": "Next idle camera",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.event_high": "High-priority events",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.adaptive": "Adaptive",
+    "core.ui.pipelines.panels.cinematic_director.fps": "FPS",
+    "core.ui.pipelines.panels.cinematic_director.width": "Width",
+    "core.ui.pipelines.panels.cinematic_director.height": "Height",
+    "core.ui.pipelines.panels.cinematic_director.idle_dwell_seconds": "Rotation interval (seconds)",
+    "core.ui.pipelines.panels.cinematic_director.event_min_seconds": "Minimum event hold (seconds)",
+    "core.ui.pipelines.panels.cinematic_director.cut_cooldown_seconds": "Minimum time between cuts (seconds)",
+    "core.ui.pipelines.panels.cinematic_director.max_event_hold_seconds": "Maximum event hold (seconds)",
+    "core.ui.pipelines.panels.cinematic_director.max_cuts_per_minute": "Maximum cuts per minute",
+    "core.ui.pipelines.panels.cinematic_director.stale_frame_max_age_seconds": "Maximum frame age (seconds)",
+    "core.ui.pipelines.panels.cinematic_director.ignore_own_pipeline_events": "Ignore events from this cinematic flow",
+    "core.ui.pipelines.panels.cinematic_director.advanced_hint":
+      "Pipeline filters, camera maps, manual priorities, and other expert settings remain available in JSON mode.",
 
     "core.ui.pipelines.panels.camera_mapping.hint":
       "Uses control points defined in your compositions to map image → world coordinates. Configure control points in the Composition editor.",
@@ -2891,6 +2951,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.source": "Iniciar fluxo",
     "core.ui.pipelines.operator_name.core.synthetic_source": "Usar fonte sintética",
     "core.ui.pipelines.operator_name.core.demo_frame_sequence_source": "Usar frames de demonstração",
+    "core.ui.pipelines.operator_name.stream.demand_gate": "Controle de demanda",
+    "core.ui.pipelines.operator_name.vision.synthetic_detection_source": "Fonte sintética de detecção",
     "core.ui.pipelines.operator_name.camera.source": "Usar câmera",
     "core.ui.pipelines.operator_name.core.schedule_gate": "Limitar por horário",
     "core.ui.pipelines.operator_name.camera.onvif_state_gate": "Condição ONVIF",
@@ -2938,6 +3000,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.home_assistant.notify": "Notificar no Home Assistant",
     "core.ui.pipelines.operator_name.home_assistant.boolean_state": "Estado booleano no Home Assistant",
     "core.ui.pipelines.operator_name.stream.publish_video": "Transmitir vídeo",
+    "core.ui.pipelines.operator_name.cinematic.director_source": "Diretor cinemático",
     "core.ui.pipelines.operator_name.core.debug": "Inspecionar fluxo",
     "core.ui.pipelines.operator_name.core.stream_state_snapshot": "Capturar estado do stream",
     "core.ui.pipelines.operator_name.core.passthrough": "Encaminhar fluxo",
@@ -2945,6 +3008,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.dist.remote_source": "Receber pacotes remotos",
     "core.ui.pipelines.operator_name.dist.target_filter": "Rotear pacotes remotos",
     "core.ui.pipelines.operator_name.dist.project_to_origin": "Enviar para origem",
+    "core.ui.pipelines.operator_description.stream.demand_gate":
+      "Abre a captura adiante apenas enquanto uma transmissão tem espectadores ou leases de heartbeat ativos.",
+    "core.ui.pipelines.operator_description.vision.synthetic_detection_source":
+      "Gera frames de demonstração determinísticos com detecções sintéticas para testes, onboarding e smoke checks.",
     "core.ui.pipelines.operator_description.camera.source": "Lê frames da câmera selecionada ou de uma fonte RTSP.",
     "core.ui.pipelines.operator_description.core.schedule_gate": "Deixa o fluxo ativo apenas nos dias e horários escolhidos.",
     "core.ui.pipelines.operator_description.camera.onvif_state_gate":
@@ -3033,6 +3100,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Mantém um sinal booleano no Home Assistant sincronizado com o lifecycle do fluxo.",
     "core.ui.pipelines.operator_description.stream.publish_video":
       "Publica os frames deste fluxo como variante de câmera ou em uma transmissão avançada.",
+    "core.ui.pipelines.operator_description.cinematic.director_source":
+      "Cria uma fonte de vídeo sob demanda que alterna câmeras ou mantém uma câmera principal enquanto corta para câmeras com eventos.",
     "core.ui.pipelines.operator_description.ai.condition_filter":
       "Deixa passar apenas pacotes em que a condição visual está presente.",
     "core.ui.pipelines.operator_description.ai.smart_crop":
@@ -3381,6 +3450,57 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.camera_source.backend.auto": "Auto (recomendado)",
     "core.ui.pipelines.panels.camera_source.hint_backend":
       "Auto seleciona o melhor backend disponível e faz fallback automaticamente se um falhar ao iniciar.",
+
+    "core.ui.pipelines.panels.cinematic_director.behavior": "Modo da transmissão",
+    "core.ui.pipelines.panels.cinematic_director.behavior.rotation_with_events": "Rotacionar câmeras e destacar eventos",
+    "core.ui.pipelines.panels.cinematic_director.behavior.primary_with_events": "Câmera principal e destacar eventos",
+    "core.ui.pipelines.panels.cinematic_director.behavior_hint.rotation":
+      "Mostra uma câmera permitida por vez e corta para câmeras com eventos quando notificações chegam.",
+    "core.ui.pipelines.panels.cinematic_director.behavior_hint.primary":
+      "Mantém uma câmera principal na tela e corta para outras apenas enquanto eventos relevantes estão ativos.",
+    "core.ui.pipelines.panels.cinematic_director.primary_camera": "Câmera principal",
+    "core.ui.pipelines.panels.cinematic_director.primary_camera_placeholder": "Selecionar câmera principal…",
+    "core.ui.pipelines.panels.cinematic_director.primary_required": "Selecione uma câmera principal para este modo.",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope": "Câmeras usadas",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.all": "Todas as câmeras ativas",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.include": "Somente câmeras selecionadas",
+    "core.ui.pipelines.panels.cinematic_director.cameras_scope.exclude": "Todas exceto câmeras selecionadas",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids": "Seleção de câmeras",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_placeholder": "Selecionar câmeras…",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.all": "Usa todas as {{count}} câmeras ativas.",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.include": "Somente as câmeras selecionadas podem aparecer.",
+    "core.ui.pipelines.panels.cinematic_director.camera_ids_hint.exclude": "As câmeras selecionadas serão ignoradas.",
+    "core.ui.pipelines.panels.cinematic_director.camera_selection_required": "Selecione pelo menos uma câmera para este modo.",
+    "core.ui.pipelines.panels.cinematic_director.no_cameras": "Nenhuma câmera ativa encontrada no cadastro de câmeras.",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum": "Prioridade mínima de evento",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.all": "Todos os eventos, inclusive silenciosos",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.medium": "Média ou alta",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.high": "Somente alta",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum.custom": "Personalizada no JSON",
+    "core.ui.pipelines.panels.cinematic_director.priority_minimum_hint":
+      "Eventos silenciosos nunca aparecem na lista de notificações, mas ainda podem direcionar esta transmissão quando todos os eventos estão permitidos.",
+    "core.ui.pipelines.panels.cinematic_director.source_role": "Fonte preferida",
+    "core.ui.pipelines.panels.cinematic_director.source_role.auto": "Automática",
+    "core.ui.pipelines.panels.cinematic_director.source_role.main": "Principal",
+    "core.ui.pipelines.panels.cinematic_director.source_role.sub": "Baixa resolução",
+    "core.ui.pipelines.panels.cinematic_director.source_role.zoom": "Zoom",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode": "Aquecimento",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.off": "Desligado",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.next_idle": "Próxima câmera em repouso",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.event_high": "Eventos de alta prioridade",
+    "core.ui.pipelines.panels.cinematic_director.warmup_mode.adaptive": "Adaptativo",
+    "core.ui.pipelines.panels.cinematic_director.fps": "FPS",
+    "core.ui.pipelines.panels.cinematic_director.width": "Largura",
+    "core.ui.pipelines.panels.cinematic_director.height": "Altura",
+    "core.ui.pipelines.panels.cinematic_director.idle_dwell_seconds": "Intervalo de rotação (segundos)",
+    "core.ui.pipelines.panels.cinematic_director.event_min_seconds": "Permanência mínima em evento (segundos)",
+    "core.ui.pipelines.panels.cinematic_director.cut_cooldown_seconds": "Tempo mínimo entre cortes (segundos)",
+    "core.ui.pipelines.panels.cinematic_director.max_event_hold_seconds": "Permanência máxima em evento (segundos)",
+    "core.ui.pipelines.panels.cinematic_director.max_cuts_per_minute": "Máximo de cortes por minuto",
+    "core.ui.pipelines.panels.cinematic_director.stale_frame_max_age_seconds": "Idade máxima do frame (segundos)",
+    "core.ui.pipelines.panels.cinematic_director.ignore_own_pipeline_events": "Ignorar eventos deste fluxo cinemático",
+    "core.ui.pipelines.panels.cinematic_director.advanced_hint":
+      "Filtros por pipeline, mapeamentos de câmera, prioridades manuais e outros ajustes especialistas continuam disponíveis no modo JSON.",
 
     "core.ui.pipelines.panels.camera_mapping.hint":
       "Usa pontos de controle definidos nas composições para mapear coordenadas imagem → mundo. Configure pontos de controle no editor de Composição.",

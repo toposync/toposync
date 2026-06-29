@@ -441,7 +441,8 @@ function isSourceOperator(definition: PipelineOperatorDefinition | null): boolea
 }
 
 function isGateControlOperator(definition: PipelineOperatorDefinition | null): boolean {
-  return operatorCapabilities(definition).has("gate_control");
+  const capabilities = operatorCapabilities(definition);
+  return capabilities.has("gate_control") && !capabilities.has("source");
 }
 
 function resolveGatePortName(definition: PipelineOperatorDefinition | null): string | null {

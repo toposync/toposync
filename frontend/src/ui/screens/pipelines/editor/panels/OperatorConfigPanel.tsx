@@ -8,6 +8,7 @@ import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldIns
 
 import {
   CategoryGateConfigCard,
+  CinematicDirectorConfigCard,
   DebounceConfigCard,
   DebugConfigCard,
   FilterConfigCard,
@@ -372,6 +373,18 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "stream.publish_video") {
     return <PublishVideoConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "cinematic.director_source") {
+    return (
+      <CinematicDirectorConfigCard
+        config={config}
+        camerasIndex={camerasIndex}
+        cameraSelectOptions={cameraSelectOptions}
+        cameraSelectOptionById={cameraSelectOptionById}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+      />
+    );
   }
 
   return null;

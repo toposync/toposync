@@ -585,6 +585,7 @@ export type ProcessingServerVisionHuggingFaceImportRequest = {
 export type CameraSummary = {
   id: string;
   name: string;
+  enabled?: boolean;
   control?: { type?: string };
   sources?: CameraSourceSummary[];
 };

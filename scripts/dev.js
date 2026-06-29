@@ -37,6 +37,19 @@ function loadDotenv() {
 
 loadDotenv();
 
+function positiveIntEnv(name, fallback) {
+  const value = Number.parseInt(String(process.env[name] ?? ""), 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+if (!String(process.env.TOPOSYNC_GRACEFUL_SHUTDOWN_TIMEOUT ?? "").trim()) {
+  process.env.TOPOSYNC_GRACEFUL_SHUTDOWN_TIMEOUT = "5";
+}
+
+const frontendShutdownTimeoutMs = positiveIntEnv("TOPOSYNC_DEV_FRONTEND_SHUTDOWN_TIMEOUT_MS", 4_000);
+const backendShutdownTimeoutMs = positiveIntEnv("TOPOSYNC_DEV_BACKEND_SHUTDOWN_TIMEOUT_MS", 10_000);
+const forceShutdownTimeoutMs = 1_500;
+
 function spawnScript(label, scriptName, extraArgs = []) {
   const child = spawn(runnerCmd, ["run", scriptName, ...extraArgs], {
     stdio: "inherit",
@@ -76,7 +89,9 @@ function killProcessTree(child, signal) {
 
   if (isWindows) {
     return new Promise((resolve) => {
-      execFile("taskkill", ["/PID", String(pid), "/T"], (err) => {
+      const args = ["/PID", String(pid), "/T"];
+      if (signal === "SIGKILL") args.push("/F");
+      execFile("taskkill", args, (err) => {
         if (!err) return resolve();
         execFile("taskkill", ["/PID", String(pid), "/T", "/F"], () => resolve());
       });
@@ -128,9 +143,20 @@ async function shutdown(signal) {
   const backendSignal = "SIGTERM";
 
   await killProcessTree(frontend, frontendSignal);
-  await waitForExit(frontend, 4_000);
+  const frontendExited = await waitForExit(frontend, frontendShutdownTimeoutMs);
+  if (!frontendExited) {
+    console.error("[dev] frontend did not exit cleanly; forcing shutdown.");
+    await killProcessTree(frontend, "SIGKILL");
+    await waitForExit(frontend, forceShutdownTimeoutMs);
+  }
 
   await killProcessTree(backend, backendSignal);
+  const backendExited = await waitForExit(backend, backendShutdownTimeoutMs);
+  if (!backendExited) {
+    console.error("[dev] backend did not exit cleanly; forcing shutdown.");
+    await killProcessTree(backend, "SIGKILL");
+    await waitForExit(backend, forceShutdownTimeoutMs);
+  }
 }
 
 backend.on("exit", (code, signal) => {

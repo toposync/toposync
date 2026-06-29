@@ -9,7 +9,7 @@ on:
       version:
         description: "Toposync version to publish from this ref"
         required: true
-        default: "0.7.10"
+        default: "0.8.0"
       smoke:
         description: "Run post-publish image smoke tests"
         required: true

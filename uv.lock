@@ -2501,7 +2501,7 @@ wheels = [
 
 [[package]]
 name = "toposync-core"
-version = "0.7.10"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -2562,7 +2562,7 @@ extensions = [
 
 [[package]]
 name = "toposync-ext-ai"
-version = "0.7.10"
+version = "0.8.0"
 source = { editable = "extensions/ai" }
 dependencies = [
     { name = "httpx" },
@@ -2581,7 +2581,7 @@ requires-dist = [
 
 [[package]]
 name = "toposync-ext-cameras"
-version = "0.7.10"
+version = "0.8.0"
 source = { editable = "extensions/cameras" }
 dependencies = [
     { name = "numpy" },
@@ -2600,7 +2600,7 @@ requires-dist = [
 
 [[package]]
 name = "toposync-ext-cinematic"
-version = "0.7.10"
+version = "0.8.0"
 source = { editable = "extensions/cinematic" }
 dependencies = [
     { name = "toposync-core" },
@@ -2611,7 +2611,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-home-assistant"
-version = "0.7.10"
+version = "0.8.0"
 source = { editable = "extensions/home_assistant" }
 dependencies = [
     { name = "httpx" },
@@ -2628,7 +2628,7 @@ requires-dist = [
 
 [[package]]
 name = "toposync-ext-images"
-version = "0.7.10"
+version = "0.8.0"
 source = { editable = "extensions/images" }
 dependencies = [
     { name = "toposync-core" },
@@ -2639,7 +2639,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-models"
-version = "0.7.10"
+version = "0.8.0"
 source = { editable = "extensions/models" }
 dependencies = [
     { name = "toposync-core" },
@@ -2650,7 +2650,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-spatial-video"
-version = "0.7.10"
+version = "0.8.0"
 source = { editable = "extensions/spatial_video" }
 dependencies = [
     { name = "toposync-core" },
@@ -2661,7 +2661,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.7.5" }]
 
 [[package]]
 name = "toposync-ext-streaming"
-version = "0.7.10"
+version = "0.8.0"
 source = { editable = "extensions/streaming" }
 dependencies = [
     { name = "numpy" },
@@ -2680,7 +2680,7 @@ requires-dist = [
 
 [[package]]
 name = "toposync-ext-structural"
-version = "0.7.10"
+version = "0.8.0"
 source = { editable = "extensions/structural" }
 dependencies = [
     { name = "toposync-core" },
@@ -2691,7 +2691,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-vision"
-version = "0.7.10"
+version = "0.8.0"
 source = { editable = "extensions/vision" }
 dependencies = [
     { name = "huggingface-hub" },

@@ -1,6 +1,6 @@
 [project]
 name = "toposync-ext-spatial-video"
-version = "0.7.10"
+version = "0.8.0"
 description = "Toposync first-party extension: projected live video on mapped compositions."
 readme = "README.md"
 license = "MIT"

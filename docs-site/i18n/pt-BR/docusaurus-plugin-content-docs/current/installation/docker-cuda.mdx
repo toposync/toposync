@@ -17,7 +17,7 @@ Use este caminho quando quiser rodar o Toposync em container com aceleração NV
 A imagem CUDA padrão é:
 
 ```text
-ghcr.io/toposync/toposync:0.7.10-cuda
+ghcr.io/toposync/toposync:0.8.0-cuda
 ```
 
 Ela instala o bundle `toposync-vision-cuda` mais a extensão de streaming,
@@ -50,7 +50,7 @@ Crie uma pasta de deploy e um arquivo Compose:
 ```yaml title="docker-compose.yml"
 services:
   toposync:
-    image: ghcr.io/toposync/toposync:0.7.10-cuda
+    image: ghcr.io/toposync/toposync:0.8.0-cuda
     ports:
       - "${TOPOSYNC_PORT:-8000}:8000"
     volumes:
@@ -167,7 +167,7 @@ docker compose up -d
 ```
 
 Para uma release fixa, pinne a tag exata no `docker-compose.yml`, por exemplo
-`ghcr.io/toposync/toposync:0.7.10-cuda`.
+`ghcr.io/toposync/toposync:0.8.0-cuda`.
 
 ## Avançado: build local {/* #advanced-local-build */}
 

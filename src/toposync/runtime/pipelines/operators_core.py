@@ -125,6 +125,7 @@ class StationaryEventConfig(BaseModel):
     require_arrival: bool = Field(default=False)
     arrival_min_distance_m: float = Field(default=0.50, ge=0.0, le=10000.0)
     close_after_moving_seconds: float = Field(default=0.75, ge=0.0, le=3600.0)
+    merge_moving_gap_seconds: float = Field(default=0.0, ge=0.0, le=3600.0)
 
 
 @dataclass(slots=True)
@@ -1116,11 +1117,36 @@ class StationaryEventRuntime(TransformOperatorRuntime):
             return []
 
         if state.confirmed:
+            if (
+                is_stationary
+                and state.moving_since is not None
+                and self._config.merge_moving_gap_seconds > 0.0
+            ):
+                moving_seconds = max(0.0, now - float(state.moving_since))
+                close_after_seconds = (
+                    self._config.close_after_moving_seconds
+                    + self._config.merge_moving_gap_seconds
+                )
+                if moving_seconds >= close_after_seconds:
+                    annotated = self._annotate(
+                        packet,
+                        state=state,
+                        now=now,
+                        distance_m=_distance_m(state.candidate_position, position),
+                        reason="moving",
+                    )
+                    self._state_by_key.pop(key, None)
+                    return [annotated.with_lifecycle(Lifecycle.CLOSE)]
+
             if is_moving:
                 if state.moving_since is None:
                     state.moving_since = now
                 moving_seconds = max(0.0, now - float(state.moving_since))
-                if moving_seconds >= self._config.close_after_moving_seconds:
+                close_after_seconds = (
+                    self._config.close_after_moving_seconds
+                    + self._config.merge_moving_gap_seconds
+                )
+                if moving_seconds >= close_after_seconds:
                     annotated = self._annotate(
                         packet,
                         state=state,
@@ -1132,6 +1158,12 @@ class StationaryEventRuntime(TransformOperatorRuntime):
                     return [annotated.with_lifecycle(Lifecycle.CLOSE)]
                 return []
 
+            moving_was_pending = (
+                state.moving_since is not None
+                and self._config.merge_moving_gap_seconds > 0.0
+                and max(0.0, now - float(state.moving_since))
+                >= self._config.close_after_moving_seconds
+            )
             state.moving_since = None
             if is_stationary:
                 state.sample_count += 1
@@ -1141,7 +1173,7 @@ class StationaryEventRuntime(TransformOperatorRuntime):
                     state=state,
                     now=now,
                     distance_m=distance_m,
-                    reason="confirmed",
+                    reason="merged_moving_gap" if moving_was_pending else "confirmed",
                 )
                 out = annotated.with_lifecycle(Lifecycle.UPDATE)
                 state.last_event_packet = out

@@ -216,6 +216,137 @@ def test_stationary_event_closes_after_sustained_movement() -> None:
     asyncio.run(scenario())
 
 
+def test_stationary_event_merges_short_moving_gap() -> None:
+    async def scenario() -> None:
+        runtime = StationaryEventRuntime(
+            {
+                "require_arrival": False,
+                "min_stationary_seconds": 1.0,
+                "min_valid_samples": 3,
+                "close_after_moving_seconds": 0.75,
+                "merge_moving_gap_seconds": 15.0,
+            }
+        )
+
+        def make_packet(frame_ts: float, stopped: bool, speed_mps: float, world_x: float) -> Packet:
+            return Packet.create(
+                stream_id="camera",
+                lifecycle=Lifecycle.UPDATE,
+                payload={
+                    "frame_ts": frame_ts,
+                    "subject": {"id": "subject-1"},
+                    "velocity": {"valid": True, "stopped": stopped, "speed_mps": speed_mps},
+                    "world": {"x": world_x, "z": 0.0},
+                },
+            )
+
+        outputs: list[Packet] = []
+        for packet in [
+            make_packet(1.0, True, 0.01, 0.0),
+            make_packet(1.5, True, 0.01, 0.0),
+            make_packet(2.1, True, 0.01, 0.0),
+            make_packet(2.5, False, 1.0, 0.2),
+            make_packet(3.3, False, 1.0, 1.0),
+            make_packet(11.0, True, 0.01, 1.0),
+        ]:
+            outputs.extend(await runtime.process_packet(packet, context=None))
+
+        assert [packet.lifecycle for packet in outputs] == [Lifecycle.OPEN, Lifecycle.UPDATE]
+        stationary = outputs[-1].payload.get("stationary_event")
+        assert isinstance(stationary, dict)
+        assert stationary.get("reason") == "merged_moving_gap"
+
+    asyncio.run(scenario())
+
+
+def test_stationary_event_closes_after_merged_gap_expires() -> None:
+    async def scenario() -> None:
+        runtime = StationaryEventRuntime(
+            {
+                "require_arrival": False,
+                "min_stationary_seconds": 1.0,
+                "min_valid_samples": 3,
+                "close_after_moving_seconds": 0.75,
+                "merge_moving_gap_seconds": 15.0,
+            }
+        )
+
+        def make_packet(frame_ts: float, stopped: bool, speed_mps: float, world_x: float) -> Packet:
+            return Packet.create(
+                stream_id="camera",
+                lifecycle=Lifecycle.UPDATE,
+                payload={
+                    "frame_ts": frame_ts,
+                    "subject": {"id": "subject-1"},
+                    "velocity": {"valid": True, "stopped": stopped, "speed_mps": speed_mps},
+                    "world": {"x": world_x, "z": 0.0},
+                },
+            )
+
+        outputs: list[Packet] = []
+        for packet in [
+            make_packet(1.0, True, 0.01, 0.0),
+            make_packet(1.5, True, 0.01, 0.0),
+            make_packet(2.1, True, 0.01, 0.0),
+            make_packet(2.5, False, 1.0, 0.2),
+            make_packet(18.4, False, 1.0, 1.0),
+        ]:
+            outputs.extend(await runtime.process_packet(packet, context=None))
+
+        assert [packet.lifecycle for packet in outputs] == [Lifecycle.OPEN, Lifecycle.CLOSE]
+
+    asyncio.run(scenario())
+
+
+def test_stationary_event_source_close_ignores_merge_gap() -> None:
+    async def scenario() -> None:
+        runtime = StationaryEventRuntime(
+            {
+                "require_arrival": False,
+                "min_stationary_seconds": 1.0,
+                "min_valid_samples": 3,
+                "close_after_moving_seconds": 0.75,
+                "merge_moving_gap_seconds": 15.0,
+            }
+        )
+
+        def make_packet(
+            frame_ts: float,
+            stopped: bool,
+            speed_mps: float,
+            world_x: float,
+            lifecycle: Lifecycle = Lifecycle.UPDATE,
+        ) -> Packet:
+            return Packet.create(
+                stream_id="camera",
+                lifecycle=lifecycle,
+                payload={
+                    "frame_ts": frame_ts,
+                    "subject": {"id": "subject-1"},
+                    "velocity": {"valid": True, "stopped": stopped, "speed_mps": speed_mps},
+                    "world": {"x": world_x, "z": 0.0},
+                },
+            )
+
+        outputs: list[Packet] = []
+        for packet in [
+            make_packet(1.0, True, 0.01, 0.0),
+            make_packet(1.5, True, 0.01, 0.0),
+            make_packet(2.1, True, 0.01, 0.0),
+            make_packet(2.5, False, 1.0, 0.2),
+            make_packet(3.3, False, 1.0, 1.0),
+            make_packet(3.4, False, 1.0, 1.0, Lifecycle.CLOSE),
+        ]:
+            outputs.extend(await runtime.process_packet(packet, context=None))
+
+        assert [packet.lifecycle for packet in outputs] == [Lifecycle.OPEN, Lifecycle.CLOSE]
+        stationary = outputs[-1].payload.get("stationary_event")
+        assert isinstance(stationary, dict)
+        assert stationary.get("reason") == "source_closed"
+
+    asyncio.run(scenario())
+
+
 def test_runtime_snapshot_includes_last_node_error() -> None:
     async def scenario() -> None:
         registry = OperatorRegistry()

@@ -482,6 +482,7 @@ export function StationaryEventConfigCard({
   const minStationarySeconds = Number((config as any).min_stationary_seconds ?? 1.25);
   const minValidSamples = Number((config as any).min_valid_samples ?? 3);
   const requireArrival = Boolean((config as any).require_arrival ?? false);
+  const mergeMovingGapSeconds = Number((config as any).merge_moving_gap_seconds ?? 0);
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -537,6 +538,23 @@ export function StationaryEventConfigCard({
           }}
         />
         <span>{t("core.ui.pipelines.panels.stationary_event.require_arrival")}</span>
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.stationary_event.merge_moving_gap_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={3600}
+          step={0.25}
+          value={Number.isFinite(mergeMovingGapSeconds) ? Math.max(0, mergeMovingGapSeconds) : 0}
+          onChange={(seconds) => {
+            onUpdateConfig((prev) => ({
+              ...prev,
+              merge_moving_gap_seconds: Number.isFinite(seconds) ? Math.max(0, seconds) : 0,
+            }));
+          }}
+        />
       </label>
 
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stationary_event.hint")}</div>

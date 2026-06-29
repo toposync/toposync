@@ -1282,8 +1282,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.stationary_event.min_stationary_seconds": "Minimum stopped time (seconds)",
     "core.ui.pipelines.panels.stationary_event.min_valid_samples": "Minimum valid samples",
     "core.ui.pipelines.panels.stationary_event.require_arrival": "Require observed arrival before stop",
+    "core.ui.pipelines.panels.stationary_event.merge_moving_gap_seconds":
+      "Merge short maneuvers (seconds)",
     "core.ui.pipelines.panels.stationary_event.hint":
-      "Opens the event quickly, but only after the subject stays below the speed limit with enough valid samples.",
+      "Opens the event quickly after confirmation and can keep the same event during brief maneuvers.",
     "core.ui.pipelines.panels.stationary_event.key_field": "Subject key field",
     "core.ui.pipelines.panels.stationary_event.stopped_field": "Stopped boolean field",
 
@@ -3509,8 +3511,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.stationary_event.min_stationary_seconds": "Tempo mínimo parado (segundos)",
     "core.ui.pipelines.panels.stationary_event.min_valid_samples": "Mínimo de amostras válidas",
     "core.ui.pipelines.panels.stationary_event.require_arrival": "Exigir chegada observada antes da parada",
+    "core.ui.pipelines.panels.stationary_event.merge_moving_gap_seconds":
+      "Unir manobras curtas (segundos)",
     "core.ui.pipelines.panels.stationary_event.hint":
-      "Abre o evento rapidamente, mas só depois que o sujeito fica abaixo do limite de velocidade com amostras válidas suficientes.",
+      "Abre o evento rapidamente após a confirmação e pode manter o mesmo evento durante manobras breves.",
     "core.ui.pipelines.panels.stationary_event.key_field": "Campo de identificação do sujeito",
     "core.ui.pipelines.panels.stationary_event.stopped_field": "Campo booleano de parado",
 

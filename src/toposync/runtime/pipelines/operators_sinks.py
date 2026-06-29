@@ -1249,6 +1249,7 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "area_label",
         "area_labels",
         "velocity",
+        "stationary_event",
         "stored_images",
         "frame_crop",
         "frame_warp",

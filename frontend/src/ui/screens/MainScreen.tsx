@@ -11,7 +11,14 @@ import type {
   ViewSettings,
 } from "@toposync/plugin-api";
 
-import type { Composition, CompositionSummary, NotificationsCount } from "../../util/api";
+import {
+  isAbortError,
+  listStreamingCameraLiveViews,
+  type Composition,
+  type CompositionSummary,
+  type NotificationsCount,
+  type StreamingCameraLiveView,
+} from "../../util/api";
 import { i18n } from "../../util/i18n";
 
 import { Modal } from "../Modal";
@@ -28,6 +35,7 @@ import {
   type NotificationImageItem,
 } from "../notifications/pipelinesNotifications";
 import { StreamsDashboard } from "../streams/StreamsDashboard";
+import { navigate, replace, usePathname } from "../router";
 
 type Props = {
   compositionName: string;
@@ -254,20 +262,85 @@ function isFilterRestrictive(filter: NotificationsFilter): boolean {
   return false;
 }
 
-type BuiltinRenderMode = "3d" | "2d" | "vector2d" | "streams";
+type BuiltinRenderMode = "3d" | "2d" | "vector2d" | "streams" | "camera-live";
 type RenderMode = BuiltinRenderMode | string;
 
+const CAMERA_LIVE_BASE_PATH = "/cameras/live";
 const RENDER_MODE_STORAGE_KEY = "toposync.render_mode.v1";
+const LAST_CAMERA_LIVE_VIEW_STORAGE_KEY = "toposync.streams.last_live_view_id.v1";
 const STREAMS_OVERLAY_IDLE_MS = 2500;
+const LIVE_VIEWS_REFRESH_MS = 15000;
 type WindowWithIdleCallback = Window & {
   requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
   cancelIdleCallback?: (handle: number) => void;
 };
 
-const BUILTIN_RENDER_MODES = new Set<string>(["3d", "2d", "vector2d", "streams"]);
+const BUILTIN_RENDER_MODES = new Set<string>(["3d", "2d", "vector2d", "streams", "camera-live"]);
 
 function isBuiltinRenderMode(value: string): value is BuiltinRenderMode {
   return BUILTIN_RENDER_MODES.has(value);
+}
+
+function isLiveCameraRenderMode(value: string): boolean {
+  return value === "streams" || value === "camera-live";
+}
+
+function normalizePathname(pathname: string): string {
+  const raw = String(pathname || "/").trim() || "/";
+  if (raw.length > 1 && raw.endsWith("/")) return raw.slice(0, -1);
+  return raw;
+}
+
+function liveViewIdFromCameraLivePath(pathname: string): string | null {
+  const raw = normalizePathname(pathname);
+  if (raw === CAMERA_LIVE_BASE_PATH) return "";
+  if (!raw.startsWith(`${CAMERA_LIVE_BASE_PATH}/`)) return null;
+  const segment = raw.slice(CAMERA_LIVE_BASE_PATH.length + 1).split("/")[0] ?? "";
+  if (!segment) return "";
+  try {
+    return decodeURIComponent(segment).trim();
+  } catch {
+    return segment.trim();
+  }
+}
+
+function buildCameraLivePath(liveViewId: string): string {
+  const normalized = String(liveViewId || "").trim();
+  return normalized ? `${CAMERA_LIVE_BASE_PATH}/${encodeURIComponent(normalized)}` : CAMERA_LIVE_BASE_PATH;
+}
+
+function readLastCameraLiveViewId(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return String(localStorage.getItem(LAST_CAMERA_LIVE_VIEW_STORAGE_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function writeLastCameraLiveViewId(liveViewId: string): void {
+  if (typeof window === "undefined") return;
+  const normalized = String(liveViewId || "").trim();
+  if (!normalized) return;
+  try {
+    localStorage.setItem(LAST_CAMERA_LIVE_VIEW_STORAGE_KEY, normalized);
+  } catch {
+    // ignore
+  }
+}
+
+function enabledLiveViewItems(liveViews: StreamingCameraLiveView[]): StreamingCameraLiveView[] {
+  return liveViews.filter((item) => item && item.enabled !== false && String(item.id || "").trim());
+}
+
+function liveViewDisplayName(liveView: StreamingCameraLiveView | null | undefined, fallback = ""): string {
+  if (!liveView) return fallback;
+  return String(liveView.name || liveView.camera_id || liveView.id || fallback).trim() || fallback;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error || "");
 }
 
 export function MainScreen({
@@ -305,8 +378,12 @@ export function MainScreen({
   onViewportReady,
 }: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
+  const pathname = usePathname();
+  const normalizedPathname = normalizePathname(pathname);
+  const routeCameraLiveViewId = liveViewIdFromCameraLivePath(normalizedPathname);
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
+  const [isCameraLiveModalOpen, setIsCameraLiveModalOpen] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [imageModal, setImageModal] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
   const [isNotificationDetailsOpen, setIsNotificationDetailsOpen] = useState(false);
@@ -322,6 +399,7 @@ export function MainScreen({
   const filterPopoverRef = useRef<HTMLDivElement | null>(null);
   const filterButtonRef = useRef<HTMLButtonElement | null>(null);
   const [renderMode, setRenderMode] = useState<RenderMode>(() => {
+    if (routeCameraLiveViewId !== null) return "camera-live";
     try {
       const saved = localStorage.getItem(RENDER_MODE_STORAGE_KEY);
       return saved && saved.trim() ? saved.trim() : "3d";
@@ -329,11 +407,19 @@ export function MainScreen({
       return "3d";
     }
   });
+  const [cameraLiveViews, setCameraLiveViews] = useState<StreamingCameraLiveView[]>([]);
+  const [cameraLiveViewsLoading, setCameraLiveViewsLoading] = useState(true);
+  const [cameraLiveViewsError, setCameraLiveViewsError] = useState<string | null>(null);
+  const [selectedCameraLiveViewId, setSelectedCameraLiveViewId] = useState(() => {
+    if (routeCameraLiveViewId !== null) return routeCameraLiveViewId;
+    return readLastCameraLiveViewId();
+  });
   const [streamsOverlayVisible, setStreamsOverlayVisible] = useState(true);
   const notificationScrollRef = useRef<HTMLDivElement | null>(null);
   const notificationSentinelRef = useRef<HTMLDivElement | null>(null);
   const streamsOverlayTimerRef = useRef<number | null>(null);
   const notificationPaginationUserEngagedRef = useRef(false);
+  const previousRouteCameraLiveViewIdRef = useRef<string | null>(routeCameraLiveViewId);
 
   const clearStreamsOverlayTimer = useCallback(() => {
     const timerId = streamsOverlayTimerRef.current;
@@ -344,7 +430,7 @@ export function MainScreen({
 
   const scheduleStreamsOverlayHide = useCallback(() => {
     clearStreamsOverlayTimer();
-    if (renderMode !== "streams") {
+    if (!isLiveCameraRenderMode(renderMode)) {
       setStreamsOverlayVisible(true);
       return;
     }
@@ -380,7 +466,7 @@ export function MainScreen({
   );
 
   useEffect(() => {
-    if (renderMode !== "streams") {
+    if (!isLiveCameraRenderMode(renderMode)) {
       clearStreamsOverlayTimer();
       setStreamsOverlayVisible(true);
       return;
@@ -562,6 +648,30 @@ export function MainScreen({
 
   const actionTitle = activeElement ? activeElement.name : t("core.ui.action");
   const isActionModalOpen = Boolean(activeElement);
+  const enabledCameraLiveViews = useMemo(() => enabledLiveViewItems(cameraLiveViews), [cameraLiveViews]);
+  const selectedCameraLiveView = useMemo(
+    () =>
+      selectedCameraLiveViewId
+        ? enabledCameraLiveViews.find((item) => String(item.id || "").trim() === selectedCameraLiveViewId) ?? null
+        : null,
+    [enabledCameraLiveViews, selectedCameraLiveViewId],
+  );
+  const cameraLiveButtonLabel =
+    liveViewDisplayName(selectedCameraLiveView, selectedCameraLiveViewId) ||
+    (cameraLiveViewsLoading
+      ? t("core.ui.loading", {}, "Loading...")
+      : t("core.ui.camera_live.select", {}, "Select camera"));
+  const selectCameraLiveView = useCallback((liveViewId: string, options: { remember?: boolean } = {}) => {
+    const normalizedLiveViewId = String(liveViewId || "").trim();
+    setSelectedCameraLiveViewId(normalizedLiveViewId);
+    setRenderMode("camera-live");
+    if (normalizedLiveViewId) {
+      if (options.remember !== false) writeLastCameraLiveViewId(normalizedLiveViewId);
+      navigate(buildCameraLivePath(normalizedLiveViewId));
+    } else {
+      navigate(CAMERA_LIVE_BASE_PATH);
+    }
+  }, []);
 
   useEffect(() => {
     try {
@@ -570,6 +680,76 @@ export function MainScreen({
       // ignore
     }
   }, [renderMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let requestController: AbortController | null = null;
+
+    const loadCameraLiveViews = async (showLoading: boolean) => {
+      if (showLoading) setCameraLiveViewsLoading(true);
+      requestController?.abort();
+      requestController = new AbortController();
+      try {
+        const payload = await listStreamingCameraLiveViews({ signal: requestController.signal });
+        if (cancelled || requestController.signal.aborted) return;
+        setCameraLiveViews(Array.isArray(payload) ? payload : []);
+        setCameraLiveViewsError(null);
+      } catch (error) {
+        if (cancelled || isAbortError(error)) return;
+        setCameraLiveViewsError(errorMessage(error));
+      } finally {
+        if (!cancelled && !requestController?.signal.aborted && showLoading) setCameraLiveViewsLoading(false);
+      }
+    };
+
+    void loadCameraLiveViews(true);
+    const intervalId = window.setInterval(() => {
+      void loadCameraLiveViews(false);
+    }, LIVE_VIEWS_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      requestController?.abort();
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  useEffect(() => {
+    const previousRouteCameraLiveViewId = previousRouteCameraLiveViewIdRef.current;
+    previousRouteCameraLiveViewIdRef.current = routeCameraLiveViewId;
+    if (routeCameraLiveViewId === null) return;
+    if (renderMode !== "camera-live") {
+      if (previousRouteCameraLiveViewId !== routeCameraLiveViewId) {
+        setRenderMode("camera-live");
+        setSelectedCameraLiveViewId(routeCameraLiveViewId);
+      }
+      return;
+    }
+    if (selectedCameraLiveViewId !== routeCameraLiveViewId) {
+      setSelectedCameraLiveViewId(routeCameraLiveViewId);
+    }
+  }, [renderMode, routeCameraLiveViewId, selectedCameraLiveViewId]);
+
+  useEffect(() => {
+    if (renderMode === "camera-live" || routeCameraLiveViewId === null) return;
+    replace("/");
+  }, [renderMode, routeCameraLiveViewId]);
+
+  useEffect(() => {
+    if (renderMode !== "camera-live" || routeCameraLiveViewId !== null || cameraLiveViewsLoading) return;
+    const rememberedLiveViewId = readLastCameraLiveViewId();
+    const rememberedEnabled = rememberedLiveViewId
+      ? enabledCameraLiveViews.find((item) => String(item.id || "").trim() === rememberedLiveViewId)
+      : null;
+    const selectedEnabled = selectedCameraLiveViewId
+      ? enabledCameraLiveViews.find((item) => String(item.id || "").trim() === selectedCameraLiveViewId)
+      : null;
+    const nextLiveViewId =
+      String(rememberedEnabled?.id || selectedEnabled?.id || enabledCameraLiveViews[0]?.id || rememberedLiveViewId || selectedCameraLiveViewId || "").trim();
+    if (!nextLiveViewId) return;
+    if (selectedCameraLiveViewId !== nextLiveViewId) setSelectedCameraLiveViewId(nextLiveViewId);
+    replace(buildCameraLivePath(nextLiveViewId));
+  }, [cameraLiveViewsLoading, enabledCameraLiveViews, renderMode, routeCameraLiveViewId, selectedCameraLiveViewId]);
 
   useEffect(() => {
     try {
@@ -763,14 +943,16 @@ export function MainScreen({
         : renderMode === "vector2d"
           ? t("core.ui.render_modal.option_vector2d.title", {}, "2D (Plan)")
           : renderMode === "streams"
-            ? t("core.ui.render_modal.option_streams.title", {}, "Live Cameras")
-            : activeRenderView
-              ? renderViewText(activeRenderView.name, activeRenderView.id)
-              : t("core.ui.render_modal.option_loading.title", {}, "Loading view");
+            ? t("core.ui.render_modal.option_streams.title", {}, "Camera Grid")
+            : renderMode === "camera-live"
+              ? t("core.ui.render_modal.option_camera_live.title", {}, "Live Camera")
+              : activeRenderView
+                ? renderViewText(activeRenderView.name, activeRenderView.id)
+                : t("core.ui.render_modal.option_loading.title", {}, "Loading view");
   const renderButtonLabel = renderModeLabel || t("core.ui.rendering");
   const compositionButtonLabel = compositionName.trim() || t("core.ui.composition");
   const viewportLoadingMessage =
-    renderMode === "streams"
+    isLiveCameraRenderMode(renderMode)
       ? null
       : !compositionLoaded
         ? t("core.ui.viewport_loading.composition", {}, "Loading composition...")
@@ -853,6 +1035,14 @@ export function MainScreen({
             </>
           ) : renderMode === "streams" ? (
             <StreamsDashboard uiVisible={streamsOverlayVisible} isActive={renderMode === "streams"} />
+          ) : renderMode === "camera-live" ? (
+            <StreamsDashboard
+              uiVisible={streamsOverlayVisible}
+              isActive={renderMode === "camera-live"}
+              embedded={true}
+              liveViewId={selectedCameraLiveViewId || "__toposync-no-camera-selected__"}
+              defaultContext="large"
+            />
           ) : (
             <div className="viewportRoot mainViewportLoadingRoot">
               <div className="mainViewportLoadingCard">
@@ -868,8 +1058,8 @@ export function MainScreen({
       <div
         className={[
           "overlayTopRight",
-          renderMode === "streams" ? "streamsOverlayAutoHide" : "",
-          renderMode === "streams" && !streamsOverlayVisible ? "isHidden" : "isVisible",
+          isLiveCameraRenderMode(renderMode) ? "streamsOverlayAutoHide" : "",
+          isLiveCameraRenderMode(renderMode) && !streamsOverlayVisible ? "isHidden" : "isVisible",
         ]
           .filter(Boolean)
           .join(" ")}
@@ -883,7 +1073,17 @@ export function MainScreen({
         >
           <span className="mainSelectorButtonText">{renderButtonLabel}</span>
         </button>
-        {renderMode !== "streams" ? (
+        {renderMode === "camera-live" ? (
+          <button
+            className="chipButton mainSelectorButton"
+            type="button"
+            aria-label={`${t("core.ui.camera_live.selector_label", {}, "Camera")}: ${cameraLiveButtonLabel}`}
+            title={`${t("core.ui.camera_live.selector_label", {}, "Camera")}: ${cameraLiveButtonLabel}`}
+            onClick={() => setIsCameraLiveModalOpen(true)}
+          >
+            <span className="mainSelectorButtonText">{cameraLiveButtonLabel}</span>
+          </button>
+        ) : renderMode !== "streams" ? (
           <button
             className="chipButton mainSelectorButton"
             type="button"
@@ -911,7 +1111,7 @@ export function MainScreen({
         >
           <Icon name="diagram-project" />
         </button>
-        {renderMode !== "streams" ? (
+        {!isLiveCameraRenderMode(renderMode) ? (
           <button
             className="iconButton iconButtonPrimary"
             type="button"
@@ -928,8 +1128,8 @@ export function MainScreen({
         className={[
           "overlayLeft",
           notificationsOpen ? "isOpen" : "isCollapsed",
-          renderMode === "streams" ? "streamsOverlayAutoHide" : "",
-          renderMode === "streams" && !streamsOverlayVisible ? "isHidden" : "isVisible",
+          isLiveCameraRenderMode(renderMode) ? "streamsOverlayAutoHide" : "",
+          isLiveCameraRenderMode(renderMode) && !streamsOverlayVisible ? "isHidden" : "isVisible",
         ]
           .filter(Boolean)
           .join(" ")}
@@ -1172,7 +1372,7 @@ export function MainScreen({
         )}
       </div>
 
-      {renderMode !== "streams" && !viewportLoadingMessage && elements.length === 0 ? (
+      {!isLiveCameraRenderMode(renderMode) && !viewportLoadingMessage && elements.length === 0 ? (
         <div className="emptyHint">
           <div className="card">
             <div className="cardTitle">{t("core.ui.empty_title")}</div>
@@ -1258,9 +1458,29 @@ export function MainScreen({
               }
             }}
           >
-            <div className="choiceTitle">{t("core.ui.render_modal.option_streams.title", {}, "Live Cameras")}</div>
+            <div className="choiceTitle">{t("core.ui.render_modal.option_streams.title", {}, "Camera Grid")}</div>
             <div className="choiceDesc">
               {t("core.ui.render_modal.option_streams.desc", {}, "Watch enabled cameras in a paged grid.")}
+            </div>
+          </div>
+          <div
+            className={["choiceItem", renderMode === "camera-live" ? "isSelected" : ""].filter(Boolean).join(" ")}
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              setRenderMode("camera-live");
+              setIsRenderModalOpen(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                setRenderMode("camera-live");
+                setIsRenderModalOpen(false);
+              }
+            }}
+          >
+            <div className="choiceTitle">{t("core.ui.render_modal.option_camera_live.title", {}, "Live Camera")}</div>
+            <div className="choiceDesc">
+              {t("core.ui.render_modal.option_camera_live.desc", {}, "Focus on one live camera with a shareable link.")}
             </div>
           </div>
           {orderedRenderViews.map((view) => {
@@ -1301,6 +1521,55 @@ export function MainScreen({
         onRename={onRenameComposition}
         onDelete={onDeleteComposition}
       />
+
+      <Modal
+        open={isCameraLiveModalOpen}
+        title={t("core.ui.camera_live.modal_title", {}, "Camera")}
+        onClose={() => setIsCameraLiveModalOpen(false)}
+      >
+        <div className="choiceList">
+          {cameraLiveViewsError ? <div className="errorText">{cameraLiveViewsError}</div> : null}
+          {cameraLiveViewsLoading ? (
+            <div className="choiceItem" aria-disabled="true">
+              <div className="choiceTitle">{t("core.ui.loading", {}, "Loading...")}</div>
+            </div>
+          ) : null}
+          {!cameraLiveViewsLoading && enabledCameraLiveViews.length === 0 ? (
+            <div className="choiceItem" aria-disabled="true">
+              <div className="choiceTitle">{t("core.ui.camera_live.empty_title", {}, "No live cameras")}</div>
+              <div className="choiceDesc">
+                {t("core.ui.camera_live.empty_desc", {}, "Create or enable a live view in Settings > Streams.")}
+              </div>
+            </div>
+          ) : null}
+          {enabledCameraLiveViews.map((liveView) => {
+            const liveViewId = String(liveView.id || "").trim();
+            const label = liveViewDisplayName(liveView, liveViewId);
+            const description = String(liveView.camera_id || "").trim();
+            return (
+              <div
+                key={liveViewId}
+                className={["choiceItem", selectedCameraLiveViewId === liveViewId ? "isSelected" : ""].filter(Boolean).join(" ")}
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  selectCameraLiveView(liveViewId, { remember: true });
+                  setIsCameraLiveModalOpen(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    selectCameraLiveView(liveViewId, { remember: true });
+                    setIsCameraLiveModalOpen(false);
+                  }
+                }}
+              >
+                <div className="choiceTitle">{label}</div>
+                {description && description !== label ? <div className="choiceDesc">{description}</div> : null}
+              </div>
+            );
+          })}
+        </div>
+      </Modal>
 
       <Modal
         open={isNotificationDetailsOpen}

@@ -910,22 +910,43 @@ def _onvif_event_stream_id(config: OnvifEventSourceConfig, context: Any, event: 
 
 
 def _onvif_event_bool(event: dict[str, Any], item_name: str = "") -> bool | None:
+    value, _item_name = _onvif_event_bool_with_item(event, item_name=item_name)
+    return value
+
+
+def _onvif_event_bool_with_item(event: dict[str, Any], item_name: str = "") -> tuple[bool | None, str]:
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     wanted = str(item_name or "").strip()
-    values: list[Any] = []
+    values: list[tuple[str, Any]] = []
     if wanted:
-        values.append(data.get(wanted))
+        values.append((wanted, data.get(wanted)))
     else:
-        values.extend(data.values())
-    for value in values:
+        values.extend((str(key or "").strip(), value) for key, value in data.items())
+    for key, value in values:
         if isinstance(value, bool):
-            return value
+            return value, key
         text = str(value or "").strip().lower()
         if text in {"1", "true", "yes", "on"}:
-            return True
+            return True, key
         if text in {"0", "false", "no", "off"}:
-            return False
-    return None
+            return False, key
+    return None, wanted
+
+
+def _onvif_event_dict_key(value: Any) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, dict):
+        return ()
+    return tuple(sorted((str(key or ""), str(item or "")) for key, item in value.items()))
+
+
+def _onvif_event_state_key(event: dict[str, Any], *, item_name: str) -> tuple[Any, ...]:
+    return (
+        str(event.get("camera_id") or "").strip(),
+        str(event.get("topic") or "").strip(),
+        str(item_name or "").strip(),
+        _onvif_event_dict_key(event.get("source")),
+        _onvif_event_dict_key(event.get("key")),
+    )
 
 
 def _onvif_gate_telemetry_ts(payload: dict[str, Any]) -> float:
@@ -1069,11 +1090,14 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
 
 
 class OnvifEventSourceRuntime(SourceOperatorRuntime):
+    _MAX_BOOLEAN_STATE_KEYS = 512
+
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = OnvifEventSourceConfig.model_validate(config)
         self._dependencies = dependencies
         self._last_sequence = 0
         self._pending: list[Packet] = []
+        self._last_boolean_values: dict[tuple[Any, ...], bool] = {}
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         if self._pending:
@@ -1104,7 +1128,10 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
                 max_seen = sequence
             if not self._matches_event(event):
                 continue
-            self._pending.append(self._packet_for_event(event, context))
+            value, item_name = self._event_boolean_value(event)
+            if self._is_duplicate_boolean_event(event, item_name=item_name, value=value):
+                continue
+            self._pending.append(self._packet_for_event(event, context, boolean_value=value))
         self._last_sequence = max_seen
         if self._pending:
             return self._pending.pop(0)
@@ -1129,12 +1156,28 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
             return True
         return False
 
-    def _packet_for_event(self, event: dict[str, Any], context: Any) -> Packet:
+    def _event_boolean_value(self, event: dict[str, Any]) -> tuple[bool | None, str]:
         item_name = ""
         filters = list(self._config.event_filters or [])
         if len(filters) == 1:
             item_name = str(filters[0].item_name or "").strip()
-        value = _onvif_event_bool(event, item_name=item_name)
+        return _onvif_event_bool_with_item(event, item_name=item_name)
+
+    def _is_duplicate_boolean_event(self, event: dict[str, Any], *, item_name: str, value: bool | None) -> bool:
+        if value is None:
+            return False
+        key = _onvif_event_state_key(event, item_name=item_name)
+        previous = self._last_boolean_values.get(key)
+        if previous is value:
+            return True
+        self._last_boolean_values[key] = value
+        if len(self._last_boolean_values) > self._MAX_BOOLEAN_STATE_KEYS:
+            oldest_key = next(iter(self._last_boolean_values))
+            self._last_boolean_values.pop(oldest_key, None)
+        return False
+
+    def _packet_for_event(self, event: dict[str, Any], context: Any, *, boolean_value: bool | None) -> Packet:
+        value = boolean_value
         operation = str(event.get("operation") or "").strip().lower()
         lifecycle = Lifecycle.UPDATE
         if value is True:

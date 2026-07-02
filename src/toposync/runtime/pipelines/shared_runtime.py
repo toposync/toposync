@@ -74,6 +74,7 @@ def build_merged_pipeline_plan(
                 merged_node_id = _merged_node_id_for_key(node=node, merge_key=merge_key)
                 node_id_by_key[merge_key] = merged_node_id
                 merged_node_by_key[merge_key] = CompiledNode(
+                    uid=merged_node_id,
                     node_id=merged_node_id,
                     operator_id=node.operator_id,
                     normalized_config=dict(node.normalized_config),
@@ -92,7 +93,12 @@ def build_merged_pipeline_plan(
             edge_key = (source_merged, edge.source_port, target_merged, edge.target_port)
             existing = edge_by_key.get(edge_key)
             if existing is None:
+                edge_uid = (
+                    f"merged:{source_merged}.{edge.source_port}->"
+                    f"{target_merged}.{edge.target_port}"
+                )
                 edge_by_key[edge_key] = CompiledEdge(
+                    uid=edge_uid,
                     source_node_id=source_merged,
                     source_port=edge.source_port,
                     target_node_id=target_merged,
@@ -128,6 +134,7 @@ def build_merged_pipeline_plan(
                     item.source_port,
                     item.target_node_id,
                     item.target_port,
+                    item.uid,
                 ),
             )
         ),
@@ -180,34 +187,44 @@ class PipelineBundleRuntime:
         await self._runtime.run_for(duration_s)
         return self.snapshot()
 
+    def graph_runtime_info(self) -> dict[str, Any]:
+        info = self._runtime.graph_runtime_info(graph_id=self.bundle_name)
+        info["bundle_name"] = self.bundle_name
+        info["pipelines"] = [pipeline.name for pipeline in self.report.pipelines]
+        info["node_occurrences"] = _occurrences_payload(self.plan.merged_node_occurrences)
+        info["shared_nodes"] = {
+            node_id: items
+            for node_id, items in info["node_occurrences"].items()
+            if len(items) > 1
+        }
+        return info
+
     def snapshot(self) -> dict[str, Any]:
         runtime_snapshot = self._runtime.snapshot()
+        graph_info = self.graph_runtime_info()
         return {
             "bundle_name": self.bundle_name,
             "pipelines": [pipeline.name for pipeline in self.report.pipelines],
-            "node_occurrences": {
-                node_id: [
-                    {
-                        "pipeline_name": item.pipeline_name,
-                        "node_id": item.node_id,
-                    }
-                    for item in occurrences
-                ]
-                for node_id, occurrences in self.plan.merged_node_occurrences.items()
-            },
-            "shared_nodes": {
-                node_id: [
-                    {
-                        "pipeline_name": item.pipeline_name,
-                        "node_id": item.node_id,
-                    }
-                    for item in occurrences
-                ]
-                for node_id, occurrences in self.plan.merged_node_occurrences.items()
-                if len(occurrences) > 1
-            },
+            "node_occurrences": graph_info["node_occurrences"],
+            "shared_nodes": graph_info["shared_nodes"],
+            "graph_info": graph_info,
             "runtime": runtime_snapshot,
         }
+
+
+def _occurrences_payload(
+    occurrences_by_node: dict[str, tuple[MergedNodeOccurrence, ...]]
+) -> dict[str, list[dict[str, str]]]:
+    return {
+        node_id: [
+            {
+                "pipeline_name": item.pipeline_name,
+                "node_id": item.node_id,
+            }
+            for item in occurrences
+        ]
+        for node_id, occurrences in occurrences_by_node.items()
+    }
 
 
 def _merged_node_id_for_key(*, node: CompiledNode, merge_key: tuple[Any, ...]) -> str:

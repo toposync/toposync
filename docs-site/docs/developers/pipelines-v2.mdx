@@ -1,0 +1,139 @@
+---
+title: Pipeline Graph v2
+description: "Developer contract for the next Toposync pipeline graph schema."
+keywords: ["toposync", "pipelines", "DAG", "backpressure", "runtime graph", "operators"]
+image: /img/social-card.png
+sidebar_position: 6
+---
+
+# Pipeline Graph v2 {/* #pipeline-graph-v2 */}
+
+Pipeline Graph v2 is the next pipeline contract for Toposync. It keeps the
+public graph acyclic, but makes the operational parts of a topology explicit:
+node identity, edge identity, traffic class, queue policy, backpressure,
+lifecycle preservation, and debug sampling.
+
+This page documents the schema boundary. The v1 compiler and runtime continue
+to run existing graphs until the v2 compiler/runtime path lands.
+
+## Principles {/* #principles */}
+
+- The backend compiler remains the source of truth.
+- The user-facing graph is a DAG. Feedback loops are only internal runtime
+  mechanics for known operators such as demand gates or future flow limiters.
+- Edges are operational objects, not visual lines.
+- Backpressure is part of the graph contract.
+- Fan-in must use an explicit operator instead of multiple upstream edges into
+  the same input port.
+- `OPEN` and `CLOSE` lifecycle packets must stay protected from lossy update
+  compaction.
+
+## Graph shape {/* #graph-shape */}
+
+```json
+{
+  "schema_version": 2,
+  "uid": "graph_front_yard",
+  "revision": 1,
+  "nodes": [],
+  "edges": [],
+  "subgraphs": [],
+  "resources": {},
+  "limits": {},
+  "layout": {},
+  "meta": {}
+}
+```
+
+`uid` is stable runtime identity. Reordering JSON arrays, renaming labels, or
+moving nodes on the canvas should not change it.
+
+## Node shape {/* #node-shape */}
+
+```json
+{
+  "uid": "node_detect_01",
+  "id": "detect",
+  "operator": "vision.detect",
+  "config": {},
+  "state": {},
+  "ui": {
+    "label": "Detect people and vehicles"
+  }
+}
+```
+
+`id` can remain human-readable. `uid` is the durable identity that future
+runtime state, metrics, and layout references should use.
+
+## Edge shape {/* #edge-shape */}
+
+```json
+{
+  "uid": "edge_motion_detect_01",
+  "from": { "node": "motion", "port": "out" },
+  "to": { "node": "detect", "port": "in" },
+  "traffic": {
+    "modality": "video.frame",
+    "semantic_class": "frame",
+    "continuous": true,
+    "loss_tolerance": "lossy_updates_only"
+  },
+  "queue": {
+    "max_items": 1,
+    "max_artifact_bytes": 134217728,
+    "max_age_ms": 1000,
+    "drop_policy": "latest_only",
+    "key_policy": "none",
+    "key_path": ""
+  },
+  "backpressure": {
+    "mode": "pause_upstream",
+    "warn_at_utilization": 0.7,
+    "critical_at_utilization": 0.9,
+    "propagate_pressure": true
+  },
+  "lifecycle": {
+    "preserve_open": true,
+    "preserve_close": true,
+    "compact_updates": true
+  },
+  "debug": {
+    "sample_headers": true,
+    "retain_last": 10,
+    "retain_artifact_refs": true,
+    "retain_artifact_data": false
+  }
+}
+```
+
+v2 moves the legacy root edge fields into `queue`:
+
+```json
+{
+  "queue": {
+    "max_items": 1,
+    "drop_policy": "latest_only"
+  }
+}
+```
+
+Do not use root-level `maxsize` or `drop_policy` in v2 edges.
+
+## First runtime targets {/* #first-runtime-targets */}
+
+The first useful v2 topology is a shared perception branch:
+
+```text
+camera.source
+  -> camera.motion_gate
+  -> internal flow limiter
+  -> vision.detect
+  -> category routes
+  -> person stopped branch
+  -> vehicle stopped branch
+```
+
+The important part is not the canvas. It is that the shared edge into
+`vision.detect` has a visible queue policy and backpressure behavior before the
+expensive model runs.

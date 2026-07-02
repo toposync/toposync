@@ -777,6 +777,11 @@ class PipelineRuntimeStatusResponse(BaseModel):
     status: dict[str, Any] = Field(default_factory=dict)
 
 
+class PipelineRuntimeGraphInfoResponse(BaseModel):
+    graphs: list[dict[str, Any]] = Field(default_factory=list)
+    status: dict[str, Any] = Field(default_factory=dict)
+
+
 class PipelineStatsResponse(BaseModel):
     pipeline_name: str
     window_seconds: int = 0
@@ -2315,6 +2320,20 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             status = {"running": False, "error": str(exc)}
         return PipelineRuntimeStatusResponse(status=status)
+
+    @app.get("/api/pipelines/runtime/graph-info", response_model=PipelineRuntimeGraphInfoResponse)
+    async def pipelines_runtime_graph_info(request: Request) -> PipelineRuntimeGraphInfoResponse:
+        _require(request, action="core:pipelines:runtime:read")
+        orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+        if orchestrator is None:
+            return PipelineRuntimeGraphInfoResponse(status={"running": False})
+        try:
+            status = orchestrator.status()
+            graph_info = status.get("graph_info") if isinstance(status, dict) else None
+            graphs = graph_info.get("graphs", []) if isinstance(graph_info, dict) else []
+        except Exception as exc:  # noqa: BLE001
+            return PipelineRuntimeGraphInfoResponse(status={"running": False, "error": str(exc)})
+        return PipelineRuntimeGraphInfoResponse(graphs=list(graphs), status=status)
 
     @app.post("/api/pipelines/runtime/reload", response_model=PipelineRuntimeStatusResponse)
     async def pipelines_runtime_reload(request: Request) -> PipelineRuntimeStatusResponse:

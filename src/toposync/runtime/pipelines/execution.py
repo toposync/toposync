@@ -13,6 +13,7 @@ from toposync.runtime.services import ServiceRegistry
 
 from .compiler import CompiledPipeline
 from .execution_scheduler import ExecutionMode, ExecutionScheduler
+from .flow_limiter import FlowLimiter, FlowLimiterMetrics, FlowLimiterPermit
 from .operator_registry import OperatorRegistry
 from .observability import (
     PipelineObservabilitySink,
@@ -29,6 +30,7 @@ from .runtime import (
     Packet,
     QueueOperationStatus,
 )
+from .runtime_info import build_graph_runtime_info
 from .stats import PipelineStatsStore
 from .telemetry import PipelineTelemetryStore
 
@@ -77,6 +79,7 @@ class NodeRuntimeMetrics:
     last_error: str | None = None
     last_error_at: float | None = None
     process_latency_ms: deque[float] = field(default_factory=lambda: deque(maxlen=4096))
+    flow_limiter: FlowLimiterMetrics | None = None
 
     def record_latency(self, latency_ms: float) -> None:
         self.process_latency_ms.append(max(0.0, float(latency_ms)))
@@ -101,6 +104,9 @@ class NodeRuntimeMetrics:
             "last_error_at": self.last_error_at,
             "avg_process_latency_ms": avg,
             "p95_process_latency_ms": p95,
+            "flow_limiter": (
+                self.flow_limiter.snapshot() if self.flow_limiter is not None else None
+            ),
         }
 
 
@@ -133,6 +139,7 @@ class NodeExecutionContext:
     stats_node_occurrences: tuple[tuple[str, str], ...] = ()
     stats_count_outputs_on_read: bool = False
     stats_count_terminal_outputs_on_emit: bool = False
+    flow_limiter: FlowLimiter | None = None
 
     async def run_blocking(
         self,
@@ -385,16 +392,32 @@ class TransformOperatorRuntime(BaseOperatorRuntime):
             packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
             if packet is None:
                 continue
+            permit: FlowLimiterPermit | None = None
+            limiter = context.flow_limiter
+            if limiter is not None:
+                decision = limiter.acquire(packet)
+                if not decision.accepted:
+                    context.metrics.dropped_packets += 1
+                    continue
+                permit = decision.permit
             started_ns = time.monotonic_ns()
             try:
                 out_packets = await self.process_packet(packet, context)
+                context.metrics.record_latency(_elapsed_ms(started_ns))
+                for out_packet in out_packets:
+                    await context.emit(out_packet, port=self.output_port)
+            except asyncio.CancelledError:
+                if permit is not None:
+                    permit.finish(canceled=True)
+                raise
             except Exception as exc:
+                if permit is not None:
+                    permit.finish(error=True)
                 context.metrics.record_error(exc)
                 context.logger.exception("Node '%s' failed to process packet", context.node_id)
                 continue
-            context.metrics.record_latency(_elapsed_ms(started_ns))
-            for out_packet in out_packets:
-                await context.emit(out_packet, port=self.output_port)
+            if permit is not None:
+                permit.finish()
 
 
 class PassThroughRuntime(TransformOperatorRuntime):
@@ -420,6 +443,7 @@ class PipelineRuntime:
     _runtime_by_node: dict[str, BaseOperatorRuntime] = field(init=False, default_factory=dict)
     _context_by_node: dict[str, NodeExecutionContext] = field(init=False, default_factory=dict)
     _tasks: list[asyncio.Task[None]] = field(init=False, default_factory=list)
+    _task_by_node: dict[str, asyncio.Task[None]] = field(init=False, default_factory=dict)
     _runtimes: list[BaseOperatorRuntime] = field(init=False, default_factory=list)
     _cancel_event: asyncio.Event = field(init=False, default_factory=asyncio.Event)
     _artifact_pipeline_counter: ArtifactMemoryCounter = field(init=False)
@@ -440,6 +464,7 @@ class PipelineRuntime:
             context = self._context_by_node[node_id]
             task = asyncio.create_task(self._run_node(runtime, context), name=f"pipeline[{self.compiled.name}].{node_id}")
             self._tasks.append(task)
+            self._task_by_node[node_id] = task
 
     async def stop(self) -> None:
         self._cancel_event.set()
@@ -456,6 +481,7 @@ class PipelineRuntime:
             await asyncio.gather(*pending, return_exceptions=True)
             await asyncio.gather(*done, return_exceptions=True)
         self._tasks.clear()
+        self._task_by_node.clear()
         for channel in self.channel_map.values():
             try:
                 channel.clear()
@@ -471,10 +497,12 @@ class PipelineRuntime:
     def snapshot(self) -> dict[str, Any]:
         channels = {name: _snapshot_to_dict(channel.metrics_snapshot()) for name, channel in self.channel_map.items()}
         nodes = {node_id: metrics.snapshot() for node_id, metrics in self.node_metrics.items()}
+        graph_info = self.graph_runtime_info()
         return {
             "pipeline_name": self.compiled.name,
             "channels": channels,
             "nodes": nodes,
+            "graph_info": graph_info,
             "artifact_memory": {
                 "pipeline": self._artifact_pipeline_counter.snapshot(),
                 "global": (
@@ -484,6 +512,22 @@ class PipelineRuntime:
                 ),
             },
         }
+
+    def graph_runtime_info(self, *, graph_id: str | None = None) -> dict[str, Any]:
+        channels = {name: channel.metrics_snapshot() for name, channel in self.channel_map.items()}
+        info = build_graph_runtime_info(
+            compiled=self.compiled,
+            registry=self.registry,
+            node_metrics=self.node_metrics,
+            channel_metrics=channels,
+            task_states={
+                node_id: _task_state(task)
+                for node_id, task in self._task_by_node.items()
+            },
+            running=bool(self._tasks and not self._cancel_event.is_set()),
+            graph_id=graph_id,
+        )
+        return info.to_dict()
 
     async def _run_node(self, runtime: BaseOperatorRuntime, context: NodeExecutionContext) -> None:
         try:
@@ -582,6 +626,9 @@ class PipelineRuntime:
                     node_outputs[source_port] = channels
 
             metrics = NodeRuntimeMetrics()
+            flow_limiter = FlowLimiter.for_operator(registered.definition)
+            if flow_limiter is not None:
+                metrics.flow_limiter = flow_limiter.metrics
             self.node_metrics[node_id] = metrics
             context = NodeExecutionContext(
                 node_id=node_id,
@@ -604,6 +651,7 @@ class PipelineRuntime:
                     if self.dependencies.pipeline_graph_limits_by_pipeline is not None
                     else {self.compiled.name: dict(self.compiled.limits)}
                 ),
+                flow_limiter=flow_limiter,
             )
             occurrences_map = self.dependencies.pipeline_stats_node_occurrences
             if occurrences_map is not None:
@@ -648,7 +696,32 @@ def _snapshot_to_dict(snapshot: ChannelMetricsSnapshot) -> dict[str, Any]:
         "active_keys": snapshot.active_keys,
         "max_depth_per_key_seen": snapshot.max_depth_per_key_seen,
         "max_in_memory_artifact_bytes_per_key_seen": snapshot.max_in_memory_artifact_bytes_per_key_seen,
+        "pressure_cause": snapshot.pressure_cause,
+        "last_pressure_at": snapshot.last_pressure_at,
+        "blocked_put_time_ms": snapshot.blocked_put_time_ms,
+        "waiting_get_time_ms": snapshot.waiting_get_time_ms,
+        "oldest_packet_age_ms": snapshot.oldest_packet_age_ms,
+        "last_event_ts": snapshot.last_event_ts,
+        "drop_reason_counts": dict(snapshot.drop_reason_counts),
+        "artifact_bytes_current": snapshot.artifact_bytes_current,
+        "artifact_bytes_max_seen": snapshot.artifact_bytes_max_seen,
+        "artifact_bytes_accepted": snapshot.artifact_bytes_accepted,
+        "artifact_bytes_delivered": snapshot.artifact_bytes_delivered,
+        "artifact_bytes_dropped": snapshot.artifact_bytes_dropped,
+        "pressure_state": snapshot.pressure_state,
     }
+
+
+def _task_state(task: asyncio.Task[Any]) -> str:
+    if task.cancelled():
+        return "canceled"
+    if not task.done():
+        return "running"
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return "canceled"
+    return "failed" if exc is not None else "completed"
 
 
 def _elapsed_ms(started_ns: int) -> float:

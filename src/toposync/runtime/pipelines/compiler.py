@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from toposync.runtime.config_store import Pipeline
 
+from .graph_schema_v2 import PipelineGraphV2Spec
 from .operator_registry import OperatorRegistry
 from .runtime import DropPolicy
 
@@ -87,7 +88,39 @@ class PipelineGraphSpec(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class _CompileNode:
+    uid: str
+    node_id: str
+    operator_id: str
+    config: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _CompileEdge:
+    uid: str
+    source_node: str
+    source_port: str
+    target_node: str
+    target_port: str
+    channel_maxsize: int
+    channel_drop_policy: DropPolicy
+    traffic_modality: str | None = None
+    preserve_open: bool = True
+    preserve_close: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class _CompileGraph:
+    schema_version: int
+    nodes: tuple[_CompileNode, ...]
+    edges: tuple[_CompileEdge, ...]
+    limits: dict[str, Any]
+    uses_v2_contracts: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class CompiledNode:
+    uid: str
     node_id: str
     operator_id: str
     normalized_config: dict[str, Any]
@@ -97,6 +130,7 @@ class CompiledNode:
 
 @dataclass(frozen=True, slots=True)
 class CompiledEdge:
+    uid: str
     source_node_id: str
     source_port: str
     target_node_id: str
@@ -140,27 +174,41 @@ class PipelineGraphCompiler:
     ) -> CompiledPipeline:
         _check_cancelled(cancel_check)
         try:
-            graph = PipelineGraphSpec.model_validate(pipeline.graph)
+            graph = _parse_graph(pipeline.graph)
         except Exception as exc:  # noqa: BLE001
             raise GraphCompileError(f"Invalid graph schema: {exc}") from exc
 
-        node_map: dict[str, PipelineGraphNode] = {}
+        node_map: dict[str, _CompileNode] = {}
+        node_uid_seen: set[str] = set()
         for node in graph.nodes:
             _check_cancelled(cancel_check)
-            if node.id in node_map:
-                raise GraphCompileError(f"Duplicate node id: {node.id}")
-            node_map[node.id] = node
+            if node.node_id in node_map:
+                raise GraphCompileError(f"Duplicate node id: {node.node_id}")
+            if graph.uses_v2_contracts:
+                if node.uid in node_uid_seen:
+                    raise GraphCompileError(f"Duplicate node uid: {node.uid}")
+                node_uid_seen.add(node.uid)
+            node_map[node.node_id] = node
 
         edge_list = list(graph.edges)
         adjacency: dict[str, set[str]] = defaultdict(set)
         indegree: dict[str, int] = {node_id: 0 for node_id in node_map}
-        incoming_edges: dict[str, list[PipelineGraphEdge]] = defaultdict(list)
+        incoming_edges: dict[str, list[_CompileEdge]] = defaultdict(list)
         target_port_seen: set[tuple[str, str]] = set()
+        edge_uid_seen: set[str] = set()
 
         for edge in edge_list:
             _check_cancelled(cancel_check)
-            src = edge.source.node
-            dst = edge.target.node
+            if graph.uses_v2_contracts:
+                if edge.uid in edge_uid_seen:
+                    raise GraphCompileError(f"Duplicate edge uid: {edge.uid}")
+                edge_uid_seen.add(edge.uid)
+                if not edge.preserve_open or not edge.preserve_close:
+                    raise GraphCompileError(
+                        f"Edge '{edge.uid}' must preserve OPEN and CLOSE lifecycle packets",
+                    )
+            src = edge.source_node
+            dst = edge.target_node
             if src not in node_map:
                 raise GraphCompileError(f"Edge source node not found: {src}")
             if dst not in node_map:
@@ -169,10 +217,10 @@ class PipelineGraphCompiler:
                 adjacency[src].add(dst)
                 indegree[dst] += 1
             incoming_edges[dst].append(edge)
-            target_port_key = (dst, edge.target.port)
+            target_port_key = (dst, edge.target_port)
             if target_port_key in target_port_seen:
                 raise GraphCompileError(
-                    f"Node '{dst}' has multiple incoming edges for input port '{edge.target.port}'",
+                    f"Node '{dst}' has multiple incoming edges for input port '{edge.target_port}'",
                 )
             target_port_seen.add(target_port_key)
 
@@ -180,6 +228,8 @@ class PipelineGraphCompiler:
         share_strategy_by_node: dict[str, str] = {}
         input_ports_by_node: dict[str, set[str]] = {}
         output_ports_by_node: dict[str, set[str]] = {}
+        input_modalities_by_node: dict[str, set[str]] = {}
+        output_modalities_by_node: dict[str, set[str]] = {}
 
         for node in graph.nodes:
             _check_cancelled(cancel_check)
@@ -188,38 +238,50 @@ class PipelineGraphCompiler:
                 raise GraphCompileError(f"Unknown operator id: {node.operator_id}")
 
             try:
-                normalized_config_by_node[node.id] = self._registry.normalize_config(
+                normalized_config_by_node[node.node_id] = self._registry.normalize_config(
                     node.operator_id, node.config
                 )
             except Exception as exc:  # noqa: BLE001
                 raise GraphCompileError(
-                    f"Invalid config for operator '{node.operator_id}' in node '{node.id}': {exc}",
+                    f"Invalid config for operator '{node.operator_id}' in node '{node.node_id}': {exc}",
                 ) from exc
-            share_strategy_by_node[node.id] = operator.definition.share_strategy
-            input_ports_by_node[node.id] = {port.name for port in operator.definition.inputs}
-            output_ports_by_node[node.id] = {port.name for port in operator.definition.outputs}
+            share_strategy_by_node[node.node_id] = operator.definition.share_strategy
+            input_ports_by_node[node.node_id] = {port.name for port in operator.definition.inputs}
+            output_ports_by_node[node.node_id] = {port.name for port in operator.definition.outputs}
+            input_modalities_by_node[node.node_id] = {
+                str(item or "").strip() for item in operator.definition.input_modalities if str(item or "").strip()
+            }
+            output_modalities_by_node[node.node_id] = {
+                str(item or "").strip() for item in operator.definition.output_modalities if str(item or "").strip()
+            }
 
             required_input_ports = {
                 port.name for port in operator.definition.inputs if port.required
             }
-            available_inputs = {edge.target.port for edge in incoming_edges.get(node.id, [])}
+            available_inputs = {edge.target_port for edge in incoming_edges.get(node.node_id, [])}
             missing_required = sorted(required_input_ports - available_inputs)
             if missing_required:
                 raise GraphCompileError(
-                    f"Node '{node.id}' is missing required inputs: {', '.join(missing_required)}",
+                    f"Node '{node.node_id}' is missing required inputs: {', '.join(missing_required)}",
                 )
 
         for edge in edge_list:
             _check_cancelled(cancel_check)
-            src_ports = output_ports_by_node[edge.source.node]
-            if edge.source.port not in src_ports:
+            src_ports = output_ports_by_node[edge.source_node]
+            if edge.source_port not in src_ports:
                 raise GraphCompileError(
-                    f"Node '{edge.source.node}' has no output port '{edge.source.port}'",
+                    f"Node '{edge.source_node}' has no output port '{edge.source_port}'",
                 )
-            dst_ports = input_ports_by_node[edge.target.node]
-            if edge.target.port not in dst_ports:
+            dst_ports = input_ports_by_node[edge.target_node]
+            if edge.target_port not in dst_ports:
                 raise GraphCompileError(
-                    f"Node '{edge.target.node}' has no input port '{edge.target.port}'",
+                    f"Node '{edge.target_node}' has no input port '{edge.target_port}'",
+                )
+            if graph.uses_v2_contracts and edge.traffic_modality:
+                _validate_edge_modality(
+                    edge=edge,
+                    source_modalities=output_modalities_by_node[edge.source_node],
+                    target_modalities=input_modalities_by_node[edge.target_node],
                 )
 
         def _has_downstream_operator(start_node_id: str, operator_id: str) -> bool:
@@ -241,11 +303,11 @@ class PipelineGraphCompiler:
             _check_cancelled(cancel_check)
             if node.operator_id != "vision.detect":
                 continue
-            cfg = normalized_config_by_node.get(node.id, {})
+            cfg = normalized_config_by_node.get(node.node_id, {})
             emit_mode = str(cfg.get("emit_mode") or "events").strip().lower()
             if emit_mode == "event":
                 emit_mode = "events"
-            if emit_mode == "events" and _has_downstream_operator(node.id, "vision.track"):
+            if emit_mode == "events" and _has_downstream_operator(node.node_id, "vision.track"):
                 raise GraphCompileError(
                     "vision.detect emit_mode='events' cannot feed vision.track; "
                     "use emit_mode='annotate' before tracking",
@@ -268,9 +330,9 @@ class PipelineGraphCompiler:
             upstream = sorted(
                 [
                     {
-                        "target_port": edge.target.port,
-                        "source_port": edge.source.port,
-                        "source_signature": signature_by_node.get(edge.source.node, ""),
+                        "target_port": edge.target_port,
+                        "source_port": edge.source_port,
+                        "source_signature": signature_by_node.get(edge.source_node, ""),
                     }
                     for edge in incoming
                 ],
@@ -288,12 +350,13 @@ class PipelineGraphCompiler:
             }
             shareable = share_strategy_by_node[node_id] == "by_signature"
             if not shareable:
-                signature_payload["node_id"] = node_id
+                signature_payload["node_uid"] = node.uid
                 signature_payload["pipeline_name"] = pipeline.name
             signature = _signature(signature_payload)
             signature_by_node[node_id] = signature
             compiled_nodes.append(
                 CompiledNode(
+                    uid=node.uid,
                     node_id=node_id,
                     operator_id=node.operator_id,
                     normalized_config=normalized_config_by_node[node_id],
@@ -306,12 +369,24 @@ class PipelineGraphCompiler:
             _check_cancelled(cancel_check)
             compiled_edges.append(
                 CompiledEdge(
-                    source_node_id=edge.source.node,
-                    source_port=edge.source.port,
-                    target_node_id=edge.target.node,
-                    target_port=edge.target.port,
+                    uid=edge.uid,
+                    source_node_id=edge.source_node,
+                    source_port=edge.source_port,
+                    target_node_id=edge.target_node,
+                    target_port=edge.target_port,
                     channel_maxsize=int(edge.channel_maxsize),
                     channel_drop_policy=edge.channel_drop_policy,
+                ),
+            )
+        if graph.uses_v2_contracts:
+            compiled_edges = sorted(
+                compiled_edges,
+                key=lambda item: (
+                    item.source_node_id,
+                    item.source_port,
+                    item.target_node_id,
+                    item.target_port,
+                    item.uid,
                 ),
             )
 
@@ -360,7 +435,7 @@ class PipelineGraphCompiler:
 
 def _topological_sort(
     *,
-    node_map: dict[str, PipelineGraphNode],
+    node_map: dict[str, _CompileNode],
     adjacency: dict[str, set[str]],
     indegree: dict[str, int],
     cancel_check: CancelCheck | None = None,
@@ -391,3 +466,109 @@ def _topological_sort(
 def _signature(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _parse_graph(raw_graph: dict[str, Any]) -> _CompileGraph:
+    raw_version = raw_graph.get("schema_version") if isinstance(raw_graph, dict) else None
+    try:
+        schema_version = int(raw_version)
+    except (TypeError, ValueError):
+        schema_version = 1
+    if schema_version == 2:
+        return _parse_graph_v2(raw_graph)
+    return _parse_graph_v1(raw_graph)
+
+
+def _parse_graph_v1(raw_graph: dict[str, Any]) -> _CompileGraph:
+    graph = PipelineGraphSpec.model_validate(raw_graph)
+    return _CompileGraph(
+        schema_version=graph.schema_version,
+        nodes=tuple(
+            _CompileNode(
+                uid=node.id,
+                node_id=node.id,
+                operator_id=node.operator_id,
+                config=dict(node.config),
+            )
+            for node in graph.nodes
+        ),
+        edges=tuple(
+            _CompileEdge(
+                uid=f"legacy:{edge.source.node}.{edge.source.port}->{edge.target.node}.{edge.target.port}",
+                source_node=edge.source.node,
+                source_port=edge.source.port,
+                target_node=edge.target.node,
+                target_port=edge.target.port,
+                channel_maxsize=int(edge.channel_maxsize),
+                channel_drop_policy=edge.channel_drop_policy,
+            )
+            for edge in graph.edges
+        ),
+        limits=dict(graph.limits),
+    )
+
+
+def _parse_graph_v2(raw_graph: dict[str, Any]) -> _CompileGraph:
+    payload = dict(raw_graph)
+    payload.setdefault("uid", "graph")
+    graph = PipelineGraphV2Spec.model_validate(payload)
+    return _CompileGraph(
+        schema_version=graph.schema_version,
+        nodes=tuple(
+            _CompileNode(
+                uid=node.uid,
+                node_id=node.id,
+                operator_id=node.operator_id,
+                config=dict(node.config),
+            )
+            for node in graph.nodes
+        ),
+        edges=tuple(
+            _CompileEdge(
+                uid=edge.uid,
+                source_node=edge.source.node,
+                source_port=edge.source.port,
+                target_node=edge.target.node,
+                target_port=edge.target.port,
+                channel_maxsize=int(edge.queue.max_items),
+                channel_drop_policy=edge.queue.drop_policy,
+                traffic_modality=edge.traffic.modality,
+                preserve_open=edge.lifecycle.preserve_open,
+                preserve_close=edge.lifecycle.preserve_close,
+            )
+            for edge in graph.edges
+        ),
+        limits=dict(graph.limits),
+        uses_v2_contracts=True,
+    )
+
+
+def _validate_edge_modality(
+    *,
+    edge: _CompileEdge,
+    source_modalities: set[str],
+    target_modalities: set[str],
+) -> None:
+    modality = str(edge.traffic_modality or "").strip()
+    if source_modalities and not any(_modality_matches(modality, item) for item in source_modalities):
+        raise GraphCompileError(
+            f"Edge '{edge.uid}' modality '{modality}' is incompatible with "
+            f"source node '{edge.source_node}' output modalities: {', '.join(sorted(source_modalities))}",
+        )
+    if target_modalities and not any(_modality_matches(modality, item) for item in target_modalities):
+        raise GraphCompileError(
+            f"Edge '{edge.uid}' modality '{modality}' is incompatible with "
+            f"target node '{edge.target_node}' input modalities: {', '.join(sorted(target_modalities))}",
+        )
+
+
+def _modality_matches(edge_modality: str, operator_modality: str) -> bool:
+    edge_value = str(edge_modality or "").strip()
+    operator_value = str(operator_modality or "").strip()
+    if not edge_value or not operator_value:
+        return False
+    return (
+        edge_value == operator_value
+        or edge_value.startswith(f"{operator_value}.")
+        or operator_value.startswith(f"{edge_value}.")
+    )

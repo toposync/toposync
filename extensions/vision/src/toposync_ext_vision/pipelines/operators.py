@@ -198,6 +198,9 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             execution_mode="thread_pool",
             max_concurrency=1,
             requires_artifacts=[MAIN_ARTIFACT_NAME],
+            state_kind="stateless",
+            resource_kind="vision_model",
+            pressure_behavior="skip_before_compute",
             produces_payload_keys=[
                 "vision",
                 "source_stream_id",
@@ -229,6 +232,9 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             execution_mode="thread_pool",
             max_concurrency=1,
             requires_artifacts=[MAIN_ARTIFACT_NAME],
+            state_kind="stateless",
+            resource_kind="vision_model",
+            pressure_behavior="skip_before_compute",
             produces_payload_keys=[
                 "vision",
                 "event_id",
@@ -263,6 +269,9 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             execution_mode="thread_pool",
             max_concurrency=1,
             requires_artifacts=[MAIN_ARTIFACT_NAME],
+            state_kind="stateless",
+            resource_kind="vision_model",
+            pressure_behavior="skip_before_compute",
             produces_payload_keys=[
                 "vision",
             ],
@@ -291,6 +300,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             execution_mode="thread_pool",
             requires_payload_keys=["subject"],
             requires_artifacts=[MAIN_ARTIFACT_NAME],
+            pressure_behavior="block",
             produces_payload_keys=[],
             produces_artifacts=[MAIN_ARTIFACT_NAME],
             expression_hints=_vision_expression_hints(),
@@ -318,6 +328,10 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             max_concurrency=1,
             requires_payload_keys=["vision"],
             requires_artifacts=[MAIN_ARTIFACT_NAME],
+            state_kind="stateful_per_stream",
+            ordering="strict",
+            resource_kind="vision_model",
+            pressure_behavior="skip_before_compute",
             produces_payload_keys=[
                 "vision",
                 "event_id",
@@ -356,6 +370,9 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             execution_mode="thread_pool",
             requires_payload_keys=["subject"],
             requires_artifacts=[MAIN_ARTIFACT_NAME],
+            state_kind="stateful_per_subject",
+            ordering="per_key",
+            default_key_path="payload.subject.id",
             produces_payload_keys=[
                 "vision",
                 "event_id",
@@ -397,6 +414,9 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             execution_mode="thread_pool",
             max_concurrency=1,
             requires_artifacts=[MAIN_ARTIFACT_NAME],
+            state_kind="stateless",
+            resource_kind="vision_model",
+            pressure_behavior="skip_before_compute",
             produces_payload_keys=[
                 "vision",
                 "event_id",

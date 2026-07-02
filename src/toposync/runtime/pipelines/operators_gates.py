@@ -93,6 +93,66 @@ def _resolve_packet_category(packet: Packet) -> str:
     return ""
 
 
+def _record_filtered(context) -> None:  # noqa: ANN001
+    metrics = getattr(context, "metrics", None)
+    if metrics is not None:
+        metrics.dropped_packets += 1
+
+
+def _deep_get(value: Any, path: str) -> tuple[bool, Any]:
+    current = value
+    for raw_part in path.split("."):
+        part = str(raw_part or "").strip()
+        if not part:
+            return False, None
+        if isinstance(current, dict):
+            if part not in current:
+                return False, None
+            current = current[part]
+            continue
+        if isinstance(current, list) and part.isdigit():
+            index = int(part)
+            if index >= len(current):
+                return False, None
+            current = current[index]
+            continue
+        return False, None
+    return True, current
+
+
+def _resolve_gate_field(packet: Packet, path: str) -> tuple[bool, Any]:
+    field_path = str(path or "").strip()
+    if not field_path:
+        return False, None
+    if field_path == "lifecycle":
+        return True, packet.lifecycle.value
+    if field_path == "stream_id":
+        return True, packet.stream_id
+    if field_path.startswith("payload."):
+        return _deep_get(packet.payload, field_path[len("payload.") :])
+    if field_path.startswith("metadata."):
+        return _deep_get(packet.metadata, field_path[len("metadata.") :])
+    return False, None
+
+
+def _field_bool(packet: Packet, path: str, *, missing: bool) -> bool:
+    found, value = _resolve_gate_field(packet, path)
+    if not found or value is None:
+        return bool(missing)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in {"", "0", "false", "no", "off", "closed", "close"}:
+            return False
+        if token in {"1", "true", "yes", "on", "open"}:
+            return True
+        return True
+    return bool(value)
+
+
 @dataclass(frozen=True, slots=True)
 class ScheduleDecision:
     is_open: bool
@@ -256,22 +316,31 @@ class CategoryGateRuntime(TransformOperatorRuntime):
             return category not in self._categories
         return category in self._categories
 
-    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         stream_key = packet.stream_id
         if packet.lifecycle == Lifecycle.OPEN:
             allowed = self._matches(packet)
             self._allowed_by_stream[stream_key] = allowed
-            return [packet] if allowed else []
+            if allowed:
+                return [packet]
+            _record_filtered(context)
+            return []
 
         if packet.lifecycle == Lifecycle.CLOSE:
             allowed = self._allowed_by_stream.pop(stream_key, self._matches(packet))
-            return [packet] if allowed else []
+            if allowed:
+                return [packet]
+            _record_filtered(context)
+            return []
 
         allowed = self._allowed_by_stream.get(stream_key)
         if allowed is None:
             allowed = self._matches(packet)
             self._allowed_by_stream[stream_key] = allowed
-        return [packet] if allowed else []
+        if allowed:
+            return [packet]
+        _record_filtered(context)
+        return []
 
 
 class CoreFilterConfig(BaseModel):
@@ -410,28 +479,125 @@ class CoreFilterRuntime(TransformOperatorRuntime):
             return not ok
         return bool(ok)
 
-    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         stream_key = packet.stream_id
 
         if packet.lifecycle == Lifecycle.OPEN:
             allowed = self._matches(packet)
             self._allowed_by_stream[stream_key] = allowed
-            return [packet] if allowed else []
+            if allowed:
+                return [packet]
+            _record_filtered(context)
+            return []
 
         if packet.lifecycle == Lifecycle.CLOSE:
             allowed = self._allowed_by_stream.pop(stream_key, False)
-            return [packet] if allowed else []
+            if allowed:
+                return [packet]
+            _record_filtered(context)
+            return []
 
         allowed = self._allowed_by_stream.get(stream_key)
         if allowed is False:
+            _record_filtered(context)
             return []
 
         # For update-only streams (e.g. camera frames), evaluate per packet without caching.
         if allowed is None:
-            return [packet] if self._matches(packet) else []
+            if self._matches(packet):
+                return [packet]
+            _record_filtered(context)
+            return []
 
         # Stream is opened downstream; filter UPDATE packets, but always allow CLOSE.
-        return [packet] if self._matches(packet) else []
+        if self._matches(packet):
+            return [packet]
+        _record_filtered(context)
+        return []
+
+
+class BooleanGateConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fields: list[str] = Field(default_factory=list)
+    missing: bool = False
+
+    @field_validator("fields")
+    @classmethod
+    def _normalize_fields(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            field_path = str(raw or "").strip()
+            if not field_path or field_path in seen:
+                continue
+            out.append(field_path)
+            seen.add(field_path)
+        return out
+
+
+class NotGateConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    field: str = ""
+    missing: bool = False
+
+    @field_validator("field")
+    @classmethod
+    def _normalize_field(cls, value: str) -> str:
+        return str(value or "").strip()
+
+
+class BooleanGateRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any], *, operator: Literal["any", "all", "not"]) -> None:
+        self._operator = operator
+        self._allowed_by_stream: dict[str, bool] = {}
+        if operator == "not":
+            parsed = NotGateConfig.model_validate(config)
+            self._fields = [parsed.field] if parsed.field else []
+            self._missing = bool(parsed.missing)
+        else:
+            parsed = BooleanGateConfig.model_validate(config)
+            self._fields = list(parsed.fields)
+            self._missing = bool(parsed.missing)
+
+    def _matches(self, packet: Packet) -> bool:
+        if self._operator == "not":
+            if not self._fields:
+                return True
+            return not _field_bool(packet, self._fields[0], missing=self._missing)
+        if self._operator == "all":
+            return all(_field_bool(packet, field, missing=self._missing) for field in self._fields)
+        return any(_field_bool(packet, field, missing=self._missing) for field in self._fields)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        stream_key = packet.stream_id
+
+        if packet.lifecycle == Lifecycle.OPEN:
+            allowed = self._matches(packet)
+            self._allowed_by_stream[stream_key] = allowed
+            if allowed:
+                return [packet]
+            _record_filtered(context)
+            return []
+
+        if packet.lifecycle == Lifecycle.CLOSE:
+            allowed = self._allowed_by_stream.pop(stream_key, False)
+            if allowed:
+                return [packet]
+            _record_filtered(context)
+            return []
+
+        allowed = self._allowed_by_stream.get(stream_key)
+        if allowed is False:
+            _record_filtered(context)
+            return []
+        if allowed is None:
+            allowed = self._matches(packet)
+        if allowed:
+            return [packet]
+        _record_filtered(context)
+        return []
 
 
 def register_gate_operators(registry: OperatorRegistry) -> None:
@@ -443,6 +609,11 @@ def register_gate_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["gate_control", "schedule", "realtime"],
         defaults=ScheduleGateConfig().model_dump(),
+        state_kind="stateful_global",
+        default_output_policy={
+            "traffic": {"modality": "control.gate", "semantic_class": "control", "continuous": False},
+            "queue": {"max_items": 1, "drop_policy": "latest_only"},
+        },
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: ScheduleGateRuntime(config),
@@ -455,6 +626,7 @@ def register_gate_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["filter", "category"],
         defaults=CategoryGateConfig().model_dump(),
+        pressure_behavior="ignore",
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: CategoryGateRuntime(config),
@@ -467,7 +639,54 @@ def register_gate_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["filter", "expression"],
         defaults=CoreFilterConfig().model_dump(),
+        pressure_behavior="ignore",
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: CoreFilterRuntime(config),
     )
+    registry.register_operator(
+        operator_id="core.any_gate",
+        description="Lifecycle-safe gate that passes packets when any configured boolean field is true.",
+        config_model=BooleanGateConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["filter", "gate", "boolean"],
+        defaults=BooleanGateConfig().model_dump(),
+        state_kind="stateful_per_stream",
+        pressure_behavior="ignore",
+        share_strategy="by_signature",
+        owner="core",
+        runtime_factory=lambda config, _deps: BooleanGateRuntime(config, operator="any"),
+    )
+    registry.register_operator(
+        operator_id="core.all_gate",
+        description="Lifecycle-safe gate that passes packets when all configured boolean fields are true.",
+        config_model=BooleanGateConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["filter", "gate", "boolean"],
+        defaults=BooleanGateConfig().model_dump(),
+        state_kind="stateful_per_stream",
+        pressure_behavior="ignore",
+        share_strategy="by_signature",
+        owner="core",
+        runtime_factory=lambda config, _deps: BooleanGateRuntime(config, operator="all"),
+    )
+    registry.register_operator(
+        operator_id="core.not_gate",
+        description="Lifecycle-safe gate that passes packets when the configured boolean field is false.",
+        config_model=NotGateConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["filter", "gate", "boolean"],
+        defaults=NotGateConfig().model_dump(),
+        state_kind="stateful_per_stream",
+        pressure_behavior="ignore",
+        share_strategy="by_signature",
+        owner="core",
+        runtime_factory=lambda config, _deps: BooleanGateRuntime(config, operator="not"),
+    )
+
+    from .operators_routing import register_routing_operators
+
+    register_routing_operators(registry)

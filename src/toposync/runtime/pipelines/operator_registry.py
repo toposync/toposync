@@ -18,6 +18,33 @@ EXPRESSION_HINT_PATH_RE = re.compile(r"^(payload|metadata)(?:\.[a-z][a-z0-9_]{0,
 EXECUTION_MODE = Literal["in_event_loop", "thread_pool", "process_pool", "external"]
 OPERATOR_DIAGNOSTIC_SEVERITY = Literal["error", "warning", "info"]
 PIPELINE_OPERATOR_UI_LEVEL = Literal["basic", "advanced"]
+OPERATOR_STATE_KIND = Literal[
+    "stateless",
+    "stateful_per_stream",
+    "stateful_per_subject",
+    "stateful_per_camera",
+    "stateful_global",
+    "external_side_effect",
+    "runtime_resource",
+]
+OPERATOR_ORDERING = Literal["strict", "per_key", "none"]
+OPERATOR_RESOURCE_KIND = Literal[
+    "none",
+    "camera",
+    "vision_model",
+    "stream_writer",
+    "network_service",
+    "storage",
+    "home_assistant",
+]
+OPERATOR_PRESSURE_BEHAVIOR = Literal[
+    "ignore",
+    "skip_before_compute",
+    "pause_source",
+    "reduce_source_rate",
+    "block",
+    "fail_fast",
+]
 
 
 class OperatorRegistrationError(ValueError):
@@ -224,6 +251,16 @@ class OperatorDefinition(BaseModel):
     share_strategy: Literal["by_signature", "never"] = "by_signature"
     execution_mode: EXECUTION_MODE = "in_event_loop"
     max_concurrency: int | None = Field(default=None, ge=1, le=1024)
+    state_kind: OPERATOR_STATE_KIND = "stateless"
+    ordering: OPERATOR_ORDERING = "strict"
+    resource_kind: OPERATOR_RESOURCE_KIND = "none"
+    pressure_behavior: OPERATOR_PRESSURE_BEHAVIOR = "ignore"
+    default_key_path: str | None = None
+    default_input_policy: dict[str, Any] = Field(default_factory=dict)
+    default_output_policy: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key_hint: str | None = None
+    preserves_lifecycle: bool = True
+    can_drop_updates: bool = True
     requires_payload_keys: list[str] = Field(default_factory=list)
     requires_artifacts: list[str] = Field(default_factory=list)
     requires_source_fields: list[str] = Field(default_factory=list)
@@ -261,6 +298,12 @@ class OperatorDefinition(BaseModel):
             out.append(name)
             seen.add(name)
         return out
+
+    @field_validator("default_key_path", "idempotency_key_hint")
+    @classmethod
+    def _normalize_optional_text(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        return text or None
 
     @field_validator("inputs", "outputs")
     @classmethod
@@ -345,6 +388,16 @@ class OperatorRegistry:
         share_strategy: Literal["by_signature", "never"] = "by_signature",
         execution_mode: EXECUTION_MODE = "in_event_loop",
         max_concurrency: int | None = None,
+        state_kind: OPERATOR_STATE_KIND = "stateless",
+        ordering: OPERATOR_ORDERING = "strict",
+        resource_kind: OPERATOR_RESOURCE_KIND = "none",
+        pressure_behavior: OPERATOR_PRESSURE_BEHAVIOR = "ignore",
+        default_key_path: str | None = None,
+        default_input_policy: dict[str, Any] | None = None,
+        default_output_policy: dict[str, Any] | None = None,
+        idempotency_key_hint: str | None = None,
+        preserves_lifecycle: bool = True,
+        can_drop_updates: bool = True,
         requires_payload_keys: list[str] | None = None,
         requires_artifacts: list[str] | None = None,
         requires_source_fields: list[str] | None = None,
@@ -406,6 +459,16 @@ class OperatorRegistry:
             share_strategy=share_strategy,
             execution_mode=execution_mode,
             max_concurrency=max_concurrency,
+            state_kind=state_kind,
+            ordering=ordering,
+            resource_kind=resource_kind,
+            pressure_behavior=pressure_behavior,
+            default_key_path=default_key_path,
+            default_input_policy=dict(default_input_policy or {}),
+            default_output_policy=dict(default_output_policy or {}),
+            idempotency_key_hint=idempotency_key_hint,
+            preserves_lifecycle=bool(preserves_lifecycle),
+            can_drop_updates=bool(can_drop_updates),
             requires_payload_keys=list(requires_payload_keys or []),
             requires_artifacts=list(requires_artifacts or []),
             requires_source_fields=list(requires_source_fields or []),

@@ -250,6 +250,19 @@ class ChannelMetricsSnapshot:
     active_keys: int = 0
     max_depth_per_key_seen: int = 0
     max_in_memory_artifact_bytes_per_key_seen: int = 0
+    pressure_cause: str = "none"
+    last_pressure_at: float | None = None
+    blocked_put_time_ms: float = 0.0
+    waiting_get_time_ms: float = 0.0
+    oldest_packet_age_ms: float = 0.0
+    last_event_ts: float | None = None
+    drop_reason_counts: dict[str, int] = field(default_factory=dict)
+    artifact_bytes_current: int = 0
+    artifact_bytes_max_seen: int = 0
+    artifact_bytes_accepted: int = 0
+    artifact_bytes_delivered: int = 0
+    artifact_bytes_dropped: int = 0
+    pressure_state: str = "idle"
 
     @property
     def dropped_total(self) -> int:
@@ -273,6 +286,41 @@ class _ChannelMetrics:
     queue_wait_samples_ms: deque[float] = field(default_factory=lambda: deque(maxlen=4096))
     in_memory_artifact_bytes: int = 0
     max_in_memory_artifact_bytes_seen: int = 0
+    pressure_cause: str = "none"
+    last_pressure_at: float | None = None
+    blocked_put_time_ms: float = 0.0
+    waiting_get_time_ms: float = 0.0
+    last_event_ts: float | None = None
+    drop_reason_counts: dict[str, int] = field(default_factory=dict)
+    artifact_bytes_accepted: int = 0
+    artifact_bytes_delivered: int = 0
+    artifact_bytes_dropped: int = 0
+
+    def record_event(self) -> None:
+        self.last_event_ts = time.time()
+
+    def record_pressure(self, cause: str) -> None:
+        normalized = str(cause or "").strip() or "none"
+        self.pressure_cause = normalized
+        self.record_event()
+        if normalized != "none":
+            self.last_pressure_at = time.time()
+
+    def record_drop(self, reason: str, *, count: int = 1, artifact_bytes: int = 0) -> None:
+        normalized = str(reason or "").strip() or "drop_policy"
+        count_int = max(0, int(count))
+        if count_int:
+            self.drop_reason_counts[normalized] = int(self.drop_reason_counts.get(normalized, 0)) + count_int
+        self.artifact_bytes_dropped += max(0, int(artifact_bytes))
+        self.record_event()
+
+    def record_blocked_put_ms(self, elapsed_ms: float) -> None:
+        self.blocked_put_time_ms += max(0.0, float(elapsed_ms))
+        self.record_event()
+
+    def record_waiting_get_ms(self, elapsed_ms: float) -> None:
+        self.waiting_get_time_ms += max(0.0, float(elapsed_ms))
+        self.record_event()
 
     def snapshot(
         self,
@@ -283,10 +331,18 @@ class _ChannelMetrics:
         active_keys: int = 0,
         max_depth_per_key_seen: int = 0,
         max_in_memory_artifact_bytes_per_key_seen: int = 0,
+        oldest_enqueued_monotonic_ns: int | None = None,
+        pressure_state: str = "idle",
     ) -> ChannelMetricsSnapshot:
         samples = list(self.queue_wait_samples_ms)
         avg = sum(samples) / len(samples) if samples else 0.0
         p95 = _percentile(samples, 95.0)
+        oldest_packet_age_ms = 0.0
+        if oldest_enqueued_monotonic_ns is not None:
+            oldest_packet_age_ms = max(
+                0.0,
+                (float(time.monotonic_ns()) - float(oldest_enqueued_monotonic_ns)) / 1_000_000.0,
+            )
         return ChannelMetricsSnapshot(
             name=name,
             maxsize=maxsize,
@@ -306,6 +362,19 @@ class _ChannelMetrics:
             active_keys=max(0, int(active_keys)),
             max_depth_per_key_seen=max(0, int(max_depth_per_key_seen)),
             max_in_memory_artifact_bytes_per_key_seen=max(0, int(max_in_memory_artifact_bytes_per_key_seen)),
+            pressure_cause=self.pressure_cause,
+            last_pressure_at=self.last_pressure_at,
+            blocked_put_time_ms=float(self.blocked_put_time_ms),
+            waiting_get_time_ms=float(self.waiting_get_time_ms),
+            oldest_packet_age_ms=oldest_packet_age_ms,
+            last_event_ts=self.last_event_ts,
+            drop_reason_counts=dict(self.drop_reason_counts),
+            artifact_bytes_current=int(self.in_memory_artifact_bytes),
+            artifact_bytes_max_seen=int(self.max_in_memory_artifact_bytes_seen),
+            artifact_bytes_accepted=int(self.artifact_bytes_accepted),
+            artifact_bytes_delivered=int(self.artifact_bytes_delivered),
+            artifact_bytes_dropped=int(self.artifact_bytes_dropped),
+            pressure_state=str(pressure_state or "idle"),
         )
 
 
@@ -344,7 +413,41 @@ class BoundedChannel(Generic[T]):
         return self._queue.qsize()
 
     def metrics_snapshot(self) -> ChannelMetricsSnapshot:
-        return self._metrics.snapshot(name=self.name, maxsize=self.maxsize, depth=self.depth)
+        return self._metrics.snapshot(
+            name=self.name,
+            maxsize=self.maxsize,
+            depth=self.depth,
+            oldest_enqueued_monotonic_ns=self._oldest_enqueued_monotonic_ns(),
+            pressure_state=self._pressure_state(),
+        )
+
+    def _oldest_enqueued_monotonic_ns(self) -> int | None:
+        queue = getattr(self._queue, "_queue", None)
+        if not queue:
+            return None
+        oldest: int | None = None
+        for env in queue:
+            ts = int(getattr(env, "enqueued_monotonic_ns", 0) or 0)
+            if ts and (oldest is None or ts < oldest):
+                oldest = ts
+        return oldest
+
+    def _pressure_state(self) -> str:
+        if self._metrics.last_event_ts is None:
+            return "idle"
+        if self.drop_policy == DropPolicy.BLOCK and self.depth >= self.maxsize:
+            return "blocked"
+        if self._metrics.pressure_cause in {"put_timeout", "put_canceled"}:
+            return "blocked"
+        if (
+            self._metrics.dropped_oldest > 0
+            or self._metrics.dropped_newest > 0
+            or bool(self._metrics.drop_reason_counts)
+        ):
+            return "dropping"
+        if self._metrics.pressure_cause != "none" or self.depth >= self.maxsize:
+            return "pressured"
+        return "healthy"
 
     def clear(self) -> int:
         dropped = 0
@@ -356,6 +459,9 @@ class BoundedChannel(Generic[T]):
                 break
             dropped += 1
             dropped_bytes += int(getattr(env, "artifact_bytes", 0) or 0)
+        self._metrics.record_event()
+        if dropped:
+            self._metrics.record_drop("clear", count=dropped, artifact_bytes=dropped_bytes)
         if dropped_bytes:
             self._metrics.in_memory_artifact_bytes = 0
             self._budget_release(dropped_bytes)
@@ -393,6 +499,8 @@ class BoundedChannel(Generic[T]):
 
     def _on_enqueued_bytes(self, artifact_bytes: int) -> None:
         added = max(0, int(artifact_bytes))
+        self._metrics.artifact_bytes_accepted += added
+        self._metrics.record_event()
         if added <= 0:
             return
         self._metrics.in_memory_artifact_bytes += added
@@ -400,12 +508,22 @@ class BoundedChannel(Generic[T]):
             self._metrics.max_in_memory_artifact_bytes_seen = int(self._metrics.in_memory_artifact_bytes)
         self._budget_reserve(added)
 
-    def _on_removed_bytes(self, artifact_bytes: int) -> None:
+    def _on_dequeued_bytes(self, artifact_bytes: int) -> None:
         removed = max(0, int(artifact_bytes))
+        self._metrics.artifact_bytes_delivered += removed
+        self._metrics.record_event()
         if removed <= 0:
             return
         self._metrics.in_memory_artifact_bytes = max(0, int(self._metrics.in_memory_artifact_bytes) - removed)
         self._budget_release(removed)
+
+    def _on_dropped_bytes(self, artifact_bytes: int, *, reason: str, count: int = 1) -> None:
+        dropped = max(0, int(artifact_bytes))
+        self._metrics.record_drop(reason, count=count, artifact_bytes=dropped)
+        if dropped <= 0:
+            return
+        self._metrics.in_memory_artifact_bytes = max(0, int(self._metrics.in_memory_artifact_bytes) - dropped)
+        self._budget_release(dropped)
 
     async def put(
         self,
@@ -426,13 +544,16 @@ class BoundedChannel(Generic[T]):
         deadline = time.monotonic() + timeout if timeout is not None else None
         envelope = _Envelope(item=item, enqueued_monotonic_ns=time.monotonic_ns(), artifact_bytes=int(artifact_bytes))
         self._metrics.put_attempts += 1
+        self._metrics.record_event()
 
         while True:
             if _is_canceled(cancel_event):
                 self._metrics.canceled += 1
+                self._metrics.record_pressure("put_canceled")
                 return ChannelPutResult(status=QueueOperationStatus.CANCELED)
 
             if not structural and not self._budget_can_reserve(envelope.artifact_bytes):
+                self._metrics.record_pressure("artifact_budget")
                 if self.drop_policy in {
                     DropPolicy.DROP_UPDATES,
                     DropPolicy.DROP_OLDEST,
@@ -440,11 +561,12 @@ class BoundedChannel(Generic[T]):
                     DropPolicy.KEYED_LATEST_ONLY,
                 }:
                     clear_all = self.drop_policy in {DropPolicy.LATEST_ONLY, DropPolicy.KEYED_LATEST_ONLY}
-                    dropped, _dropped_bytes = self._drop_droppable(clear_all=clear_all)
+                    dropped, _dropped_bytes = self._drop_droppable(clear_all=clear_all, reason="artifact_budget")
                     if dropped > 0:
                         self._metrics.dropped_oldest += dropped
                         continue
                 self._metrics.dropped_newest += 1
+                self._metrics.record_drop("artifact_budget", artifact_bytes=envelope.artifact_bytes)
                 return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
             try:
@@ -453,10 +575,13 @@ class BoundedChannel(Generic[T]):
                 self._on_enqueued_bytes(envelope.artifact_bytes)
                 return ChannelPutResult(status=QueueOperationStatus.ACCEPTED)
             except asyncio.QueueFull:
+                self._metrics.record_pressure("queue_full")
                 pass
 
             if self.drop_policy == DropPolicy.DROP_NEWEST and not structural:
                 self._metrics.dropped_newest += 1
+                self._metrics.record_pressure("drop_policy")
+                self._metrics.record_drop("drop_policy", artifact_bytes=envelope.artifact_bytes)
                 return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
             if self.drop_policy in {
@@ -469,27 +594,37 @@ class BoundedChannel(Generic[T]):
                 dropped, _dropped_bytes = self._drop_droppable(clear_all=clear_all)
                 if dropped > 0:
                     self._metrics.dropped_oldest += dropped
+                    self._metrics.record_pressure("drop_policy")
                     continue
                 if not structural:
                     # Queue is full of structural items, so we can't drop anything safely.
                     self._metrics.dropped_newest += 1
+                    self._metrics.record_pressure("structural_backlog")
+                    self._metrics.record_drop("structural_backlog", artifact_bytes=envelope.artifact_bytes)
                     return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
             if self.drop_policy != DropPolicy.BLOCK and not structural:
                 self._metrics.dropped_newest += 1
+                self._metrics.record_pressure("drop_policy")
+                self._metrics.record_drop("drop_policy", artifact_bytes=envelope.artifact_bytes)
                 return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
             remaining = _remaining_timeout(deadline)
             if remaining is not None and remaining <= 0:
                 self._metrics.timed_out += 1
+                self._metrics.record_pressure("put_timeout")
                 return ChannelPutResult(status=QueueOperationStatus.TIMEOUT)
 
+            wait_started_ns = time.monotonic_ns()
             status = await self._wait_for_slot(timeout_s=remaining, cancel_event=cancel_event)
+            self._metrics.record_blocked_put_ms(_elapsed_monotonic_ms(wait_started_ns))
             if status == QueueOperationStatus.CANCELED:
                 self._metrics.canceled += 1
+                self._metrics.record_pressure("put_canceled")
                 return ChannelPutResult(status=QueueOperationStatus.CANCELED)
             if status == QueueOperationStatus.TIMEOUT:
                 self._metrics.timed_out += 1
+                self._metrics.record_pressure("put_timeout")
                 return ChannelPutResult(status=QueueOperationStatus.TIMEOUT)
 
     async def get(
@@ -504,11 +639,12 @@ class BoundedChannel(Generic[T]):
         while True:
             if _is_canceled(cancel_event):
                 self._metrics.canceled += 1
+                self._metrics.record_event()
                 return ChannelGetResult(status=QueueOperationStatus.CANCELED)
 
             try:
                 envelope = self._queue.get_nowait()
-                self._on_removed_bytes(envelope.artifact_bytes)
+                self._on_dequeued_bytes(envelope.artifact_bytes)
                 return self._build_get_result(envelope)
             except asyncio.QueueEmpty:
                 pass
@@ -516,16 +652,21 @@ class BoundedChannel(Generic[T]):
             remaining = _remaining_timeout(deadline)
             if remaining is not None and remaining <= 0:
                 self._metrics.timed_out += 1
+                self._metrics.record_event()
                 return ChannelGetResult(status=QueueOperationStatus.TIMEOUT)
 
+            wait_started_ns = time.monotonic_ns()
             envelope = await self._wait_for_item(timeout_s=remaining, cancel_event=cancel_event)
+            self._metrics.record_waiting_get_ms(_elapsed_monotonic_ms(wait_started_ns))
             if envelope is None:
                 if _is_canceled(cancel_event):
                     self._metrics.canceled += 1
+                    self._metrics.record_event()
                     return ChannelGetResult(status=QueueOperationStatus.CANCELED)
                 self._metrics.timed_out += 1
+                self._metrics.record_event()
                 return ChannelGetResult(status=QueueOperationStatus.TIMEOUT)
-            self._on_removed_bytes(envelope.artifact_bytes)
+            self._on_dequeued_bytes(envelope.artifact_bytes)
             return self._build_get_result(envelope)
 
     def _build_get_result(self, envelope: _Envelope[T]) -> ChannelGetResult[T]:
@@ -551,16 +692,15 @@ class BoundedChannel(Generic[T]):
                 break
             if not clear_all:
                 break
-        if dropped_bytes:
-            self._on_removed_bytes(dropped_bytes)
+        if dropped:
+            self._on_dropped_bytes(dropped_bytes, reason="drop_policy", count=dropped)
         return dropped, dropped_bytes
 
-    def _drop_droppable(self, *, clear_all: bool) -> tuple[int, int]:
+    def _drop_droppable(self, *, clear_all: bool, reason: str = "drop_policy") -> tuple[int, int]:
         # Remove UPDATE packets first; never drop structural lifecycle packets.
         kept: list[_Envelope[T]] = []
         dropped = 0
         dropped_bytes = 0
-        kept_bytes = 0
         while True:
             try:
                 env = self._queue.get_nowait()
@@ -569,7 +709,6 @@ class BoundedChannel(Generic[T]):
 
             if _is_structural_item(env.item):
                 kept.append(env)
-                kept_bytes += int(env.artifact_bytes)
                 continue
 
             if clear_all:
@@ -583,14 +722,12 @@ class BoundedChannel(Generic[T]):
                 continue
 
             kept.append(env)
-            kept_bytes += int(env.artifact_bytes)
 
         for env in kept:
             self._queue.put_nowait(env)
 
-        if dropped_bytes:
-            self._metrics.in_memory_artifact_bytes = max(0, int(kept_bytes))
-            self._budget_release(dropped_bytes)
+        if dropped:
+            self._on_dropped_bytes(dropped_bytes, reason=reason, count=dropped)
         return dropped, dropped_bytes
 
     def _on_put_accepted(self) -> None:
@@ -610,6 +747,7 @@ class BoundedChannel(Generic[T]):
                 return QueueOperationStatus.CANCELED
             if self.depth < self.maxsize:
                 return QueueOperationStatus.ACCEPTED
+            self._metrics.record_pressure("queue_full")
             if timeout_s is not None and timeout_s <= 0:
                 return QueueOperationStatus.TIMEOUT
             sleep_s = 0.005
@@ -702,11 +840,42 @@ class KeyedBoundedChannel(Generic[T]):
             active_keys=len(self._queues_by_key),
             max_depth_per_key_seen=self._max_depth_per_key_seen,
             max_in_memory_artifact_bytes_per_key_seen=self._max_artifact_bytes_per_key_seen,
+            oldest_enqueued_monotonic_ns=self._oldest_enqueued_monotonic_ns(),
+            pressure_state=self._pressure_state(),
         )
+
+    def _oldest_enqueued_monotonic_ns(self) -> int | None:
+        oldest: int | None = None
+        for queue in self._queues_by_key.values():
+            for env in queue:
+                ts = int(getattr(env, "enqueued_monotonic_ns", 0) or 0)
+                if ts and (oldest is None or ts < oldest):
+                    oldest = ts
+        return oldest
+
+    def _pressure_state(self) -> str:
+        if self._metrics.last_event_ts is None:
+            return "idle"
+        if self.drop_policy == DropPolicy.BLOCK and self.depth >= self.maxsize:
+            return "blocked"
+        if self._metrics.pressure_cause in {"put_timeout", "put_canceled"}:
+            return "blocked"
+        if (
+            self._metrics.dropped_oldest > 0
+            or self._metrics.dropped_newest > 0
+            or bool(self._metrics.drop_reason_counts)
+        ):
+            return "dropping"
+        if self._metrics.pressure_cause != "none" or self.depth >= self.maxsize:
+            return "pressured"
+        return "healthy"
 
     def clear(self) -> int:
         dropped = int(self._depth)
         dropped_bytes = int(self._metrics.in_memory_artifact_bytes)
+        self._metrics.record_event()
+        if dropped:
+            self._metrics.record_drop("clear", count=dropped, artifact_bytes=dropped_bytes)
         if dropped_bytes:
             self._metrics.in_memory_artifact_bytes = 0
             self._budget_release(dropped_bytes)
@@ -765,10 +934,12 @@ class KeyedBoundedChannel(Generic[T]):
         envelope = _Envelope(item=item, enqueued_monotonic_ns=time.monotonic_ns(), artifact_bytes=int(artifact_bytes))
         key = str(self._key_fn(item) or "").strip() or "-"
         self._metrics.put_attempts += 1
+        self._metrics.record_event()
 
         while True:
             if _is_canceled(cancel_event):
                 self._metrics.canceled += 1
+                self._metrics.record_pressure("put_canceled")
                 return ChannelPutResult(status=QueueOperationStatus.CANCELED)
 
             async with self._condition:
@@ -776,9 +947,11 @@ class KeyedBoundedChannel(Generic[T]):
                     dropped, _dropped_bytes = self._drop_droppable_for_key_locked(key, clear_all=True)
                     if dropped > 0:
                         self._metrics.dropped_oldest += int(dropped)
+                        self._metrics.record_pressure("drop_policy")
                         self._condition.notify_all()
 
                 if not structural and not self._budget_can_reserve(envelope.artifact_bytes):
+                    self._metrics.record_pressure("artifact_budget")
                     if self.drop_policy in {
                         DropPolicy.DROP_UPDATES,
                         DropPolicy.DROP_OLDEST,
@@ -786,14 +959,22 @@ class KeyedBoundedChannel(Generic[T]):
                         DropPolicy.KEYED_LATEST_ONLY,
                     }:
                         clear_all = self.drop_policy in {DropPolicy.LATEST_ONLY, DropPolicy.KEYED_LATEST_ONLY}
-                        dropped, _dropped_bytes = self._drop_droppable_for_key_locked(key, clear_all=clear_all)
+                        dropped, _dropped_bytes = self._drop_droppable_for_key_locked(
+                            key,
+                            clear_all=clear_all,
+                            reason="artifact_budget",
+                        )
                         if dropped <= 0:
-                            dropped, _dropped_bytes = self._drop_oldest_droppable_locked(clear_all=clear_all)
+                            dropped, _dropped_bytes = self._drop_oldest_droppable_locked(
+                                clear_all=clear_all,
+                                reason="artifact_budget",
+                            )
                         if dropped > 0:
                             self._metrics.dropped_oldest += int(dropped)
                             self._condition.notify_all()
                             continue
                     self._metrics.dropped_newest += 1
+                    self._metrics.record_drop("artifact_budget", artifact_bytes=envelope.artifact_bytes)
                     return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
                 if self._depth < self.maxsize:
@@ -804,6 +985,8 @@ class KeyedBoundedChannel(Generic[T]):
 
                 if not structural and self.drop_policy == DropPolicy.DROP_NEWEST:
                     self._metrics.dropped_newest += 1
+                    self._metrics.record_pressure("drop_policy")
+                    self._metrics.record_drop("drop_policy", artifact_bytes=envelope.artifact_bytes)
                     return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
                 if self.drop_policy in {
@@ -818,27 +1001,37 @@ class KeyedBoundedChannel(Generic[T]):
                         dropped, _dropped_bytes = self._drop_oldest_droppable_locked(clear_all=clear_all)
                     if dropped > 0:
                         self._metrics.dropped_oldest += int(dropped)
+                        self._metrics.record_pressure("drop_policy")
                         self._condition.notify_all()
                         continue
                     if not structural:
                         self._metrics.dropped_newest += 1
+                        self._metrics.record_pressure("structural_backlog")
+                        self._metrics.record_drop("structural_backlog", artifact_bytes=envelope.artifact_bytes)
                         return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
                 if not structural and self.drop_policy != DropPolicy.BLOCK:
                     self._metrics.dropped_newest += 1
+                    self._metrics.record_pressure("drop_policy")
+                    self._metrics.record_drop("drop_policy", artifact_bytes=envelope.artifact_bytes)
                     return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
                 remaining = _remaining_timeout(deadline)
                 if remaining is not None and remaining <= 0:
                     self._metrics.timed_out += 1
+                    self._metrics.record_pressure("put_timeout")
                     return ChannelPutResult(status=QueueOperationStatus.TIMEOUT)
 
+            wait_started_ns = time.monotonic_ns()
             status = await self._wait_for_slot(timeout_s=remaining, cancel_event=cancel_event)
+            self._metrics.record_blocked_put_ms(_elapsed_monotonic_ms(wait_started_ns))
             if status == QueueOperationStatus.CANCELED:
                 self._metrics.canceled += 1
+                self._metrics.record_pressure("put_canceled")
                 return ChannelPutResult(status=QueueOperationStatus.CANCELED)
             if status == QueueOperationStatus.TIMEOUT:
                 self._metrics.timed_out += 1
+                self._metrics.record_pressure("put_timeout")
                 return ChannelPutResult(status=QueueOperationStatus.TIMEOUT)
 
     async def get(
@@ -853,6 +1046,7 @@ class KeyedBoundedChannel(Generic[T]):
         while True:
             if _is_canceled(cancel_event):
                 self._metrics.canceled += 1
+                self._metrics.record_event()
                 return ChannelGetResult(status=QueueOperationStatus.CANCELED)
 
             async with self._condition:
@@ -864,14 +1058,19 @@ class KeyedBoundedChannel(Generic[T]):
                 remaining = _remaining_timeout(deadline)
                 if remaining is not None and remaining <= 0:
                     self._metrics.timed_out += 1
+                    self._metrics.record_event()
                     return ChannelGetResult(status=QueueOperationStatus.TIMEOUT)
 
+            wait_started_ns = time.monotonic_ns()
             status = await self._wait_for_item(timeout_s=remaining, cancel_event=cancel_event)
+            self._metrics.record_waiting_get_ms(_elapsed_monotonic_ms(wait_started_ns))
             if status == QueueOperationStatus.CANCELED:
                 self._metrics.canceled += 1
+                self._metrics.record_event()
                 return ChannelGetResult(status=QueueOperationStatus.CANCELED)
             if status == QueueOperationStatus.TIMEOUT:
                 self._metrics.timed_out += 1
+                self._metrics.record_event()
                 return ChannelGetResult(status=QueueOperationStatus.TIMEOUT)
 
     def _enqueue_locked(self, key: str, envelope: _Envelope[T]) -> None:
@@ -880,6 +1079,8 @@ class KeyedBoundedChannel(Generic[T]):
             queue = deque()
             self._queues_by_key[key] = queue
         queue.append(envelope)
+        self._metrics.artifact_bytes_accepted += max(0, int(envelope.artifact_bytes))
+        self._metrics.record_event()
         self._metrics.in_memory_artifact_bytes += int(envelope.artifact_bytes)
         if self._metrics.in_memory_artifact_bytes > self._metrics.max_in_memory_artifact_bytes_seen:
             self._metrics.max_in_memory_artifact_bytes_seen = int(self._metrics.in_memory_artifact_bytes)
@@ -902,6 +1103,8 @@ class KeyedBoundedChannel(Generic[T]):
         if queue is None or not queue:
             return self._dequeue_locked()
         envelope = queue.popleft()
+        self._metrics.artifact_bytes_delivered += max(0, int(envelope.artifact_bytes))
+        self._metrics.record_event()
         self._metrics.in_memory_artifact_bytes = max(0, int(self._metrics.in_memory_artifact_bytes) - int(envelope.artifact_bytes))
         self._budget_release(envelope.artifact_bytes)
         key_bytes = max(0, int(self._artifact_bytes_by_key.get(key, 0)) - int(envelope.artifact_bytes))
@@ -919,7 +1122,13 @@ class KeyedBoundedChannel(Generic[T]):
             self._artifact_bytes_by_key.pop(key, None)
         return envelope
 
-    def _drop_droppable_for_key_locked(self, key: str, *, clear_all: bool) -> tuple[int, int]:
+    def _drop_droppable_for_key_locked(
+        self,
+        key: str,
+        *,
+        clear_all: bool,
+        reason: str = "drop_policy",
+    ) -> tuple[int, int]:
         queue = self._queues_by_key.get(key)
         if not queue:
             return 0, 0
@@ -946,6 +1155,7 @@ class KeyedBoundedChannel(Generic[T]):
             return 0, 0
         self._queues_by_key[key] = kept
         self._depth -= dropped
+        self._metrics.record_drop(reason, count=dropped, artifact_bytes=dropped_bytes)
         self._metrics.in_memory_artifact_bytes = max(0, int(self._metrics.in_memory_artifact_bytes) - int(dropped_bytes))
         self._budget_release(dropped_bytes)
         if kept_bytes:
@@ -960,7 +1170,12 @@ class KeyedBoundedChannel(Generic[T]):
                 self._ready_keys = deque([k for k in self._ready_keys if k != key])
         return dropped, dropped_bytes
 
-    def _drop_oldest_droppable_locked(self, *, clear_all: bool) -> tuple[int, int]:
+    def _drop_oldest_droppable_locked(
+        self,
+        *,
+        clear_all: bool,
+        reason: str = "drop_policy",
+    ) -> tuple[int, int]:
         oldest_key: str | None = None
         oldest_ts: int | None = None
         for key, queue in self._queues_by_key.items():
@@ -976,7 +1191,7 @@ class KeyedBoundedChannel(Generic[T]):
                 break
         if oldest_key is None:
             return 0, 0
-        return self._drop_droppable_for_key_locked(oldest_key, clear_all=clear_all)
+        return self._drop_droppable_for_key_locked(oldest_key, clear_all=clear_all, reason=reason)
 
     def _on_put_accepted_locked(self) -> None:
         self._metrics.put_accepted += 1
@@ -989,6 +1204,7 @@ class KeyedBoundedChannel(Generic[T]):
         queue_wait_ms = max(0.0, (float(now_ns) - float(envelope.enqueued_monotonic_ns)) / 1_000_000.0)
         self._metrics.get_accepted += 1
         self._metrics.queue_wait_samples_ms.append(queue_wait_ms)
+        self._metrics.record_event()
         return ChannelGetResult(
             status=QueueOperationStatus.ACCEPTED,
             item=envelope.item,
@@ -1008,6 +1224,7 @@ class KeyedBoundedChannel(Generic[T]):
                     return QueueOperationStatus.CANCELED
                 if self._depth < self.maxsize:
                     return QueueOperationStatus.ACCEPTED
+                self._metrics.record_pressure("queue_full")
                 remaining = _remaining_timeout(deadline)
                 if remaining is not None and remaining <= 0:
                     return QueueOperationStatus.TIMEOUT
@@ -1072,6 +1289,10 @@ def _remaining_timeout(deadline: float | None) -> float | None:
 
 def _is_canceled(cancel_event: asyncio.Event | None) -> bool:
     return bool(cancel_event is not None and cancel_event.is_set())
+
+
+def _elapsed_monotonic_ms(started_ns: int) -> float:
+    return max(0.0, (float(time.monotonic_ns()) - float(started_ns)) / 1_000_000.0)
 
 
 def _percentile(values: list[float], pct: float) -> float:

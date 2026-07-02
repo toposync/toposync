@@ -22,6 +22,7 @@ from .images import MAIN_ARTIFACT_NAME
 from .operator_registry import OperatorRegistry, payload_path_hint
 from .packet_contract import build_media_descriptor, build_source_descriptor
 from .runtime import Artifact, Lifecycle, Packet
+from .operators_control import register_control_operators
 from .operators_distributed import register_distributed_operators
 from .operators_gates import register_gate_operators
 from .operators_sinks import _encode_image_bytes, _write_bytes, register_sink_operators
@@ -1287,6 +1288,10 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         ],
         produces_media_fields=["modality", "ts"],
         output_modalities=["data"],
+        default_output_policy={
+            "traffic": {"modality": "data.record", "semantic_class": "data", "continuous": True},
+            "queue": {"max_items": 4, "drop_policy": "drop_oldest"},
+        },
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: SyntheticSourceRuntime(config),
@@ -1324,6 +1329,11 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         ],
         produces_media_fields=["modality", "ts", "width", "height", "frame_rate"],
         output_modalities=["video"],
+        default_output_policy={
+            "traffic": {"modality": "video.frame", "semantic_class": "frame", "continuous": True},
+            "queue": {"max_items": 1, "drop_policy": "latest_only"},
+            "backpressure": {"mode": "reduce_source_rate"},
+        },
         share_strategy="never",
         owner="core",
         runtime_factory=lambda config, _deps: DemoFrameSequenceSourceRuntime(config),
@@ -1336,6 +1346,8 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["rate_control", "realtime"],
         defaults=FPSReducerConfig().model_dump(),
+        state_kind="stateful_per_stream",
+        pressure_behavior="reduce_source_rate",
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: FPSReducerRuntime(config),
@@ -1348,6 +1360,8 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["rate_control", "realtime"],
         defaults=ThrottleConfig().model_dump(),
+        state_kind="stateful_per_stream",
+        default_key_path="stream_id",
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: ThrottleRuntime(config),
@@ -1360,6 +1374,9 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["rate_control", "realtime", "camera", "velocity"],
         defaults=VelocityThrottleConfig().model_dump(),
+        state_kind="stateful_per_subject",
+        ordering="per_key",
+        default_key_path="payload.subject.id",
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: VelocityThrottleRuntime(config),
@@ -1372,6 +1389,9 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["rate_control", "realtime"],
         defaults=DebounceConfig().model_dump(),
+        state_kind="stateful_per_subject",
+        ordering="per_key",
+        default_key_path="payload.subject.id",
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: DebounceRuntime(config),
@@ -1384,6 +1404,8 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["lifecycle", "realtime", "event"],
         defaults=LifecycleFromBooleanConfig().model_dump(),
+        state_kind="stateful_per_stream",
+        default_key_path="stream_id",
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: LifecycleFromBooleanRuntime(config),
@@ -1396,6 +1418,9 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["lifecycle", "realtime", "event", "stationary"],
         defaults=StationaryEventConfig().model_dump(),
+        state_kind="stateful_per_subject",
+        ordering="per_key",
+        default_key_path="payload.subject.id",
         produces_payload_keys=["stationary_event"],
         expression_hints=[
             payload_path_hint(
@@ -1426,6 +1451,7 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}, {"name": "snapshot"}],
         capabilities=["snapshot", "realtime", "lifecycle"],
         defaults=StreamStateSnapshotConfig().model_dump(),
+        state_kind="stateful_per_stream",
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: StreamStateSnapshotRuntime(config),
@@ -1440,6 +1466,8 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         defaults=DebugStdoutConfig().model_dump(),
         execution_mode="thread_pool",
         max_concurrency=2,
+        state_kind="external_side_effect",
+        pressure_behavior="block",
         share_strategy="never",
         owner="core",
         runtime_factory=lambda config, deps: DebugStdoutRuntime(config, deps),
@@ -1464,12 +1492,15 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[],
         capabilities=["sink", "core"],
         defaults={},
+        state_kind="external_side_effect",
+        pressure_behavior="block",
         share_strategy="never",
         owner="core",
         runtime_factory=lambda _config, _deps: SinkRuntime(),
     )
     register_gate_operators(registry)
     register_sink_operators(registry)
+    register_control_operators(registry)
     register_distributed_operators(registry)
 
 

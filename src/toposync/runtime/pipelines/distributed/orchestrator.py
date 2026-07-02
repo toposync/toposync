@@ -139,6 +139,7 @@ class PipelinesOrchestrator:
     def status(self) -> dict[str, Any]:
         pipelines: list[dict[str, Any]] = []
         local_bundle: dict[str, Any] | None = None
+        graph_info = self.graph_runtime_info()
 
         if self._local_bundle is not None:
             try:
@@ -189,10 +190,33 @@ class PipelinesOrchestrator:
             "local_bundle": local_bundle,
             "pipelines": pipelines,
             "servers": servers,
+            "graph_info": {"graphs": graph_info},
             "last_error": self._last_error,
             "last_signature": self._last_sig,
             "last_settings_signature": self._last_settings_sig,
         }
+
+    def graph_runtime_info(self) -> list[dict[str, Any]]:
+        graphs: list[dict[str, Any]] = []
+        if self._local_bundle is not None:
+            try:
+                info = self._local_bundle.runtime.graph_runtime_info()
+                info["mode"] = "bundle"
+                info["processing_server_id"] = "local"
+                info["started_at"] = self._local_bundle.started_at
+                graphs.append(info)
+            except Exception as exc:  # noqa: BLE001
+                graphs.append({"graph_id": "local_bundle", "error": str(exc)})
+        for name, handle in sorted(self._pipelines.items(), key=lambda item: item[0]):
+            try:
+                info = handle.runtime.graph_runtime_info(graph_id=name)
+                info["mode"] = handle.mode
+                info["processing_server_id"] = getattr(handle.pipeline, "processing_server_id", "local")
+                info["started_at"] = handle.started_at
+                graphs.append(info)
+            except Exception as exc:  # noqa: BLE001
+                graphs.append({"graph_id": name, "error": str(exc)})
+        return graphs
 
     async def _run(self) -> None:
         while not self._stop.is_set():

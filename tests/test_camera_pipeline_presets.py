@@ -750,10 +750,10 @@ def test_camera_pipeline_stopped_area_uses_area_composition_and_restriction(
         assert res.status_code == 200
         pipeline = res.json()
         operators = _operator_ids(pipeline)
-        assert operators.index("camera.area_restriction") < operators.index(
-            "camera.velocity_estimation"
-        )
         assert operators.index("camera.velocity_estimation") < operators.index(
+            "camera.area_restriction"
+        )
+        assert operators.index("camera.area_restriction") < operators.index(
             "core.stationary_event"
         )
         assert _node_config_by_id(pipeline, "storage_throttle") == {}

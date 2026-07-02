@@ -3148,15 +3148,6 @@ class CamerasExtension(BaseExtension):
                     raise ValueError(f"composition_id is required for {preset}")
                 tail_nodes = []
 
-                if preset in {"vehicle_stopped", "person_stopped"} and area_restriction_config:
-                    tail_nodes.append(
-                        {
-                            "id": "area",
-                            "operator": "camera.area_restriction",
-                            "config": area_restriction_config,
-                        }
-                    )
-
                 speed_threshold = STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
                 if stopped_speed_threshold is not None:
                     try:
@@ -3189,6 +3180,15 @@ class CamerasExtension(BaseExtension):
                         },
                     }
                 )
+
+                if preset in {"vehicle_stopped", "person_stopped"} and area_restriction_config:
+                    tail_nodes.append(
+                        {
+                            "id": "area",
+                            "operator": "camera.area_restriction",
+                            "config": area_restriction_config,
+                        }
+                    )
 
                 if preset == "presence_area":
                     tail_nodes.extend(
@@ -3292,11 +3292,12 @@ class CamerasExtension(BaseExtension):
                 nodes = [*base_nodes, *tail_nodes]
                 shared_node_ids = [str(node["id"]) for node in nodes]
                 nodes = [*nodes, *notify_nodes]
+                stationary_input_node = "area" if area_restriction_config else "velocity"
                 edges = _linear_edges(shared_node_ids)
                 edges.extend(
                     _linear_edges(
                         [
-                            "velocity",
+                            stationary_input_node,
                             "stationary_event",
                             "notify_debounce",
                             "notify_crop",

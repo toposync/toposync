@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Callable, Literal
-
-from pydantic import BaseModel, Field
+from typing import Any, Callable
 
 from .compiler import CompiledPipeline
+from .flow_analysis import PipelineAlert, analyze_pipeline_flow
 from .images import MAIN_ARTIFACT_NAME, normalize_artifact_name
 from .operator_registry import OperatorRegistry
 from .runtime import DropPolicy
@@ -17,17 +16,6 @@ CancelCheck = Callable[[], None]
 def _check_cancelled(cancel_check: CancelCheck | None) -> None:
     if cancel_check is not None:
         cancel_check()
-
-
-class PipelineAlert(BaseModel):
-    severity: Literal["info", "warning", "error"] = "warning"
-    code: str
-    message: str
-    suggestion: str = ""
-    node_id: str | None = None
-    operator_id: str | None = None
-    edge: dict[str, Any] | None = None
-    details: dict[str, Any] = Field(default_factory=dict)
 
 
 def analyze_compiled_pipeline(
@@ -636,4 +624,11 @@ def analyze_compiled_pipeline(
                     )
                 )
 
+    alerts.extend(
+        analyze_pipeline_flow(
+            pipeline=pipeline,
+            registry=registry,
+            cancel_check=cancel_check,
+        )
+    )
     return alerts

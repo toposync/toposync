@@ -47,6 +47,14 @@ from .pipelines.operators import (
     get_global_camera_capture_service,
     register_camera_pipeline_operators,
 )
+from .pipeline_templates import (
+    PERSON_STOPPED_OBJECT_CATEGORIES,
+    PERSON_VEHICLE_STOPPED_OBJECT_CATEGORIES,
+    STOPPED_DEFAULT_MIN_STATIONARY_SECONDS,
+    STOPPED_DEFAULT_SPEED_THRESHOLD_MPS,
+    VEHICLE_STOPPED_OBJECT_CATEGORIES,
+    build_person_vehicle_stopped_graph,
+)
 from .processing.camera_hub import get_global_camera_hub
 from .processing.mapping import ControlPointMapper
 from .pipelines.postprocess import (  # noqa: PLC2701
@@ -95,6 +103,7 @@ CAMERA_PIPELINE_PRESETS = (
     "presence_area",
     "vehicle_stopped",
     "person_stopped",
+    "person_vehicle_stopped",
 )
 CAMERA_MAPPING_REQUIRED_PRESETS = {
     "people_individual",
@@ -102,6 +111,7 @@ CAMERA_MAPPING_REQUIRED_PRESETS = {
     "presence_area",
     "vehicle_stopped",
     "person_stopped",
+    "person_vehicle_stopped",
 }
 
 
@@ -127,10 +137,6 @@ async def _raise_if_request_disconnected(request: Request) -> None:
 
 
 NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
-VEHICLE_STOPPED_OBJECT_CATEGORIES = ["car", "truck", "bus", "motorcycle"]
-PERSON_STOPPED_OBJECT_CATEGORIES = ["person"]
-STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
-STOPPED_DEFAULT_MIN_STATIONARY_SECONDS = 1.25
 PRESET_PIPELINE_NAME_PARTS = {
     "people_simple": "deteccao_simples_de_pessoas",
     "people_individual": "evento_individual_de_pessoas",
@@ -138,6 +144,7 @@ PRESET_PIPELINE_NAME_PARTS = {
     "presence_area": "presenca_agrupada_em_area",
     "vehicle_stopped": "veiculo_parou",
     "person_stopped": "pessoa_parou",
+    "person_vehicle_stopped": "pessoa_veiculo_parou",
 }
 
 
@@ -424,6 +431,7 @@ class CameraPipelinePresetRequest(BaseModel):
         "presence_area",
         "vehicle_stopped",
         "person_stopped",
+        "person_vehicle_stopped",
     ]
     source_id: str = ""
     pipeline_name: str = ""
@@ -3013,12 +3021,14 @@ class CamerasExtension(BaseExtension):
             min_stationary_seconds: float | None,
             notification_title: str,
             notification_description: str,
-            notification_priority: NotificationPriority,
+            notification_priority: NotificationPriority | None,
         ) -> dict[str, Any]:
             if preset == "vehicle_stopped":
                 detect_categories = VEHICLE_STOPPED_OBJECT_CATEGORIES
             elif preset == "person_stopped":
                 detect_categories = PERSON_STOPPED_OBJECT_CATEGORIES
+            elif preset == "person_vehicle_stopped":
+                detect_categories = PERSON_VEHICLE_STOPPED_OBJECT_CATEGORIES
             elif preset in {"people_quiet", "presence_area"}:
                 detect_categories = ["person", "dog", "cat"]
             else:
@@ -3143,7 +3153,12 @@ class CamerasExtension(BaseExtension):
                 node_ids = [str(node["id"]) for node in nodes]
                 return {"schema_version": 1, "nodes": nodes, "edges": _linear_edges(node_ids)}
 
-            if preset in {"presence_area", "vehicle_stopped", "person_stopped"}:
+            if preset in {
+                "presence_area",
+                "vehicle_stopped",
+                "person_stopped",
+                "person_vehicle_stopped",
+            }:
                 if not composition_id:
                     raise ValueError(f"composition_id is required for {preset}")
                 tail_nodes = []
@@ -3181,7 +3196,10 @@ class CamerasExtension(BaseExtension):
                     }
                 )
 
-                if preset in {"vehicle_stopped", "person_stopped"} and area_restriction_config:
+                if (
+                    preset in {"vehicle_stopped", "person_stopped", "person_vehicle_stopped"}
+                    and area_restriction_config
+                ):
                     tail_nodes.append(
                         {
                             "id": "area",
@@ -3237,6 +3255,20 @@ class CamerasExtension(BaseExtension):
                         "nodes": nodes,
                         "edges": _linear_edges(node_ids),
                     }
+
+                if preset == "person_vehicle_stopped":
+                    return build_person_vehicle_stopped_graph(
+                        camera_id=camera_id,
+                        source_id=source_id,
+                        detection_model_id=detection_model_id,
+                        composition_id=composition_id,
+                        area_restriction_config=area_restriction_config,
+                        stopped_speed_threshold=stopped_speed_threshold,
+                        min_stationary_seconds=min_stationary_seconds,
+                        notification_title=notification_title,
+                        notification_description=notification_description,
+                        notification_priority=notification_priority,
+                    )
 
                 notify_nodes = [
                     {
@@ -3411,7 +3443,10 @@ class CamerasExtension(BaseExtension):
             composition_id = str(body.composition_id or "").strip()
             area_restriction_config: dict[str, Any] | None = None
             if preset in CAMERA_MAPPING_REQUIRED_PRESETS:
-                if preset in {"vehicle_stopped", "person_stopped"} and str(body.area_id or "").strip():
+                if (
+                    preset in {"vehicle_stopped", "person_stopped", "person_vehicle_stopped"}
+                    and str(body.area_id or "").strip()
+                ):
                     resolved_area = _resolve_mapped_camera_area(
                         cfg,
                         camera_id=cid,
@@ -3459,8 +3494,10 @@ class CamerasExtension(BaseExtension):
             )
 
             try:
-                notification_priority = body.notification_priority or (
-                    "high" if preset == "vehicle_stopped" else "medium"
+                notification_priority = (
+                    body.notification_priority
+                    if preset == "person_vehicle_stopped"
+                    else body.notification_priority or ("high" if preset == "vehicle_stopped" else "medium")
                 )
                 graph = _build_camera_preset_graph(
                     preset=preset,

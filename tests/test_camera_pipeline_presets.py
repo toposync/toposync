@@ -17,12 +17,14 @@ CAMERA_PIPELINE_PRESET_MODEL_CONTRACTS = (
     "presence_area",
     "vehicle_stopped",
     "person_stopped",
+    "person_vehicle_stopped",
 )
 CAMERA_PIPELINE_PRESETS_REQUIRING_MAPPING = {
     "people_individual",
     "presence_area",
     "vehicle_stopped",
     "person_stopped",
+    "person_vehicle_stopped",
 }
 
 
@@ -299,6 +301,10 @@ def test_camera_pipeline_simple_preset_defaults_detection_to_rfdetr_medium_witho
         assert (
             overview["suggested_pipeline_names"]["person_stopped"]
             == "entrada_principal_pessoa_parou"
+        )
+        assert (
+            overview["suggested_pipeline_names"]["person_vehicle_stopped"]
+            == "entrada_principal_pessoa_veiculo_parou"
         )
 
         res = client.post(

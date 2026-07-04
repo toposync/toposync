@@ -831,6 +831,19 @@ class NotifyConfig(BaseModel):
         return str(value or "").strip()
 
 
+_NOTIFY_PRIORITIES = {"silent", "low", "medium", "high"}
+
+
+def _resolve_notify_priority(packet: Packet, default: str) -> str:
+    for source in (packet.payload, packet.metadata):
+        raw = source.get("priority")
+        normalized = str(raw or "").strip().lower()
+        if normalized in _NOTIFY_PRIORITIES:
+            return normalized
+    fallback = str(default or "").strip().lower()
+    return fallback if fallback in _NOTIFY_PRIORITIES else "medium"
+
+
 @dataclass(slots=True)
 class _NotifyState:
     started_ts: float
@@ -840,6 +853,7 @@ class _NotifyState:
     last_title: str = ""
     last_description: str = ""
     last_image_path: str | None = None
+    last_priority: str = "medium"
     revision: int = 0
     trail: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=512))
     stored_images: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -941,6 +955,7 @@ class NotifyRuntime(SinkRuntime):
         subject_type = str(subject.get("type") or "").strip() or _resolve_subject_string(packet, "type")
 
         title = _render_template(packet, self._config.title)
+        priority = _resolve_notify_priority(packet, self._config.priority)
         description = _normalize_notify_description(
             packet,
             lifecycle=lifecycle,
@@ -969,7 +984,7 @@ class NotifyRuntime(SinkRuntime):
                 "description": description,
                 "image_path": image_path,
                 "lifecycle": lifecycle.value,
-                "priority": self._config.priority,
+                "priority": priority,
                 "revision": int(state.revision),
             },
         )
@@ -984,6 +999,7 @@ class NotifyRuntime(SinkRuntime):
         state.last_signature = signature
         state.last_title = title
         state.last_description = description
+        state.last_priority = priority
         if image_path:
             state.last_image_path = image_path
 
@@ -997,7 +1013,7 @@ class NotifyRuntime(SinkRuntime):
             "parent_packet_id": packet.parent_packet_id,
             "lifecycle": lifecycle.value,
             "status": status,
-            "priority": self._config.priority,
+            "priority": priority,
             "realtime": bool(self._config.realtime),
             "event": {
                 "started_ts": float(state.started_ts),
@@ -1061,7 +1077,7 @@ class NotifyRuntime(SinkRuntime):
                         "source": "pipelines",
                         "lifecycle": Lifecycle.CLOSE.value,
                         "status": "closed",
-                        "priority": self._config.priority,
+                        "priority": state.last_priority or self._config.priority,
                         "realtime": bool(self._config.realtime),
                         "reason": "shutdown_synthesized",
                         "event": {

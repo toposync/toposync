@@ -416,6 +416,47 @@ def test_core_notify_creates_new_record_when_logical_event_reopens(tmp_path: Pat
     asyncio.run(scenario())
 
 
+def test_core_notify_uses_upstream_priority_annotation(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+        deps = PipelineRuntimeDependencies(notifications_upsert=notifications.upsert)
+        notify = NotifyRuntime(
+            {
+                "notification_type": "pipelines.tracking",
+                "title": "{{subject.category}}",
+                "priority": "low",
+                "update_interval_seconds": 0.0,
+            },
+            deps,
+        )
+
+        await notify.process_packet(
+            Packet.create(
+                stream_id="obj:camera-main:track-priority",
+                lifecycle=Lifecycle.OPEN,
+                payload={
+                    "frame_ts": 10.0,
+                    "priority": "high",
+                    "subject": {
+                        "type": "event",
+                        "id": "track-priority",
+                        "category": "person",
+                    },
+                },
+            ),
+            _NotifyContext(),
+        )
+
+        items, _cursor = await notifications.list(limit=20)
+        assert len(items) == 1
+        assert items[0]["priority"] == "high"
+        payload = items[0].get("payload")
+        assert isinstance(payload, dict)
+        assert payload.get("priority") == "high"
+
+    asyncio.run(scenario())
+
+
 def test_core_notify_accumulates_stored_images_for_one_tracking_lifecycle(tmp_path: Path) -> None:
     async def scenario() -> None:
         notifications = NotificationsRuntime(data_dir=tmp_path / "data")

@@ -220,3 +220,20 @@ def test_core_flow_limiter_operator_is_registered() -> None:
     assert registered is not None
     assert registered.definition.defaults["profile"] == "low_latency_ai"
     assert registered.definition.capabilities
+
+
+def test_core_flow_limiter_uses_configured_profile() -> None:
+    registry = OperatorRegistry()
+    register_core_operators(registry)
+    registered = registry.get("core.flow_limiter")
+    assert registered is not None
+
+    limiter = FlowLimiter.for_operator(registered.definition, {"profile": "lossless"})
+    assert limiter is not None
+
+    decision = limiter.acquire(_packet(age_ms=2_000.0))
+    assert decision.accepted is True
+    assert decision.permit is not None
+    decision.permit.finish()
+    assert limiter.metrics.snapshot()["profile"] == "lossless"
+    assert limiter.metrics.snapshot()["skipped_stale"] == 0

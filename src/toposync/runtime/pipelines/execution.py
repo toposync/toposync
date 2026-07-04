@@ -626,7 +626,7 @@ class PipelineRuntime:
                     node_outputs[source_port] = channels
 
             metrics = NodeRuntimeMetrics()
-            flow_limiter = FlowLimiter.for_operator(registered.definition)
+            flow_limiter = FlowLimiter.for_operator(registered.definition, node.normalized_config)
             if flow_limiter is not None:
                 metrics.flow_limiter = flow_limiter.metrics
             self.node_metrics[node_id] = metrics

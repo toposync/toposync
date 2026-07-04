@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from .operator_registry import OperatorDefinition
 from .runtime import Lifecycle, Packet
@@ -74,9 +74,16 @@ class FlowLimiter:
         self.metrics = FlowLimiterMetrics(profile=profile.name)
 
     @classmethod
-    def for_operator(cls, definition: OperatorDefinition) -> "FlowLimiter | None":
+    def for_operator(
+        cls,
+        definition: OperatorDefinition,
+        config: dict[str, Any] | None = None,
+    ) -> "FlowLimiter | None":
         if definition.pressure_behavior != "skip_before_compute":
             return None
+        configured_profile = _configured_profile_name(definition, config or {})
+        if configured_profile is not None:
+            return cls(profile_for_name(configured_profile))
         profile_name: FlowLimiterProfileName = (
             "low_latency_ai" if definition.resource_kind == "vision_model" else "balanced"
         )
@@ -146,3 +153,20 @@ def profile_for_name(name: FlowLimiterProfileName | str) -> FlowLimiterProfile:
         max_packet_age_ms=3000.0,
         drop_updates_when_busy=True,
     )
+
+
+def _configured_profile_name(
+    definition: OperatorDefinition,
+    config: dict[str, Any],
+) -> FlowLimiterProfileName | None:
+    raw = config.get("flow_limiter_profile")
+    if definition.id == "core.flow_limiter":
+        raw = config.get("profile", raw)
+    normalized = str(raw or "").strip().lower()
+    if normalized == "low_latency_ai":
+        return "low_latency_ai"
+    if normalized == "balanced":
+        return "balanced"
+    if normalized == "lossless":
+        return "lossless"
+    return None

@@ -13,8 +13,10 @@ public graph acyclic, but makes the operational parts of a topology explicit:
 node identity, edge identity, traffic class, queue policy, backpressure,
 lifecycle preservation, and debug sampling.
 
-This page documents the schema boundary. The v1 compiler and runtime continue
-to run existing graphs until the v2 compiler/runtime path lands.
+This page documents the schema boundary. The compiler accepts v2 graphs, but
+only `queue.max_items`, `queue.drop_policy`, `traffic.modality`, and lifecycle
+OPEN/CLOSE preservation are runtime-enforced today. The remaining edge fields
+are reserved contract fields until their runtime enforcement lands.
 
 ## Principles {/* #principles */}
 

@@ -209,6 +209,54 @@ export type PipelineStats = {
   updated_at: number;
 };
 
+export type GraphRuntimeNodeInfo = {
+  uid: string;
+  node_id: string;
+  operator_id: string;
+  task_state?: string;
+  runtime_state?: string;
+  state_kind?: string;
+  ordering?: string;
+  resource_kind?: string;
+  pressure_behavior?: string;
+  progress?: Record<string, unknown>;
+  metrics?: Record<string, unknown>;
+  last_error?: string | null;
+  last_error_at?: number | null;
+};
+
+export type GraphRuntimeEdgeInfo = {
+  uid: string;
+  source?: { node?: string; port?: string };
+  target?: { node?: string; port?: string };
+  channel_name?: string;
+  maxsize?: number;
+  drop_policy?: string;
+  depth?: number;
+  utilization?: number;
+  pressure_cause?: string;
+  progress?: Record<string, unknown>;
+  metrics?: Record<string, unknown>;
+};
+
+export type GraphRuntimeInfo = {
+  graph_id: string;
+  pipeline_name: string;
+  schema_version: number;
+  generated_at: number;
+  running: boolean;
+  nodes: Record<string, GraphRuntimeNodeInfo>;
+  edges: Record<string, GraphRuntimeEdgeInfo>;
+  resources: Record<string, Record<string, unknown>>;
+  pressure: Record<string, unknown>;
+  progress: Record<string, unknown>;
+};
+
+export type PipelineRuntimeGraphInfoResponse = {
+  graphs: GraphRuntimeInfo[];
+  status: Record<string, unknown>;
+};
+
 export type PipelineStorageLayer = {
   layer_key: string;
   layer_label: string;
@@ -718,6 +766,12 @@ export type PipelineOperatorDefinition = {
   produces_media_fields?: string[];
   input_modalities?: string[];
   output_modalities?: string[];
+  state_kind?: string;
+  ordering?: string;
+  resource_kind?: string;
+  pressure_behavior?: string;
+  default_input_policy?: Record<string, unknown>;
+  default_output_policy?: Record<string, unknown>;
   expression_hints?: PipelineOperatorExpressionHint[];
   ui?: PipelineOperatorUiMetadata | null;
 };
@@ -2070,6 +2124,14 @@ export async function getPipelineStats(name: string): Promise<PipelineStats> {
 export async function resetPipelineStats(name: string): Promise<PipelineStats> {
   const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/stats/reset`, { method: "POST" });
   if (!res.ok) throw new Error(`Failed to reset pipeline stats ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function getPipelineRuntimeGraphInfo(
+  options: AbortableRequestOptions = {},
+): Promise<PipelineRuntimeGraphInfoResponse> {
+  const res = await fetch("/api/pipelines/runtime/graph-info", { signal: options.signal });
+  if (!res.ok) throw new Error(`Failed to fetch pipeline runtime graph info: ${res.status}`);
   return res.json();
 }
 

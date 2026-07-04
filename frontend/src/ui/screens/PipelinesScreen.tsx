@@ -8,7 +8,9 @@ import type {
   CamerasIndexResponse,
   Pipeline,
   PipelineAlert,
+  GraphRuntimeInfo,
   PipelineOperatorDefinition,
+  PipelineRuntimeGraphInfoResponse,
   PipelineStats,
   ProcessingServer,
   ProcessingServerStatus,
@@ -19,6 +21,7 @@ import {
   createPipeline,
   deletePipeline,
   duplicatePipeline,
+  getPipelineRuntimeGraphInfo,
   getProcessingServerStatus,
   getPipelineStats,
   listCamerasIndex,
@@ -34,6 +37,8 @@ import { InteractivePipelineEditor, PipelineStorageCard } from "./pipelines/Inte
 import { PipelineDuplicateModal } from "./pipelines/PipelineDuplicateModal";
 import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
 import { PipelineTelemetryOverviewCard } from "./pipelines/PipelineTelemetryOverviewCard";
+import { TopologyView } from "./pipelines/topology/TopologyView";
+import { updateTopologyGraphNodeConfig } from "./pipelines/topology/topologyGraph";
 import type { EditorMode, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "./pipelines/types";
 import {
   buildGraphFromInteractiveSteps,
@@ -164,6 +169,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const [graphText, setGraphText] = useState<string>("");
   const [pythonText, setPythonText] = useState<string>("");
   const [mode, setMode] = useState<EditorMode>("interactive");
+  const [viewMode, setViewMode] = useState<"editor" | "topology">("editor");
+  const [topologyDirty, setTopologyDirty] = useState(false);
+  const [topologyValidationLoading, setTopologyValidationLoading] = useState(false);
+  const [topologyValidationError, setTopologyValidationError] = useState<string | null>(null);
 
   const [recommendations, setRecommendations] = useState<PipelineAlert[]>([]);
   const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
@@ -175,6 +184,9 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const [pipelineStats, setPipelineStats] = useState<PipelineStats | null>(null);
   const [selectedServerStatus, setSelectedServerStatus] = useState<ProcessingServerStatus | null>(null);
   const [selectedServerStatusLoading, setSelectedServerStatusLoading] = useState(false);
+  const [runtimeGraphInfo, setRuntimeGraphInfo] = useState<PipelineRuntimeGraphInfoResponse | null>(null);
+  const [runtimeGraphInfoLoading, setRuntimeGraphInfoLoading] = useState(false);
+  const [runtimeGraphInfoError, setRuntimeGraphInfoError] = useState<string | null>(null);
   const [telemetryFieldInspector, setTelemetryFieldInspector] = useState<TelemetryFieldInspectorRequest | null>(null);
   const [telemetryResetting, setTelemetryResetting] = useState(false);
   const [telemetryResetNonce, setTelemetryResetNonce] = useState(0);
@@ -306,6 +318,9 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       setMode("interactive");
       setInteractiveSteps([]);
       setInteractiveWarning(null);
+      setTopologyDirty(false);
+      setTopologyValidationLoading(false);
+      setTopologyValidationError(null);
       return;
     }
 
@@ -313,6 +328,9 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setGraphText(jsonPretty(selected.graph ?? emptyGraph()));
     setPythonText(String(selected.python_source ?? ""));
     setMode((selected.editor_mode as EditorMode) ?? "interactive");
+    setTopologyDirty(false);
+    setTopologyValidationLoading(false);
+    setTopologyValidationError(null);
     setTelemetryFieldInspector(null);
 
     const loaded = buildInteractiveStepsFromGraph(selected.graph, operatorsById);
@@ -322,10 +340,11 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
   useEffect(() => {
     if (mode !== "interactive") return;
+    if (selected?.editor_mode && selected.editor_mode !== "interactive") return;
     if (interactiveWarning) return;
     if (!interactiveGraph.graph) return;
     setGraphText(jsonPretty(interactiveGraph.graph));
-  }, [interactiveWarning, mode, interactiveGraph.graph]);
+  }, [interactiveWarning, mode, interactiveGraph.graph, selected?.editor_mode]);
 
   useEffect(() => {
     if (!draft) {
@@ -376,6 +395,62 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     };
   }, [draft?.name, draft?.processing_server_id]);
 
+  useEffect(() => {
+    if (!draft) {
+      setRuntimeGraphInfo(null);
+      setRuntimeGraphInfoError(null);
+      setRuntimeGraphInfoLoading(false);
+      return undefined;
+    }
+
+    let canceled = false;
+    let didCompleteInitialLoad = false;
+    let currentController: AbortController | null = null;
+    let timer: number | null = null;
+    setRuntimeGraphInfo(null);
+    setRuntimeGraphInfoError(null);
+    setRuntimeGraphInfoLoading(true);
+
+    const scheduleNextLoad = () => {
+      if (canceled) return;
+      timer = window.setTimeout(() => void loadGraphInfo(), 5000);
+    };
+
+    const loadGraphInfo = async () => {
+      const controller = new AbortController();
+      currentController = controller;
+      const showLoading = !didCompleteInitialLoad;
+      if (showLoading) setRuntimeGraphInfoLoading(true);
+      try {
+        const info = await getPipelineRuntimeGraphInfo({ signal: controller.signal });
+        if (!canceled && !controller.signal.aborted) {
+          setRuntimeGraphInfo(info);
+          setRuntimeGraphInfoError(null);
+        }
+      } catch (err: any) {
+        if (canceled || controller.signal.aborted || isAbortError(err)) return;
+        if (!canceled) {
+          setRuntimeGraphInfo(null);
+          setRuntimeGraphInfoError(String(err?.message ?? err));
+        }
+      } finally {
+        if (currentController === controller) currentController = null;
+        if (!controller.signal.aborted) {
+          didCompleteInitialLoad = true;
+          if (!canceled && showLoading) setRuntimeGraphInfoLoading(false);
+        }
+        scheduleNextLoad();
+      }
+    };
+
+    void loadGraphInfo();
+    return () => {
+      canceled = true;
+      currentController?.abort();
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [draft?.name]);
+
   const isPythonLocked = Boolean(draft && draft.editor_mode === "python");
   const isDraftReadOnly = Boolean(draft && isImplicitPipeline(draft));
   const selectedServerIssues = useMemo(() => {
@@ -385,6 +460,38 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       draft?.name ?? "",
     );
   }, [draft?.name, selectedServerStatus]);
+  const selectedRuntimeGraphInfo = useMemo<GraphRuntimeInfo | null>(() => {
+    if (!draft) return null;
+    const graphs = runtimeGraphInfo?.graphs ?? [];
+    return (
+      graphs.find((graph) => graph.pipeline_name === draft.name) ??
+      graphs.find((graph) => graph.graph_id === draft.name) ??
+      null
+    );
+  }, [draft?.name, runtimeGraphInfo]);
+  const topologyRuntimeStatus = useMemo(() => {
+    const generatedAt = Number(selectedRuntimeGraphInfo?.generated_at ?? 0);
+    const stale = Boolean(
+      selectedRuntimeGraphInfo &&
+        Number.isFinite(generatedAt) &&
+        generatedAt > 0 &&
+        Date.now() / 1000 - generatedAt > 15,
+    );
+    return {
+      loading: runtimeGraphInfoLoading,
+      error: runtimeGraphInfoError,
+      stale,
+    };
+  }, [runtimeGraphInfoError, runtimeGraphInfoLoading, selectedRuntimeGraphInfo]);
+  const topologyGraph = useMemo(() => {
+    if (!draft) return null;
+    if (mode === "json") {
+      const parsed = safeJsonParse(graphText);
+      return parsed.ok ? parsed.data : null;
+    }
+    if (mode === "interactive" && !interactiveWarning && interactiveGraph.graph) return interactiveGraph.graph;
+    return draft.graph;
+  }, [draft, graphText, interactiveGraph.graph, interactiveWarning, mode]);
   const pipelineIngestNotices = useMemo(() => {
     if (!draft) return [];
     const pipelineServerId = normalizeServerId(draft.processing_server_id);
@@ -428,7 +535,13 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     if (nextMode === "interactive" && mode === "json") {
       const parsed = safeJsonParse(graphText);
       if (!parsed.ok) {
-        setError(`Invalid graph JSON: ${parsed.error}`);
+        setError(
+          t(
+            "core.ui.pipelines.editor.error.invalid_graph_json",
+            { error: parsed.error },
+            `Invalid graph JSON: ${parsed.error}`,
+          ),
+        );
         return;
       }
       const loaded = buildInteractiveStepsFromGraph(parsed.data, operatorsById);
@@ -438,7 +551,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
     if (nextMode === "json" && mode === "interactive") {
       if (!interactiveGraph.graph) {
-        setError(interactiveGraph.error || "Interactive graph is invalid.");
+        setError(interactiveGraph.error || t("core.ui.pipelines.editor.error.interactive_graph_invalid"));
         return;
       }
       setGraphText(jsonPretty(interactiveGraph.graph));
@@ -463,15 +576,26 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
         };
       }
       if (!interactiveGraph.graph) {
-        return { ok: false, message: interactiveGraph.error || "Interactive graph is invalid." };
+        return { ok: false, message: interactiveGraph.error || t("core.ui.pipelines.editor.error.interactive_graph_invalid") };
       }
       return { ok: true, graph: interactiveGraph.graph };
     }
 
     if (mode === "json") {
       const parsed = safeJsonParse(graphText);
-      if (!parsed.ok) return { ok: false, message: `Invalid graph JSON: ${parsed.error}` };
-      if (!isRecord(parsed.data)) return { ok: false, message: "Graph JSON must be an object." };
+      if (!parsed.ok) {
+        return {
+          ok: false,
+          message: t(
+            "core.ui.pipelines.editor.error.invalid_graph_json",
+            { error: parsed.error },
+            `Invalid graph JSON: ${parsed.error}`,
+          ),
+        };
+      }
+      if (!isRecord(parsed.data)) {
+        return { ok: false, message: t("core.ui.pipelines.editor.error.graph_json_object") };
+      }
       return { ok: true, graph: parsed.data };
     }
 
@@ -480,6 +604,57 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     if (parsed.ok && isRecord(parsed.data)) return { ok: true, graph: parsed.data };
     const graph = isRecord(draft.graph) ? draft.graph : emptyGraph();
     return { ok: true, graph };
+  };
+
+  const applyTopologyGraphChange = useCallback((nextGraph: Record<string, unknown>) => {
+    setMode("json");
+    setViewMode("topology");
+    setGraphText(jsonPretty(nextGraph));
+    setTopologyDirty(true);
+    setTopologyValidationError(null);
+    setError(null);
+  }, []);
+
+  const discardTopologyChanges = useCallback(() => {
+    if (!draft) return;
+    setGraphText(jsonPretty(draft.graph ?? emptyGraph()));
+    setMode((draft.editor_mode as EditorMode) ?? "interactive");
+    setTopologyDirty(false);
+    setTopologyValidationError(null);
+    setError(null);
+  }, [draft]);
+
+  const validateActiveGraph = async (): Promise<{ ok: true } | { ok: false; message: string }> => {
+    if (!draft) return { ok: false, message: t("core.ui.pipelines.error.no_selection") };
+    const resolved = resolveGraphFromActiveMode();
+    if (!resolved.ok) {
+      setTopologyValidationError(resolved.message);
+      return { ok: false, message: resolved.message };
+    }
+
+    setTopologyValidationLoading(true);
+    setTopologyValidationError(null);
+    try {
+      const output = await compilePipeline({ ...draft, graph: resolved.graph });
+      const nextAlerts = Array.isArray(output.alerts) ? output.alerts : [];
+      setRecommendations(nextAlerts);
+      setRecommendationsError(null);
+      const blocking = nextAlerts.find((alert) => alert.severity === "error") ?? null;
+      if (blocking) {
+        const localized = localizePipelineAlert(blocking, t);
+        const message = localized.message || blocking.message || blocking.code;
+        setTopologyValidationError(message);
+        return { ok: false, message };
+      }
+      return { ok: true };
+    } catch (err: any) {
+      const message = String(err?.message ?? err);
+      setTopologyValidationError(message);
+      setRecommendationsError(message);
+      return { ok: false, message };
+    } finally {
+      setTopologyValidationLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -637,6 +812,17 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       const target = telemetryFieldInspector;
       if (!target) return;
       const nextValue = Number.isFinite(value) ? value : 0;
+      if (viewMode === "topology" && isRecord(topologyGraph)) {
+        const nodes = Array.isArray((topologyGraph as any).nodes) ? ((topologyGraph as any).nodes as unknown[]) : [];
+        const rawNode = nodes.find((item) => isRecord(item) && String(item.id || "").trim() === target.nodeId);
+        const currentConfig = isRecord((rawNode as any)?.config) ? { ...((rawNode as any).config as Record<string, unknown>) } : {};
+        currentConfig[target.configKey] = nextValue;
+        const result = updateTopologyGraphNodeConfig(topologyGraph, target.nodeId, currentConfig);
+        if (result.ok) applyTopologyGraphChange(result.graph);
+        else setError(result.message);
+        setTelemetryFieldInspector((prev) => (prev ? { ...prev, value: nextValue } : prev));
+        return;
+      }
       setInteractiveSteps((prev) =>
         prev.map((step) => {
           if (step.uid !== target.stepUid) return step;
@@ -648,7 +834,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       );
       setTelemetryFieldInspector((prev) => (prev ? { ...prev, value: nextValue } : prev));
     },
-    [telemetryFieldInspector],
+    [applyTopologyGraphChange, telemetryFieldInspector, topologyGraph, viewMode],
   );
 
   const handleCreate = async () => {
@@ -678,7 +864,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
     if (mode === "python") {
       if (!pythonText.trim()) {
-        setError("Python source is required in Python mode.");
+        setError(t("core.ui.pipelines.editor.error.python_source_required"));
         return;
       }
       try {
@@ -704,6 +890,11 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
         setError(resolved.message);
         return;
       }
+      const validation = await validateActiveGraph();
+      if (!validation.ok) {
+        setError(validation.message);
+        return;
+      }
       updated = {
         ...draft,
         graph: resolved.graph,
@@ -719,6 +910,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       );
       setDraft(saved);
       setGraphText(jsonPretty(saved.graph ?? emptyGraph()));
+      setTopologyDirty(false);
+      setTopologyValidationError(null);
     } catch (err: any) {
       setError(String(err?.message ?? err));
     }
@@ -966,7 +1159,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
               {recommendationsLoading ? <div className="pipelinesHint">{t("core.ui.pipelines.analysis.loading")}</div> : null}
 
-              {recommendations.length > 0 && mode !== "interactive" ? (
+              {recommendations.length > 0 && mode !== "interactive" && viewMode !== "topology" ? (
                 <div className="card">
                   <div className="cardTitle">{t("core.ui.pipelines.recommendations.title")}</div>
                   <div className="cardBody">
@@ -1091,6 +1284,26 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                     </button>
                   </div>
                 </div>
+
+                <div className="pipelinesControlField pipelinesModeField">
+                  <span>{t("core.ui.pipelines.topology.view", {}, "View")}</span>
+                  <div className="pipelinesModes" role="group" aria-label={t("core.ui.pipelines.topology.view", {}, "View")}>
+                    <button
+                      className={["pillButton", viewMode === "editor" ? "isActive" : ""].filter(Boolean).join(" ")}
+                      type="button"
+                      onClick={() => setViewMode("editor")}
+                    >
+                      {t("core.ui.pipelines.topology.editor", {}, "Editor")}
+                    </button>
+                    <button
+                      className={["pillButton", viewMode === "topology" ? "isActive" : ""].filter(Boolean).join(" ")}
+                      type="button"
+                      onClick={() => setViewMode("topology")}
+                    >
+                      {t("core.ui.pipelines.topology.title", {}, "Topology")}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {pipelineIngestNotices.map((message) => (
@@ -1103,7 +1316,35 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               ))}
 
               <div className="pipelinesEditorPanel">
-                {mode === "python" ? (
+                {viewMode === "topology" ? (
+                  <TopologyView
+                    pipelineName={draft.name}
+                    graph={topologyGraph}
+                    graphText={graphText}
+                    operatorsById={operatorsById}
+                    camerasIndex={camerasIndex}
+                    processingServerId={draft?.processing_server_id ?? "local"}
+                    onOpenProcessingServers={onOpenProcessingServers}
+                    operatorPanels={operatorPanels}
+                    onOpenTelemetryField={isDraftReadOnly ? undefined : openTelemetryFieldInspector}
+                    alerts={recommendations}
+                    runtimeInfo={selectedRuntimeGraphInfo}
+                    runtimeStatus={topologyRuntimeStatus}
+                    editable={!isDraftReadOnly && !isPythonLocked}
+                    dirty={topologyDirty}
+                    validationLoading={topologyValidationLoading}
+                    validationError={topologyValidationError}
+                    onChangeGraph={applyTopologyGraphChange}
+                    onValidate={() => {
+                      void validateActiveGraph();
+                    }}
+                    onDiscard={discardTopologyChanges}
+                    onOpenJson={() => {
+                      if (!isPythonLocked) switchMode("json");
+                      setViewMode("editor");
+                    }}
+                  />
+                ) : mode === "python" ? (
                   <div className="pipelinesMonacoWrap">
                     <Editor
                       height="520px"

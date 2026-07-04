@@ -1,0 +1,641 @@
+.pipelineTopologyRoot {
+  min-height: 560px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(12, 18, 37, 0.52);
+  box-shadow: var(--shadow);
+}
+
+.pipelineTopologyGraphPane {
+  min-width: 0;
+  min-height: 560px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.pipelineTopologyToolbar {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(8, 13, 25, 0.42);
+}
+
+.pipelineTopologyCanvas {
+  position: relative;
+  min-width: 0;
+  min-height: 506px;
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+    rgba(8, 13, 25, 0.32);
+  background-size: 48px 48px;
+}
+
+.pipelineTopologyCanvas .react-flow {
+  color: var(--text);
+}
+
+.pipelineTopologyStatusChip {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.88);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.pipelineTopologyStatusChip[data-mode="edit"] {
+  color: var(--text);
+  border-color: rgba(20, 184, 166, 0.38);
+}
+
+.pipelineTopologyPalette {
+  position: absolute;
+  z-index: 7;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  width: auto;
+  max-width: 360px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.96);
+  box-shadow: var(--shadow);
+}
+
+.pipelineTopologyPalette input,
+.pipelineTopologyEditGrid input,
+.pipelineTopologyEditGrid select,
+.pipelineTopologyJsonInput {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(8, 13, 25, 0.72);
+  color: var(--text);
+  font: inherit;
+}
+
+.pipelineTopologyPalette input {
+  min-height: 38px;
+  padding: 0 10px;
+}
+
+.pipelineTopologyPaletteList {
+  max-height: 320px;
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+}
+
+.pipelineTopologyPaletteList button {
+  min-width: 0;
+  min-height: 44px;
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.62);
+  color: var(--text);
+  text-align: left;
+  cursor: grab;
+}
+
+.pipelineTopologyPaletteList button:hover,
+.pipelineTopologyPaletteList button:focus-visible {
+  border-color: rgba(20, 184, 166, 0.48);
+  background: rgba(20, 184, 166, 0.12);
+}
+
+.pipelineTopologyPaletteList strong,
+.pipelineTopologyPaletteList span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.25;
+}
+
+.pipelineTopologyPaletteList span,
+.pipelineTopologyPaletteEmpty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pipelineTopologyPaletteEmpty {
+  padding: 12px;
+  text-align: center;
+}
+
+.pipelineTopologyActionError {
+  position: absolute;
+  z-index: 6;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  padding: 9px 10px;
+  border: 1px solid rgba(245, 158, 11, 0.38);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.94);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.pipelineTopologyCanvas .react-flow__attribution {
+  background: rgba(15, 23, 42, 0.72);
+  color: var(--muted);
+}
+
+.pipelineTopologyCanvas .react-flow__controls,
+.pipelineTopologyCanvas .react-flow__minimap {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.82);
+  box-shadow: var(--shadow);
+}
+
+.pipelineTopologyCanvas .pipelineTopologyMiniMap {
+  width: 132px !important;
+  height: 96px !important;
+}
+
+.pipelineTopologyCanvas .pipelineTopologyMiniMap svg {
+  width: 100%;
+  height: 100%;
+}
+
+.pipelineTopologyCanvas .react-flow__controls-button {
+  width: 32px;
+  height: 32px;
+  border-bottom-color: var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.pipelineTopologyCanvas .react-flow__controls-button:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.pipelineTopologyNode {
+  --pipeline-topology-node-color: #64748b;
+  width: 232px;
+  min-height: 112px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-top: 3px solid var(--pipeline-topology-node-color);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.92);
+  box-shadow: 0 8px 24px rgba(2, 6, 23, 0.24);
+}
+
+.pipelineTopologyNode.isSelected {
+  border-color: var(--borderStrong);
+  box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.22), 0 8px 24px rgba(2, 6, 23, 0.24);
+}
+
+.pipelineTopologyNode[data-pressure="warning"] {
+  border-color: rgba(245, 158, 11, 0.62);
+}
+
+.pipelineTopologyNode[data-pressure="critical"] {
+  border-color: rgba(249, 115, 22, 0.74);
+}
+
+.pipelineTopologyNode[data-pressure="error"] {
+  border-color: rgba(239, 68, 68, 0.74);
+}
+
+.pipelineTopologyNodeHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pipelineTopologyNodeIcon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  color: var(--pipeline-topology-node-color);
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.pipelineTopologyNodeTitleBlock {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.pipelineTopologyNodeTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.pipelineTopologyNodeSubtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pipelineTopologyNodeMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pipelineTopologyNodeMeta span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pipelineTopologyNode .react-flow__handle {
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(226, 232, 240, 0.88);
+  background: var(--pipeline-topology-node-color);
+}
+
+.pipelineTopologyEdge {
+  stroke: rgba(148, 163, 184, 0.72);
+  stroke-width: 2;
+}
+
+.pipelineTopologyEdge.isSelected {
+  stroke: var(--color-accent-teal);
+  stroke-width: 3;
+}
+
+.pipelineTopologyEdge[data-pressure="warning"] {
+  stroke: #f59e0b;
+}
+
+.pipelineTopologyEdge[data-pressure="critical"] {
+  stroke: #f97316;
+  stroke-width: 3;
+}
+
+.pipelineTopologyEdge[data-pressure="error"] {
+  stroke: #ef4444;
+  stroke-width: 3;
+}
+
+.pipelineTopologyCanvas .react-flow__edge-text {
+  fill: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pipelineTopologyCanvas .react-flow__edge-textbg {
+  fill: rgba(15, 23, 42, 0.92);
+  stroke: rgba(148, 163, 184, 0.22);
+}
+
+.pipelineTopologyInspector {
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.72);
+  padding: 14px;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  overflow: auto;
+}
+
+.pipelineTopologyInspectorToggle {
+  display: none;
+}
+
+.pipelineTopologyInspectorContent {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.pipelineTopologyInspectorHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pipelineTopologyInspectorTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.pipelineTopologyInspectorSubtitle {
+  margin-top: 3px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pipelineTopologyInspectorGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.pipelineTopologyInspectorField {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(88px, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.pipelineTopologyInspectorField span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pipelineTopologyInspectorField strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 730;
+  text-align: right;
+}
+
+.pipelineTopologyInspectorNotice {
+  padding: 9px 10px;
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.pipelineTopologyInspectorSection {
+  display: grid;
+  gap: 8px;
+}
+
+.pipelineTopologyInspectorSectionTitle {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.pipelineTopologyInspectorSectionTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pipelineTopologyJsonDetails > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.pipelineTopologyJsonDetails > summary::-webkit-details-marker {
+  display: none;
+}
+
+.pipelineTopologyInspectorAlerts {
+  display: grid;
+  gap: 8px;
+}
+
+.pipelineTopologyInspectorAlert {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.58);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.pipelineTopologyInspectorAlert[data-severity="warning"] {
+  border-color: rgba(245, 158, 11, 0.42);
+}
+
+.pipelineTopologyInspectorAlert[data-severity="error"] {
+  border-color: rgba(239, 68, 68, 0.48);
+}
+
+.pipelineTopologyInspectorAlertCode {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.pipelineTopologyInspectorAlert small {
+  color: var(--muted);
+}
+
+.pipelineTopologyJsonInput {
+  min-height: 180px;
+  resize: vertical;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pipelineTopologyJsonInput[readonly] {
+  color: var(--muted);
+}
+
+.pipelineTopologyEditGrid {
+  display: grid;
+  gap: 9px;
+}
+
+.pipelineTopologyEditGrid label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pipelineTopologyEditGrid input,
+.pipelineTopologyEditGrid select {
+  min-height: 36px;
+  padding: 0 9px;
+}
+
+.pipelineTopologyCheckboxField {
+  min-height: 36px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.pipelineTopologyCheckboxField input {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+}
+
+.pipelineTopologyFallback {
+  min-height: 560px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(12, 18, 37, 0.52);
+  box-shadow: var(--shadow);
+}
+
+.pipelineTopologyFallbackHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pipelineTopologyFallbackTitle {
+  font-weight: 800;
+}
+
+.pipelineTopologyFallbackDetail {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pipelineTopologyJsonFallback {
+  min-width: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.74);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pipelineTopologyEmpty {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+
+@media (max-width: 960px) {
+  .pipelineTopologyRoot {
+    grid-template-columns: 1fr;
+  }
+
+  .pipelineTopologyGraphPane {
+    min-height: 520px;
+  }
+
+  .pipelineTopologyCanvas {
+    min-height: 460px;
+  }
+
+  .pipelineTopologyPalette {
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    max-width: none;
+  }
+
+  .pipelineTopologyCanvas .pipelineTopologyMiniMap {
+    width: 96px !important;
+    height: 70px !important;
+  }
+
+  .pipelineTopologyInspector {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    max-height: 320px;
+  }
+
+  .pipelineTopologyInspector.isCollapsed {
+    max-height: 56px;
+    overflow: hidden;
+  }
+
+  .pipelineTopologyInspectorToggle {
+    width: 100%;
+    min-height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.72);
+    color: var(--text);
+    font-weight: 760;
+  }
+
+  .pipelineTopologyInspector.isCollapsed .pipelineTopologyInspectorContent {
+    display: none;
+  }
+}

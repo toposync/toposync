@@ -31,6 +31,8 @@ type Props = {
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
   onUpdateNodeConfig?: (nodeId: string, config: Record<string, unknown>) => void;
   onUpdateEdgePolicy?: (edgeId: string, patch: TopologyEdgePolicyPatch) => void;
+  onDeleteNode?: (nodeId: string) => void;
+  onDeleteEdge?: (edgeId: string) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 };
@@ -41,6 +43,7 @@ type NodeInspectorProps = Omit<
   | "runtimeStatus"
   | "runtimeGeneratedAt"
   | "onUpdateEdgePolicy"
+  | "onDeleteEdge"
   | "collapsed"
   | "onToggleCollapsed"
 > & {
@@ -198,6 +201,8 @@ function JsonConfigEditor({
       </summary>
       <textarea
         className="pipelineTopologyJsonInput"
+        id={`pipeline-topology-node-config-${node.id}`}
+        name={`node_config_${node.id}`}
         value={text}
         readOnly={!editable}
         spellCheck={false}
@@ -232,6 +237,7 @@ function NodeInspector({
   operatorPanels,
   onOpenTelemetryField,
   onUpdateNodeConfig,
+  onDeleteNode,
 }: NodeInspectorProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -264,6 +270,12 @@ function NodeInspector({
           <div className="pipelineTopologyInspectorTitle">{node.data.label}</div>
           <div className="pipelineTopologyInspectorSubtitle">{node.data.operatorId}</div>
         </div>
+        {editable ? (
+          <button className="pillButton pillButtonDanger" type="button" onClick={() => onDeleteNode?.(node.id)}>
+            <i className="fa-solid fa-trash" aria-hidden="true" />
+            {t("core.actions.delete")}
+          </button>
+        ) : null}
       </div>
       <div className="pipelineTopologyInspectorSection">
         <div className="pipelineTopologyInspectorSectionTitle pipelineTopologyInspectorSectionTitleRow">
@@ -350,6 +362,8 @@ function EdgePolicyEditor({
         <label>
           <span>{field("max_items", "Max items")}</span>
           <input
+            id={`pipeline-topology-edge-max-items-${edge.id}`}
+            name={`edge_${edge.id}_max_items`}
             min={1}
             max={4096}
             type="number"
@@ -359,7 +373,12 @@ function EdgePolicyEditor({
         </label>
         <label>
           <span>{field("drop_policy", "Drop policy")}</span>
-          <select value={data.dropPolicy} onChange={(event) => update({ dropPolicy: event.target.value })}>
+          <select
+            id={`pipeline-topology-edge-drop-policy-${edge.id}`}
+            name={`edge_${edge.id}_drop_policy`}
+            value={data.dropPolicy}
+            onChange={(event) => update({ dropPolicy: event.target.value })}
+          >
             <option value="block">block</option>
             <option value="latest_only">latest_only</option>
             <option value="drop_oldest">drop_oldest</option>
@@ -370,7 +389,12 @@ function EdgePolicyEditor({
         </label>
         <label>
           <span>{field("backpressure", "Backpressure")}</span>
-          <select value={data.pressureMode} onChange={(event) => update({ pressureMode: event.target.value })}>
+          <select
+            id={`pipeline-topology-edge-backpressure-${edge.id}`}
+            name={`edge_${edge.id}_backpressure`}
+            value={data.pressureMode}
+            onChange={(event) => update({ pressureMode: event.target.value })}
+          >
             <option value="ignore">ignore</option>
             <option value="pause_upstream">pause_upstream</option>
             <option value="reduce_source_rate">reduce_source_rate</option>
@@ -380,14 +404,26 @@ function EdgePolicyEditor({
         </label>
         <label>
           <span>{field("modality", "Modality")}</span>
-          <input value={data.modality} onChange={(event) => update({ modality: event.target.value })} />
+          <input
+            id={`pipeline-topology-edge-modality-${edge.id}`}
+            name={`edge_${edge.id}_modality`}
+            value={data.modality}
+            onChange={(event) => update({ modality: event.target.value })}
+          />
         </label>
         <label>
           <span>{field("semantic", "Semantic")}</span>
-          <input value={data.semanticClass} onChange={(event) => update({ semanticClass: event.target.value })} />
+          <input
+            id={`pipeline-topology-edge-semantic-${edge.id}`}
+            name={`edge_${edge.id}_semantic`}
+            value={data.semanticClass}
+            onChange={(event) => update({ semanticClass: event.target.value })}
+          />
         </label>
         <label className="pipelineTopologyCheckboxField">
           <input
+            id={`pipeline-topology-edge-continuous-${edge.id}`}
+            name={`edge_${edge.id}_continuous`}
             checked={data.continuous}
             type="checkbox"
             onChange={(event) => update({ continuous: event.target.checked })}
@@ -403,10 +439,12 @@ function EdgeInspector({
   edge,
   editable,
   onUpdateEdgePolicy,
+  onDeleteEdge,
 }: {
   edge: TopologyEdge;
   editable: boolean;
   onUpdateEdgePolicy?: (edgeId: string, patch: TopologyEdgePolicyPatch) => void;
+  onDeleteEdge?: (edgeId: string) => void;
 }): React.ReactElement {
   const { t } = i18n.useI18n();
   const field = (key: string, fallback: string) => t(`core.ui.pipelines.topology.field.${key}`, {}, fallback);
@@ -428,6 +466,12 @@ function EdgeInspector({
           </div>
           <div className="pipelineTopologyInspectorSubtitle">{data.uid}</div>
         </div>
+        {editable ? (
+          <button className="pillButton pillButtonDanger" type="button" onClick={() => onDeleteEdge?.(edge.id)}>
+            <i className="fa-solid fa-trash" aria-hidden="true" />
+            {t("core.actions.delete")}
+          </button>
+        ) : null}
       </div>
       <div className="pipelineTopologyInspectorGrid">
         <Field label={field("from", "From")} value={`${data.sourceNodeId}.${data.sourcePort}`} />
@@ -474,6 +518,8 @@ export function TopologyInspector({
   onOpenTelemetryField,
   onUpdateNodeConfig,
   onUpdateEdgePolicy,
+  onDeleteNode,
+  onDeleteEdge,
   collapsed,
   onToggleCollapsed,
 }: Props): React.ReactElement {
@@ -508,9 +554,10 @@ export function TopologyInspector({
             operatorPanels={operatorPanels}
             onOpenTelemetryField={onOpenTelemetryField}
             onUpdateNodeConfig={onUpdateNodeConfig}
+            onDeleteNode={onDeleteNode}
           />
         ) : edge ? (
-          <EdgeInspector edge={edge} editable={editable} onUpdateEdgePolicy={onUpdateEdgePolicy} />
+          <EdgeInspector edge={edge} editable={editable} onUpdateEdgePolicy={onUpdateEdgePolicy} onDeleteEdge={onDeleteEdge} />
         ) : (
           <SummaryInspector
             model={model}

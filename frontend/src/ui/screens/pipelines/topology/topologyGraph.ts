@@ -208,6 +208,33 @@ export function updateTopologyGraphNodeConfig(
       };
 }
 
+export function deleteTopologyGraphNode(graph: unknown, nodeId: string): TopologyGraphEditResult {
+  if (!isTopologyGraphV2(graph)) return SCHEMA_V2_ERROR;
+  const next = cloneGraph(graph);
+  const nodes = rawNodes(next);
+  if (!nodes.some((node) => text(node.id) === nodeId)) {
+    return {
+      ok: false,
+      message: `Node '${nodeId}' was not found.`,
+      messageKey: "core.ui.pipelines.topology.error.node_not_found",
+      messageParams: { nodeId },
+    };
+  }
+  next.nodes = nodes.filter((node) => text(node.id) !== nodeId);
+  next.edges = rawEdges(next).filter((edge) => {
+    const source = readEndpoint(edge, "from", "out");
+    const target = readEndpoint(edge, "to", "in");
+    return source?.node !== nodeId && target?.node !== nodeId;
+  });
+  const layout = cloneRecord(next.layout);
+  const layoutNodes = cloneRecord(layout.nodes);
+  delete layoutNodes[nodeId];
+  if (Object.keys(layoutNodes).length > 0) layout.nodes = layoutNodes;
+  else delete layout.nodes;
+  next.layout = layout;
+  return { ok: true, graph: next };
+}
+
 export function updateTopologyGraphEdgePolicy(
   graph: unknown,
   edgeId: string,
@@ -238,6 +265,22 @@ export function updateTopologyGraphEdgePolicy(
         messageKey: "core.ui.pipelines.topology.error.edge_not_found",
         messageParams: { edgeId },
       };
+}
+
+export function deleteTopologyGraphEdge(graph: unknown, edgeId: string): TopologyGraphEditResult {
+  if (!isTopologyGraphV2(graph)) return SCHEMA_V2_ERROR;
+  const next = cloneGraph(graph);
+  const edges = rawEdges(next);
+  if (!edges.some((edge) => text(edge.uid) === edgeId)) {
+    return {
+      ok: false,
+      message: `Edge '${edgeId}' was not found.`,
+      messageKey: "core.ui.pipelines.topology.error.edge_not_found",
+      messageParams: { edgeId },
+    };
+  }
+  next.edges = edges.filter((edge) => text(edge.uid) !== edgeId);
+  return { ok: true, graph: next };
 }
 
 export function connectTopologyGraphEdge(

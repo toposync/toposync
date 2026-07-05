@@ -204,6 +204,8 @@ export function PipelineStorageCard({
           <span>{t("core.ui.pipelines.storage.limit_gib", {}, "Pipeline budget (GiB)")}</span>
           <PipelinesNumberInput
             className="pipelinesInput"
+            id="pipeline-storage-limit-gib"
+            name="pipeline_storage_limit_gib"
             min={0}
             max={4096}
             step={0.25}

@@ -38,6 +38,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.actions.retry": "Retry",
     "core.actions.save": "Save",
     "core.actions.sign_out": "Sign out",
+    "core.actions.undo": "Undo",
 
     "core.ui.rendering": "Rendering",
     "core.ui.composition": "Composition",
@@ -716,6 +717,28 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.alerts.store_images_before_postprocess.suggestion": "Move Save images closer to the end of the flow, after image-processing and vision steps.",
     "core.ui.pipelines.alerts.store_images_missing_artifacts.message": "Save images reads artifacts that are not produced upstream: {{missing_artifacts}}.",
     "core.ui.pipelines.alerts.store_images_missing_artifacts.suggestion": "Store the main artifact, or set input_artifact_name to an artifact produced upstream.",
+    "core.ui.pipelines.alerts.duplicate_heavy_ai.message":
+      "This graph runs the same heavy AI step more than once from a shared upstream source.",
+    "core.ui.pipelines.alerts.duplicate_heavy_ai.suggestion":
+      "Run the detector/model once with combined categories, then route downstream branches after it.",
+    "core.ui.pipelines.alerts.heavy_edge_policy.message": "A heavy AI step can build backlog before expensive processing.",
+    "core.ui.pipelines.alerts.heavy_edge_policy.suggestion":
+      "Use maxsize=1 with latest_only/drop_oldest, or place a flow limiter before this AI step.",
+    "core.ui.pipelines.alerts.side_effect_lossy_edge.message":
+      "A blocking side-effect step is fed by a lossy edge, so notifications, storage, or actions may be skipped under pressure.",
+    "core.ui.pipelines.alerts.side_effect_lossy_edge.suggestion":
+      "Use drop_policy='block' before this side-effect, or insert an explicit limiter or buffer upstream.",
+    "core.ui.pipelines.alerts.continuous_stream_to_sparse_operator.message":
+      "A continuous video stream feeds an event-like or sparse operator directly.",
+    "core.ui.pipelines.alerts.continuous_stream_to_sparse_operator.suggestion":
+      "Add detection, tracking, routing, or explicit rate control before converting the stream into sparse events.",
+    "core.ui.pipelines.alerts.edge_policy_mismatch.message":
+      "A continuous video edge uses block policy, which can stall realtime capture or upstream AI under backpressure.",
+    "core.ui.pipelines.alerts.edge_policy_mismatch.suggestion":
+      "Use latest_only/drop_oldest for realtime video unless this edge must be lossless.",
+    "core.ui.pipelines.alerts.artifact_fanout.message": "Artifacts produced by this step fan out into multiple downstream branches.",
+    "core.ui.pipelines.alerts.artifact_fanout.suggestion":
+      "Prefer storing once, passing artifact references, or routing before creating heavy derived artifacts.",
     "core.ui.pipelines.alerts.split_stream_latest_only_channel.message": "A split-stream operator feeds into a maxsize={{maxsize}} latest_only channel, which drops packets across different objects or streams.",
     "core.ui.pipelines.alerts.split_stream_latest_only_channel.suggestion": "Increase maxsize and prefer drop_policy='keyed_latest_only' or drop_oldest for downstream processing after split streams.",
     "core.ui.pipelines.alerts.split_stream_small_channel.message": "A split-stream operator feeds into a very small channel (maxsize={{maxsize}}), which may starve some objects under load.",
@@ -755,6 +778,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.add_node": "Add node",
     "core.ui.pipelines.topology.validating": "Validating",
     "core.ui.pipelines.topology.validate": "Validate",
+    "core.ui.pipelines.topology.valid": "Valid",
+    "core.ui.pipelines.topology.validation_error": "Validation error",
+    "core.ui.pipelines.topology.not_validated": "Not validated",
+    "core.ui.pipelines.topology.fullscreen": "Fullscreen",
+    "core.ui.pipelines.topology.exit_fullscreen": "Exit fullscreen",
     "core.ui.pipelines.topology.discard": "Discard",
     "core.ui.pipelines.topology.canvas": "Pipeline topology",
     "core.ui.pipelines.topology.search_operator": "Search operator",
@@ -834,6 +862,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.error.input_taken": "{{target}} already has an incoming edge.",
     "core.ui.pipelines.topology.error.connection_exists": "This connection already exists.",
     "core.ui.pipelines.topology.error.cycle": "This connection would create a cycle.",
+    "core.ui.pipelines.recommendations.edge_details": "Edge details",
     "core.ui.pipelines.modes.interactive": "Interactive",
     "core.ui.pipelines.modes.json": "JSON",
     "core.ui.pipelines.modes.python_one_way": "Python (one-way)",
@@ -2349,6 +2378,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.actions.retry": "Tentar novamente",
     "core.actions.save": "Salvar",
     "core.actions.sign_out": "Sair",
+    "core.actions.undo": "Desfazer",
 
     "core.ui.rendering": "Renderização",
     "core.ui.composition": "Composição",
@@ -3031,6 +3061,28 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.alerts.store_images_before_postprocess.suggestion": "Mova Salvar imagens para mais perto do fim do fluxo, depois das etapas de imagem e visão.",
     "core.ui.pipelines.alerts.store_images_missing_artifacts.message": "Salvar imagens lê artefatos que não são produzidos nas etapas anteriores: {{missing_artifacts}}.",
     "core.ui.pipelines.alerts.store_images_missing_artifacts.suggestion": "Armazene o artefato principal, ou defina input_artifact_name para um artefato produzido antes.",
+    "core.ui.pipelines.alerts.duplicate_heavy_ai.message":
+      "Este grafo executa a mesma etapa pesada de IA mais de uma vez a partir de uma origem anterior compartilhada.",
+    "core.ui.pipelines.alerts.duplicate_heavy_ai.suggestion":
+      "Execute o detector/modelo uma vez com categorias combinadas e roteie os ramos depois dele.",
+    "core.ui.pipelines.alerts.heavy_edge_policy.message": "Uma etapa pesada de IA pode acumular backlog antes do processamento caro.",
+    "core.ui.pipelines.alerts.heavy_edge_policy.suggestion":
+      "Use maxsize=1 com latest_only/drop_oldest, ou coloque um limitador de fluxo antes desta etapa de IA.",
+    "core.ui.pipelines.alerts.side_effect_lossy_edge.message":
+      "Uma etapa bloqueante de efeito externo recebe dados por uma edge com perda, então notificações, armazenamento ou ações podem ser pulados sob pressão.",
+    "core.ui.pipelines.alerts.side_effect_lossy_edge.suggestion":
+      "Use drop_policy='block' antes deste efeito externo, ou insira um limitador/buffer explícito antes dele.",
+    "core.ui.pipelines.alerts.continuous_stream_to_sparse_operator.message":
+      "Um vídeo contínuo alimenta diretamente um operador esparso ou parecido com evento.",
+    "core.ui.pipelines.alerts.continuous_stream_to_sparse_operator.suggestion":
+      "Adicione detecção, rastreamento, roteamento ou controle explícito de frequência antes de converter o stream em eventos esparsos.",
+    "core.ui.pipelines.alerts.edge_policy_mismatch.message":
+      "Uma edge de vídeo contínuo usa política block, o que pode travar captura em tempo real ou IA anterior sob pressão.",
+    "core.ui.pipelines.alerts.edge_policy_mismatch.suggestion":
+      "Use latest_only/drop_oldest para vídeo em tempo real, a menos que esta edge precise ser sem perda.",
+    "core.ui.pipelines.alerts.artifact_fanout.message": "Artefatos produzidos por esta etapa se ramificam para vários caminhos posteriores.",
+    "core.ui.pipelines.alerts.artifact_fanout.suggestion":
+      "Prefira armazenar uma vez, passar referências de artefato ou rotear antes de criar artefatos derivados pesados.",
     "core.ui.pipelines.alerts.split_stream_latest_only_channel.message": "Um operador de fluxo dividido alimenta um canal latest_only com maxsize={{maxsize}}, o que descarta pacotes entre objetos ou fluxos diferentes.",
     "core.ui.pipelines.alerts.split_stream_latest_only_channel.suggestion": "Aumente maxsize e prefira drop_policy='keyed_latest_only' ou drop_oldest para processamento depois de fluxos divididos.",
     "core.ui.pipelines.alerts.split_stream_small_channel.message": "Um operador de fluxo dividido alimenta um canal muito pequeno (maxsize={{maxsize}}), o que pode deixar alguns objetos sem processamento sob carga.",
@@ -3070,6 +3122,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.add_node": "Adicionar nó",
     "core.ui.pipelines.topology.validating": "Validando",
     "core.ui.pipelines.topology.validate": "Validar",
+    "core.ui.pipelines.topology.valid": "Válido",
+    "core.ui.pipelines.topology.validation_error": "Erro de validação",
+    "core.ui.pipelines.topology.not_validated": "Não validado",
+    "core.ui.pipelines.topology.fullscreen": "Tela cheia",
+    "core.ui.pipelines.topology.exit_fullscreen": "Sair da tela cheia",
     "core.ui.pipelines.topology.discard": "Descartar",
     "core.ui.pipelines.topology.canvas": "Topologia do fluxo",
     "core.ui.pipelines.topology.search_operator": "Buscar operador",
@@ -3149,6 +3206,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.error.input_taken": "{{target}} já tem uma edge de entrada.",
     "core.ui.pipelines.topology.error.connection_exists": "Esta conexão já existe.",
     "core.ui.pipelines.topology.error.cycle": "Esta conexão criaria um ciclo.",
+    "core.ui.pipelines.recommendations.edge_details": "Detalhes da edge",
     "core.ui.pipelines.modes.interactive": "Interativo",
     "core.ui.pipelines.modes.json": "JSON",
     "core.ui.pipelines.modes.python_one_way": "Python (sem volta)",

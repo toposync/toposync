@@ -236,6 +236,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const [topologyDirty, setTopologyDirty] = useState(false);
   const [topologyValidationLoading, setTopologyValidationLoading] = useState(false);
   const [topologyValidationError, setTopologyValidationError] = useState<string | null>(null);
+  const [topologyValidationSuccessAt, setTopologyValidationSuccessAt] = useState<number | null>(null);
 
   const [recommendations, setRecommendations] = useState<PipelineAlert[]>([]);
   const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
@@ -384,6 +385,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       setTopologyDirty(false);
       setTopologyValidationLoading(false);
       setTopologyValidationError(null);
+      setTopologyValidationSuccessAt(null);
       return;
     }
 
@@ -394,6 +396,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setTopologyDirty(false);
     setTopologyValidationLoading(false);
     setTopologyValidationError(null);
+    setTopologyValidationSuccessAt(null);
     setTelemetryFieldInspector(null);
 
     const loaded = buildInteractiveStepsFromGraph(selected.graph, operatorsById);
@@ -581,6 +584,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setGraphText(jsonPretty(nextGraph));
     setTopologyDirty(true);
     setTopologyValidationError(null);
+    setTopologyValidationSuccessAt(null);
     setError(null);
   }, []);
 
@@ -590,6 +594,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setMode((draft.editor_mode as EditorMode) ?? "interactive");
     setTopologyDirty(false);
     setTopologyValidationError(null);
+    setTopologyValidationSuccessAt(null);
     setError(null);
   }, [draft]);
 
@@ -598,6 +603,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
     setTopologyValidationLoading(true);
     setTopologyValidationError(null);
+    setTopologyValidationSuccessAt(null);
     try {
       const output = await compilePipeline({ ...draft, graph });
       const nextAlerts = Array.isArray(output.alerts) ? output.alerts : [];
@@ -608,12 +614,15 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
         const localized = localizePipelineAlert(blocking, t);
         const message = localized.message || blocking.message || blocking.code;
         setTopologyValidationError(message);
+        setTopologyValidationSuccessAt(null);
         return { ok: false, message };
       }
+      setTopologyValidationSuccessAt(Date.now());
       return { ok: true };
     } catch (err: any) {
       const message = String(err?.message ?? err);
       setTopologyValidationError(message);
+      setTopologyValidationSuccessAt(null);
       setRecommendationsError(message);
       return { ok: false, message };
     } finally {
@@ -681,12 +690,24 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
             { signal: controller.signal },
           );
           if (cancelled) return;
-          setRecommendations(Array.isArray(output.alerts) ? output.alerts : []);
+          const nextAlerts = Array.isArray(output.alerts) ? output.alerts : [];
+          setRecommendations(nextAlerts);
           setRecommendationsError(null);
+          const blocking = nextAlerts.find((alert) => alert.severity === "error") ?? null;
+          if (blocking) {
+            const localized = localizePipelineAlert(blocking, t);
+            setTopologyValidationError(localized.message || blocking.message || blocking.code);
+            setTopologyValidationSuccessAt(null);
+          } else {
+            setTopologyValidationError(null);
+            setTopologyValidationSuccessAt(Date.now());
+          }
         } catch (err: any) {
           if (cancelled || isAbortError(err)) return;
           setRecommendations([]);
           setRecommendationsError(String(err?.message ?? err));
+          setTopologyValidationError(String(err?.message ?? err));
+          setTopologyValidationSuccessAt(null);
         } finally {
           if (cancelled) return;
           setRecommendationsLoading(false);
@@ -885,6 +906,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       setGraphText(jsonPretty(saved.graph ?? emptyGraph()));
       setTopologyDirty(false);
       setTopologyValidationError(null);
+      setTopologyValidationSuccessAt(Date.now());
     } catch (err: any) {
       setError(String(err?.message ?? err));
     }
@@ -1001,6 +1023,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
           <div className="pipelinesCreate">
             <input
               className="pipelinesInput"
+              id="pipeline-create-name"
+              name="pipeline_create_name"
               placeholder={t("core.ui.pipelines.create.placeholder_name")}
               value={createName}
               onChange={(event) => setCreateName(event.target.value)}
@@ -1132,36 +1156,42 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
               {recommendationsLoading ? <div className="pipelinesHint">{t("core.ui.pipelines.analysis.loading")}</div> : null}
 
-              {recommendations.length > 0 && mode !== "interactive" ? (
-                <div className="card">
-                  <div className="cardTitle">{t("core.ui.pipelines.recommendations.title")}</div>
-                  <div className="cardBody">
-                    <div className="pipelinesAlerts">
-                      {recommendations.map((alert, index) => {
-                        const localizedAlert = localizePipelineAlert(alert, t);
-                        return (
-                          <div
-                            key={`${alert.code}:${alert.node_id ?? ""}:${index}`}
-                            className={[
-                              "pipelinesAlertRow",
-                              alert.severity === "error" ? "isError" : alert.severity === "warning" ? "isWarning" : "isInfo",
-                            ]
-                              .filter(Boolean)
-                              .join(" ")}
-                          >
-                            <div className="pipelinesAlertBadge">{pipelineAlertSeverityLabel(alert.severity, t)}</div>
-                            <div className="pipelinesAlertText">
-                              <div className="pipelinesAlertMessage">{localizedAlert.message}</div>
-                              {localizedAlert.suggestion ? <div className="pipelinesAlertSuggestion">{localizedAlert.suggestion}</div> : null}
-                              {alert.node_id ? <div className="pipelinesHint">{t("core.ui.pipelines.recommendations.node", { node_id: alert.node_id })}</div> : null}
-                              {alert.edge ? <pre className="pipelinesPre">{JSON.stringify(alert.edge, null, 2)}</pre> : null}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+              {recommendations.length > 0 ? (
+                <section className="pipelinesTopologyRecommendations" aria-label={t("core.ui.pipelines.recommendations.title")}>
+                  <div className="pipelinesTopologyRecommendationsHeader">
+                    <strong>{t("core.ui.pipelines.recommendations.title")}</strong>
+                    <span>{recommendations.length}</span>
                   </div>
-                </div>
+                  <div className="pipelinesAlerts">
+                    {recommendations.map((alert, index) => {
+                      const localizedAlert = localizePipelineAlert(alert, t);
+                      return (
+                        <div
+                          key={`${alert.code}:${alert.node_id ?? ""}:${index}`}
+                          className={[
+                            "pipelinesAlertRow",
+                            alert.severity === "error" ? "isError" : alert.severity === "warning" ? "isWarning" : "isInfo",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                        >
+                          <div className="pipelinesAlertBadge">{pipelineAlertSeverityLabel(alert.severity, t)}</div>
+                          <div className="pipelinesAlertText">
+                            <div className="pipelinesAlertMessage">{localizedAlert.message}</div>
+                            {localizedAlert.suggestion ? <div className="pipelinesAlertSuggestion">{localizedAlert.suggestion}</div> : null}
+                            {alert.node_id ? <div className="pipelinesHint">{t("core.ui.pipelines.recommendations.node", { node_id: alert.node_id })}</div> : null}
+                            {alert.edge ? (
+                              <details className="pipelinesRecommendationDetails">
+                                <summary>{t("core.ui.pipelines.recommendations.edge_details", {}, "Edge details")}</summary>
+                                <pre className="pipelinesPre">{JSON.stringify(alert.edge, null, 2)}</pre>
+                              </details>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
               ) : null}
 
               {selectedServerStatus && !selectedServerStatus.ok ? (
@@ -1203,6 +1233,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               <div className="pipelinesEditorControls">
                 <label className="pipelinesInlineToggle">
                   <input
+                    id="pipeline-enabled"
+                    name="pipeline_enabled"
                     type="checkbox"
                     checked={draft.enabled !== false}
                     disabled={isDraftReadOnly}
@@ -1216,6 +1248,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   <div className="pipelinesControlRow">
                     <select
                       className="pipelinesSelect"
+                      id="pipeline-processing-server"
+                      name="processing_server_id"
                       value={draft.processing_server_id ?? "local"}
                       disabled={isDraftReadOnly}
                       onChange={(event) =>
@@ -1258,8 +1292,9 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   runtimeStatus={topologyRuntimeStatus}
                   editable={!isDraftReadOnly && !isPythonLocked}
                   dirty={topologyDirty}
-                  validationLoading={topologyValidationLoading}
+                  validationLoading={topologyValidationLoading || recommendationsLoading}
                   validationError={topologyValidationError}
+                  validationSuccessAt={topologyValidationSuccessAt}
                   onChangeGraph={applyTopologyGraphChange}
                   onValidate={() => {
                     void validateActiveGraph();

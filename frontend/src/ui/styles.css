@@ -1093,6 +1093,44 @@ video {
   gap: 10px;
 }
 
+.pipelinesTopologyRecommendations {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(15, 23, 48, 0.42);
+}
+
+.pipelinesTopologyRecommendationsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.pipelinesTopologyRecommendations .pipelinesAlerts {
+  max-height: 240px;
+  overflow: auto;
+}
+
+.pipelinesRecommendationDetails {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pipelinesRecommendationDetails > summary {
+  cursor: pointer;
+}
+
+.pipelinesRecommendationDetails .pipelinesPre {
+  margin-top: 6px;
+}
+
 .pipelinesAlertRow {
   display: flex;
   gap: 12px;

@@ -16,9 +16,10 @@
     "dev:rtsp-image": "uv run --group extensions python scripts/rtsp_image_server.py",
     "dev:rtsp-video": "uv run --group extensions python scripts/rtsp_video_server.py",
     "build:frontend": "npm --workspace @toposync/frontend run build",
+    "build:extension-ui": "node scripts/build-extension-ui.mjs",
     "typecheck:plugin-api": "npm --workspace @toposync/plugin-api run typecheck",
     "pack:plugin-api": "npm --workspace @toposync/plugin-api run pack:dry-run",
-    "build:extensions": "npm --workspace @toposync/extension-structural-ui run build && npm --workspace @toposync/extension-models-ui run build && npm --workspace @toposync/extension-home-assistant-ui run build && npm --workspace @toposync/extension-cameras-ui run build && npm --workspace @toposync/extension-images-ui run build && npm --workspace @toposync/extension-streaming-ui run build && npm --workspace @toposync/extension-ai-ui run build && npm --workspace @toposync/extension-spatial-video-ui run build",
+    "build:extensions": "node scripts/build-extension-ui.mjs --all",
     "docs:start": "npm --workspace docs-site run start",
     "docs:start:pt-BR": "npm --workspace docs-site run start:pt-BR",
     "docs:build": "npm --workspace docs-site run build",
@@ -27,10 +28,17 @@
     "docs:deploy:cloudflare": "npm run docs:build && npx wrangler pages deploy docs-site/build --project-name toposync-docs",
     "docs:serve": "npm --workspace docs-site run serve",
     "test:stream-frames": "node scripts/check_stream_transport_frames.mjs",
+    "test:wall-geometry": "rm -rf extensions/structural/ui/.test-dist && npx tsc -p extensions/structural/ui/tsconfig.wall-geometry-test.json && node --test extensions/structural/ui/.test-dist/wallGeometry.test.js && rm -rf extensions/structural/ui/.test-dist",
     "test:e2e": "playwright test"
   },
   "devDependencies": {
-    "@playwright/test": "^1.49.1"
+    "@playwright/test": "^1.49.1",
+    "@types/react": "^18.3.12",
+    "@types/three": "^0.167.2",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.6.3",
+    "webpack": "^5.94.0",
+    "webpack-cli": "^5.1.4"
   },
   "packageManager": "npm@10.8.2"
 }

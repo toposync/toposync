@@ -1,3 +1,5 @@
+import { requestJson, requestVoid } from "@toposync/plugin-api";
+
 import type {
   CameraLiveView,
   CameraLiveViewGenerateResponse,
@@ -75,36 +77,6 @@ type GenerateCameraLiveViewsRequest = {
   replace_existing?: boolean;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object";
-}
-
-async function parseErrorResponse(response: Response): Promise<string> {
-  const fallback = `HTTP ${response.status}`;
-  try {
-    const json = await response.json();
-    if (!isRecord(json)) return fallback;
-    const detail = json.detail;
-    if (typeof detail === "string" && detail.trim()) return detail.trim();
-    return fallback;
-  } catch {
-    try {
-      const text = await response.text();
-      return text.trim() || fallback;
-    } catch {
-      return fallback;
-    }
-  }
-}
-
-async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, init);
-  if (!response.ok) {
-    throw new Error(await parseErrorResponse(response));
-  }
-  return (await response.json()) as T;
-}
-
 export async function fetchStreamsHealth(signal?: AbortSignal): Promise<StreamsHealthResponse> {
   return requestJson<StreamsHealthResponse>("/api/streams/health", { signal });
 }
@@ -160,10 +132,7 @@ export async function updateCameraLiveView(liveViewId: string, payload: CameraLi
 }
 
 export async function deleteCameraLiveView(liveViewId: string): Promise<void> {
-  const response = await fetch(`/api/streams/camera-live-views/${encodeURIComponent(liveViewId)}`, { method: "DELETE" });
-  if (!response.ok) {
-    throw new Error(await parseErrorResponse(response));
-  }
+  await requestVoid(`/api/streams/camera-live-views/${encodeURIComponent(liveViewId)}`, { method: "DELETE" });
 }
 
 export async function fetchStreamingQualityProfiles(signal?: AbortSignal): Promise<StreamingQualityProfilesResponse> {
@@ -187,10 +156,7 @@ export async function updateTransmission(transmissionId: string, payload: Transm
 }
 
 export async function deleteTransmission(transmissionId: string): Promise<void> {
-  const response = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}`, { method: "DELETE" });
-  if (!response.ok) {
-    throw new Error(await parseErrorResponse(response));
-  }
+  await requestVoid(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}`, { method: "DELETE" });
 }
 
 export async function fetchTransmissionUrls(transmissionId: string): Promise<TransmissionUrlsResponse> {

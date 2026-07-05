@@ -1,26 +1,6 @@
+import { requestJson, requestVoid } from "@toposync/plugin-api";
+
 import type { CameraLiveView, PtzPreset, PtzStatus, StreamingPlaybackResponse } from "./types";
-
-async function parseError(response: Response, fallback: string): Promise<string> {
-  try {
-    const payload = await response.json();
-    const detail = payload && typeof payload === "object" ? (payload as { detail?: unknown }).detail : null;
-    if (typeof detail === "string" && detail.trim()) return detail.trim();
-  } catch {
-    try {
-      const text = await response.text();
-      if (text.trim()) return text.trim();
-    } catch {
-      // ignore
-    }
-  }
-  return fallback;
-}
-
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  if (!response.ok) throw new Error(await parseError(response, `HTTP ${response.status}`));
-  return (await response.json()) as T;
-}
 
 export async function fetchLiveViews(signal?: AbortSignal): Promise<CameraLiveView[]> {
   return requestJson<CameraLiveView[]>("/api/streams/live-views", { signal });
@@ -49,11 +29,10 @@ export async function primeTransmissionDemand(
   if (outputId) params.set("output_id", outputId);
   if (qualityProfileId) params.set("quality_profile_id", qualityProfileId);
   const query = params.toString();
-  const response = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/demand/prime${query ? `?${query}` : ""}`, {
+  await requestVoid(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/demand/prime${query ? `?${query}` : ""}`, {
     method: "POST",
     signal,
   });
-  if (!response.ok) throw new Error(await parseError(response, `Demand prime failed: ${response.status}`));
 }
 
 export async function heartbeatTransmissionDemand(args: {
@@ -65,7 +44,7 @@ export async function heartbeatTransmissionDemand(args: {
   ttlSeconds: number;
   signal?: AbortSignal;
 }): Promise<void> {
-  const response = await fetch(`/api/streams/transmissions/${encodeURIComponent(args.transmissionId)}/demand/heartbeat`, {
+  await requestVoid(`/api/streams/transmissions/${encodeURIComponent(args.transmissionId)}/demand/heartbeat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -77,7 +56,6 @@ export async function heartbeatTransmissionDemand(args: {
     }),
     signal: args.signal,
   });
-  if (!response.ok) throw new Error(await parseError(response, `Demand heartbeat failed: ${response.status}`));
 }
 
 export async function fetchCameraPtzStatus(

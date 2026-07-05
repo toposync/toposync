@@ -158,10 +158,10 @@ npm run build:extensions
 Build one extension UI:
 
 ```bash
-npm --workspace @toposync/extension-cameras-ui run build
+npm run build:extension-ui -- cameras
 ```
 
-Most extension UI packages currently expose a `build` script only. If you change extension UI code while the app is running, rebuild the relevant extension and refresh the browser.
+If you change extension UI code while the app is running, rebuild the relevant extension and refresh the browser.
 
 Extensions are discovered from Python entry points and surfaced to the frontend through `/api/extensions`. The frontend loads extension remotes with Module Federation from `/extensions/<extension_id>/...`.
 

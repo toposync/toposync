@@ -158,10 +158,10 @@ npm run build:extensions
 Compile uma UI de extensão específica:
 
 ```bash
-npm --workspace @toposync/extension-cameras-ui run build
+npm run build:extension-ui -- cameras
 ```
 
-A maioria dos pacotes de UI de extensão atualmente expõe apenas um script `build`. Se você alterar código de UI de extensão com o app rodando, recompile a extensão relevante e atualize o navegador.
+Se você alterar código de UI de extensão com o app rodando, recompile a extensão relevante e atualize o navegador.
 
 Extensões são descobertas por entry points Python e expostas ao frontend por `/api/extensions`. O frontend carrega remotes de extensões com Module Federation a partir de `/extensions/<extension_id>/...`.
 

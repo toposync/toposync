@@ -39,7 +39,58 @@ function resolveToposyncUrl(input) {
   return value;
 }
 
+async function parseHttpError(response, fallback) {
+  try {
+    const payload = await response.json();
+    const detail = payload && typeof payload === "object" ? payload.detail : null;
+    if (typeof detail === "string" && detail.trim()) return detail.trim();
+    if (detail && typeof detail === "object" && typeof detail.error === "string" && detail.error.trim()) {
+      return detail.error.trim();
+    }
+  } catch {
+    try {
+      const text = String(await response.text()).trim();
+      if (text) return text;
+    } catch {
+      // ignore
+    }
+  }
+  return fallback || `HTTP ${response.status}`;
+}
+
+async function requestJson(input, init) {
+  const response = await fetch(resolveToposyncUrl(input), init);
+  if (!response.ok) {
+    const error = new Error(await parseHttpError(response));
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+}
+
+async function requestVoid(input, init) {
+  const response = await fetch(resolveToposyncUrl(input), init);
+  if (!response.ok) {
+    const error = new Error(await parseHttpError(response));
+    error.status = response.status;
+    throw error;
+  }
+}
+
+async function requestForm(input, form, init) {
+  const response = await fetch(resolveToposyncUrl(input), { ...init, method: init?.method || "POST", body: form });
+  if (!response.ok) {
+    const error = new Error(await parseHttpError(response));
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+}
+
 module.exports = {
   getToposyncBasePath,
+  requestForm,
+  requestJson,
+  requestVoid,
   resolveToposyncUrl,
 };

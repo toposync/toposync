@@ -47,6 +47,15 @@ Toposync base path, including Home Assistant ingress paths:
 const response = await host.api.fetch("/api/demo/status");
 ```
 
+For standalone helper modules that do not receive `host`, use the bundled URL
+helpers:
+
+```ts
+import { requestJson } from "@toposync/plugin-api";
+
+const status = await requestJson("/api/demo/status");
+```
+
 ## Runtime model
 
 `@toposync/plugin-api` is intentionally a types-first package. It ships a minimal runtime stub only so bundlers and package resolvers have a concrete entry point. Extension code should treat it as a contract package and import from it using `import type` whenever possible.

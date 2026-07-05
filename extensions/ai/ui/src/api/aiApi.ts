@@ -1,4 +1,4 @@
-import { resolveToposyncUrl } from "@toposync/plugin-api";
+import { requestJson } from "@toposync/plugin-api";
 
 import type {
   AiCatalogResponse,
@@ -7,40 +7,6 @@ import type {
   ProviderTestResponse,
   UsageSnapshot,
 } from "../types";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object";
-}
-
-async function parseErrorResponse(response: Response): Promise<string> {
-  const fallback = `HTTP ${response.status}`;
-  try {
-    const json = await response.json();
-    if (!isRecord(json)) return fallback;
-    const detail = json.detail;
-    if (typeof detail === "string" && detail.trim()) return detail.trim();
-    if (isRecord(detail)) {
-      const error = detail.error;
-      if (typeof error === "string" && error.trim()) return error.trim();
-    }
-    return fallback;
-  } catch {
-    try {
-      const text = await response.text();
-      return text.trim() || fallback;
-    } catch {
-      return fallback;
-    }
-  }
-}
-
-async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(resolveToposyncUrl(input), init);
-  if (!response.ok) {
-    throw new Error(await parseErrorResponse(response));
-  }
-  return (await response.json()) as T;
-}
 
 export async function fetchAiCatalog(signal?: AbortSignal): Promise<AiCatalogResponse> {
   return requestJson<AiCatalogResponse>("/api/ai/catalog", { signal });

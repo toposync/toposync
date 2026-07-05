@@ -407,7 +407,7 @@ type HostApi = {
 };
 ```
 
-Para dados específicos da extensão, exponha suas próprias rotas backend na extensão Python e chame essas rotas com `resolveToposyncUrl()`.
+Para dados específicos da extensão, exponha suas próprias rotas backend na extensão Python e chame essas rotas com `host.api.fetch()` ou os helpers de `@toposync/plugin-api`, como `requestJson()`.
 
 ## Expectativas de Module Federation {/* #module-federation-expectations */}
 

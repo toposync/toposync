@@ -9,6 +9,8 @@ from typing import Any
 
 from .engine_manager import MediaMtxEngineManager
 
+_LIST_ITEMS_PER_PAGE = 200
+
 
 @dataclass(frozen=True, slots=True)
 class MediaMtxPathInfo:
@@ -34,11 +36,7 @@ class MediaMtxApiClient:
         self._request_timeout_s = max(0.25, float(request_timeout_s))
 
     async def get_paths(self) -> list[MediaMtxPathInfo]:
-        payload = await self._get_json("/v3/paths/list")
-        if not isinstance(payload, dict):
-            return []
-        raw_items = payload.get("items")
-        items = raw_items if isinstance(raw_items, list) else []
+        items = await self._get_list_items("/v3/paths/list")
 
         parsed: list[MediaMtxPathInfo] = []
         for item in items:
@@ -82,11 +80,7 @@ class MediaMtxApiClient:
         }
 
     async def get_hls_muxers(self) -> list[dict[str, Any]]:
-        payload = await self._get_json("/v3/hlsmuxers/list")
-        if not isinstance(payload, dict):
-            return []
-        raw_items = payload.get("items")
-        items = raw_items if isinstance(raw_items, list) else []
+        items = await self._get_list_items("/v3/hlsmuxers/list")
         return [self._compact_dict(item) for item in items if isinstance(item, dict)]
 
     async def get_metrics(self) -> dict[str, Any]:
@@ -131,6 +125,19 @@ class MediaMtxApiClient:
         except Exception:
             return None
 
+    async def _get_list_items(self, route: str) -> list[Any]:
+        first_route = f"{route}?itemsPerPage={_LIST_ITEMS_PER_PAGE}"
+        payload = await self._get_json(first_route)
+        if not isinstance(payload, dict):
+            return []
+        items = self._payload_items(payload)
+        page_count = self._payload_page_count(payload)
+        for page in range(1, page_count):
+            page_payload = await self._get_json(f"{first_route}&page={page}")
+            if isinstance(page_payload, dict):
+                items.extend(self._payload_items(page_payload))
+        return items
+
     async def _get_text_metrics(self) -> str | None:
         status = await self._engine_manager.get_status()
         if not status.running or not status.metrics_enabled:
@@ -163,6 +170,19 @@ class MediaMtxApiClient:
         request = urllib.request.Request(url=url, headers={"accept": "text/plain"})
         with urllib.request.urlopen(request, timeout=timeout_s) as response:
             return response.read().decode("utf-8", errors="ignore")
+
+    @staticmethod
+    def _payload_items(payload: dict[str, Any]) -> list[Any]:
+        raw_items = payload.get("items")
+        return list(raw_items) if isinstance(raw_items, list) else []
+
+    @staticmethod
+    def _payload_page_count(payload: dict[str, Any]) -> int:
+        try:
+            page_count = int(payload.get("pageCount") or 1)
+        except Exception:
+            page_count = 1
+        return max(1, page_count)
 
     @staticmethod
     def _parse_prometheus_metrics(text: str) -> dict[str, float]:

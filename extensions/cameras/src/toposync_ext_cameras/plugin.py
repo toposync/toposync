@@ -3120,7 +3120,7 @@ class CamerasExtension(BaseExtension):
                 return build_pipeline_graph_v2(
                     nodes=nodes,
                     edges=_linear_edges(node_ids),
-                    uid=graph_uid,
+                    graph_uid=graph_uid,
                 )
 
             if preset == "people_quiet":
@@ -3160,7 +3160,7 @@ class CamerasExtension(BaseExtension):
                 return build_pipeline_graph_v2(
                     nodes=nodes,
                     edges=_linear_edges(node_ids),
-                    uid=graph_uid,
+                    graph_uid=graph_uid,
                 )
 
             if preset in {
@@ -3263,7 +3263,7 @@ class CamerasExtension(BaseExtension):
                     return build_pipeline_graph_v2(
                         nodes=nodes,
                         edges=_linear_edges(node_ids),
-                        uid=graph_uid,
+                        graph_uid=graph_uid,
                     )
 
                 if preset == "person_vehicle_stopped":
@@ -3364,7 +3364,7 @@ class CamerasExtension(BaseExtension):
                 return build_pipeline_graph_v2(
                     nodes=nodes,
                     edges=edges,
-                    uid=graph_uid,
+                    graph_uid=graph_uid,
                 )
 
             raise ValueError("Unknown preset")

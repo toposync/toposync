@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from toposync.runtime.pipelines.templates import safe_pipeline_name
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2, safe_pipeline_name
 
 from .constants import OPERATOR_ID_DIRECTOR_SOURCE
 
@@ -74,28 +74,30 @@ def build_cinematic_wizard_graph(
         "publication_label": _safe_text(options.get("publication_label")) or "Cinematic",
     }
 
-    return {
-        "schema_version": 1,
-        "nodes": [
-            {"id": "demand", "operator": "stream.demand_gate", "config": demand_config},
-            {"id": "director", "operator": OPERATOR_ID_DIRECTOR_SOURCE, "config": director_config},
-            {"id": "publish", "operator": "stream.publish_video", "config": publish_config},
-        ],
-        "edges": [
-            {
-                "from": {"node": "demand", "port": "out"},
-                "to": {"node": "director", "port": "gate"},
-                "maxsize": 1,
-                "drop_policy": "drop_oldest",
-            },
-            {
-                "from": {"node": "director", "port": "out"},
-                "to": {"node": "publish", "port": "in"},
-                "maxsize": 1,
-                "drop_policy": "latest_only",
-            },
-        ],
-    }
+    nodes = [
+        {"id": "demand", "operator": "stream.demand_gate", "config": demand_config},
+        {"id": "director", "operator": OPERATOR_ID_DIRECTOR_SOURCE, "config": director_config},
+        {"id": "publish", "operator": "stream.publish_video", "config": publish_config},
+    ]
+    edges = [
+        {
+            "from": {"node": "demand", "port": "out"},
+            "to": {"node": "director", "port": "gate"},
+            "maxsize": 1,
+            "drop_policy": "drop_oldest",
+        },
+        {
+            "from": {"node": "director", "port": "out"},
+            "to": {"node": "publish", "port": "in"},
+            "maxsize": 1,
+            "drop_policy": "latest_only",
+        },
+    ]
+    return build_pipeline_graph_v2(
+        graph_uid=f"cinematic_{transmission}",
+        nodes=nodes,
+        edges=edges,
+    )
 
 
 def _director_config(options: dict[str, Any]) -> dict[str, Any]:

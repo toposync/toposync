@@ -3,7 +3,7 @@ from __future__ import annotations
 import unicodedata
 from typing import Any, Literal
 
-from toposync.runtime.pipelines.templates import safe_pipeline_name
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2, safe_pipeline_name
 
 WizardPresetId = Literal[
     "simple_stream",
@@ -281,11 +281,11 @@ def build_streaming_wizard_graph(
         )
         _append_edge(edges, source_node_id=current_node_id, target_node_id="stream", maxsize=8)
 
-    return {
-        "schema_version": 1,
-        "nodes": nodes,
-        "edges": edges,
-        "meta": {
+    return build_pipeline_graph_v2(
+        graph_uid=f"streaming_{transmission_id}_{camera_id}_{preset_id}",
+        nodes=nodes,
+        edges=edges,
+        meta={
             "streaming": {
                 "transmission_id": transmission_id,
                 "camera_id": camera_id,
@@ -295,7 +295,7 @@ def build_streaming_wizard_graph(
                 "demand_driven": bool(demand_gate),
             },
         },
-    }
+    )
 
 
 def _append_stream_node(

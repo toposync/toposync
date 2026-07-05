@@ -9,6 +9,19 @@ from typing import Any
 CAMERAS_EXTENSION_ID = "com.toposync.cameras"
 
 _NAME_CLEAN_RE = re.compile(r"[^A-Za-z0-9_]+")
+_VIDEO_OPERATORS = {
+    "camera.source",
+    "camera.motion_bgsub_adaptive",
+    "camera.motion_gate",
+    "camera.camera_mapping",
+    "cinematic.director_source",
+    "core.demo_frame_sequence_source",
+    "core.fps_reducer",
+    "stream.publish_video",
+    "vision.detect",
+    "vision.segment_instances",
+    "vision.track",
+}
 
 
 class PipelineTemplateError(ValueError):
@@ -131,3 +144,106 @@ def default_instance_name(*, template_name: str, camera_id: str, camera_source_i
     source = _as_str(camera_source_id).strip()
     suffix = f"{camera_id}__{source}" if source else camera_id
     return safe_pipeline_name(f"{template_name}__{suffix}")
+
+
+def build_pipeline_graph_v2(
+    *,
+    graph_uid: str,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    layout: dict[str, Any] | None = None,
+    limits: dict[str, Any] | None = None,
+    meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    operators_by_node = {
+        str(node.get("id") or "").strip(): str(node.get("operator") or node.get("operator_id") or "").strip()
+        for node in nodes
+        if isinstance(node, dict)
+    }
+    graph: dict[str, Any] = {
+        "schema_version": 2,
+        "uid": safe_pipeline_name(graph_uid or "graph"),
+        "nodes": [_graph_v2_node(node) for node in nodes],
+        "edges": [
+            _graph_v2_edge(edge, index=index, operators_by_node=operators_by_node)
+            for index, edge in enumerate(edges)
+        ],
+    }
+    if layout:
+        graph["layout"] = dict(layout)
+    if limits:
+        graph["limits"] = dict(limits)
+    if meta:
+        graph["meta"] = dict(meta)
+    return graph
+
+
+def _graph_v2_node(node: dict[str, Any]) -> dict[str, Any]:
+    node_id = str(node.get("id") or "").strip()
+    operator_id = str(node.get("operator") or node.get("operator_id") or "").strip()
+    out = {
+        "uid": str(node.get("uid") or node_id),
+        "id": node_id,
+        "operator": operator_id,
+        "config": dict(_as_record(node.get("config"))),
+    }
+    if isinstance(node.get("ui"), dict):
+        out["ui"] = dict(node["ui"])
+    if isinstance(node.get("state"), dict):
+        out["state"] = dict(node["state"])
+    return out
+
+
+def _graph_v2_edge(
+    edge: dict[str, Any],
+    *,
+    index: int,
+    operators_by_node: dict[str, str],
+) -> dict[str, Any]:
+    source = edge.get("from") if isinstance(edge.get("from"), dict) else {}
+    target = edge.get("to") if isinstance(edge.get("to"), dict) else {}
+    source_node = str(source.get("node") or "")
+    source_port = str(source.get("port") or "out")
+    target_node = str(target.get("node") or "")
+    target_port = str(target.get("port") or "in")
+    modality, semantic_class, continuous = _edge_traffic(
+        operators_by_node.get(source_node, ""),
+        operators_by_node.get(target_node, ""),
+        target_port=target_port,
+    )
+    out: dict[str, Any] = {
+        "uid": str(
+            edge.get("uid")
+            or f"edge_{index}_{_uid_part(source_node)}_{_uid_part(source_port)}_{_uid_part(target_node)}_{_uid_part(target_port)}"
+        ),
+        "from": {"node": source_node, "port": source_port},
+        "to": {"node": target_node, "port": target_port},
+        "traffic": dict(_as_record(edge.get("traffic")))
+        or {"modality": modality, "semantic_class": semantic_class, "continuous": continuous},
+        "queue": dict(_as_record(edge.get("queue")))
+        or {
+            "max_items": int(edge.get("maxsize") or 1),
+            "drop_policy": str(edge.get("drop_policy") or "latest_only"),
+        },
+    }
+    if isinstance(edge.get("backpressure"), dict):
+        out["backpressure"] = dict(edge["backpressure"])
+    else:
+        out["backpressure"] = {"mode": "reduce_source_rate" if continuous else "pause_upstream"}
+    if isinstance(edge.get("lifecycle"), dict):
+        out["lifecycle"] = dict(edge["lifecycle"])
+    if isinstance(edge.get("debug"), dict):
+        out["debug"] = dict(edge["debug"])
+    return out
+
+
+def _edge_traffic(source_operator: str, target_operator: str, *, target_port: str) -> tuple[str, str, bool]:
+    if target_port == "gate" or source_operator.endswith(".demand_gate"):
+        return "control.gate", "control", False
+    if source_operator in _VIDEO_OPERATORS and target_operator in _VIDEO_OPERATORS:
+        return "video.frame", "frame", True
+    return "data.event", "event", False
+
+
+def _uid_part(value: str) -> str:
+    return _NAME_CLEAN_RE.sub("_", str(value or "").strip().lower()).strip("_") or "item"

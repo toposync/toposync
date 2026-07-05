@@ -81,10 +81,7 @@ class PipelineGraphSpec(BaseModel):
     schema_version: int = Field(ge=1)
     nodes: list[PipelineGraphNode] = Field(default_factory=list)
     edges: list[PipelineGraphEdge] = Field(default_factory=list)
-    interfaces: dict[str, Any] = Field(default_factory=dict)
     limits: dict[str, Any] = Field(default_factory=dict)
-    layout: dict[str, Any] = Field(default_factory=dict)
-    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

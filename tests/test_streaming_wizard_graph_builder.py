@@ -217,12 +217,14 @@ def test_wizard_graph_can_gate_camera_source_by_stream_demand() -> None:
     assert gate_config["quality_profile_id"] == "quad_grid"
 
     edges = graph.get("edges") if isinstance(graph.get("edges"), list) else []
-    assert {
-        "from": {"node": "demand", "port": "out"},
-        "to": {"node": "source", "port": "gate"},
-        "maxsize": 1,
-        "drop_policy": "drop_oldest",
-    } in edges
+    demand_edge = next(
+        edge
+        for edge in edges
+        if edge.get("from") == {"node": "demand", "port": "out"}
+        and edge.get("to") == {"node": "source", "port": "gate"}
+    )
+    assert demand_edge["queue"] == {"max_items": 1, "drop_policy": "drop_oldest"}
+    assert demand_edge["traffic"]["modality"] == "control.gate"
     assert _streaming_meta(graph).get("demand_driven") is True
 
     registry = OperatorRegistry()

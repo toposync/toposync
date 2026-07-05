@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from .state import EventCandidate, EventLifecycle, EventPriority
 
@@ -16,11 +16,6 @@ _VALID_LIFECYCLES: set[EventLifecycle] = {"open", "update", "close"}
 class EventFeedBatch:
     events: list[EventCandidate]
     next_cursor: Cursor = None
-
-
-class EventFeed(Protocol):
-    async def poll(self, cursor: Cursor = None, *, limit: int = 100) -> EventFeedBatch:
-        ...
 
 
 class NotificationEventFeed:

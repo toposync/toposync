@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
-import re
 from typing import Any, Literal
+
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 
 
 NotificationPriority = Literal["low", "medium", "high"]
@@ -15,12 +16,6 @@ PERSON_VEHICLE_STOPPED_OBJECT_CATEGORIES = [
 ]
 STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
 STOPPED_DEFAULT_MIN_STATIONARY_SECONDS = 1.25
-_VIDEO_FRAME_OPERATORS = {
-    "camera.source",
-    "camera.motion_gate",
-    "vision.detect",
-    "camera.camera_mapping",
-}
 
 
 def build_person_vehicle_stopped_graph(
@@ -169,37 +164,7 @@ def build_person_vehicle_stopped_graph(
         ]
     )
 
-    return build_pipeline_graph_v2(nodes=nodes, edges=edges, uid=graph_uid)
-
-
-def build_pipeline_graph_v2(
-    *,
-    nodes: list[dict[str, Any]],
-    edges: list[dict[str, Any]],
-    uid: str = "camera_preset",
-) -> dict[str, Any]:
-    operators_by_node = {
-        str(node.get("id") or ""): str(node.get("operator") or "")
-        for node in nodes
-        if isinstance(node, dict)
-    }
-    return {
-        "schema_version": 2,
-        "uid": uid,
-        "nodes": [
-            {
-                "uid": f"node_{_uid_part(str(node.get('id') or 'node'))}",
-                "id": str(node.get("id") or ""),
-                "operator": str(node.get("operator") or ""),
-                "config": dict(node.get("config") if isinstance(node.get("config"), dict) else {}),
-            }
-            for node in nodes
-        ],
-        "edges": [
-            _graph_v2_edge(edge, index=index, operators_by_node=operators_by_node)
-            for index, edge in enumerate(edges)
-        ],
-    }
+    return build_pipeline_graph_v2(graph_uid=graph_uid, nodes=nodes, edges=edges)
 
 
 def _stopped_branch_nodes(
@@ -308,54 +273,6 @@ def _keyed_edge(
         maxsize=maxsize,
         drop_policy="keyed_latest_only",
     )
-
-
-def _graph_v2_edge(
-    edge: dict[str, Any],
-    *,
-    index: int,
-    operators_by_node: dict[str, str],
-) -> dict[str, Any]:
-    source = edge.get("from") if isinstance(edge.get("from"), dict) else {}
-    target = edge.get("to") if isinstance(edge.get("to"), dict) else {}
-    source_node = str(source.get("node") or "")
-    source_port = str(source.get("port") or "out")
-    target_node = str(target.get("node") or "")
-    target_port = str(target.get("port") or "in")
-    modality, semantic_class, continuous = _edge_traffic(
-        operators_by_node.get(source_node, ""),
-        operators_by_node.get(target_node, ""),
-    )
-    return {
-        "uid": f"edge_{index}_{_uid_part(source_node)}_{_uid_part(source_port)}_{_uid_part(target_node)}_{_uid_part(target_port)}",
-        "from": {"node": source_node, "port": source_port},
-        "to": {"node": target_node, "port": target_port},
-        "traffic": {
-            "modality": modality,
-            "semantic_class": semantic_class,
-            "continuous": continuous,
-        },
-        "queue": {
-            "max_items": int(edge.get("maxsize") or 1),
-            "drop_policy": str(edge.get("drop_policy") or "latest_only"),
-        },
-        "backpressure": {"mode": "reduce_source_rate" if continuous else "pause_upstream"},
-    }
-
-
-def _edge_traffic(source_operator: str, target_operator: str) -> tuple[str, str, bool]:
-    if source_operator in _VIDEO_FRAME_OPERATORS and target_operator in {
-        "camera.motion_gate",
-        "vision.detect",
-        "camera.camera_mapping",
-        "vision.track",
-    }:
-        return "video.frame", "frame", True
-    return "data.event", "event", False
-
-
-def _uid_part(value: str) -> str:
-    return re.sub(r"\W+", "_", str(value or "").strip().lower()).strip("_") or "item"
 
 
 def _finite_non_negative(value: float | None, *, default: float) -> float:

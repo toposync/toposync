@@ -133,8 +133,6 @@ class PipelineGraphV2Spec(_StrictModel):
     revision: int = Field(default=1, ge=1)
     nodes: list[PipelineGraphV2Node] = Field(default_factory=list)
     edges: list[PipelineGraphV2Edge] = Field(default_factory=list)
-    subgraphs: list[dict[str, Any]] = Field(default_factory=list)
-    resources: dict[str, Any] = Field(default_factory=dict)
     limits: dict[str, Any] = Field(default_factory=dict)
     layout: dict[str, Any] = Field(default_factory=dict)
     meta: dict[str, Any] = Field(default_factory=dict)

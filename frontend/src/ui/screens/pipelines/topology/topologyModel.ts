@@ -1,6 +1,7 @@
 import { Position, type NodeHandle } from "@xyflow/react";
 
 import type { PipelineAlert, PipelineOperatorDefinition } from "../../../../util/api";
+import { i18n } from "../../../../util/i18n";
 import { PIPELINE_OPERATOR_GROUPS } from "../constants";
 import { isRecord, prettyOperatorDescription, prettyOperatorName, resolvePipelineOperatorUx } from "../utils";
 import { layoutTopologyNodes } from "./topologyLayout";
@@ -186,6 +187,25 @@ function parseEdge(raw: unknown, index: number): ParsedEdge | null {
   };
 }
 
+function edgeLabel(edge: ParsedEdge): string {
+  if (edge.target.port === "gate" || edge.modality === "control.gate" || edge.semanticClass === "control") {
+    return i18n.t("core.ui.pipelines.topology.edge_label.gate", {}, "Gate");
+  }
+  if (edge.modality === "video.frame" || edge.semanticClass === "frame") {
+    return i18n.t("core.ui.pipelines.topology.edge_label.video", {}, "Video");
+  }
+  if (edge.modality.startsWith("image.") || edge.semanticClass === "image") {
+    return i18n.t("core.ui.pipelines.topology.edge_label.image", {}, "Image");
+  }
+  if (edge.modality.includes("artifact") || edge.semanticClass === "artifact") {
+    return i18n.t("core.ui.pipelines.topology.edge_label.artifact", {}, "Artifact");
+  }
+  if (edge.modality === "data.event" || edge.semanticClass === "event") {
+    return i18n.t("core.ui.pipelines.topology.edge_label.event", {}, "Event");
+  }
+  return i18n.t("core.ui.pipelines.topology.edge_label.data", {}, "Data");
+}
+
 function nodeAlerts(nodeId: string, operatorId: string, alerts: PipelineAlert[]): PipelineAlert[] {
   return alerts.filter((alert) => alert.node_id === nodeId || (!alert.node_id && alert.operator_id === operatorId));
 }
@@ -300,7 +320,6 @@ export function buildTopologyModel(options: TopologyBuildOptions): TopologyBuild
       const alertSeverity = highestSeverity(alerts);
       const runtime = runtimeEdges[edge.uid] ?? null;
       const pressureState = combinePressure(stateFromSeverity(alertSeverity), edgeRuntimePressure(runtime));
-      const labelParts = [edge.dropPolicy, edge.maxItems > 1 ? `q${edge.maxItems}` : ""].filter(Boolean);
       return {
         id: edge.uid,
         type: "topologyEdge",
@@ -314,7 +333,7 @@ export function buildTopologyModel(options: TopologyBuildOptions): TopologyBuild
           sourcePort: edge.source.port,
           targetNodeId: edge.target.node,
           targetPort: edge.target.port,
-          label: labelParts.join(" / "),
+          label: edgeLabel(edge),
           modality: edge.modality,
           continuous: edge.continuous,
           semanticClass: edge.semanticClass,

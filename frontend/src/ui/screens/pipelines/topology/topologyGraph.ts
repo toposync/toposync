@@ -18,6 +18,11 @@ export type TopologyEdgePolicyPatch = {
   semanticClass?: string;
 };
 
+export type TopologyAddNodeContext =
+  | { kind: "edge"; edgeId: string }
+  | { kind: "node"; nodeId: string }
+  | { kind: "none" };
+
 const NODE_ID_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SCHEMA_V2_ERROR = {
   ok: false,
@@ -103,6 +108,14 @@ function defaultEdgePolicy(
   return policy;
 }
 
+function edgeUid(sourceNodeId: string, sourcePort: string, targetNodeId: string, targetPort: string, used: Set<string>): string {
+  return uniqueValue(sanitizeNodeId(`edge_${sourceNodeId}_${sourcePort}_${targetNodeId}_${targetPort}`), used);
+}
+
+function graphNodeOperator(nodes: JsonRecord[], nodeId: string): string {
+  return text(nodes.find((node) => text(node.id) === nodeId)?.operator);
+}
+
 export function isTopologyGraphV2(graph: unknown): graph is JsonRecord {
   return isRecord(graph) && Number(graph.schema_version) === 2 && Array.isArray(graph.nodes) && Array.isArray(graph.edges);
 }
@@ -157,6 +170,30 @@ export function addTopologyGraphNode(
   return { ok: true, graph: next, nodeId };
 }
 
+export function addTopologyGraphNodeContextual(
+  graph: unknown,
+  operatorId: string,
+  operator: PipelineOperatorDefinition | null,
+  operatorsById: Record<string, PipelineOperatorDefinition>,
+  context: TopologyAddNodeContext,
+  position?: XYPosition,
+): TopologyGraphEditResult {
+  const added = addTopologyGraphNode(graph, operatorId, operator, position);
+  if (!added.ok || !added.nodeId) return added;
+  if (context.kind === "edge") {
+    return insertTopologyGraphNodeOnEdge(added.graph, added.nodeId, context.edgeId, operatorsById, position);
+  }
+  if (context.kind === "node") {
+    const connected = connectTopologyGraphEdge(
+      added.graph,
+      { source: context.nodeId, target: added.nodeId, sourceHandle: null, targetHandle: null },
+      operatorsById,
+    );
+    return connected.ok ? { ...connected, nodeId: added.nodeId } : connected;
+  }
+  return added;
+}
+
 function writeNodePosition(layoutValue: unknown, nodeId: string, position: XYPosition): JsonRecord {
   const layout = cloneRecord(layoutValue);
   const nodes = cloneRecord(layout.nodes);
@@ -182,6 +219,121 @@ export function updateTopologyGraphNodePosition(
   }
   next.layout = writeNodePosition(next.layout, nodeId, position);
   return { ok: true, graph: next, nodeId };
+}
+
+export function updateTopologyGraphNodePositions(
+  graph: unknown,
+  positions: Record<string, XYPosition>,
+): TopologyGraphEditResult {
+  if (!isTopologyGraphV2(graph)) return SCHEMA_V2_ERROR;
+  const next = cloneGraph(graph);
+  const nodeIds = new Set(rawNodes(next).map((node) => text(node.id)).filter(Boolean));
+  const layout = cloneRecord(next.layout);
+  const layoutNodes = cloneRecord(layout.nodes);
+  for (const [nodeId, position] of Object.entries(positions)) {
+    if (!nodeIds.has(nodeId)) continue;
+    layoutNodes[nodeId] = { x: Math.round(position.x), y: Math.round(position.y) };
+  }
+  layout.nodes = layoutNodes;
+  next.layout = layout;
+  return { ok: true, graph: next };
+}
+
+export function insertTopologyGraphNodeOnEdge(
+  graph: unknown,
+  nodeId: string,
+  edgeId: string,
+  operatorsById: Record<string, PipelineOperatorDefinition>,
+  position?: XYPosition,
+): TopologyGraphEditResult {
+  if (!isTopologyGraphV2(graph)) return SCHEMA_V2_ERROR;
+  const next = cloneGraph(graph);
+  const nodes = rawNodes(next);
+  const edges = rawEdges(next);
+  const edge = edges.find((item) => text(item.uid) === edgeId) ?? null;
+  if (!edge) {
+    return {
+      ok: false,
+      message: `Edge '${edgeId}' was not found.`,
+      messageKey: "core.ui.pipelines.topology.error.edge_not_found",
+      messageParams: { edgeId },
+    };
+  }
+  const source = readEndpoint(edge, "from", "out");
+  const target = readEndpoint(edge, "to", "in");
+  if (!source || !target) {
+    return {
+      ok: false,
+      message: `Edge '${edgeId}' is incomplete.`,
+      messageKey: "core.ui.pipelines.topology.error.edge_not_found",
+      messageParams: { edgeId },
+    };
+  }
+  if (source.node === nodeId || target.node === nodeId) {
+    return {
+      ok: false,
+      message: "A node cannot be inserted into one of its own edges.",
+      messageKey: "core.ui.pipelines.topology.error.self_connection",
+    };
+  }
+  const insertedOperatorId = graphNodeOperator(nodes, nodeId);
+  const sourceDefinition = operatorsById[graphNodeOperator(nodes, source.node)] ?? null;
+  const insertedDefinition = operatorsById[insertedOperatorId] ?? null;
+  const targetDefinition = operatorsById[graphNodeOperator(nodes, target.node)] ?? null;
+  const insertedInputPort = portName(insertedDefinition, "inputs", "in");
+  const insertedOutputPort = portName(insertedDefinition, "outputs", "out");
+  const remainingEdges = edges.filter((item) => text(item.uid) !== edgeId);
+
+  for (const item of remainingEdges) {
+    const currentTarget = readEndpoint(item, "to", "in");
+    if (!currentTarget) continue;
+    if (currentTarget.node === nodeId && currentTarget.port === insertedInputPort) {
+      return {
+        ok: false,
+        message: `${nodeId}.${insertedInputPort} already has an incoming edge.`,
+        messageKey: "core.ui.pipelines.topology.error.input_taken",
+        messageParams: { target: `${nodeId}.${insertedInputPort}` },
+      };
+    }
+    if (currentTarget.node === target.node && currentTarget.port === target.port) {
+      return {
+        ok: false,
+        message: `${target.node}.${target.port} already has an incoming edge.`,
+        messageKey: "core.ui.pipelines.topology.error.input_taken",
+        messageParams: { target: `${target.node}.${target.port}` },
+      };
+    }
+  }
+
+  if (pathExists(remainingEdges, nodeId, source.node) || pathExists(remainingEdges, target.node, nodeId)) {
+    return {
+      ok: false,
+      message: "This insertion would create a cycle.",
+      messageKey: "core.ui.pipelines.topology.error.cycle",
+    };
+  }
+
+  const usedEdgeIds = new Set(remainingEdges.map((item) => text(item.uid)).filter(Boolean));
+  const firstEdgeId = edgeUid(source.node, source.port, nodeId, insertedInputPort, usedEdgeIds);
+  usedEdgeIds.add(firstEdgeId);
+  const secondEdgeId = edgeUid(nodeId, insertedOutputPort, target.node, target.port, usedEdgeIds);
+  next.edges = [
+    ...remainingEdges,
+    {
+      uid: firstEdgeId,
+      from: { node: source.node, port: source.port },
+      to: { node: nodeId, port: insertedInputPort },
+      ...defaultEdgePolicy(sourceDefinition, insertedDefinition),
+    },
+    {
+      uid: secondEdgeId,
+      from: { node: nodeId, port: insertedOutputPort },
+      to: { node: target.node, port: target.port },
+      ...defaultEdgePolicy(insertedDefinition, targetDefinition),
+    },
+  ];
+  if (position) next.layout = writeNodePosition(next.layout, nodeId, position);
+  return { ok: true, graph: next, nodeId, edgeId: secondEdgeId };
 }
 
 export function updateTopologyGraphNodeConfig(
@@ -358,14 +510,13 @@ export function connectTopologyGraphEdge(
     };
   }
 
-  const edgeIdBase = sanitizeNodeId(`edge_${sourceNodeId}_${sourcePort}_${targetNodeId}_${targetPort}`);
-  const edgeUid = uniqueValue(edgeIdBase, new Set(edges.map((edge) => text(edge.uid)).filter(Boolean)));
+  const newEdgeUid = edgeUid(sourceNodeId, sourcePort, targetNodeId, targetPort, new Set(edges.map((edge) => text(edge.uid)).filter(Boolean)));
   const edge = {
-    uid: edgeUid,
+    uid: newEdgeUid,
     from: { node: sourceNodeId, port: sourcePort },
     to: { node: targetNodeId, port: targetPort },
     ...defaultEdgePolicy(sourceDefinition, targetDefinition),
   };
   next.edges = [...edges, edge];
-  return { ok: true, graph: next, edgeId: edgeUid };
+  return { ok: true, graph: next, edgeId: newEdgeUid };
 }

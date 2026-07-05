@@ -1154,8 +1154,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                 </div>
               ) : null}
 
-              {recommendationsLoading ? <div className="pipelinesHint">{t("core.ui.pipelines.analysis.loading")}</div> : null}
-
               {recommendations.length > 0 ? (
                 <section className="pipelinesTopologyRecommendations" aria-label={t("core.ui.pipelines.recommendations.title")}>
                   <div className="pipelinesTopologyRecommendationsHeader">

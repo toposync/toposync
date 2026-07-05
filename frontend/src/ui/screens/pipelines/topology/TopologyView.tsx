@@ -17,20 +17,24 @@ import "./topology.css";
 
 import type { CamerasIndexResponse, GraphRuntimeInfo, PipelineAlert, PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
-import { prettyOperatorName } from "../utils";
+import { prettyOperatorDescription, prettyOperatorName } from "../utils";
 import type { SelectOption, TelemetryFieldInspectorRequest } from "../types";
 import { useCameraContexts } from "../editor/useCameraContexts";
 import {
-  addTopologyGraphNode,
+  addTopologyGraphNodeContextual,
   connectTopologyGraphEdge,
   deleteTopologyGraphEdge,
   deleteTopologyGraphNode,
+  insertTopologyGraphNodeOnEdge,
   updateTopologyGraphEdgePolicy,
   updateTopologyGraphNodeConfig,
   updateTopologyGraphNodePosition,
+  updateTopologyGraphNodePositions,
+  type TopologyAddNodeContext,
   type TopologyEdgePolicyPatch,
   type TopologyGraphEditResult,
 } from "./topologyGraph";
+import { layoutTopologyNodes } from "./topologyLayout";
 import { buildTopologyModel } from "./topologyModel";
 import { TopologyEdgeComponent } from "./TopologyEdge";
 import { TopologyInspector } from "./TopologyInspector";
@@ -39,6 +43,9 @@ import type { TopologyEdge, TopologyNode, TopologyRuntimeStatus, TopologySelecti
 
 const NODE_TYPES: NodeTypes = { topologyNode: TopologyNodeComponent };
 const EDGE_TYPES: EdgeTypes = { topologyEdge: TopologyEdgeComponent };
+const NODE_WIDTH = 232;
+const NODE_HEIGHT = 112;
+const EDGE_INSERT_THRESHOLD = 72;
 
 type Props = {
   pipelineName: string;
@@ -76,10 +83,6 @@ function operatorSortKey(operator: PipelineOperatorDefinition): string {
   return `${group}:${order.toString().padStart(4, "0")}:${operator.id}`;
 }
 
-function modelPositionKey(nodes: TopologyNode[]): string {
-  return nodes.map((node) => `${node.id}:${Math.round(node.position.x)}:${Math.round(node.position.y)}`).join("|");
-}
-
 function mergeNodePositions(modelNodes: TopologyNode[], canvasNodes: TopologyNode[]): TopologyNode[] {
   if (canvasNodes.length === 0) return modelNodes;
   const positions = new Map(canvasNodes.map((node) => [node.id, node.position]));
@@ -87,6 +90,14 @@ function mergeNodePositions(modelNodes: TopologyNode[], canvasNodes: TopologyNod
     const position = positions.get(node.id);
     return position ? { ...node, position } : node;
   });
+}
+
+function distanceToSegment(point: XYPosition, start: XYPosition, end: XYPosition): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (dx === 0 && dy === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
 }
 
 function editResultMessage(result: Extract<TopologyGraphEditResult, { ok: false }>, t: ReturnType<typeof i18n.useI18n>["t"]): string {
@@ -144,6 +155,7 @@ export function TopologyView({
   const [pendingFocusNodeId, setPendingFocusNodeId] = useState<string | null>(null);
   const [undoGraphStack, setUndoGraphStack] = useState<Record<string, unknown>[]>([]);
   const [fullscreenActive, setFullscreenActive] = useState(false);
+  const [insertEdgeId, setInsertEdgeId] = useState<string | null>(null);
   const graphPaneRef = useRef<HTMLDivElement | null>(null);
   const latestGraphRef = useRef<unknown>(graph);
   const undoGraphStackRef = useRef<Record<string, unknown>[]>([]);
@@ -183,34 +195,70 @@ export function TopologyView({
     return operatorOptions
       .filter((operator) => {
         if (!query) return true;
-        return `${operator.id} ${prettyOperatorName(operator.id)} ${operator.description}`.toLowerCase().includes(query);
+        return `${operator.id} ${prettyOperatorName(operator.id)} ${prettyOperatorDescription(operator)}`.toLowerCase().includes(query);
       })
       .slice(0, 80);
   }, [operatorOptions, operatorQuery]);
-  const graphPositionKey = built.ok
-    ? `${pipelineName}:${built.model.summary.graphUid}:${modelPositionKey(built.model.nodes)}`
-    : `${pipelineName}:unsupported`;
+  const graphIdentityKey = built.ok ? `${pipelineName}:${built.model.summary.graphUid}` : `${pipelineName}:unsupported`;
   const sourceNodes = built.ok && canEdit ? mergeNodePositions(built.model.nodes, canvasNodes) : built.ok ? built.model.nodes : [];
+  const nodesById = useMemo(() => new Map(sourceNodes.map((node) => [node.id, node])), [sourceNodes]);
+
+  const edgeInsertPosition = useCallback(
+    (edgeId: string): XYPosition | undefined => {
+      if (!built.ok) return undefined;
+      const edge = built.model.edges.find((item) => item.id === edgeId);
+      const source = edge ? nodesById.get(edge.source) : null;
+      const target = edge ? nodesById.get(edge.target) : null;
+      if (!source || !target) return undefined;
+      return {
+        x: Math.round((source.position.x + NODE_WIDTH + target.position.x) / 2 - NODE_WIDTH / 2),
+        y: Math.round((source.position.y + target.position.y) / 2),
+      };
+    },
+    [built, nodesById],
+  );
+
+  const findInsertEdge = useCallback(
+    (point: XYPosition, ignoreNodeId?: string): TopologyEdge | null => {
+      if (!built.ok) return null;
+      let selected: { edge: TopologyEdge; distance: number } | null = null;
+      for (const edge of built.model.edges) {
+        if (edge.source === ignoreNodeId || edge.target === ignoreNodeId) continue;
+        const source = nodesById.get(edge.source);
+        const target = nodesById.get(edge.target);
+        if (!source || !target) continue;
+        const distance = distanceToSegment(
+          point,
+          { x: source.position.x + NODE_WIDTH, y: source.position.y + NODE_HEIGHT / 2 },
+          { x: target.position.x, y: target.position.y + NODE_HEIGHT / 2 },
+        );
+        if (distance <= EDGE_INSERT_THRESHOLD && (!selected || distance < selected.distance)) {
+          selected = { edge, distance };
+        }
+      }
+      return selected?.edge ?? null;
+    },
+    [built, nodesById],
+  );
 
   useEffect(() => {
     setSelection({ kind: "summary" });
     undoGraphStackRef.current = [];
     setUndoGraphStack([]);
-  }, [pipelineName, built.ok ? built.model.summary.graphUid : "unsupported"]);
+    setCanvasNodes(built.ok ? built.model.nodes : []);
+    setInsertEdgeId(null);
+  }, [graphIdentityKey]);
 
   useEffect(() => {
     if (dirty) return;
     undoGraphStackRef.current = [];
     setUndoGraphStack([]);
+    setCanvasNodes(built.ok ? built.model.nodes : []);
   }, [dirty]);
 
   useEffect(() => {
     latestGraphRef.current = graph;
   }, [graph]);
-
-  useEffect(() => {
-    setCanvasNodes(built.ok ? built.model.nodes : []);
-  }, [graphPositionKey]);
 
   const commitGraphResult = useCallback(
     (result: TopologyGraphEditResult) => {
@@ -229,8 +277,9 @@ export function TopologyView({
       if (result.nodeId) {
         setSelection({ kind: "node", id: result.nodeId });
         setPendingFocusNodeId(result.nodeId);
+      } else if (result.edgeId) {
+        setSelection({ kind: "edge", id: result.edgeId });
       }
-      if (result.edgeId) setSelection({ kind: "edge", id: result.edgeId });
     },
     [onChangeGraph, t],
   );
@@ -252,6 +301,48 @@ export function TopologyView({
     flowInstance?.fitView({ padding: 0.24, duration: 180 });
   }, [flowInstance]);
 
+  const arrangeTopology = useCallback(() => {
+    if (!canEdit || !built.ok) return;
+    const arrangedNodes = layoutTopologyNodes(built.model.nodes, built.model.edges);
+    const positions = Object.fromEntries(arrangedNodes.map((node) => [node.id, node.position]));
+    const currentPositions = new Map(sourceNodes.map((node) => [node.id, node.position]));
+    const changed = arrangedNodes.some((node) => {
+      const current = currentPositions.get(node.id);
+      return !current || Math.round(current.x) !== Math.round(node.position.x) || Math.round(current.y) !== Math.round(node.position.y);
+    });
+    setCanvasNodes(arrangedNodes);
+    if (!changed) {
+      window.requestAnimationFrame(fitTopologyView);
+      return;
+    }
+    commitGraphResult(updateTopologyGraphNodePositions(latestGraphRef.current, positions));
+    window.requestAnimationFrame(fitTopologyView);
+  }, [built, canEdit, commitGraphResult, fitTopologyView, sourceNodes]);
+
+  const addContext = useCallback(
+    (edgeId?: string | null): TopologyAddNodeContext => {
+      if (edgeId) return { kind: "edge", edgeId };
+      if (edgeId === null) return { kind: "none" };
+      if (selection.kind === "edge") return { kind: "edge", edgeId: selection.id };
+      if (selection.kind === "node") return { kind: "node", nodeId: selection.id };
+      return { kind: "none" };
+    },
+    [selection],
+  );
+
+  const addPosition = useCallback(
+    (context: TopologyAddNodeContext, position?: XYPosition): XYPosition | undefined => {
+      if (position) return position;
+      if (context.kind === "edge") return edgeInsertPosition(context.edgeId);
+      if (context.kind === "node") {
+        const node = nodesById.get(context.nodeId);
+        return node ? { x: node.position.x + NODE_WIDTH + 140, y: node.position.y } : undefined;
+      }
+      return undefined;
+    },
+    [edgeInsertPosition, nodesById],
+  );
+
   const toggleFullscreen = useCallback(async () => {
     const element = graphPaneRef.current;
     if (!element) return;
@@ -272,13 +363,24 @@ export function TopologyView({
   }, [fitTopologyView]);
 
   const addOperator = useCallback(
-    (operator: PipelineOperatorDefinition, position?: XYPosition) => {
+    (operator: PipelineOperatorDefinition, position?: XYPosition, edgeId?: string | null) => {
       if (!canEdit) return;
-      commitGraphResult(addTopologyGraphNode(latestGraphRef.current, operator.id, operator, position));
+      const context = addContext(edgeId);
+      commitGraphResult(
+        addTopologyGraphNodeContextual(
+          latestGraphRef.current,
+          operator.id,
+          operator,
+          operatorsById,
+          context,
+          addPosition(context, position),
+        ),
+      );
       setPaletteOpen(false);
       setOperatorQuery("");
+      setInsertEdgeId(null);
     },
-    [canEdit, commitGraphResult],
+    [addContext, addPosition, canEdit, commitGraphResult, operatorsById],
   );
 
   const handleNodesChange = useCallback(
@@ -292,9 +394,24 @@ export function TopologyView({
   const handleNodeDragStop = useCallback<OnNodeDrag<TopologyNode>>(
     (_, node) => {
       if (!canEdit) return;
+      const edge = findInsertEdge({ x: node.position.x + NODE_WIDTH / 2, y: node.position.y + NODE_HEIGHT / 2 }, node.id);
+      setInsertEdgeId(null);
+      if (edge) {
+        commitGraphResult(insertTopologyGraphNodeOnEdge(latestGraphRef.current, node.id, edge.id, operatorsById, node.position));
+        return;
+      }
       commitGraphResult(updateTopologyGraphNodePosition(latestGraphRef.current, node.id, node.position));
     },
-    [canEdit, commitGraphResult],
+    [canEdit, commitGraphResult, findInsertEdge, operatorsById],
+  );
+
+  const handleNodeDrag = useCallback<OnNodeDrag<TopologyNode>>(
+    (_, node) => {
+      if (!canEdit) return;
+      const edge = findInsertEdge({ x: node.position.x + NODE_WIDTH / 2, y: node.position.y + NODE_HEIGHT / 2 }, node.id);
+      setInsertEdgeId(edge?.id ?? null);
+    },
+    [canEdit, findInsertEdge],
   );
 
   const handleConnect = useCallback(
@@ -367,8 +484,10 @@ export function TopologyView({
       if (!canEdit) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
+      const position = flowInstance?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      setInsertEdgeId(position ? findInsertEdge(position)?.id ?? null : null);
     },
-    [canEdit],
+    [canEdit, findInsertEdge, flowInstance],
   );
 
   const handleDrop = useCallback(
@@ -379,9 +498,10 @@ export function TopologyView({
       const operator = operatorsById[operatorId];
       if (!operator) return;
       const position = flowInstance?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      addOperator(operator, position);
+      const edge = position ? findInsertEdge(position) : null;
+      addOperator(operator, position, edge ? edge.id : null);
     },
-    [addOperator, canEdit, flowInstance, operatorsById],
+    [addOperator, canEdit, findInsertEdge, flowInstance, operatorsById],
   );
 
   useEffect(() => {
@@ -436,7 +556,7 @@ export function TopologyView({
   }));
   const edges = model.edges.map((edge) => ({
     ...edge,
-    selected: selection.kind === "edge" && selection.id === edge.id,
+    selected: (selection.kind === "edge" && selection.id === edge.id) || insertEdgeId === edge.id,
   }));
   const flowKey = `${model.summary.graphUid}:${model.edges.map((edge) => edge.id).join("|")}`;
   const validationState = validationLoading
@@ -460,12 +580,24 @@ export function TopologyView({
             </span>
           ) : null}
           {dirty ? <span className="pipelineTopologyStatusChip">{t("core.ui.pipelines.topology.unsaved", {}, "Unsaved")}</span> : null}
-          {validationState ? (
-            <span className="pipelineTopologyStatusChip" data-mode={validationState.tone}>
-              <i className={`fa-solid ${validationState.icon} ${validationState.tone === "checking" ? "fa-spin" : ""}`} aria-hidden="true" />
-              {validationState.label}
-            </span>
-          ) : null}
+          <span
+            aria-hidden={validationState ? undefined : "true"}
+            className="pipelineTopologyStatusChip pipelineTopologyValidationStatus"
+            data-empty={validationState ? undefined : "true"}
+            data-mode={validationState?.tone}
+          >
+            {validationState ? (
+              <>
+                <i
+                  className={`fa-solid ${validationState.icon} ${validationState.tone === "checking" ? "fa-spin" : ""}`}
+                  aria-hidden="true"
+                />
+                {validationState.label}
+              </>
+            ) : (
+              t("core.ui.pipelines.topology.not_validated", {}, "Not validated")
+            )}
+          </span>
           <button className="pillButton" type="button" disabled={!canEdit} onClick={() => setPaletteOpen((prev) => !prev)}>
             <i className="fa-solid fa-plus" aria-hidden="true" />
             {t("core.ui.pipelines.topology.add_node", {}, "Add node")}
@@ -474,13 +606,22 @@ export function TopologyView({
             <i className="fa-solid fa-rotate-left" aria-hidden="true" />
             {t("core.actions.undo", {}, "Undo")}
           </button>
+          <button className="pillButton" type="button" disabled={!canEdit || model.summary.nodeCount < 2} onClick={arrangeTopology}>
+            <i className="fa-solid fa-sitemap" aria-hidden="true" />
+            {t("core.ui.pipelines.topology.arrange", {}, "Arrange")}
+          </button>
           <button className="pillButton" type="button" onClick={() => void toggleFullscreen()}>
             <i className={`fa-solid ${fullscreenActive ? "fa-compress" : "fa-expand"}`} aria-hidden="true" />
             {fullscreenActive
               ? t("core.ui.pipelines.topology.exit_fullscreen", {}, "Exit fullscreen")
               : t("core.ui.pipelines.topology.fullscreen", {}, "Fullscreen")}
           </button>
-          <button className="pillButton" type="button" disabled={!canEdit || validationLoading} onClick={onValidate}>
+          <button
+            className="pillButton pipelineTopologyValidateButton"
+            type="button"
+            disabled={!canEdit || validationLoading}
+            onClick={onValidate}
+          >
             <i className="fa-solid fa-shield-halved" aria-hidden="true" />
             {validationLoading
               ? t("core.ui.pipelines.topology.validating", {}, "Validating")
@@ -519,7 +660,7 @@ export function TopologyView({
               <div className="pipelineTopologyPaletteList">
                 {filteredOperatorOptions.map((operator) => {
                   const label = prettyOperatorName(operator.id) || operator.id;
-                  const description = String(operator.description || operator.id).trim();
+                  const description = prettyOperatorDescription(operator) || operator.id;
                   const ariaLabel = description && description !== operator.id ? `${label}. ${description}` : label;
                   return (
                     <button
@@ -571,9 +712,11 @@ export function TopologyView({
               if (selection.kind === "node") return;
               deleteEdgeIds(deletedEdges.map((edge) => edge.id));
             }}
+            onNodeDrag={handleNodeDrag}
             onNodeDragStop={handleNodeDragStop}
             onConnect={handleConnect}
             onDragOver={handleDragOver}
+            onDragLeave={() => setInsertEdgeId(null)}
             onDrop={handleDrop}
             onNodeClick={(_, node) => setSelection({ kind: "node", id: node.id })}
             onEdgeClick={(_, edge) => setSelection({ kind: "edge", id: edge.id })}

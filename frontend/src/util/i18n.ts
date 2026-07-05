@@ -776,6 +776,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.read_only_short": "Read-only",
     "core.ui.pipelines.topology.unsaved": "Unsaved",
     "core.ui.pipelines.topology.add_node": "Add node",
+    "core.ui.pipelines.topology.arrange": "Arrange",
     "core.ui.pipelines.topology.validating": "Validating",
     "core.ui.pipelines.topology.validate": "Validate",
     "core.ui.pipelines.topology.valid": "Valid",
@@ -798,6 +799,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.runtime.ready": "ready",
     "core.ui.pipelines.topology.runtime.idle": "idle",
     "core.ui.pipelines.topology.runtime.no_runtime": "no runtime",
+    "core.ui.pipelines.topology.node_metric.output": "Out {{count}}",
+    "core.ui.pipelines.topology.node_metric.processed": "Proc {{count}}",
+    "core.ui.pipelines.topology.node_metric.dropped": "Lost {{count}}",
+    "core.ui.pipelines.topology.node_metric.errors": "Err {{count}}",
+    "core.ui.pipelines.topology.node_metric.no_telemetry": "No telemetry",
     "core.ui.pipelines.topology.value.none": "none",
     "core.ui.pipelines.topology.value.yes": "yes",
     "core.ui.pipelines.topology.value.no": "no",
@@ -811,8 +817,33 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.config": "Config",
     "core.ui.pipelines.topology.apply_config": "Apply config",
     "core.ui.pipelines.topology.last_error": "Last error",
-    "core.ui.pipelines.topology.edge_policy": "Edge policy",
+    "core.ui.pipelines.topology.edge_policy": "Edge behavior",
     "core.ui.pipelines.topology.edge_data_unavailable": "Edge data unavailable.",
+    "core.ui.pipelines.topology.edge_label.video": "Video",
+    "core.ui.pipelines.topology.edge_label.event": "Event",
+    "core.ui.pipelines.topology.edge_label.gate": "Gate",
+    "core.ui.pipelines.topology.edge_label.data": "Data",
+    "core.ui.pipelines.topology.edge_label.image": "Image",
+    "core.ui.pipelines.topology.edge_label.artifact": "Artifact",
+    "core.ui.pipelines.topology.drop_policy.block": "Wait",
+    "core.ui.pipelines.topology.drop_policy.latest_only": "Keep latest",
+    "core.ui.pipelines.topology.drop_policy.drop_oldest": "Drop oldest",
+    "core.ui.pipelines.topology.drop_policy.drop_newest": "Drop newest",
+    "core.ui.pipelines.topology.drop_policy.drop_updates": "Drop updates",
+    "core.ui.pipelines.topology.drop_policy.keyed_latest_only": "Latest per subject",
+    "core.ui.pipelines.topology.pressure_mode.ignore": "Do nothing",
+    "core.ui.pipelines.topology.pressure_mode.pause_upstream": "Pause upstream",
+    "core.ui.pipelines.topology.pressure_mode.reduce_source_rate": "Slow source",
+    "core.ui.pipelines.topology.pressure_mode.block": "Block upstream",
+    "core.ui.pipelines.topology.pressure_mode.fail_fast": "Fail fast",
+    "core.ui.pipelines.topology.modality.video_frame": "Video frames",
+    "core.ui.pipelines.topology.modality.data_event": "Events",
+    "core.ui.pipelines.topology.modality.control_gate": "Gate signal",
+    "core.ui.pipelines.topology.modality.data_record": "Data records",
+    "core.ui.pipelines.topology.semantic.frame": "Frame",
+    "core.ui.pipelines.topology.semantic.event": "Event",
+    "core.ui.pipelines.topology.semantic.control": "Control",
+    "core.ui.pipelines.topology.semantic.data": "Data",
     "core.ui.pipelines.topology.show_details": "Show details",
     "core.ui.pipelines.topology.hide_details": "Hide details",
     "core.ui.pipelines.topology.field.graph": "Graph",
@@ -831,11 +862,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.field.emitted": "Emitted",
     "core.ui.pipelines.topology.field.dropped": "Dropped",
     "core.ui.pipelines.topology.field.errors": "Errors",
-    "core.ui.pipelines.topology.field.max_items": "Max items",
-    "core.ui.pipelines.topology.field.drop_policy": "Drop policy",
-    "core.ui.pipelines.topology.field.backpressure": "Backpressure",
-    "core.ui.pipelines.topology.field.modality": "Modality",
-    "core.ui.pipelines.topology.field.semantic": "Semantic",
+    "core.ui.pipelines.topology.field.max_items": "Buffer",
+    "core.ui.pipelines.topology.field.drop_policy": "When full",
+    "core.ui.pipelines.topology.field.backpressure": "Pressure response",
+    "core.ui.pipelines.topology.field.modality": "Carries",
+    "core.ui.pipelines.topology.field.semantic": "Meaning",
     "core.ui.pipelines.topology.field.continuous_stream": "Continuous stream",
     "core.ui.pipelines.topology.field.from": "From",
     "core.ui.pipelines.topology.field.to": "To",
@@ -950,6 +981,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.dist.remote_source": "Receive remote packets",
     "core.ui.pipelines.operator_name.dist.target_filter": "Route remote packets",
     "core.ui.pipelines.operator_name.dist.project_to_origin": "Send to origin",
+    "core.ui.pipelines.operator_description.core.source":
+      "Starts a flow from packets provided by another process or test harness.",
+    "core.ui.pipelines.operator_description.core.synthetic_source":
+      "Emits simple synthetic packets for tests and smoke checks.",
+    "core.ui.pipelines.operator_description.core.demo_frame_sequence_source":
+      "Plays a configured sequence of demo frames through the pipeline.",
     "core.ui.pipelines.operator_description.stream.demand_gate":
       "Opens downstream capture only while a live stream has viewers or active heartbeat leases.",
     "core.ui.pipelines.operator_description.vision.synthetic_detection_source":
@@ -968,6 +1005,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Detects motion on each incoming frame and lets frames pass only while motion is active or during the configured hold time.",
     "core.ui.pipelines.operator_description.core.fps_reducer":
       "Reduces the number of frames before heavier steps to save processing.",
+    "core.ui.pipelines.operator_description.camera.frame_attach":
+      "Attaches the current video frame to packets that need image context later.",
     "core.ui.pipelines.operator_description.camera.image_crop":
       "Crops a fixed rectangular region from the image and can replace the image used by later steps.",
     "core.ui.pipelines.operator_description.camera.artifact_privacy":
@@ -1038,6 +1077,12 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Saves selected images or artifacts to local file storage.",
     "core.ui.pipelines.operator_description.core.notify":
       "Creates lifecycle-aware notifications with templates and optional thumbnails.",
+    "core.ui.pipelines.operator_description.core.stream_state_snapshot":
+      "Captures current stream state and attaches it to the packet for diagnostics.",
+    "core.ui.pipelines.operator_description.core.passthrough":
+      "Forwards packets unchanged, useful as a placeholder or branch join.",
+    "core.ui.pipelines.operator_description.core.sink":
+      "Consumes packets at the end of a branch without producing another output.",
     "core.ui.pipelines.operator_description.home_assistant.notify":
       "Sends mobile push notifications through a Home Assistant notify service.",
     "core.ui.pipelines.operator_description.home_assistant.boolean_state":
@@ -1050,6 +1095,12 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Lets packets pass only when the visual condition is present.",
     "core.ui.pipelines.operator_description.ai.smart_crop":
       "Finds regions from a description and crops the selected area.",
+    "core.ui.pipelines.operator_description.dist.remote_source":
+      "Receives packets forwarded from another processing server.",
+    "core.ui.pipelines.operator_description.dist.target_filter":
+      "Keeps only remote packets intended for this processing target.",
+    "core.ui.pipelines.operator_description.dist.project_to_origin":
+      "Projects processed remote packets back to the origin server.",
 
     "core.ui.pipelines.artifacts.main": "Main",
     "core.ui.pipelines.artifacts.frame_cropped": "Cropped frame",
@@ -3120,6 +3171,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.read_only_short": "Somente leitura",
     "core.ui.pipelines.topology.unsaved": "Não salvo",
     "core.ui.pipelines.topology.add_node": "Adicionar nó",
+    "core.ui.pipelines.topology.arrange": "Organizar",
     "core.ui.pipelines.topology.validating": "Validando",
     "core.ui.pipelines.topology.validate": "Validar",
     "core.ui.pipelines.topology.valid": "Válido",
@@ -3142,6 +3194,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.runtime.ready": "pronto",
     "core.ui.pipelines.topology.runtime.idle": "ocioso",
     "core.ui.pipelines.topology.runtime.no_runtime": "sem runtime",
+    "core.ui.pipelines.topology.node_metric.output": "Saída {{count}}",
+    "core.ui.pipelines.topology.node_metric.processed": "Proc. {{count}}",
+    "core.ui.pipelines.topology.node_metric.dropped": "Perda {{count}}",
+    "core.ui.pipelines.topology.node_metric.errors": "Erro {{count}}",
+    "core.ui.pipelines.topology.node_metric.no_telemetry": "Sem telemetria",
     "core.ui.pipelines.topology.value.none": "nenhum",
     "core.ui.pipelines.topology.value.yes": "sim",
     "core.ui.pipelines.topology.value.no": "não",
@@ -3155,8 +3212,33 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.config": "Configuração",
     "core.ui.pipelines.topology.apply_config": "Aplicar configuração",
     "core.ui.pipelines.topology.last_error": "Último erro",
-    "core.ui.pipelines.topology.edge_policy": "Política da edge",
+    "core.ui.pipelines.topology.edge_policy": "Comportamento da aresta",
     "core.ui.pipelines.topology.edge_data_unavailable": "Dados da edge indisponíveis.",
+    "core.ui.pipelines.topology.edge_label.video": "Vídeo",
+    "core.ui.pipelines.topology.edge_label.event": "Evento",
+    "core.ui.pipelines.topology.edge_label.gate": "Gate",
+    "core.ui.pipelines.topology.edge_label.data": "Dados",
+    "core.ui.pipelines.topology.edge_label.image": "Imagem",
+    "core.ui.pipelines.topology.edge_label.artifact": "Artefato",
+    "core.ui.pipelines.topology.drop_policy.block": "Esperar",
+    "core.ui.pipelines.topology.drop_policy.latest_only": "Manter mais recente",
+    "core.ui.pipelines.topology.drop_policy.drop_oldest": "Descartar mais antigo",
+    "core.ui.pipelines.topology.drop_policy.drop_newest": "Descartar mais novo",
+    "core.ui.pipelines.topology.drop_policy.drop_updates": "Descartar atualizações",
+    "core.ui.pipelines.topology.drop_policy.keyed_latest_only": "Mais recente por sujeito",
+    "core.ui.pipelines.topology.pressure_mode.ignore": "Não agir",
+    "core.ui.pipelines.topology.pressure_mode.pause_upstream": "Pausar etapa anterior",
+    "core.ui.pipelines.topology.pressure_mode.reduce_source_rate": "Reduzir fonte",
+    "core.ui.pipelines.topology.pressure_mode.block": "Bloquear etapa anterior",
+    "core.ui.pipelines.topology.pressure_mode.fail_fast": "Falhar rápido",
+    "core.ui.pipelines.topology.modality.video_frame": "Frames de vídeo",
+    "core.ui.pipelines.topology.modality.data_event": "Eventos",
+    "core.ui.pipelines.topology.modality.control_gate": "Sinal de gate",
+    "core.ui.pipelines.topology.modality.data_record": "Registros de dados",
+    "core.ui.pipelines.topology.semantic.frame": "Frame",
+    "core.ui.pipelines.topology.semantic.event": "Evento",
+    "core.ui.pipelines.topology.semantic.control": "Controle",
+    "core.ui.pipelines.topology.semantic.data": "Dados",
     "core.ui.pipelines.topology.show_details": "Mostrar detalhes",
     "core.ui.pipelines.topology.hide_details": "Ocultar detalhes",
     "core.ui.pipelines.topology.field.graph": "Grafo",
@@ -3175,11 +3257,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.topology.field.emitted": "Emitidos",
     "core.ui.pipelines.topology.field.dropped": "Descartados",
     "core.ui.pipelines.topology.field.errors": "Erros",
-    "core.ui.pipelines.topology.field.max_items": "Máximo de itens",
-    "core.ui.pipelines.topology.field.drop_policy": "Política de descarte",
-    "core.ui.pipelines.topology.field.backpressure": "Backpressure",
-    "core.ui.pipelines.topology.field.modality": "Modalidade",
-    "core.ui.pipelines.topology.field.semantic": "Semântica",
+    "core.ui.pipelines.topology.field.max_items": "Buffer",
+    "core.ui.pipelines.topology.field.drop_policy": "Quando lotar",
+    "core.ui.pipelines.topology.field.backpressure": "Resposta à pressão",
+    "core.ui.pipelines.topology.field.modality": "Transporta",
+    "core.ui.pipelines.topology.field.semantic": "Significado",
     "core.ui.pipelines.topology.field.continuous_stream": "Stream contínuo",
     "core.ui.pipelines.topology.field.from": "Origem",
     "core.ui.pipelines.topology.field.to": "Destino",
@@ -3294,6 +3376,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.dist.remote_source": "Receber pacotes remotos",
     "core.ui.pipelines.operator_name.dist.target_filter": "Rotear pacotes remotos",
     "core.ui.pipelines.operator_name.dist.project_to_origin": "Enviar para origem",
+    "core.ui.pipelines.operator_description.core.source":
+      "Inicia um fluxo a partir de pacotes fornecidos por outro processo ou teste.",
+    "core.ui.pipelines.operator_description.core.synthetic_source":
+      "Emite pacotes sintéticos simples para testes e smoke checks.",
+    "core.ui.pipelines.operator_description.core.demo_frame_sequence_source":
+      "Reproduz uma sequência configurada de frames de demonstração no fluxo.",
     "core.ui.pipelines.operator_description.stream.demand_gate":
       "Abre a captura adiante apenas enquanto uma transmissão tem espectadores ou leases de heartbeat ativos.",
     "core.ui.pipelines.operator_description.vision.synthetic_detection_source":
@@ -3312,6 +3400,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Detecta movimento em cada frame de entrada e deixa passar frames apenas enquanto há movimento ou durante o tempo de espera configurado.",
     "core.ui.pipelines.operator_description.core.fps_reducer":
       "Reduz a quantidade de frames antes de etapas mais pesadas para economizar processamento.",
+    "core.ui.pipelines.operator_description.camera.frame_attach":
+      "Anexa o frame atual do vídeo aos pacotes que precisam de contexto de imagem depois.",
     "core.ui.pipelines.operator_description.camera.image_crop":
       "Recorta uma região retangular fixa da imagem e pode substituir a imagem usada nas próximas etapas.",
     "core.ui.pipelines.operator_description.camera.artifact_privacy":
@@ -3382,6 +3472,12 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Salva imagens ou artifacts selecionados no armazenamento local de arquivos.",
     "core.ui.pipelines.operator_description.core.notify":
       "Cria notificações com lifecycle, templates e miniatura opcional.",
+    "core.ui.pipelines.operator_description.core.stream_state_snapshot":
+      "Captura o estado atual do stream e anexa ao pacote para diagnóstico.",
+    "core.ui.pipelines.operator_description.core.passthrough":
+      "Encaminha pacotes sem alterar, útil como placeholder ou junção de ramo.",
+    "core.ui.pipelines.operator_description.core.sink":
+      "Consome pacotes no final de um ramo sem produzir outra saída.",
     "core.ui.pipelines.operator_description.home_assistant.notify":
       "Envia notificações push pelo serviço notify do Home Assistant.",
     "core.ui.pipelines.operator_description.home_assistant.boolean_state":
@@ -3394,6 +3490,12 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Deixa passar apenas pacotes em que a condição visual está presente.",
     "core.ui.pipelines.operator_description.ai.smart_crop":
       "Encontra regiões pela descrição e recorta a área selecionada.",
+    "core.ui.pipelines.operator_description.dist.remote_source":
+      "Recebe pacotes encaminhados por outro servidor de processamento.",
+    "core.ui.pipelines.operator_description.dist.target_filter":
+      "Mantém apenas pacotes remotos destinados a este alvo de processamento.",
+    "core.ui.pipelines.operator_description.dist.project_to_origin":
+      "Projeta pacotes remotos processados de volta para o servidor de origem.",
 
     "core.ui.pipelines.artifacts.main": "Principal",
     "core.ui.pipelines.artifacts.frame_cropped": "Frame recortado",

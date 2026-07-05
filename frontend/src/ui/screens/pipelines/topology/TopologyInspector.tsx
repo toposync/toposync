@@ -71,6 +71,12 @@ function timestampText(value: number | null, t: Translate): string {
   return new Date(value * 1000).toLocaleTimeString();
 }
 
+function edgeValueLabel(kind: "drop_policy" | "pressure_mode" | "modality" | "semantic", value: string, t: Translate): string {
+  const normalized = String(value || "").trim().replace(/\./g, "_");
+  if (!normalized) return t("core.ui.pipelines.topology.value.none", {}, "none");
+  return t(`core.ui.pipelines.topology.${kind}.${normalized}`, {}, value);
+}
+
 function stepForNode(node: TopologyNode, showAdvanced: boolean): InteractiveStep {
   return {
     uid: node.data.uid || node.id,
@@ -89,6 +95,25 @@ function Field({ label, value }: { label: string; value: unknown }): React.React
     <div className="pipelineTopologyInspectorField">
       <span>{label}</span>
       <strong title={text}>{text}</strong>
+    </div>
+  );
+}
+
+function EdgeField({
+  label,
+  kind,
+  value,
+}: {
+  label: string;
+  kind: "drop_policy" | "pressure_mode" | "modality" | "semantic";
+  value: string;
+}): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const text = edgeValueLabel(kind, value, t);
+  return (
+    <div className="pipelineTopologyInspectorField">
+      <span>{label}</span>
+      <strong title={value && value !== text ? value : text}>{text}</strong>
     </div>
   );
 }
@@ -355,6 +380,8 @@ function EdgePolicyEditor({
   const data = edge.data;
   if (!data || !editable) return null;
   const update = (patch: TopologyEdgePolicyPatch) => onUpdateEdgePolicy?.(edge.id, patch);
+  const dropPolicyOptions = ["block", "latest_only", "drop_oldest", "drop_newest", "drop_updates", "keyed_latest_only"];
+  const pressureModeOptions = ["ignore", "pause_upstream", "reduce_source_rate", "block", "fail_fast"];
   return (
     <div className="pipelineTopologyInspectorSection">
       <div className="pipelineTopologyInspectorSectionTitle">{t("core.ui.pipelines.topology.edge_policy", {}, "Edge policy")}</div>
@@ -379,12 +406,11 @@ function EdgePolicyEditor({
             value={data.dropPolicy}
             onChange={(event) => update({ dropPolicy: event.target.value })}
           >
-            <option value="block">block</option>
-            <option value="latest_only">latest_only</option>
-            <option value="drop_oldest">drop_oldest</option>
-            <option value="drop_newest">drop_newest</option>
-            <option value="drop_updates">drop_updates</option>
-            <option value="keyed_latest_only">keyed_latest_only</option>
+            {dropPolicyOptions.map((value) => (
+              <option key={value} value={value}>
+                {edgeValueLabel("drop_policy", value, t)}
+              </option>
+            ))}
           </select>
         </label>
         <label>
@@ -395,11 +421,11 @@ function EdgePolicyEditor({
             value={data.pressureMode}
             onChange={(event) => update({ pressureMode: event.target.value })}
           >
-            <option value="ignore">ignore</option>
-            <option value="pause_upstream">pause_upstream</option>
-            <option value="reduce_source_rate">reduce_source_rate</option>
-            <option value="block">block</option>
-            <option value="fail_fast">fail_fast</option>
+            {pressureModeOptions.map((value) => (
+              <option key={value} value={value}>
+                {edgeValueLabel("pressure_mode", value, t)}
+              </option>
+            ))}
           </select>
         </label>
         <label>
@@ -476,12 +502,12 @@ function EdgeInspector({
       <div className="pipelineTopologyInspectorGrid">
         <Field label={field("from", "From")} value={`${data.sourceNodeId}.${data.sourcePort}`} />
         <Field label={field("to", "To")} value={`${data.targetNodeId}.${data.targetPort}`} />
-        <Field label={field("modality", "Modality")} value={data.modality} />
-        <Field label={field("semantic", "Semantic")} value={data.semanticClass} />
+        <EdgeField label={field("modality", "Modality")} kind="modality" value={data.modality} />
+        <EdgeField label={field("semantic", "Semantic")} kind="semantic" value={data.semanticClass} />
         <Field label={field("continuous", "Continuous")} value={data.continuous} />
         <Field label={field("max_items", "Max items")} value={data.maxItems} />
-        <Field label={field("drop_policy", "Drop policy")} value={data.dropPolicy} />
-        <Field label={field("backpressure", "Backpressure")} value={data.pressureMode} />
+        <EdgeField label={field("drop_policy", "Drop policy")} kind="drop_policy" value={data.dropPolicy} />
+        <EdgeField label={field("backpressure", "Backpressure")} kind="pressure_mode" value={data.pressureMode} />
         <Field label={field("depth", "Depth")} value={runtime?.depth} />
         <Field label={field("utilization", "Utilization")} value={runtime?.utilization} />
         <Field label={field("cause", "Cause")} value={runtime?.pressure_cause} />

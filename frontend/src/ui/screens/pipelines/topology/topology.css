@@ -71,6 +71,18 @@
   font-weight: 760;
 }
 
+.pipelineTopologyValidationStatus {
+  min-width: 132px;
+}
+
+.pipelineTopologyValidationStatus[data-empty="true"] {
+  visibility: hidden;
+}
+
+.pipelineTopologyValidateButton {
+  min-width: 104px;
+}
+
 .pipelineTopologyStatusChip[data-mode="ok"] {
   color: #5eead4;
   border-color: rgba(20, 184, 166, 0.42);
@@ -321,8 +333,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--muted);
+  color: var(--text);
   font-size: 12px;
+  font-weight: 720;
 }
 
 .pipelineTopologyNodeMeta {
@@ -346,6 +359,18 @@
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
+}
+
+.pipelineTopologyNodeMeta span[data-tone="warning"] {
+  border-color: rgba(245, 158, 11, 0.36);
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+}
+
+.pipelineTopologyNodeMeta span[data-tone="error"] {
+  border-color: rgba(239, 68, 68, 0.36);
+  background: rgba(239, 68, 68, 0.1);
+  color: #b91c1c;
 }
 
 .pipelineTopologyNode .react-flow__handle {

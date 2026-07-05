@@ -414,19 +414,7 @@ function edgePolicyFor(
   source: PipelineOperatorDefinition | null,
   target: PipelineOperatorDefinition | null,
 ): { maxsize: number; drop_policy: string } {
-  const sourceCaps = new Set((source?.capabilities ?? []).map((value) => String(value).trim().toLowerCase()));
-  const targetCaps = new Set((target?.capabilities ?? []).map((value) => String(value).trim().toLowerCase()));
-  const fallback = (() => {
-    if (sourceCaps.has("source")) return { maxsize: 1, drop_policy: "latest_only" };
-    if (targetCaps.has("sink") || targetCaps.has("origin_only")) {
-      return { maxsize: 128, drop_policy: "drop_oldest" };
-    }
-    if (sourceCaps.has("split_stream")) {
-      return { maxsize: 64, drop_policy: "keyed_latest_only" };
-    }
-    if (targetCaps.has("heavy_compute")) return { maxsize: 1, drop_policy: "latest_only" };
-    return { maxsize: 32, drop_policy: "drop_oldest" };
-  })();
+  const fallback = { maxsize: 1, drop_policy: "latest_only" };
   const queue = {
     ...edgePolicyQueue(source?.default_output_policy),
     ...edgePolicyQueue(target?.default_input_policy),

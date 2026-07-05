@@ -1402,6 +1402,26 @@ async function _parseHttpError(res: Response, fallback: string): Promise<string>
   return fallback;
 }
 
+async function requestJson<T>(input: string, init: RequestInit | undefined, fallback: string): Promise<T> {
+  const res = await fetch(input, init);
+  if (!res.ok) throw new Error(await _parseHttpError(res, fallback));
+  return res.json();
+}
+
+async function requestVoid(input: string, init: RequestInit | undefined, fallback: string): Promise<void> {
+  const res = await fetch(input, init);
+  if (!res.ok) throw new Error(await _parseHttpError(res, fallback));
+}
+
+function jsonRequest(method: string, body: unknown, init: RequestInit = {}): RequestInit {
+  return {
+    ...init,
+    method,
+    headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+    body: JSON.stringify(body),
+  };
+}
+
 export function isAbortError(err: unknown): boolean {
   if (typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "AbortError") return true;
   if (err && typeof err === "object" && "name" in err) {
@@ -1411,9 +1431,7 @@ export function isAbortError(err: unknown): boolean {
 }
 
 export async function getAuthStatus(): Promise<AuthStatus> {
-  const res = await fetch("/api/auth/status");
-  if (!res.ok) throw new Error(`Failed to load auth status: ${res.status}`);
-  return res.json();
+  return requestJson<AuthStatus>("/api/auth/status", undefined, "Failed to load auth status");
 }
 
 export async function setupOwner(params: {
@@ -1422,18 +1440,16 @@ export async function setupOwner(params: {
   display_name?: string;
   device_label?: string;
 }): Promise<AuthUser> {
-  const res = await fetch("/api/auth/setup", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+  const body = await requestJson<{ user: AuthUser }>(
+    "/api/auth/setup",
+    jsonRequest("POST", {
       username: params.username,
       password: params.password,
       display_name: params.display_name ?? "",
       device_label: params.device_label ?? "browser",
     }),
-  });
-  if (!res.ok) throw new Error(`Failed to setup owner: ${res.status}`);
-  const body = await res.json();
+    "Failed to setup owner",
+  );
   return body.user;
 }
 
@@ -1442,61 +1458,50 @@ export async function login(params: {
   password: string;
   device_label?: string;
 }): Promise<AuthUser> {
-  const res = await fetch("/api/auth/login", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+  const body = await requestJson<{ user: AuthUser }>(
+    "/api/auth/login",
+    jsonRequest("POST", {
       username: params.username,
       password: params.password,
       device_label: params.device_label ?? "browser",
     }),
-  });
-  if (!res.ok) throw new Error(`Failed to login: ${res.status}`);
-  const body = await res.json();
+    "Failed to login",
+  );
   return body.user;
 }
 
 export async function logout(): Promise<void> {
-  const res = await fetch("/api/auth/logout", { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to logout: ${res.status}`);
+  await requestVoid("/api/auth/logout", { method: "POST" }, "Failed to logout");
 }
 
 export async function startPairing(params?: { device_label?: string }): Promise<{ code: string; expires_at: number }> {
-  const res = await fetch("/api/auth/pair/start", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+  return requestJson<{ code: string; expires_at: number }>(
+    "/api/auth/pair/start",
+    jsonRequest("POST", {
       device_label: params?.device_label ?? "mobile",
     }),
-  });
-  if (!res.ok) throw new Error(`Failed to start pairing: ${res.status}`);
-  return res.json();
+    "Failed to start pairing",
+  );
 }
 
 export async function completePairing(params: { code: string; device_label?: string }): Promise<AuthUser> {
-  const res = await fetch("/api/auth/pair/complete", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+  const body = await requestJson<{ user: AuthUser }>(
+    "/api/auth/pair/complete",
+    jsonRequest("POST", {
       code: params.code,
       device_label: params.device_label ?? "mobile",
     }),
-  });
-  if (!res.ok) throw new Error(`Failed to complete pairing: ${res.status}`);
-  const body = await res.json();
+    "Failed to complete pairing",
+  );
   return body.user;
 }
 
 export async function listAccessUsers(): Promise<AccessUsersPayload> {
-  const res = await fetch("/api/access/users");
-  if (!res.ok) throw new Error(`Failed to list access users: ${res.status}`);
-  return res.json();
+  return requestJson<AccessUsersPayload>("/api/access/users", undefined, "Failed to list access users");
 }
 
 export async function getAccessOptions(): Promise<AccessOptionsPayload> {
-  const res = await fetch("/api/access/options");
-  if (!res.ok) throw new Error(`Failed to fetch access options: ${res.status}`);
-  return res.json();
+  return requestJson<AccessOptionsPayload>("/api/access/options", undefined, "Failed to fetch access options");
 }
 
 export async function createAccessUser(payload: {
@@ -1505,28 +1510,20 @@ export async function createAccessUser(payload: {
   role: AuthRole;
   display_name?: string;
 }): Promise<AuthUser> {
-  const res = await fetch("/api/access/users", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`Failed to create access user: ${res.status}`);
-  return res.json();
+  return requestJson<AuthUser>("/api/access/users", jsonRequest("POST", payload), "Failed to create access user");
 }
 
 export async function startAccessUserPairing(
   userId: string,
   params?: { device_label?: string },
 ): Promise<{ code: string; expires_at: number }> {
-  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}/pair/start`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+  return requestJson<{ code: string; expires_at: number }>(
+    `/api/access/users/${encodeURIComponent(userId)}/pair/start`,
+    jsonRequest("POST", {
       device_label: params?.device_label ?? "mobile",
     }),
-  });
-  if (!res.ok) throw new Error(`Failed to start pairing for access user ${userId}: ${res.status}`);
-  return res.json();
+    `Failed to start pairing for access user ${userId}`,
+  );
 }
 
 export async function patchAccessUser(
@@ -1538,18 +1535,19 @@ export async function patchAccessUser(
     is_disabled?: boolean;
   },
 ): Promise<AuthUser> {
-  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`Failed to patch access user ${userId}: ${res.status}`);
-  return res.json();
+  return requestJson<AuthUser>(
+    `/api/access/users/${encodeURIComponent(userId)}`,
+    jsonRequest("PATCH", payload),
+    `Failed to patch access user ${userId}`,
+  );
 }
 
 export async function deleteAccessUser(userId: string): Promise<void> {
-  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`Failed to delete access user ${userId}: ${res.status}`);
+  await requestVoid(
+    `/api/access/users/${encodeURIComponent(userId)}`,
+    { method: "DELETE" },
+    `Failed to delete access user ${userId}`,
+  );
 }
 
 export async function upsertAccessGrant(
@@ -1561,160 +1559,144 @@ export async function upsertAccessGrant(
     exclude: string[];
   },
 ): Promise<AuthUser> {
-  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}/grants`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`Failed to upsert grant for ${userId}: ${res.status}`);
-  return res.json();
+  return requestJson<AuthUser>(
+    `/api/access/users/${encodeURIComponent(userId)}/grants`,
+    jsonRequest("POST", payload),
+    `Failed to upsert grant for ${userId}`,
+  );
 }
 
 export async function deleteAccessGrant(userId: string, action: string, resourceType: string): Promise<AuthUser> {
   const query = new URLSearchParams({ action, resource_type: resourceType });
-  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}/grants?${query.toString()}`, {
-    method: "DELETE",
-  });
-  if (!res.ok) throw new Error(`Failed to delete grant for ${userId}: ${res.status}`);
-  return res.json();
+  return requestJson<AuthUser>(
+    `/api/access/users/${encodeURIComponent(userId)}/grants?${query.toString()}`,
+    { method: "DELETE" },
+    `Failed to delete grant for ${userId}`,
+  );
 }
 
 export async function fetchExtensions(): Promise<any[]> {
-  const res = await fetch("/api/extensions");
-  if (!res.ok) throw new Error(`Failed to list extensions: ${res.status}`);
-  return res.json();
+  return requestJson<any[]>("/api/extensions", undefined, "Failed to list extensions");
 }
 
 export async function fetchExtensionManagementCatalog(): Promise<ExtensionManagementCatalog> {
-  const res = await fetch("/api/extensions/manage");
-  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to list managed extensions: ${res.status}`));
-  return res.json();
+  return requestJson<ExtensionManagementCatalog>(
+    "/api/extensions/manage",
+    undefined,
+    "Failed to list managed extensions",
+  );
 }
 
 export async function installManualManagedExtension(pipSpec: string): Promise<ExtensionOperationResponse> {
-  const res = await fetch("/api/extensions/manage/install", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pip_spec: pipSpec }),
-  });
-  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to install extension: ${res.status}`));
-  return res.json();
+  return requestJson<ExtensionOperationResponse>(
+    "/api/extensions/manage/install",
+    jsonRequest("POST", { pip_spec: pipSpec }),
+    "Failed to install extension",
+  );
 }
 
 export async function installRecommendedManagedExtension(extensionId: string): Promise<ExtensionOperationResponse> {
-  const res = await fetch(`/api/extensions/manage/recommended/${encodeURIComponent(extensionId)}/install`, {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to install extension ${extensionId}: ${res.status}`));
-  return res.json();
+  return requestJson<ExtensionOperationResponse>(
+    `/api/extensions/manage/recommended/${encodeURIComponent(extensionId)}/install`,
+    { method: "POST" },
+    `Failed to install extension ${extensionId}`,
+  );
 }
 
 export async function enableManagedExtension(extensionId: string): Promise<ExtensionOperationResponse> {
-  const res = await fetch(`/api/extensions/manage/${encodeURIComponent(extensionId)}/enable`, { method: "POST" });
-  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to enable extension ${extensionId}: ${res.status}`));
-  return res.json();
+  return requestJson<ExtensionOperationResponse>(
+    `/api/extensions/manage/${encodeURIComponent(extensionId)}/enable`,
+    { method: "POST" },
+    `Failed to enable extension ${extensionId}`,
+  );
 }
 
 export async function disableManagedExtension(extensionId: string): Promise<ExtensionOperationResponse> {
-  const res = await fetch(`/api/extensions/manage/${encodeURIComponent(extensionId)}/disable`, { method: "POST" });
-  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to disable extension ${extensionId}: ${res.status}`));
-  return res.json();
+  return requestJson<ExtensionOperationResponse>(
+    `/api/extensions/manage/${encodeURIComponent(extensionId)}/disable`,
+    { method: "POST" },
+    `Failed to disable extension ${extensionId}`,
+  );
 }
 
 export async function removeManagedExtension(extensionId: string): Promise<ExtensionOperationResponse> {
-  const res = await fetch(`/api/extensions/manage/${encodeURIComponent(extensionId)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to remove extension ${extensionId}: ${res.status}`));
-  return res.json();
+  return requestJson<ExtensionOperationResponse>(
+    `/api/extensions/manage/${encodeURIComponent(extensionId)}`,
+    { method: "DELETE" },
+    `Failed to remove extension ${extensionId}`,
+  );
 }
 
 export async function getSettings(): Promise<AppSettings> {
-  const res = await fetch("/api/settings");
-  if (!res.ok) throw new Error(`Failed to fetch settings: ${res.status}`);
-  return res.json();
+  return requestJson<AppSettings>("/api/settings", undefined, "Failed to fetch settings");
 }
 
 export async function patchExtensionSettings(
   extensionId: string,
   patch: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`/api/settings/extensions/${encodeURIComponent(extensionId)}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(patch ?? {}),
-  });
-  if (!res.ok) throw new Error(`Failed to update settings for ${extensionId}: ${res.status}`);
-  const body = await res.json();
+  const body = await requestJson<{ settings?: Record<string, unknown> }>(
+    `/api/settings/extensions/${encodeURIComponent(extensionId)}`,
+    jsonRequest("PATCH", patch ?? {}),
+    `Failed to update settings for ${extensionId}`,
+  );
   return body?.settings ?? {};
 }
 
 export async function emitEvent(eventName: string, payload: unknown, context: Record<string, unknown> = {}): Promise<EmitEventResponse> {
-  const res = await fetch(`/api/events/${encodeURIComponent(eventName)}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ payload, context }),
-  });
-  if (!res.ok) throw new Error(`Failed to emit ${eventName}: ${res.status}`);
-  return res.json();
+  return requestJson<EmitEventResponse>(
+    `/api/events/${encodeURIComponent(eventName)}`,
+    jsonRequest("POST", { payload, context }),
+    `Failed to emit ${eventName}`,
+  );
 }
 
 export async function getDevice(deviceId: string): Promise<{ device_id: string; state: boolean }> {
-  const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`);
-  if (!res.ok) throw new Error(`Failed to fetch device ${deviceId}: ${res.status}`);
-  return res.json();
+  return requestJson<{ device_id: string; state: boolean }>(
+    `/api/devices/${encodeURIComponent(deviceId)}`,
+    undefined,
+    `Failed to fetch device ${deviceId}`,
+  );
 }
 
 export async function getComposition(): Promise<Composition> {
-  const res = await fetch("/api/composition");
-  if (!res.ok) throw new Error(`Failed to fetch composition: ${res.status}`);
-  return res.json();
+  return requestJson<Composition>("/api/composition", undefined, "Failed to fetch composition");
 }
 
 export async function putComposition(composition: Composition): Promise<Composition> {
-  const res = await fetch("/api/composition", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(composition),
-  });
-  if (!res.ok) throw new Error(`Failed to save composition: ${res.status}`);
-  return res.json();
+  return requestJson<Composition>("/api/composition", jsonRequest("PUT", composition), "Failed to save composition");
 }
 
 export async function listCompositions(): Promise<CompositionsIndex> {
-  const res = await fetch("/api/compositions");
-  if (!res.ok) throw new Error(`Failed to list compositions: ${res.status}`);
-  return res.json();
+  return requestJson<CompositionsIndex>("/api/compositions", undefined, "Failed to list compositions");
 }
 
 export async function createComposition(name: string): Promise<Composition> {
-  const res = await fetch("/api/compositions", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!res.ok) throw new Error(`Failed to create composition: ${res.status}`);
-  return res.json();
+  return requestJson<Composition>("/api/compositions", jsonRequest("POST", { name }), "Failed to create composition");
 }
 
 export async function activateComposition(compositionId: string): Promise<Composition> {
-  const res = await fetch(`/api/compositions/${encodeURIComponent(compositionId)}/activate`, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to activate composition: ${res.status}`);
-  return res.json();
+  return requestJson<Composition>(
+    `/api/compositions/${encodeURIComponent(compositionId)}/activate`,
+    { method: "POST" },
+    "Failed to activate composition",
+  );
 }
 
 export async function renameComposition(compositionId: string, name: string): Promise<Composition> {
-  const res = await fetch(`/api/compositions/${encodeURIComponent(compositionId)}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!res.ok) throw new Error(`Failed to rename composition: ${res.status}`);
-  return res.json();
+  return requestJson<Composition>(
+    `/api/compositions/${encodeURIComponent(compositionId)}`,
+    jsonRequest("PATCH", { name }),
+    "Failed to rename composition",
+  );
 }
 
 export async function deleteComposition(compositionId: string): Promise<DeleteCompositionResponse> {
-  const res = await fetch(`/api/compositions/${encodeURIComponent(compositionId)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`Failed to delete composition: ${res.status}`);
-  return res.json();
+  return requestJson<DeleteCompositionResponse>(
+    `/api/compositions/${encodeURIComponent(compositionId)}`,
+    { method: "DELETE" },
+    "Failed to delete composition",
+  );
 }
 
 export async function listNotifications(
@@ -2069,30 +2051,24 @@ export async function uploadProcessingServerVisionModelArtifact(
 }
 
 export async function listPipelines(options: AbortableRequestOptions = {}): Promise<Pipeline[]> {
-  const res = await fetch("/api/pipelines", { signal: options.signal });
-  if (!res.ok) throw new Error(`Failed to list pipelines: ${res.status}`);
-  const body = (await res.json()) as { pipelines?: Pipeline[] };
+  const body = await requestJson<{ pipelines?: Pipeline[] }>(
+    "/api/pipelines",
+    { signal: options.signal },
+    "Failed to list pipelines",
+  );
   return body.pipelines ?? [];
 }
 
 export async function createPipeline(pipeline: Pipeline): Promise<Pipeline> {
-  const res = await fetch("/api/pipelines", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(pipeline),
-  });
-  if (!res.ok) throw new Error(`Failed to create pipeline: ${res.status}`);
-  return res.json();
+  return requestJson<Pipeline>("/api/pipelines", jsonRequest("POST", pipeline), "Failed to create pipeline");
 }
 
 export async function putPipeline(name: string, pipeline: Pipeline): Promise<Pipeline> {
-  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(pipeline),
-  });
-  if (!res.ok) throw new Error(`Failed to save pipeline ${name}: ${res.status}`);
-  return res.json();
+  return requestJson<Pipeline>(
+    `/api/pipelines/${encodeURIComponent(name)}`,
+    jsonRequest("PUT", pipeline),
+    `Failed to save pipeline ${name}`,
+  );
 }
 
 export async function duplicatePipeline(name: string, newName: string): Promise<Pipeline> {
@@ -2110,38 +2086,48 @@ export async function duplicatePipeline(name: string, newName: string): Promise<
 }
 
 export async function deletePipeline(name: string): Promise<Pipeline> {
-  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`Failed to delete pipeline ${name}: ${res.status}`);
-  return res.json();
+  return requestJson<Pipeline>(
+    `/api/pipelines/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+    `Failed to delete pipeline ${name}`,
+  );
 }
 
 export async function getPipelineStats(name: string): Promise<PipelineStats> {
-  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/stats`);
-  if (!res.ok) throw new Error(`Failed to fetch pipeline stats ${name}: ${res.status}`);
-  return res.json();
+  return requestJson<PipelineStats>(
+    `/api/pipelines/${encodeURIComponent(name)}/stats`,
+    undefined,
+    `Failed to fetch pipeline stats ${name}`,
+  );
 }
 
 export async function resetPipelineStats(name: string): Promise<PipelineStats> {
-  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/stats/reset`, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to reset pipeline stats ${name}: ${res.status}`);
-  return res.json();
+  return requestJson<PipelineStats>(
+    `/api/pipelines/${encodeURIComponent(name)}/stats/reset`,
+    { method: "POST" },
+    `Failed to reset pipeline stats ${name}`,
+  );
 }
 
 export async function getPipelineRuntimeGraphInfo(
   options: AbortableRequestOptions = {},
 ): Promise<PipelineRuntimeGraphInfoResponse> {
-  const res = await fetch("/api/pipelines/runtime/graph-info", { signal: options.signal });
-  if (!res.ok) throw new Error(`Failed to fetch pipeline runtime graph info: ${res.status}`);
-  return res.json();
+  return requestJson<PipelineRuntimeGraphInfoResponse>(
+    "/api/pipelines/runtime/graph-info",
+    { signal: options.signal },
+    "Failed to fetch pipeline runtime graph info",
+  );
 }
 
 export async function getPipelineStorage(
   name: string,
   signal?: AbortSignal,
 ): Promise<PipelineStorageSummary> {
-  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/storage`, { signal });
-  if (!res.ok) throw new Error(`Failed to fetch pipeline storage ${name}: ${res.status}`);
-  return res.json();
+  return requestJson<PipelineStorageSummary>(
+    `/api/pipelines/${encodeURIComponent(name)}/storage`,
+    { signal },
+    `Failed to fetch pipeline storage ${name}`,
+  );
 }
 
 export async function cleanupPipelineStorage(
@@ -2149,11 +2135,11 @@ export async function cleanupPipelineStorage(
   options?: { purge?: boolean },
 ): Promise<PipelineStorageSummary> {
   const query = options?.purge ? "?purge=true" : "";
-  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/storage/cleanup${query}`, {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error(`Failed to clean pipeline storage ${name}: ${res.status}`);
-  return res.json();
+  return requestJson<PipelineStorageSummary>(
+    `/api/pipelines/${encodeURIComponent(name)}/storage/cleanup${query}`,
+    { method: "POST" },
+    `Failed to clean pipeline storage ${name}`,
+  );
 }
 
 export async function getPipelineTelemetryNumeric(
@@ -2422,9 +2408,11 @@ export async function fetchPipelinePreviewFrame(
 export async function listPipelineOperators(
   options: AbortableRequestOptions = {},
 ): Promise<PipelineOperatorDefinition[]> {
-  const res = await fetch("/api/pipelines/operators", { signal: options.signal });
-  if (!res.ok) throw new Error(`Failed to list pipeline operators: ${res.status}`);
-  const body = (await res.json()) as { operators?: PipelineOperatorDefinition[] };
+  const body = await requestJson<{ operators?: PipelineOperatorDefinition[] }>(
+    "/api/pipelines/operators",
+    { signal: options.signal },
+    "Failed to list pipeline operators",
+  );
   return body.operators ?? [];
 }
 
@@ -2448,9 +2436,11 @@ export async function validateFilterExpression(
 export async function listHomeAssistantServers(
   options: AbortableRequestOptions = {},
 ): Promise<HomeAssistantServerInfo[]> {
-  const res = await fetch("/api/home_assistant/servers", { signal: options.signal });
-  if (!res.ok) throw new Error(`Failed to list Home Assistant servers: ${res.status}`);
-  const body = await res.json();
+  const body = await requestJson<unknown>(
+    "/api/home_assistant/servers",
+    { signal: options.signal },
+    "Failed to list Home Assistant servers",
+  );
   return Array.isArray(body) ? (body as HomeAssistantServerInfo[]) : [];
 }
 
@@ -2458,11 +2448,11 @@ export async function getHomeAssistantRegistry(
   serverId: string,
   options: AbortableRequestOptions = {},
 ): Promise<HomeAssistantRegistryResponse> {
-  const res = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/registry`, {
-    signal: options.signal,
-  });
-  if (!res.ok) throw new Error(`Failed to load Home Assistant registry: ${res.status}`);
-  const body = await res.json();
+  const body = await requestJson<any>(
+    `/api/home_assistant/${encodeURIComponent(serverId)}/registry`,
+    { signal: options.signal },
+    "Failed to load Home Assistant registry",
+  );
   return {
     entities: Array.isArray(body?.entities) ? (body.entities as HomeAssistantRegistryEntityInfo[]) : [],
     devices: Array.isArray(body?.devices) ? (body.devices as HomeAssistantRegistryDeviceInfo[]) : [],
@@ -2480,24 +2470,28 @@ export async function listHomeAssistantServices(
   const query = new URLSearchParams();
   if (options?.domain) query.set("domain", options.domain);
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
-  const res = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/services${suffix}`, {
-    signal: options.signal,
-  });
-  if (!res.ok) throw new Error(`Failed to list Home Assistant services: ${res.status}`);
-  const body = await res.json();
+  const body = await requestJson<unknown>(
+    `/api/home_assistant/${encodeURIComponent(serverId)}/services${suffix}`,
+    { signal: options.signal },
+    "Failed to list Home Assistant services",
+  );
   return Array.isArray(body) ? (body as HomeAssistantServiceInfo[]) : [];
 }
 
 export async function listStreamingTransmissions(options: AbortableRequestOptions = {}): Promise<StreamingTransmission[]> {
-  const res = await fetch("/api/streams/transmissions", { signal: options.signal });
-  if (!res.ok) throw new Error(`Failed to list streaming transmissions: ${res.status}`);
-  return (await res.json()) as StreamingTransmission[];
+  return requestJson<StreamingTransmission[]>(
+    "/api/streams/transmissions",
+    { signal: options.signal },
+    "Failed to list streaming transmissions",
+  );
 }
 
 export async function listStreamingCameraLiveViews(options: AbortableRequestOptions = {}): Promise<StreamingCameraLiveView[]> {
-  const res = await fetch("/api/streams/live-views", { signal: options.signal });
-  if (!res.ok) throw new Error(`Failed to list live cameras: ${res.status}`);
-  return (await res.json()) as StreamingCameraLiveView[];
+  return requestJson<StreamingCameraLiveView[]>(
+    "/api/streams/live-views",
+    { signal: options.signal },
+    "Failed to list live cameras",
+  );
 }
 
 export async function listStreamingPublications(
@@ -2508,9 +2502,11 @@ export async function listStreamingPublications(
   const normalizedCameraId = String(cameraId || "").trim();
   if (normalizedCameraId) params.set("camera_id", normalizedCameraId);
   const query = params.toString();
-  const res = await fetch(`/api/streams/publications${query ? `?${query}` : ""}`, { signal: options.signal });
-  if (!res.ok) throw new Error(`Failed to list streaming publications: ${res.status}`);
-  return (await res.json()) as StreamingStreamPublication[];
+  return requestJson<StreamingStreamPublication[]>(
+    `/api/streams/publications${query ? `?${query}` : ""}`,
+    { signal: options.signal },
+    "Failed to list streaming publications",
+  );
 }
 
 export async function updateStreamingCameraSourcePublication(
@@ -2518,35 +2514,26 @@ export async function updateStreamingCameraSourcePublication(
   sourceId: string,
   patch: Partial<Pick<StreamingStreamPublication, "enabled" | "label" | "role" | "host_server_id" | "quality_policy" | "transport_policy">>,
 ): Promise<StreamingStreamPublication> {
-  const res = await fetch(
+  return requestJson<StreamingStreamPublication>(
     `/api/streams/publications/camera-sources/${encodeURIComponent(cameraId)}/${encodeURIComponent(sourceId)}`,
-    {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(patch),
-    },
+    jsonRequest("PUT", patch),
+    "Failed to update streaming publication",
   );
-  if (!res.ok) throw new Error(`Failed to update streaming publication: ${res.status}`);
-  return (await res.json()) as StreamingStreamPublication;
 }
 
 export async function reconcileStreamingPublications(): Promise<unknown> {
-  const res = await fetch("/api/streams/reconcile", { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to reconcile streaming publications: ${res.status}`);
-  return res.json();
+  return requestJson<unknown>("/api/streams/reconcile", { method: "POST" }, "Failed to reconcile streaming publications");
 }
 
 export async function updateStreamingCameraLiveView(
   liveViewId: string,
   liveView: StreamingCameraLiveView,
 ): Promise<StreamingCameraLiveView> {
-  const res = await fetch(`/api/streams/camera-live-views/${encodeURIComponent(liveViewId)}`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(liveView),
-  });
-  if (!res.ok) throw new Error(`Failed to update live camera view ${liveViewId}: ${res.status}`);
-  return (await res.json()) as StreamingCameraLiveView;
+  return requestJson<StreamingCameraLiveView>(
+    `/api/streams/camera-live-views/${encodeURIComponent(liveViewId)}`,
+    jsonRequest("PUT", liveView),
+    `Failed to update live camera view ${liveViewId}`,
+  );
 }
 
 export type StreamingCameraLivePlaybackOptions = {
@@ -2564,18 +2551,19 @@ export async function getStreamingCameraLiveViewPlayback(
   const variantId = String(options.variantId || "").trim();
   if (variantId) params.set("variant_id", variantId);
   const query = params.toString();
-  const res = await fetch(
+  return requestJson<StreamingCameraLiveViewPlaybackResponse>(
     `/api/streams/live-views/${encodeURIComponent(liveViewId)}/playback${query ? `?${query}` : ""}`,
     { signal: options.signal },
+    `Failed to resolve live camera playback for ${liveViewId}`,
   );
-  if (!res.ok) throw new Error(`Failed to resolve live camera playback for ${liveViewId}: ${res.status}`);
-  return (await res.json()) as StreamingCameraLiveViewPlaybackResponse;
 }
 
 export async function getStreamingQualityProfiles(options: AbortableRequestOptions = {}): Promise<StreamingQualityProfilesResponse> {
-  const res = await fetch("/api/streams/quality-profiles", { signal: options.signal });
-  if (!res.ok) throw new Error(`Failed to fetch streaming quality profiles: ${res.status}`);
-  return (await res.json()) as StreamingQualityProfilesResponse;
+  return requestJson<StreamingQualityProfilesResponse>(
+    "/api/streams/quality-profiles",
+    { signal: options.signal },
+    "Failed to fetch streaming quality profiles",
+  );
 }
 
 export type StreamingTransmissionUrlSelectionOptions = {
@@ -2600,11 +2588,11 @@ export async function getStreamingTransmissionUrls(
   options?: StreamingTransmissionUrlRequestOptions,
 ): Promise<StreamingTransmissionUrlsResponse> {
   const query = streamingTransmissionUrlSelectionQuery(options);
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/urls${query}`, {
-    signal: options?.signal,
-  });
-  if (!res.ok) throw new Error(`Failed to fetch streaming URLs for ${transmissionId}: ${res.status}`);
-  return (await res.json()) as StreamingTransmissionUrlsResponse;
+  return requestJson<StreamingTransmissionUrlsResponse>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/urls${query}`,
+    { signal: options?.signal },
+    `Failed to fetch streaming URLs for ${transmissionId}`,
+  );
 }
 
 export async function getStreamingTransmissionPlaybackPlan(
@@ -2626,11 +2614,11 @@ export async function getStreamingTransmissionPlaybackPlan(
   if (context) params.set("context", context);
   if (options?.lowLatency) params.set("low_latency", "true");
   const query = params.toString() ? `?${params.toString()}` : "";
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/playback-plan${query}`, {
-    signal: options?.signal,
-  });
-  if (!res.ok) throw new Error(`Failed to fetch streaming playback plan for ${transmissionId}: ${res.status}`);
-  return (await res.json()) as StreamingPlaybackPlanResponse;
+  return requestJson<StreamingPlaybackPlanResponse>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/playback-plan${query}`,
+    { signal: options?.signal },
+    `Failed to fetch streaming playback plan for ${transmissionId}`,
+  );
 }
 
 export async function primeStreamingTransmissionDemand(
@@ -2638,21 +2626,20 @@ export async function primeStreamingTransmissionDemand(
   options?: StreamingTransmissionUrlSelectionOptions,
 ): Promise<StreamingTransmissionDemandPrimeResponse> {
   const query = streamingTransmissionUrlSelectionQuery(options);
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/demand/prime${query}`, {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error(`Failed to prime streaming demand for ${transmissionId}: ${res.status}`);
-  return (await res.json()) as StreamingTransmissionDemandPrimeResponse;
+  return requestJson<StreamingTransmissionDemandPrimeResponse>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/demand/prime${query}`,
+    { method: "POST" },
+    `Failed to prime streaming demand for ${transmissionId}`,
+  );
 }
 
 export async function heartbeatStreamingTransmissionDemand(
   transmissionId: string,
   request: StreamingTransmissionDemandHeartbeatRequest,
 ): Promise<StreamingTransmissionDemandHeartbeatResponse> {
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/demand/heartbeat`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+  return requestJson<StreamingTransmissionDemandHeartbeatResponse>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/demand/heartbeat`,
+    jsonRequest("POST", {
       playback_session_id: request.playbackSessionId,
       output_id: request.outputId ?? null,
       quality_profile_id: request.qualityProfileId ?? null,
@@ -2660,105 +2647,93 @@ export async function heartbeatStreamingTransmissionDemand(
       source: request.source ?? "player",
       ttl_seconds: request.ttlSeconds ?? null,
     }),
-  });
-  if (!res.ok) throw new Error(`Failed to renew streaming demand for ${transmissionId}: ${res.status}`);
-  return (await res.json()) as StreamingTransmissionDemandHeartbeatResponse;
+    `Failed to renew streaming demand for ${transmissionId}`,
+  );
 }
 
 export async function getStreamingTransmissionCameraPresets(
   transmissionId: string,
   options: AbortableRequestOptions = {},
 ): Promise<StreamingTransmissionCameraPresetsResponse> {
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/presets`, {
-    signal: options.signal,
-  });
-  if (!res.ok) {
-    throw new Error(await _parseHttpError(res, `Failed to fetch PTZ presets for ${transmissionId}: ${res.status}`));
-  }
-  return (await res.json()) as StreamingTransmissionCameraPresetsResponse;
+  return requestJson<StreamingTransmissionCameraPresetsResponse>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/presets`,
+    { signal: options.signal },
+    `Failed to fetch PTZ presets for ${transmissionId}`,
+  );
 }
 
 export async function gotoStreamingTransmissionCameraPreset(
   transmissionId: string,
   presetToken: string,
 ): Promise<{ ok: boolean }> {
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/goto-preset`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ preset_token: presetToken }),
-  });
-  if (!res.ok) {
-    throw new Error(await _parseHttpError(res, `Failed to go to PTZ preset for ${transmissionId}: ${res.status}`));
-  }
-  return (await res.json()) as { ok: boolean };
+  return requestJson<{ ok: boolean }>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/goto-preset`,
+    jsonRequest("POST", { preset_token: presetToken }),
+    `Failed to go to PTZ preset for ${transmissionId}`,
+  );
 }
 
 export async function getStreamingTransmissionCameraStatus(
   transmissionId: string,
   options: AbortableRequestOptions = {},
 ): Promise<StreamingTransmissionCameraStatusResponse> {
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/status`, {
-    signal: options.signal,
-  });
-  if (!res.ok) {
-    throw new Error(await _parseHttpError(res, `Failed to fetch PTZ status for ${transmissionId}: ${res.status}`));
-  }
-  return (await res.json()) as StreamingTransmissionCameraStatusResponse;
+  return requestJson<StreamingTransmissionCameraStatusResponse>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/status`,
+    { signal: options.signal },
+    `Failed to fetch PTZ status for ${transmissionId}`,
+  );
 }
 
 export async function moveStreamingTransmissionCamera(
   transmissionId: string,
   payload: { pan: number; tilt: number; zoom: number; timeout_s?: number | null },
 ): Promise<{ ok: boolean }> {
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/move`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    throw new Error(await _parseHttpError(res, `Failed to move PTZ camera for ${transmissionId}: ${res.status}`));
-  }
-  return (await res.json()) as { ok: boolean };
+  return requestJson<{ ok: boolean }>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/move`,
+    jsonRequest("POST", payload),
+    `Failed to move PTZ camera for ${transmissionId}`,
+  );
 }
 
 export async function stopStreamingTransmissionCamera(
   transmissionId: string,
   payload?: { pan_tilt?: boolean; zoom?: boolean },
 ): Promise<{ ok: boolean }> {
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/stop`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload ?? {}),
-  });
-  if (!res.ok) {
-    throw new Error(await _parseHttpError(res, `Failed to stop PTZ camera for ${transmissionId}: ${res.status}`));
-  }
-  return (await res.json()) as { ok: boolean };
+  return requestJson<{ ok: boolean }>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/stop`,
+    jsonRequest("POST", payload ?? {}),
+    `Failed to stop PTZ camera for ${transmissionId}`,
+  );
 }
 
 export async function getStreamingOutputsRuntime(options: AbortableRequestOptions = {}): Promise<StreamingOutputsRuntimeResponse> {
-  const res = await fetch("/api/streams/runtime/outputs", { signal: options.signal });
-  if (!res.ok) throw new Error(`Failed to fetch streaming runtime outputs: ${res.status}`);
-  return (await res.json()) as StreamingOutputsRuntimeResponse;
+  return requestJson<StreamingOutputsRuntimeResponse>(
+    "/api/streams/runtime/outputs",
+    { signal: options.signal },
+    "Failed to fetch streaming runtime outputs",
+  );
 }
 
 export async function getStreamingRuntimeHealth(options: AbortableRequestOptions = {}): Promise<StreamingRuntimeHealthResponse> {
-  const res = await fetch("/api/streams/runtime/health", { signal: options.signal });
-  if (!res.ok) throw new Error(`Failed to fetch streaming runtime health: ${res.status}`);
-  return (await res.json()) as StreamingRuntimeHealthResponse;
+  return requestJson<StreamingRuntimeHealthResponse>(
+    "/api/streams/runtime/health",
+    { signal: options.signal },
+    "Failed to fetch streaming runtime health",
+  );
 }
 
 export async function getStreamingRuntimePipelines(options: AbortableRequestOptions = {}): Promise<StreamingRuntimePipelinesResponse> {
-  const res = await fetch("/api/streams/runtime/pipelines", { signal: options.signal });
-  if (!res.ok) throw new Error(`Failed to fetch streaming runtime pipelines: ${res.status}`);
-  return (await res.json()) as StreamingRuntimePipelinesResponse;
+  return requestJson<StreamingRuntimePipelinesResponse>(
+    "/api/streams/runtime/pipelines",
+    { signal: options.signal },
+    "Failed to fetch streaming runtime pipelines",
+  );
 }
 
 export async function postStreamingPlaybackEvents(payload: StreamingPlaybackEventsRequest): Promise<void> {
-  const res = await fetch("/api/streams/runtime/playback-events", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`Failed to post streaming playback events: ${res.status}`);
+  await requestVoid(
+    "/api/streams/runtime/playback-events",
+    jsonRequest("POST", payload),
+    "Failed to post streaming playback events",
+  );
 }

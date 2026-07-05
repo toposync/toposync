@@ -15,5 +15,8 @@ cameras = "toposync_ext_cameras.plugin:CamerasExtension"
 requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.hooks.custom]
+path = "../../hatch_build_extension_ui.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/toposync_ext_cameras"]

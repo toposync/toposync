@@ -15,5 +15,8 @@ home_assistant = "toposync_ext_home_assistant.plugin:HomeAssistantExtension"
 requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.hooks.custom]
+path = "../../hatch_build_extension_ui.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/toposync_ext_home_assistant"]

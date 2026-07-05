@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
 import logging
 from typing import Any
-from urllib import error, parse, request
+from urllib import parse
 
 from ..api.models import (
     EXTENSION_ID,
@@ -16,6 +14,7 @@ from ..api.models import (
     normalize_streaming_settings,
 )
 from .engine_manager import MediaMtxEngineManager
+from .http_client import request_json
 from .camera_ingest import (
     build_camera_ingest_definitions,
     build_camera_ingest_path_auth,
@@ -83,7 +82,7 @@ class DistributedSettingsSync:
         if not self.enabled:
             raise RuntimeError("Distributed settings sync is not enabled")
 
-        payload = await asyncio.to_thread(self._fetch_remote_settings_blocking)
+        payload = await self._fetch_remote_settings()
         remote_settings = StreamingExtensionSettings.model_validate(payload)
         remote_dump = remote_settings.model_dump(mode="json")
 
@@ -134,55 +133,16 @@ class DistributedSettingsSync:
             except TimeoutError:
                 continue
 
-    def _fetch_remote_settings_blocking(self) -> dict[str, Any]:
+    async def _fetch_remote_settings(self) -> dict[str, Any]:
         server_id = parse.quote(self._host_server_id, safe="")
         url = f"{self._core_base_url}/api/streams/distributed/settings/{server_id}"
-        headers = {"accept": "application/json"}
-        auth_header = _build_auth_header(
-            bearer_token=self._bearer_token,
-            username=self._username,
-            password=self._password,
-        )
-        if auth_header:
-            headers["authorization"] = auth_header
-
-        req = request.Request(url=url, headers=headers, method="GET")
         try:
-            with request.urlopen(req, timeout=self._timeout_s) as response:
-                raw = response.read()
-        except error.HTTPError as exc:
-            body = _read_error_body(exc)
-            raise RuntimeError(f"Core sync request failed ({exc.code}): {body}") from exc
-        except error.URLError as exc:
-            raise RuntimeError(f"Core sync request failed: {exc.reason}") from exc
-
-        try:
-            parsed_payload = json.loads(raw.decode("utf-8"))
+            return await request_json(
+                url=url,
+                timeout_s=self._timeout_s,
+                bearer_token=self._bearer_token,
+                username=self._username,
+                password=self._password,
+            )
         except Exception as exc:
-            raise RuntimeError("Core sync request returned invalid JSON") from exc
-
-        if not isinstance(parsed_payload, dict):
-            raise RuntimeError("Core sync request returned an invalid payload")
-        return parsed_payload
-
-
-def _build_auth_header(*, bearer_token: str, username: str, password: str) -> str:
-    token = str(bearer_token or "").strip()
-    if token:
-        return f"Bearer {token}"
-    user = str(username or "").strip()
-    if not user and not str(password or "").strip():
-        return ""
-    raw = f"{user}:{password}".encode("utf-8")
-    encoded = base64.b64encode(raw).decode("ascii")
-    return f"Basic {encoded}"
-
-
-def _read_error_body(exc: error.HTTPError) -> str:
-    try:
-        body = exc.read().decode("utf-8", errors="replace").strip()
-    except Exception:
-        body = ""
-    if not body:
-        return str(exc.reason or f"HTTP {exc.code}")
-    return body[:400]
+            raise RuntimeError(f"Core sync request failed: {exc}") from exc

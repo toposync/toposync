@@ -190,39 +190,20 @@ class TransmissionRuntimeState:
             self._evict_stale_locked(transmission_key, now_monotonic)
             selected_writer_id = self._refresh_active_writer_locked(transmission_key, now_monotonic)
             if not selected_writer_id:
-                fallback = self._last_selected_frame_by_transmission.get(transmission_key) or self._last_incoming_frame_by_transmission.get(transmission_key)
-                if fallback is not None:
-                    return self._selected_frame_result(
-                        transmission_id=transmission_key,
-                        now_monotonic=now_monotonic,
-                        active_writer_id=None,
-                        writer_id=None,
-                        selected_writer_id=fallback.writer_id,
-                        frame=fallback.frame,
-                        lifecycle_state=None,
-                        writer_priority=0,
-                        frame_ts=float(fallback.frame_ts),
-                        updated_at_monotonic=float(fallback.updated_at_monotonic),
-                        last_live_frame_at_unix=fallback.updated_at_unix,
-                        fallback_active=True,
-                        fallback_reason="no_active_writer",
-                        stale_after_s=stale_after,
-                        placeholder_after_s=placeholder_after,
-                    )
-                return self._selected_frame_result(
+                fallback_result = self._fallback_frame_result_locked(
                     transmission_id=transmission_key,
                     now_monotonic=now_monotonic,
                     active_writer_id=None,
-                    writer_id=None,
-                    selected_writer_id=None,
-                    frame=None,
-                    lifecycle_state=None,
-                    writer_priority=0,
-                    frame_ts=0.0,
-                    updated_at_monotonic=now_monotonic,
-                    last_live_frame_at_unix=None,
-                    fallback_active=False,
-                    fallback_reason="no_frame",
+                    fallback_reason="no_active_writer",
+                    stale_after_s=stale_after,
+                    placeholder_after_s=placeholder_after,
+                )
+                if fallback_result is not None:
+                    return fallback_result
+                return self._empty_frame_result(
+                    transmission_id=transmission_key,
+                    now_monotonic=now_monotonic,
+                    active_writer_id=None,
                     stale_after_s=stale_after,
                     placeholder_after_s=placeholder_after,
                 )
@@ -230,39 +211,20 @@ class TransmissionRuntimeState:
             by_writer = self._last_frame_by_writer.get(transmission_key) or {}
             selected = by_writer.get(selected_writer_id)
             if selected is None:
-                fallback = self._last_selected_frame_by_transmission.get(transmission_key) or self._last_incoming_frame_by_transmission.get(transmission_key)
-                if fallback is not None:
-                    return self._selected_frame_result(
-                        transmission_id=transmission_key,
-                        now_monotonic=now_monotonic,
-                        active_writer_id=selected_writer_id,
-                        writer_id=None,
-                        selected_writer_id=fallback.writer_id,
-                        frame=fallback.frame,
-                        lifecycle_state=None,
-                        writer_priority=0,
-                        frame_ts=float(fallback.frame_ts),
-                        updated_at_monotonic=float(fallback.updated_at_monotonic),
-                        last_live_frame_at_unix=fallback.updated_at_unix,
-                        fallback_active=True,
-                        fallback_reason="selected_writer_missing_frame",
-                        stale_after_s=stale_after,
-                        placeholder_after_s=placeholder_after,
-                    )
-                return self._selected_frame_result(
+                fallback_result = self._fallback_frame_result_locked(
                     transmission_id=transmission_key,
                     now_monotonic=now_monotonic,
                     active_writer_id=selected_writer_id,
-                    writer_id=None,
-                    selected_writer_id=None,
-                    frame=None,
-                    lifecycle_state=None,
-                    writer_priority=0,
-                    frame_ts=0.0,
-                    updated_at_monotonic=now_monotonic,
-                    last_live_frame_at_unix=None,
-                    fallback_active=False,
-                    fallback_reason="no_frame",
+                    fallback_reason="selected_writer_missing_frame",
+                    stale_after_s=stale_after,
+                    placeholder_after_s=placeholder_after,
+                )
+                if fallback_result is not None:
+                    return fallback_result
+                return self._empty_frame_result(
+                    transmission_id=transmission_key,
+                    now_monotonic=now_monotonic,
+                    active_writer_id=selected_writer_id,
                     stale_after_s=stale_after,
                     placeholder_after_s=placeholder_after,
                 )
@@ -283,7 +245,7 @@ class TransmissionRuntimeState:
             fallback_reason: str | None = None
             selected_frame_writer_id: str | None = selected.writer_id
             if resolved_frame is None:
-                fallback = self._last_selected_frame_by_transmission.get(transmission_key) or self._last_incoming_frame_by_transmission.get(transmission_key)
+                fallback = self._fallback_frame_locked(transmission_key)
                 if fallback is not None:
                     resolved_frame = fallback.frame
                     resolved_frame_ts = float(fallback.frame_ts)
@@ -577,6 +539,70 @@ class TransmissionRuntimeState:
                 return True
         return False
 
+    def _fallback_frame_locked(self, transmission_id: str) -> TransmissionFrameState | None:
+        return (
+            self._last_selected_frame_by_transmission.get(transmission_id)
+            or self._last_incoming_frame_by_transmission.get(transmission_id)
+        )
+
+    def _fallback_frame_result_locked(
+        self,
+        *,
+        transmission_id: str,
+        now_monotonic: float,
+        active_writer_id: str | None,
+        fallback_reason: str,
+        stale_after_s: float,
+        placeholder_after_s: float,
+    ) -> SelectedWriterFrame | None:
+        fallback = self._fallback_frame_locked(transmission_id)
+        if fallback is None:
+            return None
+        return self._selected_frame_result(
+            transmission_id=transmission_id,
+            now_monotonic=now_monotonic,
+            active_writer_id=active_writer_id,
+            writer_id=None,
+            selected_writer_id=fallback.writer_id,
+            frame=fallback.frame,
+            lifecycle_state=None,
+            writer_priority=0,
+            frame_ts=float(fallback.frame_ts),
+            updated_at_monotonic=float(fallback.updated_at_monotonic),
+            last_live_frame_at_unix=fallback.updated_at_unix,
+            fallback_active=True,
+            fallback_reason=fallback_reason,
+            stale_after_s=stale_after_s,
+            placeholder_after_s=placeholder_after_s,
+        )
+
+    def _empty_frame_result(
+        self,
+        *,
+        transmission_id: str,
+        now_monotonic: float,
+        active_writer_id: str | None,
+        stale_after_s: float,
+        placeholder_after_s: float,
+    ) -> SelectedWriterFrame:
+        return self._selected_frame_result(
+            transmission_id=transmission_id,
+            now_monotonic=now_monotonic,
+            active_writer_id=active_writer_id,
+            writer_id=None,
+            selected_writer_id=None,
+            frame=None,
+            lifecycle_state=None,
+            writer_priority=0,
+            frame_ts=0.0,
+            updated_at_monotonic=now_monotonic,
+            last_live_frame_at_unix=None,
+            fallback_active=False,
+            fallback_reason="no_frame",
+            stale_after_s=stale_after_s,
+            placeholder_after_s=placeholder_after_s,
+        )
+
     def _selected_frame_locked(
         self,
         *,
@@ -608,66 +634,32 @@ class TransmissionRuntimeState:
                     placeholder_after_s=placeholder_after_s,
                 )
 
-            fallback = (
-                self._last_selected_frame_by_transmission.get(transmission_id)
-                or self._last_incoming_frame_by_transmission.get(transmission_id)
-            )
-            if fallback is not None:
-                return self._selected_frame_result(
-                    transmission_id=transmission_id,
-                    now_monotonic=now_monotonic,
-                    active_writer_id=active_writer_id,
-                    writer_id=None,
-                    selected_writer_id=fallback.writer_id,
-                    frame=fallback.frame,
-                    lifecycle_state=None,
-                    writer_priority=0,
-                    frame_ts=float(fallback.frame_ts),
-                    updated_at_monotonic=float(fallback.updated_at_monotonic),
-                    last_live_frame_at_unix=fallback.updated_at_unix,
-                    fallback_active=True,
-                    fallback_reason="selected_writer_missing_frame",
-                    stale_after_s=stale_after_s,
-                    placeholder_after_s=placeholder_after_s,
-                )
-
-        fallback = (
-            self._last_selected_frame_by_transmission.get(transmission_id)
-            or self._last_incoming_frame_by_transmission.get(transmission_id)
-        )
-        if fallback is not None:
-            return self._selected_frame_result(
+            fallback_result = self._fallback_frame_result_locked(
                 transmission_id=transmission_id,
                 now_monotonic=now_monotonic,
                 active_writer_id=active_writer_id,
-                writer_id=None,
-                selected_writer_id=fallback.writer_id,
-                frame=fallback.frame,
-                lifecycle_state=None,
-                writer_priority=0,
-                frame_ts=float(fallback.frame_ts),
-                updated_at_monotonic=float(fallback.updated_at_monotonic),
-                last_live_frame_at_unix=fallback.updated_at_unix,
-                fallback_active=True,
-                fallback_reason="no_active_writer",
+                fallback_reason="selected_writer_missing_frame",
                 stale_after_s=stale_after_s,
                 placeholder_after_s=placeholder_after_s,
             )
+            if fallback_result is not None:
+                return fallback_result
 
-        return self._selected_frame_result(
+        fallback_result = self._fallback_frame_result_locked(
             transmission_id=transmission_id,
             now_monotonic=now_monotonic,
             active_writer_id=active_writer_id,
-            writer_id=None,
-            selected_writer_id=None,
-            frame=None,
-            lifecycle_state=None,
-            writer_priority=0,
-            frame_ts=0.0,
-            updated_at_monotonic=now_monotonic,
-            last_live_frame_at_unix=None,
-            fallback_active=False,
-            fallback_reason="no_frame",
+            fallback_reason="no_active_writer",
+            stale_after_s=stale_after_s,
+            placeholder_after_s=placeholder_after_s,
+        )
+        if fallback_result is not None:
+            return fallback_result
+
+        return self._empty_frame_result(
+            transmission_id=transmission_id,
+            now_monotonic=now_monotonic,
+            active_writer_id=active_writer_id,
             stale_after_s=stale_after_s,
             placeholder_after_s=placeholder_after_s,
         )

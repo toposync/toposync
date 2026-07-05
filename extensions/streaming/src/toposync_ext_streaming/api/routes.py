@@ -36,6 +36,12 @@ from toposync.runtime.services import ServiceRegistry
 from ..streaming.engine_manager import MediaMtxEngineManager, MediaMtxPortResolutionError
 from ..streaming.go2rtc_binary import extract_go2rtc_binary, find_installed_go2rtc_binary
 from ..streaming.go2rtc_manager import Go2RtcSidecarManager, Go2RtcSidecarStatus
+from ..streaming.http_client import (
+    request_bytes,
+    request_bytes_with_status,
+    request_json,
+    request_text_with_status,
+)
 from ..streaming.camera_ingest import (
     build_camera_ingest_definitions,
     build_camera_ingest_path_auth,
@@ -88,6 +94,7 @@ from .models import (
     StreamingApplyWebRtcCompanionResponse,
     StreamingApplyQualityProfilesRequest,
     StreamingApplyQualityProfilesResponse,
+    StreamingMediaAuthType,
     StreamingCameraIngestAuthPath,
     StreamingCameraIngestAuthResponse,
     StreamingCameraIngestResolveRequest,
@@ -1057,12 +1064,6 @@ def _filter_settings_for_server(
     return StreamingExtensionSettings.model_validate(payload)
 
 
-def _build_basic_authorization(username: str, password: str) -> str:
-    raw = f"{username}:{password}".encode("utf-8")
-    encoded = base64.b64encode(raw).decode("ascii")
-    return f"Basic {encoded}"
-
-
 async def _fetch_json(
     *,
     url: str,
@@ -1070,30 +1071,12 @@ async def _fetch_json(
     username: str = "",
     password: str = "",
 ) -> dict[str, Any]:
-    def _do_request() -> dict[str, Any]:
-        headers = {"accept": "application/json"}
-        if username or password:
-            headers["authorization"] = _build_basic_authorization(username, password)
-        req = urllib_request.Request(url=url, headers=headers, method="GET")
-        try:
-            with urllib_request.urlopen(req, timeout=max(1.0, float(timeout_s))) as response:
-                payload = response.read().decode("utf-8", errors="replace")
-        except urllib_error.HTTPError as exc:
-            body = _read_http_error(exc)
-            raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
-        except urllib_error.URLError as exc:
-            reason = str(getattr(exc, "reason", "") or exc)
-            raise RuntimeError(f"Connection failed: {reason}") from exc
-
-        try:
-            parsed_payload = json.loads(payload)
-        except Exception as exc:
-            raise RuntimeError("Invalid JSON response") from exc
-        if not isinstance(parsed_payload, dict):
-            raise RuntimeError("Invalid JSON payload")
-        return parsed_payload
-
-    return await asyncio.to_thread(_do_request)
+    return await request_json(
+        url=url,
+        timeout_s=timeout_s,
+        username=username,
+        password=password,
+    )
 
 
 async def _fetch_bytes(
@@ -1104,22 +1087,13 @@ async def _fetch_bytes(
     password: str = "",
     accept: str = "*/*",
 ) -> tuple[bytes, str | None]:
-    def _do_request() -> tuple[bytes, str | None]:
-        headers = {"accept": accept}
-        if username or password:
-            headers["authorization"] = _build_basic_authorization(username, password)
-        req = urllib_request.Request(url=url, headers=headers, method="GET")
-        try:
-            with urllib_request.urlopen(req, timeout=max(1.0, float(timeout_s))) as response:
-                return response.read(), response.headers.get("content-type")
-        except urllib_error.HTTPError as exc:
-            body = _read_http_error(exc)
-            raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
-        except urllib_error.URLError as exc:
-            reason = str(getattr(exc, "reason", "") or exc)
-            raise RuntimeError(f"Connection failed: {reason}") from exc
-
-    return await asyncio.to_thread(_do_request)
+    return await request_bytes(
+        url=url,
+        timeout_s=timeout_s,
+        username=username,
+        password=password,
+        accept=accept,
+    )
 
 
 async def _post_json(
@@ -1130,42 +1104,14 @@ async def _post_json(
     username: str = "",
     password: str = "",
 ) -> dict[str, Any]:
-    def _do_request() -> dict[str, Any]:
-        headers = {"accept": "application/json", "content-type": "application/json"}
-        if username or password:
-            headers["authorization"] = _build_basic_authorization(username, password)
-        req = urllib_request.Request(
-            url=url,
-            data=json.dumps(body).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urllib_request.urlopen(req, timeout=max(1.0, float(timeout_s))) as response:
-                payload = response.read().decode("utf-8", errors="replace")
-        except urllib_error.HTTPError as exc:
-            detail = _read_http_error(exc)
-            raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
-        except urllib_error.URLError as exc:
-            reason = str(getattr(exc, "reason", "") or exc)
-            raise RuntimeError(f"Connection failed: {reason}") from exc
-        try:
-            parsed_payload = json.loads(payload)
-        except Exception as exc:
-            raise RuntimeError("Invalid JSON response") from exc
-        if not isinstance(parsed_payload, dict):
-            raise RuntimeError("Invalid JSON payload")
-        return parsed_payload
-
-    return await asyncio.to_thread(_do_request)
-
-
-def _read_http_error(exc: urllib_error.HTTPError) -> str:
-    try:
-        body = exc.read().decode("utf-8", errors="replace").strip()
-    except Exception:
-        body = ""
-    return body or str(exc.reason or "")
+    return await request_json(
+        url=url,
+        method="POST",
+        body=body,
+        timeout_s=timeout_s,
+        username=username,
+        password=password,
+    )
 
 
 async def _fetch_text_with_status(
@@ -1176,23 +1122,13 @@ async def _fetch_text_with_status(
     username: str = "",
     password: str = "",
 ) -> tuple[int, str]:
-    def _do_request() -> tuple[int, str]:
-        request_headers = dict(headers or {})
-        if username or password:
-            request_headers["authorization"] = _build_basic_authorization(username, password)
-        req = urllib_request.Request(url=url, headers=request_headers, method="GET")
-        try:
-            with urllib_request.urlopen(req, timeout=max(1.0, float(timeout_s))) as response:
-                payload = response.read().decode("utf-8", errors="replace")
-                return int(getattr(response, "status", 200) or 200), payload
-        except urllib_error.HTTPError as exc:
-            body = _read_http_error(exc)
-            return int(exc.code), body
-        except urllib_error.URLError as exc:
-            reason = str(getattr(exc, "reason", "") or exc)
-            raise RuntimeError(f"Connection failed: {reason}") from exc
-
-    return await asyncio.to_thread(_do_request)
+    return await request_text_with_status(
+        url=url,
+        timeout_s=timeout_s,
+        headers=headers,
+        username=username,
+        password=password,
+    )
 
 
 async def _fetch_bytes_with_status(
@@ -1203,36 +1139,13 @@ async def _fetch_bytes_with_status(
     username: str = "",
     password: str = "",
 ) -> tuple[int, bytes, dict[str, str]]:
-    def _response_headers(response: Any) -> dict[str, str]:
-        raw_headers = getattr(response, "headers", None)
-        if raw_headers is None:
-            return {}
-        try:
-            items = raw_headers.items()
-        except Exception:
-            return {}
-        return {str(key).lower(): str(value) for key, value in items}
-
-    def _do_request() -> tuple[int, bytes, dict[str, str]]:
-        request_headers = dict(headers or {})
-        if username or password:
-            request_headers["authorization"] = _build_basic_authorization(username, password)
-        req = urllib_request.Request(url=url, headers=request_headers, method="GET")
-        try:
-            with urllib_request.urlopen(req, timeout=max(1.0, float(timeout_s))) as response:
-                payload = response.read()
-                return int(getattr(response, "status", 200) or 200), payload, _response_headers(response)
-        except urllib_error.HTTPError as exc:
-            try:
-                payload = exc.read()
-            except Exception:
-                payload = b""
-            return int(exc.code), payload, _response_headers(exc)
-        except urllib_error.URLError as exc:
-            reason = str(getattr(exc, "reason", "") or exc)
-            raise RuntimeError(f"Connection failed: {reason}") from exc
-
-    return await asyncio.to_thread(_do_request)
+    return await request_bytes_with_status(
+        url=url,
+        timeout_s=timeout_s,
+        headers=headers,
+        username=username,
+        password=password,
+    )
 
 
 def _hls_parse_uri_lines(playlist_text: str, maximum_count: int) -> list[str]:
@@ -1823,77 +1736,43 @@ async def _resolve_local_transmission_urls(
                 requires_auth = False
                 auth_username = None
                 outputs.append(
-                    TransmissionOutputUrl(
-                        output_id=output.id,
+                    _transmission_output_url(
+                        output=output,
                         protocol=output.protocol,
-                        resolved_engine_path=engine_path,
+                        engine_path=engine_path,
                         url=url,
                         requires_auth=requires_auth,
                         auth_username=auth_username,
                         media_auth_type=media_auth_type,
                         url_expires_at_unix=url_expires_at_unix,
                         renew_after_unix=renew_after_unix,
-                        **_output_quality_metadata(
-                            output,
-                            source_dimensions=media_source_dimensions,
-                            include_content_rect=True,
-                        ),
+                        source_dimensions=media_source_dimensions,
                     )
                 )
                 if mse_media_url_available:
-                    media_token, mse_expires_at_unix, mse_renew_after_unix = _issue_media_token(
-                        config_store=_config_store(request),
-                        settings=settings,
-                        transmission=transmission,
-                        output=output,
-                        engine_path=engine_path,
-                        transport="mse",
-                        ttl_seconds=media_token_ttl_seconds,
-                    )
                     outputs.append(
-                        TransmissionOutputUrl(
-                            output_id=output.id,
-                            protocol="mse",
-                            resolved_engine_path=engine_path,
-                            url=_mse_proxy_url(request, engine_path, media_token=media_token),
-                            requires_auth=False,
-                            auth_username=None,
-                            media_auth_type="signed_url",
-                            url_expires_at_unix=mse_expires_at_unix,
-                            renew_after_unix=mse_renew_after_unix,
-                            **_output_quality_metadata(
-                                output,
-                                source_dimensions=media_source_dimensions,
-                                include_content_rect=True,
-                            ),
+                        _signed_proxy_output_url(
+                            request=request,
+                            settings=settings,
+                            transmission=transmission,
+                            output=output,
+                            engine_path=engine_path,
+                            transport="mse",
+                            ttl_seconds=media_token_ttl_seconds,
+                            source_dimensions=media_source_dimensions,
                         )
                     )
                 if jsmpeg_available:
-                    media_token, jsmpeg_expires_at_unix, jsmpeg_renew_after_unix = _issue_media_token(
-                        config_store=_config_store(request),
-                        settings=settings,
-                        transmission=transmission,
-                        output=output,
-                        engine_path=engine_path,
-                        transport="jsmpeg",
-                        ttl_seconds=media_token_ttl_seconds,
-                    )
                     outputs.append(
-                        TransmissionOutputUrl(
-                            output_id=output.id,
-                            protocol="jsmpeg",
-                            resolved_engine_path=engine_path,
-                            url=_jsmpeg_proxy_url(request, engine_path, media_token=media_token),
-                            requires_auth=False,
-                            auth_username=None,
-                            media_auth_type="signed_url",
-                            url_expires_at_unix=jsmpeg_expires_at_unix,
-                            renew_after_unix=jsmpeg_renew_after_unix,
-                            **_output_quality_metadata(
-                                output,
-                                source_dimensions=media_source_dimensions,
-                                include_content_rect=True,
-                            ),
+                        _signed_proxy_output_url(
+                            request=request,
+                            settings=settings,
+                            transmission=transmission,
+                            output=output,
+                            engine_path=engine_path,
+                            transport="jsmpeg",
+                            ttl_seconds=media_token_ttl_seconds,
+                            source_dimensions=media_source_dimensions,
                         )
                     )
                 continue
@@ -1914,75 +1793,41 @@ async def _resolve_local_transmission_urls(
         auth_username = str(getattr(output_auth, "username", "") or "").strip() or None
         media_auth_type = "basic" if requires_auth else "none"
         outputs.append(
-            TransmissionOutputUrl(
-                output_id=output.id,
+            _transmission_output_url(
+                output=output,
                 protocol=output.protocol,
-                resolved_engine_path=engine_path,
+                engine_path=engine_path,
                 url=url,
                 requires_auth=requires_auth,
                 auth_username=auth_username if requires_auth else None,
                 media_auth_type=media_auth_type,
-                **_output_quality_metadata(
-                    output,
-                    source_dimensions=media_source_dimensions,
-                    include_content_rect=True,
-                ),
+                source_dimensions=media_source_dimensions,
             )
         )
         if output.protocol == "hls" and mse_media_url_available:
-            media_token, mse_expires_at_unix, mse_renew_after_unix = _issue_media_token(
-                config_store=_config_store(request),
-                settings=settings,
-                transmission=transmission,
-                output=output,
-                engine_path=engine_path,
-                transport="mse",
-                ttl_seconds=media_token_ttl_seconds,
-            )
             outputs.append(
-                TransmissionOutputUrl(
-                    output_id=output.id,
-                    protocol="mse",
-                    resolved_engine_path=engine_path,
-                    url=_mse_proxy_url(request, engine_path, media_token=media_token),
-                    requires_auth=False,
-                    auth_username=None,
-                    media_auth_type="signed_url",
-                    url_expires_at_unix=mse_expires_at_unix,
-                    renew_after_unix=mse_renew_after_unix,
-                    **_output_quality_metadata(
-                        output,
-                        source_dimensions=media_source_dimensions,
-                        include_content_rect=True,
-                    ),
+                _signed_proxy_output_url(
+                    request=request,
+                    settings=settings,
+                    transmission=transmission,
+                    output=output,
+                    engine_path=engine_path,
+                    transport="mse",
+                    ttl_seconds=media_token_ttl_seconds,
+                    source_dimensions=media_source_dimensions,
                 )
             )
         if output.protocol == "hls" and jsmpeg_available:
-            media_token, jsmpeg_expires_at_unix, jsmpeg_renew_after_unix = _issue_media_token(
-                config_store=_config_store(request),
-                settings=settings,
-                transmission=transmission,
-                output=output,
-                engine_path=engine_path,
-                transport="jsmpeg",
-                ttl_seconds=media_token_ttl_seconds,
-            )
             outputs.append(
-                TransmissionOutputUrl(
-                    output_id=output.id,
-                    protocol="jsmpeg",
-                    resolved_engine_path=engine_path,
-                    url=_jsmpeg_proxy_url(request, engine_path, media_token=media_token),
-                    requires_auth=False,
-                    auth_username=None,
-                    media_auth_type="signed_url",
-                    url_expires_at_unix=jsmpeg_expires_at_unix,
-                    renew_after_unix=jsmpeg_renew_after_unix,
-                    **_output_quality_metadata(
-                        output,
-                        source_dimensions=media_source_dimensions,
-                        include_content_rect=True,
-                    ),
+                _signed_proxy_output_url(
+                    request=request,
+                    settings=settings,
+                    transmission=transmission,
+                    output=output,
+                    engine_path=engine_path,
+                    transport="jsmpeg",
+                    ttl_seconds=media_token_ttl_seconds,
+                    source_dimensions=media_source_dimensions,
                 )
             )
 
@@ -2084,21 +1929,11 @@ async def _resolve_remote_transmission_urls(
     for output in resolved.outputs:
         rewritten_url = _rewrite_url_host(output.url, host=host_override)
         outputs.append(
-            TransmissionOutputUrl(
-                output_id=output.output_id,
-                protocol=output.protocol,
-                resolved_engine_path=output.resolved_engine_path,
-                url=rewritten_url,
-                requires_auth=bool(output.requires_auth),
-                auth_username=str(output.auth_username or "").strip() or None,
-                media_auth_type=output.media_auth_type,
-                url_expires_at_unix=output.url_expires_at_unix,
-                renew_after_unix=output.renew_after_unix,
-                quality_profile_id=output.quality_profile_id,
-                resolution=output.resolution,
-                fps_limit=output.fps_limit,
-                bitrate_kbps=output.bitrate_kbps,
-                latency_profile=output.latency_profile,
+            output.model_copy(
+                update={
+                    "url": rewritten_url,
+                    "auth_username": str(output.auth_username or "").strip() or None,
+                }
             )
         )
 
@@ -2239,6 +2074,70 @@ def _output_quality_metadata(
     if include_content_rect:
         metadata["content_rect"] = _output_content_rect(output, source_dimensions=source_dimensions)
     return metadata
+
+
+def _transmission_output_url(
+    *,
+    output: TransmissionOutput,
+    protocol: Literal["hls", "rtsp", "webrtc", "mse", "jsmpeg"],
+    engine_path: str,
+    url: str,
+    requires_auth: bool = False,
+    auth_username: str | None = None,
+    media_auth_type: StreamingMediaAuthType = "none",
+    url_expires_at_unix: float | None = None,
+    renew_after_unix: float | None = None,
+    source_dimensions: tuple[int, int] | None = None,
+) -> TransmissionOutputUrl:
+    return TransmissionOutputUrl(
+        output_id=output.id,
+        protocol=protocol,
+        resolved_engine_path=engine_path,
+        url=url,
+        requires_auth=requires_auth,
+        auth_username=auth_username if requires_auth or auth_username else None,
+        media_auth_type=media_auth_type,
+        url_expires_at_unix=url_expires_at_unix,
+        renew_after_unix=renew_after_unix,
+        **_output_quality_metadata(
+            output,
+            source_dimensions=source_dimensions,
+            include_content_rect=True,
+        ),
+    )
+
+
+def _signed_proxy_output_url(
+    *,
+    request: Request,
+    settings: StreamingExtensionSettings,
+    transmission: Transmission,
+    output: TransmissionOutput,
+    engine_path: str,
+    transport: Literal["mse", "jsmpeg"],
+    ttl_seconds: int,
+    source_dimensions: tuple[int, int] | None = None,
+) -> TransmissionOutputUrl:
+    token, expires_at_unix, renew_after_unix = _issue_media_token(
+        config_store=_config_store(request),
+        settings=settings,
+        transmission=transmission,
+        output=output,
+        engine_path=engine_path,
+        transport=transport,
+        ttl_seconds=ttl_seconds,
+    )
+    proxy_url = _mse_proxy_url if transport == "mse" else _jsmpeg_proxy_url
+    return _transmission_output_url(
+        output=output,
+        protocol=transport,
+        engine_path=engine_path,
+        url=proxy_url(request, engine_path, media_token=token),
+        media_auth_type="signed_url",
+        url_expires_at_unix=expires_at_unix,
+        renew_after_unix=renew_after_unix,
+        source_dimensions=source_dimensions,
+    )
 
 
 async def _transmission_media_source_dimensions(
@@ -2774,6 +2673,39 @@ def _remote_transmission_endpoint(
     if query_params:
         url = f"{url}?{urllib_parse.urlencode(query_params)}"
     return url
+
+
+async def _post_remote_transmission(
+    *,
+    config_store: ConfigStore,
+    transmission: Transmission,
+    suffix: str,
+    body: dict[str, Any],
+    query: dict[str, str | None] | None = None,
+    action_label: str,
+) -> dict[str, Any]:
+    server = await _remote_transmission_server(
+        config_store=config_store,
+        transmission=transmission,
+    )
+    remote_url = _remote_transmission_endpoint(
+        server,
+        transmission_id=transmission.id,
+        suffix=suffix,
+        query=query,
+    )
+    try:
+        return await _post_json(
+            url=remote_url,
+            body=body,
+            username=str(server.username or "").strip(),
+            password=str(server.password or "").strip(),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to {action_label} on processing server '{transmission.host_server_id}': {exc}",
+        ) from exc
 
 
 def _home_assistant_still_url_path(
@@ -4567,6 +4499,90 @@ async def _build_runtime_health(
         hls_proxy_reachable=_media_url_origin(request) is not None,
         hls_playlist_rewrite_ok=True,
     )
+
+
+def _runtime_output_status(
+    *,
+    transmission: StreamingRuntimeTransmissionHealth,
+    output: StreamingRuntimeOutputHealth,
+) -> StreamingOutputRuntimeStatus:
+    payload = output.model_dump(mode="python")
+    payload.update(
+        {
+            "transmission_id": transmission.transmission_id,
+            "active_writer_id": transmission.active_writer_id,
+            "selected_writer_id": transmission.selected_writer_id,
+            "selected_frame_age_seconds": transmission.selected_frame_age_seconds,
+            "last_incoming_frame_age_seconds": transmission.last_incoming_frame_age_seconds,
+            "last_live_frame_at_unix": transmission.last_live_frame_at_unix,
+            "fallback_active": transmission.fallback_active,
+            "fallback_reason": transmission.fallback_reason,
+            "stale": transmission.stale,
+            "placeholder_active": transmission.placeholder_active,
+            "stream_behavior": transmission.stream_behavior,
+            "event_gated": transmission.event_gated,
+            "event_gated_idle": transmission.event_gated_idle,
+            "event_gate_reasons": transmission.event_gate_reasons,
+        }
+    )
+    return StreamingOutputRuntimeStatus.model_validate(payload)
+
+
+async def _runtime_diagnostics_payload(
+    request: Request,
+    *,
+    settings: StreamingExtensionSettings | None = None,
+) -> dict[str, Any]:
+    if settings is None:
+        settings = await _load_settings(_config_store(request))
+    manager = _engine_manager(request)
+    runtime_state = _runtime_state(request)
+    publisher = _publisher_manager(request)
+    bridge = _writer_bridge(request)
+    playback_events = _playback_event_store(request)
+    ingest_credentials = _ingest_credential_store(request).load_or_create()
+
+    bridge_snapshot: dict[str, Any] | None = None
+    if bridge is not None and callable(getattr(bridge, "snapshot", None)):
+        try:
+            bridge_snapshot = redact_ingest_secret(
+                await bridge.snapshot(),
+                credentials=ingest_credentials,
+            )
+        except Exception as exc:
+            bridge_snapshot = {"error": str(exc)}
+
+    return {
+        "server_id": _current_server_id(request),
+        "quality_profiles": [profile.model_dump(mode="python") for profile in build_quality_profiles()],
+        "public_media": {
+            "public_base_path": _request_public_base_path(request),
+            "media_url_origin": _media_url_origin(request),
+            "hls_proxy_reachable": _media_url_origin(request) is not None,
+            "hls_playlist_rewrite_ok": True,
+        },
+        "engine": await manager.status_payload(host=_status_host(request, settings)),
+        "media_auth": settings.engine.media_auth.model_dump(mode="python"),
+        "camera_ingest_auth": (
+            await _build_camera_ingest_auth_response(request, reveal=False)
+        ).model_dump(mode="python"),
+        "mediamtx": await _mediamtx_snapshot(request),
+        "publisher": redact_ingest_secret(
+            await publisher.snapshot(),
+            credentials=ingest_credentials,
+        ),
+        "runtime_state": await runtime_state.snapshot(
+            stale_after_s=settings.stale_policy.stale_after_seconds,
+            placeholder_after_s=settings.stale_policy.placeholder_after_seconds,
+        ),
+        "bridge": bridge_snapshot,
+        "source_health": await _camera_source_health_snapshot(request),
+        "playback_events": {
+            "retention_seconds": playback_events.retention_seconds,
+            "retained_count": await playback_events.retained_count(),
+            "events": [event.as_dict() for event in await playback_events.list_events(limit=100)],
+        },
+    }
 
 
 def _resolve_camera_id_from_settings(settings: Any, *, camera_selector: str) -> str | None:
@@ -8643,59 +8659,7 @@ def create_streaming_router() -> APIRouter:
         outputs: list[StreamingOutputRuntimeStatus] = []
         for transmission in health.transmissions:
             for output in transmission.outputs:
-                outputs.append(
-                    StreamingOutputRuntimeStatus(
-                        output_key=output.output_key,
-                        output_id=output.output_id,
-                        transmission_id=transmission.transmission_id,
-                        protocol=output.protocol,
-                        resolved_engine_path=output.resolved_engine_path,
-                        quality_profile_id=output.quality_profile_id,
-                        resolution=output.resolution,
-                        fps_limit=output.fps_limit,
-                        bitrate_kbps=output.bitrate_kbps,
-                        latency_profile=output.latency_profile,
-                        viewer_count=output.viewer_count,
-                        demand_signal=output.demand_signal,
-                        publisher_running=output.publisher_running,
-                        publisher_pid=output.publisher_pid,
-                        publisher_frames_sent=output.publisher_frames_sent,
-                        publisher_last_error=output.publisher_last_error,
-                        publisher_active_codec=output.publisher_active_codec,
-                        publisher_hardware_accelerated=output.publisher_hardware_accelerated,
-                        publisher_restart_count=output.publisher_restart_count,
-                        publisher_last_frame_at_unix=output.publisher_last_frame_at_unix,
-                        publisher_encoder_mode=output.publisher_encoder_mode,
-                        publisher_encoder_state=output.publisher_encoder_state,
-                        publisher_encoder_reason=output.publisher_encoder_reason,
-                        publisher_encoder_quarantined_until_unix=output.publisher_encoder_quarantined_until_unix,
-                        publisher_encoder_fallback_active=output.publisher_encoder_fallback_active,
-                        status=output.status,
-                        active_writer_id=transmission.active_writer_id,
-                        selected_writer_id=transmission.selected_writer_id,
-                        selected_frame_age_seconds=transmission.selected_frame_age_seconds,
-                        last_incoming_frame_age_seconds=transmission.last_incoming_frame_age_seconds,
-                        last_live_frame_at_unix=transmission.last_live_frame_at_unix,
-                        fallback_active=transmission.fallback_active,
-                        fallback_reason=transmission.fallback_reason,
-                        stale=transmission.stale,
-                        placeholder_active=transmission.placeholder_active,
-                        stream_behavior=transmission.stream_behavior,
-                        event_gated=transmission.event_gated,
-                        event_gated_idle=transmission.event_gated_idle,
-                        event_gate_reasons=transmission.event_gate_reasons,
-                        classification=output.classification,
-                        evidence=output.evidence,
-                        summary_status=output.summary_status,
-                        summary_message=output.summary_message,
-                        summary_action=output.summary_action,
-                        technical_status=output.technical_status,
-                        active_playback_session_count=output.active_playback_session_count,
-                        last_playback_event_at_unix=output.last_playback_event_at_unix,
-                        publisher_frames_sent_rate=output.publisher_frames_sent_rate,
-                        source_health=output.source_health,
-                    )
-                )
+                outputs.append(_runtime_output_status(transmission=transmission, output=output))
 
         outputs.sort(key=lambda item: (item.transmission_id, item.output_id))
         return StreamingOutputsRuntimeResponse(
@@ -8840,57 +8804,7 @@ def create_streaming_router() -> APIRouter:
         health = await _build_runtime_health(request=request, settings=settings)
         health = await _annotate_runtime_health_observability(request=request, settings=settings, health=health)
         outputs = [
-            StreamingOutputRuntimeStatus(
-                output_key=output.output_key,
-                output_id=output.output_id,
-                transmission_id=transmission.transmission_id,
-                protocol=output.protocol,
-                resolved_engine_path=output.resolved_engine_path,
-                quality_profile_id=output.quality_profile_id,
-                resolution=output.resolution,
-                fps_limit=output.fps_limit,
-                bitrate_kbps=output.bitrate_kbps,
-                latency_profile=output.latency_profile,
-                viewer_count=output.viewer_count,
-                demand_signal=output.demand_signal,
-                publisher_running=output.publisher_running,
-                publisher_pid=output.publisher_pid,
-                publisher_frames_sent=output.publisher_frames_sent,
-                publisher_last_error=output.publisher_last_error,
-                publisher_active_codec=output.publisher_active_codec,
-                publisher_hardware_accelerated=output.publisher_hardware_accelerated,
-                publisher_restart_count=output.publisher_restart_count,
-                publisher_last_frame_at_unix=output.publisher_last_frame_at_unix,
-                publisher_encoder_mode=output.publisher_encoder_mode,
-                publisher_encoder_state=output.publisher_encoder_state,
-                publisher_encoder_reason=output.publisher_encoder_reason,
-                publisher_encoder_quarantined_until_unix=output.publisher_encoder_quarantined_until_unix,
-                publisher_encoder_fallback_active=output.publisher_encoder_fallback_active,
-                status=output.status,
-                active_writer_id=transmission.active_writer_id,
-                selected_writer_id=transmission.selected_writer_id,
-                selected_frame_age_seconds=transmission.selected_frame_age_seconds,
-                last_incoming_frame_age_seconds=transmission.last_incoming_frame_age_seconds,
-                last_live_frame_at_unix=transmission.last_live_frame_at_unix,
-                fallback_active=transmission.fallback_active,
-                fallback_reason=transmission.fallback_reason,
-                stale=transmission.stale,
-                placeholder_active=transmission.placeholder_active,
-                stream_behavior=transmission.stream_behavior,
-                event_gated=transmission.event_gated,
-                event_gated_idle=transmission.event_gated_idle,
-                event_gate_reasons=transmission.event_gate_reasons,
-                classification=output.classification,
-                evidence=output.evidence,
-                summary_status=output.summary_status,
-                summary_message=output.summary_message,
-                summary_action=output.summary_action,
-                technical_status=output.technical_status,
-                active_playback_session_count=output.active_playback_session_count,
-                last_playback_event_at_unix=output.last_playback_event_at_unix,
-                publisher_frames_sent_rate=output.publisher_frames_sent_rate,
-                source_health=output.source_health,
-            ).model_dump(mode="python")
+            _runtime_output_status(transmission=transmission, output=output).model_dump(mode="python")
             for transmission in health.transmissions
             for output in transmission.outputs
         ]
@@ -8911,62 +8825,13 @@ def create_streaming_router() -> APIRouter:
             ).model_dump(mode="python"),
             "encoders": await _publisher_manager(request).encoders_snapshot(),
             "source_health": await _camera_source_health_snapshot(request),
-            "diagnostics": await streaming_runtime_diagnostics(request),
+            "diagnostics": await _runtime_diagnostics_payload(request, settings=settings),
         }
 
     @router.get("/runtime/diagnostics")
     async def streaming_runtime_diagnostics(request: Request) -> dict[str, Any]:
         _require_auth(request, action="core:settings:read")
-        config_store = _config_store(request)
-        settings = await _load_settings(config_store)
-        manager = _engine_manager(request)
-        runtime_state = _runtime_state(request)
-        publisher = _publisher_manager(request)
-        bridge = _writer_bridge(request)
-        playback_events = _playback_event_store(request)
-        ingest_credentials = _ingest_credential_store(request).load_or_create()
-
-        bridge_snapshot: dict[str, Any] | None = None
-        if bridge is not None and callable(getattr(bridge, "snapshot", None)):
-            try:
-                bridge_snapshot = redact_ingest_secret(
-                    await bridge.snapshot(),
-                    credentials=ingest_credentials,
-                )
-            except Exception as exc:
-                bridge_snapshot = {"error": str(exc)}
-
-        return {
-            "server_id": _current_server_id(request),
-            "quality_profiles": [profile.model_dump(mode="python") for profile in build_quality_profiles()],
-            "public_media": {
-                "public_base_path": _request_public_base_path(request),
-                "media_url_origin": _media_url_origin(request),
-                "hls_proxy_reachable": _media_url_origin(request) is not None,
-                "hls_playlist_rewrite_ok": True,
-            },
-            "engine": await manager.status_payload(host=_status_host(request, settings)),
-            "media_auth": settings.engine.media_auth.model_dump(mode="python"),
-            "camera_ingest_auth": (
-                await _build_camera_ingest_auth_response(request, reveal=False)
-            ).model_dump(mode="python"),
-            "mediamtx": await _mediamtx_snapshot(request),
-            "publisher": redact_ingest_secret(
-                await publisher.snapshot(),
-                credentials=ingest_credentials,
-            ),
-            "runtime_state": await runtime_state.snapshot(
-                stale_after_s=settings.stale_policy.stale_after_seconds,
-                placeholder_after_s=settings.stale_policy.placeholder_after_seconds,
-            ),
-            "bridge": bridge_snapshot,
-            "source_health": await _camera_source_health_snapshot(request),
-            "playback_events": {
-                "retention_seconds": playback_events.retention_seconds,
-                "retained_count": await playback_events.retained_count(),
-                "events": [event.as_dict() for event in await playback_events.list_events(limit=100)],
-            },
-        }
+        return await _runtime_diagnostics_payload(request)
 
     @router.get(
         "/transmissions/{transmission_id}/demand", response_model=TransmissionDemandResponse
@@ -9030,31 +8895,17 @@ def create_streaming_router() -> APIRouter:
         if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(
             request
         ):
-            server = await _remote_transmission_server(
+            return await _post_remote_transmission(
                 config_store=config_store,
                 transmission=transmission,
-            )
-            remote_url = _remote_transmission_endpoint(
-                server,
-                transmission_id=transmission.id,
                 suffix="demand/prime",
+                body={},
                 query={
                     "output_id": output_id,
                     "quality_profile_id": quality_profile_id,
                 },
+                action_label="prime demand",
             )
-            try:
-                return await _post_json(
-                    url=remote_url,
-                    body={},
-                    username=str(server.username or "").strip(),
-                    password=str(server.password or "").strip(),
-                )
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Failed to prime demand on processing server '{transmission.host_server_id}': {exc}",
-                ) from exc
 
         bridge = _writer_bridge(request)
         prime_demand = getattr(bridge, "prime_transmission_demand", None)
@@ -9108,22 +8959,14 @@ def create_streaming_router() -> APIRouter:
         default_lease_seconds = 90.0 if payload.source == "home_assistant_entity" else 45.0
         lease_seconds = float(payload.ttl_seconds or default_lease_seconds)
         if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
-            server = await _remote_transmission_server(
+            remote_payload = await _post_remote_transmission(
                 config_store=config_store,
                 transmission=transmission,
-            )
-            remote_url = _remote_transmission_endpoint(
-                server,
-                transmission_id=transmission.id,
                 suffix="demand/heartbeat",
+                body=payload.model_dump(mode="json"),
+                action_label="renew demand",
             )
             try:
-                remote_payload = await _post_json(
-                    url=remote_url,
-                    body=payload.model_dump(mode="json"),
-                    username=str(server.username or "").strip(),
-                    password=str(server.password or "").strip(),
-                )
                 return TransmissionDemandHeartbeatResponse.model_validate(remote_payload)
             except Exception as exc:
                 raise HTTPException(

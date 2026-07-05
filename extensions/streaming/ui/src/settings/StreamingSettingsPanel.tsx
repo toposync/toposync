@@ -73,6 +73,15 @@ type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: st
 type BrowserDebugTransport = "hls" | "webrtc" | "mse" | "jsmpeg";
 type StreamingSettingsTab = "live" | "issues" | "playback" | "infrastructure" | "advanced";
 type StreamingIssueSeverity = "critical" | "warning" | "info";
+type LoaderOptions<T> = {
+  signal?: AbortSignal;
+  showLoading?: boolean;
+  setLoading?: (loading: boolean) => void;
+  setError: (message: string | null) => void;
+  load: (signal?: AbortSignal) => Promise<T>;
+  apply: (payload: T) => void;
+  onError?: () => void;
+};
 
 const BROWSER_DEBUG_TRANSPORTS: BrowserDebugTransport[] = ["hls", "webrtc", "mse", "jsmpeg"];
 const STREAMING_SETTINGS_TABS: StreamingSettingsTab[] = ["live", "issues", "playback", "infrastructure", "advanced"];
@@ -91,11 +100,7 @@ function enginePortFallbackWarningLabel(warning: string): string | null {
 }
 
 function uniqueLabels(labels: string[]): string[] {
-  const unique: string[] = [];
-  for (const label of labels) {
-    if (label && !unique.includes(label)) unique.push(label);
-  }
-  return unique;
+  return Array.from(new Set(labels.filter(Boolean)));
 }
 
 function toSafeInt(value: string, fallback: number): number {
@@ -115,10 +120,39 @@ function toOptionalInt(value: string): number | null {
 function slugifyPath(value: string): string {
   const text = String(value || "").trim().toLowerCase();
   if (!text) return "";
-  const filtered = Array.from(text)
-    .map((ch) => (/[a-z0-9_-]/.test(ch) ? ch : "-"))
-    .join("");
-  return filtered.replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, "");
+  return text.replace(/[^a-z0-9_-]+/g, "-").replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, "");
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function runLoader<T>({
+  signal,
+  showLoading = true,
+  setLoading,
+  setError,
+  load,
+  apply,
+  onError,
+}: LoaderOptions<T>): Promise<void> {
+  if (showLoading) setLoading?.(true);
+  setError(null);
+  try {
+    const payload = await load(signal);
+    if (signal?.aborted) return;
+    apply(payload);
+  } catch (error) {
+    if (isAbortError(error)) return;
+    onError?.();
+    setError(errorMessage(error));
+  } finally {
+    if (showLoading && !signal?.aborted) setLoading?.(false);
+  }
 }
 
 function streamingTransportDebugHref(options: {
@@ -717,196 +751,124 @@ function StreamingSettingsPanelContent({
 
   const transmissionsCount = transmissions.length > 0 ? transmissions.length : fallbackCount;
 
-  const fetchHealthData = useCallback(async (signal?: AbortSignal) => {
-    setHealthLoading(true);
-    setHealthError(null);
-    try {
-      const payload = await fetchStreamsHealth(signal);
-      setHealth(payload);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setHealth(null);
-      setHealthError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (!signal?.aborted) setHealthLoading(false);
-    }
-  }, []);
+  const fetchHealthData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    setLoading: setHealthLoading,
+    setError: setHealthError,
+    load: fetchStreamsHealth,
+    apply: setHealth,
+    onError: () => setHealth(null),
+  }), []);
 
-  const fetchEngineData = useCallback(async (signal?: AbortSignal) => {
-    setEngineLoading(true);
-    setEngineError(null);
-    try {
-      const payload = await fetchEngineStatus(signal);
-      setEngineStatus(payload);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setEngineStatus(null);
-      setEngineError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (!signal?.aborted) setEngineLoading(false);
-    }
-  }, []);
+  const fetchEngineData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    setLoading: setEngineLoading,
+    setError: setEngineError,
+    load: fetchEngineStatus,
+    apply: setEngineStatus,
+    onError: () => setEngineStatus(null),
+  }), []);
 
-  const fetchRuntimeHealthData = useCallback(async (signal?: AbortSignal, showLoading = false) => {
-    if (showLoading) setRuntimeHealthLoading(true);
-    setRuntimeHealthError(null);
-    try {
-      const payload = await fetchStreamingRuntimeHealth(signal);
-      if (signal?.aborted) return;
-      setRuntimeHealth(payload);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setRuntimeHealthError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (showLoading && !signal?.aborted) setRuntimeHealthLoading(false);
-    }
-  }, []);
+  const fetchRuntimeHealthData = useCallback((signal?: AbortSignal, showLoading = false) => runLoader({
+    signal,
+    showLoading,
+    setLoading: setRuntimeHealthLoading,
+    setError: setRuntimeHealthError,
+    load: fetchStreamingRuntimeHealth,
+    apply: setRuntimeHealth,
+  }), []);
 
-  const fetchRuntimePipelinesData = useCallback(async (signal?: AbortSignal) => {
-    setRuntimePipelinesError(null);
-    try {
-      const payload = await fetchStreamingRuntimePipelines(signal);
-      if (signal?.aborted) return;
-      setRuntimePipelines(payload);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setRuntimePipelinesError(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
+  const fetchRuntimePipelinesData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    showLoading: false,
+    setError: setRuntimePipelinesError,
+    load: fetchStreamingRuntimePipelines,
+    apply: setRuntimePipelines,
+  }), []);
 
-  const fetchRuntimeObservabilityData = useCallback(async (signal?: AbortSignal) => {
-    setRuntimeObservabilityError(null);
-    try {
-      const payload = await fetchStreamingRuntimeObservability(signal);
-      if (signal?.aborted) return;
-      setRuntimeObservability(payload);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setRuntimeObservabilityError(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
+  const fetchRuntimeObservabilityData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    showLoading: false,
+    setError: setRuntimeObservabilityError,
+    load: fetchStreamingRuntimeObservability,
+    apply: setRuntimeObservability,
+  }), []);
 
-  const fetchRuntimeEncodersData = useCallback(async (signal?: AbortSignal) => {
-    setRuntimeEncodersError(null);
-    try {
-      const payload = await fetchStreamingRuntimeEncoders(signal);
-      if (signal?.aborted) return;
-      setRuntimeEncoders(payload);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setRuntimeEncodersError(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
+  const fetchRuntimeEncodersData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    showLoading: false,
+    setError: setRuntimeEncodersError,
+    load: fetchStreamingRuntimeEncoders,
+    apply: setRuntimeEncoders,
+  }), []);
 
-  const fetchCameraIngestAuthData = useCallback(async (signal?: AbortSignal) => {
-    setCameraIngestAuthLoading(true);
-    setCameraIngestAuthError(null);
-    try {
-      const payload = await fetchCameraIngestAuth(signal);
-      if (signal?.aborted) return;
+  const fetchCameraIngestAuthData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    setLoading: setCameraIngestAuthLoading,
+    setError: setCameraIngestAuthError,
+    load: fetchCameraIngestAuth,
+    apply: (payload) => {
       setCameraIngestAuth(payload);
       setCameraIngestRevealed(Boolean(payload.password));
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setCameraIngestAuthError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (!signal?.aborted) setCameraIngestAuthLoading(false);
-    }
-  }, []);
+    },
+  }), []);
 
-  const fetchSettingsData = useCallback(async (signal?: AbortSignal) => {
-    setSettingsLoading(true);
-    setSettingsError(null);
-    try {
-      const payload = await fetchStreamingSettings(signal);
-      if (signal?.aborted) return;
+  const fetchSettingsData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    setLoading: setSettingsLoading,
+    setError: setSettingsError,
+    load: fetchStreamingSettings,
+    apply: (payload) => {
       setExtensionSettings(payload);
       setEngineSettingsDraft(deepClone(payload.engine ?? {}));
       setEngineSettingsDirty(false);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setExtensionSettings(null);
-      setSettingsError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (!signal?.aborted) setSettingsLoading(false);
-    }
-  }, []);
+    },
+    onError: () => setExtensionSettings(null),
+  }), []);
 
-  const fetchTransmissionsData = useCallback(async (signal?: AbortSignal) => {
-    setTransmissionsLoading(true);
-    setTransmissionsError(null);
-    try {
-      const payload = await fetchTransmissions(signal);
-      setTransmissions(payload);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setTransmissions([]);
-      setTransmissionsError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (!signal?.aborted) setTransmissionsLoading(false);
-    }
-  }, []);
+  const fetchTransmissionsData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    setLoading: setTransmissionsLoading,
+    setError: setTransmissionsError,
+    load: fetchTransmissions,
+    apply: setTransmissions,
+    onError: () => setTransmissions([]),
+  }), []);
 
-  const fetchCameraLiveViewsData = useCallback(async (signal?: AbortSignal) => {
-    setCameraLiveViewsLoading(true);
-    setCameraLiveViewsError(null);
-    try {
-      const payload = await fetchCameraLiveViews(signal);
-      if (signal?.aborted) return;
-      setCameraLiveViews(Array.isArray(payload) ? payload : []);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setCameraLiveViews([]);
-      setCameraLiveViewsError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (!signal?.aborted) setCameraLiveViewsLoading(false);
-    }
-  }, []);
+  const fetchCameraLiveViewsData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    setLoading: setCameraLiveViewsLoading,
+    setError: setCameraLiveViewsError,
+    load: fetchCameraLiveViews,
+    apply: (payload) => setCameraLiveViews(Array.isArray(payload) ? payload : []),
+    onError: () => setCameraLiveViews([]),
+  }), []);
 
-  const fetchQualityProfilesData = useCallback(async (signal?: AbortSignal) => {
-    setQualityProfilesError(null);
-    try {
-      const payload = await fetchStreamingQualityProfiles(signal);
-      if (signal?.aborted) return;
-      setQualityProfiles(payload);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setQualityProfilesError(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
+  const fetchQualityProfilesData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    showLoading: false,
+    setError: setQualityProfilesError,
+    load: fetchStreamingQualityProfiles,
+    apply: setQualityProfiles,
+  }), []);
 
-  const fetchProcessingServersData = useCallback(async (signal?: AbortSignal) => {
-    setProcessingServersLoading(true);
-    setProcessingServersError(null);
-    try {
-      const payload = await fetchProcessingServers(signal);
-      if (signal?.aborted) return;
-      setProcessingServers(sortProcessingServers(Array.isArray(payload) ? payload : []));
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setProcessingServers([{ id: "local", name: "Local", kind: "inprocess", url: "" }]);
-      setProcessingServersError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (!signal?.aborted) setProcessingServersLoading(false);
-    }
-  }, []);
+  const fetchProcessingServersData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    setLoading: setProcessingServersLoading,
+    setError: setProcessingServersError,
+    load: fetchProcessingServers,
+    apply: (payload) => setProcessingServers(sortProcessingServers(Array.isArray(payload) ? payload : [])),
+    onError: () => setProcessingServers([{ id: "local", name: "Local", kind: "inprocess", url: "" }]),
+  }), []);
 
-  const fetchAvailableCamerasData = useCallback(async (signal?: AbortSignal) => {
-    setAvailableCamerasLoading(true);
-    setAvailableCamerasError(null);
-    try {
-      const data = await fetchCamerasIndex(signal);
-      if (signal?.aborted) return;
-      const next = Array.isArray(data.cameras) ? data.cameras : [];
-      setAvailableCameras(next);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setAvailableCameras([]);
-      setAvailableCamerasError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (!signal?.aborted) setAvailableCamerasLoading(false);
-    }
-  }, []);
+  const fetchAvailableCamerasData = useCallback((signal?: AbortSignal) => runLoader({
+    signal,
+    setLoading: setAvailableCamerasLoading,
+    setError: setAvailableCamerasError,
+    load: fetchCamerasIndex,
+    apply: (data) => setAvailableCameras(Array.isArray(data.cameras) ? data.cameras : []),
+    onError: () => setAvailableCameras([]),
+  }), []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -941,23 +903,20 @@ function StreamingSettingsPanelContent({
   ]);
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
+    const runVisible = (...loaders: Array<() => Promise<void>>) => {
       if (document.visibilityState === "hidden") return;
-      void fetchEngineData();
-    }, 5000);
-    return () => window.clearInterval(interval);
-  }, [fetchEngineData]);
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (document.visibilityState === "hidden") return;
-      void fetchRuntimeHealthData();
-      void fetchRuntimePipelinesData();
-      void fetchRuntimeObservabilityData();
-      void fetchRuntimeEncodersData();
-    }, 2000);
-    return () => window.clearInterval(interval);
-  }, [fetchRuntimeHealthData, fetchRuntimeEncodersData, fetchRuntimeObservabilityData, fetchRuntimePipelinesData]);
+      for (const loader of loaders) void loader();
+    };
+    const engineInterval = window.setInterval(() => runVisible(fetchEngineData), 5000);
+    const runtimeInterval = window.setInterval(
+      () => runVisible(fetchRuntimeHealthData, fetchRuntimePipelinesData, fetchRuntimeObservabilityData, fetchRuntimeEncodersData),
+      2000,
+    );
+    return () => {
+      window.clearInterval(engineInterval);
+      window.clearInterval(runtimeInterval);
+    };
+  }, [fetchEngineData, fetchRuntimeHealthData, fetchRuntimeEncodersData, fetchRuntimeObservabilityData, fetchRuntimePipelinesData]);
 
   useEffect(() => {
     if (activeTransmissionId && transmissions.some((item) => item.id === activeTransmissionId)) return;

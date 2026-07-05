@@ -1344,24 +1344,6 @@ def _resolve_chain_rtsp_source(
     )
 
 
-def _apply_rtsp_auth(url: str, username: str, password: str) -> str:
-    raw = str(url or "").strip()
-    if not raw:
-        return ""
-    if "@" in raw:
-        return raw
-    user = str(username or "").strip()
-    pwd = str(password or "").strip()
-    if not user and not pwd:
-        return raw
-    if raw.startswith("rtsp://"):
-        rest = raw[len("rtsp://") :]
-        if pwd:
-            return f"rtsp://{user}:{pwd}@{rest}"
-        return f"rtsp://{user}@{rest}"
-    return raw
-
-
 def _redact_url_userinfo(url: str) -> str:
     raw = str(url or "").strip()
     if not raw:

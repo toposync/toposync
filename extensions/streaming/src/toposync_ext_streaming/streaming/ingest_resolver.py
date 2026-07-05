@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import asyncio
-import base64
-import json
 import logging
 import os
 from typing import Any
-from urllib import error as urllib_error
 from urllib import parse as urllib_parse
-from urllib import request as urllib_request
 
 from ..api.models import (
     EXTENSION_ID,
@@ -30,6 +25,7 @@ from .camera_ingest import (
     rtsp_url_with_auth,
 )
 from .engine_manager import MediaMtxEngineManager
+from .http_client import request_json
 from .ingest_auth import CameraIngestCredentialStore, REDACTED_PASSWORD
 from .mediamtx_config import MediaMTXPathAuth
 
@@ -466,60 +462,15 @@ async def _post_json(
     username: str = "",
     password: str = "",
 ) -> dict[str, Any]:
-    def _do_request() -> dict[str, Any]:
-        payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
-        headers = {
-            "accept": "application/json",
-            "content-type": "application/json",
-        }
-        auth_header = _build_auth_header(
-            bearer_token=bearer_token,
-            username=username,
-            password=password,
-        )
-        if auth_header:
-            headers["authorization"] = auth_header
-        req = urllib_request.Request(url=url, data=payload, headers=headers, method="POST")
-        try:
-            with urllib_request.urlopen(req, timeout=max(1.0, float(timeout_s))) as response:
-                raw = response.read().decode("utf-8", errors="replace")
-        except urllib_error.HTTPError as exc:
-            body_text = _read_http_error(exc)
-            raise RuntimeError(f"HTTP {exc.code}: {body_text}") from exc
-        except urllib_error.URLError as exc:
-            reason = str(getattr(exc, "reason", "") or exc)
-            raise RuntimeError(f"Connection failed: {reason}") from exc
-
-        try:
-            parsed = json.loads(raw)
-        except Exception as exc:
-            raise RuntimeError("Invalid JSON response") from exc
-        if not isinstance(parsed, dict):
-            raise RuntimeError("Invalid JSON payload")
-        return parsed
-
-    return await asyncio.to_thread(_do_request)
-
-
-def _build_auth_header(*, bearer_token: str, username: str, password: str) -> str:
-    token = str(bearer_token or "").strip()
-    if token:
-        return f"Bearer {token}"
-    user = str(username or "").strip()
-    pwd = str(password or "").strip()
-    if not user and not pwd:
-        return ""
-    raw = f"{user}:{pwd}".encode("utf-8")
-    encoded = base64.b64encode(raw).decode("ascii")
-    return f"Basic {encoded}"
-
-
-def _read_http_error(exc: urllib_error.HTTPError) -> str:
-    try:
-        payload = exc.read().decode("utf-8", errors="replace")
-    except Exception:
-        return str(exc)
-    return payload.strip() or str(exc)
+    return await request_json(
+        url=url,
+        method="POST",
+        body=body,
+        timeout_s=timeout_s,
+        bearer_token=bearer_token,
+        username=username,
+        password=password,
+    )
 
 
 def _redacted_rtsp_url_with_userinfo(host: str, port: int, path: str, *, username: str) -> str:

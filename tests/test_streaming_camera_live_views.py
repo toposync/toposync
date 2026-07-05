@@ -274,12 +274,13 @@ def test_generate_camera_live_view_uses_sub_for_thumbnail_and_main_for_large(tmp
     sub_nodes = sub_pipeline.graph.get("nodes") if isinstance(sub_pipeline.graph.get("nodes"), list) else []
     sub_edges = sub_pipeline.graph.get("edges") if isinstance(sub_pipeline.graph.get("edges"), list) else []
     assert any(item.get("operator") == "stream.demand_gate" for item in sub_nodes if isinstance(item, dict))
-    assert {
-        "from": {"node": "demand", "port": "out"},
-        "to": {"node": "source", "port": "gate"},
-        "maxsize": 1,
-        "drop_policy": "drop_oldest",
-    } in sub_edges
+    assert any(
+        isinstance(edge, dict)
+        and edge.get("from") == {"node": "demand", "port": "out"}
+        and edge.get("to") == {"node": "source", "port": "gate"}
+        and edge.get("queue") == {"max_items": 1, "drop_policy": "drop_oldest"}
+        for edge in sub_edges
+    )
     assert sub_pipeline.graph["meta"]["streaming"]["demand_driven"] is True
 
 

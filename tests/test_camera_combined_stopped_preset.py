@@ -175,7 +175,12 @@ def _edge_config(
             and str(target.get("node") or "") == target_node_id
             and (source_port is None or str(source.get("port") or "") == source_port)
         ):
-            return edge
+            queue = edge.get("queue") if isinstance(edge.get("queue"), dict) else {}
+            return {
+                **edge,
+                "maxsize": edge.get("maxsize", queue.get("max_items")),
+                "drop_policy": edge.get("drop_policy", queue.get("drop_policy")),
+            }
     return {}
 
 

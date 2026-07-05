@@ -11,16 +11,21 @@ import toposync.extensions.manager as ext_manager_mod
 import toposync_ext_cameras.plugin as cameras_plugin_mod
 
 
-CAMERA_PIPELINE_PRESET_MODEL_CONTRACTS = (
+CAMERA_PIPELINE_PRESETS = (
     "people_simple",
     "people_individual",
+    "people_quiet",
     "presence_area",
     "vehicle_stopped",
     "person_stopped",
     "person_vehicle_stopped",
 )
+CAMERA_PIPELINE_PRESET_MODEL_CONTRACTS = tuple(
+    preset for preset in CAMERA_PIPELINE_PRESETS if preset != "people_quiet"
+)
 CAMERA_PIPELINE_PRESETS_REQUIRING_MAPPING = {
     "people_individual",
+    "people_quiet",
     "presence_area",
     "vehicle_stopped",
     "person_stopped",
@@ -123,8 +128,17 @@ def _edge_config(pipeline: dict[str, Any], source_node_id: str, target_node_id: 
         source = edge.get("from") if isinstance(edge.get("from"), dict) else {}
         target = edge.get("to") if isinstance(edge.get("to"), dict) else {}
         if str(source.get("node") or "") == source_node_id and str(target.get("node") or "") == target_node_id:
-            return edge
+            return _normalized_edge(edge)
     return {}
+
+
+def _normalized_edge(edge: dict[str, Any]) -> dict[str, Any]:
+    queue = edge.get("queue") if isinstance(edge.get("queue"), dict) else {}
+    return {
+        **edge,
+        "maxsize": edge.get("maxsize", queue.get("max_items")),
+        "drop_policy": edge.get("drop_policy", queue.get("drop_policy")),
+    }
 
 
 def _configure_camera(client: TestClient) -> None:
@@ -213,6 +227,36 @@ def _prepare_preset_prerequisites(client: TestClient, preset: str) -> None:
     _configure_camera(client)
     if preset in CAMERA_PIPELINE_PRESETS_REQUIRING_MAPPING:
         _add_mapped_composition(client)
+
+
+@pytest.mark.parametrize("preset", CAMERA_PIPELINE_PRESETS)
+def test_camera_pipeline_preset_builds_graph_v2(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    preset: str,
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _prepare_preset_prerequisites(client, preset)
+
+        res = client.post("/api/cameras/cameras/cam1/pipelines/presets", json={"preset": preset})
+        assert res.status_code == 200, res.text
+
+        pipeline_name = res.json()["pipeline_name"]
+        res = client.get(f"/api/pipelines/{pipeline_name}")
+        assert res.status_code == 200, res.text
+        pipeline = res.json()
+        graph = pipeline.get("graph")
+        assert isinstance(graph, dict)
+        assert graph.get("schema_version") == 2
+        assert graph.get("uid") == pipeline_name
+        assert all(isinstance(node, dict) and node.get("uid") for node in graph.get("nodes", []))
+        assert all(
+            isinstance(edge, dict) and edge.get("uid") and isinstance(edge.get("queue"), dict)
+            for edge in graph.get("edges", [])
+        )
+
+        res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert res.status_code == 200, res.text
 
 
 def test_camera_pipeline_simple_preset_defaults_detection_to_rfdetr_medium_without_mapping(

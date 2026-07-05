@@ -9,6 +9,7 @@ from .runtime import Lifecycle, Packet
 
 
 FlowLimiterProfileName = Literal["low_latency_ai", "balanced", "lossless"]
+FLOW_LIMITER_PROFILE_NAMES = {"low_latency_ai", "balanced", "lossless"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,10 +164,4 @@ def _configured_profile_name(
     if definition.id == "core.flow_limiter":
         raw = config.get("profile", raw)
     normalized = str(raw or "").strip().lower()
-    if normalized == "low_latency_ai":
-        return "low_latency_ai"
-    if normalized == "balanced":
-        return "balanced"
-    if normalized == "lossless":
-        return "lossless"
-    return None
+    return normalized if normalized in FLOW_LIMITER_PROFILE_NAMES else None

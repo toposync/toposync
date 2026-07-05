@@ -53,6 +53,7 @@ from .pipeline_templates import (
     STOPPED_DEFAULT_MIN_STATIONARY_SECONDS,
     STOPPED_DEFAULT_SPEED_THRESHOLD_MPS,
     VEHICLE_STOPPED_OBJECT_CATEGORIES,
+    build_pipeline_graph_v2,
     build_person_vehicle_stopped_graph,
 )
 from .processing.camera_hub import get_global_camera_hub
@@ -3022,6 +3023,7 @@ class CamerasExtension(BaseExtension):
             notification_title: str,
             notification_description: str,
             notification_priority: NotificationPriority | None,
+            graph_uid: str = "camera_preset",
         ) -> dict[str, Any]:
             if preset == "vehicle_stopped":
                 detect_categories = VEHICLE_STOPPED_OBJECT_CATEGORIES
@@ -3115,7 +3117,11 @@ class CamerasExtension(BaseExtension):
                 ]
                 nodes = [*base_nodes, *tail_nodes]
                 node_ids = [str(node["id"]) for node in nodes]
-                return {"schema_version": 1, "nodes": nodes, "edges": _linear_edges(node_ids)}
+                return build_pipeline_graph_v2(
+                    nodes=nodes,
+                    edges=_linear_edges(node_ids),
+                    uid=graph_uid,
+                )
 
             if preset == "people_quiet":
                 tail_nodes = [
@@ -3151,7 +3157,11 @@ class CamerasExtension(BaseExtension):
                 ]
                 nodes = [*base_nodes, *tail_nodes]
                 node_ids = [str(node["id"]) for node in nodes]
-                return {"schema_version": 1, "nodes": nodes, "edges": _linear_edges(node_ids)}
+                return build_pipeline_graph_v2(
+                    nodes=nodes,
+                    edges=_linear_edges(node_ids),
+                    uid=graph_uid,
+                )
 
             if preset in {
                 "presence_area",
@@ -3250,11 +3260,11 @@ class CamerasExtension(BaseExtension):
                     )
                     nodes = [*base_nodes, *tail_nodes]
                     node_ids = [str(node["id"]) for node in nodes]
-                    return {
-                        "schema_version": 1,
-                        "nodes": nodes,
-                        "edges": _linear_edges(node_ids),
-                    }
+                    return build_pipeline_graph_v2(
+                        nodes=nodes,
+                        edges=_linear_edges(node_ids),
+                        uid=graph_uid,
+                    )
 
                 if preset == "person_vehicle_stopped":
                     return build_person_vehicle_stopped_graph(
@@ -3268,6 +3278,7 @@ class CamerasExtension(BaseExtension):
                         notification_title=notification_title,
                         notification_description=notification_description,
                         notification_priority=notification_priority,
+                        graph_uid=graph_uid,
                     )
 
                 notify_nodes = [
@@ -3350,7 +3361,11 @@ class CamerasExtension(BaseExtension):
                     }:
                         edge["maxsize"] = 32 if source_node == "velocity" else 8
                         edge["drop_policy"] = "keyed_latest_only"
-                return {"schema_version": 1, "nodes": nodes, "edges": edges}
+                return build_pipeline_graph_v2(
+                    nodes=nodes,
+                    edges=edges,
+                    uid=graph_uid,
+                )
 
             raise ValueError("Unknown preset")
 
@@ -3511,6 +3526,7 @@ class CamerasExtension(BaseExtension):
                     notification_title=str(body.notification_title or "").strip(),
                     notification_description=str(body.notification_description or "").strip(),
                     notification_priority=notification_priority,
+                    graph_uid=pipeline_name,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -269,7 +269,8 @@ def analyze_pipeline_flow(
 
     for node in pipeline.nodes:
         _check_cancelled(cancel_check)
-        if not produced_artifacts(node.node_id):
+        produced = produced_artifacts(node.node_id)
+        if not produced:
             continue
         branch_edges = [
             edge for edge in outgoing.get(node.node_id, []) if branch_consumes_artifact(edge.target_node_id)
@@ -284,7 +285,7 @@ def analyze_pipeline_flow(
                 message="Artifacts produced by this step fan out into multiple downstream branches.",
                 suggestion="Prefer storing once, passing artifact references, or routing before creating heavy derived artifacts.",
                 details={
-                    "produced_artifacts": sorted(produced_artifacts(node.node_id)),
+                    "produced_artifacts": sorted(produced),
                     "branch_targets": sorted(edge.target_node_id for edge in branch_edges),
                 },
             )

@@ -171,7 +171,8 @@ function parseEdge(raw: unknown, index: number): ParsedEdge | null {
   const queue = isRecord(raw.queue) ? raw.queue : {};
   const traffic = isRecord(raw.traffic) ? raw.traffic : {};
   const backpressure = isRecord(raw.backpressure) ? raw.backpressure : {};
-  const uid = text(raw.uid, `edge:${parsedEdgeKey({ source, target, uid: "", modality: "", semanticClass: "", continuous: false, maxItems: 1, dropPolicy: "latest_only", pressureMode: "pause_upstream" })}:${index}`);
+  const fallbackKey = edgeKey(source.node, source.port, target.node, target.port);
+  const uid = text(raw.uid, `edge:${fallbackKey}:${index}`);
   return {
     uid,
     source,

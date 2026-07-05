@@ -58,6 +58,15 @@ type Props = {
   operatorPanels?: Record<string, PipelineOperatorPanel>;
 };
 
+type PollingEffectOptions = {
+  active: boolean;
+  intervalMs?: number;
+  reset: () => void;
+  setLoading: (loading: boolean) => void;
+  load: (signal: AbortSignal) => Promise<void>;
+  onError: (error: unknown) => void;
+};
+
 const PIPELINES_BASE_PATH = "/settings/pipelines";
 const PIPELINE_NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
@@ -92,6 +101,62 @@ function processingServerLabel(serverId: string, servers: ProcessingServer[]): s
   const server = servers.find((item) => normalizeServerId(item.id) === normalized);
   const name = String(server?.name ?? "").trim();
   return name ? `${name} (${normalized})` : normalized;
+}
+
+function usePollingEffect({
+  active,
+  intervalMs = 5000,
+  reset,
+  setLoading,
+  load,
+  onError,
+}: PollingEffectOptions): void {
+  useEffect(() => {
+    if (!active) {
+      reset();
+      setLoading(false);
+      return undefined;
+    }
+
+    let canceled = false;
+    let didCompleteInitialLoad = false;
+    let currentController: AbortController | null = null;
+    let timer: number | null = null;
+    reset();
+    setLoading(true);
+
+    const scheduleNextLoad = () => {
+      if (canceled) return;
+      timer = window.setTimeout(() => void loadNext(), intervalMs);
+    };
+
+    const loadNext = async () => {
+      const controller = new AbortController();
+      currentController = controller;
+      const showLoading = !didCompleteInitialLoad;
+      if (showLoading) setLoading(true);
+      try {
+        await load(controller.signal);
+      } catch (err: unknown) {
+        if (canceled || controller.signal.aborted || isAbortError(err)) return;
+        onError(err);
+      } finally {
+        if (currentController === controller) currentController = null;
+        if (!controller.signal.aborted) {
+          didCompleteInitialLoad = true;
+          if (!canceled && showLoading) setLoading(false);
+        }
+        scheduleNextLoad();
+      }
+    };
+
+    void loadNext();
+    return () => {
+      canceled = true;
+      currentController?.abort();
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [active, intervalMs, load, onError, reset, setLoading]);
 }
 
 function cameraSourceRefsFromPipelineGraph(graph: unknown): Array<{ cameraId: string; sourceId: string }> {
@@ -346,110 +411,50 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setGraphText(jsonPretty(interactiveGraph.graph));
   }, [interactiveWarning, mode, interactiveGraph.graph, selected?.editor_mode]);
 
-  useEffect(() => {
-    if (!draft) {
-      setSelectedServerStatus(null);
-      setSelectedServerStatusLoading(false);
-      return undefined;
-    }
-
-    const serverId = String(draft.processing_server_id ?? "local").trim().toLowerCase() || "local";
-    let canceled = false;
-    let didCompleteInitialLoad = false;
-    let currentController: AbortController | null = null;
-    let timer: number | null = null;
+  const resetSelectedServerStatus = useCallback(() => {
     setSelectedServerStatus(null);
-    setSelectedServerStatusLoading(true);
+  }, []);
+  const loadSelectedServerStatus = useCallback(
+    async (signal: AbortSignal) => {
+      const status = await getProcessingServerStatus(normalizeServerId(draft?.processing_server_id), { signal });
+      setSelectedServerStatus(status);
+    },
+    [draft?.name, draft?.processing_server_id],
+  );
+  const setSelectedServerStatusError = useCallback((err: unknown) => {
+    setSelectedServerStatus({ ok: false, error: String((err as any)?.message ?? err) });
+  }, []);
+  usePollingEffect({
+    active: Boolean(draft),
+    reset: resetSelectedServerStatus,
+    setLoading: setSelectedServerStatusLoading,
+    load: loadSelectedServerStatus,
+    onError: setSelectedServerStatusError,
+  });
 
-    const scheduleNextLoad = () => {
-      if (canceled) return;
-      timer = window.setTimeout(() => void loadStatus(), 5000);
-    };
-
-    const loadStatus = async () => {
-      const controller = new AbortController();
-      currentController = controller;
-      const showLoading = !didCompleteInitialLoad;
-      if (showLoading) setSelectedServerStatusLoading(true);
-      try {
-        const status = await getProcessingServerStatus(serverId, { signal: controller.signal });
-        if (!canceled && !controller.signal.aborted) setSelectedServerStatus(status);
-      } catch (err: any) {
-        if (canceled || controller.signal.aborted || isAbortError(err)) return;
-        if (!canceled) setSelectedServerStatus({ ok: false, error: String(err?.message ?? err) });
-      } finally {
-        if (currentController === controller) currentController = null;
-        if (!controller.signal.aborted) {
-          didCompleteInitialLoad = true;
-          if (!canceled && showLoading) setSelectedServerStatusLoading(false);
-        }
-        scheduleNextLoad();
-      }
-    };
-
-    void loadStatus();
-    return () => {
-      canceled = true;
-      currentController?.abort();
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [draft?.name, draft?.processing_server_id]);
-
-  useEffect(() => {
-    if (!draft) {
-      setRuntimeGraphInfo(null);
-      setRuntimeGraphInfoError(null);
-      setRuntimeGraphInfoLoading(false);
-      return undefined;
-    }
-
-    let canceled = false;
-    let didCompleteInitialLoad = false;
-    let currentController: AbortController | null = null;
-    let timer: number | null = null;
+  const resetRuntimeGraphInfo = useCallback(() => {
     setRuntimeGraphInfo(null);
     setRuntimeGraphInfoError(null);
-    setRuntimeGraphInfoLoading(true);
-
-    const scheduleNextLoad = () => {
-      if (canceled) return;
-      timer = window.setTimeout(() => void loadGraphInfo(), 5000);
-    };
-
-    const loadGraphInfo = async () => {
-      const controller = new AbortController();
-      currentController = controller;
-      const showLoading = !didCompleteInitialLoad;
-      if (showLoading) setRuntimeGraphInfoLoading(true);
-      try {
-        const info = await getPipelineRuntimeGraphInfo({ signal: controller.signal });
-        if (!canceled && !controller.signal.aborted) {
-          setRuntimeGraphInfo(info);
-          setRuntimeGraphInfoError(null);
-        }
-      } catch (err: any) {
-        if (canceled || controller.signal.aborted || isAbortError(err)) return;
-        if (!canceled) {
-          setRuntimeGraphInfo(null);
-          setRuntimeGraphInfoError(String(err?.message ?? err));
-        }
-      } finally {
-        if (currentController === controller) currentController = null;
-        if (!controller.signal.aborted) {
-          didCompleteInitialLoad = true;
-          if (!canceled && showLoading) setRuntimeGraphInfoLoading(false);
-        }
-        scheduleNextLoad();
-      }
-    };
-
-    void loadGraphInfo();
-    return () => {
-      canceled = true;
-      currentController?.abort();
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [draft?.name]);
+  }, []);
+  const loadRuntimeGraphInfo = useCallback(
+    async (signal: AbortSignal) => {
+      const info = await getPipelineRuntimeGraphInfo({ signal });
+      setRuntimeGraphInfo(info);
+      setRuntimeGraphInfoError(null);
+    },
+    [draft?.name],
+  );
+  const setRuntimeGraphInfoLoadError = useCallback((err: unknown) => {
+    setRuntimeGraphInfo(null);
+    setRuntimeGraphInfoError(String((err as any)?.message ?? err));
+  }, []);
+  usePollingEffect({
+    active: Boolean(draft),
+    reset: resetRuntimeGraphInfo,
+    setLoading: setRuntimeGraphInfoLoading,
+    load: loadRuntimeGraphInfo,
+    onError: setRuntimeGraphInfoLoadError,
+  });
 
   const isPythonLocked = Boolean(draft && draft.editor_mode === "python");
   const isDraftReadOnly = Boolean(draft && isImplicitPipeline(draft));
@@ -624,18 +629,13 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setError(null);
   }, [draft]);
 
-  const validateActiveGraph = async (): Promise<{ ok: true } | { ok: false; message: string }> => {
+  const validateResolvedGraph = async (graph: Record<string, unknown>): Promise<{ ok: true } | { ok: false; message: string }> => {
     if (!draft) return { ok: false, message: t("core.ui.pipelines.error.no_selection") };
-    const resolved = resolveGraphFromActiveMode();
-    if (!resolved.ok) {
-      setTopologyValidationError(resolved.message);
-      return { ok: false, message: resolved.message };
-    }
 
     setTopologyValidationLoading(true);
     setTopologyValidationError(null);
     try {
-      const output = await compilePipeline({ ...draft, graph: resolved.graph });
+      const output = await compilePipeline({ ...draft, graph });
       const nextAlerts = Array.isArray(output.alerts) ? output.alerts : [];
       setRecommendations(nextAlerts);
       setRecommendationsError(null);
@@ -655,6 +655,15 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     } finally {
       setTopologyValidationLoading(false);
     }
+  };
+
+  const validateActiveGraph = async (): Promise<{ ok: true } | { ok: false; message: string }> => {
+    const resolved = resolveGraphFromActiveMode();
+    if (!resolved.ok) {
+      setTopologyValidationError(resolved.message);
+      return { ok: false, message: resolved.message };
+    }
+    return validateResolvedGraph(resolved.graph);
   };
 
   useEffect(() => {
@@ -890,7 +899,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
         setError(resolved.message);
         return;
       }
-      const validation = await validateActiveGraph();
+      const validation = await validateResolvedGraph(resolved.graph);
       if (!validation.ok) {
         setError(validation.message);
         return;

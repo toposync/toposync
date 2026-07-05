@@ -36,6 +36,19 @@ type Props = {
   onToggleCollapsed: () => void;
 };
 
+type NodeInspectorProps = Omit<
+  Props,
+  | "selection"
+  | "runtimeStatus"
+  | "runtimeGeneratedAt"
+  | "onOpenJson"
+  | "onUpdateEdgePolicy"
+  | "collapsed"
+  | "onToggleCollapsed"
+> & {
+  node: TopologyNode;
+};
+
 type Translate = ReturnType<typeof i18n.useI18n>["t"];
 
 function valueText(value: unknown, t: Translate, fallback = t("core.ui.pipelines.topology.value.none", {}, "none")): string {
@@ -226,25 +239,7 @@ function NodeInspector({
   operatorPanels,
   onOpenTelemetryField,
   onUpdateNodeConfig,
-}: {
-  model: TopologyModel;
-  node: TopologyNode;
-  editable: boolean;
-  pipelineName: string;
-  processingServerId: string;
-  onOpenProcessingServers?: () => void;
-  operatorsById: Record<string, PipelineOperatorDefinition>;
-  interactiveCameraId: string;
-  camerasIndex: CamerasIndexResponse;
-  cameraSelectOptions: SelectOption[];
-  cameraSelectOptionById: Map<string, SelectOption>;
-  activeCameraContexts: CameraContextsResponse | null;
-  activeCameraContextsError: string | null;
-  cameraAreaOptions: CameraAreaOption[];
-  operatorPanels?: Record<string, PipelineOperatorPanel>;
-  onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
-  onUpdateNodeConfig?: (nodeId: string, config: Record<string, unknown>) => void;
-}): React.ReactElement {
+}: NodeInspectorProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [insertError, setInsertError] = useState<string | null>(null);
@@ -254,8 +249,9 @@ function NodeInspector({
     () => model.nodes.map((item) => stepForNode(item, item.id === node.id ? showAdvanced : false)),
     [model.nodes, node.id, showAdvanced],
   );
-  const step = steps.find((item) => item.nodeId === node.data.nodeId) ?? stepForNode(node, showAdvanced);
-  const index = Math.max(0, steps.findIndex((item) => item.nodeId === node.data.nodeId));
+  const stepIndex = steps.findIndex((item) => item.nodeId === node.data.nodeId);
+  const step = stepIndex >= 0 ? steps[stepIndex] : stepForNode(node, showAdvanced);
+  const index = Math.max(0, stepIndex);
 
   useEffect(() => {
     setShowAdvanced(false);
@@ -276,27 +272,9 @@ function NodeInspector({
           <div className="pipelineTopologyInspectorSubtitle">{node.data.operatorId}</div>
         </div>
       </div>
-      <div className="pipelineTopologyInspectorGrid">
-        <Field label={field("node_id", "Node ID")} value={node.data.nodeId} />
-        <Field label={field("uid", "UID")} value={node.data.uid} />
-        <Field label={field("runtime", "Runtime")} value={runtime?.runtime_state ?? runtime?.task_state} />
-        <Field label={field("resource", "Resource")} value={node.data.resourceKind} />
-        <Field label={field("pressure", "Pressure")} value={node.data.pressureState} />
-        <Field label={field("behavior", "Behavior")} value={node.data.pressureBehavior} />
-        <Field label={field("processed", "Processed")} value={runtime?.progress?.processed_packets} />
-        <Field label={field("emitted", "Emitted")} value={runtime?.progress?.emitted_packets} />
-        <Field label={field("dropped", "Dropped")} value={runtime?.progress?.dropped_packets} />
-        <Field label={field("errors", "Errors")} value={runtime?.progress?.error_count} />
-      </div>
-      {runtime?.last_error ? (
-        <div className="pipelineTopologyInspectorNotice">
-          {t("core.ui.pipelines.topology.last_error", {}, "Last error")}: {runtime.last_error}
-        </div>
-      ) : null}
-      <Alerts alerts={node.data.alerts} />
       <div className="pipelineTopologyInspectorSection">
         <div className="pipelineTopologyInspectorSectionTitle pipelineTopologyInspectorSectionTitleRow">
-          <span>{t("core.ui.pipelines.topology.form", {}, "Form")}</span>
+          <span>{t("core.ui.pipelines.topology.config", {}, "Config")}</span>
           <button className="pillButton" type="button" onClick={() => setShowAdvanced((prev) => !prev)}>
             {t("core.ui.pipelines.topology.advanced", {}, "Advanced")}
           </button>
@@ -335,6 +313,24 @@ function NodeInspector({
         </div>
         {insertError ? <div className="pipelineTopologyInspectorNotice">{insertError}</div> : null}
       </div>
+      <div className="pipelineTopologyInspectorGrid">
+        <Field label={field("node_id", "Node ID")} value={node.data.nodeId} />
+        <Field label={field("uid", "UID")} value={node.data.uid} />
+        <Field label={field("runtime", "Runtime")} value={runtime?.runtime_state ?? runtime?.task_state} />
+        <Field label={field("resource", "Resource")} value={node.data.resourceKind} />
+        <Field label={field("pressure", "Pressure")} value={node.data.pressureState} />
+        <Field label={field("behavior", "Behavior")} value={node.data.pressureBehavior} />
+        <Field label={field("processed", "Processed")} value={runtime?.progress?.processed_packets} />
+        <Field label={field("emitted", "Emitted")} value={runtime?.progress?.emitted_packets} />
+        <Field label={field("dropped", "Dropped")} value={runtime?.progress?.dropped_packets} />
+        <Field label={field("errors", "Errors")} value={runtime?.progress?.error_count} />
+      </div>
+      {runtime?.last_error ? (
+        <div className="pipelineTopologyInspectorNotice">
+          {t("core.ui.pipelines.topology.last_error", {}, "Last error")}: {runtime.last_error}
+        </div>
+      ) : null}
+      <Alerts alerts={node.data.alerts} />
       <JsonConfigEditor node={node} editable={editable} onApply={onUpdateNodeConfig} />
     </>
   );

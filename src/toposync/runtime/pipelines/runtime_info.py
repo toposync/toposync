@@ -261,41 +261,10 @@ def _channel_snapshot(metrics: ChannelMetricsSnapshot | None) -> dict[str, Any]:
             "artifact_bytes_dropped": 0,
             "pressure_state": "idle",
         }
-    return {
-        "name": metrics.name,
-        "maxsize": metrics.maxsize,
-        "depth": metrics.depth,
-        "max_depth_seen": metrics.max_depth_seen,
-        "put_attempts": metrics.put_attempts,
-        "put_accepted": metrics.put_accepted,
-        "get_accepted": metrics.get_accepted,
-        "dropped_oldest": metrics.dropped_oldest,
-        "dropped_newest": metrics.dropped_newest,
-        "dropped_total": metrics.dropped_total,
-        "timed_out": metrics.timed_out,
-        "canceled": metrics.canceled,
-        "avg_queue_wait_ms": metrics.avg_queue_wait_ms,
-        "p95_queue_wait_ms": metrics.p95_queue_wait_ms,
-        "utilization": metrics.utilization,
-        "in_memory_artifact_bytes": metrics.in_memory_artifact_bytes,
-        "max_in_memory_artifact_bytes_seen": metrics.max_in_memory_artifact_bytes_seen,
-        "active_keys": metrics.active_keys,
-        "max_depth_per_key_seen": metrics.max_depth_per_key_seen,
-        "max_in_memory_artifact_bytes_per_key_seen": metrics.max_in_memory_artifact_bytes_per_key_seen,
-        "pressure_cause": metrics.pressure_cause,
-        "last_pressure_at": metrics.last_pressure_at,
-        "blocked_put_time_ms": metrics.blocked_put_time_ms,
-        "waiting_get_time_ms": metrics.waiting_get_time_ms,
-        "oldest_packet_age_ms": metrics.oldest_packet_age_ms,
-        "last_event_ts": metrics.last_event_ts,
-        "drop_reason_counts": dict(metrics.drop_reason_counts),
-        "artifact_bytes_current": metrics.artifact_bytes_current,
-        "artifact_bytes_max_seen": metrics.artifact_bytes_max_seen,
-        "artifact_bytes_accepted": metrics.artifact_bytes_accepted,
-        "artifact_bytes_delivered": metrics.artifact_bytes_delivered,
-        "artifact_bytes_dropped": metrics.artifact_bytes_dropped,
-        "pressure_state": metrics.pressure_state,
-    }
+    payload = asdict(metrics)
+    payload["dropped_total"] = metrics.dropped_total
+    payload["utilization"] = metrics.utilization
+    return payload
 
 
 def _edge_pressure_cause(metrics: ChannelMetricsSnapshot | None) -> str:

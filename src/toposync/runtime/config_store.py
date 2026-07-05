@@ -86,8 +86,8 @@ class Pipeline(BaseModel):
         if not isinstance(value, dict):
             raise TypeError("Pipeline graph must be an object")
         schema_version = value.get(PIPELINE_GRAPH_SCHEMA_VERSION_KEY)
-        if type(schema_version) is not int or int(schema_version) < 1:
-            raise ValueError("Pipeline graph must include schema_version >= 1")
+        if type(schema_version) is not int or int(schema_version) != 2:
+            raise ValueError("Pipeline graph must include schema_version=2; graph v1 is no longer supported")
         return value
 
     @field_validator("processing_server_id", mode="before")

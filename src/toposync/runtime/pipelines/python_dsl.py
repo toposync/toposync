@@ -87,9 +87,9 @@ class GraphEndpoint:
 
 
 class DslGraphBuilder:
-    def __init__(self, registry: OperatorRegistry, *, schema_version: int = 1) -> None:
+    def __init__(self, registry: OperatorRegistry, *, graph_uid: str = "graph") -> None:
         self._registry = registry
-        self._schema_version = int(schema_version)
+        self._graph_uid = str(graph_uid or "graph").strip() or "graph"
         self._used_node_ids: set[str] = set()
         self._nodes: dict[str, dict[str, Any]] = {}
         self._edges: list[dict[str, Any]] = []
@@ -133,6 +133,7 @@ class DslGraphBuilder:
             resolved_id = self.allocate_node_id(operator_id, requested=None)
         normalized_config = self._registry.normalize_config(operator_id, dict(config))
         self._nodes[resolved_id] = {
+            "uid": resolved_id,
             "id": resolved_id,
             "operator": operator_id,
             "config": normalized_config,
@@ -184,14 +185,48 @@ class DslGraphBuilder:
         self._target_ports_seen.add(target_key)
 
         edge: dict[str, Any] = {
+            "uid": f"{source.node}.{source.port}->{target.node}.{target.port}",
             "from": {"node": source.node, "port": source.port},
             "to": {"node": target.node, "port": target.port},
+            "traffic": self._edge_traffic(source.node, target.node, target.port),
+            "queue": {},
         }
         if maxsize is not None:
-            edge["maxsize"] = int(maxsize)
+            edge["queue"]["max_items"] = int(maxsize)
         if drop_policy is not None:
-            edge["drop_policy"] = str(drop_policy)
+            edge["queue"]["drop_policy"] = str(drop_policy)
         self._edges.append(edge)
+
+    def _edge_traffic(self, source_node: str, target_node: str, target_port: str) -> dict[str, Any]:
+        source_operator = str((self._nodes.get(source_node) or {}).get("operator") or "")
+        target_operator = str((self._nodes.get(target_node) or {}).get("operator") or "")
+        if str(target_port or "").strip() == "gate" or source_operator.endswith(".demand_gate"):
+            return {"modality": "control.gate", "semantic_class": "control", "continuous": False}
+
+        modality = self._first_output_modality(source_operator) or self._first_input_modality(target_operator)
+        if str(modality).startswith("video"):
+            return {"modality": "video.frame", "semantic_class": "frame", "continuous": True}
+        return {"modality": "data.event", "semantic_class": "event", "continuous": False}
+
+    def _first_output_modality(self, operator_id: str) -> str:
+        registered = self._registry.get(operator_id)
+        if registered is None:
+            return ""
+        for modality in registered.definition.output_modalities:
+            text = str(modality or "").strip()
+            if text:
+                return text
+        return ""
+
+    def _first_input_modality(self, operator_id: str) -> str:
+        registered = self._registry.get(operator_id)
+        if registered is None:
+            return ""
+        for modality in registered.definition.input_modalities:
+            text = str(modality or "").strip()
+            if text:
+                return text
+        return ""
 
     def to_graph_spec(self) -> dict[str, Any]:
         nodes = sorted(self._nodes.values(), key=lambda item: str(item.get("id", "")))
@@ -208,9 +243,14 @@ class DslGraphBuilder:
 
         edges = sorted(self._edges, key=edge_sort_key)
         return {
-            "schema_version": int(self._schema_version),
+            "schema_version": 2,
+            "uid": self._graph_uid,
+            "revision": 1,
             "nodes": nodes,
             "edges": edges,
+            "limits": {},
+            "layout": {},
+            "meta": {},
         }
 
 
@@ -504,7 +544,7 @@ def compile_python_source_to_graph(
     registry: OperatorRegistry,
     filename: str = "<pipeline>",
 ) -> dict[str, Any]:
-    builder = DslGraphBuilder(registry)
+    builder = DslGraphBuilder(registry, graph_uid=pipeline_name)
 
     globals_dict: dict[str, Any] = {
         "__builtins__": _make_safe_builtins(),

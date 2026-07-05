@@ -211,8 +211,8 @@ export function buildTopologyModel(options: TopologyBuildOptions): TopologyBuild
   if (schemaVersion !== 2) {
     return {
       ok: false,
-      title: "Topology view needs graph v2",
-      detail: "This pipeline still uses the legacy graph shape. Inspect it in JSON mode.",
+      title: "Unsupported graph schema",
+      detail: "Pipeline graphs must use schema_version=2.",
       titleKey: "core.ui.pipelines.topology.fallback.needs_v2.title",
       detailKey: "core.ui.pipelines.topology.fallback.needs_v2.detail",
     };

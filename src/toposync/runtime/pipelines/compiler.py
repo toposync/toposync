@@ -6,8 +6,6 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from pydantic import BaseModel, Field, field_validator
-
 from toposync.runtime.config_store import Pipeline
 
 from .graph_schema_v2 import PipelineGraphV2Spec
@@ -25,63 +23,6 @@ CancelCheck = Callable[[], None]
 def _check_cancelled(cancel_check: CancelCheck | None) -> None:
     if cancel_check is not None:
         cancel_check()
-
-
-class GraphEndpoint(BaseModel):
-    node: str
-    port: str = "out"
-
-    @field_validator("node")
-    @classmethod
-    def _validate_node(cls, value: str) -> str:
-        name = str(value or "").strip()
-        if not name:
-            raise ValueError("Endpoint node is required")
-        return name
-
-    @field_validator("port")
-    @classmethod
-    def _validate_port(cls, value: str) -> str:
-        port = str(value or "").strip()
-        if not port:
-            raise ValueError("Endpoint port is required")
-        return port
-
-
-class PipelineGraphNode(BaseModel):
-    id: str
-    operator_id: str = Field(alias="operator")
-    config: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("id")
-    @classmethod
-    def _validate_id(cls, value: str) -> str:
-        node_id = str(value or "").strip()
-        if not node_id:
-            raise ValueError("Node id is required")
-        return node_id
-
-    @field_validator("operator_id")
-    @classmethod
-    def _validate_operator(cls, value: str) -> str:
-        operator_id = str(value or "").strip()
-        if not operator_id:
-            raise ValueError("Node operator is required")
-        return operator_id
-
-
-class PipelineGraphEdge(BaseModel):
-    source: GraphEndpoint = Field(alias="from")
-    target: GraphEndpoint = Field(alias="to")
-    channel_maxsize: int = Field(default=1, alias="maxsize", ge=1, le=4096)
-    channel_drop_policy: DropPolicy = Field(default=DropPolicy.LATEST_ONLY, alias="drop_policy")
-
-
-class PipelineGraphSpec(BaseModel):
-    schema_version: int = Field(ge=1)
-    nodes: list[PipelineGraphNode] = Field(default_factory=list)
-    edges: list[PipelineGraphEdge] = Field(default_factory=list)
-    limits: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -466,43 +407,16 @@ def _signature(payload: dict[str, Any]) -> str:
 
 
 def _parse_graph(raw_graph: dict[str, Any]) -> _CompileGraph:
-    raw_version = raw_graph.get("schema_version") if isinstance(raw_graph, dict) else None
+    if not isinstance(raw_graph, dict):
+        raise ValueError("Pipeline graph must be a JSON object with schema_version=2")
+    raw_version = raw_graph.get("schema_version")
     try:
         schema_version = int(raw_version)
     except (TypeError, ValueError):
-        schema_version = 1
-    if schema_version == 2:
-        return _parse_graph_v2(raw_graph)
-    return _parse_graph_v1(raw_graph)
-
-
-def _parse_graph_v1(raw_graph: dict[str, Any]) -> _CompileGraph:
-    graph = PipelineGraphSpec.model_validate(raw_graph)
-    return _CompileGraph(
-        schema_version=graph.schema_version,
-        nodes=tuple(
-            _CompileNode(
-                uid=node.id,
-                node_id=node.id,
-                operator_id=node.operator_id,
-                config=dict(node.config),
-            )
-            for node in graph.nodes
-        ),
-        edges=tuple(
-            _CompileEdge(
-                uid=f"legacy:{edge.source.node}.{edge.source.port}->{edge.target.node}.{edge.target.port}",
-                source_node=edge.source.node,
-                source_port=edge.source.port,
-                target_node=edge.target.node,
-                target_port=edge.target.port,
-                channel_maxsize=int(edge.channel_maxsize),
-                channel_drop_policy=edge.channel_drop_policy,
-            )
-            for edge in graph.edges
-        ),
-        limits=dict(graph.limits),
-    )
+        raise ValueError("Pipeline graph schema_version=2 is required; graph v1 is no longer supported") from None
+    if schema_version != 2:
+        raise ValueError("Pipeline graph schema_version=2 is required; graph v1 is no longer supported")
+    return _parse_graph_v2(raw_graph)
 
 
 def _parse_graph_v2(raw_graph: dict[str, Any]) -> _CompileGraph:

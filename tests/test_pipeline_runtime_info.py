@@ -60,28 +60,32 @@ def test_graph_runtime_info_exposes_nodes_edges_resources_pressure_and_progress(
         pipeline = Pipeline(
             name="runtime_info_probe",
             graph={
-                "schema_version": 1,
+                "schema_version": 2,
+                "uid": "runtime_info_probe",
                 "nodes": [
                     {
+                        "uid": "camera",
                         "id": "camera",
                         "operator": "test.camera_source",
                         "config": {"camera_id": "front"},
                     },
                     {
+                        "uid": "detect",
                         "id": "detect",
                         "operator": "test.vision_detect",
                         "config": {"model_id": "people"},
                     },
-                    {"id": "sink", "operator": "test.sink", "config": {}},
+                    {"uid": "sink", "id": "sink", "operator": "test.sink", "config": {}},
                 ],
                 "edges": [
                     {
+                        "uid": "camera.out->detect.in",
                         "from": {"node": "camera", "port": "out"},
                         "to": {"node": "detect", "port": "in"},
-                        "maxsize": 1,
-                        "drop_policy": DropPolicy.DROP_NEWEST.value,
+                        "queue": {"max_items": 1, "drop_policy": DropPolicy.DROP_NEWEST.value},
                     },
                     {
+                        "uid": "detect.out->sink.in",
                         "from": {"node": "detect", "port": "out"},
                         "to": {"node": "sink", "port": "in"},
                     },
@@ -120,6 +124,18 @@ def test_graph_runtime_info_exposes_nodes_edges_resources_pressure_and_progress(
     asyncio.run(scenario())
 
 
+def test_graph_v1_is_rejected() -> None:
+    with pytest.raises(ValueError, match="graph v1 is no longer supported"):
+        Pipeline(
+            name="legacy",
+            graph={
+                "schema_version": 1,
+                "nodes": [{"id": "source", "operator": "test.camera_source", "config": {}}],
+                "edges": [],
+            },
+        )
+
+
 def test_bundle_graph_runtime_info_exposes_shared_node_occurrences() -> None:
     registry = _registry()
     compiler = PipelineGraphCompiler(registry)
@@ -128,20 +144,23 @@ def test_bundle_graph_runtime_info_exposes_shared_node_occurrences() -> None:
         return Pipeline(
             name=name,
             graph={
-                "schema_version": 1,
-                "nodes": [
-                    {
-                        "id": source_id,
-                        "operator": "test.camera_source",
-                        "config": {"camera_id": "front"},
-                    },
-                    {"id": sink_id, "operator": "test.sink", "config": {}},
-                ],
-                "edges": [
-                    {
-                        "from": {"node": source_id, "port": "out"},
-                        "to": {"node": sink_id, "port": "in"},
-                    }
+                    "schema_version": 2,
+                    "uid": name,
+                    "nodes": [
+                        {
+                            "uid": source_id,
+                            "id": source_id,
+                            "operator": "test.camera_source",
+                            "config": {"camera_id": "front"},
+                        },
+                        {"uid": sink_id, "id": sink_id, "operator": "test.sink", "config": {}},
+                    ],
+                    "edges": [
+                        {
+                            "uid": f"{source_id}.out->{sink_id}.in",
+                            "from": {"node": source_id, "port": "out"},
+                            "to": {"node": sink_id, "port": "in"},
+                        }
                 ],
             },
         )

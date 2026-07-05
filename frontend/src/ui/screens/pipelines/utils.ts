@@ -353,7 +353,7 @@ export function pipelineAlertSeverityLabel(
 }
 
 export function emptyGraph(): Record<string, unknown> {
-  return { schema_version: 1, nodes: [], edges: [] };
+  return { schema_version: 2, uid: "graph", revision: 1, nodes: [], edges: [], limits: {}, layout: {}, meta: {} };
 }
 
 export function defaultPipeline(name: string): Pipeline {
@@ -432,6 +432,23 @@ function edgePolicyQueue(policy: unknown): Record<string, unknown> {
   return isRecord(policy) && isRecord(policy.queue) ? policy.queue : {};
 }
 
+function edgeTrafficFor(
+  source: PipelineOperatorDefinition | null,
+  target: PipelineOperatorDefinition | null,
+  targetPort: string,
+): Record<string, unknown> {
+  if (targetPort === "gate" || String(source?.id || "").endsWith(".demand_gate")) {
+    return { modality: "control.gate", semantic_class: "control", continuous: false };
+  }
+  const modality = [...(source?.output_modalities ?? []), ...(target?.input_modalities ?? [])]
+    .map((value) => String(value || "").trim())
+    .find(Boolean);
+  if (String(modality || "").startsWith("video")) {
+    return { modality: "video.frame", semantic_class: "frame", continuous: true };
+  }
+  return { modality: "data.event", semantic_class: "event", continuous: false };
+}
+
 function operatorCapabilities(definition: PipelineOperatorDefinition | null): Set<string> {
   return new Set((definition?.capabilities ?? []).map((value) => String(value || "").trim().toLowerCase()));
 }
@@ -497,6 +514,7 @@ export function buildGraphFromInteractiveSteps(
     }
 
     nodes.push({
+      uid: nodeIdRaw,
       id: nodeIdRaw,
       operator: operatorId,
       config: parsed.data,
@@ -575,10 +593,11 @@ export function buildGraphFromInteractiveSteps(
     }
 
     edges.push({
+      uid: `${sourceNodeId}.out->${targetNode.id}.${targetPort}`,
       from: { node: sourceNodeId, port: "out" },
       to: { node: targetNode.id, port: targetPort },
-      maxsize: policy.maxsize,
-      drop_policy: policy.drop_policy,
+      traffic: edgeTrafficFor(upstreamOperator, targetOperator, targetPort),
+      queue: { max_items: policy.maxsize, drop_policy: policy.drop_policy },
     });
 
     if (isSourceOperator(targetOperator) || !isSinkOperator(targetOperator)) {
@@ -587,9 +606,14 @@ export function buildGraphFromInteractiveSteps(
   }
 
   const graph: Record<string, unknown> = {
-    schema_version: 1,
+    schema_version: 2,
+    uid: isRecord(baseGraph) && typeof baseGraph.uid === "string" ? baseGraph.uid : "graph",
+    revision: isRecord(baseGraph) && typeof baseGraph.revision === "number" ? baseGraph.revision : 1,
     nodes,
     edges,
+    limits: {},
+    layout: isRecord(baseGraph) && isRecord(baseGraph.layout) ? { ...baseGraph.layout } : {},
+    meta: isRecord(baseGraph) && isRecord(baseGraph.meta) ? { ...baseGraph.meta } : {},
   };
   if (isRecord(baseGraph) && isRecord(baseGraph.limits) && Object.keys(baseGraph.limits).length > 0) {
     graph.limits = { ...baseGraph.limits };

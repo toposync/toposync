@@ -29,7 +29,6 @@ type Props = {
   cameraAreaOptions: CameraAreaOption[];
   operatorPanels?: Record<string, PipelineOperatorPanel>;
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
-  onOpenJson: () => void;
   onUpdateNodeConfig?: (nodeId: string, config: Record<string, unknown>) => void;
   onUpdateEdgePolicy?: (edgeId: string, patch: TopologyEdgePolicyPatch) => void;
   collapsed: boolean;
@@ -41,7 +40,6 @@ type NodeInspectorProps = Omit<
   | "selection"
   | "runtimeStatus"
   | "runtimeGeneratedAt"
-  | "onOpenJson"
   | "onUpdateEdgePolicy"
   | "collapsed"
   | "onToggleCollapsed"
@@ -119,8 +117,7 @@ function SummaryInspector({
   runtimeStatus,
   runtimeGeneratedAt,
   editable,
-  onOpenJson,
-}: Pick<Props, "model" | "runtimeStatus" | "runtimeGeneratedAt" | "editable" | "onOpenJson">): React.ReactElement {
+}: Pick<Props, "model" | "runtimeStatus" | "runtimeGeneratedAt" | "editable">): React.ReactElement {
   const { t } = i18n.useI18n();
   const field = (key: string, fallback: string) => t(`core.ui.pipelines.topology.field.${key}`, {}, fallback);
   const runtimeLabel = runtimeStatus.loading
@@ -143,10 +140,6 @@ function SummaryInspector({
               : t("core.ui.pipelines.topology.read_only", {}, "Read-only graph view")}
           </div>
         </div>
-        <button className="pillButton" type="button" onClick={onOpenJson}>
-          <i className="fa-solid fa-code" aria-hidden="true" />
-          JSON
-        </button>
       </div>
       <div className="pipelineTopologyInspectorGrid">
         <Field label={field("graph", "Graph")} value={model.summary.graphUid} />
@@ -479,7 +472,6 @@ export function TopologyInspector({
   cameraAreaOptions,
   operatorPanels,
   onOpenTelemetryField,
-  onOpenJson,
   onUpdateNodeConfig,
   onUpdateEdgePolicy,
   collapsed,
@@ -525,7 +517,6 @@ export function TopologyInspector({
             runtimeStatus={runtimeStatus}
             runtimeGeneratedAt={runtimeGeneratedAt}
             editable={editable}
-            onOpenJson={onOpenJson}
           />
         )}
       </div>

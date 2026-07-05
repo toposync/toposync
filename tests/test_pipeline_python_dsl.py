@@ -42,8 +42,10 @@ PIPELINE = test.source(_id="source") | test.transform(_id="transform")
         python_source=source, pipeline_name="demo", registry=registry
     )
     assert graph1 == graph2
-    assert graph1["schema_version"] == 1
+    assert graph1["schema_version"] == 2
+    assert graph1["uid"] == "demo"
     assert {node["id"] for node in graph1["nodes"]} == {"source", "transform"}
+    assert all("uid" in node for node in graph1["nodes"])
     assert graph1["edges"]
 
 
@@ -107,8 +109,8 @@ PIPELINE = test.source(_id="source") | test.split(_id="split") | test.heavy(_id=
     split_edge = next(
         edge for edge in graph["edges"] if edge["from"]["node"] == "split"
     )
-    assert split_edge["maxsize"] == 64
-    assert split_edge["drop_policy"] == "keyed_latest_only"
+    assert split_edge["queue"]["max_items"] == 64
+    assert split_edge["queue"]["drop_policy"] == "keyed_latest_only"
 
 
 def test_python_dsl_requires_pipeline_root() -> None:
@@ -143,13 +145,13 @@ def test_compile_python_endpoint_returns_graph(
             name="demo_pipeline",
             editor_mode="python",
             python_source='PIPELINE = core.demo_frame_sequence_source(_id="source") | core.notify(_id="notify")',
-            graph={"schema_version": 1, "nodes": [], "edges": []},
+            graph={"schema_version": 2, "uid": "demo_pipeline", "nodes": [], "edges": []},
         ).model_dump(mode="json")
         res = client.post("/api/pipelines/compile-python", json={"pipeline": pipeline})
         assert res.status_code == 200
         body = res.json()
         assert "graph" in body
-        assert body["graph"]["schema_version"] == 1
+        assert body["graph"]["schema_version"] == 2
         assert {node["id"] for node in body["graph"]["nodes"]} == {"source", "notify"}
 
 
@@ -161,7 +163,7 @@ def test_python_pipeline_save_compiles_source(
             name="dsl_pipeline",
             editor_mode="python",
             python_source='PIPELINE = core.demo_frame_sequence_source(_id="source") | core.notify(_id="notify")',
-            graph={"schema_version": 1, "nodes": [], "edges": []},
+            graph={"schema_version": 2, "uid": "dsl_pipeline", "nodes": [], "edges": []},
         ).model_dump(mode="json")
 
         res = client.post("/api/pipelines", json=payload)

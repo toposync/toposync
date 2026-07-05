@@ -1,4 +1,3 @@
-import Editor from "@monaco-editor/react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
@@ -33,7 +32,7 @@ import {
   resetPipelineStats,
 } from "../../util/api";
 import { extractProcessingRuntimeNodeIssues, filterProcessingRuntimeIssuesForPipeline } from "../processingRuntimeHealth";
-import { InteractivePipelineEditor, PipelineStorageCard } from "./pipelines/InteractivePipelineEditor";
+import { PipelineStorageCard } from "./pipelines/InteractivePipelineEditor";
 import { PipelineDuplicateModal } from "./pipelines/PipelineDuplicateModal";
 import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
 import { PipelineTelemetryOverviewCard } from "./pipelines/PipelineTelemetryOverviewCard";
@@ -234,7 +233,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const [graphText, setGraphText] = useState<string>("");
   const [pythonText, setPythonText] = useState<string>("");
   const [mode, setMode] = useState<EditorMode>("interactive");
-  const [viewMode, setViewMode] = useState<"editor" | "topology">("editor");
   const [topologyDirty, setTopologyDirty] = useState(false);
   const [topologyValidationLoading, setTopologyValidationLoading] = useState(false);
   const [topologyValidationError, setTopologyValidationError] = useState<string | null>(null);
@@ -533,39 +531,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       .filter(Boolean);
   }, [camerasIndex.cameras, draft, servers, t]);
 
-  const switchMode = (nextMode: EditorMode) => {
-    if (!draft) return;
-    if (isPythonLocked && nextMode !== "python") return;
-
-    if (nextMode === "interactive" && mode === "json") {
-      const parsed = safeJsonParse(graphText);
-      if (!parsed.ok) {
-        setError(
-          t(
-            "core.ui.pipelines.editor.error.invalid_graph_json",
-            { error: parsed.error },
-            `Invalid graph JSON: ${parsed.error}`,
-          ),
-        );
-        return;
-      }
-      const loaded = buildInteractiveStepsFromGraph(parsed.data, operatorsById);
-      setInteractiveSteps(loaded.steps);
-      setInteractiveWarning(loaded.warning);
-    }
-
-    if (nextMode === "json" && mode === "interactive") {
-      if (!interactiveGraph.graph) {
-        setError(interactiveGraph.error || t("core.ui.pipelines.editor.error.interactive_graph_invalid"));
-        return;
-      }
-      setGraphText(jsonPretty(interactiveGraph.graph));
-    }
-
-    setError(null);
-    setMode(nextMode);
-  };
-
   const resolveGraphFromActiveMode = (): { ok: true; graph: Record<string, unknown> } | { ok: false; message: string } => {
     if (!draft) return { ok: false, message: t("core.ui.pipelines.error.no_selection") };
 
@@ -613,7 +578,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
   const applyTopologyGraphChange = useCallback((nextGraph: Record<string, unknown>) => {
     setMode("json");
-    setViewMode("topology");
     setGraphText(jsonPretty(nextGraph));
     setTopologyDirty(true);
     setTopologyValidationError(null);
@@ -821,7 +785,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       const target = telemetryFieldInspector;
       if (!target) return;
       const nextValue = Number.isFinite(value) ? value : 0;
-      if (viewMode === "topology" && isRecord(topologyGraph)) {
+      if (isRecord(topologyGraph)) {
         const nodes = Array.isArray((topologyGraph as any).nodes) ? ((topologyGraph as any).nodes as unknown[]) : [];
         const rawNode = nodes.find((item) => isRecord(item) && String(item.id || "").trim() === target.nodeId);
         const currentConfig = isRecord((rawNode as any)?.config) ? { ...((rawNode as any).config as Record<string, unknown>) } : {};
@@ -843,7 +807,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       );
       setTelemetryFieldInspector((prev) => (prev ? { ...prev, value: nextValue } : prev));
     },
-    [applyTopologyGraphChange, telemetryFieldInspector, topologyGraph, viewMode],
+    [applyTopologyGraphChange, telemetryFieldInspector, topologyGraph],
   );
 
   const handleCreate = async () => {
@@ -1168,7 +1132,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
               {recommendationsLoading ? <div className="pipelinesHint">{t("core.ui.pipelines.analysis.loading")}</div> : null}
 
-              {recommendations.length > 0 && mode !== "interactive" && viewMode !== "topology" ? (
+              {recommendations.length > 0 && mode !== "interactive" ? (
                 <div className="card">
                   <div className="cardTitle">{t("core.ui.pipelines.recommendations.title")}</div>
                   <div className="cardBody">
@@ -1267,52 +1231,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   </div>
                 </label>
 
-                <div className="pipelinesControlField pipelinesModeField">
-                  <span>{t("core.ui.pipelines.form.editor_mode", {}, "Editor mode")}</span>
-                  <div className="pipelinesModes" role="group" aria-label={t("core.ui.pipelines.form.editor_mode", {}, "Editor mode")}>
-                    {mode === "python" || isPythonLocked ? (
-                      <button className="pillButton isActive" type="button" disabled>
-                        {t("core.ui.pipelines.modes.python_one_way")}
-                      </button>
-                    ) : null}
-                    <button
-                      className={["pillButton", mode === "interactive" ? "isActive" : ""].filter(Boolean).join(" ")}
-                      type="button"
-                      disabled={isPythonLocked}
-                      onClick={() => switchMode("interactive")}
-                    >
-                      {t("core.ui.pipelines.modes.interactive")}
-                    </button>
-                    <button
-                      className={["pillButton", mode === "json" ? "isActive" : ""].filter(Boolean).join(" ")}
-                      type="button"
-                      disabled={isPythonLocked}
-                      onClick={() => switchMode("json")}
-                    >
-                      {t("core.ui.pipelines.modes.json")}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="pipelinesControlField pipelinesModeField">
-                  <span>{t("core.ui.pipelines.topology.view", {}, "View")}</span>
-                  <div className="pipelinesModes" role="group" aria-label={t("core.ui.pipelines.topology.view", {}, "View")}>
-                    <button
-                      className={["pillButton", viewMode === "editor" ? "isActive" : ""].filter(Boolean).join(" ")}
-                      type="button"
-                      onClick={() => setViewMode("editor")}
-                    >
-                      {t("core.ui.pipelines.topology.editor", {}, "Editor")}
-                    </button>
-                    <button
-                      className={["pillButton", viewMode === "topology" ? "isActive" : ""].filter(Boolean).join(" ")}
-                      type="button"
-                      onClick={() => setViewMode("topology")}
-                    >
-                      {t("core.ui.pipelines.topology.title", {}, "Topology")}
-                    </button>
-                  </div>
-                </div>
               </div>
 
               {pipelineIngestNotices.map((message) => (
@@ -1325,91 +1243,29 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               ))}
 
               <div className="pipelinesEditorPanel">
-                {viewMode === "topology" ? (
-                  <TopologyView
-                    pipelineName={draft.name}
-                    graph={topologyGraph}
-                    graphText={graphText}
-                    operatorsById={operatorsById}
-                    camerasIndex={camerasIndex}
-                    processingServerId={draft?.processing_server_id ?? "local"}
-                    onOpenProcessingServers={onOpenProcessingServers}
-                    operatorPanels={operatorPanels}
-                    onOpenTelemetryField={isDraftReadOnly ? undefined : openTelemetryFieldInspector}
-                    alerts={recommendations}
-                    runtimeInfo={selectedRuntimeGraphInfo}
-                    runtimeStatus={topologyRuntimeStatus}
-                    editable={!isDraftReadOnly && !isPythonLocked}
-                    dirty={topologyDirty}
-                    validationLoading={topologyValidationLoading}
-                    validationError={topologyValidationError}
-                    onChangeGraph={applyTopologyGraphChange}
-                    onValidate={() => {
-                      void validateActiveGraph();
-                    }}
-                    onDiscard={discardTopologyChanges}
-                    onOpenJson={() => {
-                      if (!isPythonLocked) switchMode("json");
-                      setViewMode("editor");
-                    }}
-                  />
-                ) : mode === "python" ? (
-                  <div className="pipelinesMonacoWrap">
-                    <Editor
-                      height="520px"
-                      language="python"
-                      value={pythonText}
-                      onChange={(value) => {
-                        if (!isDraftReadOnly) setPythonText(String(value ?? ""));
-                      }}
-                      options={{
-                        automaticLayout: true,
-                        fontSize: 13,
-                        minimap: { enabled: false },
-                        readOnly: isDraftReadOnly,
-                        scrollBeyondLastLine: false,
-                        wordWrap: "on",
-                      }}
-                    />
-                  </div>
-                ) : mode === "interactive" ? (
-                  <InteractivePipelineEditor
-                    operatorsById={operatorsById}
-                    camerasIndex={camerasIndex}
-                    pipelineName={draft?.name ?? null}
-                    processingServerId={draft?.processing_server_id ?? "local"}
-                    onOpenProcessingServers={onOpenProcessingServers}
-                    stepOutputsByNodeId={stepOutputsByNodeId}
-                    interactiveSteps={interactiveSteps}
-                    setInteractiveSteps={setInteractiveSteps}
-                    interactiveWarning={interactiveWarning}
-                    setInteractiveWarning={setInteractiveWarning}
-                    interactiveGraph={interactiveGraph}
-                    pipelineAlerts={recommendations}
-                    operatorPanels={operatorPanels}
-                    readOnly={isDraftReadOnly}
-                    onOpenTelemetryField={isDraftReadOnly ? undefined : openTelemetryFieldInspector}
-                  />
-                ) : (
-                  <div className="pipelinesMonacoWrap">
-                    <Editor
-                      height="520px"
-                      language="json"
-                      value={graphText}
-                      onChange={(value) => {
-                        if (!isDraftReadOnly) setGraphText(String(value ?? ""));
-                      }}
-                      options={{
-                        automaticLayout: true,
-                        fontSize: 13,
-                        minimap: { enabled: false },
-                        readOnly: isDraftReadOnly,
-                        scrollBeyondLastLine: false,
-                        wordWrap: "on",
-                      }}
-                    />
-                  </div>
-                )}
+                <TopologyView
+                  pipelineName={draft.name}
+                  graph={topologyGraph}
+                  graphText={graphText}
+                  operatorsById={operatorsById}
+                  camerasIndex={camerasIndex}
+                  processingServerId={draft?.processing_server_id ?? "local"}
+                  onOpenProcessingServers={onOpenProcessingServers}
+                  operatorPanels={operatorPanels}
+                  onOpenTelemetryField={isDraftReadOnly ? undefined : openTelemetryFieldInspector}
+                  alerts={recommendations}
+                  runtimeInfo={selectedRuntimeGraphInfo}
+                  runtimeStatus={topologyRuntimeStatus}
+                  editable={!isDraftReadOnly && !isPythonLocked}
+                  dirty={topologyDirty}
+                  validationLoading={topologyValidationLoading}
+                  validationError={topologyValidationError}
+                  onChangeGraph={applyTopologyGraphChange}
+                  onValidate={() => {
+                    void validateActiveGraph();
+                  }}
+                  onDiscard={discardTopologyChanges}
+                />
               </div>
 
               <PipelineTelemetryOverviewCard

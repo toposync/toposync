@@ -17,6 +17,45 @@ def _create_store(tmp_path: Path) -> ConfigStore:
     return ConfigStore(paths=paths)
 
 
+def _graph(
+    *,
+    uid: str = "graph",
+    nodes: list[dict] | None = None,
+    edges: list[dict] | None = None,
+) -> dict:
+    converted_nodes = [
+        {"uid": str(node.get("uid") or node.get("id")), **node}
+        for node in (nodes or [])
+    ]
+    converted_edges = []
+    for index, edge in enumerate(edges or []):
+        source = edge.get("from") or {}
+        target = edge.get("to") or {}
+        converted = {
+            "uid": str(
+                edge.get("uid")
+                or f"{source.get('node', 'source')}.{source.get('port', 'out')}->{target.get('node', 'target')}.{target.get('port', 'in')}"
+            ),
+            "from": source,
+            "to": target,
+            "queue": {
+                "max_items": int(edge.get("maxsize") or 1),
+                "drop_policy": str(edge.get("drop_policy") or "latest_only"),
+            },
+        }
+        converted_edges.append(converted)
+    return {
+        "schema_version": 2,
+        "uid": uid,
+        "revision": 1,
+        "nodes": converted_nodes,
+        "edges": converted_edges,
+        "limits": {},
+        "layout": {},
+        "meta": {},
+    }
+
+
 def _external_append_pipeline(config_path: Path, name: str) -> None:
     raw = json.loads(config_path.read_text(encoding="utf-8"))
     raw.setdefault("pipelines", [])
@@ -27,7 +66,7 @@ def _external_append_pipeline(config_path: Path, name: str) -> None:
             "processing_server_id": "local",
             "editor_mode": "json",
             "python_source": "",
-            "graph": {"schema_version": 1},
+            "graph": _graph(uid=name),
         }
     )
     config_path.write_text(
@@ -37,7 +76,7 @@ def _external_append_pipeline(config_path: Path, name: str) -> None:
 
 def test_config_store_reloads_after_external_config_json_change(tmp_path: Path) -> None:
     store = _create_store(tmp_path)
-    asyncio.run(store.create_pipeline(Pipeline(name="p1", graph={"schema_version": 1})))
+    asyncio.run(store.create_pipeline(Pipeline(name="p1", graph=_graph(uid="p1"))))
 
     _external_append_pipeline(store.paths.config_path, "p2")
 
@@ -48,7 +87,7 @@ def test_config_store_reloads_after_external_config_json_change(tmp_path: Path) 
 
 def test_config_store_write_does_not_clobber_external_pipeline_changes(tmp_path: Path) -> None:
     store = _create_store(tmp_path)
-    asyncio.run(store.create_pipeline(Pipeline(name="p1", graph={"schema_version": 1})))
+    asyncio.run(store.create_pipeline(Pipeline(name="p1", graph=_graph(uid="p1"))))
 
     _external_append_pipeline(store.paths.config_path, "p2")
 
@@ -73,9 +112,9 @@ def test_config_store_preserves_tracking_graph_without_identity_migration(tmp_pa
                         "processing_server_id": "local",
                         "editor_mode": "json",
                         "python_source": "",
-                        "graph": {
-                            "schema_version": 1,
-                            "nodes": [
+                        "graph": _graph(
+                            uid="legacy_tracking",
+                            nodes=[
                                 {"id": "source", "operator": "camera.source", "config": {}},
                                 {
                                     "id": "track",
@@ -102,7 +141,7 @@ def test_config_store_preserves_tracking_graph_without_identity_migration(tmp_pa
                                     },
                                 },
                             ],
-                            "edges": [
+                            edges=[
                                 {"from": {"node": "source", "port": "out"}, "to": {"node": "track", "port": "in"}},
                                 {
                                     "from": {"node": "track", "port": "out"},
@@ -112,7 +151,7 @@ def test_config_store_preserves_tracking_graph_without_identity_migration(tmp_pa
                                 },
                                 {"from": {"node": "throttle", "port": "out"}, "to": {"node": "notify", "port": "in"}},
                             ],
-                        },
+                        ),
                     }
                 ],
             },
@@ -152,9 +191,9 @@ def test_config_store_preserves_existing_event_assembler_and_edges(
                 "pipelines": [
                     {
                         "name": "partially_migrated_tracking",
-                        "graph": {
-                            "schema_version": 1,
-                            "nodes": [
+                        "graph": _graph(
+                            uid="partially_migrated_tracking",
+                            nodes=[
                                 {
                                     "id": "track",
                                     "operator": "vision.track",
@@ -167,11 +206,11 @@ def test_config_store_preserves_existing_event_assembler_and_edges(
                                 },
                                 {"id": "store", "operator": "core.store_images", "config": {}},
                             ],
-                            "edges": [
+                            edges=[
                                 {"from": {"node": "track", "port": "out"}, "to": {"node": "event", "port": "in"}},
                                 {"from": {"node": "event", "port": "out"}, "to": {"node": "store", "port": "in"}},
                             ],
-                        },
+                        ),
                     }
                 ],
             },
@@ -206,9 +245,9 @@ def test_config_store_does_not_add_group_events_stationary_setting(
                 "pipelines": [
                     {
                         "name": "presence_area_without_stationary_members",
-                        "graph": {
-                            "schema_version": 1,
-                            "nodes": [
+                        "graph": _graph(
+                            uid="presence_area_without_stationary_members",
+                            nodes=[
                                 {"id": "track", "operator": "vision.track", "config": {}},
                                 {
                                     "id": "velocity",
@@ -225,12 +264,12 @@ def test_config_store_does_not_add_group_events_stationary_setting(
                                 },
                                 {"id": "notify", "operator": "core.notify", "config": {}},
                             ],
-                            "edges": [
+                            edges=[
                                 {"from": {"node": "track", "port": "out"}, "to": {"node": "velocity", "port": "in"}},
                                 {"from": {"node": "velocity", "port": "out"}, "to": {"node": "group", "port": "in"}},
                                 {"from": {"node": "group", "port": "out"}, "to": {"node": "notify", "port": "in"}},
                             ],
-                        },
+                        ),
                     }
                 ],
             },
@@ -260,9 +299,9 @@ def test_config_store_preserves_explicit_group_events_stationary_setting(
                 "pipelines": [
                     {
                         "name": "explicit_stationary_setting",
-                        "graph": {
-                            "schema_version": 1,
-                            "nodes": [
+                        "graph": _graph(
+                            uid="explicit_stationary_setting",
+                            nodes=[
                                 {"id": "velocity", "operator": "camera.velocity_estimation", "config": {}},
                                 {
                                     "id": "group",
@@ -273,10 +312,10 @@ def test_config_store_preserves_explicit_group_events_stationary_setting(
                                     },
                                 },
                             ],
-                            "edges": [
+                            edges=[
                                 {"from": {"node": "velocity", "port": "out"}, "to": {"node": "group", "port": "in"}},
                             ],
-                        },
+                        ),
                     }
                 ],
             },

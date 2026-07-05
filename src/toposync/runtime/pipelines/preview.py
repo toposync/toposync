@@ -5,8 +5,8 @@ from typing import Any
 
 from toposync.runtime.config_store import Pipeline
 
-from .compiler import PipelineGraphSpec
 from .execution import PipelineRuntimeDependencies, SinkRuntime
+from .graph_schema_v2 import PipelineGraphV2Spec
 from .images import resolve_image_artifact_for_data
 from .operator_registry import OperatorDefinition, OperatorRegistry
 from .runtime import Packet
@@ -84,7 +84,7 @@ def build_preview_registry(registry: OperatorRegistry) -> OperatorRegistry:
 
 def prepare_preview_pipeline(*, pipeline: Pipeline, registry: OperatorRegistry) -> Pipeline:
     try:
-        graph = PipelineGraphSpec.model_validate(pipeline.graph)
+        graph = PipelineGraphV2Spec.model_validate(pipeline.graph)
     except Exception as exc:  # noqa: BLE001
         raise PipelinePreviewError(f"Invalid preview graph: {exc}", code="invalid_preview_graph") from exc
 
@@ -129,7 +129,7 @@ def prepare_preview_pipeline(*, pipeline: Pipeline, registry: OperatorRegistry) 
             if not _is_passthrough_compatible(definition):
                 unsupported.append((node.id, operator_id))
                 continue
-            rewritten_nodes.append({"id": node.id, "operator": "core.passthrough", "config": {}})
+            rewritten_nodes.append({"uid": node.uid, "id": node.id, "operator": "core.passthrough", "config": {}})
             continue
 
         rewritten_nodes.append(node.model_dump(mode="json", by_alias=True))
@@ -185,13 +185,13 @@ def prepare_preview_pipeline(*, pipeline: Pipeline, registry: OperatorRegistry) 
     used_node_ids = {str(node.get("id") or "") for node in rewritten_nodes}
     for terminal_node_id in terminal_node_ids:
         sink_node_id = _next_preview_sink_id(used_node_ids)
-        rewritten_nodes.append({"id": sink_node_id, "operator": "core.sink", "config": {}})
+        rewritten_nodes.append({"uid": sink_node_id, "id": sink_node_id, "operator": "core.sink", "config": {}})
         rewritten_edges.append(
             {
+                "uid": f"preview:{terminal_node_id}->{sink_node_id}",
                 "from": {"node": terminal_node_id, "port": "out"},
                 "to": {"node": sink_node_id, "port": "in"},
-                "maxsize": 1,
-                "drop_policy": "latest_only",
+                "queue": {"max_items": 1, "drop_policy": "latest_only"},
             }
         )
 
@@ -200,9 +200,14 @@ def prepare_preview_pipeline(*, pipeline: Pipeline, registry: OperatorRegistry) 
         update={
             "name": preview_name,
             "graph": {
-                "schema_version": int(graph.schema_version),
+                "schema_version": 2,
+                "uid": f"{str(graph.uid or 'graph').strip() or 'graph'}__preview",
+                "revision": int(graph.revision or 1),
                 "nodes": rewritten_nodes,
                 "edges": rewritten_edges,
+                "limits": dict(graph.limits),
+                "layout": dict(graph.layout),
+                "meta": dict(graph.meta),
             },
         }
     )

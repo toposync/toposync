@@ -55,7 +55,6 @@ type Props = {
   dirty?: boolean;
   validationLoading?: boolean;
   validationError?: string | null;
-  onOpenJson: () => void;
   onChangeGraph?: (graph: Record<string, unknown>) => void;
   onValidate?: () => void;
   onDiscard?: () => void;
@@ -126,7 +125,6 @@ export function TopologyView({
   dirty = false,
   validationLoading = false,
   validationError = null,
-  onOpenJson,
   onChangeGraph,
   onValidate,
   onDiscard,
@@ -309,10 +307,6 @@ export function TopologyView({
             <div className="pipelineTopologyFallbackTitle">{built.titleKey ? t(built.titleKey, {}, built.title) : built.title}</div>
             <div className="pipelineTopologyFallbackDetail">{built.detailKey ? t(built.detailKey, {}, built.detail) : built.detail}</div>
           </div>
-          <button className="pillButton" type="button" onClick={onOpenJson}>
-            <i className="fa-solid fa-code" aria-hidden="true" />
-            JSON
-          </button>
         </div>
         <pre className="pipelineTopologyJsonFallback">{graphText}</pre>
       </div>
@@ -354,10 +348,6 @@ export function TopologyView({
           <button className="pillButton" type="button" disabled={!canEdit || !dirty} onClick={onDiscard}>
             <i className="fa-solid fa-rotate-left" aria-hidden="true" />
             {t("core.ui.pipelines.topology.discard", {}, "Discard")}
-          </button>
-          <button className="pillButton" type="button" onClick={onOpenJson}>
-            <i className="fa-solid fa-code" aria-hidden="true" />
-            JSON
           </button>
         </div>
         <div className="pipelineTopologyCanvas" aria-label={t("core.ui.pipelines.topology.canvas", {}, "Pipeline topology")}>
@@ -464,7 +454,6 @@ export function TopologyView({
         cameraAreaOptions={cameraAreaOptions}
         operatorPanels={operatorPanels}
         onOpenTelemetryField={onOpenTelemetryField}
-        onOpenJson={onOpenJson}
         onUpdateNodeConfig={handleUpdateNodeConfig}
         onUpdateEdgePolicy={handleUpdateEdgePolicy}
         collapsed={inspectorCollapsed}

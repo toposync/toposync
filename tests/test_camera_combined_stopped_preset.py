@@ -274,8 +274,7 @@ def test_camera_pipeline_combined_stopped_builds_shared_detection_and_branches(
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
-        assert "split_stream_latest_only_channel" not in alert_codes
-        assert "split_stream_small_channel" not in alert_codes
+        assert alert_codes == set()
 
 
 def test_camera_pipeline_combined_stopped_area_thresholds_and_priority_override(

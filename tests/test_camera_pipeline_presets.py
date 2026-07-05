@@ -617,8 +617,7 @@ def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
-        assert "split_stream_latest_only_channel" not in alert_codes
-        assert "split_stream_small_channel" not in alert_codes
+        assert alert_codes == set()
 
 
 def test_camera_pipeline_vehicle_stopped_requires_mapping(
@@ -703,8 +702,7 @@ def test_camera_pipeline_vehicle_stopped_builds_confirmed_stop_notification(
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
-        assert "split_stream_latest_only_channel" not in alert_codes
-        assert "split_stream_small_channel" not in alert_codes
+        assert alert_codes == set()
 
 
 def test_camera_pipeline_person_stopped_builds_confirmed_stop_notification(
@@ -770,8 +768,7 @@ def test_camera_pipeline_person_stopped_builds_confirmed_stop_notification(
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
-        assert "split_stream_latest_only_channel" not in alert_codes
-        assert "split_stream_small_channel" not in alert_codes
+        assert alert_codes == set()
 
 
 @pytest.mark.parametrize("preset", ["vehicle_stopped", "person_stopped"])
@@ -831,3 +828,8 @@ def test_camera_pipeline_stopped_area_uses_area_composition_and_restriction(
                 ],
             }
         ]
+
+        res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert res.status_code == 200, res.text
+        alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
+        assert alert_codes == set()

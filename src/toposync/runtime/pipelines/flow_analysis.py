@@ -209,8 +209,9 @@ def analyze_pipeline_flow(
         if target is None:
             continue
         if is_heavy_ai(target.node_id) and (
-            int(edge.channel_maxsize) > 1
-            or edge.channel_drop_policy not in {DropPolicy.LATEST_ONLY, DropPolicy.DROP_OLDEST}
+            (int(edge.channel_maxsize) > 1 and edge.channel_drop_policy != DropPolicy.KEYED_LATEST_ONLY)
+            or edge.channel_drop_policy
+            not in {DropPolicy.LATEST_ONLY, DropPolicy.DROP_OLDEST, DropPolicy.KEYED_LATEST_ONLY}
         ):
             alerts.append(
                 PipelineAlert(
@@ -218,7 +219,7 @@ def analyze_pipeline_flow(
                     node_id=target.node_id,
                     operator_id=target.operator_id,
                     message="A heavy AI step is fed by an edge that can build backlog before expensive compute.",
-                    suggestion="Use maxsize=1 with latest_only/drop_oldest, or place a flow limiter before this AI step.",
+                    suggestion="Use maxsize=1 with latest_only/drop_oldest, keyed_latest_only after split streams, or place a flow limiter before this AI step.",
                     edge=edge_payload(edge),
                     details={"maxsize": int(edge.channel_maxsize), "drop_policy": edge.channel_drop_policy.value},
                 )

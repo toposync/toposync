@@ -224,19 +224,28 @@ def _branch_edges(prefix: str) -> list[dict[str, Any]]:
     return [
         _keyed_edge(f"{prefix}_stationary", f"{prefix}_debounce"),
         _keyed_edge(f"{prefix}_debounce", f"{prefix}_crop"),
-        _edge(f"{prefix}_crop", f"{prefix}_store", maxsize=8),
-        _edge(f"{prefix}_store", f"{prefix}_notify", maxsize=16),
+        _edge(f"{prefix}_crop", f"{prefix}_store", maxsize=8, drop_policy="block"),
+        _edge(f"{prefix}_store", f"{prefix}_notify", maxsize=16, drop_policy="block"),
     ]
 
 
 def _linear_edges(node_ids: list[str]) -> list[dict[str, Any]]:
     edges: list[dict[str, Any]] = []
     for index in range(len(node_ids) - 1):
+        target_id = node_ids[index + 1]
+        drop_policy = "drop_oldest"
+        maxsize = 2 if index < 2 else 8
+        if target_id == "detect":
+            maxsize = 1
+        elif target_id == "track":
+            maxsize = 32
+            drop_policy = "keyed_latest_only"
         edges.append(
             _edge(
                 node_ids[index],
-                node_ids[index + 1],
-                maxsize=2 if index < 2 else 8,
+                target_id,
+                maxsize=maxsize,
+                drop_policy=drop_policy,
             )
         )
     return edges

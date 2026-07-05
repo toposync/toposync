@@ -2998,16 +2998,26 @@ class CamerasExtension(BaseExtension):
         def _linear_edges(node_ids: list[str]) -> list[dict[str, Any]]:
             edges: list[dict[str, Any]] = []
             for index in range(len(node_ids) - 1):
+                target_id = node_ids[index + 1]
+                drop_policy = "block" if target_id in {"store", "notify", "notify_store"} else "drop_oldest"
+                maxsize = 2 if index < 2 else 8
+                if target_id == "detect":
+                    maxsize = 1
+                elif target_id == "track":
+                    maxsize = 32
+                    drop_policy = "keyed_latest_only"
                 edges.append(
                     {
                         "from": {"node": node_ids[index], "port": "out"},
-                        "to": {"node": node_ids[index + 1], "port": "in"},
-                        "maxsize": 2 if index < 2 else 8,
-                        "drop_policy": "drop_oldest",
+                        "to": {"node": target_id, "port": "in"},
+                        "maxsize": maxsize,
+                        "drop_policy": drop_policy,
                     }
                 )
             if edges:
                 edges[-1]["maxsize"] = 16
+                if node_ids[-1] in {"store", "notify", "notify_store"}:
+                    edges[-1]["drop_policy"] = "block"
             return edges
 
         def _build_camera_preset_graph(
@@ -3356,11 +3366,15 @@ class CamerasExtension(BaseExtension):
                     source_node = str(from_node.get("node") or "")
                     if source_node in {
                         "velocity",
+                        "area",
                         "stationary_event",
                         "notify_debounce",
                     }:
-                        edge["maxsize"] = 32 if source_node == "velocity" else 8
+                        edge["maxsize"] = 32 if source_node in {"velocity", "area"} else 8
                         edge["drop_policy"] = "keyed_latest_only"
+                    to_node = edge.get("to") if isinstance(edge.get("to"), dict) else {}
+                    if str(to_node.get("node") or "") in {"notify_store", "notify"}:
+                        edge["drop_policy"] = "block"
                 return build_pipeline_graph_v2(
                     nodes=nodes,
                     edges=edges,

@@ -723,7 +723,7 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Run the detector/model once with combined categories, then route downstream branches after it.",
     "core.ui.pipelines.alerts.heavy_edge_policy.message": "A heavy AI step can build backlog before expensive processing.",
     "core.ui.pipelines.alerts.heavy_edge_policy.suggestion":
-      "Use maxsize=1 with latest_only/drop_oldest, or place a flow limiter before this AI step.",
+      "Use maxsize=1 with latest_only/drop_oldest, keyed_latest_only after split streams, or place a flow limiter before this AI step.",
     "core.ui.pipelines.alerts.side_effect_lossy_edge.message":
       "A blocking side-effect step is fed by a lossy edge, so notifications, storage, or actions may be skipped under pressure.",
     "core.ui.pipelines.alerts.side_effect_lossy_edge.suggestion":
@@ -3067,7 +3067,7 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Execute o detector/modelo uma vez com categorias combinadas e roteie os ramos depois dele.",
     "core.ui.pipelines.alerts.heavy_edge_policy.message": "Uma etapa pesada de IA pode acumular backlog antes do processamento caro.",
     "core.ui.pipelines.alerts.heavy_edge_policy.suggestion":
-      "Use maxsize=1 com latest_only/drop_oldest, ou coloque um limitador de fluxo antes desta etapa de IA.",
+      "Use maxsize=1 com latest_only/drop_oldest, keyed_latest_only depois de streams divididos, ou coloque um limitador de fluxo antes desta etapa de IA.",
     "core.ui.pipelines.alerts.side_effect_lossy_edge.message":
       "Uma etapa bloqueante de efeito externo recebe dados por uma edge com perda, então notificações, armazenamento ou ações podem ser pulados sob pressão.",
     "core.ui.pipelines.alerts.side_effect_lossy_edge.suggestion":

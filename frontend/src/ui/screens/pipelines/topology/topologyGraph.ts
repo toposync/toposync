@@ -26,11 +26,11 @@ const SCHEMA_V2_ERROR = {
 } satisfies TopologyGraphEditResult;
 
 function cloneGraph(graph: JsonRecord): JsonRecord {
-  return JSON.parse(JSON.stringify(graph)) as JsonRecord;
+  return structuredClone(graph) as JsonRecord;
 }
 
 function cloneRecord(value: unknown): JsonRecord {
-  return isRecord(value) ? (JSON.parse(JSON.stringify(value)) as JsonRecord) : {};
+  return isRecord(value) ? (structuredClone(value) as JsonRecord) : {};
 }
 
 function rawNodes(graph: JsonRecord): JsonRecord[] {
@@ -82,26 +82,7 @@ function policySection(record: unknown, key: string): JsonRecord {
   return isRecord(record) && isRecord(record[key]) ? cloneRecord(record[key]) : {};
 }
 
-const FALLBACK_EDGE_POLICY = {
-  traffic: { modality: "data.record", semantic_class: "data", continuous: false },
-  queue: { max_items: 8, drop_policy: "drop_oldest" },
-  backpressure: {
-    mode: "pause_upstream",
-    warn_at_utilization: 0.7,
-    critical_at_utilization: 0.9,
-    propagate_pressure: true,
-  },
-  lifecycle: { preserve_open: true, preserve_close: true, compact_updates: true },
-  debug: { sample_headers: true, retain_last: 10, retain_artifact_refs: true, retain_artifact_data: false },
-} satisfies Record<string, JsonRecord>;
-
-function mergedPolicySection(key: keyof typeof FALLBACK_EDGE_POLICY, sourcePolicy: JsonRecord, targetPolicy: JsonRecord): JsonRecord {
-  return {
-    ...FALLBACK_EDGE_POLICY[key],
-    ...policySection(sourcePolicy, key),
-    ...policySection(targetPolicy, key),
-  };
-}
+const EDGE_POLICY_SECTIONS = ["traffic", "queue", "backpressure", "lifecycle", "debug"] as const;
 
 function defaultEdgePolicy(
   source: PipelineOperatorDefinition | null,
@@ -109,14 +90,17 @@ function defaultEdgePolicy(
 ): JsonRecord {
   const outputPolicy = cloneRecord(source?.default_output_policy);
   const inputPolicy = cloneRecord(target?.default_input_policy);
+  const policy: JsonRecord = {};
 
-  return {
-    traffic: mergedPolicySection("traffic", outputPolicy, inputPolicy),
-    queue: mergedPolicySection("queue", outputPolicy, inputPolicy),
-    backpressure: mergedPolicySection("backpressure", outputPolicy, inputPolicy),
-    lifecycle: mergedPolicySection("lifecycle", outputPolicy, inputPolicy),
-    debug: mergedPolicySection("debug", outputPolicy, inputPolicy),
-  };
+  for (const section of EDGE_POLICY_SECTIONS) {
+    const value = {
+      ...policySection(outputPolicy, section),
+      ...policySection(inputPolicy, section),
+    };
+    if (Object.keys(value).length > 0) policy[section] = value;
+  }
+
+  return policy;
 }
 
 export function isTopologyGraphV2(graph: unknown): graph is JsonRecord {

@@ -46,55 +46,38 @@ def analyze_compiled_pipeline(
             str(item).strip().lower() for item in caps if str(item).strip()
         }
 
-    def _operator_ids_upstream(start_node_id: str) -> set[str]:
+    def _walk(
+        start_node_id: str,
+        edge_map: dict[str, list[Any]],
+        next_node_id: Callable[[Any], str],
+    ) -> list[str]:
         seen: set[str] = set()
-        found: set[str] = set()
         q: deque[str] = deque([start_node_id])
+        out: list[str] = []
         while q:
             _check_cancelled(cancel_check)
             current = q.popleft()
-            for edge in incoming.get(current, []):
-                src = str(edge.source_node_id)
-                if src in seen:
+            for edge in edge_map.get(current, []):
+                nxt = str(next_node_id(edge))
+                if nxt in seen:
                     continue
-                seen.add(src)
-                node = nodes_by_id.get(src)
-                if node is not None:
-                    found.add(str(node.operator_id))
-                q.append(src)
-        return found
+                seen.add(nxt)
+                out.append(nxt)
+                q.append(nxt)
+        return out
+
+    def _operator_ids_upstream(start_node_id: str) -> set[str]:
+        return {
+            str(node.operator_id)
+            for node_id in _upstream_nodes(start_node_id)
+            if (node := nodes_by_id.get(node_id)) is not None
+        }
 
     def _upstream_nodes(start_node_id: str) -> list[str]:
-        seen: set[str] = set()
-        q: deque[str] = deque([start_node_id])
-        out: list[str] = []
-        while q:
-            _check_cancelled(cancel_check)
-            current = q.popleft()
-            for edge in incoming.get(current, []):
-                src = str(edge.source_node_id)
-                if src in seen:
-                    continue
-                seen.add(src)
-                out.append(src)
-                q.append(src)
-        return out
+        return _walk(start_node_id, incoming, lambda edge: edge.source_node_id)
 
     def _downstream_nodes(start_node_id: str) -> list[str]:
-        seen: set[str] = set()
-        q: deque[str] = deque([start_node_id])
-        out: list[str] = []
-        while q:
-            _check_cancelled(cancel_check)
-            current = q.popleft()
-            for edge in outgoing.get(current, []):
-                dst = str(edge.target_node_id)
-                if dst in seen:
-                    continue
-                seen.add(dst)
-                out.append(dst)
-                q.append(dst)
-        return out
+        return _walk(start_node_id, outgoing, lambda edge: edge.target_node_id)
 
     def _node_has_upstream_operator(node_id: str, operator_id: str) -> bool:
         for upstream_id in _operator_ids_upstream(node_id):

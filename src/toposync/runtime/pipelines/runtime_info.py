@@ -150,10 +150,11 @@ def build_graph_runtime_info(
                     resources[resource_key]["pressure_cause"] = pressure_cause
 
     for resource in resources.values():
+        resource_node_uids = set(resource.get("nodes") or [])
         resource_states = [
             node_runtime_state_by_node_id.get(node.node_id, "stopped")
             for node in compiled.nodes
-            if node.uid in set(resource.get("nodes") or [])
+            if node.uid in resource_node_uids
         ]
         if resource.get("pressure_cause") != "none":
             resource["state"] = "pressured"

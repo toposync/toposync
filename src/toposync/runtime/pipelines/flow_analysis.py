@@ -173,6 +173,7 @@ def analyze_pipeline_flow(
     heavy_groups: dict[str, list[CompiledNode]] = {}
     for node in heavy_nodes:
         heavy_groups.setdefault(heavy_signature(node), []).append(node)
+    upstream_by_node = {node.node_id: upstream_nodes(node.node_id) for node in heavy_nodes}
     for group in heavy_groups.values():
         _check_cancelled(cancel_check)
         if len(group) < 2:
@@ -182,9 +183,9 @@ def analyze_pipeline_flow(
             related = [
                 previous
                 for previous in ordered[:idx]
-                if upstream_nodes(previous.node_id) & upstream_nodes(node.node_id)
-                and previous.node_id not in upstream_nodes(node.node_id)
-                and node.node_id not in upstream_nodes(previous.node_id)
+                if upstream_by_node[previous.node_id] & upstream_by_node[node.node_id]
+                and previous.node_id not in upstream_by_node[node.node_id]
+                and node.node_id not in upstream_by_node[previous.node_id]
             ]
             if not related:
                 continue

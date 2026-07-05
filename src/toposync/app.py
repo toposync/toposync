@@ -1510,6 +1510,20 @@ def create_app() -> FastAPI:
             "bypass": bool(principal.bypass),
         }
 
+    def _http_processing_transport(
+        server: ProcessingServer, *, timeout_s: float
+    ) -> HttpProcessingTransport:
+        return HttpProcessingTransport(
+            base_url=server.url,
+            username=getattr(server, "username", ""),
+            password=getattr(server, "password", ""),
+            timeout_s=timeout_s,
+        )
+
+    async def _close_processing_transport(transport: HttpProcessingTransport) -> None:
+        with suppress(Exception):
+            await transport.close()
+
     @app.middleware("http")
     async def auth_and_extension_guard(
         request: Request,
@@ -2426,12 +2440,7 @@ def create_app() -> FastAPI:
                 return ProcessingServerStatusResponse(ok=True, status=status)
 
             try:
-                transport = HttpProcessingTransport(
-                    base_url=server.url,
-                    username=getattr(server, "username", ""),
-                    password=getattr(server, "password", ""),
-                    timeout_s=5.0,
-                )
+                transport = _http_processing_transport(server, timeout_s=5.0)
             except ProcessingTransportError as exc:
                 return ProcessingServerStatusResponse(ok=False, error=str(exc))
 
@@ -2440,10 +2449,7 @@ def create_app() -> FastAPI:
             except Exception as exc:  # noqa: BLE001
                 return ProcessingServerStatusResponse(ok=False, error=str(exc))
             finally:
-                try:
-                    await transport.close()
-                except Exception:
-                    pass
+                await _close_processing_transport(transport)
             check_cancelled()
             return ProcessingServerStatusResponse(ok=True, status=status)
 
@@ -2492,12 +2498,7 @@ def create_app() -> FastAPI:
             return ProcessingServerVisionManifestImportResponse.model_validate(result)
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=20.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=20.0)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2511,10 +2512,7 @@ def create_app() -> FastAPI:
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.post("/api/processing-servers/{server_id}/vision/custom-onnx/inspect")
     async def inspect_processing_server_custom_onnx(
@@ -2552,12 +2550,7 @@ def create_app() -> FastAPI:
             return dict(result or {})
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=120.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=120.0)
         except ProcessingTransportError as exc:
             await file.close()
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2577,10 +2570,7 @@ def create_app() -> FastAPI:
                 await file.close()
             except Exception:
                 pass
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.post("/api/processing-servers/{server_id}/vision/custom-onnx/preview")
     async def preview_processing_server_custom_onnx(
@@ -2646,12 +2636,7 @@ def create_app() -> FastAPI:
             return dict(result or {})
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=120.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=120.0)
         except ProcessingTransportError as exc:
             await image.close()
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2673,10 +2658,7 @@ def create_app() -> FastAPI:
                 await image.close()
             except Exception:
                 pass
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.post(
         "/api/processing-servers/{server_id}/vision/custom-onnx/import",
@@ -2737,12 +2719,7 @@ def create_app() -> FastAPI:
             return ProcessingServerVisionManifestImportResponse.model_validate(result)
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=120.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=120.0)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2756,10 +2733,7 @@ def create_app() -> FastAPI:
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.post(
         "/api/processing-servers/{server_id}/vision/huggingface/probe",
@@ -2797,12 +2771,7 @@ def create_app() -> FastAPI:
             return ProcessingServerVisionHuggingFaceProbeResponse.model_validate(result)
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=120.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=120.0)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2812,10 +2781,7 @@ def create_app() -> FastAPI:
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.post(
         "/api/processing-servers/{server_id}/vision/huggingface/inspect",
@@ -2856,12 +2822,7 @@ def create_app() -> FastAPI:
             return ProcessingServerVisionHuggingFaceInspectResponse.model_validate(result)
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=120.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=120.0)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2871,10 +2832,7 @@ def create_app() -> FastAPI:
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.post(
         "/api/processing-servers/{server_id}/vision/huggingface/export",
@@ -2916,12 +2874,7 @@ def create_app() -> FastAPI:
             return ProcessingServerVisionHuggingFaceInspectResponse.model_validate(result)
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=1200.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=1200.0)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2931,10 +2884,7 @@ def create_app() -> FastAPI:
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.post(
         "/api/processing-servers/{server_id}/vision/huggingface/import",
@@ -2999,12 +2949,7 @@ def create_app() -> FastAPI:
             return ProcessingServerVisionManifestImportResponse.model_validate(result)
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=120.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=120.0)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3018,10 +2963,7 @@ def create_app() -> FastAPI:
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.post(
         "/api/processing-servers/{server_id}/vision/models/{model_id}/install",
@@ -3067,12 +3009,7 @@ def create_app() -> FastAPI:
             return ProcessingServerVisionModelInstallResponse.model_validate(result)
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=20.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=20.0)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3086,10 +3023,7 @@ def create_app() -> FastAPI:
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.post(
         "/api/processing-servers/{server_id}/vision/models/{model_id}/cancel",
@@ -3132,12 +3066,7 @@ def create_app() -> FastAPI:
             return ProcessingServerVisionModelInstallResponse.model_validate(result)
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=20.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=20.0)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3151,10 +3080,7 @@ def create_app() -> FastAPI:
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.post(
         "/api/processing-servers/{server_id}/vision/models/{model_id}/retry",
@@ -3197,12 +3123,7 @@ def create_app() -> FastAPI:
             return ProcessingServerVisionModelInstallResponse.model_validate(result)
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=20.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=20.0)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3216,10 +3137,7 @@ def create_app() -> FastAPI:
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.post(
         "/api/processing-servers/{server_id}/vision/models/{model_id}/artifact",
@@ -3262,12 +3180,7 @@ def create_app() -> FastAPI:
             return ProcessingServerVisionModelArtifactUploadResponse.model_validate(result)
 
         try:
-            transport = HttpProcessingTransport(
-                base_url=server.url,
-                username=getattr(server, "username", ""),
-                password=getattr(server, "password", ""),
-                timeout_s=120.0,
-            )
+            transport = _http_processing_transport(server, timeout_s=120.0)
         except ProcessingTransportError as exc:
             await file.close()
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3288,10 +3201,7 @@ def create_app() -> FastAPI:
                 await file.close()
             except Exception:
                 pass
-            try:
-                await transport.close()
-            except Exception:
-                pass
+            await _close_processing_transport(transport)
 
     @app.get("/api/pipelines", response_model=PipelinesListResponse)
     async def list_pipelines(request: Request) -> PipelinesListResponse:

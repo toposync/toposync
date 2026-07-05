@@ -34,7 +34,7 @@ from ..observability import (
 from ..runtime import BoundedChannel, DropPolicy
 from ..shared_runtime import PipelineBundleRuntime, SharedRuntimeBuildError
 from .plan import build_distributed_graphs
-from .transport import HttpProcessingTransport, ProcessingTransport
+from .transport import HttpProcessingTransport
 
 
 logger = logging.getLogger("toposync.pipelines.orchestrator")
@@ -58,7 +58,7 @@ class _BundleHandle:
 @dataclass(slots=True)
 class _ServerHandle:
     server: ProcessingServer
-    transport: ProcessingTransport
+    transport: HttpProcessingTransport
     pump_task: asyncio.Task[None]
     config_payload: dict[str, Any] = field(default_factory=dict)
     last_event_id: int = 0

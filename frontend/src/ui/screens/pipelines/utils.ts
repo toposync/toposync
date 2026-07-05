@@ -416,16 +416,32 @@ function edgePolicyFor(
 ): { maxsize: number; drop_policy: string } {
   const sourceCaps = new Set((source?.capabilities ?? []).map((value) => String(value).trim().toLowerCase()));
   const targetCaps = new Set((target?.capabilities ?? []).map((value) => String(value).trim().toLowerCase()));
+  const fallback = (() => {
+    if (sourceCaps.has("source")) return { maxsize: 1, drop_policy: "latest_only" };
+    if (targetCaps.has("sink") || targetCaps.has("origin_only")) {
+      return { maxsize: 128, drop_policy: "drop_oldest" };
+    }
+    if (sourceCaps.has("split_stream")) {
+      return { maxsize: 64, drop_policy: "keyed_latest_only" };
+    }
+    if (targetCaps.has("heavy_compute")) return { maxsize: 1, drop_policy: "latest_only" };
+    return { maxsize: 32, drop_policy: "drop_oldest" };
+  })();
+  const queue = {
+    ...edgePolicyQueue(source?.default_output_policy),
+    ...edgePolicyQueue(target?.default_input_policy),
+  };
+  const rawMaxItems = queue.max_items;
+  const maxItems = typeof rawMaxItems === "number" || typeof rawMaxItems === "string" ? Number(rawMaxItems) : NaN;
+  const dropPolicy = String(queue.drop_policy ?? "").trim();
+  return {
+    maxsize: Number.isFinite(maxItems) ? Math.max(1, Math.round(maxItems)) : fallback.maxsize,
+    drop_policy: dropPolicy || fallback.drop_policy,
+  };
+}
 
-  if (sourceCaps.has("source")) return { maxsize: 1, drop_policy: "latest_only" };
-  if (targetCaps.has("sink") || targetCaps.has("origin_only")) {
-    return { maxsize: 128, drop_policy: "drop_oldest" };
-  }
-  if (sourceCaps.has("split_stream")) {
-    return { maxsize: 64, drop_policy: "keyed_latest_only" };
-  }
-  if (targetCaps.has("heavy_compute")) return { maxsize: 1, drop_policy: "latest_only" };
-  return { maxsize: 32, drop_policy: "drop_oldest" };
+function edgePolicyQueue(policy: unknown): Record<string, unknown> {
+  return isRecord(policy) && isRecord(policy.queue) ? policy.queue : {};
 }
 
 function operatorCapabilities(definition: PipelineOperatorDefinition | null): Set<string> {

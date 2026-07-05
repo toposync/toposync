@@ -5,7 +5,7 @@ import logging
 import math
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -675,41 +675,10 @@ class PipelineRuntime:
 
 
 def _snapshot_to_dict(snapshot: ChannelMetricsSnapshot) -> dict[str, Any]:
-    return {
-        "name": snapshot.name,
-        "maxsize": snapshot.maxsize,
-        "depth": snapshot.depth,
-        "max_depth_seen": snapshot.max_depth_seen,
-        "put_attempts": snapshot.put_attempts,
-        "put_accepted": snapshot.put_accepted,
-        "get_accepted": snapshot.get_accepted,
-        "dropped_oldest": snapshot.dropped_oldest,
-        "dropped_newest": snapshot.dropped_newest,
-        "dropped_total": snapshot.dropped_total,
-        "timed_out": snapshot.timed_out,
-        "canceled": snapshot.canceled,
-        "avg_queue_wait_ms": snapshot.avg_queue_wait_ms,
-        "p95_queue_wait_ms": snapshot.p95_queue_wait_ms,
-        "utilization": snapshot.utilization,
-        "in_memory_artifact_bytes": snapshot.in_memory_artifact_bytes,
-        "max_in_memory_artifact_bytes_seen": snapshot.max_in_memory_artifact_bytes_seen,
-        "active_keys": snapshot.active_keys,
-        "max_depth_per_key_seen": snapshot.max_depth_per_key_seen,
-        "max_in_memory_artifact_bytes_per_key_seen": snapshot.max_in_memory_artifact_bytes_per_key_seen,
-        "pressure_cause": snapshot.pressure_cause,
-        "last_pressure_at": snapshot.last_pressure_at,
-        "blocked_put_time_ms": snapshot.blocked_put_time_ms,
-        "waiting_get_time_ms": snapshot.waiting_get_time_ms,
-        "oldest_packet_age_ms": snapshot.oldest_packet_age_ms,
-        "last_event_ts": snapshot.last_event_ts,
-        "drop_reason_counts": dict(snapshot.drop_reason_counts),
-        "artifact_bytes_current": snapshot.artifact_bytes_current,
-        "artifact_bytes_max_seen": snapshot.artifact_bytes_max_seen,
-        "artifact_bytes_accepted": snapshot.artifact_bytes_accepted,
-        "artifact_bytes_delivered": snapshot.artifact_bytes_delivered,
-        "artifact_bytes_dropped": snapshot.artifact_bytes_dropped,
-        "pressure_state": snapshot.pressure_state,
-    }
+    payload = asdict(snapshot)
+    payload["dropped_total"] = snapshot.dropped_total
+    payload["utilization"] = snapshot.utilization
+    return payload
 
 
 def _task_state(task: asyncio.Task[Any]) -> str:

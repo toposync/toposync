@@ -162,6 +162,8 @@ def analyze_pipeline_flow(
         if node is None or defn is None or node.operator_id == "core.sink":
             return False
         caps = capabilities(defn)
+        if caps & {"sink", "origin_only"}:
+            return False
         return (
             bool(caps & {"event", "filter", "gate", "gate_control", "rate_control"})
             or defn.state_kind == "external_side_effect"

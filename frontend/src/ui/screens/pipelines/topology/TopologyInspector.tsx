@@ -382,6 +382,30 @@ function EdgePolicyEditor({
   const update = (patch: TopologyEdgePolicyPatch) => onUpdateEdgePolicy?.(edge.id, patch);
   const dropPolicyOptions = ["block", "latest_only", "drop_oldest", "drop_newest", "drop_updates", "keyed_latest_only"];
   const pressureModeOptions = ["ignore", "pause_upstream", "reduce_source_rate", "block", "fail_fast"];
+  const selectFields = [
+    {
+      fieldKey: "drop_policy",
+      name: "drop-policy",
+      kind: "drop_policy",
+      value: data.dropPolicy,
+      options: dropPolicyOptions,
+      patchKey: "dropPolicy",
+      fallback: "Drop policy",
+    },
+    {
+      fieldKey: "backpressure",
+      name: "backpressure",
+      kind: "pressure_mode",
+      value: data.pressureMode,
+      options: pressureModeOptions,
+      patchKey: "pressureMode",
+      fallback: "Backpressure",
+    },
+  ] as const;
+  const textFields = [
+    { fieldKey: "modality", name: "modality", value: data.modality, patchKey: "modality", fallback: "Modality" },
+    { fieldKey: "semantic", name: "semantic", value: data.semanticClass, patchKey: "semanticClass", fallback: "Semantic" },
+  ] as const;
   return (
     <div className="pipelineTopologyInspectorSection">
       <div className="pipelineTopologyInspectorSectionTitle">{t("core.ui.pipelines.topology.edge_policy", {}, "Edge policy")}</div>
@@ -398,54 +422,34 @@ function EdgePolicyEditor({
             onChange={(event) => update({ maxItems: Number(event.target.value) })}
           />
         </label>
-        <label>
-          <span>{field("drop_policy", "Drop policy")}</span>
-          <select
-            id={`pipeline-topology-edge-drop-policy-${edge.id}`}
-            name={`edge_${edge.id}_drop_policy`}
-            value={data.dropPolicy}
-            onChange={(event) => update({ dropPolicy: event.target.value })}
-          >
-            {dropPolicyOptions.map((value) => (
-              <option key={value} value={value}>
-                {edgeValueLabel("drop_policy", value, t)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>{field("backpressure", "Backpressure")}</span>
-          <select
-            id={`pipeline-topology-edge-backpressure-${edge.id}`}
-            name={`edge_${edge.id}_backpressure`}
-            value={data.pressureMode}
-            onChange={(event) => update({ pressureMode: event.target.value })}
-          >
-            {pressureModeOptions.map((value) => (
-              <option key={value} value={value}>
-                {edgeValueLabel("pressure_mode", value, t)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>{field("modality", "Modality")}</span>
-          <input
-            id={`pipeline-topology-edge-modality-${edge.id}`}
-            name={`edge_${edge.id}_modality`}
-            value={data.modality}
-            onChange={(event) => update({ modality: event.target.value })}
-          />
-        </label>
-        <label>
-          <span>{field("semantic", "Semantic")}</span>
-          <input
-            id={`pipeline-topology-edge-semantic-${edge.id}`}
-            name={`edge_${edge.id}_semantic`}
-            value={data.semanticClass}
-            onChange={(event) => update({ semanticClass: event.target.value })}
-          />
-        </label>
+        {selectFields.map((item) => (
+          <label key={item.patchKey}>
+            <span>{field(item.fieldKey, item.fallback)}</span>
+            <select
+              id={`pipeline-topology-edge-${item.name}-${edge.id}`}
+              name={`edge_${edge.id}_${item.name.replace(/-/g, "_")}`}
+              value={item.value}
+              onChange={(event) => update({ [item.patchKey]: event.target.value })}
+            >
+              {item.options.map((value) => (
+                <option key={value} value={value}>
+                  {edgeValueLabel(item.kind, value, t)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+        {textFields.map((item) => (
+          <label key={item.patchKey}>
+            <span>{field(item.fieldKey, item.fallback)}</span>
+            <input
+              id={`pipeline-topology-edge-${item.name}-${edge.id}`}
+              name={`edge_${edge.id}_${item.name}`}
+              value={item.value}
+              onChange={(event) => update({ [item.patchKey]: event.target.value })}
+            />
+          </label>
+        ))}
         <label className="pipelineTopologyCheckboxField">
           <input
             id={`pipeline-topology-edge-continuous-${edge.id}`}

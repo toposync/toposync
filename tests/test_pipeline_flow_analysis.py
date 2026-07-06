@@ -34,6 +34,7 @@ def _registry() -> OperatorRegistry:
         capabilities=["vision", "heavy_compute"],
         requires_artifacts=["main"],
         resource_kind="vision_model",
+        output_modalities=["video"],
         pressure_behavior="skip_before_compute",
     )
     registry.register_operator(
@@ -42,6 +43,15 @@ def _registry() -> OperatorRegistry:
         outputs=[{"name": "out"}],
         input_modalities=["video"],
         output_modalities=["video"],
+    )
+    registry.register_operator(
+        operator_id="test.video_sink",
+        inputs=[{"name": "in", "required": True}],
+        outputs=[],
+        capabilities=["sink", "realtime"],
+        input_modalities=["video"],
+        state_kind="external_side_effect",
+        pressure_behavior="reduce_source_rate",
     )
     registry.register_operator(
         operator_id="test.debounce",
@@ -93,7 +103,36 @@ def _edge(
 
 def _compile(graph: dict) -> tuple[OperatorRegistry, object]:
     registry = _registry()
-    compiled = PipelineGraphCompiler(registry).compile_pipeline(Pipeline(name="flow", graph=graph))
+    operators_by_node_id = {str(node["id"]): str(node["operator"]) for node in graph.get("nodes", [])}
+
+    def edge_traffic(edge: dict) -> dict[str, Any]:
+        source_operator_id = operators_by_node_id.get(str(edge["from"]["node"]), "")
+        registered = registry.get(source_operator_id)
+        output_modalities = registered.definition.output_modalities if registered is not None else []
+        if any(str(item).startswith("video") for item in output_modalities):
+            return {"modality": "video.frame", "semantic_class": "frame", "continuous": True}
+        return {"modality": "data.record", "semantic_class": "data", "continuous": False}
+
+    normalized = {
+        **graph,
+        "schema_version": 2,
+        "uid": graph.get("uid", "graph"),
+        "nodes": [{**node, "uid": node.get("uid", node["id"])} for node in graph.get("nodes", [])],
+        "edges": [
+            {
+                "uid": edge.get("uid", f"{edge['from']['node']}.{edge['from']['port']}->{edge['to']['node']}.{edge['to']['port']}"),
+                "from": edge["from"],
+                "to": edge["to"],
+                "queue": {
+                    "max_items": edge.get("maxsize", 1),
+                    "drop_policy": edge.get("drop_policy", "latest_only"),
+                },
+                "traffic": edge_traffic(edge),
+            }
+            for edge in graph.get("edges", [])
+        ],
+    }
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(Pipeline(name="flow", graph=normalized))
     return registry, compiled
 
 
@@ -227,6 +266,22 @@ def test_flow_analysis_warns_about_continuous_stream_to_sparse_operator() -> Non
     alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
 
     assert "continuous_stream_to_sparse_operator" in _codes(alerts)
+
+
+def test_flow_analysis_accepts_continuous_stream_to_video_sink() -> None:
+    registry, compiled = _compile(
+        {
+            "nodes": [
+                {"id": "source", "operator": "test.video_source"},
+                {"id": "publish", "operator": "test.video_sink"},
+            ],
+            "edges": [_edge("source", "publish")],
+        }
+    )
+
+    alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
+
+    assert "continuous_stream_to_sparse_operator" not in _codes(alerts)
 
 
 def test_flow_analysis_warns_about_blocking_policy_on_continuous_video() -> None:

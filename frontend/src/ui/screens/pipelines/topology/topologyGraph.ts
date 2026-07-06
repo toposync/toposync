@@ -248,7 +248,6 @@ export function insertTopologyGraphNodeOnEdge(
 ): TopologyGraphEditResult {
   if (!isTopologyGraphV2(graph)) return SCHEMA_V2_ERROR;
   const next = cloneGraph(graph);
-  const nodes = rawNodes(next);
   const edges = rawEdges(next);
   const edge = edges.find((item) => text(item.uid) === edgeId) ?? null;
   if (!edge) {
@@ -276,64 +275,21 @@ export function insertTopologyGraphNodeOnEdge(
       messageKey: "core.ui.pipelines.topology.error.self_connection",
     };
   }
-  const insertedOperatorId = graphNodeOperator(nodes, nodeId);
-  const sourceDefinition = operatorsById[graphNodeOperator(nodes, source.node)] ?? null;
-  const insertedDefinition = operatorsById[insertedOperatorId] ?? null;
-  const targetDefinition = operatorsById[graphNodeOperator(nodes, target.node)] ?? null;
-  const insertedInputPort = portName(insertedDefinition, "inputs", "in");
-  const insertedOutputPort = portName(insertedDefinition, "outputs", "out");
-  const remainingEdges = edges.filter((item) => text(item.uid) !== edgeId);
-
-  for (const item of remainingEdges) {
-    const currentTarget = readEndpoint(item, "to", "in");
-    if (!currentTarget) continue;
-    if (currentTarget.node === nodeId && currentTarget.port === insertedInputPort) {
-      return {
-        ok: false,
-        message: `${nodeId}.${insertedInputPort} already has an incoming edge.`,
-        messageKey: "core.ui.pipelines.topology.error.input_taken",
-        messageParams: { target: `${nodeId}.${insertedInputPort}` },
-      };
-    }
-    if (currentTarget.node === target.node && currentTarget.port === target.port) {
-      return {
-        ok: false,
-        message: `${target.node}.${target.port} already has an incoming edge.`,
-        messageKey: "core.ui.pipelines.topology.error.input_taken",
-        messageParams: { target: `${target.node}.${target.port}` },
-      };
-    }
-  }
-
-  if (pathExists(remainingEdges, nodeId, source.node) || pathExists(remainingEdges, target.node, nodeId)) {
-    return {
-      ok: false,
-      message: "This insertion would create a cycle.",
-      messageKey: "core.ui.pipelines.topology.error.cycle",
-    };
-  }
-
-  const usedEdgeIds = new Set(remainingEdges.map((item) => text(item.uid)).filter(Boolean));
-  const firstEdgeId = edgeUid(source.node, source.port, nodeId, insertedInputPort, usedEdgeIds);
-  usedEdgeIds.add(firstEdgeId);
-  const secondEdgeId = edgeUid(nodeId, insertedOutputPort, target.node, target.port, usedEdgeIds);
-  next.edges = [
-    ...remainingEdges,
-    {
-      uid: firstEdgeId,
-      from: { node: source.node, port: source.port },
-      to: { node: nodeId, port: insertedInputPort },
-      ...defaultEdgePolicy(sourceDefinition, insertedDefinition),
-    },
-    {
-      uid: secondEdgeId,
-      from: { node: nodeId, port: insertedOutputPort },
-      to: { node: target.node, port: target.port },
-      ...defaultEdgePolicy(insertedDefinition, targetDefinition),
-    },
-  ];
-  if (position) next.layout = writeNodePosition(next.layout, nodeId, position);
-  return { ok: true, graph: next, nodeId, edgeId: secondEdgeId };
+  next.edges = edges.filter((item) => text(item.uid) !== edgeId);
+  const first = connectTopologyGraphEdge(
+    next,
+    { source: source.node, target: nodeId, sourceHandle: source.port, targetHandle: null },
+    operatorsById,
+  );
+  if (!first.ok) return first;
+  const second = connectTopologyGraphEdge(
+    first.graph,
+    { source: nodeId, target: target.node, sourceHandle: null, targetHandle: target.port },
+    operatorsById,
+  );
+  if (!second.ok) return second;
+  if (position) second.graph.layout = writeNodePosition(second.graph.layout, nodeId, position);
+  return { ok: true, graph: second.graph, nodeId, edgeId: second.edgeId };
 }
 
 export function updateTopologyGraphNodeConfig(

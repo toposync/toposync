@@ -36,12 +36,7 @@ from toposync.runtime.services import ServiceRegistry
 from ..streaming.engine_manager import MediaMtxEngineManager, MediaMtxPortResolutionError
 from ..streaming.go2rtc_binary import extract_go2rtc_binary, find_installed_go2rtc_binary
 from ..streaming.go2rtc_manager import Go2RtcSidecarManager, Go2RtcSidecarStatus
-from ..streaming.http_client import (
-    request_bytes,
-    request_bytes_with_status,
-    request_json,
-    request_text_with_status,
-)
+from ..streaming.http_client import request_json, request_raw
 from ..streaming.camera_ingest import (
     build_camera_ingest_definitions,
     build_camera_ingest_path_auth,
@@ -1087,13 +1082,14 @@ async def _fetch_bytes(
     password: str = "",
     accept: str = "*/*",
 ) -> tuple[bytes, str | None]:
-    return await request_bytes(
+    response = await request_raw(
         url=url,
         timeout_s=timeout_s,
         username=username,
         password=password,
-        accept=accept,
+        headers={"accept": accept},
     )
+    return response.body, response.headers.get("content-type")
 
 
 async def _post_json(
@@ -1122,13 +1118,15 @@ async def _fetch_text_with_status(
     username: str = "",
     password: str = "",
 ) -> tuple[int, str]:
-    return await request_text_with_status(
+    response = await request_raw(
         url=url,
         timeout_s=timeout_s,
         headers=headers,
         username=username,
         password=password,
+        return_http_error=True,
     )
+    return response.status_code, response.body.decode("utf-8", errors="replace")
 
 
 async def _fetch_bytes_with_status(
@@ -1139,13 +1137,15 @@ async def _fetch_bytes_with_status(
     username: str = "",
     password: str = "",
 ) -> tuple[int, bytes, dict[str, str]]:
-    return await request_bytes_with_status(
+    response = await request_raw(
         url=url,
         timeout_s=timeout_s,
         headers=headers,
         username=username,
         password=password,
+        return_http_error=True,
     )
+    return response.status_code, response.body, response.headers
 
 
 def _hls_parse_uri_lines(playlist_text: str, maximum_count: int) -> list[str]:

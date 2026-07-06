@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from .engine_manager import MediaMtxEngineManager
+from .http_client import request_json, request_raw
 
 _LIST_ITEMS_PER_PAGE = 200
 
@@ -121,7 +119,7 @@ class MediaMtxApiClient:
             return None
         url = f"{base_url}{route}"
         try:
-            return await asyncio.to_thread(self._fetch_json_sync, url, self._request_timeout_s)
+            return await request_json(url=url, timeout_s=self._request_timeout_s)
         except Exception:
             return None
 
@@ -144,7 +142,12 @@ class MediaMtxApiClient:
             return None
         url = f"http://127.0.0.1:{int(status.ports.metrics)}/metrics"
         try:
-            return await asyncio.to_thread(self._fetch_text_sync, url, self._request_timeout_s)
+            response = await request_raw(
+                url=url,
+                timeout_s=self._request_timeout_s,
+                headers={"accept": "text/plain"},
+            )
+            return response.body.decode("utf-8", errors="ignore")
         except Exception:
             return None
 
@@ -154,22 +157,6 @@ class MediaMtxApiClient:
             return None
         api_port = int(status.ports.api)
         return f"http://127.0.0.1:{api_port}"
-
-    @staticmethod
-    def _fetch_json_sync(url: str, timeout_s: float) -> dict[str, Any] | list[Any] | None:
-        request = urllib.request.Request(url=url, headers={"accept": "application/json"})
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:
-            body = response.read().decode("utf-8", errors="ignore")
-        try:
-            return json.loads(body)
-        except Exception:
-            return None
-
-    @staticmethod
-    def _fetch_text_sync(url: str, timeout_s: float) -> str:
-        request = urllib.request.Request(url=url, headers={"accept": "text/plain"})
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:
-            return response.read().decode("utf-8", errors="ignore")
 
     @staticmethod
     def _payload_items(payload: dict[str, Any]) -> list[Any]:

@@ -70,6 +70,8 @@ type Props = {
   onDiscard?: () => void;
 };
 
+type TopologyDeleteGraphItem = (graph: unknown, id: string) => TopologyGraphEditResult;
+
 function minimapStrokeColor(node: TopologyNode): string {
   if (node.data.pressureState === "error") return "#EF4444";
   if (node.data.pressureState === "critical") return "#F97316";
@@ -319,30 +321,6 @@ export function TopologyView({
     window.requestAnimationFrame(fitTopologyView);
   }, [built, canEdit, commitGraphResult, fitTopologyView, sourceNodes]);
 
-  const addContext = useCallback(
-    (edgeId?: string | null): TopologyAddNodeContext => {
-      if (edgeId) return { kind: "edge", edgeId };
-      if (edgeId === null) return { kind: "none" };
-      if (selection.kind === "edge") return { kind: "edge", edgeId: selection.id };
-      if (selection.kind === "node") return { kind: "node", nodeId: selection.id };
-      return { kind: "none" };
-    },
-    [selection],
-  );
-
-  const addPosition = useCallback(
-    (context: TopologyAddNodeContext, position?: XYPosition): XYPosition | undefined => {
-      if (position) return position;
-      if (context.kind === "edge") return edgeInsertPosition(context.edgeId);
-      if (context.kind === "node") {
-        const node = nodesById.get(context.nodeId);
-        return node ? { x: node.position.x + NODE_WIDTH + 140, y: node.position.y } : undefined;
-      }
-      return undefined;
-    },
-    [edgeInsertPosition, nodesById],
-  );
-
   const toggleFullscreen = useCallback(async () => {
     const element = graphPaneRef.current;
     if (!element) return;
@@ -365,7 +343,16 @@ export function TopologyView({
   const addOperator = useCallback(
     (operator: PipelineOperatorDefinition, position?: XYPosition, edgeId?: string | null) => {
       if (!canEdit) return;
-      const context = addContext(edgeId);
+      let context: TopologyAddNodeContext = { kind: "none" };
+      if (edgeId) context = { kind: "edge", edgeId };
+      else if (edgeId !== null && selection.kind === "edge") context = { kind: "edge", edgeId: selection.id };
+      else if (edgeId !== null && selection.kind === "node") context = { kind: "node", nodeId: selection.id };
+      let insertPosition = position;
+      if (!insertPosition && context.kind === "edge") insertPosition = edgeInsertPosition(context.edgeId);
+      if (!insertPosition && context.kind === "node") {
+        const node = nodesById.get(context.nodeId);
+        insertPosition = node ? { x: node.position.x + NODE_WIDTH + 140, y: node.position.y } : undefined;
+      }
       commitGraphResult(
         addTopologyGraphNodeContextual(
           latestGraphRef.current,
@@ -373,14 +360,14 @@ export function TopologyView({
           operator,
           operatorsById,
           context,
-          addPosition(context, position),
+          insertPosition,
         ),
       );
       setPaletteOpen(false);
       setOperatorQuery("");
       setInsertEdgeId(null);
     },
-    [addContext, addPosition, canEdit, commitGraphResult, operatorsById],
+    [canEdit, commitGraphResult, edgeInsertPosition, nodesById, operatorsById, selection],
   );
 
   const handleNodesChange = useCallback(
@@ -438,12 +425,12 @@ export function TopologyView({
     [canEdit, commitGraphResult],
   );
 
-  const deleteNodeIds = useCallback(
-    (nodeIds: string[]) => {
-      if (!canEdit || nodeIds.length === 0) return;
+  const deleteGraphIds = useCallback(
+    (ids: string[], deleteOne: TopologyDeleteGraphItem) => {
+      if (!canEdit || ids.length === 0) return;
       let currentGraph = latestGraphRef.current;
-      for (const nodeId of nodeIds) {
-        const result = deleteTopologyGraphNode(currentGraph, nodeId);
+      for (const id of ids) {
+        const result = deleteOne(currentGraph, id);
         if (!result.ok) {
           setActionError(editResultMessage(result, t));
           return;
@@ -456,23 +443,8 @@ export function TopologyView({
     [canEdit, commitGraphResult, t],
   );
 
-  const deleteEdgeIds = useCallback(
-    (edgeIds: string[]) => {
-      if (!canEdit || edgeIds.length === 0) return;
-      let currentGraph = latestGraphRef.current;
-      for (const edgeId of edgeIds) {
-        const result = deleteTopologyGraphEdge(currentGraph, edgeId);
-        if (!result.ok) {
-          setActionError(editResultMessage(result, t));
-          return;
-        }
-        currentGraph = result.graph;
-      }
-      commitGraphResult({ ok: true, graph: currentGraph as Record<string, unknown> });
-      setSelection({ kind: "summary" });
-    },
-    [canEdit, commitGraphResult, t],
-  );
+  const deleteNodeIds = useCallback((nodeIds: string[]) => deleteGraphIds(nodeIds, deleteTopologyGraphNode), [deleteGraphIds]);
+  const deleteEdgeIds = useCallback((edgeIds: string[]) => deleteGraphIds(edgeIds, deleteTopologyGraphEdge), [deleteGraphIds]);
 
   const handleOperatorDragStart = useCallback((event: React.DragEvent<HTMLButtonElement>, operator: PipelineOperatorDefinition) => {
     event.dataTransfer.setData("application/toposync-operator", operator.id);

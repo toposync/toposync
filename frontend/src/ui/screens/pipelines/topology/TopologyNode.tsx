@@ -12,6 +12,21 @@ type NodeTelemetry = {
   errors: number;
 };
 
+type NodeTelemetryKey = keyof NodeTelemetry;
+
+const NODE_TELEMETRY_METRICS: Array<{
+  key: NodeTelemetryKey;
+  labelKey: string;
+  fieldKey: string;
+  fallback: string;
+  fieldFallback: string;
+}> = [
+  { key: "emitted", labelKey: "output", fieldKey: "emitted", fallback: "Out {{count}}", fieldFallback: "Emitted" },
+  { key: "processed", labelKey: "processed", fieldKey: "processed", fallback: "Proc {{count}}", fieldFallback: "Processed" },
+  { key: "dropped", labelKey: "dropped", fieldKey: "dropped", fallback: "Lost {{count}}", fieldFallback: "Dropped" },
+  { key: "errors", labelKey: "errors", fieldKey: "errors", fallback: "Err {{count}}", fieldFallback: "Errors" },
+];
+
 function handleOffset(index: number, total: number): string {
   if (total <= 1) return "50%";
   return `${Math.round(((index + 1) / (total + 1)) * 100)}%`;
@@ -57,6 +72,18 @@ function metricCount(value: number): string {
   }).format(value);
 }
 
+function metricLabel(
+  metric: (typeof NODE_TELEMETRY_METRICS)[number],
+  telemetry: NodeTelemetry,
+  t: ReturnType<typeof i18n.useI18n>["t"],
+): string {
+  return t(
+    `core.ui.pipelines.topology.node_metric.${metric.labelKey}`,
+    { count: metricCount(telemetry[metric.key]) },
+    metric.fallback,
+  );
+}
+
 export function TopologyNodeComponent({ id, data, selected, isConnectable }: NodeProps<TopologyNode>): React.ReactElement {
   const { t } = i18n.useI18n();
   const updateNodeInternals = useUpdateNodeInternals();
@@ -71,41 +98,21 @@ export function TopologyNodeComponent({ id, data, selected, isConnectable }: Nod
       ? t("core.ui.pipelines.topology.alert_count_one", {}, "1 alert")
       : t("core.ui.pipelines.topology.alert_count_many", { count: data.alertCount }, "{{count}} alerts");
   const telemetry = nodeTelemetry(data.runtime);
-  const outputLabel = telemetry
-    ? t(
-        "core.ui.pipelines.topology.node_metric.output",
-        { count: metricCount(telemetry.emitted) },
-        "Out {{count}}",
-      )
+  const metricLabels: Record<NodeTelemetryKey, string> | null = telemetry
+    ? (Object.fromEntries(
+        NODE_TELEMETRY_METRICS.map((metric) => [metric.key, metricLabel(metric, telemetry, t)]),
+      ) as Record<NodeTelemetryKey, string>)
+    : null;
+  const outputLabel = metricLabels
+    ? metricLabels.emitted
     : t("core.ui.pipelines.topology.node_metric.no_telemetry", {}, "No telemetry");
-  const processedLabel = telemetry
-    ? t(
-        "core.ui.pipelines.topology.node_metric.processed",
-        { count: metricCount(telemetry.processed) },
-        "Proc {{count}}",
-      )
-    : "";
-  const droppedLabel = telemetry
-    ? t(
-        "core.ui.pipelines.topology.node_metric.dropped",
-        { count: metricCount(telemetry.dropped) },
-        "Lost {{count}}",
-      )
-    : "";
-  const errorLabel = telemetry
-    ? t(
-        "core.ui.pipelines.topology.node_metric.errors",
-        { count: metricCount(telemetry.errors) },
-        "Err {{count}}",
-      )
-    : "";
   const telemetryTitle = telemetry
     ? [
         `${t("core.ui.pipelines.topology.field.node_id", {}, "Node ID")}: ${data.nodeId}`,
-        `${t("core.ui.pipelines.topology.field.emitted", {}, "Emitted")}: ${metricCount(telemetry.emitted)}`,
-        `${t("core.ui.pipelines.topology.field.processed", {}, "Processed")}: ${metricCount(telemetry.processed)}`,
-        `${t("core.ui.pipelines.topology.field.dropped", {}, "Dropped")}: ${metricCount(telemetry.dropped)}`,
-        `${t("core.ui.pipelines.topology.field.errors", {}, "Errors")}: ${metricCount(telemetry.errors)}`,
+        ...NODE_TELEMETRY_METRICS.map(
+          (metric) =>
+            `${t(`core.ui.pipelines.topology.field.${metric.fieldKey}`, {}, metric.fieldFallback)}: ${metricCount(telemetry[metric.key])}`,
+        ),
       ].join(" | ")
     : data.nodeId;
   useLayoutEffect(() => {
@@ -144,9 +151,9 @@ export function TopologyNodeComponent({ id, data, selected, isConnectable }: Nod
       </div>
       <div className="pipelineTopologyNodeMeta">
         <span>{runtimeState}</span>
-        {telemetry && telemetry.processed !== telemetry.emitted ? <span>{processedLabel}</span> : null}
-        {telemetry && telemetry.dropped > 0 ? <span data-tone="warning">{droppedLabel}</span> : null}
-        {telemetry && telemetry.errors > 0 ? <span data-tone="error">{errorLabel}</span> : null}
+        {telemetry && metricLabels && telemetry.processed !== telemetry.emitted ? <span>{metricLabels.processed}</span> : null}
+        {telemetry && metricLabels && telemetry.dropped > 0 ? <span data-tone="warning">{metricLabels.dropped}</span> : null}
+        {telemetry && metricLabels && telemetry.errors > 0 ? <span data-tone="error">{metricLabels.errors}</span> : null}
         {data.resourceKind !== "none" ? <span>{data.resourceKind}</span> : null}
         {data.alertCount > 0 ? <span>{alertLabel}</span> : null}
       </div>

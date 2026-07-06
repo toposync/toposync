@@ -57,62 +57,6 @@ async def request_json(
     return parsed
 
 
-async def request_bytes(
-    *,
-    url: str,
-    timeout_s: float = 6.0,
-    username: str = "",
-    password: str = "",
-    accept: str = "*/*",
-) -> tuple[bytes, str | None]:
-    response = await request_raw(
-        url=url,
-        timeout_s=timeout_s,
-        username=username,
-        password=password,
-        headers={"accept": accept},
-    )
-    return response.body, response.headers.get("content-type")
-
-
-async def request_text_with_status(
-    *,
-    url: str,
-    timeout_s: float = 2.5,
-    headers: dict[str, str] | None = None,
-    username: str = "",
-    password: str = "",
-) -> tuple[int, str]:
-    response = await request_raw(
-        url=url,
-        timeout_s=timeout_s,
-        username=username,
-        password=password,
-        headers=headers,
-        return_http_error=True,
-    )
-    return response.status_code, response.body.decode("utf-8", errors="replace")
-
-
-async def request_bytes_with_status(
-    *,
-    url: str,
-    timeout_s: float = 2.5,
-    headers: dict[str, str] | None = None,
-    username: str = "",
-    password: str = "",
-) -> tuple[int, bytes, dict[str, str]]:
-    response = await request_raw(
-        url=url,
-        timeout_s=timeout_s,
-        username=username,
-        password=password,
-        headers=headers,
-        return_http_error=True,
-    )
-    return response.status_code, response.body, response.headers
-
-
 async def request_raw(
     *,
     url: str,

@@ -53,7 +53,6 @@ class _CompileGraph:
     nodes: tuple[_CompileNode, ...]
     edges: tuple[_CompileEdge, ...]
     limits: dict[str, Any]
-    uses_v2_contracts: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,10 +121,9 @@ class PipelineGraphCompiler:
             _check_cancelled(cancel_check)
             if node.node_id in node_map:
                 raise GraphCompileError(f"Duplicate node id: {node.node_id}")
-            if graph.uses_v2_contracts:
-                if node.uid in node_uid_seen:
-                    raise GraphCompileError(f"Duplicate node uid: {node.uid}")
-                node_uid_seen.add(node.uid)
+            if node.uid in node_uid_seen:
+                raise GraphCompileError(f"Duplicate node uid: {node.uid}")
+            node_uid_seen.add(node.uid)
             node_map[node.node_id] = node
 
         edge_list = list(graph.edges)
@@ -137,14 +135,13 @@ class PipelineGraphCompiler:
 
         for edge in edge_list:
             _check_cancelled(cancel_check)
-            if graph.uses_v2_contracts:
-                if edge.uid in edge_uid_seen:
-                    raise GraphCompileError(f"Duplicate edge uid: {edge.uid}")
-                edge_uid_seen.add(edge.uid)
-                if not edge.preserve_open or not edge.preserve_close:
-                    raise GraphCompileError(
-                        f"Edge '{edge.uid}' must preserve OPEN and CLOSE lifecycle packets",
-                    )
+            if edge.uid in edge_uid_seen:
+                raise GraphCompileError(f"Duplicate edge uid: {edge.uid}")
+            edge_uid_seen.add(edge.uid)
+            if not edge.preserve_open or not edge.preserve_close:
+                raise GraphCompileError(
+                    f"Edge '{edge.uid}' must preserve OPEN and CLOSE lifecycle packets",
+                )
             src = edge.source_node
             dst = edge.target_node
             if src not in node_map:
@@ -215,7 +212,7 @@ class PipelineGraphCompiler:
                 raise GraphCompileError(
                     f"Node '{edge.target_node}' has no input port '{edge.target_port}'",
                 )
-            if graph.uses_v2_contracts and edge.traffic_modality:
+            if edge.traffic_modality:
                 _validate_edge_modality(
                     edge=edge,
                     source_modalities=output_modalities_by_node[edge.source_node],
@@ -316,17 +313,16 @@ class PipelineGraphCompiler:
                     channel_drop_policy=edge.channel_drop_policy,
                 ),
             )
-        if graph.uses_v2_contracts:
-            compiled_edges = sorted(
-                compiled_edges,
-                key=lambda item: (
-                    item.source_node_id,
-                    item.source_port,
-                    item.target_node_id,
-                    item.target_port,
-                    item.uid,
-                ),
-            )
+        compiled_edges = sorted(
+            compiled_edges,
+            key=lambda item: (
+                item.source_node_id,
+                item.source_port,
+                item.target_node_id,
+                item.target_port,
+                item.uid,
+            ),
+        )
 
         return CompiledPipeline(
             name=pipeline.name,
@@ -450,7 +446,6 @@ def _parse_graph_v2(raw_graph: dict[str, Any]) -> _CompileGraph:
             for edge in graph.edges
         ),
         limits=dict(graph.limits),
-        uses_v2_contracts=True,
     )
 
 

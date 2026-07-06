@@ -23,6 +23,7 @@ import {
   type StreamingTransmissionUrlOutput,
   type StreamingTransmissionUrlsResponse,
 } from "../../util/api";
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 import { i18n } from "../../util/i18n";
 import { Icon } from "../Icon";
 import { Modal } from "../Modal";
@@ -104,6 +105,7 @@ const RETRY_BASE_MS = 900;
 const RETRY_MAX_MS = 8000;
 const WEBRTC_SIGNAL_TIMEOUT_MS = 5000;
 const WEBRTC_CONNECT_TIMEOUT_MS = 5000;
+const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 8000;
 const WEBRTC_WHEP_READY_ATTEMPTS = 8;
 const WEBRTC_WHEP_READY_RETRY_MS = 500;
 const RUNTIME_HEALTH_REFRESH_MS = 2000;
@@ -115,6 +117,8 @@ const MSE_FIRST_FRAME_TIMEOUT_MS = 12000;
 const MSE_CONNECT_ATTEMPTS = 3;
 const MSE_RETRY_DELAY_MS = 900;
 const DEMAND_HEARTBEAT_INTERVAL_MS = 10000;
+const STILL_POSTER_RETRY_MS = 750;
+const STILL_POSTER_MAX_ATTEMPTS = 3;
 
 function readGridMode(): GridMode {
   if (typeof window === "undefined") return "2x2";
@@ -658,6 +662,32 @@ function buildBasicAuthHeader(auth: BasicAuthCredentials | null): string | null 
   } catch {
     return null;
   }
+}
+
+function buildTransmissionStillUrl(
+  transmissionId: string,
+  output: PlaybackOutputSelection | null,
+  fallbackQualityProfileId: StreamingQualityProfileId | null,
+): string | null {
+  const normalizedTransmissionId = String(transmissionId || "").trim();
+  if (!normalizedTransmissionId) return null;
+  const params = new URLSearchParams();
+  const outputId = String(output?.outputId || "").trim();
+  if (outputId) params.set("output_id", outputId);
+  const qualityProfileId = String(output?.qualityProfileId || fallbackQualityProfileId || "").trim();
+  if (qualityProfileId) params.set("quality_profile_id", qualityProfileId);
+  const query = params.toString();
+  return resolveToposyncUrl(`/api/streams/transmissions/${encodeURIComponent(normalizedTransmissionId)}/still.jpg${query ? `?${query}` : ""}`);
+}
+
+function withCacheBust(url: string): string {
+  const parsed = new URL(url, window.location.href);
+  parsed.searchParams.set("_", String(Date.now()));
+  return parsed.toString();
+}
+
+function videoHasCurrentFrame(video: HTMLVideoElement): boolean {
+  return video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
 }
 
 function withBasicAuthInUrl(url: string, auth: BasicAuthCredentials | null): string {
@@ -1303,7 +1333,7 @@ function waitForPeerConnectionReady(peerConnection: RTCPeerConnection, timeoutMs
 }
 
 function waitForVideoElementFrame(videoElement: HTMLVideoElement, timeoutMs: number, timeoutMessage: string): Promise<void> {
-  if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0 && videoElement.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+  if (videoHasCurrentFrame(videoElement)) {
     return Promise.resolve();
   }
   return new Promise((resolve, reject) => {
@@ -1326,7 +1356,7 @@ function waitForVideoElementFrame(videoElement: HTMLVideoElement, timeoutMs: num
       videoElement.removeEventListener("error", onError);
     }
     function checkReady() {
-      if (videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0 || videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+      if (!videoHasCurrentFrame(videoElement)) return;
       cleanup();
       resolve();
     }
@@ -1648,6 +1678,7 @@ function StreamTilePlayer({
   hlsUrl,
   hlsAuthHeader,
   hlsNativeUrl,
+  stillUrl,
   runtimeHealth,
   active,
   ptzEnabled,
@@ -1687,6 +1718,7 @@ function StreamTilePlayer({
   hlsUrl: string | null;
   hlsAuthHeader: string | null;
   hlsNativeUrl: string | null;
+  stillUrl: string | null;
   runtimeHealth?: StreamingRuntimeTransmissionHealth;
   active: boolean;
   ptzEnabled: boolean;
@@ -1712,9 +1744,12 @@ function StreamTilePlayer({
   const frameRef = useRef<HTMLDivElement | null>(null);
   const playbackSessionIdRef = useRef<string | null>(null);
   const onRefreshUrlsRef = useRef(onRefreshUrls);
+  const posterObjectUrlRef = useRef<string | null>(null);
 
   const [status, setStatus] = useState<TilePlaybackStatus>("idle");
   const [transport, setTransport] = useState<TilePlaybackTransport>("none");
+  const [firstFrameReady, setFirstFrameReady] = useState(false);
+  const [posterObjectUrl, setPosterObjectUrl] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [webRtcStats, setWebRtcStats] = useState<WebRtcStatsSummary | null>(null);
   const [webRtcFallbackActive, setWebRtcFallbackActive] = useState(false);
@@ -1726,9 +1761,16 @@ function StreamTilePlayer({
   const runtimeHealthRef = useRef(runtimeHealth);
   const playbackActive = active || pictureInPictureActive;
   const playbackWarmupActive = playbackWarmupUntilMs > Date.now();
+  const replacePosterObjectUrl = useCallback((nextUrl: string | null) => {
+    const previousUrl = posterObjectUrlRef.current;
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
+    posterObjectUrlRef.current = nextUrl;
+    setPosterObjectUrl(nextUrl);
+  }, []);
   useEffect(() => {
     onRefreshUrlsRef.current = onRefreshUrls;
   }, [onRefreshUrls]);
+  useEffect(() => () => replacePosterObjectUrl(null), [replacePosterObjectUrl]);
   useEffect(() => {
     runtimeHealthRef.current = runtimeHealth;
   }, [runtimeHealth]);
@@ -1753,6 +1795,61 @@ function StreamTilePlayer({
     [hlsUrl, jsmpegUrl, lowLatencyRequested, mseUrl, serverPlaybackPlan, transportPreference, urls, webrtcUrl],
   );
   const { allowMse, allowHls, allowWebRtc, allowJsmpeg, preferMseFirst, preferWebRtcFirst } = playbackPlan;
+  useEffect(() => {
+    if (!playbackActive || !stillUrl || firstFrameReady) {
+      if (!playbackActive || !stillUrl) replacePosterObjectUrl(null);
+      return;
+    }
+
+    let cancelled = false;
+    let retryTimerId: number | null = null;
+    let controller: AbortController | null = null;
+    const clearRetry = () => {
+      if (retryTimerId == null) return;
+      window.clearTimeout(retryTimerId);
+      retryTimerId = null;
+    };
+    const loadPoster = async (attempt: number) => {
+      controller?.abort();
+      controller = new AbortController();
+      try {
+        const response = await fetch(withCacheBust(stillUrl), {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const frameState = String(response.headers.get("x-toposync-frame-state") || "").trim().toLowerCase();
+        const blob = await response.blob();
+        if (cancelled || controller.signal.aborted || blob.size <= 0) return;
+        const objectUrl = URL.createObjectURL(blob);
+        if (cancelled || controller.signal.aborted) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        replacePosterObjectUrl(objectUrl);
+        if (frameState !== "live" && attempt < STILL_POSTER_MAX_ATTEMPTS) {
+          retryTimerId = window.setTimeout(() => {
+            void loadPoster(attempt + 1);
+          }, STILL_POSTER_RETRY_MS);
+        }
+      } catch (error) {
+        if (!isAbortError(error) && attempt < STILL_POSTER_MAX_ATTEMPTS) {
+          retryTimerId = window.setTimeout(() => {
+            void loadPoster(attempt + 1);
+          }, STILL_POSTER_RETRY_MS);
+        }
+      }
+    };
+
+    replacePosterObjectUrl(null);
+    void loadPoster(1);
+    return () => {
+      cancelled = true;
+      clearRetry();
+      controller?.abort();
+    };
+  }, [firstFrameReady, playbackActive, replacePosterObjectUrl, stillUrl]);
+
   const transportTelemetryBase = useMemo(
     () => ({
       transport_preference: transportPreference,
@@ -1861,6 +1958,25 @@ function StreamTilePlayer({
     document.addEventListener("fullscreenchange", updateFullscreenState);
     updateFullscreenState();
     return () => document.removeEventListener("fullscreenchange", updateFullscreenState);
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const checkFrame = () => {
+      if (videoHasCurrentFrame(video)) setFirstFrameReady(true);
+    };
+    video.addEventListener("loadeddata", checkFrame);
+    video.addEventListener("canplay", checkFrame);
+    video.addEventListener("playing", checkFrame);
+    video.addEventListener("timeupdate", checkFrame);
+    checkFrame();
+    return () => {
+      video.removeEventListener("loadeddata", checkFrame);
+      video.removeEventListener("canplay", checkFrame);
+      video.removeEventListener("playing", checkFrame);
+      video.removeEventListener("timeupdate", checkFrame);
+    };
   }, []);
 
   useEffect(() => {
@@ -2369,6 +2485,7 @@ function StreamTilePlayer({
         MSE_FIRST_FRAME_TIMEOUT_MS,
         i18n.t("core.ui.streams.errors.mse_first_frame_timeout", {}, "Timed out waiting for MSE video frame."),
       );
+      setFirstFrameReady(true);
       setStatus("playing");
       setErrorText(null);
     };
@@ -2402,6 +2519,7 @@ function StreamTilePlayer({
       let nativeRecovering = false;
       let healthyProbeRecoveries = 0;
       const onPlaying = () => {
+        setFirstFrameReady(true);
         setStatus("playing");
         setErrorText(null);
       };
@@ -2493,6 +2611,7 @@ function StreamTilePlayer({
       hlsPlayer = hls;
 
       const onPlaying = () => {
+        setFirstFrameReady(true);
         setStatus("playing");
         setErrorText(null);
       };
@@ -2659,8 +2778,6 @@ function StreamTilePlayer({
         throw error;
       }
 
-      setStatus("playing");
-      setErrorText(null);
       const sampleStats = () => {
         const currentPeerConnection = peerConnection;
         if (!currentPeerConnection) return;
@@ -2683,6 +2800,14 @@ function StreamTilePlayer({
       } catch {
         // autoplay can be blocked; user interaction will retry.
       }
+      await waitForVideoElementFrame(
+        video,
+        WEBRTC_FIRST_FRAME_TIMEOUT_MS,
+        i18n.t("core.ui.streams.errors.webrtc_first_frame_timeout", {}, "Timed out waiting for WebRTC video frame."),
+      );
+      setFirstFrameReady(true);
+      setStatus("playing");
+      setErrorText(null);
     };
 
     const startHlsPlayback = async (video: HTMLVideoElement): Promise<void> => {
@@ -2757,6 +2882,7 @@ function StreamTilePlayer({
                 severity: "debug",
                 data: withTransportTelemetry({ output_id: jsmpegOutputId ?? hlsOutputId ?? outputId }),
               });
+              setFirstFrameReady(true);
               resolveOnce();
             },
           });
@@ -2865,6 +2991,7 @@ function StreamTilePlayer({
         }),
       });
 
+      setFirstFrameReady(false);
       destroyPlayback();
       configureVideo(video);
       setStatus("loading");
@@ -3208,6 +3335,7 @@ function StreamTilePlayer({
       setWebRtcFallbackActive(false);
       setHlsProbeSummary(null);
       setPlaybackWarmupUntilMs(0);
+      setFirstFrameReady(false);
       return () => {
         cancelled = true;
         playbackAbortController.abort();
@@ -3371,6 +3499,7 @@ function StreamTilePlayer({
     ? t("core.ui.streams.health.hls_warming_up", {}, "Aquecendo transmissão HLS...")
     : sourceHint;
   const displaySourceHintTone = hlsWarmupHintActive ? "muted" : sourceHintTone;
+  const posterVisible = playbackActive && Boolean(posterObjectUrl) && !firstFrameReady;
 
   return (
     <div className="streamsPlayerFrame" ref={frameRef}>
@@ -3385,6 +3514,14 @@ function StreamTilePlayer({
         playsInline
         autoPlay
       />
+      {posterObjectUrl ? (
+        <img
+          className={["streamsFirstFramePoster", posterVisible ? "isVisible" : "isHidden"].join(" ")}
+          src={posterObjectUrl}
+          alt=""
+          aria-hidden="true"
+        />
+      ) : null}
 
 	      <div className={["streamsTileOverlay", overlayVisible ? "isVisible" : "isHidden"].join(" ")}>
         <div className="streamsTileOverlayLeft" title={label}>
@@ -4002,6 +4139,15 @@ export function StreamsDashboard({
               lowLatencyRequested,
             });
             const plannedTransport = plannedPrimaryTransport(clientPlaybackPlan, mseUrl, hlsUrl, webrtcUrl, jsmpegUrl);
+            const stillOutput =
+              plannedTransport === "webrtc"
+                ? hlsOutput ?? mseOutput ?? jsmpegOutput ?? webrtcOutput
+                : plannedTransport === "mse"
+                  ? mseOutput
+                  : plannedTransport === "jsmpeg"
+                    ? jsmpegOutput
+                    : hlsOutput ?? mseOutput ?? webrtcOutput ?? jsmpegOutput;
+            const stillUrl = buildTransmissionStillUrl(transmissionId, stillOutput, desiredQualityProfileId);
             const activeTransportWarnings = transportScopedWarnings(urls, plannedTransport, clientPlaybackPlan);
             const variantOptions = (liveView.variants ?? [])
               .filter((variant) => variant && variant.enabled !== false && String(variant.id || "").trim())
@@ -4088,6 +4234,7 @@ export function StreamsDashboard({
                   hlsUrl={hlsUrl}
                   hlsAuthHeader={hlsAuthHeader}
                   hlsNativeUrl={hlsNativeUrl}
+                  stillUrl={stillUrl}
                   runtimeHealth={runtimeHealth}
                   active={tileActive}
                   ptzEnabled={ptzEnabled}

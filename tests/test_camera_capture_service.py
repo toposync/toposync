@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -52,29 +53,31 @@ class _Frame:
 
 
 class _Grabber:
-    def __init__(self) -> None:
+    def __init__(self, *, frame_ts: float | None = None, opened: bool = True) -> None:
         self.frame: Any | None = _Frame()
-        self.frame_ts = 100.0
+        self.frame_ts = time.time() if frame_ts is None else frame_ts
+        self.opened = opened
 
     def get_latest(self) -> tuple[Any | None, float]:
         return self.frame, self.frame_ts
 
     def metrics_snapshot(self) -> _Metrics:
-        return _Metrics(last_frame_ts=self.frame_ts)
+        return _Metrics(last_frame_ts=self.frame_ts, opened=self.opened)
 
 
 class _Hub:
-    def __init__(self) -> None:
+    def __init__(self, *, grabber: _Grabber | None = None) -> None:
         self.acquire_calls: list[dict[str, Any]] = []
         self.release_calls: list[str] = []
         self.fail_next = False
+        self.grabber = grabber or _Grabber()
 
     async def acquire(self, **kwargs: Any) -> _Grabber:
         self.acquire_calls.append(dict(kwargs))
         if self.fail_next:
             self.fail_next = False
             raise RuntimeError("open failed")
-        return _Grabber()
+        return self.grabber
 
     async def release(self, *, key: str) -> None:
         self.release_calls.append(key)
@@ -185,3 +188,50 @@ async def _run_uses_failover_backend_after_open_failure() -> None:
     assert lease.backend == "ffmpeg"
     assert hub.acquire_calls[0]["backend"] == "auto"
     assert hub.acquire_calls[1]["backend"] == "ffmpeg"
+
+
+def test_camera_capture_service_releases_stale_cached_frame_for_reacquire() -> None:
+    asyncio.run(_run_releases_stale_cached_frame_for_reacquire())
+
+
+async def _run_releases_stale_cached_frame_for_reacquire() -> None:
+    grabber = _Grabber(frame_ts=time.time() - 60.0, opened=False)
+    hub = _Hub(grabber=grabber)
+    health = _HealthStore()
+    service = _service(hub=hub, health=health)
+    request = CameraCaptureRequest(
+        owner_id="owner",
+        camera_id="front",
+        source_id="main",
+        pipeline_name="p",
+        node_id="n",
+    )
+
+    lease = await service.open(request, PipelineRuntimeDependencies())
+    frame = await service.get_latest(lease.lease_id, min_frame_ts=grabber.frame_ts)
+
+    assert frame.released is True
+    assert frame.fresh is False
+    assert frame.frame is None
+    assert hub.release_calls == ["front:main:auto"]
+    assert health.ticks[-1]["status"] == "stale"
+    assert health.shutdowns == ["p:n:front:main"]
+
+
+def test_camera_capture_service_keeps_recent_cached_frame_during_polling() -> None:
+    asyncio.run(_run_keeps_recent_cached_frame_during_polling())
+
+
+async def _run_keeps_recent_cached_frame_during_polling() -> None:
+    grabber = _Grabber(opened=False)
+    hub = _Hub(grabber=grabber)
+    service = _service(hub=hub)
+    request = CameraCaptureRequest(owner_id="owner", camera_id="front", source_id="main")
+
+    lease = await service.open(request, PipelineRuntimeDependencies())
+    frame = await service.get_latest(lease.lease_id, min_frame_ts=grabber.frame_ts)
+
+    assert frame.released is False
+    assert frame.fresh is False
+    assert frame.frame is grabber.frame
+    assert hub.release_calls == []

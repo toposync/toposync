@@ -272,13 +272,22 @@ class CameraCaptureService:
 
         frame, frame_ts = lease.grabber.get_latest()
         metrics = self._metrics_snapshot(lease.grabber)
-        if frame is None or not frame_ts:
-            source_health = self._record_status(lease, status="starting", metrics=metrics)
-            released = await self._maybe_reacquire(lease, metrics=metrics)
+        if frame_ts and not metrics.get("last_frame_ts"):
+            metrics = {**metrics, "last_frame_ts": float(frame_ts)}
+        released = await self._maybe_reacquire(lease, metrics=metrics)
+        if released:
             return CameraCaptureFrame(
                 lease_id=lease.lease_id,
                 frame_ts=float(frame_ts or 0.0),
-                released=released,
+                released=True,
+                metrics=metrics,
+                resolved=camera_capture_resolved_as_dict(lease.resolved),
+            )
+        if frame is None or not frame_ts:
+            source_health = self._record_status(lease, status="starting", metrics=metrics)
+            return CameraCaptureFrame(
+                lease_id=lease.lease_id,
+                frame_ts=float(frame_ts or 0.0),
                 metrics=metrics,
                 source_health=source_health,
                 resolved=camera_capture_resolved_as_dict(lease.resolved),

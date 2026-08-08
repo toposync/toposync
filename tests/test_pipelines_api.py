@@ -446,7 +446,9 @@ def test_pipelines_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         assert res.json() == {"pipelines": []}
 
 
-def test_pipelines_api_emits_lifecycle_events(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipelines_api_emits_lifecycle_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         events: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
         bus = client.app.state.bus
@@ -913,15 +915,33 @@ def test_pipeline_compile_returns_recommendations(
         pipeline = Pipeline(
             name="demo_pipeline",
             graph={
-                "schema_version": 1,
+                "schema_version": 2,
+                "uid": "graph_demo_pipeline",
                 "nodes": [
-                    {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
-                    {"id": "notify", "operator": "core.notify", "config": {}},
+                    {
+                        "uid": "node_source",
+                        "id": "source",
+                        "operator": "core.demo_frame_sequence_source",
+                        "config": {},
+                    },
+                    {
+                        "uid": "node_notify",
+                        "id": "notify",
+                        "operator": "core.notify",
+                        "config": {"input_artifact_name": "main"},
+                    },
                 ],
                 "edges": [
                     {
+                        "uid": "edge_source_notify",
                         "from": {"node": "source", "port": "out"},
                         "to": {"node": "notify", "port": "in"},
+                        "traffic": {
+                            "modality": "video.frame",
+                            "semantic_class": "frame",
+                            "continuous": True,
+                        },
+                        "queue": {"max_items": 1, "drop_policy": "latest_only"},
                     },
                 ],
             },
@@ -931,6 +951,40 @@ def test_pipeline_compile_returns_recommendations(
         body = res.json()
         assert isinstance(body.get("alerts"), list)
         assert any(item.get("code") == "notify_missing_store_images" for item in body["alerts"])
+        compiled_edge = body["pipeline"]["edges"][0]
+        assert compiled_edge["traffic"] == {
+            "modality": "video.frame",
+            "semantic_class": "frame",
+            "continuous": True,
+            "loss_tolerance": "lossy_updates_only",
+        }
+        assert compiled_edge["queue"] == {
+            "max_items": 1,
+            "max_artifact_bytes": None,
+            "max_age_ms": None,
+            "drop_policy": "latest_only",
+            "key_policy": "none",
+            "key_path": "",
+        }
+        assert compiled_edge["lifecycle"] == {
+            "preserve_open": True,
+            "preserve_close": True,
+            "compact_updates": True,
+        }
+        assert compiled_edge["debug"] == {
+            "sample_headers": True,
+            "retain_last": 10,
+            "retain_artifact_refs": True,
+            "retain_artifact_data": False,
+        }
+
+        pipeline["graph"]["nodes"][1]["config"] = {}
+        text_only = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert text_only.status_code == 200
+        assert not any(
+            item.get("code") == "notify_missing_store_images"
+            for item in text_only.json().get("alerts", [])
+        )
 
 
 def test_pipeline_telemetry_endpoints_return_numeric_and_markers(

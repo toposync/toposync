@@ -86,7 +86,9 @@ def camera_default_source_ids_by_id(extensions_settings: dict[str, Any]) -> dict
             if _as_str(source.get("kind")).strip().lower() in {"", "video"}
             and bool(source.get("enabled", True))
         ]
-        selected = next((source for source in video_sources if bool(source.get("is_default"))), None)
+        selected = next(
+            (source for source in video_sources if bool(source.get("is_default"))), None
+        )
         if selected is None and len(video_sources) == 1:
             selected = video_sources[0]
         source_id = _as_str(selected.get("id")).strip() if selected is not None else ""
@@ -156,7 +158,9 @@ def build_pipeline_graph_v2(
     meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     operators_by_node = {
-        str(node.get("id") or "").strip(): str(node.get("operator") or node.get("operator_id") or "").strip()
+        str(node.get("id") or "").strip(): str(
+            node.get("operator") or node.get("operator_id") or ""
+        ).strip()
         for node in nodes
         if isinstance(node, dict)
     }
@@ -211,6 +215,12 @@ def _graph_v2_edge(
         operators_by_node.get(target_node, ""),
         target_port=target_port,
     )
+    traffic = dict(_as_record(edge.get("traffic"))) or {
+        "modality": modality,
+        "semantic_class": semantic_class,
+        "continuous": continuous,
+    }
+    effective_continuous = bool(traffic.get("continuous", continuous))
     out: dict[str, Any] = {
         "uid": str(
             edge.get("uid")
@@ -218,8 +228,7 @@ def _graph_v2_edge(
         ),
         "from": {"node": source_node, "port": source_port},
         "to": {"node": target_node, "port": target_port},
-        "traffic": dict(_as_record(edge.get("traffic")))
-        or {"modality": modality, "semantic_class": semantic_class, "continuous": continuous},
+        "traffic": traffic,
         "queue": dict(_as_record(edge.get("queue")))
         or {
             "max_items": int(edge.get("maxsize") or 1),
@@ -229,7 +238,9 @@ def _graph_v2_edge(
     if isinstance(edge.get("backpressure"), dict):
         out["backpressure"] = dict(edge["backpressure"])
     else:
-        out["backpressure"] = {"mode": "reduce_source_rate" if continuous else "pause_upstream"}
+        out["backpressure"] = {
+            "mode": "reduce_source_rate" if effective_continuous else "pause_upstream"
+        }
     if isinstance(edge.get("lifecycle"), dict):
         out["lifecycle"] = dict(edge["lifecycle"])
     if isinstance(edge.get("debug"), dict):
@@ -237,7 +248,9 @@ def _graph_v2_edge(
     return out
 
 
-def _edge_traffic(source_operator: str, target_operator: str, *, target_port: str) -> tuple[str, str, bool]:
+def _edge_traffic(
+    source_operator: str, target_operator: str, *, target_port: str
+) -> tuple[str, str, bool]:
     if target_port == "gate" or source_operator.endswith(".demand_gate"):
         return "control.gate", "control", False
     if source_operator in _VIDEO_OPERATORS and target_operator in _VIDEO_OPERATORS:

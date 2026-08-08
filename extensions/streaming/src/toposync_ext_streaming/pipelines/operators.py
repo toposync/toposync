@@ -7,7 +7,11 @@ import cv2
 import numpy
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, SinkRuntime, SourceOperatorRuntime
+from toposync.runtime.pipelines.execution import (
+    PipelineRuntimeDependencies,
+    SinkRuntime,
+    SourceOperatorRuntime,
+)
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, normalize_artifact_name
 from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, OperatorRegistry
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
@@ -211,10 +215,14 @@ class DemandGateRuntime(SourceOperatorRuntime):
             }
 
         snapshot = raw if isinstance(raw, dict) else {}
-        active = bool(snapshot.get("demand_active") or snapshot.get("active") or snapshot.get("demand_signal"))
+        active = bool(
+            snapshot.get("demand_active") or snapshot.get("active") or snapshot.get("demand_signal")
+        )
         return active, {
             "demand_active": active,
-            "reason": str(snapshot.get("reason") or ("active_demand" if active else "no_active_demand")),
+            "reason": str(
+                snapshot.get("reason") or ("active_demand" if active else "no_active_demand")
+            ),
             "viewer_count_total": int(snapshot.get("viewer_count_total") or 0),
             "primed": bool(snapshot.get("primed")),
             "hint_active": bool(snapshot.get("hint_active")),
@@ -239,7 +247,11 @@ def register_streaming_pipeline_operators(registry: OperatorRegistry) -> None:
             defaults=DemandGateConfig(transmission_id="stream_default").model_dump(mode="json"),
             state_kind="stateful_global",
             default_output_policy={
-                "traffic": {"modality": "control.gate", "semantic_class": "control", "continuous": False},
+                "traffic": {
+                    "modality": "control.gate",
+                    "semantic_class": "control",
+                    "continuous": False,
+                },
                 "queue": {"max_items": 1, "drop_policy": "latest_only"},
             },
             share_strategy="by_signature",
@@ -275,7 +287,28 @@ def register_streaming_pipeline_operators(registry: OperatorRegistry) -> None:
     )
 
 
-def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any]) -> list[OperatorDiagnostic]:
+def _publish_video_diagnostics(
+    _config: dict[str, Any], context: dict[str, Any]
+) -> list[OperatorDiagnostic]:
+    incoming_edges = context.get("incoming_edges")
+    if not isinstance(incoming_edges, list):
+        return []
+
+    has_continuous_video_input = False
+    for item in incoming_edges:
+        edge = item if isinstance(item, dict) else {}
+        target = edge.get("to")
+        target = target if isinstance(target, dict) else {}
+        if str(target.get("port") or "").strip() != "in":
+            continue
+        traffic = edge.get("traffic")
+        traffic = traffic if isinstance(traffic, dict) else {}
+        if traffic.get("continuous") is True:
+            has_continuous_video_input = True
+            break
+    if not has_continuous_video_input:
+        return []
+
     upstream_nodes = context.get("upstream_nodes")
     if not isinstance(upstream_nodes, list):
         return []
@@ -283,7 +316,9 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
     diagnostics: list[OperatorDiagnostic] = []
     seen_codes: set[str] = set()
 
-    def add(code: str, message: str, suggestion: str, details: dict[str, Any] | None = None) -> None:
+    def add(
+        code: str, message: str, suggestion: str, details: dict[str, Any] | None = None
+    ) -> None:
         if code in seen_codes:
             return
         seen_codes.add(code)
@@ -297,6 +332,8 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
             )
         )
 
+    # The analyzer provides ancestors nearest-first. Report only the first
+    # event-gating conversion so one branch does not produce stacked warnings.
     for item in upstream_nodes:
         node = item if isinstance(item, dict) else {}
         operator_id = str(node.get("operator_id") or "").strip()
@@ -311,17 +348,22 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
                 "Use a continuous branch into stream.publish_video and keep motion gate on a separate analytics/event branch.",
                 {"source_node_id": node_id},
             )
-            continue
+            break
 
         emit_mode = str(cfg.get("emit_mode") or "").strip().lower()
-        if operator_id == "vision.detect" and emit_mode in {"events", "event", "filter", "filter_frames"}:
+        if operator_id == "vision.detect" and emit_mode in {
+            "events",
+            "event",
+            "filter",
+            "filter_frames",
+        }:
             add(
                 "stream_publish_video_event_gated_detection",
                 f"stream.publish_video is downstream of detection '{node_id}' in emit_mode={emit_mode}.",
                 "Use emit_mode='annotate' for visual streaming, or split detection onto a separate analytics/event branch.",
                 {"source_node_id": node_id, "emit_mode": emit_mode},
             )
-            continue
+            break
 
         if operator_id == "vision.track":
             add(
@@ -330,7 +372,7 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
                 "Use a continuous visual branch for normal streaming, or keep this branch only when event-gated streaming is intentional.",
                 {"source_node_id": node_id},
             )
-            continue
+            break
 
         if operator_id == "vision.group_events":
             add(
@@ -339,17 +381,22 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
                 "Use a continuous visual branch for normal streaming, or keep this branch only when event-gated streaming is intentional.",
                 {"source_node_id": node_id},
             )
+            break
 
     return diagnostics
 
 
 def _build_writer_id(context) -> str:  # noqa: ANN001
     pipeline_name = str(getattr(context, "pipeline_name", "pipeline") or "pipeline").strip()
-    node_id = str(getattr(context, "node_id", "stream.publish_video") or "stream.publish_video").strip()
+    node_id = str(
+        getattr(context, "node_id", "stream.publish_video") or "stream.publish_video"
+    ).strip()
     return f"{pipeline_name}:{node_id}"
 
 
-def _demand_gate_stream_id(transmission_id: str, *, output_id: str = "", quality_profile_id: str = "") -> str:
+def _demand_gate_stream_id(
+    transmission_id: str, *, output_id: str = "", quality_profile_id: str = ""
+) -> str:
     transmission = str(transmission_id or "").strip() or "stream"
     output = str(output_id or "").strip()
     profile = str(quality_profile_id or "").strip()

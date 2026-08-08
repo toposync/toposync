@@ -69,6 +69,24 @@ def analyze_compiled_pipeline(
     def _upstream_nodes(start_node_id: str) -> list[str]:
         return _walk(start_node_id, incoming, lambda edge: edge.source_node_id)
 
+    def _diagnostic_upstream_nodes(start_node_id: str) -> list[str]:
+        seen: set[str] = set()
+        q: deque[str] = deque([start_node_id])
+        out: list[str] = []
+        while q:
+            _check_cancelled(cancel_check)
+            current = q.popleft()
+            current_edges = incoming.get(current, [])
+            primary_edges = [edge for edge in current_edges if edge.target_port == "in"]
+            for edge in primary_edges or current_edges:
+                upstream_id = str(edge.source_node_id)
+                if upstream_id in seen:
+                    continue
+                seen.add(upstream_id)
+                out.append(upstream_id)
+                q.append(upstream_id)
+        return out
+
     def _downstream_nodes(start_node_id: str) -> list[str]:
         return _walk(start_node_id, outgoing, lambda edge: edge.target_node_id)
 
@@ -82,10 +100,18 @@ def analyze_compiled_pipeline(
         cfg = node.normalized_config
         return cfg if isinstance(cfg, dict) else {}
 
+    def _configured_allowlist(config: dict[str, Any], field_name: str) -> set[str]:
+        if not field_name:
+            return set()
+        raw_values = config.get(field_name, [])
+        if not isinstance(raw_values, list):
+            return set()
+        return {str(item).strip() for item in raw_values if str(item).strip()}
+
     def _diagnostic_node_context(node_id: str) -> dict[str, Any]:
         node = nodes_by_id.get(node_id)
         upstream_nodes: list[dict[str, Any]] = []
-        for upstream_id in _upstream_nodes(node_id):
+        for upstream_id in _diagnostic_upstream_nodes(node_id):
             _check_cancelled(cancel_check)
             upstream = nodes_by_id.get(upstream_id)
             if upstream is None:
@@ -196,6 +222,8 @@ def analyze_compiled_pipeline(
         )
 
         registered = registry.get(node.operator_id)
+        produced_payload_keys: set[str] = set()
+        produced_artifacts: set[str] = set()
         if registered is not None:
             cfg = node.normalized_config if isinstance(node.normalized_config, dict) else {}
             missing_payload_keys = [
@@ -246,22 +274,39 @@ def analyze_compiled_pipeline(
                     )
                 )
 
-            upstream_payload_keys.update(registered.definition.produces_payload_keys)
+            produced_payload_keys.update(registered.definition.produces_payload_keys)
 
-            produced_artifacts = set(registered.definition.produces_artifacts)
+            produced_artifacts.update(registered.definition.produces_artifacts)
             output_artifact_name = normalize_artifact_name(
                 cfg.get("output_artifact_name"), default=""
             )
             if output_artifact_name and MAIN_ARTIFACT_NAME in produced_artifacts:
                 produced_artifacts.remove(MAIN_ARTIFACT_NAME)
                 produced_artifacts.add(output_artifact_name)
-            upstream_artifacts.update(produced_artifacts)
 
         if registered is not None:
             for output_port in registered.definition.outputs:
                 output_key = (node_id, output_port.name)
-                guaranteed_payload_keys_by_output[output_key] = set(upstream_payload_keys)
-                guaranteed_artifacts_by_output[output_key] = set(upstream_artifacts)
+                if output_port.preserves_input_contract:
+                    output_payload_keys = set(upstream_payload_keys)
+                    output_artifacts = set(upstream_artifacts)
+                    payload_allowlist = _configured_allowlist(
+                        cfg, output_port.payload_keys_allowlist_field
+                    )
+                    artifact_allowlist = _configured_allowlist(
+                        cfg, output_port.artifact_names_allowlist_field
+                    )
+                    if payload_allowlist:
+                        output_payload_keys.intersection_update(payload_allowlist)
+                    if artifact_allowlist:
+                        output_artifacts.intersection_update(artifact_allowlist)
+                else:
+                    output_payload_keys = set()
+                    output_artifacts = set()
+                output_payload_keys.update(produced_payload_keys)
+                output_artifacts.update(produced_artifacts)
+                guaranteed_payload_keys_by_output[output_key] = output_payload_keys
+                guaranteed_artifacts_by_output[output_key] = output_artifacts
 
     # Tracking defaults: too-aggressive closing and unthrottled update emission cause flicker under drops.
     for tracking_node_id in _node_ids_by_operator("vision.track"):

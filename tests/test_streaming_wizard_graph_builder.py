@@ -434,6 +434,87 @@ def test_stream_publish_video_group_events_diagnostic_respects_edge_semantics() 
     assert "stream_publish_video_event_gated_tracking" not in alert_codes
 
 
+def test_stream_publish_video_diagnostics_ignore_event_gates_on_auxiliary_inputs() -> None:
+    graph = {
+        "schema_version": 2,
+        "uid": "stream_with_auxiliary_event_branch",
+        "nodes": [
+            {
+                "uid": "node_source",
+                "id": "source",
+                "operator": "core.demo_frame_sequence_source",
+                "config": {},
+            },
+            {
+                "uid": "node_motion",
+                "id": "motion",
+                "operator": "camera.motion_gate",
+                "config": {"emit_when_idle": False},
+            },
+            {
+                "uid": "node_attach",
+                "id": "attach",
+                "operator": "camera.frame_attach",
+                "config": {},
+            },
+            {
+                "uid": "node_stream",
+                "id": "stream",
+                "operator": "stream.publish_video",
+                "config": {"transmission_id": "transmission_main"},
+            },
+        ],
+        "edges": [
+            {
+                "uid": "edge_source_attach",
+                "from": {"node": "source", "port": "out"},
+                "to": {"node": "attach", "port": "in"},
+                "traffic": {
+                    "modality": "video.frame",
+                    "semantic_class": "frame",
+                    "continuous": True,
+                },
+                "queue": {"max_items": 1, "drop_policy": "latest_only"},
+            },
+            {
+                "uid": "edge_source_motion",
+                "from": {"node": "source", "port": "out"},
+                "to": {"node": "motion", "port": "in"},
+                "traffic": {
+                    "modality": "video.frame",
+                    "semantic_class": "frame",
+                    "continuous": True,
+                },
+                "queue": {"max_items": 1, "drop_policy": "latest_only"},
+            },
+            {
+                "uid": "edge_motion_attach",
+                "from": {"node": "motion", "port": "out"},
+                "to": {"node": "attach", "port": "frames"},
+                "traffic": {
+                    "modality": "video.frame",
+                    "semantic_class": "event",
+                    "continuous": False,
+                },
+                "queue": {"max_items": 1, "drop_policy": "latest_only"},
+            },
+            {
+                "uid": "edge_attach_stream",
+                "from": {"node": "attach", "port": "out"},
+                "to": {"node": "stream", "port": "in"},
+                "traffic": {
+                    "modality": "video.frame",
+                    "semantic_class": "frame",
+                    "continuous": True,
+                },
+                "queue": {"max_items": 1, "drop_policy": "latest_only"},
+            },
+        ],
+    }
+
+    assert "stream_publish_video_event_gated_motion" not in _compile_alert_codes(graph)
+
+
 @pytest.mark.parametrize("preset_id", ["motion_gate_stream", "detection_stream", "tracking_stream"])
 def test_stream_publish_video_diagnostics_do_not_warn_for_continuous_presets(
     preset_id: str,

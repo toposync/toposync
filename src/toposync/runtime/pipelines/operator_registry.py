@@ -5,7 +5,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator, model_validator
 
@@ -122,6 +122,9 @@ class OperatorPort(BaseModel):
     name: str
     required: bool = False
     description: str = ""
+    preserves_input_contract: bool = True
+    payload_keys_allowlist_field: str = ""
+    artifact_names_allowlist_field: str = ""
 
     @field_validator("name")
     @classmethod
@@ -130,6 +133,14 @@ class OperatorPort(BaseModel):
         if not PORT_NAME_RE.match(name):
             raise ValueError("Port name must match ^[a-z][a-z0-9_]{0,63}$")
         return name
+
+    @field_validator("payload_keys_allowlist_field", "artifact_names_allowlist_field")
+    @classmethod
+    def _validate_allowlist_field(cls, value: str) -> str:
+        field_name = str(value or "").strip()
+        if field_name and not PORT_NAME_RE.match(field_name):
+            raise ValueError("Allowlist field name must match ^[a-z][a-z0-9_]{0,63}$")
+        return field_name
 
 
 class ExpressionHint(BaseModel):
@@ -434,6 +445,43 @@ class OperatorRegistry:
         )
         if outputs is None and not parsed_outputs:
             parsed_outputs = [OperatorPort(name="out")]
+
+        for input_port in parsed_inputs:
+            if (
+                not input_port.preserves_input_contract
+                or input_port.payload_keys_allowlist_field
+                or input_port.artifact_names_allowlist_field
+            ):
+                raise OperatorRegistrationError(
+                    f"Input port {input_port.name!r} cannot declare output contract behavior"
+                )
+
+        for output_port in parsed_outputs:
+            allowlist_fields = (
+                output_port.payload_keys_allowlist_field,
+                output_port.artifact_names_allowlist_field,
+            )
+            if not output_port.preserves_input_contract and any(allowlist_fields):
+                raise OperatorRegistrationError(
+                    f"Output port {output_port.name!r} cannot combine allowlist fields "
+                    "with preserves_input_contract=False"
+                )
+            for field_name in allowlist_fields:
+                if not field_name:
+                    continue
+                config_field = cfg_model.model_fields.get(field_name)
+                if config_field is None:
+                    raise OperatorRegistrationError(
+                        f"Output port {output_port.name!r} references unknown config field "
+                        f"{field_name!r}"
+                    )
+                if get_origin(config_field.annotation) is not list or get_args(
+                    config_field.annotation
+                ) != (str,):
+                    raise OperatorRegistrationError(
+                        f"Output port {output_port.name!r} allowlist field {field_name!r} "
+                        "must be a list of strings"
+                    )
 
         capability_values = list(capabilities or [])
         if share_strategy == "by_signature":

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
-from toposync.runtime.pipelines import OperatorRegistry, register_core_operators
+from toposync.runtime.pipelines import (
+    OperatorRegistrationError,
+    OperatorRegistry,
+    register_core_operators,
+)
 from toposync_ext_cameras.pipelines import (
     register_camera_core_pipeline_operators,
 )
@@ -83,6 +87,75 @@ def test_operator_policy_defaults_are_not_shared_between_definitions() -> None:
     assert second.default_output_policy == {}
 
 
+class _AllowlistConfig(BaseModel):
+    names: list[str] = Field(default_factory=list)
+    scalar_name: str = ""
+
+
+def test_operator_registry_accepts_output_contract_allowlist_fields() -> None:
+    registry = OperatorRegistry()
+    definition = registry.register_operator(
+        operator_id="test.contract_allowlist",
+        config_model=_AllowlistConfig,
+        outputs=[
+            {
+                "name": "out",
+                "payload_keys_allowlist_field": "names",
+                "artifact_names_allowlist_field": "names",
+            }
+        ],
+    )
+
+    [output] = definition.outputs
+    assert output.payload_keys_allowlist_field == "names"
+    assert output.artifact_names_allowlist_field == "names"
+
+
+@pytest.mark.parametrize(
+    ("inputs", "outputs", "message"),
+    [
+        (
+            [],
+            [{"name": "out", "payload_keys_allowlist_field": "missing"}],
+            "unknown config field",
+        ),
+        (
+            [],
+            [{"name": "out", "payload_keys_allowlist_field": "scalar_name"}],
+            "must be a list of strings",
+        ),
+        (
+            [],
+            [
+                {
+                    "name": "out",
+                    "preserves_input_contract": False,
+                    "payload_keys_allowlist_field": "names",
+                }
+            ],
+            "cannot combine allowlist fields",
+        ),
+        (
+            [{"name": "in", "payload_keys_allowlist_field": "names"}],
+            [{"name": "out"}],
+            "cannot declare output contract behavior",
+        ),
+    ],
+)
+def test_operator_registry_rejects_invalid_output_contract_metadata(
+    inputs: list[dict], outputs: list[dict], message: str
+) -> None:
+    registry = OperatorRegistry()
+
+    with pytest.raises(OperatorRegistrationError, match=message):
+        registry.register_operator(
+            operator_id="test.invalid_contract_metadata",
+            config_model=_AllowlistConfig,
+            inputs=inputs,
+            outputs=outputs,
+        )
+
+
 def test_principal_operators_have_v2_runtime_metadata() -> None:
     registry = OperatorRegistry()
     register_core_operators(registry)
@@ -96,6 +169,15 @@ def test_principal_operators_have_v2_runtime_metadata() -> None:
     assert camera_source.definition.resource_kind == "camera"
     assert camera_source.definition.pressure_behavior == "reduce_source_rate"
     assert camera_source.definition.default_output_policy["queue"]["drop_policy"] == "latest_only"
+
+    snapshot = registry.get("core.stream_state_snapshot")
+    assert snapshot is not None
+    snapshot_output = next(
+        output for output in snapshot.definition.outputs if output.name == "snapshot"
+    )
+    assert snapshot_output.preserves_input_contract is True
+    assert snapshot_output.payload_keys_allowlist_field == "include_payload_keys"
+    assert snapshot_output.artifact_names_allowlist_field == "artifact_names"
 
     vision_detect = registry.get("vision.detect")
     assert vision_detect is not None

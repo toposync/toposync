@@ -1448,7 +1448,14 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         description="Emits periodic per-stream snapshot packets to a side output while passing through the original stream.",
         config_model=StreamStateSnapshotConfig,
         inputs=[{"name": "in", "required": True}],
-        outputs=[{"name": "out"}, {"name": "snapshot"}],
+        outputs=[
+            {"name": "out"},
+            {
+                "name": "snapshot",
+                "payload_keys_allowlist_field": "include_payload_keys",
+                "artifact_names_allowlist_field": "artifact_names",
+            },
+        ],
         capabilities=["snapshot", "realtime", "lifecycle"],
         defaults=StreamStateSnapshotConfig().model_dump(),
         state_kind="stateful_per_stream",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel, Field
 
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines import (
@@ -11,6 +12,11 @@ from toposync.runtime.pipelines import (
 )
 from toposync.runtime.pipelines.recommendations import analyze_compiled_pipeline
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
+
+
+class _ContractFilterConfig(BaseModel):
+    payload_keys: list[str] = Field(default_factory=list)
+    artifact_names: list[str] = Field(default_factory=list)
 
 
 def _graph_v2(registry: OperatorRegistry, graph: dict) -> dict:
@@ -366,6 +372,28 @@ def _register_branch_contract_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
     )
     registry.register_operator(
+        operator_id="test.contract_side_output",
+        inputs=[{"name": "in", "required": True}],
+        outputs=[
+            {"name": "out"},
+            {"name": "snapshot", "preserves_input_contract": False},
+        ],
+    )
+    registry.register_operator(
+        operator_id="test.contract_filtered_producer",
+        config_model=_ContractFilterConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[
+            {
+                "name": "out",
+                "payload_keys_allowlist_field": "payload_keys",
+                "artifact_names_allowlist_field": "artifact_names",
+            }
+        ],
+        produces_payload_keys=["world"],
+        produces_artifacts=["branch_artifact"],
+    )
+    registry.register_operator(
         operator_id="test.contract_consumer",
         inputs=[{"name": "in", "required": True}],
         outputs=[],
@@ -533,6 +561,190 @@ def test_contract_preserves_primary_input_guarantees_with_auxiliary_frames() -> 
         and alert.code in {"missing_required_payload_keys", "missing_required_artifacts"}
         for alert in alerts
     )
+
+
+def test_contract_does_not_copy_input_guarantees_to_filtered_side_outputs() -> None:
+    registry = OperatorRegistry()
+    _register_branch_contract_operators(registry)
+    pipeline = Pipeline(
+        name="contract_filtered_side_output",
+        graph=_graph_v2(
+            registry,
+            {
+                "schema_version": 2,
+                "nodes": [
+                    {"id": "source", "operator": "test.branch_source"},
+                    {"id": "producer", "operator": "test.contract_producer"},
+                    {"id": "side_output", "operator": "test.contract_side_output"},
+                    {"id": "main_consumer", "operator": "test.contract_consumer"},
+                    {"id": "snapshot_consumer", "operator": "test.contract_consumer"},
+                ],
+                "edges": [
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "producer", "port": "in"},
+                    },
+                    {
+                        "from": {"node": "producer", "port": "out"},
+                        "to": {"node": "side_output", "port": "in"},
+                    },
+                    {
+                        "from": {"node": "side_output", "port": "out"},
+                        "to": {"node": "main_consumer", "port": "in"},
+                    },
+                    {
+                        "from": {"node": "side_output", "port": "snapshot"},
+                        "to": {"node": "snapshot_consumer", "port": "in"},
+                    },
+                ],
+            },
+        ),
+    )
+
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+    alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
+
+    assert not any(
+        alert.node_id == "main_consumer"
+        and alert.code in {"missing_required_payload_keys", "missing_required_artifacts"}
+        for alert in alerts
+    )
+    snapshot_alert_codes = {alert.code for alert in alerts if alert.node_id == "snapshot_consumer"}
+    assert snapshot_alert_codes == {
+        "missing_required_artifacts",
+        "missing_required_payload_keys",
+    }
+
+
+def test_output_contract_keeps_values_produced_after_filtering_inputs() -> None:
+    registry = OperatorRegistry()
+    _register_branch_contract_operators(registry)
+    pipeline = Pipeline(
+        name="contract_filtered_producer",
+        graph=_graph_v2(
+            registry,
+            {
+                "schema_version": 2,
+                "nodes": [
+                    {"id": "source", "operator": "test.branch_source"},
+                    {
+                        "id": "producer",
+                        "operator": "test.contract_filtered_producer",
+                        "config": {
+                            "payload_keys": ["other_payload"],
+                            "artifact_names": ["other_artifact"],
+                        },
+                    },
+                    {"id": "consumer", "operator": "test.contract_consumer"},
+                ],
+                "edges": [
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "producer", "port": "in"},
+                    },
+                    {
+                        "from": {"node": "producer", "port": "out"},
+                        "to": {"node": "consumer", "port": "in"},
+                    },
+                ],
+            },
+        ),
+    )
+
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+    alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
+
+    assert not any(
+        alert.node_id == "consumer"
+        and alert.code in {"missing_required_payload_keys", "missing_required_artifacts"}
+        for alert in alerts
+    )
+
+
+@pytest.mark.parametrize(
+    ("snapshot_config", "expected_alert_codes"),
+    [
+        ({}, set()),
+        (
+            {
+                "include_payload_keys": ["world"],
+                "artifact_names": ["branch_artifact"],
+            },
+            set(),
+        ),
+        (
+            {
+                "include_payload_keys": ["other_payload"],
+                "artifact_names": ["other_artifact"],
+            },
+            {"missing_required_artifacts", "missing_required_payload_keys"},
+        ),
+        (
+            {
+                "include_payload_keys": ["other_payload"],
+                "artifact_names": ["branch_artifact"],
+            },
+            {"missing_required_payload_keys"},
+        ),
+        (
+            {
+                "include_payload_keys": ["world"],
+                "artifact_names": ["other_artifact"],
+            },
+            {"missing_required_artifacts"},
+        ),
+    ],
+)
+def test_stream_state_snapshot_contract_follows_configured_allowlists(
+    snapshot_config: dict, expected_alert_codes: set[str]
+) -> None:
+    registry = OperatorRegistry()
+    register_builtin_operators(registry)
+    _register_branch_contract_operators(registry)
+    pipeline = Pipeline(
+        name="stream_state_snapshot_contract",
+        graph=_graph_v2(
+            registry,
+            {
+                "schema_version": 2,
+                "nodes": [
+                    {"id": "source", "operator": "test.branch_source"},
+                    {"id": "producer", "operator": "test.contract_producer"},
+                    {
+                        "id": "snapshot",
+                        "operator": "core.stream_state_snapshot",
+                        "config": snapshot_config,
+                    },
+                    {"id": "consumer", "operator": "test.contract_consumer"},
+                ],
+                "edges": [
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "producer", "port": "in"},
+                    },
+                    {
+                        "from": {"node": "producer", "port": "out"},
+                        "to": {"node": "snapshot", "port": "in"},
+                    },
+                    {
+                        "from": {"node": "snapshot", "port": "snapshot"},
+                        "to": {"node": "consumer", "port": "in"},
+                    },
+                ],
+            },
+        ),
+    )
+
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+    alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
+
+    alert_codes = {
+        alert.code
+        for alert in alerts
+        if alert.node_id == "consumer"
+        and alert.code in {"missing_required_payload_keys", "missing_required_artifacts"}
+    }
+    assert alert_codes == expected_alert_codes
 
 
 def test_store_images_requires_artifact_guaranteed_on_every_merge_branch() -> None:

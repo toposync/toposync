@@ -241,15 +241,21 @@ def test_cinematic_publication_pipeline_compiles_and_satisfies_main_artifact_con
 
 def test_publish_video_warns_when_main_artifact_is_not_produced_upstream() -> None:
     registry = _registry()
+    registry.register_operator(
+        operator_id="test.video_without_artifact",
+        inputs=[],
+        outputs=[{"name": "out"}],
+        output_modalities=["video"],
+    )
     pipeline = Pipeline(
         name="cinematic_publication_missing_main",
         graph=_graph_v2(
             uid="cinematic_publication_missing_main",
             nodes=[
                 {
-                    "id": "demand",
-                    "operator": "stream.demand_gate",
-                    "config": {"transmission_id": "tx-cinematic"},
+                    "id": "source",
+                    "operator": "test.video_without_artifact",
+                    "config": {},
                 },
                 {
                     "id": "publish",
@@ -259,7 +265,7 @@ def test_publish_video_warns_when_main_artifact_is_not_produced_upstream() -> No
             ],
             edges=[
                 {
-                    "from": {"node": "demand", "port": "out"},
+                    "from": {"node": "source", "port": "out"},
                     "to": {"node": "publish", "port": "in"},
                     "traffic": {
                         "modality": "video.frame",

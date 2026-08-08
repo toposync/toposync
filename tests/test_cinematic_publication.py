@@ -8,7 +8,11 @@ from typing import Any
 import numpy
 
 from toposync.runtime.config_store import Pipeline
-from toposync.runtime.pipelines import OperatorRegistry, PipelineGraphCompiler, register_builtin_operators
+from toposync.runtime.pipelines import (
+    OperatorRegistry,
+    PipelineGraphCompiler,
+    register_builtin_operators,
+)
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME
 from toposync.runtime.pipelines.recommendations import analyze_compiled_pipeline
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
@@ -21,7 +25,10 @@ from toposync_ext_streaming.pipelines import (
     set_streaming_runtime_bindings,
 )
 from toposync_ext_streaming.pipelines.operators import PublishVideoRuntime
-from toposync_ext_streaming.streaming.publisher_manager import PublisherEncodingSettings, PublisherOutput
+from toposync_ext_streaming.streaming.publisher_manager import (
+    PublisherEncodingSettings,
+    PublisherOutput,
+)
 from toposync_ext_streaming.streaming.runtime_state import TransmissionRuntimeState
 from toposync_ext_streaming.streaming.writer_bridge import StreamWriterBridge
 
@@ -114,10 +121,28 @@ def _registry() -> OperatorRegistry:
     return registry
 
 
-def _cinematic_publication_graph() -> dict[str, Any]:
+def _graph_v2(
+    *, uid: str, nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
+) -> dict[str, Any]:
+    normalized_edges: list[dict[str, Any]] = []
+    for index, edge in enumerate(edges):
+        normalized = dict(edge)
+        queue = dict(normalized.pop("queue", {}))
+        queue.setdefault("max_items", normalized.pop("maxsize", 1))
+        queue.setdefault("drop_policy", normalized.pop("drop_policy", "latest_only"))
+        normalized_edges.append({"uid": f"{uid}_edge_{index:03d}", **normalized, "queue": queue})
     return {
-        "schema_version": 1,
-        "nodes": [
+        "schema_version": 2,
+        "uid": uid,
+        "nodes": [{"uid": f"{uid}_node_{node['id']}", **node} for node in nodes],
+        "edges": normalized_edges,
+    }
+
+
+def _cinematic_publication_graph() -> dict[str, Any]:
+    return _graph_v2(
+        uid="cinematic_publication",
+        nodes=[
             {
                 "id": "demand",
                 "operator": "stream.demand_gate",
@@ -134,21 +159,31 @@ def _cinematic_publication_graph() -> dict[str, Any]:
                 "config": {"transmission_id": "tx-cinematic", "writer_priority": 5},
             },
         ],
-        "edges": [
+        edges=[
             {
                 "from": {"node": "demand", "port": "out"},
                 "to": {"node": "director", "port": "gate"},
                 "maxsize": 1,
                 "drop_policy": "drop_oldest",
+                "traffic": {
+                    "modality": "control.gate",
+                    "semantic_class": "control",
+                    "continuous": False,
+                },
             },
             {
                 "from": {"node": "director", "port": "out"},
                 "to": {"node": "publish", "port": "in"},
                 "maxsize": 1,
                 "drop_policy": "latest_only",
+                "traffic": {
+                    "modality": "video.frame",
+                    "semantic_class": "frame",
+                    "continuous": True,
+                },
             },
         ],
-    }
+    )
 
 
 def _cinematic_packet(frame: numpy.ndarray, *, frame_ts: float = 12.5) -> Packet:
@@ -198,16 +233,19 @@ def test_cinematic_publication_pipeline_compiles_and_satisfies_main_artifact_con
     assert ("director", "out", "publish", "in") in edges
 
     alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
-    assert not any(alert.code == "missing_required_artifacts" and alert.node_id == "publish" for alert in alerts)
+    assert not any(
+        alert.code == "missing_required_artifacts" and alert.node_id == "publish"
+        for alert in alerts
+    )
 
 
 def test_publish_video_warns_when_main_artifact_is_not_produced_upstream() -> None:
     registry = _registry()
     pipeline = Pipeline(
         name="cinematic_publication_missing_main",
-        graph={
-            "schema_version": 1,
-            "nodes": [
+        graph=_graph_v2(
+            uid="cinematic_publication_missing_main",
+            nodes=[
                 {
                     "id": "demand",
                     "operator": "stream.demand_gate",
@@ -219,10 +257,18 @@ def test_publish_video_warns_when_main_artifact_is_not_produced_upstream() -> No
                     "config": {"transmission_id": "tx-cinematic"},
                 },
             ],
-            "edges": [
-                {"from": {"node": "demand", "port": "out"}, "to": {"node": "publish", "port": "in"}},
+            edges=[
+                {
+                    "from": {"node": "demand", "port": "out"},
+                    "to": {"node": "publish", "port": "in"},
+                    "traffic": {
+                        "modality": "video.frame",
+                        "semantic_class": "frame",
+                        "continuous": True,
+                    },
+                },
             ],
-        },
+        ),
     )
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
 
@@ -252,7 +298,9 @@ async def _run_publish_video_receives_cinematic_main_artifact_and_writer_priorit
     finally:
         set_streaming_runtime_bindings(None)
 
-    selected = await state.get_selected_writer_frame("tx-cinematic", stale_after_s=5.0, placeholder_after_s=10.0)
+    selected = await state.get_selected_writer_frame(
+        "tx-cinematic", stale_after_s=5.0, placeholder_after_s=10.0
+    )
     assert selected.writer_id == "cinematic_pipeline:publish"
     assert selected.selected_writer_id == "cinematic_pipeline:publish"
     assert selected.writer_priority == 7
@@ -303,7 +351,10 @@ async def _run_cinematic_publication_resize_contain_through_writer_bridge() -> N
 
     set_streaming_runtime_bindings(StreamingRuntimeBindings(runtime_state=state))
     try:
-        await runtime.process_packet(_cinematic_packet(frame, frame_ts=10.0), SimpleNamespace(pipeline_name="cinematic", node_id="publish"))
+        await runtime.process_packet(
+            _cinematic_packet(frame, frame_ts=10.0),
+            SimpleNamespace(pipeline_name="cinematic", node_id="publish"),
+        )
     finally:
         set_streaming_runtime_bindings(None)
     await bridge._tick_once(1.0)
@@ -322,8 +373,12 @@ def test_cinematic_writer_priority_wins_in_priority_latest_arbitration() -> None
 
 async def _run_cinematic_writer_priority_wins_in_priority_latest_arbitration() -> None:
     clock = {"now": 10.0}
-    state = TransmissionRuntimeState(monotonic=lambda: float(clock["now"]), wall_time=lambda: float(clock["now"]))
-    await state.set_transmission_arbitration(transmission_id="tx-cinematic", arbitration_mode="priority_latest")
+    state = TransmissionRuntimeState(
+        monotonic=lambda: float(clock["now"]), wall_time=lambda: float(clock["now"])
+    )
+    await state.set_transmission_arbitration(
+        transmission_id="tx-cinematic", arbitration_mode="priority_latest"
+    )
 
     await state.update_writer_frame(
         transmission_id="tx-cinematic",
@@ -343,7 +398,9 @@ async def _run_cinematic_writer_priority_wins_in_priority_latest_arbitration() -
         frame_ts=2.0,
     )
 
-    selected = await state.get_selected_writer_frame("tx-cinematic", stale_after_s=5.0, placeholder_after_s=10.0)
+    selected = await state.get_selected_writer_frame(
+        "tx-cinematic", stale_after_s=5.0, placeholder_after_s=10.0
+    )
 
     assert selected.selected_writer_id == "cinematic_pipeline:publish"
     assert selected.writer_priority == 9

@@ -9,6 +9,7 @@ import pytest
 from toposync.app import create_app
 import toposync.extensions.manager as ext_manager_mod
 import toposync_ext_cameras.plugin as cameras_plugin_mod
+from toposync_ext_vision.registry import ModelRegistryError, build_default_model_registry
 
 
 class _ExtensionEntryPoint:
@@ -24,8 +25,15 @@ class _ExtensionEntryPoint:
 
 
 def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    async def _allow_detection_model(*_args: Any, **_kwargs: Any) -> None:
-        return None
+    async def _allow_detection_model(*_args: Any, **kwargs: Any) -> None:
+        model_id = str(kwargs.get("model_id") or "").strip()
+        try:
+            manifest = build_default_model_registry().resolve_detector_manifest(model_id)
+        except ModelRegistryError:
+            return
+        artifact_path = manifest.resolve_artifact_path()
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.touch()
 
     monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
@@ -89,10 +97,26 @@ def _add_mapped_composition(client: TestClient, *, with_area: bool = False) -> N
                         "id": "main",
                         "label": "Main",
                         "control_points": [
-                            {"id": "A", "image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
-                            {"id": "B", "image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                            {"id": "C", "image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
-                            {"id": "D", "image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                            {
+                                "id": "A",
+                                "image": {"x": 0.0, "y": 0.0},
+                                "world": {"x": 0.0, "z": 0.0},
+                            },
+                            {
+                                "id": "B",
+                                "image": {"x": 1.0, "y": 0.0},
+                                "world": {"x": 10.0, "z": 0.0},
+                            },
+                            {
+                                "id": "C",
+                                "image": {"x": 1.0, "y": 1.0},
+                                "world": {"x": 10.0, "z": 10.0},
+                            },
+                            {
+                                "id": "D",
+                                "image": {"x": 0.0, "y": 1.0},
+                                "world": {"x": 0.0, "z": 10.0},
+                            },
                         ],
                     }
                 ],
@@ -261,15 +285,24 @@ def test_camera_pipeline_combined_stopped_builds_shared_detection_and_branches(
         assert _edge_config(pipeline, "velocity", "person_router").get("drop_policy") == (
             "keyed_latest_only"
         )
-        assert _edge_config(
-            pipeline, "person_router", "person_stationary", source_port="match"
-        ).get("drop_policy") == "keyed_latest_only"
-        assert _edge_config(
-            pipeline, "person_router", "vehicle_router", source_port="other"
-        ).get("drop_policy") == "keyed_latest_only"
-        assert _edge_config(
-            pipeline, "vehicle_router", "vehicle_stationary", source_port="match"
-        ).get("drop_policy") == "keyed_latest_only"
+        assert (
+            _edge_config(pipeline, "person_router", "person_stationary", source_port="match").get(
+                "drop_policy"
+            )
+            == "keyed_latest_only"
+        )
+        assert (
+            _edge_config(pipeline, "person_router", "vehicle_router", source_port="other").get(
+                "drop_policy"
+            )
+            == "keyed_latest_only"
+        )
+        assert (
+            _edge_config(pipeline, "vehicle_router", "vehicle_stationary", source_port="match").get(
+                "drop_policy"
+            )
+            == "keyed_latest_only"
+        )
 
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text

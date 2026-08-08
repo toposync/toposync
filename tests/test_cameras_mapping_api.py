@@ -7,7 +7,14 @@ from fastapi.testclient import TestClient
 import pytest
 
 from toposync.app import create_app
-from toposync.runtime.config_store import AppConfig, AppSettings, Composition, CompositionElement, Pipeline, Vector3
+from toposync.runtime.config_store import (
+    AppConfig,
+    AppSettings,
+    Composition,
+    CompositionElement,
+    Pipeline,
+    Vector3,
+)
 from toposync.runtime.pipelines import OperatorRegistry, PipelineGraphCompiler
 from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
 import toposync.extensions.manager as ext_manager_mod
@@ -50,7 +57,10 @@ def _valid_calibrated_views() -> list[dict[str, object]]:
             "stream_scope": {"compatible_roles": ["main", "sub"], "compatible_source_ids": []},
             "projection_model": {
                 "type": "image_quad_on_world",
-                "image_region": {"top_left": {"x": 0.0, "y": 0.0}, "bottom_right": {"x": 1.0, "y": 1.0}},
+                "image_region": {
+                    "top_left": {"x": 0.0, "y": 0.0},
+                    "bottom_right": {"x": 1.0, "y": 1.0},
+                },
                 "world_quad": {
                     "top_left": {"x": 0.0, "z": 0.0},
                     "top_right": {"x": 10.0, "z": 0.0},
@@ -91,7 +101,9 @@ def _camera_composition(
                                 {
                                     "id": "main",
                                     "label": "Main",
-                                    "control_points": control_points if control_points is not None else _valid_control_points(),
+                                    "control_points": control_points
+                                    if control_points is not None
+                                    else _valid_control_points(),
                                 }
                             ]
                         }
@@ -100,6 +112,40 @@ def _camera_composition(
             )
         ],
     )
+
+
+def _camera_mapping_graph(*, mapping_config: dict[str, object] | None = None) -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "uid": "mapping_diagnostics",
+        "revision": 1,
+        "nodes": [
+            {
+                "uid": "mapping_source",
+                "id": "source",
+                "operator": "camera.source",
+                "config": {"camera_id": "cam1"},
+            },
+            {
+                "uid": "camera_mapping",
+                "id": "map",
+                "operator": "camera.camera_mapping",
+                "config": dict(mapping_config or {}),
+            },
+        ],
+        "edges": [
+            {
+                "uid": "source_to_mapping",
+                "from": {"node": "source", "port": "out"},
+                "to": {"node": "map", "port": "in"},
+                "traffic": {
+                    "modality": "video.frame",
+                    "semantic_class": "frame",
+                    "continuous": True,
+                },
+            }
+        ],
+    }
 
 
 def _camera_mapping_alerts(
@@ -111,14 +157,7 @@ def _camera_mapping_alerts(
     register_camera_pipeline_operators(registry)
     pipeline = Pipeline(
         name="mapping_diagnostics",
-        graph={
-            "schema_version": 1,
-            "nodes": [
-                {"id": "source", "operator": "camera.source", "config": {"camera_id": "cam1"}},
-                {"id": "map", "operator": "camera.camera_mapping", "config": dict(mapping_config or {})},
-            ],
-            "edges": [{"from": {"node": "source"}, "to": {"node": "map", "port": "in"}}],
-        },
+        graph=_camera_mapping_graph(mapping_config=mapping_config),
     )
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
     return analyze_compiled_pipeline(
@@ -132,7 +171,9 @@ def _camera_mapping_alert_codes(alerts: list[PipelineAlert]) -> set[str]:
     return {alert.code for alert in alerts if alert.code.startswith("camera_mapping_")}
 
 
-def test_projection_map_accepts_calibrated_view_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_projection_map_accepts_calibrated_view_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client_with_cameras(tmp_path, monkeypatch) as client:
         res = client.post(
             "/api/cameras/projection/map",
@@ -149,7 +190,9 @@ def test_projection_map_accepts_calibrated_view_payload(tmp_path: Path, monkeypa
         assert body["quality"]["number_of_points"] == 4
 
 
-def test_projection_map_applies_calibrated_view_refinement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_projection_map_applies_calibrated_view_refinement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     view = _valid_calibrated_views()[0]
     projection_model = view["projection_model"]
     assert isinstance(projection_model, dict)
@@ -210,7 +253,9 @@ def test_camera_mapping_diagnostics_accepts_calibrated_composition() -> None:
 
 
 def test_camera_mapping_diagnostics_inline_calibrated_views_skip_composition_check() -> None:
-    alerts = _camera_mapping_alerts(mapping_config={"calibrated_views": _valid_calibrated_views()}, compositions=[])
+    alerts = _camera_mapping_alerts(
+        mapping_config={"calibrated_views": _valid_calibrated_views()}, compositions=[]
+    )
 
     assert _camera_mapping_alert_codes(alerts) == set()
 
@@ -268,17 +313,12 @@ def test_pipeline_compile_returns_camera_mapping_diagnostic_from_compositions(
         )
         pipeline = Pipeline(
             name="mapping_diagnostics",
-            graph={
-                "schema_version": 1,
-                "nodes": [
-                    {"id": "source", "operator": "camera.source", "config": {"camera_id": "cam1"}},
-                    {"id": "map", "operator": "camera.camera_mapping", "config": {}},
-                ],
-                "edges": [{"from": {"node": "source"}, "to": {"node": "map", "port": "in"}}],
-            },
+            graph=_camera_mapping_graph(),
         )
 
-        res = client.post("/api/pipelines/compile", json={"pipeline": pipeline.model_dump(mode="json")})
+        res = client.post(
+            "/api/pipelines/compile", json={"pipeline": pipeline.model_dump(mode="json")}
+        )
 
         assert res.status_code == 200, res.text
         alerts = res.json()["alerts"]
@@ -290,7 +330,9 @@ def test_pipeline_compile_returns_camera_mapping_diagnostic_from_compositions(
         )
 
 
-def test_camera_contexts_reports_control_point_sets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_camera_contexts_reports_control_point_sets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client_with_cameras(tmp_path, monkeypatch) as client:
         config_store = client.app.state.config_store
         client.portal.call(
@@ -331,20 +373,52 @@ def test_camera_contexts_reports_control_point_sets(tmp_path: Path, monkeypatch:
                                             "id": "main",
                                             "label": "Vista principal",
                                             "control_points": [
-                                                {"id": "A", "image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
-                                                {"id": "B", "image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                                                {"id": "C", "image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
-                                                {"id": "D", "image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                                                {
+                                                    "id": "A",
+                                                    "image": {"x": 0.0, "y": 0.0},
+                                                    "world": {"x": 0.0, "z": 0.0},
+                                                },
+                                                {
+                                                    "id": "B",
+                                                    "image": {"x": 1.0, "y": 0.0},
+                                                    "world": {"x": 10.0, "z": 0.0},
+                                                },
+                                                {
+                                                    "id": "C",
+                                                    "image": {"x": 1.0, "y": 1.0},
+                                                    "world": {"x": 10.0, "z": 10.0},
+                                                },
+                                                {
+                                                    "id": "D",
+                                                    "image": {"x": 0.0, "y": 1.0},
+                                                    "world": {"x": 0.0, "z": 10.0},
+                                                },
                                             ],
                                         },
                                         {
                                             "id": "door",
                                             "label": "Porta",
-                                            "pose_reference": {"pan": 0.1, "tilt": -0.2, "zoom": 0.3},
+                                            "pose_reference": {
+                                                "pan": 0.1,
+                                                "tilt": -0.2,
+                                                "zoom": 0.3,
+                                            },
                                             "control_points": [
-                                                {"id": "A", "image": {"x": 0.1, "y": 0.1}, "world": {"x": 1.0, "z": 1.0}},
-                                                {"id": "B", "image": {"x": 0.2, "y": 0.2}, "world": {"x": 2.0, "z": 2.0}},
-                                                {"id": "C", "image": {"x": 0.3, "y": 0.3}, "world": {"x": 3.0, "z": 3.0}},
+                                                {
+                                                    "id": "A",
+                                                    "image": {"x": 0.1, "y": 0.1},
+                                                    "world": {"x": 1.0, "z": 1.0},
+                                                },
+                                                {
+                                                    "id": "B",
+                                                    "image": {"x": 0.2, "y": 0.2},
+                                                    "world": {"x": 2.0, "z": 2.0},
+                                                },
+                                                {
+                                                    "id": "C",
+                                                    "image": {"x": 0.3, "y": 0.3},
+                                                    "world": {"x": 3.0, "z": 3.0},
+                                                },
                                             ],
                                         },
                                     ],
@@ -390,7 +464,9 @@ def test_camera_contexts_reports_control_point_sets(tmp_path: Path, monkeypatch:
         ]
 
 
-def test_camera_ptz_routes_forward_to_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_camera_ptz_routes_forward_to_services(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client_with_cameras(tmp_path, monkeypatch) as client:
         services = client.app.state.services
 
@@ -399,7 +475,9 @@ def test_camera_ptz_routes_forward_to_services(tmp_path: Path, monkeypatch: pyte
             assert camera_source_id is None
             return [{"token": "home", "name": "Home", "pan": 0.1, "tilt": -0.2, "zoom": 0.3}]
 
-        async def goto_preset(*, camera_id: str, preset_token: str, camera_source_id: str | None = None):
+        async def goto_preset(
+            *, camera_id: str, preset_token: str, camera_source_id: str | None = None
+        ):
             assert camera_id == "cam1"
             assert camera_source_id is None
             assert preset_token == "home"
@@ -408,7 +486,14 @@ def test_camera_ptz_routes_forward_to_services(tmp_path: Path, monkeypatch: pyte
         async def get_status(*, camera_id: str, camera_source_id: str | None = None):
             assert camera_id == "cam1"
             assert camera_source_id is None
-            return {"pan": 0.1, "tilt": -0.2, "zoom": 0.3, "move_status": "IDLE", "error": "", "utc_time": "2026-01-01T00:00:00Z"}
+            return {
+                "pan": 0.1,
+                "tilt": -0.2,
+                "zoom": 0.3,
+                "move_status": "IDLE",
+                "error": "",
+                "utc_time": "2026-01-01T00:00:00Z",
+            }
 
         async def absolute_move(
             *,
@@ -443,7 +528,11 @@ def test_camera_ptz_routes_forward_to_services(tmp_path: Path, monkeypatch: pyte
             return {"ok": True}
 
         async def stop(
-            *, camera_id: str, pan_tilt: bool = True, zoom: bool = True, camera_source_id: str | None = None
+            *,
+            camera_id: str,
+            pan_tilt: bool = True,
+            zoom: bool = True,
+            camera_source_id: str | None = None,
         ):
             assert camera_id == "cam1"
             assert camera_source_id is None
@@ -462,7 +551,9 @@ def test_camera_ptz_routes_forward_to_services(tmp_path: Path, monkeypatch: pyte
         assert presets.status_code == 200, presets.text
         assert presets.json()["presets"][0]["token"] == "home"
 
-        goto = client.post("/api/cameras/cameras/cam1/ptz/goto-preset", json={"preset_token": "home"})
+        goto = client.post(
+            "/api/cameras/cameras/cam1/ptz/goto-preset", json={"preset_token": "home"}
+        )
         assert goto.status_code == 200, goto.text
         assert goto.json()["ok"] is True
 
@@ -484,6 +575,8 @@ def test_camera_ptz_routes_forward_to_services(tmp_path: Path, monkeypatch: pyte
         assert move_res.status_code == 200, move_res.text
         assert move_res.json()["ok"] is True
 
-        stop_res = client.post("/api/cameras/cameras/cam1/ptz/stop", json={"pan_tilt": True, "zoom": False})
+        stop_res = client.post(
+            "/api/cameras/cameras/cam1/ptz/stop", json={"pan_tilt": True, "zoom": False}
+        )
         assert stop_res.status_code == 200, stop_res.text
         assert stop_res.json()["ok"] is True

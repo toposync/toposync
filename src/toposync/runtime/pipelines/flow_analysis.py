@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import json
-from collections import deque
 from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
 
 from .compiler import CompiledEdge, CompiledNode, CompiledPipeline
-from .images import MAIN_ARTIFACT_NAME, normalize_artifact_name
 from .operator_registry import OperatorDefinition, OperatorRegistry
 from .runtime import DropPolicy
 
@@ -41,9 +39,7 @@ def analyze_pipeline_flow(
     nodes_by_id = {node.node_id: node for node in pipeline.nodes}
     order_index = {node_id: idx for idx, node_id in enumerate(pipeline.topological_order)}
     incoming: dict[str, list[CompiledEdge]] = {}
-    outgoing: dict[str, list[CompiledEdge]] = {}
     for edge in pipeline.edges:
-        outgoing.setdefault(edge.source_node_id, []).append(edge)
         incoming.setdefault(edge.target_node_id, []).append(edge)
 
     def definition(node_id: str) -> OperatorDefinition | None:
@@ -51,40 +47,14 @@ def analyze_pipeline_flow(
         registered = registry.get(node.operator_id) if node is not None else None
         return registered.definition if registered is not None else None
 
-    def config(node_id: str) -> dict[str, Any]:
-        node = nodes_by_id.get(node_id)
-        return dict(node.normalized_config) if node is not None else {}
-
-    def walk(
-        start_node_id: str,
-        edge_map: dict[str, list[CompiledEdge]],
-        next_node_id: Callable[[CompiledEdge], str],
-    ) -> set[str]:
-        seen: set[str] = set()
-        q: deque[str] = deque([start_node_id])
-        while q:
-            _check_cancelled(cancel_check)
-            current = q.popleft()
-            for edge in edge_map.get(current, []):
-                nxt = str(next_node_id(edge))
-                if nxt in seen:
-                    continue
-                seen.add(nxt)
-                q.append(nxt)
-        return seen
-
-    def upstream_nodes(start_node_id: str) -> set[str]:
-        return walk(start_node_id, incoming, lambda edge: edge.source_node_id)
-
-    def downstream_nodes(start_node_id: str) -> set[str]:
-        return walk(start_node_id, outgoing, lambda edge: edge.target_node_id)
-
     def edge_payload(edge: CompiledEdge) -> dict[str, Any]:
         return {
+            "uid": edge.uid,
             "from": {"node": edge.source_node_id, "port": edge.source_port},
             "to": {"node": edge.target_node_id, "port": edge.target_port},
             "maxsize": int(edge.channel_maxsize),
             "drop_policy": edge.channel_drop_policy.value,
+            **edge.as_contract_dict(),
         }
 
     def capabilities(defn: OperatorDefinition | None) -> set[str]:
@@ -110,100 +80,59 @@ def analyze_pipeline_flow(
         payload = {"operator_id": node.operator_id, "config": cfg}
         return json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
 
-    def produced_artifacts(node_id: str) -> set[str]:
-        defn = definition(node_id)
-        if defn is None:
-            return set()
-        names = {normalize_artifact_name(item) for item in defn.produces_artifacts}
-        output_name = normalize_artifact_name(config(node_id).get("output_artifact_name"), default="")
-        if output_name and MAIN_ARTIFACT_NAME in names:
-            names.remove(MAIN_ARTIFACT_NAME)
-            names.add(output_name)
-        return {name for name in names if name}
+    def heavy_input_signature(node_id: str) -> tuple[str, ...]:
+        inputs: list[str] = []
+        for edge in incoming.get(node_id, []):
+            source = nodes_by_id.get(edge.source_node_id)
+            payload = {
+                "source_signature": source.signature if source is not None else "",
+                "source_port": edge.source_port,
+                "target_port": edge.target_port,
+                **edge.as_contract_dict(),
+            }
+            inputs.append(json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")))
+        return tuple(sorted(inputs))
 
-    def required_artifacts(node_id: str) -> set[str]:
-        defn = definition(node_id)
-        if defn is None:
-            return set()
-        names = {normalize_artifact_name(item) for item in defn.requires_artifacts}
-        input_name = normalize_artifact_name(config(node_id).get("input_artifact_name"), default="")
-        if input_name and MAIN_ARTIFACT_NAME in names:
-            names.discard(MAIN_ARTIFACT_NAME)
-            names.add(input_name)
-        return {name for name in names if name}
+    def is_continuous_video_edge(edge: CompiledEdge) -> bool:
+        return edge.traffic_continuous and edge.traffic_modality.startswith("video")
 
-    def branch_consumes_artifact(start_node_id: str) -> bool:
-        for node_id in {start_node_id, *downstream_nodes(start_node_id)}:
-            defn = definition(node_id)
-            node = nodes_by_id.get(node_id)
-            if node is None or defn is None:
-                continue
-            if required_artifacts(node_id):
-                return True
-            if defn.state_kind == "external_side_effect" and node.operator_id != "core.sink":
-                return True
-        return False
+    def declares_lossless_delivery(edge: CompiledEdge) -> bool:
+        loss_tolerance = edge.traffic_loss_tolerance.strip().lower().replace("-", "_")
+        return loss_tolerance in {"lossless", "no_loss", "none"}
 
-    def is_continuous_video_source(node_id: str) -> bool:
-        defn = definition(node_id)
-        if defn is None:
-            return False
-        if any(str(item).startswith("video") for item in defn.output_modalities):
-            return True
-        traffic = defn.default_output_policy.get("traffic")
-        if not isinstance(traffic, dict):
-            return False
-        modality = str(traffic.get("modality") or "").strip()
-        return modality.startswith("video") and bool(traffic.get("continuous", False))
-
-    def is_sparse_target(node_id: str) -> bool:
-        node = nodes_by_id.get(node_id)
-        defn = definition(node_id)
-        if node is None or defn is None or node.operator_id == "core.sink":
-            return False
-        caps = capabilities(defn)
-        if caps & {"sink", "origin_only"}:
-            return False
-        return (
-            bool(caps & {"event", "filter", "gate", "gate_control", "rate_control"})
-            or defn.state_kind == "external_side_effect"
-        )
+    def requires_blocking_delivery(edge: CompiledEdge) -> bool:
+        return declares_lossless_delivery(edge) or edge.backpressure_mode == "block"
 
     alerts: list[PipelineAlert] = []
 
     heavy_nodes = [node for node in pipeline.nodes if is_heavy_ai(node.node_id)]
-    heavy_groups: dict[str, list[CompiledNode]] = {}
+    heavy_groups: dict[tuple[str, tuple[str, ...]], list[CompiledNode]] = {}
     for node in heavy_nodes:
-        heavy_groups.setdefault(heavy_signature(node), []).append(node)
-    upstream_by_node = {node.node_id: upstream_nodes(node.node_id) for node in heavy_nodes}
-    for group in heavy_groups.values():
+        input_signature = heavy_input_signature(node.node_id)
+        if not input_signature:
+            continue
+        group_key = (heavy_signature(node), input_signature)
+        heavy_groups.setdefault(group_key, []).append(node)
+    for (signature, input_signature), group in heavy_groups.items():
         _check_cancelled(cancel_check)
         if len(group) < 2:
             continue
         ordered = sorted(group, key=lambda item: order_index.get(item.node_id, 0))
-        for idx, node in enumerate(ordered[1:], start=1):
-            related = [
-                previous
-                for previous in ordered[:idx]
-                if upstream_by_node[previous.node_id] & upstream_by_node[node.node_id]
-                and previous.node_id not in upstream_by_node[node.node_id]
-                and node.node_id not in upstream_by_node[previous.node_id]
-            ]
-            if not related:
-                continue
-            alerts.append(
-                PipelineAlert(
-                    code="duplicate_heavy_ai",
-                    node_id=node.node_id,
-                    operator_id=node.operator_id,
-                    message="This graph runs the same heavy AI step more than once on branches with a shared upstream source.",
-                    suggestion="Run the detector/model once with combined categories and route downstream branches after it.",
-                    details={
-                        "duplicate_node_ids": sorted({node.node_id, *[item.node_id for item in related]}),
-                        "signature": heavy_signature(node),
-                    },
-                )
+        representative = ordered[0]
+        alerts.append(
+            PipelineAlert(
+                code="duplicate_heavy_ai",
+                node_id=representative.node_id,
+                operator_id=representative.operator_id,
+                message="This graph runs the same heavy AI step more than once for the same immediate input.",
+                suggestion="Run the detector/model once with combined categories and route downstream branches after it.",
+                details={
+                    "duplicate_node_ids": sorted(node.node_id for node in ordered),
+                    "signature": signature,
+                    "input_signature": list(input_signature),
+                },
             )
+        )
 
     for edge in pipeline.edges:
         _check_cancelled(cancel_check)
@@ -211,7 +140,10 @@ def analyze_pipeline_flow(
         if target is None:
             continue
         if is_heavy_ai(target.node_id) and (
-            (int(edge.channel_maxsize) > 1 and edge.channel_drop_policy != DropPolicy.KEYED_LATEST_ONLY)
+            (
+                int(edge.channel_maxsize) > 1
+                and edge.channel_drop_policy != DropPolicy.KEYED_LATEST_ONLY
+            )
             or edge.channel_drop_policy
             not in {DropPolicy.LATEST_ONLY, DropPolicy.DROP_OLDEST, DropPolicy.KEYED_LATEST_ONLY}
         ):
@@ -223,7 +155,10 @@ def analyze_pipeline_flow(
                     message="A heavy AI step is fed by an edge that can build backlog before expensive compute.",
                     suggestion="Use maxsize=1 with latest_only/drop_oldest, keyed_latest_only after split streams, or place a flow limiter before this AI step.",
                     edge=edge_payload(edge),
-                    details={"maxsize": int(edge.channel_maxsize), "drop_policy": edge.channel_drop_policy.value},
+                    details={
+                        "maxsize": int(edge.channel_maxsize),
+                        "drop_policy": edge.channel_drop_policy.value,
+                    },
                 )
             )
 
@@ -234,65 +169,44 @@ def analyze_pipeline_flow(
             and target_defn.state_kind == "external_side_effect"
             and target_defn.pressure_behavior == "block"
             and edge.channel_drop_policy != DropPolicy.BLOCK
+            and requires_blocking_delivery(edge)
         ):
             alerts.append(
                 PipelineAlert(
                     code="side_effect_lossy_edge",
                     node_id=target.node_id,
                     operator_id=target.operator_id,
-                    message="A blocking side-effect step is fed by a lossy edge, so notifications/storage/actions may be skipped under pressure.",
-                    suggestion="Use drop_policy='block' before this side-effect, or insert an explicit limiter/buffer upstream.",
+                    message="This edge declares blocking or lossless delivery but uses a lossy queue before a side-effect step.",
+                    suggestion="Use drop_policy='block', or explicitly declare that update loss is acceptable on this edge.",
                     edge=edge_payload(edge),
-                    details={"drop_policy": edge.channel_drop_policy.value},
+                    details={
+                        "drop_policy": edge.channel_drop_policy.value,
+                        "loss_tolerance": edge.traffic_loss_tolerance,
+                        "backpressure_mode": edge.backpressure_mode,
+                    },
                 )
             )
 
-        if is_continuous_video_source(edge.source_node_id) and is_sparse_target(edge.target_node_id):
-            alerts.append(
-                PipelineAlert(
-                    code="continuous_stream_to_sparse_operator",
-                    node_id=target.node_id,
-                    operator_id=target.operator_id,
-                    message="A continuous video stream feeds an event-like or sparse operator directly.",
-                    suggestion="Add detection, tracking, routing, or explicit rate control before converting the stream into sparse events.",
-                    edge=edge_payload(edge),
-                    details={"source_node_id": edge.source_node_id},
-                )
-            )
-
-        if is_continuous_video_source(edge.source_node_id) and edge.channel_drop_policy == DropPolicy.BLOCK:
+        if (
+            is_continuous_video_edge(edge)
+            and edge.channel_drop_policy == DropPolicy.BLOCK
+            and not requires_blocking_delivery(edge)
+            and edge.backpressure_mode != "reduce_source_rate"
+        ):
             alerts.append(
                 PipelineAlert(
                     code="edge_policy_mismatch",
                     message="A continuous video edge uses block policy, which can stall realtime capture or upstream AI under backpressure.",
-                    suggestion="Use latest_only/drop_oldest for realtime video unless this edge must be lossless.",
+                    suggestion="Use latest_only/drop_oldest, reduce the source rate, or declare this edge lossless.",
                     edge=edge_payload(edge),
-                    details={"drop_policy": edge.channel_drop_policy.value},
+                    details={
+                        "drop_policy": edge.channel_drop_policy.value,
+                        "modality": edge.traffic_modality,
+                        "continuous": edge.traffic_continuous,
+                        "loss_tolerance": edge.traffic_loss_tolerance,
+                        "backpressure_mode": edge.backpressure_mode,
+                    },
                 )
             )
-
-    for node in pipeline.nodes:
-        _check_cancelled(cancel_check)
-        produced = produced_artifacts(node.node_id)
-        if not produced:
-            continue
-        branch_edges = [
-            edge for edge in outgoing.get(node.node_id, []) if branch_consumes_artifact(edge.target_node_id)
-        ]
-        if len(branch_edges) < 2:
-            continue
-        alerts.append(
-            PipelineAlert(
-                code="artifact_fanout",
-                node_id=node.node_id,
-                operator_id=node.operator_id,
-                message="Artifacts produced by this step fan out into multiple downstream branches.",
-                suggestion="Prefer storing once, passing artifact references, or routing before creating heavy derived artifacts.",
-                details={
-                    "produced_artifacts": sorted(produced),
-                    "branch_targets": sorted(edge.target_node_id for edge in branch_edges),
-                },
-            )
-        )
 
     return alerts

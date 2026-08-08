@@ -18,6 +18,18 @@ class ThresholdConfig(BaseModel):
     threshold: float = Field(default=0.25, ge=0.0, le=1.0)
 
 
+def _graph_v2(*, uid: str, nodes: list[dict], edges: list[dict]) -> dict:
+    return {
+        "schema_version": 2,
+        "uid": uid,
+        "nodes": [{"uid": f"{uid}_node_{node['id']}", **node} for node in nodes],
+        "edges": [
+            {"uid": edge.get("uid", f"{uid}_edge_{index:03d}"), **edge}
+            for index, edge in enumerate(edges)
+        ],
+    }
+
+
 def test_operator_registry_validates_config_defaults() -> None:
     registry = OperatorRegistry()
     registry.register_operator(
@@ -59,26 +71,26 @@ def test_pipeline_compiler_detects_reusable_signatures_across_pipelines() -> Non
     )
     compiler = PipelineGraphCompiler(registry)
 
-    graph_one = {
-        "schema_version": 1,
-        "nodes": [
+    graph_one = _graph_v2(
+        uid="reusable_one",
+        nodes=[
             {"id": "source_a", "operator": "test.source", "config": {"threshold": 0.4}},
             {"id": "filter_a", "operator": "test.filter", "config": {"threshold": 0.8}},
         ],
-        "edges": [
+        edges=[
             {"from": {"node": "source_a", "port": "out"}, "to": {"node": "filter_a", "port": "in"}}
         ],
-    }
-    graph_two = {
-        "schema_version": 1,
-        "nodes": [
+    )
+    graph_two = _graph_v2(
+        uid="reusable_two",
+        nodes=[
             {"id": "source_b", "operator": "test.source", "config": {"threshold": 0.4}},
             {"id": "filter_b", "operator": "test.filter", "config": {"threshold": 0.8}},
         ],
-        "edges": [
+        edges=[
             {"from": {"node": "source_b", "port": "out"}, "to": {"node": "filter_b", "port": "in"}}
         ],
-    }
+    )
     pipelines = [
         Pipeline(name="pipeline_a", graph=graph_one),
         Pipeline(name="pipeline_b", graph=graph_two),
@@ -112,7 +124,9 @@ def test_pipeline_compiler_cancel_check_interrupts_compile_many() -> None:
     for index in range(64):
         node_id = f"filter_{index:02d}"
         nodes.append({"id": node_id, "operator": "test.filter", "config": {}})
-        edges.append({"from": {"node": previous, "port": "out"}, "to": {"node": node_id, "port": "in"}})
+        edges.append(
+            {"from": {"node": previous, "port": "out"}, "to": {"node": node_id, "port": "in"}}
+        )
         previous = node_id
 
     cancel_checks = 0
@@ -125,7 +139,12 @@ def test_pipeline_compiler_cancel_check_interrupts_compile_many() -> None:
 
     with pytest.raises(RuntimeError, match="cancelled"):
         PipelineGraphCompiler(registry).compile_many(
-            [Pipeline(name="cancel_compile", graph={"schema_version": 1, "nodes": nodes, "edges": edges})],
+            [
+                Pipeline(
+                    name="cancel_compile",
+                    graph=_graph_v2(uid="cancel_compile", nodes=nodes, edges=edges),
+                )
+            ],
             cancel_check=cancel_check,
         )
     assert cancel_checks >= 8
@@ -150,16 +169,16 @@ def test_pipeline_recommendations_cancel_check_interrupts_analysis() -> None:
     )
     pipeline = Pipeline(
         name="cancel_recommendations",
-        graph={
-            "schema_version": 1,
-            "nodes": [
+        graph=_graph_v2(
+            uid="cancel_recommendations",
+            nodes=[
                 {"id": "source", "operator": "test.source", "config": {}},
                 {"id": "filter", "operator": "test.filter", "config": {}},
             ],
-            "edges": [
+            edges=[
                 {"from": {"node": "source", "port": "out"}, "to": {"node": "filter", "port": "in"}}
             ],
-        },
+        ),
     )
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
     cancel_checks = 0
@@ -186,25 +205,25 @@ def test_pipeline_compiler_rejects_unknown_operator_and_cycle() -> None:
     )
     compiler = PipelineGraphCompiler(registry)
 
-    unknown_operator_graph = {
-        "schema_version": 1,
-        "nodes": [{"id": "a", "operator": "test.missing", "config": {}}],
-        "edges": [],
-    }
+    unknown_operator_graph = _graph_v2(
+        uid="unknown_operator",
+        nodes=[{"id": "a", "operator": "test.missing", "config": {}}],
+        edges=[],
+    )
     with pytest.raises(GraphCompileError):
         compiler.compile_pipeline(Pipeline(name="missing_op", graph=unknown_operator_graph))
 
-    cycle_graph = {
-        "schema_version": 1,
-        "nodes": [
+    cycle_graph = _graph_v2(
+        uid="cycle",
+        nodes=[
             {"id": "a", "operator": "test.node", "config": {}},
             {"id": "b", "operator": "test.node", "config": {}},
         ],
-        "edges": [
+        edges=[
             {"from": {"node": "a", "port": "out"}, "to": {"node": "b", "port": "in"}},
             {"from": {"node": "b", "port": "out"}, "to": {"node": "a", "port": "in"}},
         ],
-    }
+    )
     with pytest.raises(GraphCompileError):
         compiler.compile_pipeline(Pipeline(name="cyclic_graph", graph=cycle_graph))
 
@@ -343,38 +362,81 @@ def test_operator_registry_preserves_ui_metadata() -> None:
 
 def test_operator_diagnostics_are_collected_as_pipeline_alerts() -> None:
     registry = OperatorRegistry()
+    captured_context: dict = {}
+
     registry.register_operator(
         operator_id="test.source",
         inputs=[],
         outputs=[{"name": "out"}],
         defaults={},
         capabilities=["source"],
-        diagnostics_factory=lambda config, context: [
+    )
+
+    def collect_diagnostics(config: dict, context: dict) -> list[dict]:
+        captured_context.update(context)
+        return [
             {
                 "severity": "error",
-                "code": "test_source_not_ready",
-                "message": f"Source is not ready in {context['scope']}.",
-                "suggestion": "Fix the source configuration.",
+                "code": "test_diagnostic_not_ready",
+                "message": f"Diagnostic operator is not ready in {context['scope']}.",
+                "suggestion": "Fix the diagnostic operator configuration.",
             }
-        ],
+        ]
+
+    registry.register_operator(
+        operator_id="test.diagnostic",
+        inputs=[{"name": "in", "required": True}],
+        outputs=[],
+        defaults={},
+        share_strategy="never",
+        diagnostics_factory=collect_diagnostics,
     )
 
     compiled = PipelineGraphCompiler(registry).compile_pipeline(
         Pipeline(
             name="diagnostics",
-            graph={
-                "schema_version": 1,
-                "nodes": [{"id": "source", "operator": "test.source", "config": {}}],
-                "edges": [],
-            },
+            graph=_graph_v2(
+                uid="diagnostics",
+                nodes=[
+                    {"id": "source", "operator": "test.source", "config": {}},
+                    {"id": "diagnostic", "operator": "test.diagnostic", "config": {}},
+                ],
+                edges=[
+                    {
+                        "uid": "edge_source_diagnostic",
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "diagnostic", "port": "in"},
+                        "traffic": {
+                            "modality": "data.event",
+                            "semantic_class": "event",
+                            "continuous": False,
+                            "loss_tolerance": "lossless",
+                        },
+                    }
+                ],
+            ),
         )
     )
-    alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry, context={"scope": "test"})
+    alerts = analyze_compiled_pipeline(
+        pipeline=compiled, registry=registry, context={"scope": "test"}
+    )
 
     assert any(
         alert.severity == "error"
-        and alert.code == "test_source_not_ready"
-        and alert.node_id == "source"
-        and alert.operator_id == "test.source"
+        and alert.code == "test_diagnostic_not_ready"
+        and alert.node_id == "diagnostic"
+        and alert.operator_id == "test.diagnostic"
         for alert in alerts
     )
+    assert captured_context["node_id"] == "diagnostic"
+    assert captured_context["operator_id"] == "test.diagnostic"
+    [incoming_edge] = captured_context["incoming_edges"]
+    assert incoming_edge["uid"] == "edge_source_diagnostic"
+    assert incoming_edge["from"] == {"node": "source", "port": "out"}
+    assert incoming_edge["to"] == {"node": "diagnostic", "port": "in"}
+    assert incoming_edge["traffic"] == {
+        "modality": "data.event",
+        "semantic_class": "event",
+        "continuous": False,
+        "loss_tolerance": "lossless",
+    }

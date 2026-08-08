@@ -53,7 +53,9 @@ def suggested_streaming_wizard_pipeline_name(
         skip_generic=True,
     )
     camera_component = _pick_name_component(camera_id, camera_name)
-    source_component = _pick_name_component(camera_source_id, camera_source_name, fallback="", skip_generic=True)
+    source_component = _pick_name_component(
+        camera_source_id, camera_source_name, fallback="", skip_generic=True
+    )
     preset_component = _PRESET_NAME_COMPONENTS.get(str(preset_id), "stream")
 
     components = [transmission_component, camera_component, source_component, preset_component]
@@ -77,9 +79,15 @@ def build_streaming_wizard_graph(
 
     options = optional_parameters if isinstance(optional_parameters, dict) else {}
 
-    source_backend = _pick_choice(options.get("source_backend"), allowed={"auto", "opencv", "ffmpeg"}, default="auto")
-    resize_mode = _pick_choice(options.get("resize_mode"), allowed={"contain", "none"}, default="contain")
-    bypass_mode = _pick_choice(options.get("bypass_mode"), allowed={"auto", "force_on", "force_off"}, default="auto")
+    source_backend = _pick_choice(
+        options.get("source_backend"), allowed={"auto", "opencv", "ffmpeg"}, default="auto"
+    )
+    resize_mode = _pick_choice(
+        options.get("resize_mode"), allowed={"contain", "none"}, default="contain"
+    )
+    bypass_mode = _pick_choice(
+        options.get("bypass_mode"), allowed={"auto", "force_on", "force_off"}, default="auto"
+    )
     stream_behavior = _pick_choice(
         options.get("stream_behavior"),
         allowed={"continuous", "event_gated"},
@@ -91,7 +99,9 @@ def build_streaming_wizard_graph(
     demand_gate_fail_open = _coerce_bool(options.get("demand_gate_fail_open"), default=True)
     demand_gate_output_id = _safe_text(options.get("demand_gate_output_id"))
     demand_gate_quality_profile_id = _safe_text(options.get("demand_gate_quality_profile_id"))
-    demand_gate_scope_default = "output" if demand_gate_output_id or demand_gate_quality_profile_id else "transmission"
+    demand_gate_scope_default = (
+        "output" if demand_gate_output_id or demand_gate_quality_profile_id else "transmission"
+    )
     demand_gate_scope = _pick_choice(
         options.get("demand_gate_scope"),
         allowed={"transmission", "output"},
@@ -114,9 +124,15 @@ def build_streaming_wizard_graph(
     use_fps_reducer = force_fps_reducer or bool(use_fps_reducer_flag) or fps_limit > 0.0
     target_fps = fps_limit if fps_limit > 0.0 else default_motion_fps
 
-    motion_sensitivity = _coerce_float(options.get("motion_sensitivity"), default=0.010, min_value=0.0001, max_value=1.0)
-    motion_hold_seconds = _coerce_float(options.get("motion_hold_seconds"), default=6.0, min_value=0.0, max_value=120.0)
-    yolo_confidence = _coerce_float(options.get("yolo_confidence_threshold"), default=0.55, min_value=0.01, max_value=1.0)
+    motion_sensitivity = _coerce_float(
+        options.get("motion_sensitivity"), default=0.010, min_value=0.0001, max_value=1.0
+    )
+    motion_hold_seconds = _coerce_float(
+        options.get("motion_hold_seconds"), default=6.0, min_value=0.0, max_value=120.0
+    )
+    yolo_confidence = _coerce_float(
+        options.get("yolo_confidence_threshold"), default=0.55, min_value=0.01, max_value=1.0
+    )
     tracking_detection_confidence = _coerce_float(
         options.get("yolo_confidence_threshold"),
         default=0.25,
@@ -279,7 +295,13 @@ def build_streaming_wizard_graph(
             writer_priority=writer_priority,
             bypass_mode=bypass_mode,
         )
-        _append_edge(edges, source_node_id=current_node_id, target_node_id="stream", maxsize=8)
+        _append_edge(
+            edges,
+            source_node_id=current_node_id,
+            target_node_id="stream",
+            maxsize=8,
+            continuous=False,
+        )
 
     return build_pipeline_graph_v2(
         graph_uid=f"streaming_{transmission_id}_{camera_id}_{preset_id}",
@@ -326,15 +348,21 @@ def _append_edge(
     source_node_id: str,
     target_node_id: str,
     maxsize: int,
+    continuous: bool | None = None,
 ) -> None:
-    edges.append(
-        {
-            "from": {"node": source_node_id, "port": "out"},
-            "to": {"node": target_node_id, "port": "in"},
-            "maxsize": int(max(1, maxsize)),
-            "drop_policy": "drop_oldest",
+    edge: dict[str, Any] = {
+        "from": {"node": source_node_id, "port": "out"},
+        "to": {"node": target_node_id, "port": "in"},
+        "maxsize": int(max(1, maxsize)),
+        "drop_policy": "drop_oldest",
+    }
+    if continuous is not None:
+        edge["traffic"] = {
+            "modality": "video.frame",
+            "semantic_class": "frame" if continuous else "event",
+            "continuous": continuous,
         }
-    )
+    edges.append(edge)
 
 
 def _append_gate_edge(

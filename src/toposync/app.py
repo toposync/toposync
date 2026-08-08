@@ -54,6 +54,7 @@ from toposync.runtime.services import ServiceRegistry
 from toposync.runtime.processing_diagnostics import collect_processing_server_diagnostics
 from toposync.runtime.pipelines import (
     ArtifactMemoryCounter,
+    CompiledPipeline,
     GraphCompileError,
     OperatorDefinition,
     OperatorRegistry,
@@ -325,9 +326,7 @@ async def _run_cancelable_request_work(
         cancel_event.set()
         if limiter_acquired and limiter is not None:
             if work_future is not None and not work_future.done():
-                work_future.add_done_callback(
-                    partial(_release_limiter_after_request_work, limiter)
-                )
+                work_future.add_done_callback(partial(_release_limiter_after_request_work, limiter))
             else:
                 limiter.release()
         if not disconnect_task.done():
@@ -727,6 +726,37 @@ class PipelineCompilePythonResponse(BaseModel):
     pipeline: dict[str, Any]
     shared_signatures: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     alerts: list[PipelineAlert] = Field(default_factory=list)
+
+
+def _serialize_compiled_pipeline(pipeline: CompiledPipeline) -> dict[str, Any]:
+    return {
+        "name": pipeline.name,
+        "schema_version": pipeline.schema_version,
+        "topological_order": list(pipeline.topological_order),
+        "nodes": [
+            {
+                "id": node.node_id,
+                "operator_id": node.operator_id,
+                "normalized_config": node.normalized_config,
+                "signature": node.signature,
+                "shareable": node.shareable,
+            }
+            for node in pipeline.nodes
+        ],
+        "edges": [
+            {
+                "source_node_id": edge.source_node_id,
+                "source_port": edge.source_port,
+                "target_node_id": edge.target_node_id,
+                "target_port": edge.target_port,
+                # Keep the flat channel fields for existing API consumers.
+                "channel_maxsize": edge.channel_maxsize,
+                "channel_drop_policy": edge.channel_drop_policy.value,
+                **edge.as_contract_dict(),
+            }
+            for edge in pipeline.edges
+        ],
+    }
 
 
 async def _build_pipeline_diagnostics_context(config_store: ConfigStore) -> dict[str, Any]:
@@ -1817,9 +1847,7 @@ def create_app() -> FastAPI:
         )
         base_path = _public_base_path_for_request(request).rstrip("/")
         complete_path = (
-            f"{base_path}/api/auth/embed/complete"
-            if base_path
-            else "/api/auth/embed/complete"
+            f"{base_path}/api/auth/embed/complete" if base_path else "/api/auth/embed/complete"
         )
         return AuthEmbedStartResponse(
             url=f"{complete_path}?token={token}",
@@ -1867,9 +1895,7 @@ def create_app() -> FastAPI:
         ):
             raise HTTPException(status_code=403, detail="Only owners can pair owner accounts")
         try:
-            code, expires_at = auth.start_pairing(
-                user_id=target.id, device_label=body.device_label
-            )
+            code, expires_at = auth.start_pairing(user_id=target.id, device_label=body.device_label)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return AuthPairStartResponse(code=code, expires_at=expires_at)
@@ -3302,32 +3328,7 @@ def create_app() -> FastAPI:
             if not compiled.pipelines:
                 return PipelineCompileResponse(pipeline={}, shared_signatures={})
             pipeline = compiled.pipelines[0]
-            compiled_dict = {
-                "name": pipeline.name,
-                "schema_version": pipeline.schema_version,
-                "topological_order": list(pipeline.topological_order),
-                "nodes": [
-                    {
-                        "id": node.node_id,
-                        "operator_id": node.operator_id,
-                        "normalized_config": node.normalized_config,
-                        "signature": node.signature,
-                        "shareable": node.shareable,
-                    }
-                    for node in pipeline.nodes
-                ],
-                "edges": [
-                    {
-                        "source_node_id": edge.source_node_id,
-                        "source_port": edge.source_port,
-                        "target_node_id": edge.target_node_id,
-                        "target_port": edge.target_port,
-                        "channel_maxsize": edge.channel_maxsize,
-                        "channel_drop_policy": edge.channel_drop_policy.value,
-                    }
-                    for edge in pipeline.edges
-                ],
-            }
+            compiled_dict = _serialize_compiled_pipeline(pipeline)
             shared_signatures = {
                 signature: [
                     {
@@ -3401,37 +3402,10 @@ def create_app() -> FastAPI:
 
             check_cancelled()
             if not compiled.pipelines:
-                return PipelineCompilePythonResponse(
-                    graph=graph, pipeline={}, shared_signatures={}
-                )
+                return PipelineCompilePythonResponse(graph=graph, pipeline={}, shared_signatures={})
 
             compiled_pipeline = compiled.pipelines[0]
-            compiled_dict = {
-                "name": compiled_pipeline.name,
-                "schema_version": compiled_pipeline.schema_version,
-                "topological_order": list(compiled_pipeline.topological_order),
-                "nodes": [
-                    {
-                        "id": node.node_id,
-                        "operator_id": node.operator_id,
-                        "normalized_config": node.normalized_config,
-                        "signature": node.signature,
-                        "shareable": node.shareable,
-                    }
-                    for node in compiled_pipeline.nodes
-                ],
-                "edges": [
-                    {
-                        "source_node_id": edge.source_node_id,
-                        "source_port": edge.source_port,
-                        "target_node_id": edge.target_node_id,
-                        "target_port": edge.target_port,
-                        "channel_maxsize": edge.channel_maxsize,
-                        "channel_drop_policy": edge.channel_drop_policy.value,
-                    }
-                    for edge in compiled_pipeline.edges
-                ],
-            }
+            compiled_dict = _serialize_compiled_pipeline(compiled_pipeline)
             shared_signatures = {
                 signature: [
                     {
@@ -3478,7 +3452,9 @@ def create_app() -> FastAPI:
         async def build_response(check_cancelled: Callable[[], None]) -> Response:
             check_cancelled()
             try:
-                preview_pipeline = prepare_preview_pipeline(pipeline=body.pipeline, registry=registry)
+                preview_pipeline = prepare_preview_pipeline(
+                    pipeline=body.pipeline, registry=registry
+                )
             except PipelinePreviewError as exc:
                 fallback_response = _pipeline_preview_fallback_response(
                     request,
@@ -4072,7 +4048,9 @@ def create_app() -> FastAPI:
         )
         return PipelineStorageResponse.model_validate(summary)
 
-    @app.post("/api/pipelines/{pipeline_name}/storage/cleanup", response_model=PipelineStorageResponse)
+    @app.post(
+        "/api/pipelines/{pipeline_name}/storage/cleanup", response_model=PipelineStorageResponse
+    )
     async def cleanup_pipeline_storage(
         request: Request,
         pipeline_name: str,

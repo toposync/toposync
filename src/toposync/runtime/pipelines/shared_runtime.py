@@ -30,6 +30,32 @@ class MergedPipelinePlan:
     )
 
 
+def _edge_policy_key(edge: CompiledEdge) -> tuple[Any, ...]:
+    return (
+        int(edge.channel_maxsize),
+        str(edge.channel_drop_policy.value),
+        edge.traffic_modality,
+        edge.traffic_semantic_class,
+        edge.traffic_continuous,
+        edge.traffic_loss_tolerance,
+        edge.queue_max_artifact_bytes,
+        edge.queue_max_age_ms,
+        edge.queue_key_policy,
+        edge.queue_key_path,
+        edge.backpressure_mode,
+        edge.backpressure_warn_at_utilization,
+        edge.backpressure_critical_at_utilization,
+        edge.backpressure_propagate_pressure,
+        edge.preserve_open,
+        edge.preserve_close,
+        edge.compact_updates,
+        edge.debug_sample_headers,
+        edge.debug_retain_last,
+        edge.debug_retain_artifact_refs,
+        edge.debug_retain_artifact_data,
+    )
+
+
 def build_merged_pipeline_plan(
     report: CompilationReport,
     *,
@@ -61,8 +87,7 @@ def build_merged_pipeline_plan(
                                 (pipeline.name, edge.source_node_id),
                                 f"unmerged:{pipeline.name}:{edge.source_node_id}",
                             ),
-                            int(edge.channel_maxsize),
-                            str(edge.channel_drop_policy.value),
+                            *_edge_policy_key(edge),
                         )
                         for edge in incoming
                     ),
@@ -94,8 +119,7 @@ def build_merged_pipeline_plan(
             existing = edge_by_key.get(edge_key)
             if existing is None:
                 edge_uid = (
-                    f"merged:{source_merged}.{edge.source_port}->"
-                    f"{target_merged}.{edge.target_port}"
+                    f"merged:{source_merged}.{edge.source_port}->{target_merged}.{edge.target_port}"
                 )
                 edge_by_key[edge_key] = CompiledEdge(
                     uid=edge_uid,
@@ -105,12 +129,30 @@ def build_merged_pipeline_plan(
                     target_port=edge.target_port,
                     channel_maxsize=edge.channel_maxsize,
                     channel_drop_policy=edge.channel_drop_policy,
+                    traffic_modality=edge.traffic_modality,
+                    traffic_semantic_class=edge.traffic_semantic_class,
+                    traffic_continuous=edge.traffic_continuous,
+                    traffic_loss_tolerance=edge.traffic_loss_tolerance,
+                    queue_max_artifact_bytes=edge.queue_max_artifact_bytes,
+                    queue_max_age_ms=edge.queue_max_age_ms,
+                    queue_key_policy=edge.queue_key_policy,
+                    queue_key_path=edge.queue_key_path,
+                    backpressure_mode=edge.backpressure_mode,
+                    backpressure_warn_at_utilization=edge.backpressure_warn_at_utilization,
+                    backpressure_critical_at_utilization=(
+                        edge.backpressure_critical_at_utilization
+                    ),
+                    backpressure_propagate_pressure=edge.backpressure_propagate_pressure,
+                    preserve_open=edge.preserve_open,
+                    preserve_close=edge.preserve_close,
+                    compact_updates=edge.compact_updates,
+                    debug_sample_headers=edge.debug_sample_headers,
+                    debug_retain_last=edge.debug_retain_last,
+                    debug_retain_artifact_refs=edge.debug_retain_artifact_refs,
+                    debug_retain_artifact_data=edge.debug_retain_artifact_data,
                 )
                 continue
-            if (
-                existing.channel_maxsize != edge.channel_maxsize
-                or existing.channel_drop_policy != edge.channel_drop_policy
-            ):
+            if _edge_policy_key(existing) != _edge_policy_key(edge):
                 raise SharedRuntimeBuildError(
                     "Conflicting channel settings for merged edge "
                     f"{source_merged}.{edge.source_port}->{target_merged}.{edge.target_port}",
@@ -193,9 +235,7 @@ class PipelineBundleRuntime:
         info["pipelines"] = [pipeline.name for pipeline in self.report.pipelines]
         info["node_occurrences"] = _occurrences_payload(self.plan.merged_node_occurrences)
         info["shared_nodes"] = {
-            node_id: items
-            for node_id, items in info["node_occurrences"].items()
-            if len(items) > 1
+            node_id: items for node_id, items in info["node_occurrences"].items() if len(items) > 1
         }
         return info
 
@@ -213,7 +253,7 @@ class PipelineBundleRuntime:
 
 
 def _occurrences_payload(
-    occurrences_by_node: dict[str, tuple[MergedNodeOccurrence, ...]]
+    occurrences_by_node: dict[str, tuple[MergedNodeOccurrence, ...]],
 ) -> dict[str, list[dict[str, str]]]:
     return {
         node_id: [

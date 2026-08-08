@@ -106,9 +106,7 @@ PIPELINE = test.source(_id="source") | test.split(_id="split") | test.heavy(_id=
     graph = compile_python_source_to_graph(
         python_source=source, pipeline_name="split_policy", registry=registry
     )
-    split_edge = next(
-        edge for edge in graph["edges"] if edge["from"]["node"] == "split"
-    )
+    split_edge = next(edge for edge in graph["edges"] if edge["from"]["node"] == "split")
     assert split_edge["queue"]["max_items"] == 64
     assert split_edge["queue"]["drop_policy"] == "keyed_latest_only"
 
@@ -153,6 +151,38 @@ def test_compile_python_endpoint_returns_graph(
         assert "graph" in body
         assert body["graph"]["schema_version"] == 2
         assert {node["id"] for node in body["graph"]["nodes"]} == {"source", "notify"}
+        graph_edge = body["graph"]["edges"][0]
+        compiled_edge = body["pipeline"]["edges"][0]
+        for key, value in graph_edge["traffic"].items():
+            assert compiled_edge["traffic"][key] == value
+        for key, value in graph_edge["queue"].items():
+            assert compiled_edge["queue"][key] == value
+        for key, value in graph_edge.get("backpressure", {}).items():
+            assert compiled_edge["backpressure"][key] == value
+        for key, value in graph_edge.get("lifecycle", {}).items():
+            assert compiled_edge["lifecycle"][key] == value
+        assert compiled_edge["traffic"]["loss_tolerance"] == "lossy_updates_only"
+        assert compiled_edge["queue"]["key_policy"] == "none"
+        assert compiled_edge["queue"]["key_path"] == ""
+        assert compiled_edge["queue"]["max_artifact_bytes"] is None
+        assert compiled_edge["queue"]["max_age_ms"] is None
+        assert compiled_edge["backpressure"] == {
+            "mode": "pause_upstream",
+            "warn_at_utilization": 0.7,
+            "critical_at_utilization": 0.9,
+            "propagate_pressure": True,
+        }
+        assert compiled_edge["lifecycle"] == {
+            "preserve_open": True,
+            "preserve_close": True,
+            "compact_updates": True,
+        }
+        assert compiled_edge["debug"] == {
+            "sample_headers": True,
+            "retain_last": 10,
+            "retain_artifact_refs": True,
+            "retain_artifact_data": False,
+        }
 
 
 def test_python_pipeline_save_compiles_source(

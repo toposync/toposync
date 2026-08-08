@@ -54,6 +54,7 @@ from toposync.runtime.services import ServiceRegistry
 from toposync.runtime.processing_diagnostics import collect_processing_server_diagnostics
 from toposync.runtime.pipelines import (
     ArtifactMemoryCounter,
+    CompiledPipeline,
     GraphCompileError,
     OperatorDefinition,
     OperatorRegistry,
@@ -725,6 +726,37 @@ class PipelineCompilePythonResponse(BaseModel):
     pipeline: dict[str, Any]
     shared_signatures: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     alerts: list[PipelineAlert] = Field(default_factory=list)
+
+
+def _serialize_compiled_pipeline(pipeline: CompiledPipeline) -> dict[str, Any]:
+    return {
+        "name": pipeline.name,
+        "schema_version": pipeline.schema_version,
+        "topological_order": list(pipeline.topological_order),
+        "nodes": [
+            {
+                "id": node.node_id,
+                "operator_id": node.operator_id,
+                "normalized_config": node.normalized_config,
+                "signature": node.signature,
+                "shareable": node.shareable,
+            }
+            for node in pipeline.nodes
+        ],
+        "edges": [
+            {
+                "source_node_id": edge.source_node_id,
+                "source_port": edge.source_port,
+                "target_node_id": edge.target_node_id,
+                "target_port": edge.target_port,
+                # Keep the flat channel fields for existing API consumers.
+                "channel_maxsize": edge.channel_maxsize,
+                "channel_drop_policy": edge.channel_drop_policy.value,
+                **edge.as_contract_dict(),
+            }
+            for edge in pipeline.edges
+        ],
+    }
 
 
 async def _build_pipeline_diagnostics_context(config_store: ConfigStore) -> dict[str, Any]:
@@ -3350,32 +3382,7 @@ def create_app() -> FastAPI:
             if not compiled.pipelines:
                 return PipelineCompileResponse(pipeline={}, shared_signatures={})
             pipeline = compiled.pipelines[0]
-            compiled_dict = {
-                "name": pipeline.name,
-                "schema_version": pipeline.schema_version,
-                "topological_order": list(pipeline.topological_order),
-                "nodes": [
-                    {
-                        "id": node.node_id,
-                        "operator_id": node.operator_id,
-                        "normalized_config": node.normalized_config,
-                        "signature": node.signature,
-                        "shareable": node.shareable,
-                    }
-                    for node in pipeline.nodes
-                ],
-                "edges": [
-                    {
-                        "source_node_id": edge.source_node_id,
-                        "source_port": edge.source_port,
-                        "target_node_id": edge.target_node_id,
-                        "target_port": edge.target_port,
-                        "channel_maxsize": edge.channel_maxsize,
-                        "channel_drop_policy": edge.channel_drop_policy.value,
-                    }
-                    for edge in pipeline.edges
-                ],
-            }
+            compiled_dict = _serialize_compiled_pipeline(pipeline)
             shared_signatures = {
                 signature: [
                     {
@@ -3452,32 +3459,7 @@ def create_app() -> FastAPI:
                 return PipelineCompilePythonResponse(graph=graph, pipeline={}, shared_signatures={})
 
             compiled_pipeline = compiled.pipelines[0]
-            compiled_dict = {
-                "name": compiled_pipeline.name,
-                "schema_version": compiled_pipeline.schema_version,
-                "topological_order": list(compiled_pipeline.topological_order),
-                "nodes": [
-                    {
-                        "id": node.node_id,
-                        "operator_id": node.operator_id,
-                        "normalized_config": node.normalized_config,
-                        "signature": node.signature,
-                        "shareable": node.shareable,
-                    }
-                    for node in compiled_pipeline.nodes
-                ],
-                "edges": [
-                    {
-                        "source_node_id": edge.source_node_id,
-                        "source_port": edge.source_port,
-                        "target_node_id": edge.target_node_id,
-                        "target_port": edge.target_port,
-                        "channel_maxsize": edge.channel_maxsize,
-                        "channel_drop_policy": edge.channel_drop_policy.value,
-                    }
-                    for edge in compiled_pipeline.edges
-                ],
-            }
+            compiled_dict = _serialize_compiled_pipeline(compiled_pipeline)
             shared_signatures = {
                 signature: [
                     {

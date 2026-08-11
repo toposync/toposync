@@ -28,7 +28,6 @@ def analyze_compiled_pipeline(
     _check_cancelled(cancel_check)
     nodes_by_id = {node.node_id: node for node in pipeline.nodes}
     edges = list(pipeline.edges)
-    order_index = {node_id: idx for idx, node_id in enumerate(pipeline.topological_order)}
 
     incoming: dict[str, list[Any]] = {}
     outgoing: dict[str, list[Any]] = {}
@@ -107,6 +106,48 @@ def analyze_compiled_pipeline(
         if not isinstance(raw_values, list):
             return set()
         return {str(item).strip() for item in raw_values if str(item).strip()}
+
+    def _limits_emission_rate(node_id: str) -> bool:
+        """Return whether this node bounds packets independently of upstream FPS."""
+        if node_id not in nodes_by_id:
+            return False
+        if nodes_by_id[node_id].operator_id in {
+            "core.fps_reducer",
+            "core.throttle",
+            "core.velocity_throttle",
+            "core.debounce",
+        }:
+            return True
+        if "rate_limited_emission" not in capabilities_by_node_id.get(node_id, set()):
+            return False
+        try:
+            return float(_resolve_config(node_id).get("update_interval_seconds") or 0.0) > 0.0
+        except (TypeError, ValueError):
+            return False
+
+    def _has_unbounded_tracking_path_to(store_node_id: str) -> bool:
+        """Detect a tracking-to-store path with no explicit downstream emission bound."""
+        queue: deque[tuple[str, bool]] = deque([(store_node_id, False)])
+        seen: set[tuple[str, bool]] = set()
+        while queue:
+            _check_cancelled(cancel_check)
+            node_id, already_limited = queue.popleft()
+            state = (node_id, already_limited)
+            if state in seen:
+                continue
+            seen.add(state)
+            rate_limited = already_limited or _limits_emission_rate(node_id)
+            for edge in incoming.get(node_id, []):
+                upstream_id = str(edge.source_node_id)
+                upstream = nodes_by_id.get(upstream_id)
+                if upstream is None:
+                    continue
+                if upstream.operator_id == "vision.track":
+                    if not rate_limited:
+                        return True
+                    continue
+                queue.append((upstream_id, rate_limited))
+        return False
 
     def _diagnostic_node_context(node_id: str) -> dict[str, Any]:
         node = nodes_by_id.get(node_id)
@@ -483,41 +524,20 @@ def analyze_compiled_pipeline(
         cfg = _resolve_config(store_node_id)
         if not bool(cfg.get("drop_data_after_store", True)):
             continue
-        # If Store Images is fed directly by split/track streams without downstream rate control, it can be very heavy.
-        tracking_ids = [
-            nid
-            for nid in _upstream_nodes(store_node_id)
-            if nid in nodes_by_id and nodes_by_id[nid].operator_id == "vision.track"
-        ]
-        if tracking_ids:
-            tracking_idx = min(order_index.get(nid, 0) for nid in tracking_ids)
-            store_idx = order_index.get(store_node_id, tracking_idx + 1)
-            has_rate_control_after_tracking = False
-            for nid in _upstream_nodes(store_node_id):
-                if nid not in nodes_by_id:
-                    continue
-                idx = order_index.get(nid, -1)
-                if idx <= tracking_idx or idx >= store_idx:
-                    continue
-                if nodes_by_id[nid].operator_id in {
-                    "core.fps_reducer",
-                    "core.throttle",
-                    "core.velocity_throttle",
-                    "core.debounce",
-                }:
-                    has_rate_control_after_tracking = True
-                    break
-            if not has_rate_control_after_tracking:
-                alerts.append(
-                    PipelineAlert(
-                        severity="info",
-                        code="store_images_without_rate_control",
-                        node_id=store_node_id,
-                        operator_id="core.store_images",
-                        message="Store Images is fed by object tracking without any downstream rate control, which can be heavy on CPU/disk.",
-                        suggestion="Add FPS Reducer/Throttle before Store Images to limit how many frames are stored per second.",
-                    )
+        # A per-object tracker can emit at camera rate. Warn only if at least one
+        # path from it to storage lacks a downstream limiter; a semantic event
+        # operator with a positive update interval is such a limiter too.
+        if _has_unbounded_tracking_path_to(store_node_id):
+            alerts.append(
+                PipelineAlert(
+                    severity="info",
+                    code="store_images_without_rate_control",
+                    node_id=store_node_id,
+                    operator_id="core.store_images",
+                    message="Store Images is fed by object tracking without any downstream rate control, which can be heavy on CPU/disk.",
+                    suggestion="Add FPS Reducer/Throttle before Store Images to limit how many frames are stored per second.",
                 )
+            )
         downstream = _downstream_nodes(store_node_id)
         stored_artifacts = {normalize_artifact_name(cfg.get("input_artifact_name"))}
 

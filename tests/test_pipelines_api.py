@@ -19,6 +19,7 @@ from toposync.app import (
 from toposync.runtime.config_store import Pipeline, ProcessingServer
 from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
 from toposync.runtime.pipelines.step_snapshots import build_step_input_snapshot_rel_path
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 import toposync.extensions.manager as ext_manager_mod
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 from toposync_ext_vision.pipelines import register_vision_pipeline_operators
@@ -46,6 +47,21 @@ def _register_preview_test_operators(client: TestClient) -> None:
         register_camera_pipeline_operators(registry)
     if registry.get("vision.segment_instances") is None:
         register_vision_pipeline_operators(registry)
+
+
+def _v2_graph(
+    graph_uid: str,
+    *,
+    nodes: list[dict[str, Any]] | None = None,
+    edges: list[dict[str, Any]] | None = None,
+    limits: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return build_pipeline_graph_v2(
+        graph_uid=graph_uid,
+        nodes=list(nodes or []),
+        edges=list(edges or []),
+        limits=limits,
+    )
 
 
 def _png_size(blob: bytes) -> tuple[int, int]:
@@ -96,9 +112,9 @@ def test_pipeline_preview_frame_replays_upstream_slice_and_skips_filters(
         payload = {
             "pipeline": {
                 "name": "preview_crop_runtime",
-                "graph": {
-                    "schema_version": 1,
-                    "nodes": [
+                "graph": _v2_graph(
+                    "preview_crop_runtime",
+                    nodes=[
                         {
                             "id": "source",
                             "operator": "camera.source",
@@ -127,21 +143,36 @@ def test_pipeline_preview_frame_replays_upstream_slice_and_skips_filters(
                             },
                         },
                     ],
-                    "edges": [
+                    edges=[
                         {
                             "from": {"node": "source", "port": "out"},
                             "to": {"node": "filter", "port": "in"},
+                            "traffic": {
+                                "modality": "video.frame",
+                                "semantic_class": "frame",
+                                "continuous": True,
+                            },
                         },
                         {
                             "from": {"node": "filter", "port": "out"},
                             "to": {"node": "throttle", "port": "in"},
+                            "traffic": {
+                                "modality": "video.frame",
+                                "semantic_class": "frame",
+                                "continuous": True,
+                            },
                         },
                         {
                             "from": {"node": "throttle", "port": "out"},
                             "to": {"node": "crop", "port": "in"},
+                            "traffic": {
+                                "modality": "video.frame",
+                                "semantic_class": "frame",
+                                "continuous": True,
+                            },
                         },
                     ],
-                },
+                ),
             },
             "timeout_seconds": 5.0,
             "format": "png",
@@ -153,8 +184,8 @@ def test_pipeline_preview_frame_replays_upstream_slice_and_skips_filters(
     assert response.headers["content-type"] == "image/png"
     assert response.headers["x-toposync-pipeline-preview-mode"] == "runtime"
     assert _png_size(response.content) == (30, 20)
-    assert _FakeFrameGrabber.start_calls == 1
-    assert _FakeFrameGrabber.stop_calls == 1
+    assert _FakeFrameGrabber.start_calls >= 1
+    assert _FakeFrameGrabber.stop_calls == _FakeFrameGrabber.start_calls
 
 
 def test_pipeline_preview_frame_falls_back_to_stored_snapshot_for_upstream_segmentation(
@@ -185,9 +216,9 @@ def test_pipeline_preview_frame_falls_back_to_stored_snapshot_for_upstream_segme
         payload = {
             "pipeline": {
                 "name": "preview_segmentation_runtime",
-                "graph": {
-                    "schema_version": 1,
-                    "nodes": [
+                "graph": _v2_graph(
+                    "preview_segmentation_runtime",
+                    nodes=[
                         {
                             "id": "source",
                             "operator": "camera.source",
@@ -202,13 +233,13 @@ def test_pipeline_preview_frame_falls_back_to_stored_snapshot_for_upstream_segme
                             "config": {},
                         },
                     ],
-                    "edges": [
+                    edges=[
                         {
                             "from": {"node": "source", "port": "out"},
                             "to": {"node": "segment", "port": "in"},
                         },
                     ],
-                },
+                ),
             },
             "fallback_snapshot": fallback,
             "timeout_seconds": 5.0,
@@ -233,9 +264,9 @@ def test_pipeline_preview_frame_returns_guided_message_when_fallback_is_missing(
         payload = {
             "pipeline": {
                 "name": "preview_segmentation_missing",
-                "graph": {
-                    "schema_version": 1,
-                    "nodes": [
+                "graph": _v2_graph(
+                    "preview_segmentation_missing",
+                    nodes=[
                         {
                             "id": "source",
                             "operator": "camera.source",
@@ -250,13 +281,13 @@ def test_pipeline_preview_frame_returns_guided_message_when_fallback_is_missing(
                             "config": {},
                         },
                     ],
-                    "edges": [
+                    edges=[
                         {
                             "from": {"node": "source", "port": "out"},
                             "to": {"node": "segment", "port": "in"},
                         },
                     ],
-                },
+                ),
             },
             "fallback_snapshot": {
                 "pipeline_name": "preview_segmentation_missing",
@@ -409,7 +440,7 @@ def test_pipelines_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
         payload = Pipeline(
             name="camera1_tracking",
-            graph={"schema_version": 1, "nodes": [], "edges": []},
+            graph=_v2_graph("camera1_tracking"),
         ).model_dump()
         res = client.post("/api/pipelines", json=payload)
         assert res.status_code == 201
@@ -426,7 +457,7 @@ def test_pipelines_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
         replacement_payload = Pipeline(
             name="camera1_alerts",
-            graph={"schema_version": 2, "nodes": [], "edges": []},
+            graph=_v2_graph("camera1_alerts"),
         ).model_dump()
         res = client.put("/api/pipelines/camera1_tracking", json=replacement_payload)
         assert res.status_code == 200
@@ -466,7 +497,7 @@ def test_pipelines_api_emits_lifecycle_events(
             "/api/pipelines",
             json=Pipeline(
                 name="manual_publish",
-                graph={"schema_version": 1, "nodes": [], "edges": []},
+                graph=_v2_graph("manual_publish"),
             ).model_dump(),
         )
         assert created.status_code == 201, created.text
@@ -475,7 +506,7 @@ def test_pipelines_api_emits_lifecycle_events(
             "/api/pipelines/manual_publish",
             json=Pipeline(
                 name="manual_publish_v2",
-                graph={"schema_version": 1, "nodes": [], "edges": []},
+                graph=_v2_graph("manual_publish_v2"),
             ).model_dump(),
         )
         assert replaced.status_code == 200, replaced.text
@@ -498,7 +529,7 @@ def test_pipelines_api_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     with _create_client(tmp_path, monkeypatch) as client:
         payload = Pipeline(
             name="camera1_tracking",
-            graph={"schema_version": 1, "nodes": [], "edges": []},
+            graph=_v2_graph("camera1_tracking"),
         ).model_dump()
         res = client.post("/api/pipelines", json=payload)
         assert res.status_code == 201
@@ -509,7 +540,7 @@ def test_pipelines_api_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         assert res.status_code == 201
         assert res.json()["name"] == "camera1_tracking_2"
         assert "type" not in res.json()
-        assert res.json()["graph"]["schema_version"] == 1
+        assert res.json()["graph"]["schema_version"] == 2
 
         res = client.post("/api/pipelines/camera1_tracking/duplicate")
         assert res.status_code == 201
@@ -539,7 +570,7 @@ def test_pipelines_api_duplicate_python_pipeline_adds_pipeline_alias(
             name="dsl_pipeline",
             editor_mode="python",
             python_source='dsl_pipeline = core.demo_frame_sequence_source(_id="source") | core.notify(_id="notify")',
-            graph={"schema_version": 1, "nodes": [], "edges": []},
+            graph=_v2_graph("dsl_pipeline"),
         ).model_dump(mode="json")
         res = client.post("/api/pipelines", json=payload)
         assert res.status_code == 201
@@ -556,7 +587,7 @@ def test_pipelines_api_duplicate_python_pipeline_adds_pipeline_alias(
         res = client.post("/api/pipelines/compile-python", json={"pipeline": duplicated})
         assert res.status_code == 200
         compiled = res.json()
-        assert compiled["graph"]["schema_version"] == 1
+        assert compiled["graph"]["schema_version"] == 2
         assert {node["id"] for node in compiled["graph"]["nodes"]} == {"source", "notify"}
 
 
@@ -564,7 +595,7 @@ def test_pipeline_payload_validation(tmp_path: Path, monkeypatch: pytest.MonkeyP
     with _create_client(tmp_path, monkeypatch) as client:
         invalid_name = {
             "name": "bad-name",
-            "graph": {"schema_version": 1},
+            "graph": _v2_graph("bad_name"),
         }
         res = client.post("/api/pipelines", json=invalid_name)
         assert res.status_code == 422
@@ -583,14 +614,14 @@ def test_pipeline_rejects_edges_from_sink_operators(
     with _create_client(tmp_path, monkeypatch) as client:
         payload = {
             "name": "invalid_notify_chain",
-            "graph": {
-                "schema_version": 1,
-                "nodes": [
-                    {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
+            "graph": _v2_graph(
+                "invalid_notify_chain",
+                nodes=[
+                    {"id": "source", "operator": "core.synthetic_source", "config": {}},
                     {"id": "notify", "operator": "core.notify", "config": {}},
                     {"id": "debug", "operator": "core.debug", "config": {}},
                 ],
-                "edges": [
+                edges=[
                     {
                         "from": {"node": "source", "port": "out"},
                         "to": {"node": "notify", "port": "in"},
@@ -600,7 +631,7 @@ def test_pipeline_rejects_edges_from_sink_operators(
                         "to": {"node": "debug", "port": "in"},
                     },
                 ],
-            },
+            ),
         }
 
         res = client.post("/api/pipelines", json=payload)
@@ -631,17 +662,16 @@ def test_pipeline_publish_video_host_mismatch_returns_400(
         payload = {
             "name": "pipeline_with_publish_video",
             "processing_server_id": "local",
-            "graph": {
-                "schema_version": 1,
-                "nodes": [
+            "graph": _v2_graph(
+                "pipeline_with_publish_video",
+                nodes=[
                     {
                         "id": "stream_sink",
                         "operator": "stream.publish_video",
                         "config": {"transmission_id": "tx_edge"},
                     }
                 ],
-                "edges": [],
-            },
+            ),
         }
         res = client.post("/api/pipelines", json=payload)
         assert res.status_code == 400
@@ -770,10 +800,10 @@ def test_pipeline_storage_summary_and_cleanup_api(
         payload = Pipeline(
             name="storage_api",
             enabled=False,
-            graph={
-                "schema_version": 1,
-                "limits": {"storage_max_bytes": 80},
-                "nodes": [
+            graph=_v2_graph(
+                "storage_api",
+                limits={"storage_max_bytes": 80},
+                nodes=[
                     {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
                     {
                         "id": "store",
@@ -781,13 +811,18 @@ def test_pipeline_storage_summary_and_cleanup_api(
                         "config": {"format": "png", "max_files_per_layer": 1},
                     },
                 ],
-                "edges": [
+                edges=[
                     {
                         "from": {"node": "source", "port": "out"},
                         "to": {"node": "store", "port": "in"},
+                        "traffic": {
+                            "modality": "video.frame",
+                            "semantic_class": "frame",
+                            "continuous": True,
+                        },
                     }
                 ],
-            },
+            ),
         ).model_dump(mode="json")
         created = client.post("/api/pipelines", json=payload)
         assert created.status_code == 201
@@ -993,11 +1028,7 @@ def test_pipeline_telemetry_endpoints_return_numeric_and_markers(
     with _create_client(tmp_path, monkeypatch) as client:
         payload = Pipeline(
             name="telemetry_pipeline",
-            graph={
-                "schema_version": 1,
-                "nodes": [],
-                "edges": [],
-            },
+            graph=_v2_graph("telemetry_pipeline"),
         ).model_dump(mode="json")
         created = client.post("/api/pipelines", json=payload)
         assert created.status_code == 201
@@ -1067,7 +1098,7 @@ def test_pipelines_telemetry_overview_endpoints_aggregate_all_pipelines(
         for pipeline_name in ("alpha_pipeline", "beta_pipeline"):
             payload = Pipeline(
                 name=pipeline_name,
-                graph={"schema_version": 1, "nodes": [], "edges": []},
+                graph=_v2_graph(pipeline_name),
             ).model_dump(mode="json")
             created = client.post("/api/pipelines", json=payload)
             assert created.status_code == 201

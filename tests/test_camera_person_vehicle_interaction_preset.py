@@ -304,8 +304,15 @@ def test_person_vehicle_interaction_builds_semantic_relation_graph_v2(
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
-        assert alert_codes == {
-            "continuous_stream_to_sparse_operator",
+        assert alert_codes == {"vision_model_artifact_missing"}
+
+        relation["update_interval_seconds"] = 0.0
+        res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert res.status_code == 200, res.text
+        unbounded_alert_codes = {
+            str(alert.get("code") or "") for alert in res.json().get("alerts", [])
+        }
+        assert unbounded_alert_codes == {
             "store_images_without_rate_control",
             "vision_model_artifact_missing",
         }

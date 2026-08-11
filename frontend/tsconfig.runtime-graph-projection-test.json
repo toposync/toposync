@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "outDir": ".test-dist",
+    "rootDir": "src",
+    "types": []
+  },
+  "include": [
+    "src/util/api.ts",
+    "src/ui/screens/pipelines/topology/runtimeGraphProjection.ts",
+    "src/ui/screens/pipelines/topology/runtimeGraphProjection.test.ts"
+  ]
+}

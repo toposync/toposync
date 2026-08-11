@@ -215,6 +215,20 @@ function edgeAlerts(edge: ParsedEdge, alerts: PipelineAlert[]): PipelineAlert[] 
   return alerts.filter((alert) => alertEdgeKey(alert) === key);
 }
 
+function runtimeEdgeFor(edge: ParsedEdge, runtimeEdges: Record<string, TopologyEdgeData["runtime"]>): TopologyEdgeData["runtime"] {
+  return (
+    runtimeEdges[edge.uid] ??
+    Object.values(runtimeEdges).find(
+      (runtime) =>
+        runtime?.source?.node === edge.source.node &&
+        runtime.source.port === edge.source.port &&
+        runtime.target?.node === edge.target.node &&
+        runtime.target.port === edge.target.port,
+    ) ??
+    null
+  );
+}
+
 export function buildTopologyModel(options: TopologyBuildOptions): TopologyBuildResult {
   const graph = isRecord(options.graph) ? options.graph : null;
   if (!graph) {
@@ -318,7 +332,7 @@ export function buildTopologyModel(options: TopologyBuildOptions): TopologyBuild
     .map((edge) => {
       const alerts = edgeAlerts(edge, options.alerts);
       const alertSeverity = highestSeverity(alerts);
-      const runtime = runtimeEdges[edge.uid] ?? null;
+      const runtime = runtimeEdgeFor(edge, runtimeEdges);
       const pressureState = combinePressure(stateFromSeverity(alertSeverity), edgeRuntimePressure(runtime));
       return {
         id: edge.uid,

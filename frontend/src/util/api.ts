@@ -239,6 +239,11 @@ export type GraphRuntimeEdgeInfo = {
   metrics?: Record<string, unknown>;
 };
 
+export type GraphRuntimeNodeOccurrence = {
+  pipeline_name: string;
+  node_id: string;
+};
+
 export type GraphRuntimeInfo = {
   graph_id: string;
   pipeline_name: string;
@@ -250,6 +255,8 @@ export type GraphRuntimeInfo = {
   resources: Record<string, Record<string, unknown>>;
   pressure: Record<string, unknown>;
   progress: Record<string, unknown>;
+  pipelines?: string[];
+  node_occurrences?: Record<string, GraphRuntimeNodeOccurrence[]>;
 };
 
 export type PipelineRuntimeGraphInfoResponse = {

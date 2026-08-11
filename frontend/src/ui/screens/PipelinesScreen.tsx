@@ -36,6 +36,7 @@ import { PipelineStorageCard } from "./pipelines/InteractivePipelineEditor";
 import { PipelineDuplicateModal } from "./pipelines/PipelineDuplicateModal";
 import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
 import { PipelineTelemetryOverviewCard } from "./pipelines/PipelineTelemetryOverviewCard";
+import { projectRuntimeGraphInfoForPipeline } from "./pipelines/topology/runtimeGraphProjection";
 import { TopologyView } from "./pipelines/topology/TopologyView";
 import { updateTopologyGraphNodeConfig } from "./pipelines/topology/topologyGraph";
 import type { EditorMode, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "./pipelines/types";
@@ -468,12 +469,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   }, [draft?.name, selectedServerStatus]);
   const selectedRuntimeGraphInfo = useMemo<GraphRuntimeInfo | null>(() => {
     if (!draft) return null;
-    const graphs = runtimeGraphInfo?.graphs ?? [];
-    return (
-      graphs.find((graph) => graph.pipeline_name === draft.name) ??
-      graphs.find((graph) => graph.graph_id === draft.name) ??
-      null
-    );
+    return projectRuntimeGraphInfoForPipeline(runtimeGraphInfo?.graphs ?? [], draft.name);
   }, [draft?.name, runtimeGraphInfo]);
   const topologyRuntimeStatus = useMemo(() => {
     const generatedAt = Number(selectedRuntimeGraphInfo?.generated_at ?? 0);

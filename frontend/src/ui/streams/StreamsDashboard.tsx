@@ -15,7 +15,9 @@ import {
   type StreamingCameraLiveVariant,
   type StreamingCameraLiveView,
   type StreamingCameraLiveViewPlaybackResponse,
+  type StreamingPlaybackPlanTransport,
   type StreamingPlaybackPlanResponse,
+  type StreamingPlaybackTransport,
   type StreamingQualityProfileId,
   type StreamingRuntimeTransmissionHealth,
   type StreamingSummaryStatus,
@@ -394,7 +396,50 @@ function isProbablyMobileTouchBrowser(): boolean {
   return mobileUserAgent || ipadDesktopMode || (touchPoints > 0 && compactTouchViewport);
 }
 
-function getWebRtcIssueMessages(urls: StreamingTransmissionUrlsResponse | undefined): string[] {
+function playbackPlanTransport(
+  plan: StreamingPlaybackPlanResponse | null | undefined,
+  transport: StreamingPlaybackTransport,
+): StreamingPlaybackPlanTransport | null {
+  return plan?.transports?.find((item) => item.transport === transport) ?? null;
+}
+
+function hasServerPlaybackPlan(plan: StreamingPlaybackPlanResponse | null | undefined): boolean {
+  return Boolean(plan?.transports?.length);
+}
+
+function isServerTransportAvailable(
+  plan: StreamingPlaybackPlanResponse | null | undefined,
+  transport: StreamingPlaybackTransport,
+  hasUrl: boolean,
+): boolean {
+  if (!hasUrl) return false;
+  if (!hasServerPlaybackPlan(plan)) return true;
+  return Boolean(playbackPlanTransport(plan, transport)?.available);
+}
+
+function transportPlanMessages(
+  plan: StreamingPlaybackPlanResponse | null | undefined,
+  transport: StreamingPlaybackTransport,
+): string[] {
+  const item = playbackPlanTransport(plan, transport);
+  if (!item) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [...(item.blocking_errors ?? []), ...(item.warnings ?? [])]) {
+    const message = String(raw || "").trim();
+    if (!message || seen.has(message)) continue;
+    seen.add(message);
+    out.push(message);
+  }
+  return out;
+}
+
+function getWebRtcIssueMessages(
+  urls: StreamingTransmissionUrlsResponse | undefined,
+  serverPlaybackPlan?: StreamingPlaybackPlanResponse | null,
+): string[] {
+  const planMessages = transportPlanMessages(serverPlaybackPlan, "webrtc");
+  if (planMessages.length > 0) return planMessages;
   const contract = urls?.network_contract ?? null;
   const scopedWarnings = urls?.webrtc_warnings ?? [];
   const rawMessages = scopedWarnings.length
@@ -451,14 +496,15 @@ function buildPlaybackPlan(options: {
   jsmpegUrl: string | null;
   lowLatencyRequested: boolean;
 }): StreamPlaybackPlan {
-  const hasMse = Boolean(options.mseUrl) && canUseMse();
-  const hasHls = Boolean(options.hlsUrl);
-  const hasWebRtc = Boolean(options.webrtcUrl);
-  const hasJsmpeg = Boolean(options.jsmpegUrl);
-  const webRtcIssueMessages = getWebRtcIssueMessages(options.urls);
+  const hasMse = isServerTransportAvailable(options.serverPlaybackPlan, "mse", Boolean(options.mseUrl) && canUseMse());
+  const hasHls = isServerTransportAvailable(options.serverPlaybackPlan, "hls", Boolean(options.hlsUrl));
+  const hasWebRtc = isServerTransportAvailable(options.serverPlaybackPlan, "webrtc", Boolean(options.webrtcUrl));
+  const hasJsmpeg = isServerTransportAvailable(options.serverPlaybackPlan, "jsmpeg", Boolean(options.jsmpegUrl));
+  const webRtcIssueMessages = getWebRtcIssueMessages(options.urls, options.serverPlaybackPlan);
   const webRtcBlocked = webRtcIssueMessages.length > 0;
   const homeAssistantProxyHls = hasHomeAssistantProxyHlsContract(options.urls);
   const mobileTouchBrowser = isProbablyMobileTouchBrowser();
+  const serverPlanPresent = hasServerPlaybackPlan(options.serverPlaybackPlan);
   const serverSelectedTransport = String(options.serverPlaybackPlan?.selected_transport || "").trim().toLowerCase();
   const serverPrefersMse = serverSelectedTransport === "mse";
   const serverPrefersHls = serverSelectedTransport === "hls";
@@ -468,7 +514,7 @@ function buildPlaybackPlan(options: {
   if (options.transportPreference === "hls") {
     return {
       allowMse: false,
-      allowHls: hasHls,
+      allowHls: Boolean(options.hlsUrl),
       allowWebRtc: false,
       allowJsmpeg: false,
       preferMseFirst: false,
@@ -485,7 +531,7 @@ function buildPlaybackPlan(options: {
     return {
       allowMse: false,
       allowHls: false,
-      allowWebRtc: hasWebRtc,
+      allowWebRtc: Boolean(options.webrtcUrl),
       allowJsmpeg: false,
       preferMseFirst: false,
       preferWebRtcFirst: true,
@@ -499,13 +545,23 @@ function buildPlaybackPlan(options: {
 
   const hlsFirstForHomeAssistant = homeAssistantProxyHls && hasHls && !options.lowLatencyRequested;
   const hlsFirstForServerPlan = serverPrefersHls && hasHls && !options.lowLatencyRequested;
-  const hlsFirstForContract = webRtcBlocked && hasHls;
+  const hlsFirstForContract = !serverPlanPresent && webRtcBlocked && hasHls;
   const preferHlsFirst = hlsFirstForHomeAssistant || hlsFirstForServerPlan || hlsFirstForContract;
   const allowMse = hasMse && !hlsFirstForHomeAssistant;
-  const allowWebRtc = hasWebRtc && !webRtcBlocked && (options.lowLatencyRequested || !preferHlsFirst || !hasHls);
+  const allowWebRtc =
+    hasWebRtc &&
+    !webRtcBlocked &&
+    (options.lowLatencyRequested ||
+      serverPrefersWebRtc ||
+      (!serverPlanPresent && (!preferHlsFirst || !hasHls)));
   const allowJsmpeg = hasJsmpeg;
-  const preferWebRtcFirst = allowWebRtc && (options.lowLatencyRequested || serverPrefersWebRtc || !preferHlsFirst);
-  const preferMseFirst = allowMse && !preferWebRtcFirst && (serverPrefersMse || (!preferHlsFirst && !serverPrefersHls));
+  const preferWebRtcFirst =
+    allowWebRtc &&
+    (options.lowLatencyRequested || serverPrefersWebRtc || (!serverPlanPresent && !preferHlsFirst));
+  const preferMseFirst =
+    allowMse &&
+    !preferWebRtcFirst &&
+    (serverPrefersMse || (!serverPlanPresent && !preferHlsFirst && !serverPrefersHls));
   const effectiveMode: EffectiveTransportMode = preferWebRtcFirst
     ? options.lowLatencyRequested
       ? "ptz_webrtc"

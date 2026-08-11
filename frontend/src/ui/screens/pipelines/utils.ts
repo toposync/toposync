@@ -475,6 +475,26 @@ function resolveGatePortName(definition: PipelineOperatorDefinition | null): str
   return null;
 }
 
+function interactiveEdgeKey(sourceNodeId: string, targetNodeId: string, targetPort: string): string {
+  return `${sourceNodeId}.out->${targetNodeId}.${targetPort}`;
+}
+
+function preservedInteractiveEdges(baseGraph: unknown): Map<string, Record<string, unknown>> {
+  if (!isRecord(baseGraph) || !Array.isArray(baseGraph.edges)) return new Map();
+
+  const edges = new Map<string, Record<string, unknown>>();
+  for (const edge of baseGraph.edges) {
+    if (!isRecord(edge) || !isRecord(edge.from) || !isRecord(edge.to)) continue;
+    const sourceNodeId = String(edge.from.node || "").trim();
+    const sourcePort = String(edge.from.port || "").trim();
+    const targetNodeId = String(edge.to.node || "").trim();
+    const targetPort = String(edge.to.port || "").trim();
+    if (!sourceNodeId || sourcePort !== "out" || !targetNodeId || !targetPort) continue;
+    edges.set(interactiveEdgeKey(sourceNodeId, targetNodeId, targetPort), edge);
+  }
+  return edges;
+}
+
 export function buildGraphFromInteractiveSteps(
   steps: InteractiveStep[],
   operatorsById: Record<string, PipelineOperatorDefinition>,
@@ -482,6 +502,7 @@ export function buildGraphFromInteractiveSteps(
 ): InteractiveBuildResult {
   const usedNodeIds = new Set<string>();
   const nodes: Array<Record<string, unknown>> = [];
+  const preservedEdges = preservedInteractiveEdges(baseGraph);
 
   for (let index = 0; index < steps.length; index += 1) {
     const step = steps[index];
@@ -592,13 +613,24 @@ export function buildGraphFromInteractiveSteps(
       };
     }
 
-    edges.push({
-      uid: `${sourceNodeId}.out->${targetNode.id}.${targetPort}`,
-      from: { node: sourceNodeId, port: "out" },
-      to: { node: targetNode.id, port: targetPort },
-      traffic: edgeTrafficFor(upstreamOperator, targetOperator, targetPort),
-      queue: { max_items: policy.maxsize, drop_policy: policy.drop_policy },
-    });
+    const targetNodeId = String(targetNode.id || "").trim();
+    const edgeKey = interactiveEdgeKey(sourceNodeId, targetNodeId, targetPort);
+    const preservedEdge = preservedEdges.get(edgeKey);
+    edges.push(
+      preservedEdge
+        ? {
+            ...preservedEdge,
+            from: { node: sourceNodeId, port: "out" },
+            to: { node: targetNodeId, port: targetPort },
+          }
+        : {
+            uid: edgeKey,
+            from: { node: sourceNodeId, port: "out" },
+            to: { node: targetNodeId, port: targetPort },
+            traffic: edgeTrafficFor(upstreamOperator, targetOperator, targetPort),
+            queue: { max_items: policy.maxsize, drop_policy: policy.drop_policy },
+          },
+    );
 
     if (isSourceOperator(targetOperator) || !isSinkOperator(targetOperator)) {
       mainTailNodeId = String(targetNode.id || "").trim() || null;

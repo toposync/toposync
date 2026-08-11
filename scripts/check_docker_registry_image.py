@@ -42,7 +42,9 @@ def _read_json(url: str, *, timeout: float = 5.0) -> object:
 
 
 def _read_text(url: str, *, timeout: float = 5.0) -> str:
-    request = urllib.request.Request(url, headers={"accept": "text/html, text/plain;q=0.9, */*;q=0.1"})
+    request = urllib.request.Request(
+        url, headers={"accept": "text/html, text/plain;q=0.9, */*;q=0.1"}
+    )
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
         return response.read().decode("utf-8", errors="replace")
 
@@ -88,6 +90,7 @@ def _assert_extensions(base_url: str) -> None:
         "com.toposync.cameras",
         "com.toposync.vision",
         "com.toposync.home_assistant",
+        "com.toposync.ptz_attention",
         "com.toposync.streaming",
     ):
         if extension_id not in raw:
@@ -155,7 +158,13 @@ def _run_container(args: argparse.Namespace) -> None:
                 _assert_python_distribution(container_id, "toposync-ext-streaming")
             else:
                 _assert_python_distribution(container_id, "toposync-streaming")
-            for module_name in ("toposync", "toposync_ext_streaming.plugin", "toposync_ext_vision"):
+            _assert_python_distribution(container_id, "toposync-ext-ptz-attention")
+            for module_name in (
+                "toposync",
+                "toposync_ext_ptz_attention.plugin",
+                "toposync_ext_streaming.plugin",
+                "toposync_ext_vision",
+            ):
                 _assert_import(container_id, module_name)
         finally:
             subprocess.run(

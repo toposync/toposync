@@ -98,6 +98,7 @@ O fluxo atual de visualização do Toposync transforma progressivamente um cômo
 | **Rastreamento espacial** | Rastrear objetos, pessoas ou eventos ao longo do tempo e associar seus caminhos a áreas da casa. | **Pronto para teste** |
 | **Spatial Awareness na entrada** | Detectar pessoas, veículos ou entregas parados perto do portão, garagem, calçada ou entrada. | **Pronto para teste** |
 | **Objetos parados relevantes** | Criar regras para coisas que realmente pararam em uma área, em vez de reagir a qualquer movimento rápido. | **Pronto para teste** |
+| **Atenção PTZ semântica** | Manter uma câmera PTZ focada em um evento relevante com ciclo de vida, preservar a vista calibrada enquanto o evento estiver ativo e voltar para uma vista inicial configurada depois. | **Experimento inicial, primeiro em simulação** |
 | **Spatial Awareness para áreas sensíveis** | Adicionar uma camada extra de consciência em locais como piscinas, portões, garagens, quintais ou áreas restritas. | **Pronto para teste** |
 | **Pets perto de áreas sensíveis** | Combinar detecção, áreas e notificações para perceber situações relevantes envolvendo pets perto de piscinas, ruas ou portões. | **Pronto para teste** |
 | **Visão espacial 360** | Projetar imagens de câmeras no modelo 2D/3D, criando uma visualização inspirada em sistemas de câmera 360 de carros. | **Experimento inicial** |
@@ -263,6 +264,7 @@ Pontos de partida úteis:
 - [Instalação](docs-site/i18n/pt-BR/docusaurus-plugin-content-docs/current/installation/choose-your-installation.mdx)
 - [Compatibilidade](docs-site/i18n/pt-BR/docusaurus-plugin-content-docs/current/installation/architecture-support.mdx)
 - [Arquitetura](docs-site/i18n/pt-BR/docusaurus-plugin-content-docs/current/developers/architecture.mdx)
+- [Atenção PTZ semântica](docs-site/i18n/pt-BR/docusaurus-plugin-content-docs/current/cameras/ptz-attention.mdx)
 - [Autoria de extensões](docs-site/i18n/pt-BR/docusaurus-plugin-content-docs/current/developers/extension-authoring.mdx)
 - [Plugin API](docs-site/i18n/pt-BR/docusaurus-plugin-content-docs/current/developers/plugin-api.mdx)
 - [Pipelines](docs-site/i18n/pt-BR/docusaurus-plugin-content-docs/current/developers/pipelines.mdx)

@@ -18,7 +18,7 @@ CAMERA_PIPELINE_PRESETS = (
     "presence_area",
     "vehicle_stopped",
     "person_stopped",
-    "person_vehicle_stopped",
+    "person_vehicle_interaction",
 )
 CAMERA_PIPELINE_PRESET_MODEL_CONTRACTS = tuple(
     preset for preset in CAMERA_PIPELINE_PRESETS if preset != "people_quiet"
@@ -29,7 +29,7 @@ CAMERA_PIPELINE_PRESETS_REQUIRING_MAPPING = {
     "presence_area",
     "vehicle_stopped",
     "person_stopped",
-    "person_vehicle_stopped",
+    "person_vehicle_interaction",
 }
 
 
@@ -50,11 +50,13 @@ def _create_client(
     monkeypatch: pytest.MonkeyPatch,
     *,
     patch_model_readiness: bool = True,
+    include_ptz_attention: bool = False,
 ) -> TestClient:
     monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
     monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
     if patch_model_readiness:
+
         async def _allow_detection_model(*_args: Any, **_kwargs: Any) -> None:
             return None
 
@@ -63,14 +65,17 @@ def _create_client(
             "_ensure_camera_preset_detection_model_ready",
             _allow_detection_model,
         )
-    monkeypatch.setattr(
-        ext_manager_mod,
-        "_iter_entry_points",
-        lambda _group: [
-            _ExtensionEntryPoint("toposync_ext_cameras.plugin:CamerasExtension"),
-            _ExtensionEntryPoint("toposync_ext_vision.plugin:VisionExtension"),
-        ],
-    )
+    entry_points = [
+        _ExtensionEntryPoint("toposync_ext_cameras.plugin:CamerasExtension"),
+        _ExtensionEntryPoint("toposync_ext_vision.plugin:VisionExtension"),
+    ]
+    if include_ptz_attention:
+        entry_points.append(
+            _ExtensionEntryPoint(
+                "toposync_ext_ptz_attention.plugin:PtzAttentionExtension"
+            )
+        )
+    monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: entry_points)
     return TestClient(create_app())
 
 
@@ -119,7 +124,9 @@ def _operator_ids(pipeline: dict[str, Any]) -> list[str]:
     return [str(node.get("operator") or "") for node in nodes if isinstance(node, dict)]
 
 
-def _edge_config(pipeline: dict[str, Any], source_node_id: str, target_node_id: str) -> dict[str, Any]:
+def _edge_config(
+    pipeline: dict[str, Any], source_node_id: str, target_node_id: str
+) -> dict[str, Any]:
     graph = pipeline.get("graph") if isinstance(pipeline.get("graph"), dict) else {}
     edges = graph.get("edges") if isinstance(graph.get("edges"), list) else []
     for edge in edges:
@@ -127,7 +134,10 @@ def _edge_config(pipeline: dict[str, Any], source_node_id: str, target_node_id: 
             continue
         source = edge.get("from") if isinstance(edge.get("from"), dict) else {}
         target = edge.get("to") if isinstance(edge.get("to"), dict) else {}
-        if str(source.get("node") or "") == source_node_id and str(target.get("node") or "") == target_node_id:
+        if (
+            str(source.get("node") or "") == source_node_id
+            and str(target.get("node") or "") == target_node_id
+        ):
             return _normalized_edge(edge)
     return {}
 
@@ -169,6 +179,43 @@ def _configure_camera(client: TestClient) -> None:
     assert res.status_code == 200, res.text
 
 
+def _configure_ptz_camera(client: TestClient) -> None:
+    res = client.patch(
+        "/api/settings/extensions/com.toposync.cameras",
+        json={
+            "devices": [
+                {
+                    "id": "cam1",
+                    "name": "Entrada Principal",
+                    "control": {"type": "onvif"},
+                    "onvif": {
+                        "xaddr": "http://camera.local/onvif/device_service",
+                        "username": "operator",
+                        "password": "not-used-in-test",
+                    },
+                    "sources": [
+                        {
+                            "id": "main",
+                            "name": "Principal",
+                            "enabled": True,
+                            "is_default": True,
+                            "kind": "video",
+                            "role": "main",
+                            "origin": {
+                                "type": "onvif_profile",
+                                "profile_token": "profile-main",
+                                "has_ptz": True,
+                            },
+                            "ingest": {"mode": "direct"},
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    assert res.status_code == 200, res.text
+
+
 def _add_mapped_composition(client: TestClient, *, with_area: bool = False) -> None:
     elements: list[dict[str, Any]] = [
         {
@@ -184,10 +231,26 @@ def _add_mapped_composition(client: TestClient, *, with_area: bool = False) -> N
                         "id": "main",
                         "label": "Main",
                         "control_points": [
-                            {"id": "A", "image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
-                            {"id": "B", "image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                            {"id": "C", "image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
-                            {"id": "D", "image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                            {
+                                "id": "A",
+                                "image": {"x": 0.0, "y": 0.0},
+                                "world": {"x": 0.0, "z": 0.0},
+                            },
+                            {
+                                "id": "B",
+                                "image": {"x": 1.0, "y": 0.0},
+                                "world": {"x": 10.0, "z": 0.0},
+                            },
+                            {
+                                "id": "C",
+                                "image": {"x": 1.0, "y": 1.0},
+                                "world": {"x": 10.0, "z": 10.0},
+                            },
+                            {
+                                "id": "D",
+                                "image": {"x": 0.0, "y": 1.0},
+                                "world": {"x": 0.0, "z": 10.0},
+                            },
                         ],
                     }
                 ],
@@ -280,7 +343,10 @@ def test_camera_pipeline_simple_preset_defaults_detection_to_rfdetr_medium_witho
                                 "is_default": True,
                                 "kind": "video",
                                 "role": "main",
-                                "origin": {"type": "rtsp", "rtsp_url": "rtsp://example.local/front"},
+                                "origin": {
+                                    "type": "rtsp",
+                                    "rtsp_url": "rtsp://example.local/front",
+                                },
                                 "ingest": {"mode": "direct"},
                             }
                         ],
@@ -347,8 +413,8 @@ def test_camera_pipeline_simple_preset_defaults_detection_to_rfdetr_medium_witho
             == "entrada_principal_pessoa_parou"
         )
         assert (
-            overview["suggested_pipeline_names"]["person_vehicle_stopped"]
-            == "entrada_principal_pessoa_veiculo_parou"
+            overview["suggested_pipeline_names"]["person_vehicle_interaction"]
+            == "entrada_principal_interacao_pessoa_veiculo"
         )
 
         res = client.post(
@@ -473,6 +539,56 @@ def test_camera_pipeline_individual_preset_requires_and_uses_mapping(
         assert _node_config(pipeline, "core.notify").get("dedupe_key_template") == "{{subject.id}}"
 
 
+def test_camera_pipeline_preset_option_adds_configured_ptz_attention_operator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _create_client(tmp_path, monkeypatch, include_ptz_attention=True) as client:
+        _configure_ptz_camera(client)
+        _add_mapped_composition(client)
+
+        rejected = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={
+                "preset": "person_vehicle_interaction",
+                "source_id": "main",
+                "composition_id": "yard",
+                "enable_ptz_attention": True,
+            },
+        )
+        assert rejected.status_code == 409, rejected.text
+        assert "native tracking" in rejected.json()["detail"]
+
+        created = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={
+                "preset": "person_vehicle_interaction",
+                "source_id": "main",
+                "composition_id": "yard",
+                "enable_ptz_attention": True,
+                "ptz_attention_native_tracking_disabled_confirmed": True,
+            },
+        )
+        assert created.status_code == 200, created.text
+
+        pipeline = client.get(f"/api/pipelines/{created.json()['pipeline_name']}").json()
+        assert "ptz_attention.request" in _operator_ids(pipeline)
+        assert _node_config_by_id(pipeline, "ptz_attention") == {
+            "camera_id": "cam1",
+            "source_id": "main",
+            "composition_id": "yard",
+            "priority": 0,
+            "hold_after_close_seconds": 8.0,
+            "native_tracking_disabled_confirmed": True,
+        }
+        assert _edge_config(pipeline, "relation", "ptz_attention")["queue"] == {
+            "max_items": 16,
+            "drop_policy": "block",
+        }
+        compiled = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert compiled.status_code == 200, compiled.text
+
+
 def test_camera_pipeline_quiet_preset_adds_session_grouping(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -512,7 +628,11 @@ def test_camera_pipeline_quiet_preset_adds_session_grouping(
         assert _node_config(pipeline, "camera.camera_mapping").get("composition_id") == "yard"
         assert _node_config(pipeline, "vision.track").get("tracker_id") == "byte_world"
         assert _node_config(pipeline, "vision.group_events").get("mode") == "session"
-        assert _node_config(pipeline, "vision.group_events").get("categories") == ["person", "dog", "cat"]
+        assert _node_config(pipeline, "vision.group_events").get("categories") == [
+            "person",
+            "dog",
+            "cat",
+        ]
         notify = _node_config(pipeline, "core.notify")
         assert notify.get("description") == ""
         assert notify.get("dedupe_key_template") == "{{subject.id}}"
@@ -539,7 +659,10 @@ def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping
                                 "is_default": True,
                                 "kind": "video",
                                 "role": "main",
-                                "origin": {"type": "rtsp", "rtsp_url": "rtsp://example.local/front"},
+                                "origin": {
+                                    "type": "rtsp",
+                                    "rtsp_url": "rtsp://example.local/front",
+                                },
                                 "ingest": {"mode": "direct"},
                             }
                         ],
@@ -568,10 +691,26 @@ def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping
                                     "id": "main",
                                     "label": "Main",
                                     "control_points": [
-                                        {"id": "A", "image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
-                                        {"id": "B", "image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                                        {"id": "C", "image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
-                                        {"id": "D", "image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                                        {
+                                            "id": "A",
+                                            "image": {"x": 0.0, "y": 0.0},
+                                            "world": {"x": 0.0, "z": 0.0},
+                                        },
+                                        {
+                                            "id": "B",
+                                            "image": {"x": 1.0, "y": 0.0},
+                                            "world": {"x": 10.0, "z": 0.0},
+                                        },
+                                        {
+                                            "id": "C",
+                                            "image": {"x": 1.0, "y": 1.0},
+                                            "world": {"x": 10.0, "z": 10.0},
+                                        },
+                                        {
+                                            "id": "D",
+                                            "image": {"x": 0.0, "y": 1.0},
+                                            "world": {"x": 0.0, "z": 10.0},
+                                        },
                                     ],
                                 }
                             ],
@@ -607,7 +746,9 @@ def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping
         assert _node_config(pipeline, "camera.velocity_estimation").get("filter_mode") == "annotate"
         assert _node_config(pipeline, "vision.group_events").get("mode") == "proximity"
         assert _node_config(pipeline, "vision.group_events").get("group_distance_meters") == 10.0
-        assert _node_config(pipeline, "vision.group_events").get("include_stationary_members") is True
+        assert (
+            _node_config(pipeline, "vision.group_events").get("include_stationary_members") is True
+        )
         assert _node_config(pipeline, "core.throttle").get("interval_seconds") == 10.0
         notify = _node_config(pipeline, "core.notify")
         assert notify.get("description") == ""
@@ -617,7 +758,7 @@ def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
-        assert alert_codes == set()
+        assert alert_codes <= {"vision_model_artifact_missing"}
 
 
 def test_camera_pipeline_vehicle_stopped_requires_mapping(
@@ -692,7 +833,9 @@ def test_camera_pipeline_vehicle_stopped_builds_confirmed_stop_notification(
         assert _node_config_by_id(pipeline, "storage_throttle") == {}
         assert _node_config_by_id(pipeline, "storage_crop") == {}
         assert _node_config_by_id(pipeline, "storage_store") == {}
-        assert _node_config_by_id(pipeline, "notify_debounce").get("key_field") == "payload.subject.id"
+        assert (
+            _node_config_by_id(pipeline, "notify_debounce").get("key_field") == "payload.subject.id"
+        )
 
         notify = _node_config(pipeline, "core.notify")
         assert notify.get("dedupe_key_template") == "{{subject.id}}"
@@ -702,7 +845,7 @@ def test_camera_pipeline_vehicle_stopped_builds_confirmed_stop_notification(
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
-        assert alert_codes == set()
+        assert alert_codes <= {"vision_model_artifact_missing"}
 
 
 def test_camera_pipeline_person_stopped_builds_confirmed_stop_notification(
@@ -768,7 +911,7 @@ def test_camera_pipeline_person_stopped_builds_confirmed_stop_notification(
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
-        assert alert_codes == set()
+        assert alert_codes <= {"vision_model_artifact_missing"}
 
 
 @pytest.mark.parametrize("preset", ["vehicle_stopped", "person_stopped"])
@@ -800,9 +943,7 @@ def test_camera_pipeline_stopped_area_uses_area_composition_and_restriction(
         assert operators.index("camera.velocity_estimation") < operators.index(
             "camera.area_restriction"
         )
-        assert operators.index("camera.area_restriction") < operators.index(
-            "core.stationary_event"
-        )
+        assert operators.index("camera.area_restriction") < operators.index("core.stationary_event")
         assert _node_config_by_id(pipeline, "storage_throttle") == {}
         assert _node_config_by_id(pipeline, "storage_crop") == {}
         assert _node_config_by_id(pipeline, "storage_store") == {}
@@ -832,4 +973,4 @@ def test_camera_pipeline_stopped_area_uses_area_composition_and_restriction(
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
-        assert alert_codes == set()
+        assert alert_codes <= {"vision_model_artifact_missing"}

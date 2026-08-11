@@ -630,7 +630,7 @@ function writeLastUsedDetectionModelId(modelId: string): void {
   }
 }
 
-function parsePrivacyPolicyLabels(raw: string): string[] {
+function parseCommaSeparatedLabels(raw: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const part of String(raw || "").split(",")) {
@@ -640,6 +640,50 @@ function parsePrivacyPolicyLabels(raw: string): string[] {
     out.push(value);
   }
   return out;
+}
+
+type SpatialRelationCategoryGroup = {
+  name: string;
+  categories: string[];
+};
+
+const DEFAULT_SPATIAL_RELATION_CATEGORY_GROUPS: readonly SpatialRelationCategoryGroup[] = [
+  { name: "person", categories: ["person"] },
+  { name: "vehicle", categories: ["car", "truck", "bus", "motorcycle"] },
+];
+
+function readSpatialRelationCategoryGroups(raw: unknown): [SpatialRelationCategoryGroup, SpatialRelationCategoryGroup] {
+  const groups: SpatialRelationCategoryGroup[] = [];
+  const names = new Set<string>();
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [rawName, rawCategories] of Object.entries(raw as Record<string, unknown>)) {
+      const name = String(rawName || "").trim().toLowerCase();
+      const categories = Array.isArray(rawCategories)
+        ? parseCommaSeparatedLabels(rawCategories.map((value) => String(value || "")).join(","))
+        : [];
+      if (!name || names.has(name) || categories.length === 0) continue;
+      names.add(name);
+      groups.push({ name, categories });
+      if (groups.length === 2) break;
+    }
+  }
+  for (const fallback of DEFAULT_SPATIAL_RELATION_CATEGORY_GROUPS) {
+    if (groups.length === 2) break;
+    if (names.has(fallback.name)) continue;
+    names.add(fallback.name);
+    groups.push({ name: fallback.name, categories: [...fallback.categories] });
+  }
+  return [groups[0], groups[1]];
+}
+
+function spatialRelationCategoryGroupsRecord(
+  groups: [SpatialRelationCategoryGroup, SpatialRelationCategoryGroup],
+): Record<string, string[]> {
+  return Object.fromEntries(groups.map((group) => [group.name, [...group.categories]]));
+}
+
+function replaceTupleItem<T>(values: [T, T], index: 0 | 1, value: T): [T, T] {
+  return index === 0 ? [value, values[1]] : [values[0], value];
 }
 
 function buildClassificationPrivacyMatchExpression(labels: string[], minScore: number): string {
@@ -861,6 +905,257 @@ export function VisionGroupEventsConfigCard({
                   ...prev,
                   max_crop_area_ratio: Math.max(0.01, Math.min(1, nextValue)),
                 }));
+              }}
+            />
+          </label>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+export function VisionSpatialRelationEventConfigCard({
+  config,
+  showAdvanced,
+  onUpdateConfig,
+}: {
+  config: Record<string, unknown>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+}): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const categoryGroups = readSpatialRelationCategoryGroups((config as any).required_categories);
+  const categoryGroupsSignature = JSON.stringify(categoryGroups);
+  const categoryGroupNames: [string, string] = [categoryGroups[0].name, categoryGroups[1].name];
+  const categoryGroupValues: [string, string] = [
+    categoryGroups[0].categories.join(", "),
+    categoryGroups[1].categories.join(", "),
+  ];
+  const [categoryGroupNameTexts, setCategoryGroupNameTexts] = useState<[string, string]>(
+    categoryGroupNames,
+  );
+  const [categoryGroupCategoryTexts, setCategoryGroupCategoryTexts] = useState<[string, string]>(
+    categoryGroupValues,
+  );
+  useEffect(() => {
+    setCategoryGroupNameTexts(categoryGroupNames);
+    setCategoryGroupCategoryTexts(categoryGroupValues);
+  }, [categoryGroupsSignature]);
+  const numberValue = (key: string, fallback: number): number => {
+    const value = Number((config as any)[key] ?? fallback);
+    return Number.isFinite(value) ? value : fallback;
+  };
+  const updateNumber = (key: string, minimum: number, maximum: number, value: number): void => {
+    onUpdateConfig((previous) => ({
+      ...previous,
+      [key]: Math.max(minimum, Math.min(maximum, value)),
+    }));
+  };
+  const commitGroupName = (index: 0 | 1): void => {
+    const name = categoryGroupNameTexts[index].trim().toLowerCase();
+    const otherIndex = index === 0 ? 1 : 0;
+    if (!name || name === categoryGroupNames[otherIndex]) {
+      setCategoryGroupNameTexts(categoryGroupNames);
+      return;
+    }
+    setCategoryGroupNameTexts((previous) => replaceTupleItem(previous, index, name));
+    onUpdateConfig((previous) => {
+      const previousGroups = readSpatialRelationCategoryGroups(previous.required_categories);
+      if (name === previousGroups[otherIndex].name) return previous;
+      const nextGroups: [SpatialRelationCategoryGroup, SpatialRelationCategoryGroup] = [
+        { ...previousGroups[0], categories: [...previousGroups[0].categories] },
+        { ...previousGroups[1], categories: [...previousGroups[1].categories] },
+      ];
+      nextGroups[index].name = name;
+      return {
+        ...previous,
+        required_categories: spatialRelationCategoryGroupsRecord(nextGroups),
+      };
+    });
+  };
+  const commitGroupCategories = (index: 0 | 1): void => {
+    const raw = categoryGroupCategoryTexts[index];
+    const categories = parseCommaSeparatedLabels(raw);
+    if (categories.length === 0) {
+      setCategoryGroupCategoryTexts(categoryGroupValues);
+      return;
+    }
+    setCategoryGroupCategoryTexts((previous) => (
+      replaceTupleItem(previous, index, categories.join(", "))
+    ));
+    onUpdateConfig((previous) => {
+      const previousGroups = readSpatialRelationCategoryGroups(previous.required_categories);
+      const nextGroups: [SpatialRelationCategoryGroup, SpatialRelationCategoryGroup] = [
+        { ...previousGroups[0], categories: [...previousGroups[0].categories] },
+        { ...previousGroups[1], categories: [...previousGroups[1].categories] },
+      ];
+      nextGroups[index].categories = categories;
+      return {
+        ...previous,
+        required_categories: spatialRelationCategoryGroupsRecord(nextGroups),
+      };
+    });
+  };
+
+  return (
+    <div className="pipelinesStepConfigForm">
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.spatial_relation_event.hint")}</div>
+
+      {([0, 1] as const).map((index) => (
+        <React.Fragment key={index}>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.spatial_relation_event.group_name", { number: index + 1 })}</span>
+            <input
+              className="pipelinesInput"
+              value={categoryGroupNameTexts[index]}
+              onChange={(event) => {
+                setCategoryGroupNameTexts((previous) => (
+                  replaceTupleItem(previous, index, event.target.value)
+                ));
+              }}
+              onBlur={() => commitGroupName(index)}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.spatial_relation_event.group_categories", {
+              number: index + 1,
+              role: categoryGroupNameTexts[index].trim() || categoryGroupNames[index],
+            })}</span>
+            <input
+              className="pipelinesInput"
+              value={categoryGroupCategoryTexts[index]}
+              onChange={(event) => {
+                setCategoryGroupCategoryTexts((previous) => (
+                  replaceTupleItem(previous, index, event.target.value)
+                ));
+              }}
+              onBlur={() => commitGroupCategories(index)}
+            />
+          </label>
+        </React.Fragment>
+      ))}
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.spatial_relation_event.categories_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.spatial_relation_event.enter_distance_meters")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0.01}
+          max={1000}
+          step={0.1}
+          value={numberValue("enter_distance_meters", 3)}
+          onChange={(value) => updateNumber("enter_distance_meters", 0.01, 1000, value)}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.spatial_relation_event.exit_distance_meters")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0.01}
+          max={1000}
+          step={0.1}
+          value={numberValue("exit_distance_meters", 4)}
+          onChange={(value) => updateNumber("exit_distance_meters", 0.01, 1000, value)}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.spatial_relation_event.dwell_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={3600}
+          step={0.5}
+          value={numberValue("dwell_seconds", 4)}
+          onChange={(value) => updateNumber("dwell_seconds", 0, 3600, value)}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.spatial_relation_event.close_grace_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={3600}
+          step={0.5}
+          value={numberValue("close_grace_seconds", 6)}
+          onChange={(value) => updateNumber("close_grace_seconds", 0, 3600, value)}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.spatial_relation_event.stale_timeout_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0.01}
+          max={3600}
+          step={0.5}
+          value={numberValue("stale_timeout_seconds", 15)}
+          onChange={(value) => updateNumber("stale_timeout_seconds", 0.01, 3600, value)}
+        />
+      </label>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.spatial_relation_event.minimum_world_anchor_confidence")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={1}
+              step={0.05}
+              value={numberValue("minimum_world_anchor_confidence", 0.7)}
+              onChange={(value) => updateNumber("minimum_world_anchor_confidence", 0, 1, value)}
+            />
+          </label>
+          <div className="pipelinesStepHint">
+            {t("core.ui.pipelines.panels.spatial_relation_event.minimum_world_anchor_confidence_hint")}
+          </div>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.spatial_relation_event.enter_image_center_distance")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0.001}
+              max={2}
+              step={0.01}
+              value={numberValue("enter_image_center_distance", 0.2)}
+              onChange={(value) => updateNumber("enter_image_center_distance", 0.001, 2, value)}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.spatial_relation_event.exit_image_center_distance")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0.001}
+              max={2}
+              step={0.01}
+              value={numberValue("exit_image_center_distance", 0.28)}
+              onChange={(value) => updateNumber("exit_image_center_distance", 0.001, 2, value)}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.spatial_relation_event.update_interval_seconds")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={300}
+              step={0.5}
+              value={numberValue("update_interval_seconds", 1)}
+              onChange={(value) => updateNumber("update_interval_seconds", 0, 300, value)}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.spatial_relation_event.event_id_prefix")}</span>
+            <input
+              className="pipelinesInput"
+              value={String((config as any).event_id_prefix ?? "rel")}
+              onChange={(event) => {
+                onUpdateConfig((previous) => ({ ...previous, event_id_prefix: event.target.value }));
               }}
             />
           </label>
@@ -1190,7 +1485,7 @@ export function VisionConfigCard({
     [t],
   );
 
-  const privacyPolicyLabels = useMemo(() => parsePrivacyPolicyLabels(privacyPolicyLabelsText), [privacyPolicyLabelsText]);
+  const privacyPolicyLabels = useMemo(() => parseCommaSeparatedLabels(privacyPolicyLabelsText), [privacyPolicyLabelsText]);
   const privacyPolicyMatchExpression = useMemo(
     () => (privacyPolicyLabels.length > 0 ? buildClassificationPrivacyMatchExpression(privacyPolicyLabels, privacyPolicyThreshold) : ""),
     [privacyPolicyLabels, privacyPolicyThreshold],

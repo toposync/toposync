@@ -42,9 +42,25 @@ class _CompileEdge:
     target_port: str
     channel_maxsize: int
     channel_drop_policy: DropPolicy
-    traffic_modality: str | None = None
+    traffic_modality: str = "data.record"
+    traffic_semantic_class: str = "data"
+    traffic_continuous: bool = False
+    traffic_loss_tolerance: str = "lossy_updates_only"
+    queue_max_artifact_bytes: int | None = None
+    queue_max_age_ms: int | None = None
+    queue_key_policy: str = "none"
+    queue_key_path: str = ""
+    backpressure_mode: str = "pause_upstream"
+    backpressure_warn_at_utilization: float = 0.7
+    backpressure_critical_at_utilization: float = 0.9
+    backpressure_propagate_pressure: bool = True
     preserve_open: bool = True
     preserve_close: bool = True
+    compact_updates: bool = True
+    debug_sample_headers: bool = True
+    debug_retain_last: int = 10
+    debug_retain_artifact_refs: bool = True
+    debug_retain_artifact_data: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +90,60 @@ class CompiledEdge:
     target_port: str
     channel_maxsize: int
     channel_drop_policy: DropPolicy
+    traffic_modality: str = "data.record"
+    traffic_semantic_class: str = "data"
+    traffic_continuous: bool = False
+    traffic_loss_tolerance: str = "lossy_updates_only"
+    queue_max_artifact_bytes: int | None = None
+    queue_max_age_ms: int | None = None
+    queue_key_policy: str = "none"
+    queue_key_path: str = ""
+    backpressure_mode: str = "pause_upstream"
+    backpressure_warn_at_utilization: float = 0.7
+    backpressure_critical_at_utilization: float = 0.9
+    backpressure_propagate_pressure: bool = True
+    preserve_open: bool = True
+    preserve_close: bool = True
+    compact_updates: bool = True
+    debug_sample_headers: bool = True
+    debug_retain_last: int = 10
+    debug_retain_artifact_refs: bool = True
+    debug_retain_artifact_data: bool = False
+
+    def as_contract_dict(self) -> dict[str, Any]:
+        return {
+            "traffic": {
+                "modality": self.traffic_modality,
+                "semantic_class": self.traffic_semantic_class,
+                "continuous": self.traffic_continuous,
+                "loss_tolerance": self.traffic_loss_tolerance,
+            },
+            "queue": {
+                "max_items": self.channel_maxsize,
+                "max_artifact_bytes": self.queue_max_artifact_bytes,
+                "max_age_ms": self.queue_max_age_ms,
+                "drop_policy": self.channel_drop_policy.value,
+                "key_policy": self.queue_key_policy,
+                "key_path": self.queue_key_path,
+            },
+            "backpressure": {
+                "mode": self.backpressure_mode,
+                "warn_at_utilization": self.backpressure_warn_at_utilization,
+                "critical_at_utilization": self.backpressure_critical_at_utilization,
+                "propagate_pressure": self.backpressure_propagate_pressure,
+            },
+            "lifecycle": {
+                "preserve_open": self.preserve_open,
+                "preserve_close": self.preserve_close,
+                "compact_updates": self.compact_updates,
+            },
+            "debug": {
+                "sample_headers": self.debug_sample_headers,
+                "retain_last": self.debug_retain_last,
+                "retain_artifact_refs": self.debug_retain_artifact_refs,
+                "retain_artifact_data": self.debug_retain_artifact_data,
+            },
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,10 +254,14 @@ class PipelineGraphCompiler:
             input_ports_by_node[node.node_id] = {port.name for port in operator.definition.inputs}
             output_ports_by_node[node.node_id] = {port.name for port in operator.definition.outputs}
             input_modalities_by_node[node.node_id] = {
-                str(item or "").strip() for item in operator.definition.input_modalities if str(item or "").strip()
+                str(item or "").strip()
+                for item in operator.definition.input_modalities
+                if str(item or "").strip()
             }
             output_modalities_by_node[node.node_id] = {
-                str(item or "").strip() for item in operator.definition.output_modalities if str(item or "").strip()
+                str(item or "").strip()
+                for item in operator.definition.output_modalities
+                if str(item or "").strip()
             }
 
             required_input_ports = {
@@ -311,6 +385,27 @@ class PipelineGraphCompiler:
                     target_port=edge.target_port,
                     channel_maxsize=int(edge.channel_maxsize),
                     channel_drop_policy=edge.channel_drop_policy,
+                    traffic_modality=edge.traffic_modality,
+                    traffic_semantic_class=edge.traffic_semantic_class,
+                    traffic_continuous=edge.traffic_continuous,
+                    traffic_loss_tolerance=edge.traffic_loss_tolerance,
+                    queue_max_artifact_bytes=edge.queue_max_artifact_bytes,
+                    queue_max_age_ms=edge.queue_max_age_ms,
+                    queue_key_policy=edge.queue_key_policy,
+                    queue_key_path=edge.queue_key_path,
+                    backpressure_mode=edge.backpressure_mode,
+                    backpressure_warn_at_utilization=edge.backpressure_warn_at_utilization,
+                    backpressure_critical_at_utilization=(
+                        edge.backpressure_critical_at_utilization
+                    ),
+                    backpressure_propagate_pressure=edge.backpressure_propagate_pressure,
+                    preserve_open=edge.preserve_open,
+                    preserve_close=edge.preserve_close,
+                    compact_updates=edge.compact_updates,
+                    debug_sample_headers=edge.debug_sample_headers,
+                    debug_retain_last=edge.debug_retain_last,
+                    debug_retain_artifact_refs=edge.debug_retain_artifact_refs,
+                    debug_retain_artifact_data=edge.debug_retain_artifact_data,
                 ),
             )
         compiled_edges = sorted(
@@ -409,9 +504,13 @@ def _parse_graph(raw_graph: dict[str, Any]) -> _CompileGraph:
     try:
         schema_version = int(raw_version)
     except (TypeError, ValueError):
-        raise ValueError("Pipeline graph schema_version=2 is required; graph v1 is no longer supported") from None
+        raise ValueError(
+            "Pipeline graph schema_version=2 is required; graph v1 is no longer supported"
+        ) from None
     if schema_version != 2:
-        raise ValueError("Pipeline graph schema_version=2 is required; graph v1 is no longer supported")
+        raise ValueError(
+            "Pipeline graph schema_version=2 is required; graph v1 is no longer supported"
+        )
     return _parse_graph_v2(raw_graph)
 
 
@@ -440,8 +539,24 @@ def _parse_graph_v2(raw_graph: dict[str, Any]) -> _CompileGraph:
                 channel_maxsize=int(edge.queue.max_items),
                 channel_drop_policy=edge.queue.drop_policy,
                 traffic_modality=edge.traffic.modality,
+                traffic_semantic_class=edge.traffic.semantic_class,
+                traffic_continuous=edge.traffic.continuous,
+                traffic_loss_tolerance=edge.traffic.loss_tolerance,
+                queue_max_artifact_bytes=edge.queue.max_artifact_bytes,
+                queue_max_age_ms=edge.queue.max_age_ms,
+                queue_key_policy=edge.queue.key_policy,
+                queue_key_path=edge.queue.key_path,
+                backpressure_mode=edge.backpressure.mode,
+                backpressure_warn_at_utilization=edge.backpressure.warn_at_utilization,
+                backpressure_critical_at_utilization=edge.backpressure.critical_at_utilization,
+                backpressure_propagate_pressure=edge.backpressure.propagate_pressure,
                 preserve_open=edge.lifecycle.preserve_open,
                 preserve_close=edge.lifecycle.preserve_close,
+                compact_updates=edge.lifecycle.compact_updates,
+                debug_sample_headers=edge.debug.sample_headers,
+                debug_retain_last=edge.debug.retain_last,
+                debug_retain_artifact_refs=edge.debug.retain_artifact_refs,
+                debug_retain_artifact_data=edge.debug.retain_artifact_data,
             )
             for edge in graph.edges
         ),
@@ -456,12 +571,16 @@ def _validate_edge_modality(
     target_modalities: set[str],
 ) -> None:
     modality = str(edge.traffic_modality or "").strip()
-    if source_modalities and not any(_modality_matches(modality, item) for item in source_modalities):
+    if source_modalities and not any(
+        _modality_matches(modality, item) for item in source_modalities
+    ):
         raise GraphCompileError(
             f"Edge '{edge.uid}' modality '{modality}' is incompatible with "
             f"source node '{edge.source_node}' output modalities: {', '.join(sorted(source_modalities))}",
         )
-    if target_modalities and not any(_modality_matches(modality, item) for item in target_modalities):
+    if target_modalities and not any(
+        _modality_matches(modality, item) for item in target_modalities
+    ):
         raise GraphCompileError(
             f"Edge '{edge.uid}' modality '{modality}' is incompatible with "
             f"target node '{edge.target_node}' input modalities: {', '.join(sorted(target_modalities))}",

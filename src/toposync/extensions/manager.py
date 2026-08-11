@@ -137,6 +137,13 @@ class ExtensionAuthRoute:
     resource_type: str = "core:extension"
 
 
+@dataclass(frozen=True, slots=True)
+class ExtensionSettingsAuthorizationRequirement:
+    action: str
+    resource_type: str
+    resource_selector: str
+
+
 PluginFactory = Callable[[], Any]
 
 
@@ -145,11 +152,80 @@ class ExtensionManager:
         self._group = group
         self._disabled_extension_ids = set(disabled_extension_ids or set())
         self._extensions: dict[str, LoadedExtension] = {}
+        self._settings_authorization_extensions: dict[str, LoadedExtension] = {}
         self._auth_routes: list[ExtensionAuthRoute] = []
         self._diagnostics: list[ExtensionDiagnostic] = []
 
     def get(self, extension_id: str) -> LoadedExtension | None:
         return self._extensions.get(extension_id)
+
+    def settings_authorization_requirements(
+        self,
+        extension_id: str,
+        *,
+        current_settings: Any,
+        proposed_settings: Any,
+    ) -> list[ExtensionSettingsAuthorizationRequirement]:
+        normalized_extension_id = str(extension_id or "").strip()
+        loaded = self._settings_authorization_extensions.get(normalized_extension_id)
+        if loaded is None:
+            return []
+        hook = getattr(loaded.plugin, "settings_authorization_requirements", None)
+        if not callable(hook):
+            return []
+        if inspect.iscoroutinefunction(hook):
+            raise RuntimeError(
+                f"Extension settings authorization hook must be synchronous for '{loaded.manifest.id}'"
+            )
+        try:
+            raw_requirements = hook(
+                current_settings=current_settings,
+                proposed_settings=proposed_settings,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Extension settings authorization hook failed for '{loaded.manifest.id}'"
+            ) from exc
+        if inspect.isawaitable(raw_requirements):
+            close = getattr(raw_requirements, "close", None)
+            if callable(close):
+                close()
+            raise RuntimeError(
+                f"Extension settings authorization hook must be synchronous for '{loaded.manifest.id}'"
+            )
+        if raw_requirements is None:
+            return []
+        if not isinstance(raw_requirements, list):
+            raise RuntimeError(
+                f"Extension settings authorization hook returned an invalid contract for '{loaded.manifest.id}'"
+            )
+
+        requirements: list[ExtensionSettingsAuthorizationRequirement] = []
+        seen: set[tuple[str, str, str]] = set()
+        for raw in raw_requirements:
+            if not isinstance(raw, dict):
+                raise RuntimeError(
+                    f"Extension settings authorization hook returned an invalid requirement for '{loaded.manifest.id}'"
+                )
+            action = str(raw.get("action") or "").strip()
+            resource_type = str(raw.get("resource_type") or "").strip()
+            resource_selector = str(raw.get("resource_selector") or "").strip()
+            if not action or not resource_type or not resource_selector:
+                raise RuntimeError(
+                    f"Extension settings authorization hook returned an incomplete requirement for '{loaded.manifest.id}'"
+                )
+            key = (action, resource_type, resource_selector)
+            if key in seen:
+                continue
+            seen.add(key)
+            requirements.append(
+                ExtensionSettingsAuthorizationRequirement(
+                    action=action,
+                    resource_type=resource_type,
+                    resource_selector=resource_selector,
+                )
+            )
+        return requirements
 
     def public_extensions(self) -> list[dict[str, Any]]:
         return [
@@ -165,6 +241,7 @@ class ExtensionManager:
 
     async def load(self, *, app: FastAPI, bus: EventBus, services: ServiceRegistry) -> None:
         self._extensions = {}
+        self._settings_authorization_extensions = {}
         self._auth_routes = []
         self._diagnostics = []
         discovered: dict[str, LoadedExtension] = {}
@@ -280,6 +357,12 @@ class ExtensionManager:
                 manifest=manifest, plugin=plugin_obj, static_root=static_root
             )
 
+        # Settings authorization is a declarative safety contract, so keep it
+        # available even when an installed extension is disabled and its runtime
+        # setup/routes are intentionally skipped. Otherwise a restricted caller
+        # could stage protected settings while disabled and activate them later.
+        self._settings_authorization_extensions = dict(discovered)
+
         enabled_discovered = {
             extension_id: ext
             for extension_id, ext in discovered.items()
@@ -299,7 +382,7 @@ class ExtensionManager:
             self._check_frontend_assets(ext)
             self._register_auth_routes(ext)
 
-        async def _setup(ext: LoadedExtension) -> None:
+        async def _setup(ext: LoadedExtension) -> bool:
             if hasattr(ext.plugin, "setup"):
                 try:
                     maybe = ext.plugin.setup(app, bus=bus, services=services)
@@ -313,8 +396,69 @@ class ExtensionManager:
                         message=f"Extension '{ext.manifest.id}' setup failed.",
                     )
                     logger.error("Extension '%s' setup failed.", ext.manifest.id, exc_info=True)
+                    return False
+            return True
 
-        await asyncio.gather(*(_setup(ext) for ext in self._extensions.values()))
+        dependencies = {
+            extension_id: {
+                _parse_extension_requirement(requirement)[0]
+                for requirement in ext.manifest.requires_extensions
+            }
+            for extension_id, ext in self._extensions.items()
+        }
+        pending = set(self._extensions)
+        completed: set[str] = set()
+        succeeded: set[str] = set()
+
+        while pending:
+            ready = sorted(
+                extension_id for extension_id in pending if dependencies[extension_id] <= completed
+            )
+            if not ready:
+                cycle = ", ".join(sorted(pending))
+                for extension_id in sorted(pending):
+                    self._add_diagnostic(
+                        extension_id=extension_id,
+                        level="error",
+                        code="setup_dependency_cycle",
+                        message=(
+                            f"Extension '{extension_id}' was not set up because its dependency "
+                            f"graph contains a cycle: {cycle}."
+                        ),
+                    )
+                logger.error("Extension setup dependency cycle: %s", cycle)
+                break
+
+            runnable: list[tuple[str, LoadedExtension]] = []
+            for extension_id in ready:
+                failed_dependencies = sorted(dependencies[extension_id] - succeeded)
+                if failed_dependencies:
+                    dependency_list = ", ".join(failed_dependencies)
+                    self._add_diagnostic(
+                        extension_id=extension_id,
+                        level="error",
+                        code="required_extension_setup_failed",
+                        message=(
+                            f"Extension '{extension_id}' was not set up because required "
+                            f"extension setup failed: {dependency_list}."
+                        ),
+                    )
+                    logger.error(
+                        "Skipping extension '%s' setup because dependencies failed: %s",
+                        extension_id,
+                        dependency_list,
+                    )
+                    continue
+                runnable.append((extension_id, self._extensions[extension_id]))
+
+            results = await asyncio.gather(*(_setup(ext) for _, ext in runnable))
+            succeeded.update(
+                extension_id
+                for (extension_id, _ext), setup_succeeded in zip(runnable, results, strict=True)
+                if setup_succeeded
+            )
+            completed.update(ready)
+            pending.difference_update(ready)
 
     def _add_diagnostic(
         self,
@@ -476,8 +620,7 @@ class ExtensionManager:
             or "core:extension:use"
         )
         route_resource_type = (
-            str(auth_caps_dict.get("resource_type") or "core:extension").strip()
-            or "core:extension"
+            str(auth_caps_dict.get("resource_type") or "core:extension").strip() or "core:extension"
         )
         prefixes: list[Any] = list(manifest.api_prefixes or [])
         if isinstance(auth_caps_dict.get("api_prefixes"), list):

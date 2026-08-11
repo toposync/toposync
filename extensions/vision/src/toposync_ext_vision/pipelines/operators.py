@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME
-from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, OperatorRegistry, payload_path_hint
+from toposync.runtime.pipelines.operator_registry import (
+    OperatorDiagnostic,
+    OperatorRegistry,
+    payload_path_hint,
+)
 
 from ..processing.tasks import (
     VisionClassifyImageRuntime,
@@ -12,6 +16,7 @@ from ..processing.tasks import (
     VisionGroupEventsRuntime,
     VisionPoseEstimateRuntime,
     VisionSegmentInstancesRuntime,
+    VisionSpatialRelationEventRuntime,
     VisionSyntheticDetectionSourceRuntime,
     VisionTrackRuntime,
 )
@@ -23,61 +28,214 @@ from .schemas import (
     VisionGroupEventsConfig,
     VisionPoseEstimateConfig,
     VisionSegmentInstancesConfig,
+    VisionSpatialRelationEventConfig,
     VisionSyntheticDetectionSourceConfig,
     VisionTrackConfig,
 )
 
 
 def _vision_expression_hints(*, branch: str | None = None) -> list[Any]:
-    hints: list[Any] = [payload_path_hint("payload.vision", value_type="object", description="Structured vision annotations attached to the packet.")]
+    hints: list[Any] = [
+        payload_path_hint(
+            "payload.vision",
+            value_type="object",
+            description="Structured vision annotations attached to the packet.",
+        )
+    ]
     if branch == "classification":
         hints.extend(
             [
-                payload_path_hint("payload.source_stream_id", value_type="string", description="Source stream identifier emitted by the vision operator."),
-                payload_path_hint("payload.classification_label", value_type="string", description="Top image-classification label selected by the model."),
-                payload_path_hint("payload.classification_label_normalized", value_type="string", description="Lower-cased top image-classification label for stable filtering rules."),
-                payload_path_hint("payload.classification_score", value_type="number", description="Confidence score for the top image-classification label."),
-                payload_path_hint("payload.vision.classification", value_type="object", description="Structured image-classification payload."),
-                payload_path_hint("payload.vision.classification.top_label", value_type="string", description="Top label predicted by the classifier."),
-                payload_path_hint("payload.vision.classification.top_label_normalized", value_type="string", description="Lower-cased top label predicted by the classifier."),
-                payload_path_hint("payload.vision.classification.top_score", value_type="number", description="Score for the top classifier label."),
-                payload_path_hint("payload.vision.classification.labels", value_type="array", description="Ranked label scores kept on the packet."),
-                payload_path_hint("payload.vision.classification.labels[0]", value_type="object", description="Highest-confidence label score entry."),
-                payload_path_hint("payload.vision.classification.scores", value_type="object", description="Map of label -> score for the retained labels."),
+                payload_path_hint(
+                    "payload.source_stream_id",
+                    value_type="string",
+                    description="Source stream identifier emitted by the vision operator.",
+                ),
+                payload_path_hint(
+                    "payload.classification_label",
+                    value_type="string",
+                    description="Top image-classification label selected by the model.",
+                ),
+                payload_path_hint(
+                    "payload.classification_label_normalized",
+                    value_type="string",
+                    description="Lower-cased top image-classification label for stable filtering rules.",
+                ),
+                payload_path_hint(
+                    "payload.classification_score",
+                    value_type="number",
+                    description="Confidence score for the top image-classification label.",
+                ),
+                payload_path_hint(
+                    "payload.vision.classification",
+                    value_type="object",
+                    description="Structured image-classification payload.",
+                ),
+                payload_path_hint(
+                    "payload.vision.classification.top_label",
+                    value_type="string",
+                    description="Top label predicted by the classifier.",
+                ),
+                payload_path_hint(
+                    "payload.vision.classification.top_label_normalized",
+                    value_type="string",
+                    description="Lower-cased top label predicted by the classifier.",
+                ),
+                payload_path_hint(
+                    "payload.vision.classification.top_score",
+                    value_type="number",
+                    description="Score for the top classifier label.",
+                ),
+                payload_path_hint(
+                    "payload.vision.classification.labels",
+                    value_type="array",
+                    description="Ranked label scores kept on the packet.",
+                ),
+                payload_path_hint(
+                    "payload.vision.classification.labels[0]",
+                    value_type="object",
+                    description="Highest-confidence label score entry.",
+                ),
+                payload_path_hint(
+                    "payload.vision.classification.scores",
+                    value_type="object",
+                    description="Map of label -> score for the retained labels.",
+                ),
             ]
         )
         return hints
     hints.extend(
         [
-            payload_path_hint("payload.event_id", value_type="string", description="Event identifier derived from the vision operator."),
-            payload_path_hint("payload.event_code", value_type="string", description="Short event code for UI grouping and visual correlation."),
-            payload_path_hint("payload.subject", value_type="object", description="Canonical product subject carried by event packets."),
-            payload_path_hint("payload.subject.type", value_type="string", description="Subject kind, such as event or group_event."),
-            payload_path_hint("payload.subject.id", value_type="string", description="Canonical product subject identifier for throttling, notifications, and storage."),
-            payload_path_hint("payload.subject.lifecycle", value_type="string", description="Lifecycle state for the canonical subject."),
-            payload_path_hint("payload.subject.category", value_type="string", description="Canonical subject category."),
-            payload_path_hint("payload.subject.confidence", value_type="number", description="Canonical subject confidence."),
-            payload_path_hint("payload.subject.bbox01", value_type="array", description="Normalized subject bounding box."),
-            payload_path_hint("payload.group_event_id", value_type="string", description="Aggregated group event identifier emitted by vision.group_events."),
-            payload_path_hint("payload.group_event_code", value_type="string", description="Short group event code emitted by vision.group_events."),
-            payload_path_hint("payload.member_event_ids", value_type="array", description="Individual event identifiers included in the current group event."),
-            payload_path_hint("payload.category_summary", value_type="object", description="Grouped category counts and confidence summary."),
-            payload_path_hint("payload.world_envelope", value_type="object", description="World-space envelope for grouped members when mapping is available."),
-            payload_path_hint("payload.tracklet_id", value_type="string", description="Technical tracklet identifier emitted by the tracker."),
-            payload_path_hint("payload.tracklet_ids", value_type="array", description="Technical tracklet identifiers stitched into the current event."),
-            payload_path_hint("payload.raw_tracking_id", value_type="string", description="Raw backend-specific tracking identifier."),
-            payload_path_hint("payload.tracker_track_id", value_type="string", description="Raw tracker-specific track identifier."),
-            payload_path_hint("payload.identity_id", value_type="string", description="Optional recognized identity identifier for the product event."),
-            payload_path_hint("payload.correlation_id", value_type="string", description="Correlation identifier connecting related packets."),
-            payload_path_hint("payload.source_stream_id", value_type="string", description="Source stream identifier emitted by the vision operator."),
+            payload_path_hint(
+                "payload.event_id",
+                value_type="string",
+                description="Event identifier derived from the vision operator.",
+            ),
+            payload_path_hint(
+                "payload.event_code",
+                value_type="string",
+                description="Short event code for UI grouping and visual correlation.",
+            ),
+            payload_path_hint(
+                "payload.subject",
+                value_type="object",
+                description="Canonical product subject carried by event packets.",
+            ),
+            payload_path_hint(
+                "payload.subject.type",
+                value_type="string",
+                description="Subject kind, such as event or group_event.",
+            ),
+            payload_path_hint(
+                "payload.subject.id",
+                value_type="string",
+                description="Canonical product subject identifier for throttling, notifications, and storage.",
+            ),
+            payload_path_hint(
+                "payload.subject.lifecycle",
+                value_type="string",
+                description="Lifecycle state for the canonical subject.",
+            ),
+            payload_path_hint(
+                "payload.subject.category",
+                value_type="string",
+                description="Canonical subject category.",
+            ),
+            payload_path_hint(
+                "payload.subject.confidence",
+                value_type="number",
+                description="Canonical subject confidence.",
+            ),
+            payload_path_hint(
+                "payload.subject.bbox01",
+                value_type="array",
+                description="Normalized subject bounding box.",
+            ),
+            payload_path_hint(
+                "payload.group_event_id",
+                value_type="string",
+                description="Aggregated group event identifier emitted by vision.group_events.",
+            ),
+            payload_path_hint(
+                "payload.group_event_code",
+                value_type="string",
+                description="Short group event code emitted by vision.group_events.",
+            ),
+            payload_path_hint(
+                "payload.member_event_ids",
+                value_type="array",
+                description="Individual event identifiers included in the current group event.",
+            ),
+            payload_path_hint(
+                "payload.category_summary",
+                value_type="object",
+                description="Grouped category counts and confidence summary.",
+            ),
+            payload_path_hint(
+                "payload.world_envelope",
+                value_type="object",
+                description="World-space envelope for grouped members when mapping is available.",
+            ),
+            payload_path_hint(
+                "payload.tracklet_id",
+                value_type="string",
+                description="Technical tracklet identifier emitted by the tracker.",
+            ),
+            payload_path_hint(
+                "payload.tracklet_ids",
+                value_type="array",
+                description="Technical tracklet identifiers stitched into the current event.",
+            ),
+            payload_path_hint(
+                "payload.raw_tracking_id",
+                value_type="string",
+                description="Raw backend-specific tracking identifier.",
+            ),
+            payload_path_hint(
+                "payload.tracker_track_id",
+                value_type="string",
+                description="Raw tracker-specific track identifier.",
+            ),
+            payload_path_hint(
+                "payload.identity_id",
+                value_type="string",
+                description="Optional recognized identity identifier for the product event.",
+            ),
+            payload_path_hint(
+                "payload.correlation_id",
+                value_type="string",
+                description="Correlation identifier connecting related packets.",
+            ),
+            payload_path_hint(
+                "payload.source_stream_id",
+                value_type="string",
+                description="Source stream identifier emitted by the vision operator.",
+            ),
         ]
     )
     if branch == "detections":
-        hints.append(payload_path_hint("payload.vision.detections", value_type="array", description="Frame-level detection annotations."))
+        hints.append(
+            payload_path_hint(
+                "payload.vision.detections",
+                value_type="array",
+                description="Frame-level detection annotations.",
+            )
+        )
     if branch == "tracks":
-        hints.append(payload_path_hint("payload.vision.tracks", value_type="array", description="Frame-level track annotations."))
+        hints.append(
+            payload_path_hint(
+                "payload.vision.tracks",
+                value_type="array",
+                description="Frame-level track annotations.",
+            )
+        )
     if branch == "segmentations":
-        hints.append(payload_path_hint("payload.vision.segmentations", value_type="array", description="Frame-level instance segmentation annotations."))
+        hints.append(
+            payload_path_hint(
+                "payload.vision.segmentations",
+                value_type="array",
+                description="Frame-level instance segmentation annotations.",
+            )
+        )
     return hints
 
 
@@ -104,7 +262,9 @@ def _vision_model_diagnostics(task: str) -> Any:
     def collect(config: dict[str, Any], context: dict[str, Any]) -> list[OperatorDiagnostic]:
         model_id = str(config.get("model_id") or "").strip().lower()
         try:
-            manifest = _resolve_task_manifest(_vision_registry_from_context(context), task, model_id)
+            manifest = _resolve_task_manifest(
+                _vision_registry_from_context(context), task, model_id
+            )
         except Exception as exc:  # noqa: BLE001
             return [
                 OperatorDiagnostic(
@@ -395,6 +555,58 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             runtime_factory=lambda config, _deps: VisionGroupEventsRuntime(
                 config,
                 operator_id="vision.group_events",
+            ),
+        )
+    if registry.get("vision.spatial_relation_event") is None:
+        registry.register_operator(
+            operator_id="vision.spatial_relation_event",
+            description=(
+                "Qualifies grouped tracked events by required categories, spatial proximity, "
+                "dwell, hysteresis, close grace, and stale timeout. Emits an independent finite "
+                "spatial_relation_event lifecycle."
+            ),
+            config_model=VisionSpatialRelationEventConfig,
+            inputs=[{"name": "in", "required": True}],
+            outputs=[{"name": "out"}],
+            input_modalities=["data"],
+            output_modalities=["data"],
+            capabilities=[
+                "vision",
+                "tracking",
+                "grouping",
+                "relation",
+                "event",
+                "split_stream",
+                "rate_limited_emission",
+            ],
+            defaults=VisionSpatialRelationEventConfig().model_dump(),
+            requires_payload_keys=["subject"],
+            state_kind="stateful_per_subject",
+            ordering="per_key",
+            default_key_path="payload.subject.id",
+            pressure_behavior="ignore",
+            preserves_lifecycle=False,
+            produces_payload_keys=[
+                "vision",
+                "event_id",
+                "event_code",
+                "relation_event_id",
+                "relation_event_code",
+                "source_group_event_id",
+                "source_group_event_code",
+                "subject",
+                "spatial_relation_event",
+                "world_envelope",
+                "group_bbox01",
+                "correlation_id",
+                "source_stream_id",
+            ],
+            expression_hints=_vision_expression_hints(),
+            share_strategy="never",
+            owner="com.toposync.vision",
+            runtime_factory=lambda config, _deps: VisionSpatialRelationEventRuntime(
+                config,
+                operator_id="vision.spatial_relation_event",
             ),
         )
     if registry.get("vision.detect") is None:

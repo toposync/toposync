@@ -1,0 +1,294 @@
+---
+title: Semantic PTZ attention
+description: "Configure Toposync to hold a PTZ camera on relevant semantic events and return safely to a calibrated home view."
+keywords: ["toposync", "local-first", "home automation", "PTZ", "ONVIF", "semantic events", "camera attention", "calibrated views"]
+image: /img/social-card.png
+sidebar_position: 3.5
+---
+
+# Semantic PTZ attention {/* #semantic-ptz-attention */}
+
+Semantic PTZ attention keeps a camera focused on a relevant event instead of
+following every person, bicycle, or vehicle that passes through the image. It
+consumes an explicit event lifecycle, selects one allowed calibrated PTZ view,
+holds that view while the event remains active, and returns to a configured home
+view after the event closes.
+
+This feature is an early experiment. Start in shadow mode, review the decisions,
+and enable physical movement only after the camera, presets, mapping, and manual
+takeover have been tested in a contained environment.
+
+PTZ attention is not a crime classifier. A relation such as people remaining near
+a vehicle can justify a closer view, but it does not prove theft or malicious
+intent.
+
+## What it does {/* #what-it-does */}
+
+For each physical PTZ device, the attention runtime can:
+
+- accept semantic event `OPEN`, `UPDATE`, and `CLOSE` packets;
+- confirm a candidate before moving;
+- choose only from calibrated views allowed by the profile;
+- acquire exclusive automated control of the physical camera;
+- send one preset movement when a focus session opens;
+- keep the same view through ordinary event updates;
+- wait through a short grace period after the event closes;
+- return to the configured home view;
+- record selected, suppressed, shadow, movement, return, and fault decisions.
+
+This is different from camera firmware autotracking. Firmware autotracking reacts
+to motion inside the camera. PTZ attention reacts to semantic events produced by
+Toposync pipelines and uses their complete lifecycle.
+
+## Safety model {/* #safety-model */}
+
+The physical camera remains the protected resource:
+
+- one Camera device represents one physical head; wide and zoom lenses are
+  sources of that same device;
+- manual control has higher priority than automation;
+- after manual takeover, automation does not move or return the camera;
+- shadow mode records decisions but sends no motor command;
+- live preset mode requires a home view and at least one allowed focus view with
+  a different identifier;
+- stale commands are rejected through the camera control lease and fencing
+  contract;
+- movement is limited per minute;
+- a fault stops the automated session instead of guessing a recovery movement.
+
+Disable camera firmware autotracking, monitor-point movement, and automatic
+return before enabling live PTZ attention, then confirm exclusive automation
+control in Cameras settings. Firmware movement happens outside the Toposync
+ownership model and can invalidate the expected pose.
+
+Do not use PTZ attention as the only view of a safety-sensitive area. Preserve a
+wide recording or another fixed observer whenever possible.
+
+## Prerequisites {/* #prerequisites */}
+
+Before creating a live profile:
+
+1. Add the camera and verify its ONVIF connection.
+2. Confirm that discovery marks an enabled video source as PTZ-capable and that
+   it supports preset movement, status, and stop. ONVIF alone is not proof of PTZ.
+3. Test each intended preset manually.
+4. Place the camera in a composition.
+5. Create non-estimated, ready calibrated views for one home position and the
+   useful focus positions.
+6. Keep the allowed focus set small and exclude private or unsafe views.
+7. Produce a semantic event with a stable identifier, complete lifecycle, and
+   spatial target.
+8. Confirm that manual PTZ control can take ownership immediately.
+
+See [Camera mapping](camera-mapping.mdx) for calibrated PTZ views and
+[Pipelines](../developers/pipelines.mdx) for event lifecycle behavior.
+
+### Dual-lens and TrackMix cameras {/* #dual-lens-and-trackmix-cameras */}
+
+Wide and zoom sources on a dual-lens camera may share one physical head. Model
+them as sources of one Camera device. The camera identifier is also the canonical
+physical actuator identifier, so separate Camera devices cannot accidentally
+share geometry state or a control lease.
+
+If the observer source moves with the PTZ head, movement changes the scene that
+produced the event. Mapping is temporarily unavailable while moving and settling,
+and tracking may need to reacquire the subject afterward. Keep this configuration
+in shadow mode until same-head transition and reacquisition have been validated.
+A separate fixed observer avoids this feedback loop. Live profiles whose observer
+and actuator use the same Camera require a persisted acknowledgement in the profile;
+choosing a different source on that Camera does not bypass the gate because both
+sources still share the physical head. A later pipeline change to a same-head
+observer is blocked until that acknowledgement is saved.
+
+## Configure a profile {/* #configure-a-profile */}
+
+Open **Settings > PTZ Attention** and create a profile. The wizard has four steps.
+
+### 1. Events {/* #configure-events */}
+
+Choose only semantic event sources that expose:
+
+- a stable event identifier;
+- `OPEN`, `UPDATE`, and `CLOSE` lifecycle packets;
+- a world envelope, world anchor, or image bounding box. Image-only targets also
+  need an allowed preferred calibrated view;
+- enough persistence to distinguish a relevant event from ordinary passing
+  traffic.
+
+Examples include a person stopped in a mapped entrance area or one or more people
+remaining near a vehicle. The event detector decides relevance; PTZ attention
+only arbitrates already-qualified events.
+
+### 2. Camera and views {/* #configure-camera-and-views */}
+
+Choose:
+
+- the physical PTZ camera;
+- the composition containing its calibrated views;
+- one ready home view;
+- one or more ready focus views distinct from the home view.
+
+The profile never moves to an arbitrary uncalibrated pose. A preferred view from
+an event is accepted only when it belongs to the profile's allowed set.
+
+### 3. Policy {/* #configure-policy */}
+
+The table lists the API model defaults. The new-profile wizard deliberately starts
+more conservatively at `3 s` candidate confirmation, `6 s` close grace, `18 s`
+stale timeout, and `2/min` maximum movements to reduce mechanical churn. Tune only
+from recorded shadow decisions.
+
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| Candidate confirmation | `0.5 s` | Prevents a transient packet from moving the camera. |
+| Minimum focus | `10 s` | Keeps a selected event stable instead of switching rapidly. |
+| Maximum focus | `120 s` | Forces a bounded return even when an event never closes. |
+| Close grace | `5 s` | Tolerates short gaps after the event closes. |
+| Cooldown | `10 s` | Prevents an immediate return-and-refocus loop. |
+| Stale timeout | `12 s` | Ends attention when updates disappear without a clean close. |
+| Settle timeout | `8 s` | Bounds the wait for movement and stabilization. |
+| Control lease | `15 s` | Requires automation to keep ownership alive. |
+| Maximum movements | `6/min` | Limits mechanical churn. |
+| Minimum target confidence | `0` | Rejects weak spatial targets when raised. |
+
+### 4. Safety and mode {/* #configure-safety-and-mode */}
+
+| Stored mode | Behavior |
+| --- | --- |
+| `disabled` | Profile remains configured but does not evaluate or move. |
+| `shadow` | Evaluates events and records decisions without motor commands. |
+| `live_preset` | Moves only among the configured calibrated presets. |
+| `paused` | Holds automation until resumed; remembers the previous resumable mode. |
+
+Use `shadow` first. Treat `live_preset` as a supervised rollout step, not as a
+default.
+
+## Connect a pipeline {/* #connect-a-pipeline */}
+
+Add `ptz_attention.request` after the operator that produces the qualified event.
+The operator runs on the main Toposync server because it creates an external
+device-control effect.
+
+```text
+semantic event with OPEN / UPDATE / CLOSE
+    -> ptz_attention.request
+    -> PTZ Attention profile
+    -> Cameras control lease
+    -> calibrated preset
+```
+
+An `OPEN` packet must include a spatial target. `UPDATE` packets only refresh the
+active session; they do not change its resolved target or selected view. `CLOSE`
+releases the semantic event and starts the configured grace and return behavior.
+Graph edges must preserve `OPEN` and `CLOSE`; only intermediate updates may be
+compacted.
+
+For people near a vehicle, a typical perception branch is:
+
+```text
+camera.source
+    -> core.fps_reducer
+    -> vision.detect
+    -> camera.camera_mapping
+    -> vision.track
+    -> camera.velocity_estimation
+    -> vision.group_events
+    -> vision.spatial_relation_event
+    -> ptz_attention.request
+```
+
+Configure `vision.group_events` in proximity mode with person and vehicle
+categories and `include_stationary_members=true`. Set the request node's fixed
+`event_type` to `person_vehicle_interaction`; the profile policy must use the
+same value.
+
+For a person stopped in front of the house, use `core.stationary_event` after
+tracking and velocity estimation. Prefer `core.fps_reducer` over a motion gate in
+these flows; a motion gate can starve the stationary evidence the event needs.
+
+## Runtime states {/* #runtime-states */}
+
+| State | Meaning |
+| --- | --- |
+| `IDLE` | No event owns attention; this state alone does not prove the physical pose. |
+| `CANDIDATE` | A possible event is waiting for confirmation. |
+| `ACQUIRING` | Control and target view are being acquired. |
+| `FOCUSED` | The selected event owns the calibrated focus view. |
+| `GRACE` | The event closed; the runtime is waiting through close grace. |
+| `RETURNING` | The camera is returning to the home view. |
+| `MANUAL_OVERRIDE` | Manual control owns the physical camera. |
+| `FAULT` | Automation stopped after a control or validation failure. |
+
+The settings panel exposes current state, active event, logical view, whether a
+lease is active, movement count, recent decisions, readiness issues, and faults.
+
+## Manual control and operator actions {/* #manual-control-and-operator-actions */}
+
+- **Pause here** stops automated decisions without forcing a movement.
+- **Resume automation** returns the profile to its previous enabled mode.
+- **Return home** requests the configured home preset. Pause first when the
+  profile must remain paused after the return.
+- Opening manual PTZ control preempts automation. Closing the manual controls does
+  not silently send the camera home.
+
+When a return fails, inspect the fault and the live image before retrying. Do not
+repeat movement blindly when the camera, network, or physical scene is uncertain.
+
+## Troubleshooting {/* #troubleshooting */}
+
+### The profile cannot enter live preset mode
+
+Confirm that discovery reports actual PTZ capability, exclusive automation
+control is explicitly confirmed, the home view is ready and non-estimated, and
+at least one ready focus view is allowed. The focus view must be distinct from
+the home view.
+Also resolve any privacy, source compatibility, or shared-observer warning shown
+by the wizard.
+
+### The camera does not move
+
+Check whether the profile is `disabled`, `shadow`, or `paused`; whether manual
+control owns the camera; whether the user has camera-control permission; and
+whether the selected event reached candidate confirmation.
+
+### The camera moves too often
+
+Increase candidate confirmation, minimum focus, or close grace. Reduce the number
+of event sources and allowed views. Keep the movement-per-minute limit enabled.
+
+### The camera never returns home
+
+Check for a missing `CLOSE`, a stale event, manual takeover, or a `FAULT` state.
+After a process restart, an interrupted live session enters `FAULT` because the
+physical pose is unknown. Inspect the image, then use **Return home** explicitly;
+the runtime never guesses a recovery movement. Call it only after confirming that
+the configured home preset is safe.
+
+### Mapping disappears during movement
+
+This is expected when observation and PTZ movement share one physical head. Use a
+fixed observer, or keep same-head operation in shadow until reacquisition is
+reliable.
+
+## Validate before live movement {/* #validate-before-live-movement */}
+
+1. Run the profile in shadow and review representative events.
+2. Confirm that fast passers are suppressed.
+3. Manually test `home`, one focus preset, and `home` again.
+4. Enable one live focus view during a supervised test window.
+5. Take manual control and confirm that automation stops immediately.
+6. Close the event and confirm a single safe return.
+7. Test camera, network, and process failures before unattended use.
+
+Do not rely on this alpha feature for unattended security monitoring, access
+control, emergency response, or any automation where a missed event or unexpected
+movement could cause harm.
+
+## Related documentation {/* #related-documentation */}
+
+- [Cameras overview](overview.mdx)
+- [Camera mapping](camera-mapping.mdx)
+- [Live viewing](live-viewing.mdx)
+- [Image processing](image-processing.mdx)
+- [Pipelines](../developers/pipelines.mdx)
+- [Architecture](../developers/architecture.mdx)

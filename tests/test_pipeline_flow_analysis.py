@@ -89,6 +89,9 @@ def _edge(
     *,
     maxsize: int | None = None,
     drop_policy: str | None = None,
+    traffic: dict[str, Any] | None = None,
+    queue: dict[str, Any] | None = None,
+    backpressure: dict[str, Any] | None = None,
 ) -> dict:
     edge: dict = {
         "from": {"node": source, "port": "out"},
@@ -98,41 +101,64 @@ def _edge(
         edge["maxsize"] = maxsize
     if drop_policy is not None:
         edge["drop_policy"] = drop_policy
+    if traffic is not None:
+        edge["traffic"] = dict(traffic)
+    if queue is not None:
+        edge["queue"] = dict(queue)
+    if backpressure is not None:
+        edge["backpressure"] = dict(backpressure)
     return edge
 
 
 def _compile(graph: dict) -> tuple[OperatorRegistry, object]:
     registry = _registry()
-    operators_by_node_id = {str(node["id"]): str(node["operator"]) for node in graph.get("nodes", [])}
+    operators_by_node_id = {
+        str(node["id"]): str(node["operator"]) for node in graph.get("nodes", [])
+    }
 
     def edge_traffic(edge: dict) -> dict[str, Any]:
         source_operator_id = operators_by_node_id.get(str(edge["from"]["node"]), "")
         registered = registry.get(source_operator_id)
-        output_modalities = registered.definition.output_modalities if registered is not None else []
+        output_modalities = (
+            registered.definition.output_modalities if registered is not None else []
+        )
         if any(str(item).startswith("video") for item in output_modalities):
-            return {"modality": "video.frame", "semantic_class": "frame", "continuous": True}
-        return {"modality": "data.record", "semantic_class": "data", "continuous": False}
+            traffic = {"modality": "video.frame", "semantic_class": "frame", "continuous": True}
+        else:
+            traffic = {"modality": "data.record", "semantic_class": "data", "continuous": False}
+        traffic.update(edge.get("traffic") or {})
+        return traffic
+
+    def normalize_edge(edge: dict) -> dict[str, Any]:
+        queue = {
+            "max_items": edge.get("maxsize", 1),
+            "drop_policy": edge.get("drop_policy", "latest_only"),
+        }
+        queue.update(edge.get("queue") or {})
+        normalized_edge = {
+            "uid": edge.get(
+                "uid",
+                f"{edge['from']['node']}.{edge['from']['port']}->{edge['to']['node']}.{edge['to']['port']}",
+            ),
+            "from": edge["from"],
+            "to": edge["to"],
+            "queue": queue,
+            "traffic": edge_traffic(edge),
+        }
+        if edge.get("backpressure") is not None:
+            normalized_edge["backpressure"] = dict(edge["backpressure"])
+        return normalized_edge
 
     normalized = {
         **graph,
         "schema_version": 2,
         "uid": graph.get("uid", "graph"),
         "nodes": [{**node, "uid": node.get("uid", node["id"])} for node in graph.get("nodes", [])],
-        "edges": [
-            {
-                "uid": edge.get("uid", f"{edge['from']['node']}.{edge['from']['port']}->{edge['to']['node']}.{edge['to']['port']}"),
-                "from": edge["from"],
-                "to": edge["to"],
-                "queue": {
-                    "max_items": edge.get("maxsize", 1),
-                    "drop_policy": edge.get("drop_policy", "latest_only"),
-                },
-                "traffic": edge_traffic(edge),
-            }
-            for edge in graph.get("edges", [])
-        ],
+        "edges": [normalize_edge(edge) for edge in graph.get("edges", [])],
     }
-    compiled = PipelineGraphCompiler(registry).compile_pipeline(Pipeline(name="flow", graph=normalized))
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(
+        Pipeline(name="flow", graph=normalized)
+    )
     return registry, compiled
 
 
@@ -166,7 +192,92 @@ def test_flow_analysis_warns_about_duplicate_heavy_ai_with_different_categories(
 
     alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
 
-    assert "duplicate_heavy_ai" in _codes(alerts)
+    duplicate_alerts = [alert for alert in alerts if alert.code == "duplicate_heavy_ai"]
+    assert len(duplicate_alerts) == 1
+    assert duplicate_alerts[0].details["duplicate_node_ids"] == [
+        "detect_person",
+        "detect_vehicle",
+    ]
+
+
+def test_flow_analysis_reports_one_finding_for_equivalent_heavy_ai_group() -> None:
+    registry, compiled = _compile(
+        {
+            "nodes": [
+                {"id": "source", "operator": "test.video_source"},
+                {
+                    "id": "detect_person",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "yolo", "categories": ["person"]},
+                },
+                {
+                    "id": "detect_vehicle",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "yolo", "categories": ["car"]},
+                },
+                {
+                    "id": "detect_animal",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "yolo", "categories": ["dog"]},
+                },
+            ],
+            "edges": [
+                _edge("source", "detect_person"),
+                _edge("source", "detect_vehicle"),
+                _edge("source", "detect_animal"),
+            ],
+        }
+    )
+
+    alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
+    duplicate_alerts = [alert for alert in alerts if alert.code == "duplicate_heavy_ai"]
+
+    assert len(duplicate_alerts) == 1
+    assert duplicate_alerts[0].details["duplicate_node_ids"] == [
+        "detect_animal",
+        "detect_person",
+        "detect_vehicle",
+    ]
+
+
+def test_flow_analysis_does_not_merge_heavy_ai_after_different_transforms() -> None:
+    registry, compiled = _compile(
+        {
+            "nodes": [
+                {"id": "source", "operator": "test.video_source"},
+                {
+                    "id": "transform_a",
+                    "operator": "test.transform",
+                    "config": {"variant": "a"},
+                },
+                {
+                    "id": "transform_b",
+                    "operator": "test.transform",
+                    "config": {"variant": "b"},
+                },
+                {
+                    "id": "detect_a",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "yolo", "categories": ["person"]},
+                },
+                {
+                    "id": "detect_b",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "yolo", "categories": ["car"]},
+                },
+            ],
+            "edges": [
+                _edge("source", "transform_a"),
+                _edge("source", "transform_b"),
+                _edge("transform_a", "detect_a"),
+                _edge("transform_b", "detect_b"),
+            ],
+        }
+    )
+
+    alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
+
+    assert "duplicate_heavy_ai" not in _codes(alerts)
 
 
 def test_flow_analysis_accepts_single_combined_detection_before_branches() -> None:
@@ -213,7 +324,7 @@ def test_flow_analysis_warns_about_heavy_edge_backlog_policy() -> None:
     assert "heavy_edge_policy" in _codes(alerts)
 
 
-def test_flow_analysis_warns_about_artifact_fanout() -> None:
+def test_flow_analysis_accepts_intentional_artifact_fanout() -> None:
     registry, compiled = _compile(
         {
             "schema_version": 1,
@@ -231,7 +342,7 @@ def test_flow_analysis_warns_about_artifact_fanout() -> None:
 
     alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
 
-    assert "artifact_fanout" in _codes(alerts)
+    assert "artifact_fanout" not in _codes(alerts)
 
 
 def test_flow_analysis_warns_about_lossy_edge_before_blocking_side_effect() -> None:
@@ -242,7 +353,14 @@ def test_flow_analysis_warns_about_lossy_edge_before_blocking_side_effect() -> N
                 {"id": "source", "operator": "test.data_source"},
                 {"id": "notify", "operator": "test.notify"},
             ],
-            "edges": [_edge("source", "notify", drop_policy="drop_oldest")],
+            "edges": [
+                _edge(
+                    "source",
+                    "notify",
+                    drop_policy="drop_oldest",
+                    traffic={"loss_tolerance": "lossless"},
+                )
+            ],
         }
     )
 
@@ -251,7 +369,7 @@ def test_flow_analysis_warns_about_lossy_edge_before_blocking_side_effect() -> N
     assert "side_effect_lossy_edge" in _codes(alerts)
 
 
-def test_flow_analysis_warns_about_continuous_stream_to_sparse_operator() -> None:
+def test_flow_analysis_accepts_intentional_continuous_stream_rate_control() -> None:
     registry, compiled = _compile(
         {
             "schema_version": 1,
@@ -265,7 +383,7 @@ def test_flow_analysis_warns_about_continuous_stream_to_sparse_operator() -> Non
 
     alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
 
-    assert "continuous_stream_to_sparse_operator" in _codes(alerts)
+    assert "continuous_stream_to_sparse_operator" not in _codes(alerts)
 
 
 def test_flow_analysis_accepts_continuous_stream_to_video_sink() -> None:
@@ -299,6 +417,110 @@ def test_flow_analysis_warns_about_blocking_policy_on_continuous_video() -> None
     alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
 
     assert "edge_policy_mismatch" in _codes(alerts)
+    mismatch = next(alert for alert in alerts if alert.code == "edge_policy_mismatch")
+    assert mismatch.edge is not None
+    assert mismatch.edge["traffic"] == {
+        "modality": "video.frame",
+        "semantic_class": "frame",
+        "continuous": True,
+        "loss_tolerance": "lossy_updates_only",
+    }
+
+
+def test_flow_analysis_uses_edge_continuity_instead_of_source_operator_modality() -> None:
+    registry, compiled = _compile(
+        {
+            "nodes": [
+                {"id": "source", "operator": "test.video_source"},
+                {"id": "transform", "operator": "test.transform"},
+            ],
+            "edges": [
+                _edge(
+                    "source",
+                    "transform",
+                    drop_policy="block",
+                    traffic={"continuous": False},
+                )
+            ],
+        }
+    )
+
+    alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
+
+    assert "edge_policy_mismatch" not in _codes(alerts)
+
+
+def test_flow_analysis_does_not_treat_continuous_data_event_as_video() -> None:
+    registry, compiled = _compile(
+        {
+            "nodes": [
+                {"id": "source", "operator": "test.data_source"},
+                {"id": "notify", "operator": "test.notify"},
+            ],
+            "edges": [
+                _edge(
+                    "source",
+                    "notify",
+                    drop_policy="block",
+                    traffic={
+                        "modality": "data.event",
+                        "semantic_class": "event",
+                        "continuous": True,
+                    },
+                )
+            ],
+        }
+    )
+
+    alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
+
+    assert "edge_policy_mismatch" not in _codes(alerts)
+
+
+def test_flow_analysis_accepts_blocking_video_edge_with_source_rate_backpressure() -> None:
+    registry, compiled = _compile(
+        {
+            "nodes": [
+                {"id": "source", "operator": "test.video_source"},
+                {"id": "transform", "operator": "test.transform"},
+            ],
+            "edges": [
+                _edge(
+                    "source",
+                    "transform",
+                    drop_policy="block",
+                    backpressure={"mode": "reduce_source_rate"},
+                )
+            ],
+        }
+    )
+
+    alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
+
+    assert "edge_policy_mismatch" not in _codes(alerts)
+
+
+def test_flow_analysis_accepts_explicit_lossy_delivery_before_side_effect() -> None:
+    registry, compiled = _compile(
+        {
+            "nodes": [
+                {"id": "source", "operator": "test.data_source"},
+                {"id": "notify", "operator": "test.notify"},
+            ],
+            "edges": [
+                _edge(
+                    "source",
+                    "notify",
+                    drop_policy="drop_oldest",
+                    traffic={"loss_tolerance": "lossy_updates_only"},
+                )
+            ],
+        }
+    )
+
+    alerts = analyze_pipeline_flow(pipeline=compiled, registry=registry)
+
+    assert "side_effect_lossy_edge" not in _codes(alerts)
 
 
 def test_flow_analysis_is_included_in_compiled_pipeline_recommendations() -> None:

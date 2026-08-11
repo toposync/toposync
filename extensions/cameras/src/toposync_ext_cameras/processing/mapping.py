@@ -65,6 +65,11 @@ class PanTiltZoomState:
     error: str | None = None
     source: str | None = None
     confidence: float | None = None
+    preset_token: str | None = None
+    geometry_safe: bool | None = None
+    motion_epoch: int | None = None
+    motion_state: str | None = None
+    physical_updated_at: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +80,8 @@ class ControlPointSet:
     control_points: tuple[ControlPointPair, ...]
     refinement_points: tuple[ControlPointRefinementPoint, ...] = ()
     boundary_refinement_points: tuple[ControlPointBoundaryRefinementPoint, ...] = ()
+    compatible_source_ids: tuple[str, ...] = ()
+    compatible_roles: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +90,7 @@ class PoseSelectionConfig:
     sigma_tilt: float = 0.04
     sigma_zoom: float = 0.06
     max_distance: float = 3.0
-    fallback_mode: FallbackMode = "default_set"
+    fallback_mode: FallbackMode = "none"
     min_shared_axes: int = 1
 
 
@@ -112,10 +119,14 @@ class HomographyQuality:
             "number_of_inliers": int(self.number_of_inliers),
             "inlier_ratio": float(self.inlier_ratio),
             "median_reprojection_error_uv": (
-                float(self.median_reprojection_error_uv) if self.median_reprojection_error_uv is not None else None
+                float(self.median_reprojection_error_uv)
+                if self.median_reprojection_error_uv is not None
+                else None
             ),
             "p95_reprojection_error_uv": (
-                float(self.p95_reprojection_error_uv) if self.p95_reprojection_error_uv is not None else None
+                float(self.p95_reprojection_error_uv)
+                if self.p95_reprojection_error_uv is not None
+                else None
             ),
             "convex_hull_area_ratio_uv": float(self.convex_hull_area_ratio_uv),
             "is_near_collinear": bool(self.is_near_collinear),
@@ -205,19 +216,28 @@ def select_control_point_set(
                 move_status=None,
                 reason="missing_pose_state:default_set",
             )
-        if len(valid_sets) == 1:
-            return ControlPointSetSelection(
-                control_point_set=valid_sets[0],
-                pose_distance=None,
-                pose_axes_used=(),
-                move_status=None,
-                reason="missing_pose_state:single_set",
-            )
         return None
 
     normalized_status = normalize_move_status(pan_tilt_zoom_state.move_status)
     if motion_policy_mode == "skip_when_moving" and normalized_status == "moving":
         return None
+
+    active_preset_token = str(pan_tilt_zoom_state.preset_token or "").strip()
+    if active_preset_token:
+        preset_matches = [
+            item
+            for item in valid_sets
+            if item.pose_reference is not None
+            and str(item.pose_reference.preset_token or "").strip() == active_preset_token
+        ]
+        if len(preset_matches) == 1:
+            return ControlPointSetSelection(
+                control_point_set=preset_matches[0],
+                pose_distance=0.0,
+                pose_axes_used=("preset",),
+                move_status=normalized_status,
+                reason="preset_token_match",
+            )
 
     nearest_any: tuple[float, tuple[str, ...], ControlPointSet] | None = None
     nearest_in_range: tuple[float, tuple[str, ...], ControlPointSet] | None = None
@@ -265,19 +285,12 @@ def select_control_point_set(
             reason="fallback:default_set",
         )
 
-    if default_set is not None and nearest_any is None:
-        return ControlPointSetSelection(
-            control_point_set=default_set,
-            pose_distance=None,
-            pose_axes_used=(),
-            move_status=normalized_status,
-            reason="fallback:default_set_without_pose_axes",
-        )
-
     return None
 
 
-def compute_control_points_signature(control_points: list[ControlPointPair] | tuple[ControlPointPair, ...]) -> str:
+def compute_control_points_signature(
+    control_points: list[ControlPointPair] | tuple[ControlPointPair, ...],
+) -> str:
     raw = "\n".join(
         f"{float(point.image_u):.12g}|{float(point.image_v):.12g}|{float(point.world_x):.12g}|{float(point.world_z):.12g}"
         for point in control_points
@@ -304,7 +317,8 @@ def compute_refinement_points_signature(
 
 
 def compute_boundary_refinement_points_signature(
-    boundary_refinement_points: list[ControlPointBoundaryRefinementPoint] | tuple[ControlPointBoundaryRefinementPoint, ...],
+    boundary_refinement_points: list[ControlPointBoundaryRefinementPoint]
+    | tuple[ControlPointBoundaryRefinementPoint, ...],
 ) -> str:
     raw = "\n".join(
         "|".join(
@@ -442,7 +456,9 @@ def compute_homography_quality_metrics(
     for index, point in enumerate(pairs):
         expected_image = (float(point.image_u), float(point.image_v))
         fallback_image_points.append(expected_image)
-        predicted_image = apply_homography(H_world_to_image, float(point.world_x), float(point.world_z))
+        predicted_image = apply_homography(
+            H_world_to_image, float(point.world_x), float(point.world_z)
+        )
         if predicted_image is None:
             continue
         error = math.dist(expected_image, predicted_image)
@@ -453,16 +469,22 @@ def compute_homography_quality_metrics(
     if not image_errors:
         points_for_quality = fallback_image_points
         for point in pairs:
-            predicted_image = apply_homography(H_world_to_image, float(point.world_x), float(point.world_z))
+            predicted_image = apply_homography(
+                H_world_to_image, float(point.world_x), float(point.world_z)
+            )
             if predicted_image is None:
                 continue
-            image_errors.append(math.dist((float(point.image_u), float(point.image_v)), predicted_image))
+            image_errors.append(
+                math.dist((float(point.image_u), float(point.image_v)), predicted_image)
+            )
     else:
         points_for_quality = inlier_image_points
 
     hull_area_ratio = _convex_hull_area_ratio(points_for_quality)
     is_near_collinear = hull_area_ratio <= 1e-4
-    is_numerically_unstable = _is_homography_numerically_unstable(H_world_to_image, H_image_to_world)
+    is_numerically_unstable = _is_homography_numerically_unstable(
+        H_world_to_image, H_image_to_world
+    )
     return HomographyQuality(
         number_of_points=len(pairs),
         number_of_inliers=sum(1 for flag in inlier_mask if flag),
@@ -511,7 +533,8 @@ class ControlPointMapper:
         self,
         pairs: list[ControlPointPair],
         config: HomographyEstimationConfig | None = None,
-        refinement_points: list[ControlPointRefinementPoint] | tuple[ControlPointRefinementPoint, ...] = (),
+        refinement_points: list[ControlPointRefinementPoint]
+        | tuple[ControlPointRefinementPoint, ...] = (),
         boundary_refinement_points: list[ControlPointBoundaryRefinementPoint]
         | tuple[ControlPointBoundaryRefinementPoint, ...] = (),
     ) -> None:
@@ -541,13 +564,19 @@ class ControlPointMapper:
         base = apply_homography(self._H_image_to_world, u, v)
         if base is None:
             return None
-        boundary_delta = _boundary_refinement_delta(self._boundary_refinement_displacements, float(u), float(v))
+        boundary_delta = _boundary_refinement_delta(
+            self._boundary_refinement_displacements, float(u), float(v)
+        )
         delta = _local_refinement_delta(self._refinement_displacements, float(u), float(v))
-        return float(base[0]) + boundary_delta[0] + delta[0], float(base[1]) + boundary_delta[1] + delta[1]
+        return float(base[0]) + boundary_delta[0] + delta[0], float(base[1]) + boundary_delta[
+            1
+        ] + delta[1]
 
     def map_world_to_image(self, x: float, z: float) -> tuple[float, float] | None:
         base = apply_homography(self._H_world_to_image, x, z)
-        if base is None or (not self._refinement_displacements and not self._boundary_refinement_displacements):
+        if base is None or (
+            not self._refinement_displacements and not self._boundary_refinement_displacements
+        ):
             return base
         return _invert_refined_image_point(self, float(x), float(z), base)
 
@@ -709,7 +738,9 @@ def _boundary_delta_at_edge(
     edge: BoundaryRefinementEdge,
     t: float,
 ) -> tuple[float, float]:
-    edge_points = sorted((point for point in displacements if point.edge == edge), key=lambda point: point.t)
+    edge_points = sorted(
+        (point for point in displacements if point.edge == edge), key=lambda point: point.t
+    )
     if not edge_points:
         return 0.0, 0.0
     anchors: list[tuple[float, float, float]] = [(0.0, 0.0, 0.0)]

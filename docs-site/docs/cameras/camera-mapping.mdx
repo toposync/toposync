@@ -86,6 +86,11 @@ When the camera moves:
 Warnings about pose quality do not mean the stream is broken. They mean the
 projected position may be imprecise.
 
+[Semantic PTZ attention](ptz-attention.mdx) uses only the calibrated views allowed
+by its profile. One ready view is selected as home and the remaining allowed views
+form the focus target set. A preset token is a movement target, not proof that the
+camera reached the expected composition.
+
 ## Area clipping for 360 View {/* #area-clipping-for-360-view */}
 
 A camera element can optionally choose one area as a 360 View clip area. This
@@ -118,7 +123,7 @@ Camera mapping can affect:
 - camera markers and spatial context;
 - **Spatial Events** produced from mapped camera detections;
 - pipelines that use camera-to-world coordinates;
-- future PTZ-aware controls and overlays.
+- Semantic PTZ attention view selection and return behavior.
 
 It does not replace live viewing. A camera must still have an active
 transmission/publication before it can be projected as live video.
@@ -131,5 +136,7 @@ transmission/publication before it can be projected as live video.
 4. Add four reliable corner pairs.
 5. Use the global transform before adding internal refinement points.
 6. Add PTZ views only for meaningful positions or presets.
-7. Use area clipping only when you want a spatial crop in 360 View.
-8. Open 360 View and check that the video, marker, and warnings make sense.
+7. For PTZ attention, mark one ready view as home and keep the allowed focus set
+   small.
+8. Use area clipping only when you want a spatial crop in 360 View.
+9. Open 360 View and check that the video, marker, and warnings make sense.

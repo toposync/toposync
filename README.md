@@ -98,6 +98,7 @@ Toposync's current visualization flow progressively turns a mapped room into an 
 | **Spatial tracking** | Track objects, people, or events over time and associate their paths with areas of the home. | **Ready for testing** |
 | **Spatial Awareness at entrances** | Detect people, vehicles, or deliveries stopped near the gate, driveway, sidewalk, or entrance. | **Ready for testing** |
 | **Relevant stopped objects** | Create rules for things that actually stopped in an area, instead of reacting to every fast movement. | **Ready for testing** |
+| **Semantic PTZ attention** | Keep a PTZ camera focused on a relevant lifecycle event, hold the selected calibrated view while the event remains active, and return to a configured home view afterward. | **Early experiment, shadow first** |
 | **Spatial Awareness for sensitive areas** | Add an extra awareness layer around places such as pools, gates, garages, backyards, or restricted areas. | **Ready for testing** |
 | **Pets near sensitive areas** | Combine detection, areas, and notifications to notice relevant situations involving pets near places such as pools, streets, or gates. | **Ready for testing** |
 | **Spatial 360 view** | Project camera images into the 2D/3D model, creating a visualization inspired by car 360 camera systems. | **Early experiment** |
@@ -263,6 +264,7 @@ Useful starting points:
 - [Installation](docs-site/docs/installation/choose-your-installation.mdx)
 - [Compatibility](docs-site/docs/installation/architecture-support.mdx)
 - [Architecture](docs-site/docs/developers/architecture.mdx)
+- [Semantic PTZ attention](docs-site/docs/cameras/ptz-attention.mdx)
 - [Extension authoring](docs-site/docs/developers/extension-authoring.mdx)
 - [Plugin API](docs-site/docs/developers/plugin-api.mdx)
 - [Pipelines](docs-site/docs/developers/pipelines.mdx)

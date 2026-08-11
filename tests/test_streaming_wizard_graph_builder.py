@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 
 from toposync.runtime.config_store import Pipeline
-from toposync.runtime.pipelines import OperatorRegistry, PipelineGraphCompiler, register_builtin_operators
+from toposync.runtime.pipelines import (
+    OperatorRegistry,
+    PipelineGraphCompiler,
+    register_builtin_operators,
+)
 from toposync.runtime.pipelines.recommendations import analyze_compiled_pipeline
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 from toposync_ext_streaming.wizard.pipeline_builder import (
@@ -33,6 +37,17 @@ def _stream_config(graph: dict) -> dict:
         if str(node.get("operator") or "") == "stream.publish_video":
             return node.get("config") if isinstance(node.get("config"), dict) else {}
     return {}
+
+
+def _stream_input_edge(graph: dict) -> dict:
+    edges = graph.get("edges") if isinstance(graph.get("edges"), list) else []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        target = edge.get("to") if isinstance(edge.get("to"), dict) else {}
+        if str(target.get("node") or "") == "stream" and str(target.get("port") or "in") == "in":
+            return edge
+    raise AssertionError("stream.publish_video input edge was not found")
 
 
 def _operator_config(graph: dict, *, operator_id: str) -> dict:
@@ -231,7 +246,9 @@ def test_wizard_graph_can_gate_camera_source_by_stream_demand() -> None:
     register_builtin_operators(registry)
     register_camera_pipeline_operators(registry)
     register_streaming_pipeline_operators(registry)
-    PipelineGraphCompiler(registry).compile_pipeline(Pipeline(name="demand_gate_stream", graph=graph))
+    PipelineGraphCompiler(registry).compile_pipeline(
+        Pipeline(name="demand_gate_stream", graph=graph)
+    )
 
 
 def test_motion_preset_has_fps_reducer_even_without_optional_parameters() -> None:
@@ -267,8 +284,14 @@ def test_wizard_graph_defaults_detection_and_tracking_to_annotate() -> None:
         preset_id="detection_stream",
         optional_parameters=None,
     )
-    assert _operator_config(detection_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
-    assert _operator_config(detection_graph, operator_id="vision.detect").get("model_id") == "rfdetr_det_medium"
+    assert (
+        _operator_config(detection_graph, operator_id="vision.detect").get("emit_mode")
+        == "annotate"
+    )
+    assert (
+        _operator_config(detection_graph, operator_id="vision.detect").get("model_id")
+        == "rfdetr_det_medium"
+    )
 
     tracking_graph = build_streaming_wizard_graph(
         transmission_id="transmission_main",
@@ -276,9 +299,17 @@ def test_wizard_graph_defaults_detection_and_tracking_to_annotate() -> None:
         preset_id="tracking_stream",
         optional_parameters=None,
     )
-    assert _operator_config(tracking_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
-    assert _operator_config(tracking_graph, operator_id="vision.detect").get("model_id") == "rfdetr_det_medium"
-    assert _operator_config(tracking_graph, operator_id="vision.detect").get("confidence_threshold") == 0.25
+    assert (
+        _operator_config(tracking_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
+    )
+    assert (
+        _operator_config(tracking_graph, operator_id="vision.detect").get("model_id")
+        == "rfdetr_det_medium"
+    )
+    assert (
+        _operator_config(tracking_graph, operator_id="vision.detect").get("confidence_threshold")
+        == 0.25
+    )
     track_config = _operator_config(tracking_graph, operator_id="vision.track")
     assert track_config.get("tracker_id") == "byte_world"
     assert track_config.get("close_after_seconds") == 10.0
@@ -290,7 +321,12 @@ def test_wizard_graph_defaults_detection_and_tracking_to_annotate() -> None:
         preset_id="tracking_stream",
         optional_parameters={"stream_behavior": "event_gated"},
     )
-    assert _operator_config(event_gated_tracking_graph, operator_id="vision.track").get("close_after_seconds") == 10.0
+    assert (
+        _operator_config(event_gated_tracking_graph, operator_id="vision.track").get(
+            "close_after_seconds"
+        )
+        == 10.0
+    )
     assert "vision.event_assembler" not in _operator_ids(event_gated_tracking_graph)
 
 
@@ -311,43 +347,187 @@ def test_wizard_graph_event_gated_keeps_gate_upstream_of_stream() -> None:
         optional_parameters={"stream_behavior": "event_gated"},
     )
     assert "vision.detect" in _upstream_operator_ids_to_stream(detection_graph)
-    assert _operator_config(detection_graph, operator_id="vision.detect").get("emit_mode") == "filter"
+    assert (
+        _operator_config(detection_graph, operator_id="vision.detect").get("emit_mode") == "filter"
+    )
 
 
-def test_stream_publish_video_diagnostics_warn_for_event_gated_upstream() -> None:
-    motion_graph = build_streaming_wizard_graph(
+@pytest.mark.parametrize(
+    ("preset_id", "expected_code"),
+    [
+        ("motion_gate_stream", "stream_publish_video_event_gated_motion"),
+        ("detection_stream", "stream_publish_video_event_gated_detection"),
+        ("tracking_stream", "stream_publish_video_event_gated_tracking"),
+    ],
+)
+def test_stream_publish_video_diagnostics_respect_event_gated_edge_semantics(
+    preset_id: str,
+    expected_code: str,
+) -> None:
+    graph = build_streaming_wizard_graph(
         transmission_id="transmission_main",
         camera_id="camera_a",
-        preset_id="motion_gate_stream",
+        preset_id=preset_id,  # type: ignore[arg-type]
         optional_parameters={"stream_behavior": "event_gated"},
     )
-    assert "stream_publish_video_event_gated_motion" in _compile_alert_codes(motion_graph)
+    stream_edge = _stream_input_edge(graph)
+    assert stream_edge["traffic"] == {
+        "modality": "video.frame",
+        "semantic_class": "event",
+        "continuous": False,
+    }
+    assert stream_edge["backpressure"]["mode"] == "pause_upstream"
+    assert expected_code not in _compile_alert_codes(graph)
 
-    detection_graph = build_streaming_wizard_graph(
-        transmission_id="transmission_main",
-        camera_id="camera_a",
-        preset_id="detection_stream",
-        optional_parameters={"stream_behavior": "event_gated"},
-    )
-    assert "stream_publish_video_event_gated_detection" in _compile_alert_codes(detection_graph)
+    stream_edge["traffic"] = {
+        "modality": "video.frame",
+        "semantic_class": "frame",
+        "continuous": True,
+    }
+    stream_edge["backpressure"] = {"mode": "reduce_source_rate"}
+    assert expected_code in _compile_alert_codes(graph)
 
-    tracking_graph = build_streaming_wizard_graph(
+
+def test_stream_publish_video_group_events_diagnostic_respects_edge_semantics() -> None:
+    graph = build_streaming_wizard_graph(
         transmission_id="transmission_main",
         camera_id="camera_a",
         preset_id="tracking_stream",
         optional_parameters={"stream_behavior": "event_gated"},
     )
-    assert "stream_publish_video_event_gated_tracking" in _compile_alert_codes(tracking_graph)
+    stream_edge = _stream_input_edge(graph)
+    stream_edge["to"] = {"node": "group", "port": "in"}
+    graph["nodes"].append(
+        {
+            "uid": "group",
+            "id": "group",
+            "operator": "vision.group_events",
+            "config": {},
+        }
+    )
+    graph["edges"].append(
+        {
+            "uid": "edge_group_stream",
+            "from": {"node": "group", "port": "out"},
+            "to": {"node": "stream", "port": "in"},
+            "traffic": {
+                "modality": "video.frame",
+                "semantic_class": "event",
+                "continuous": False,
+            },
+            "queue": {"max_items": 8, "drop_policy": "drop_oldest"},
+            "backpressure": {"mode": "pause_upstream"},
+        }
+    )
+
+    assert "stream_publish_video_event_gated_group_events" not in _compile_alert_codes(graph)
+
+    stream_edge = _stream_input_edge(graph)
+    stream_edge["traffic"] = {
+        "modality": "video.frame",
+        "semantic_class": "frame",
+        "continuous": True,
+    }
+    stream_edge["backpressure"] = {"mode": "reduce_source_rate"}
+    alert_codes = _compile_alert_codes(graph)
+    assert "stream_publish_video_event_gated_group_events" in alert_codes
+    assert "stream_publish_video_event_gated_tracking" not in alert_codes
+
+
+def test_stream_publish_video_diagnostics_ignore_event_gates_on_auxiliary_inputs() -> None:
+    graph = {
+        "schema_version": 2,
+        "uid": "stream_with_auxiliary_event_branch",
+        "nodes": [
+            {
+                "uid": "node_source",
+                "id": "source",
+                "operator": "core.demo_frame_sequence_source",
+                "config": {},
+            },
+            {
+                "uid": "node_motion",
+                "id": "motion",
+                "operator": "camera.motion_gate",
+                "config": {"emit_when_idle": False},
+            },
+            {
+                "uid": "node_attach",
+                "id": "attach",
+                "operator": "camera.frame_attach",
+                "config": {},
+            },
+            {
+                "uid": "node_stream",
+                "id": "stream",
+                "operator": "stream.publish_video",
+                "config": {"transmission_id": "transmission_main"},
+            },
+        ],
+        "edges": [
+            {
+                "uid": "edge_source_attach",
+                "from": {"node": "source", "port": "out"},
+                "to": {"node": "attach", "port": "in"},
+                "traffic": {
+                    "modality": "video.frame",
+                    "semantic_class": "frame",
+                    "continuous": True,
+                },
+                "queue": {"max_items": 1, "drop_policy": "latest_only"},
+            },
+            {
+                "uid": "edge_source_motion",
+                "from": {"node": "source", "port": "out"},
+                "to": {"node": "motion", "port": "in"},
+                "traffic": {
+                    "modality": "video.frame",
+                    "semantic_class": "frame",
+                    "continuous": True,
+                },
+                "queue": {"max_items": 1, "drop_policy": "latest_only"},
+            },
+            {
+                "uid": "edge_motion_attach",
+                "from": {"node": "motion", "port": "out"},
+                "to": {"node": "attach", "port": "frames"},
+                "traffic": {
+                    "modality": "video.frame",
+                    "semantic_class": "event",
+                    "continuous": False,
+                },
+                "queue": {"max_items": 1, "drop_policy": "latest_only"},
+            },
+            {
+                "uid": "edge_attach_stream",
+                "from": {"node": "attach", "port": "out"},
+                "to": {"node": "stream", "port": "in"},
+                "traffic": {
+                    "modality": "video.frame",
+                    "semantic_class": "frame",
+                    "continuous": True,
+                },
+                "queue": {"max_items": 1, "drop_policy": "latest_only"},
+            },
+        ],
+    }
+
+    assert "stream_publish_video_event_gated_motion" not in _compile_alert_codes(graph)
 
 
 @pytest.mark.parametrize("preset_id", ["motion_gate_stream", "detection_stream", "tracking_stream"])
-def test_stream_publish_video_diagnostics_do_not_warn_for_continuous_presets(preset_id: str) -> None:
+def test_stream_publish_video_diagnostics_do_not_warn_for_continuous_presets(
+    preset_id: str,
+) -> None:
     graph = build_streaming_wizard_graph(
         transmission_id="transmission_main",
         camera_id="camera_a",
         preset_id=preset_id,  # type: ignore[arg-type]
         optional_parameters=None,
     )
+    stream_edge = _stream_input_edge(graph)
+    assert stream_edge["traffic"]["continuous"] is True
+    assert stream_edge["backpressure"]["mode"] == "reduce_source_rate"
     alert_codes = _compile_alert_codes(graph)
     assert not any(code.startswith("stream_publish_video_event_gated_") for code in alert_codes)
 
@@ -359,7 +539,10 @@ def test_wizard_graph_disables_yolo_filter_when_requested() -> None:
         preset_id="detection_stream",
         optional_parameters={"yolo_filter_enabled": False},
     )
-    assert _operator_config(detection_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
+    assert (
+        _operator_config(detection_graph, operator_id="vision.detect").get("emit_mode")
+        == "annotate"
+    )
 
     tracking_graph = build_streaming_wizard_graph(
         transmission_id="transmission_main",
@@ -367,9 +550,17 @@ def test_wizard_graph_disables_yolo_filter_when_requested() -> None:
         preset_id="tracking_stream",
         optional_parameters={"yolo_filter_enabled": False},
     )
-    assert _operator_config(tracking_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
-    assert _operator_config(tracking_graph, operator_id="vision.detect").get("confidence_threshold") == 0.25
-    assert _operator_config(tracking_graph, operator_id="vision.track").get("close_after_seconds") == 10.0
+    assert (
+        _operator_config(tracking_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
+    )
+    assert (
+        _operator_config(tracking_graph, operator_id="vision.detect").get("confidence_threshold")
+        == 0.25
+    )
+    assert (
+        _operator_config(tracking_graph, operator_id="vision.track").get("close_after_seconds")
+        == 10.0
+    )
 
 
 def test_wizard_graph_defaults_segmentation_to_rtmdet_ins_and_mask_publish() -> None:
@@ -380,6 +571,14 @@ def test_wizard_graph_defaults_segmentation_to_rtmdet_ins_and_mask_publish() -> 
         optional_parameters=None,
     )
 
-    assert _operator_config(segmentation_graph, operator_id="vision.segment_instances").get("model_id") == "rtmdet_ins_small"
-    assert _operator_config(segmentation_graph, operator_id="vision.segment_instances").get("attach_mask_artifacts") is True
+    assert (
+        _operator_config(segmentation_graph, operator_id="vision.segment_instances").get("model_id")
+        == "rtmdet_ins_small"
+    )
+    assert (
+        _operator_config(segmentation_graph, operator_id="vision.segment_instances").get(
+            "attach_mask_artifacts"
+        )
+        is True
+    )
     assert _stream_config(segmentation_graph).get("input_artifact_name", "") == ""

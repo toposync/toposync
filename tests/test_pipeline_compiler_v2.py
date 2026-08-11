@@ -11,6 +11,7 @@ from toposync.runtime.pipelines import (
     OperatorRegistry,
     PipelineGraphCompiler,
 )
+from toposync.runtime.pipelines.shared_runtime import build_merged_pipeline_plan
 
 
 def _registry() -> OperatorRegistry:
@@ -52,14 +53,43 @@ def _graph_v2() -> dict:
                 "uid": "edge_source_filter",
                 "from": {"node": "source", "port": "out"},
                 "to": {"node": "filter", "port": "in"},
-                "traffic": {"modality": "video.frame", "semantic_class": "frame"},
-                "queue": {"max_items": 3, "drop_policy": "drop_oldest"},
+                "traffic": {
+                    "modality": "video.frame",
+                    "semantic_class": "frame",
+                    "continuous": True,
+                    "loss_tolerance": "lossy_updates_only",
+                },
+                "queue": {
+                    "max_items": 3,
+                    "max_artifact_bytes": 1_048_576,
+                    "max_age_ms": 750,
+                    "drop_policy": "drop_oldest",
+                    "key_policy": "packet_field",
+                    "key_path": "stream_id",
+                },
+                "backpressure": {
+                    "mode": "reduce_source_rate",
+                    "warn_at_utilization": 0.6,
+                    "critical_at_utilization": 0.85,
+                    "propagate_pressure": False,
+                },
+                "lifecycle": {
+                    "preserve_open": True,
+                    "preserve_close": True,
+                    "compact_updates": False,
+                },
+                "debug": {
+                    "sample_headers": False,
+                    "retain_last": 7,
+                    "retain_artifact_refs": False,
+                    "retain_artifact_data": True,
+                },
             }
         ],
     }
 
 
-def test_compiler_v2_preserves_uids_and_queue_contract() -> None:
+def test_compiler_v2_preserves_edge_contract() -> None:
     compiled = PipelineGraphCompiler(_registry()).compile_pipeline(
         Pipeline(name="graph_v2", graph=_graph_v2())
     )
@@ -74,6 +104,50 @@ def test_compiler_v2_preserves_uids_and_queue_contract() -> None:
     assert edge.uid == "edge_source_filter"
     assert edge.channel_maxsize == 3
     assert edge.channel_drop_policy == DropPolicy.DROP_OLDEST
+    assert edge.traffic_modality == "video.frame"
+    assert edge.traffic_semantic_class == "frame"
+    assert edge.traffic_continuous is True
+    assert edge.traffic_loss_tolerance == "lossy_updates_only"
+    assert edge.queue_max_artifact_bytes == 1_048_576
+    assert edge.queue_max_age_ms == 750
+    assert edge.queue_key_policy == "packet_field"
+    assert edge.queue_key_path == "stream_id"
+    assert edge.backpressure_mode == "reduce_source_rate"
+    assert edge.backpressure_warn_at_utilization == 0.6
+    assert edge.backpressure_critical_at_utilization == 0.85
+    assert edge.backpressure_propagate_pressure is False
+    assert edge.preserve_open is True
+    assert edge.preserve_close is True
+    assert edge.compact_updates is False
+    assert edge.debug_sample_headers is False
+    assert edge.debug_retain_last == 7
+    assert edge.debug_retain_artifact_refs is False
+    assert edge.debug_retain_artifact_data is True
+    assert edge.as_contract_dict()["queue"] == {
+        "max_items": 3,
+        "max_artifact_bytes": 1_048_576,
+        "max_age_ms": 750,
+        "drop_policy": "drop_oldest",
+        "key_policy": "packet_field",
+        "key_path": "stream_id",
+    }
+    assert edge.as_contract_dict()["debug"] == {
+        "sample_headers": False,
+        "retain_last": 7,
+        "retain_artifact_refs": False,
+        "retain_artifact_data": True,
+    }
+
+
+def test_merged_runtime_preserves_compiled_edge_contract() -> None:
+    report = PipelineGraphCompiler(_registry()).compile_many(
+        [Pipeline(name="graph_v2", graph=_graph_v2())]
+    )
+
+    original = report.pipelines[0].edges[0]
+    merged = build_merged_pipeline_plan(report).merged_pipeline.edges[0]
+
+    assert merged.as_contract_dict() == original.as_contract_dict()
 
 
 def test_compiler_v2_accepts_empty_graph_without_graph_uid_for_api_compatibility() -> None:
@@ -96,7 +170,9 @@ def test_compiler_v2_rejects_duplicate_node_uid() -> None:
 
 def test_compiler_v2_rejects_duplicate_edge_uid() -> None:
     graph = _graph_v2()
-    graph["nodes"].append({"uid": "node_filter_2", "id": "filter_2", "operator": "test.video_filter"})
+    graph["nodes"].append(
+        {"uid": "node_filter_2", "id": "filter_2", "operator": "test.video_filter"}
+    )
     graph["edges"].append(
         {
             "uid": "edge_source_filter",
@@ -162,7 +238,9 @@ def test_compiler_v2_keeps_dag_and_single_input_port_guards() -> None:
         PipelineGraphCompiler(_registry()).compile_pipeline(Pipeline(name="cycle", graph=cycle))
 
     multi_input = _graph_v2()
-    multi_input["nodes"].append({"uid": "node_source_2", "id": "source_2", "operator": "test.video_source"})
+    multi_input["nodes"].append(
+        {"uid": "node_source_2", "id": "source_2", "operator": "test.video_source"}
+    )
     multi_input["edges"].append(
         {
             "uid": "edge_source_2_filter",
@@ -172,7 +250,9 @@ def test_compiler_v2_keeps_dag_and_single_input_port_guards() -> None:
         }
     )
     with pytest.raises(GraphCompileError, match="multiple incoming edges"):
-        PipelineGraphCompiler(_registry()).compile_pipeline(Pipeline(name="multi", graph=multi_input))
+        PipelineGraphCompiler(_registry()).compile_pipeline(
+            Pipeline(name="multi", graph=multi_input)
+        )
 
 
 def test_compiler_v2_output_is_independent_of_json_order() -> None:

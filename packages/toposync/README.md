@@ -11,6 +11,7 @@ This distribution installs:
 - `toposync-ext-images`
 - `toposync-ext-cameras`
 - `toposync-ext-vision`
+- `toposync-ext-ptz-attention`
 - `toposync-ext-spatial-video`
 - `onnxruntime`
 

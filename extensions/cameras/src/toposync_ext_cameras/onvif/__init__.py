@@ -4,6 +4,7 @@ This intentionally avoids external dependencies to keep the extension lightweigh
 """
 
 from .client import (
+    OnvifAmbiguousMutationError,
     OnvifClient,
     OnvifError,
     OnvifProfile,
@@ -12,6 +13,13 @@ from .client import (
     normalize_onvif_xaddr,
     normalize_rtsp_url,
     onvif_xaddr_candidates,
+)
+from .reolink_cgi import (
+    REOLINK_PRESET_TOKEN_PREFIX,
+    ReolinkCgiClient,
+    ReolinkCgiError,
+    ReolinkCgiPreset,
+    parse_reolink_preset_token,
 )
 from .discovery import (
     OnvifDiscoveredDevice,
@@ -36,11 +44,16 @@ from .events import (
 )
 
 __all__ = [
+    "OnvifAmbiguousMutationError",
     "OnvifClient",
     "OnvifError",
     "OnvifProfile",
     "OnvifPtzPreset",
     "OnvifPtzStatus",
+    "REOLINK_PRESET_TOKEN_PREFIX",
+    "ReolinkCgiClient",
+    "ReolinkCgiError",
+    "ReolinkCgiPreset",
     "OnvifService",
     "OnvifEventItemDescription",
     "OnvifEventDescriptor",
@@ -61,4 +74,5 @@ __all__ = [
     "normalize_onvif_xaddr",
     "onvif_xaddr_candidates",
     "normalize_rtsp_url",
+    "parse_reolink_preset_token",
 ]

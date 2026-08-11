@@ -101,6 +101,11 @@ pipeline helper: it links an existing Streaming transmission to a generated
 pipeline and cuts between cameras from notifications. That is a specialized
 workflow, not the normal camera live-view setup.
 
+[Semantic PTZ attention](ptz-attention.mdx) is a different workflow. It consumes
+explicit semantic event lifecycles, selects an allowed calibrated PTZ view, holds
+that view while the event remains active, and returns to a configured home view.
+It does not follow every moving object and does not infer criminal intent.
+
 ## Mapping {/* #mapping */}
 
 When the camera is placed in a composition, Toposync can use it for spatial
@@ -114,6 +119,8 @@ context:
 See [Camera mapping](camera-mapping.mdx) for calibration, PTZ poses, and spatial
 video projection.
 
+Calibrated PTZ views are also the safe target set used by Semantic PTZ attention.
+
 ## What to validate {/* #what-to-validate */}
 
 After adding a camera, validate this in order:
@@ -125,5 +132,7 @@ After adding a camera, validate this in order:
 5. The dashboard shows the camera as live, warming up, or with a clear problem.
 6. PTZ works only if the camera supports PTZ and credentials allow it.
 7. Mapping is calibrated only after the image and live source are stable.
+8. PTZ attention is reviewed in shadow mode before live preset movement is
+   enabled.
 
 Avoid tuning advanced transport settings until one camera is reliable.

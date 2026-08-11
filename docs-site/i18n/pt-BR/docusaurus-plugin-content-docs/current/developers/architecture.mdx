@@ -98,9 +98,12 @@ O pacote padrão `toposync` é um bundle de aplicação. Ele depende de `toposyn
 - Home Assistant: integração com servidor Home Assistant e contexto de entidades.
 - Cameras: registro de câmeras, utilitários RTSP/ONVIF, snapshots, calibração e operadores de pipeline para câmeras.
 - Vision: gerenciamento de modelos baseado em ONNX e operadores de pipeline de vision.
+- PTZ Attention: arbitragem sensível ao ciclo de vida que seleciona eventos semânticos relevantes, focaliza presets PTZ calibrados permitidos e coordena o retorno.
 - Spatial Video: superfície da extensão de vídeo espacial.
 
 Streaming e AI são caminhos de extensão, não pressupostos embutidos na arquitetura core. Streaming é distribuído como bundle opcional porque traz preocupações externas de runtime de mídia. AI também é modelado como extensão para manter comportamento específico de provedores fora do core.
+
+A extensão Cameras é dona da atuação PTZ física, leases, proteção contra comandos antigos e tomada de controle manual. PTZ Attention é dona da seleção semântica, sessões de foco, tempos e política de retorno. Essa divisão mantém o controle de dispositivos genérico e permite evoluir o comportamento de atenção por evento de forma independente.
 
 ## Pipelines e processamento {/* #pipelines-and-processing */}
 

@@ -482,13 +482,16 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
     if (!id) continue;
     const controlRecord = readRecord(device.control);
     const controlType = readString(controlRecord.type).trim().toLowerCase() === "onvif" ? "onvif" : "none";
+    const sources = readCameraSources(device.sources);
     output.push({
       id,
       name: readString(device.name).trim(),
       enabled: typeof device.enabled === "boolean" ? device.enabled : true,
-      control: { type: controlType },
+      control: {
+        type: controlType,
+      },
       onvif: controlType === "onvif" ? readOnvifConfig(device.onvif) ?? { xaddr: "", username: "", password: "" } : null,
-      sources: readCameraSources(device.sources),
+      sources,
       metadata: readRecord(device.metadata),
     });
   }
@@ -498,17 +501,21 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
 export function serializeCameras(settings: CameraConfig[]): Record<string, unknown> {
   return {
     schema_version: 4,
-    devices: settings.map((camera) => ({
-      id: camera.id,
-      name: camera.name,
-      kind: "camera",
-      enabled: camera.enabled,
-      clock_domain: `device:${camera.id}`,
-      control: { type: camera.control?.type === "onvif" ? "onvif" : "none" },
-      onvif: camera.control?.type === "onvif" ? camera.onvif ?? { xaddr: "", username: "", password: "" } : null,
-      sources: normalizeCameraSourcesForSave(camera.sources),
-      metadata: camera.metadata ?? {},
-    })),
+    devices: settings.map((camera) => {
+      return {
+        id: camera.id,
+        name: camera.name,
+        kind: "camera",
+        enabled: camera.enabled,
+        clock_domain: `device:${camera.id}`,
+        control: {
+          type: camera.control?.type === "onvif" ? "onvif" : "none",
+        },
+        onvif: camera.control?.type === "onvif" ? camera.onvif ?? { xaddr: "", username: "", password: "" } : null,
+        sources: normalizeCameraSourcesForSave(camera.sources),
+        metadata: camera.metadata ?? {},
+      };
+    }),
   };
 }
 

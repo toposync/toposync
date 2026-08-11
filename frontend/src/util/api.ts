@@ -728,6 +728,9 @@ export type PipelineOperatorPort = {
   name: string;
   required: boolean;
   description: string;
+  preserves_input_contract: boolean;
+  payload_keys_allowlist_field?: string;
+  artifact_names_allowlist_field?: string;
 };
 
 export type PipelineOperatorExpressionHint = {

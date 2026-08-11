@@ -55,6 +55,15 @@ class _PipelineExtension:
         )
 
 
+def _graph_v2(*, uid: str, nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "schema_version": 2,
+        "uid": uid,
+        "nodes": [{"uid": f"{uid}_node_{node['id']}", **node} for node in nodes],
+        "edges": [],
+    }
+
+
 def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
@@ -87,13 +96,12 @@ def test_extension_operator_registration_and_graph_validation(
 
         valid_pipeline = {
             "name": "camera_pipeline",
-            "graph": {
-                "schema_version": 1,
-                "nodes": [
+            "graph": _graph_v2(
+                uid="camera_pipeline",
+                nodes=[
                     {"id": "camera", "operator": "test.camera_source", "config": {"fps": 12}},
                 ],
-                "edges": [],
-            },
+            ),
         }
         created = client.post("/api/pipelines", json=valid_pipeline)
         assert created.status_code == 201
@@ -101,26 +109,24 @@ def test_extension_operator_registration_and_graph_validation(
 
         invalid_pipeline = {
             "name": "camera_pipeline_invalid",
-            "graph": {
-                "schema_version": 1,
-                "nodes": [
+            "graph": _graph_v2(
+                uid="camera_pipeline_invalid",
+                nodes=[
                     {"id": "camera", "operator": "test.camera_source", "config": {"fps": 120}},
                 ],
-                "edges": [],
-            },
+            ),
         }
         invalid = client.post("/api/pipelines", json=invalid_pipeline)
         assert invalid.status_code == 400
 
         unknown_operator_pipeline = {
             "name": "unknown_operator_pipeline",
-            "graph": {
-                "schema_version": 1,
-                "nodes": [
+            "graph": _graph_v2(
+                uid="unknown_operator_pipeline",
+                nodes=[
                     {"id": "camera", "operator": "test.unknown", "config": {}},
                 ],
-                "edges": [],
-            },
+            ),
         }
         unknown = client.post("/api/pipelines", json=unknown_operator_pipeline)
         assert unknown.status_code == 400

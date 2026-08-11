@@ -45,14 +45,18 @@ class VisionSyntheticDetectionSourceConfig(BaseModel):
         default_factory=lambda: [VisionSyntheticDetectionConfig()]
     )
 
-    @field_validator("stream_id", "camera_id", "camera_name", "source_id", "source_name", "model_id")
+    @field_validator(
+        "stream_id", "camera_id", "camera_name", "source_id", "source_name", "model_id"
+    )
     @classmethod
     def _trim_strings(cls, value: str) -> str:
         return str(value or "").strip()
 
     @field_validator("detections")
     @classmethod
-    def _require_detection(cls, value: list[VisionSyntheticDetectionConfig]) -> list[VisionSyntheticDetectionConfig]:
+    def _require_detection(
+        cls, value: list[VisionSyntheticDetectionConfig]
+    ) -> list[VisionSyntheticDetectionConfig]:
         if not value:
             raise ValueError("detections must contain at least one item")
         return value
@@ -295,6 +299,81 @@ class VisionGroupEventsConfig(BaseModel):
         if not prefix:
             return "grp"
         return prefix
+
+
+class VisionSpatialRelationEventConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    required_categories: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "person": ["person"],
+            "vehicle": ["car", "truck", "bus", "motorcycle"],
+        },
+        description=(
+            "Exactly two named category groups. A relation requires at least one active member "
+            "from each group."
+        ),
+    )
+    enter_distance_meters: float = Field(default=3.0, gt=0.0, le=1000.0)
+    exit_distance_meters: float = Field(default=4.0, gt=0.0, le=1000.0)
+    minimum_world_anchor_confidence: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum confidence required on both world anchors before world-space distance is "
+            "used. Missing or weaker confidence falls back to image-space distance."
+        ),
+    )
+    enter_image_center_distance: float = Field(default=0.20, gt=0.0, le=2.0)
+    exit_image_center_distance: float = Field(default=0.28, gt=0.0, le=2.0)
+    dwell_seconds: float = Field(default=4.0, ge=0.0, le=3600.0)
+    close_grace_seconds: float = Field(default=6.0, ge=0.0, le=3600.0)
+    stale_timeout_seconds: float = Field(default=15.0, gt=0.0, le=3600.0)
+    update_interval_seconds: float = Field(default=1.0, ge=0.0, le=300.0)
+    event_id_prefix: str = "rel"
+
+    @field_validator("required_categories")
+    @classmethod
+    def _normalize_required_categories(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        seen_categories: set[str] = set()
+        for role_raw, categories_raw in dict(value or {}).items():
+            role = str(role_raw or "").strip().lower()
+            if not role:
+                raise ValueError("required_categories keys must be non-empty")
+            categories: list[str] = []
+            for category_raw in list(categories_raw or []):
+                category = str(category_raw or "").strip().lower()
+                if not category or category in categories:
+                    continue
+                if category in seen_categories:
+                    raise ValueError("required_categories groups must not overlap")
+                categories.append(category)
+                seen_categories.add(category)
+            if not categories:
+                raise ValueError("required_categories groups must contain at least one category")
+            out[role] = categories
+        if len(out) != 2:
+            raise ValueError("required_categories must contain exactly two groups")
+        return out
+
+    @field_validator("event_id_prefix")
+    @classmethod
+    def _normalize_relation_event_id_prefix(cls, value: str) -> str:
+        return str(value or "").strip().lower() or "rel"
+
+    @model_validator(mode="after")
+    def _validate_relation_constraints(self) -> "VisionSpatialRelationEventConfig":
+        if float(self.exit_distance_meters) < float(self.enter_distance_meters):
+            raise ValueError("exit_distance_meters must be >= enter_distance_meters")
+        if float(self.exit_image_center_distance) < float(self.enter_image_center_distance):
+            raise ValueError("exit_image_center_distance must be >= enter_image_center_distance")
+        if float(self.dwell_seconds) >= float(self.stale_timeout_seconds):
+            raise ValueError("dwell_seconds must be lower than stale_timeout_seconds")
+        if float(self.close_grace_seconds) > float(self.stale_timeout_seconds):
+            raise ValueError("close_grace_seconds must be <= stale_timeout_seconds")
+        return self
 
 
 class VisionSegmentInstancesConfig(BaseModel):

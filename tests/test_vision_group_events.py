@@ -67,7 +67,9 @@ def test_group_events_session_keeps_same_group_for_related_members() -> None:
         runtime = _runtime({"mode": "session", "update_interval_seconds": 0.0})
 
         opened = await runtime.process_packet(_event_packet(1.0, "1"), None)
-        updated = await runtime.process_packet(_event_packet(2.0, "2", bbox01=(0.4, 0.1, 0.6, 0.5)), None)
+        updated = await runtime.process_packet(
+            _event_packet(2.0, "2", bbox01=(0.4, 0.1, 0.6, 0.5)), None
+        )
 
         assert [packet.lifecycle for packet in opened] == [Lifecycle.OPEN]
         assert [packet.lifecycle for packet in updated] == [Lifecycle.UPDATE]
@@ -107,9 +109,15 @@ def test_group_events_proximity_splits_far_world_anchors_and_groups_near_members
             }
         )
 
-        first = await runtime.process_packet(_event_packet(1.0, "1", world={"x": 0.0, "z": 0.0}), None)
-        near = await runtime.process_packet(_event_packet(2.0, "2", world={"x": 3.0, "z": 0.0}), None)
-        far = await runtime.process_packet(_event_packet(3.0, "3", world={"x": 20.0, "z": 0.0}), None)
+        first = await runtime.process_packet(
+            _event_packet(1.0, "1", world={"x": 0.0, "z": 0.0}), None
+        )
+        near = await runtime.process_packet(
+            _event_packet(2.0, "2", world={"x": 3.0, "z": 0.0}), None
+        )
+        far = await runtime.process_packet(
+            _event_packet(3.0, "3", world={"x": 20.0, "z": 0.0}), None
+        )
 
         assert first[0].lifecycle == Lifecycle.OPEN
         assert near[0].lifecycle == Lifecycle.UPDATE
@@ -117,6 +125,28 @@ def test_group_events_proximity_splits_far_world_anchors_and_groups_near_members
         assert far[0].lifecycle == Lifecycle.OPEN
         assert far[0].payload["subject"]["id"] != first[0].payload["subject"]["id"]
         assert isinstance(near[0].payload["subject"]["world_envelope"], dict)
+
+    asyncio.run(scenario())
+
+
+def test_group_events_preserves_normalized_world_anchor_confidence() -> None:
+    async def scenario() -> None:
+        runtime = _runtime({"mode": "session"})
+
+        opened = await runtime.process_packet(
+            _event_packet(
+                1.0,
+                "1",
+                world={"x": 1.0, "z": 2.0, "confidence": 1.4},
+            ),
+            None,
+        )
+
+        assert opened[0].payload["subject"]["members"][0]["world_anchor"] == {
+            "x": 1.0,
+            "z": 2.0,
+            "confidence": 1.0,
+        }
 
     asyncio.run(scenario())
 
@@ -187,10 +217,14 @@ def test_group_events_disabled_passes_packets_through() -> None:
 
 def test_group_events_close_member_does_not_close_group_before_idle() -> None:
     async def scenario() -> None:
-        runtime = _runtime({"mode": "session", "idle_timeout_seconds": 10.0, "update_interval_seconds": 0.0})
+        runtime = _runtime(
+            {"mode": "session", "idle_timeout_seconds": 10.0, "update_interval_seconds": 0.0}
+        )
 
         opened = await runtime.process_packet(_event_packet(1.0, "1"), None)
-        close_member = await runtime.process_packet(_event_packet(2.0, "1", lifecycle=Lifecycle.CLOSE), None)
+        close_member = await runtime.process_packet(
+            _event_packet(2.0, "1", lifecycle=Lifecycle.CLOSE), None
+        )
 
         assert opened[0].lifecycle == Lifecycle.OPEN
         assert close_member == []

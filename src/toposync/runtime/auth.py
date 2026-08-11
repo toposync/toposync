@@ -1319,6 +1319,11 @@ class AuthRuntime:
         "core:extensions": ["core:extensions:list", "core:extensions:manage"],
         "core:event": ["core:events:emit"],
         "core:area": ["core:area:read", "core:area:control", "core:area:edit"],
+        "core:camera": [
+            "core:camera:read",
+            "core:camera:control",
+            "core:camera:configure",
+        ],
     }
 
     public_routes: set[str] = {
@@ -1328,9 +1333,7 @@ class AuthRuntime:
         "/api/auth/pair/complete",
         "/api/auth/embed/complete",
     }
-    public_route_prefixes: tuple[str, ...] = (
-        "/api/streams/media/hls/",
-    )
+    public_route_prefixes: tuple[str, ...] = ("/api/streams/media/hls/",)
 
     def is_public_route(self, path: str) -> bool:
         normalized = str(path or "")

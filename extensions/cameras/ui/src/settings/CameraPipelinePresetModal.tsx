@@ -95,6 +95,7 @@ function presetNamePart(preset: CameraPipelinePreset): string {
   if (preset === "presence_area") return "presenca_agrupada_em_area";
   if (preset === "vehicle_stopped") return "veiculo_parou";
   if (preset === "person_stopped") return "pessoa_parou";
+  if (preset === "person_vehicle_interaction") return "interacao_pessoa_veiculo";
   return "evento_individual_de_pessoas";
 }
 
@@ -108,11 +109,15 @@ function defaultPipelineName(camera: CameraConfig, preset: CameraPipelinePreset)
 }
 
 function defaultNotificationPriority(preset: CameraPipelinePreset): CameraNotificationPriority {
-  return preset === "vehicle_stopped" ? "high" : "medium";
+  return preset === "vehicle_stopped" || preset === "person_vehicle_interaction" ? "high" : "medium";
 }
 
 function presetConfirmsStop(preset: CameraPipelinePreset): boolean {
   return preset === "vehicle_stopped" || preset === "person_stopped";
+}
+
+function presetSupportsArea(preset: CameraPipelinePreset): boolean {
+  return presetConfirmsStop(preset) || preset === "person_vehicle_interaction";
 }
 
 function sourceHasVideoOrigin(camera: CameraConfig, source: CameraSourceConfig | null): boolean {
@@ -260,6 +265,8 @@ export function CameraPipelinePresetModal({
   const [stoppedSpeedKmh, setStoppedSpeedKmh] = useState(VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
   const [minStationarySeconds, setMinStationarySeconds] = useState(VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS);
   const [notificationPriority, setNotificationPriority] = useState<CameraNotificationPriority>("medium");
+  const [enablePtzAttention, setEnablePtzAttention] = useState(false);
+  const [nativeTrackingDisabledConfirmed, setNativeTrackingDisabledConfirmed] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [processingServerId, setProcessingServerId] = useState("local");
   const [modelId, setModelId] = useState(DEFAULT_DETECTION_MODEL_ID);
@@ -299,6 +306,8 @@ export function CameraPipelinePresetModal({
     setStoppedSpeedKmh(VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
     setMinStationarySeconds(VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS);
     setNotificationPriority(defaultNotificationPriority(preset));
+    setEnablePtzAttention(false);
+    setNativeTrackingDisabledConfirmed(false);
     setEnabled(sourceHasVideoOrigin(camera, nextSource));
     setProcessingServerId("local");
     setModelId(DEFAULT_DETECTION_MODEL_ID);
@@ -353,6 +362,10 @@ export function CameraPipelinePresetModal({
     const nextSuggested = preset ? defaultPipelineName(camera, preset) : "";
     const previousSuggested = suggestedName;
     setSourceId(nextSourceId);
+    if (nextSource?.origin.has_ptz !== true) {
+      setEnablePtzAttention(false);
+      setNativeTrackingDisabledConfirmed(false);
+    }
     setEnabled(sourceHasVideoOrigin(camera, nextSource));
     setSuggestedName(nextSuggested);
     if (!pipelineName.trim() || pipelineName === previousSuggested) setPipelineName(nextSuggested);
@@ -387,12 +400,14 @@ export function CameraPipelinePresetModal({
         processing_server_id: processingServerId,
         model_id: modelId,
         composition_id: presetRequiresMapping(preset) ? compositionId : "",
-        area_id: presetConfirmsStop(preset) ? areaId : "",
+        area_id: presetSupportsArea(preset) ? areaId : "",
         stopped_speed_threshold:
           presetConfirmsStop(preset) ? Math.max(0, Number(stoppedSpeedKmh) || 0) / 3.6 : undefined,
         min_stationary_seconds:
           presetConfirmsStop(preset) ? Math.max(0, Number(minStationarySeconds) || 0) : undefined,
         notification_priority: notificationPriority,
+        enable_ptz_attention: enablePtzAttention,
+        ptz_attention_native_tracking_disabled_confirmed: nativeTrackingDisabledConfirmed,
       });
       onCreated(response.pipeline_name);
       onClose();
@@ -437,9 +452,18 @@ export function CameraPipelinePresetModal({
         ? t("ext.cameras.pipeline_preset.vehicle_stopped.title", {}, "Vehicle stopped")
       : preset === "person_stopped"
         ? t("ext.cameras.pipeline_preset.person_stopped.title", {}, "Person stopped")
+      : preset === "person_vehicle_interaction"
+        ? t(
+            "ext.cameras.pipeline_preset.person_vehicle_interaction.title",
+            {},
+            "Person–vehicle interaction",
+          )
         : t("ext.cameras.pipeline_preset.people_individual.title", {}, "Individual people events");
   const noSource = videoSources.length === 0;
   const noMapping = isMappingPreset && mappedCompositions.length === 0;
+  const canOfferPtzAttention = Boolean(
+    isMappingPreset && selectedSource?.origin.has_ptz === true,
+  );
   const selectedServerLabel = processingServerLabel(normalizedProcessingServerId, processingServers, t);
   const selectedModelName = selectedModel?.displayName || DEFAULT_DETECTION_MODEL_NAME;
   const selectedModelId = selectedModel?.modelId || modelId || DEFAULT_DETECTION_MODEL_ID;
@@ -458,6 +482,15 @@ export function CameraPipelinePresetModal({
   if (noMapping) {
     createBlockedReasons.push(
       t("ext.cameras.pipeline_preset.blocked.mapping_required", {}, "Map this camera in a composition before using this preset."),
+    );
+  }
+  if (enablePtzAttention && !nativeTrackingDisabledConfirmed) {
+    createBlockedReasons.push(
+      t(
+        "ext.cameras.pipeline_preset.blocked.ptz_confirmation",
+        {},
+        "Confirm that native tracking, monitor point, and automatic return are disabled before enabling PTZ focus.",
+      ),
     );
   }
   if (modelStatusWaiting) {
@@ -743,7 +776,41 @@ export function CameraPipelinePresetModal({
           </div>
         ) : null}
 
-        {isStopPreset ? (
+        {canOfferPtzAttention ? (
+          <div className="field">
+            <label className="chipButton" style={{ justifyContent: "flex-start" }}>
+              <input
+                type="checkbox"
+                checked={enablePtzAttention}
+                onChange={(event) => {
+                  setEnablePtzAttention(event.target.checked);
+                  if (!event.target.checked) setNativeTrackingDisabledConfirmed(false);
+                }}
+                disabled={creating || noMapping}
+              />
+              {t("ext.cameras.pipeline_preset.ptz.enable", {}, "Focus PTZ on this event")}
+            </label>
+            {enablePtzAttention ? (
+              <label className="row" style={{ alignItems: "flex-start", marginTop: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={nativeTrackingDisabledConfirmed}
+                  onChange={(event) => setNativeTrackingDisabledConfirmed(event.target.checked)}
+                  disabled={creating}
+                />
+                <span>
+                  {t(
+                    "ext.cameras.pipeline_preset.ptz.confirm",
+                    {},
+                    "I confirm that native auto-tracking, monitor point, and automatic return are disabled.",
+                  )}
+                </span>
+              </label>
+            ) : null}
+          </div>
+        ) : null}
+
+        {presetSupportsArea(preset) ? (
           <div className="rowWrap">
             <div className="field">
               <label className="label">{t("ext.cameras.pipeline_preset.area", {}, "Optional area")}</label>
@@ -766,36 +833,40 @@ export function CameraPipelinePresetModal({
                 })}
               </select>
             </div>
-            <div className="field">
-              <label className="label">{t("ext.cameras.pipeline_preset.stopped_speed", {}, "Maximum speed to count as stopped (km/h)")}</label>
-              <input
-                className="input"
-                type="number"
-                min="0"
-                step="0.1"
-                value={String(stoppedSpeedKmh)}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  setStoppedSpeedKmh(Number.isFinite(next) ? next : VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
-                }}
-                disabled={creating}
-              />
-            </div>
-            <div className="field">
-              <label className="label">{t("ext.cameras.pipeline_preset.min_stationary_seconds", {}, "Minimum stopped time (seconds)")}</label>
-              <input
-                className="input"
-                type="number"
-                min="0"
-                step="0.25"
-                value={String(minStationarySeconds)}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  setMinStationarySeconds(Number.isFinite(next) ? next : VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS);
-                }}
-                disabled={creating}
-              />
-            </div>
+            {isStopPreset ? (
+              <>
+                <div className="field">
+                  <label className="label">{t("ext.cameras.pipeline_preset.stopped_speed", {}, "Maximum speed to count as stopped (km/h)")}</label>
+                  <input
+                    className="input"
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={String(stoppedSpeedKmh)}
+                    onChange={(event) => {
+                      const next = Number(event.target.value);
+                      setStoppedSpeedKmh(Number.isFinite(next) ? next : VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
+                    }}
+                    disabled={creating}
+                  />
+                </div>
+                <div className="field">
+                  <label className="label">{t("ext.cameras.pipeline_preset.min_stationary_seconds", {}, "Minimum stopped time (seconds)")}</label>
+                  <input
+                    className="input"
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    value={String(minStationarySeconds)}
+                    onChange={(event) => {
+                      const next = Number(event.target.value);
+                      setMinStationarySeconds(Number.isFinite(next) ? next : VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS);
+                    }}
+                    disabled={creating}
+                  />
+                </div>
+              </>
+            ) : null}
           </div>
         ) : null}
 
@@ -843,6 +914,12 @@ export function CameraPipelinePresetModal({
                   "ext.cameras.pipeline_preset.presence_area.summary",
                   {},
                   "Uses mapping, tracking and proximity grouping to create quieter presence notifications.",
+                )
+            : preset === "person_vehicle_interaction"
+              ? t(
+                  "ext.cameras.pipeline_preset.person_vehicle_interaction.summary",
+                  {},
+                  "Detects and maps people and vehicles, includes stationary subjects, confirms sustained proximity and emits one stable semantic event with an image and high-priority notification.",
                 )
             : isStopPreset
               ? t(

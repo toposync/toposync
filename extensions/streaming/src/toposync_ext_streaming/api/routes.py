@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import hmac
 import json
+import logging
 import os
 import posixpath
 import re
@@ -151,6 +152,8 @@ from .models import (
     resolve_output_engine_path,
 )
 from .playback_plan import build_playback_plan_response, is_webrtc_contract_message, select_webrtc_output
+
+_LOGGER = logging.getLogger(__name__)
 
 MSE_PROXY_DEMAND_TTL_S = 45.0
 MSE_PROXY_PATH_READY_TIMEOUT_S = 8.0
@@ -7256,12 +7259,37 @@ def create_streaming_router() -> APIRouter:
         return registry
 
     async def _require_transmission_camera_controls(
-        request: Request, *, transmission_id: str
+        request: Request,
+        *,
+        transmission_id: str,
+        action: str,
     ) -> tuple[Transmission, str, str | None]:
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
 
-        transmission = next((t for t in settings.transmissions if t.id == transmission_id), None)
+        normalized_transmission_id = str(transmission_id or "").strip()
+        authorization_camera_id = ""
+        for candidate in settings.transmissions:
+            if candidate.id != normalized_transmission_id:
+                continue
+            candidate_controls = getattr(candidate, "camera_controls", None)
+            authorization_camera_id = str(
+                getattr(candidate_controls, "camera_id", "") or ""
+            ).strip()
+            break
+        _require_auth(
+            request,
+            action=action,
+            resource_type="core:camera",
+            resource_selector=(
+                authorization_camera_id or f"transmission:{normalized_transmission_id or 'unknown'}"
+            ),
+        )
+
+        transmission = next(
+            (item for item in settings.transmissions if item.id == normalized_transmission_id),
+            None,
+        )
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
@@ -7286,6 +7314,107 @@ def create_streaming_router() -> APIRouter:
             )
         return transmission, camera_id, camera_source_id or None
 
+    def _manual_camera_owner_id(request: Request, *, camera_id: str) -> str:
+        maybe = _maybe_auth(request)
+        if maybe is None or maybe[1].principal is None:
+            principal_id = "local"
+        else:
+            principal_id = str(maybe[1].principal.user_id or "local").strip() or "local"
+        return f"manual:{principal_id}:{camera_id}"
+
+    async def _submit_manual_camera_command(
+        request: Request,
+        *,
+        camera_id: str,
+        camera_source_id: str | None,
+        command: dict[str, Any],
+    ) -> None:
+        services = _services(request)
+        command_id = str(request.headers.get("x-idempotency-key") or "").strip()
+        if not command_id:
+            command_id = f"manual_{secrets.token_hex(16)}"
+        try:
+            lease = await services.call(
+                "cameras.control.acquire",
+                camera_id=camera_id,
+                camera_source_id=camera_source_id,
+                owner_kind="manual",
+                owner_id=_manual_camera_owner_id(request, camera_id=camera_id),
+                ttl_s=15.0,
+            )
+            await services.call(
+                "cameras.control.submit",
+                lease_id=str(lease.get("lease_id") or ""),
+                fence=int(lease.get("fence") or 0),
+                command_id=command_id,
+                command=command,
+            )
+        except KeyError:
+            raise HTTPException(
+                status_code=503,
+                detail="Camera controls are not available (cameras extension not loaded)",
+            ) from None
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if str(command.get("kind") or "").strip() == "stop":
+                try:
+                    await services.call(
+                        "cameras.control.emergency_stop",
+                        camera_id=camera_id,
+                        camera_source_id=camera_source_id,
+                    )
+                    return
+                except KeyError:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Camera emergency stop is not available (cameras extension not loaded)",
+                    ) from None
+                except Exception as emergency_error:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "Transmission camera emergency stop failed for camera_id=%s source_id=%s",
+                        camera_id,
+                        camera_source_id,
+                        exc_info=True,
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail="camera_ptz_fault: Camera PTZ emergency stop could not be confirmed.",
+                    ) from emergency_error
+            raw_error = str(exc).lower()
+            _LOGGER.debug(
+                "Transmission camera command failed for camera_id=%s source_id=%s kind=%s",
+                camera_id,
+                camera_source_id,
+                str(command.get("kind") or ""),
+                exc_info=True,
+            )
+            if "fault" in raw_error or "emergency_stop" in raw_error:
+                raise HTTPException(
+                    status_code=409,
+                    detail="camera_ptz_fault: Camera PTZ control is faulted.",
+                ) from exc
+            if any(
+                marker in raw_error
+                for marker in (
+                    "lease",
+                    "fence",
+                    "busy",
+                    "conflict",
+                    "already",
+                    "owned",
+                    "shutting down",
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="camera_ptz_conflict: Camera PTZ command conflicted with active control.",
+                ) from exc
+            raise HTTPException(
+                status_code=503,
+                detail="camera_ptz_unavailable: Camera PTZ command could not be completed.",
+            ) from exc
+
     @router.get(
         "/transmissions/{transmission_id}/camera/presets",
         response_model=TransmissionCameraPresetsResponse,
@@ -7293,9 +7422,10 @@ def create_streaming_router() -> APIRouter:
     async def transmission_camera_presets(
         request: Request, transmission_id: str
     ) -> TransmissionCameraPresetsResponse:
-        _require_auth(request, action="core:settings:read")
         _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
-            request, transmission_id=transmission_id
+            request,
+            action="core:camera:read",
+            transmission_id=transmission_id,
         )
 
         services = _services(request)
@@ -7337,24 +7467,17 @@ def create_streaming_router() -> APIRouter:
         transmission_id: str,
         body: TransmissionCameraGotoPresetRequest,
     ) -> TransmissionCameraActionResponse:
-        _require_auth(request, action="core:settings:read")
         _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
-            request, transmission_id=transmission_id
+            request,
+            action="core:camera:control",
+            transmission_id=transmission_id,
         )
-
-        services = _services(request)
-        try:
-            await services.call(
-                "cameras.ptz.goto_preset",
-                camera_id=camera_id,
-                camera_source_id=camera_source_id,
-                preset_token=body.preset_token,
-            )
-        except KeyError:
-            raise HTTPException(
-                status_code=503,
-                detail="Camera controls are not available (cameras extension not loaded)",
-            ) from None
+        await _submit_manual_camera_command(
+            request,
+            camera_id=camera_id,
+            camera_source_id=camera_source_id,
+            command={"kind": "goto_preset", "preset_token": body.preset_token},
+        )
 
         return TransmissionCameraActionResponse(ok=True)
 
@@ -7365,9 +7488,10 @@ def create_streaming_router() -> APIRouter:
     async def transmission_camera_status(
         request: Request, transmission_id: str
     ) -> TransmissionCameraStatusResponse:
-        _require_auth(request, action="core:settings:read")
         _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
-            request, transmission_id=transmission_id
+            request,
+            action="core:camera:read",
+            transmission_id=transmission_id,
         )
 
         services = _services(request)
@@ -7400,27 +7524,23 @@ def create_streaming_router() -> APIRouter:
         transmission_id: str,
         body: TransmissionCameraMoveRequest,
     ) -> TransmissionCameraActionResponse:
-        _require_auth(request, action="core:settings:read")
         _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
-            request, transmission_id=transmission_id
+            request,
+            action="core:camera:control",
+            transmission_id=transmission_id,
         )
-
-        services = _services(request)
-        try:
-            await services.call(
-                "cameras.ptz.continuous_move",
-                camera_id=camera_id,
-                camera_source_id=camera_source_id,
-                pan=float(body.pan),
-                tilt=float(body.tilt),
-                zoom=float(body.zoom),
-                timeout_s=body.timeout_s,
-            )
-        except KeyError:
-            raise HTTPException(
-                status_code=503,
-                detail="Camera controls are not available (cameras extension not loaded)",
-            ) from None
+        await _submit_manual_camera_command(
+            request,
+            camera_id=camera_id,
+            camera_source_id=camera_source_id,
+            command={
+                "kind": "continuous_move",
+                "pan": float(body.pan),
+                "tilt": float(body.tilt),
+                "zoom": float(body.zoom),
+                "timeout_s": body.timeout_s,
+            },
+        )
 
         return TransmissionCameraActionResponse(ok=True)
 
@@ -7433,25 +7553,21 @@ def create_streaming_router() -> APIRouter:
         transmission_id: str,
         body: TransmissionCameraStopRequest,
     ) -> TransmissionCameraActionResponse:
-        _require_auth(request, action="core:settings:read")
         _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
-            request, transmission_id=transmission_id
+            request,
+            action="core:camera:control",
+            transmission_id=transmission_id,
         )
-
-        services = _services(request)
-        try:
-            await services.call(
-                "cameras.ptz.stop",
-                camera_id=camera_id,
-                camera_source_id=camera_source_id,
-                pan_tilt=bool(body.pan_tilt),
-                zoom=bool(body.zoom),
-            )
-        except KeyError:
-            raise HTTPException(
-                status_code=503,
-                detail="Camera controls are not available (cameras extension not loaded)",
-            ) from None
+        await _submit_manual_camera_command(
+            request,
+            camera_id=camera_id,
+            camera_source_id=camera_source_id,
+            command={
+                "kind": "stop",
+                "pan_tilt": bool(body.pan_tilt),
+                "zoom": bool(body.zoom),
+            },
+        )
 
         return TransmissionCameraActionResponse(ok=True)
 

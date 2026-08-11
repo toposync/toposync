@@ -22,6 +22,7 @@ O runtime de extensões é real e sustenta o produto first-party hoje:
 - `toposync-ext-home-assistant`;
 - `toposync-ext-cameras`;
 - `toposync-ext-vision`;
+- `toposync-ext-ptz-attention`;
 - extensões opcionais como streaming, AI e spatial video.
 
 A peça que falta é validação de ecossistema. O Toposync ainda não tem um conjunto comprovado de extensões de terceiros mantidas de forma independente e instaladas de fora deste monorepo. Antes de considerar o contrato estável para um marketplace mais amplo, ainda precisamos validar empacotamento, upgrades, dependências compartilhadas do frontend, restrições de versão, UX de gerenciamento de extensões e expectativas de segurança com pacotes externos reais.
@@ -158,6 +159,31 @@ Use `setup()` para registrar recursos em runtime:
 
 Use `capabilities()` quando o core precisa de metadados sobre a extensão. Hoje isso é usado para prefixos de autorização de APIs da extensão.
 
+Para configurações que controlam recursos do domínio, sobrescreva o hook síncrono
+`settings_authorization_requirements()`. Ele recebe as configurações efetivas atual e
+proposta da extensão e retorna cada permissão escopada adicional que precisa ser
+autorizada antes de `PATCH /api/settings/extensions/<id>` ou `PUT /api/settings`
+persistir a mudança.
+
+```py
+def settings_authorization_requirements(
+    self, *, current_settings: object, proposed_settings: object
+) -> list[dict[str, str]]:
+    return [{
+        "action": "example:device:configure",
+        "resource_type": "example:device",
+        "resource_selector": "device-1",
+    }]
+```
+
+Retorne somente os recursos cujos registros efetivos mudaram. Se não for possível
+determinar o recurso afetado com segurança, retorne o seletor global (`"*"`). O hook
+deve ser síncrono e fornecer strings completas em `action`, `resource_type` e
+`resource_selector`; exceções ou resultados malformados falham de forma fechada e as
+configurações não são persistidas. O contrato continua ativo para uma extensão
+instalada mesmo quando seu runtime está desabilitado, impedindo que configurações
+protegidas sejam preparadas para uma reativação posterior.
+
 ## Manifesto {/* #manifest */}
 
 Toda extensão precisa levar `extension.json` dentro do pacote Python.
@@ -189,7 +215,7 @@ Campos:
 - `requires_extensions`: lista opcional de ids de extensões exigidas, com specifier de versão opcional;
 - `frontend`: descrição opcional de remote Module Federation.
 
-Compatibilidade é aplicada antes de `setup()`. Se a versão do core ou das extensões exigidas não bater, a extensão é ignorada em vez de ser carregada parcialmente.
+Compatibilidade é aplicada antes de `setup()`. Se a versão do core ou das extensões exigidas não bater, a extensão é ignorada em vez de ser carregada parcialmente. Extensões exigidas executam `setup()` antes de suas dependentes; por consequência, callbacks de desligamento registrados no `setup()` rodam na ordem inversa das dependências.
 
 ## Assets estáticos {/* #static-assets */}
 

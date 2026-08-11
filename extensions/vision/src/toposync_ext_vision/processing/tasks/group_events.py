@@ -134,7 +134,7 @@ def _normalize_world_anchor(raw: Any) -> dict[str, float] | None:
     if not isinstance(raw, dict):
         return None
     out: dict[str, float] = {}
-    for key in ("x", "y", "z"):
+    for key in ("x", "y", "z", "confidence"):
         if key not in raw:
             continue
         try:
@@ -142,8 +142,8 @@ def _normalize_world_anchor(raw: Any) -> dict[str, float] | None:
         except Exception:
             continue
         if math.isfinite(value):
-            out[key] = value
-    return out or None
+            out[key] = max(0.0, min(1.0, value)) if key == "confidence" else value
+    return out if any(key in out for key in ("x", "y", "z")) else None
 
 
 def _world_distance(left: dict[str, float], right: dict[str, float]) -> float | None:
@@ -301,7 +301,9 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         next_number = int(self._next_group_number_by_source_stream.get(source_stream_id, 0)) + 1
         self._next_group_number_by_source_stream[source_stream_id] = next_number
         group_event_code = str(next_number)
-        group_event_id = f"{self._config.group_event_id_prefix}:{source_stream_id}:{group_event_code}"
+        group_event_id = (
+            f"{self._config.group_event_id_prefix}:{source_stream_id}:{group_event_code}"
+        )
         return _GroupState(
             group_event_id=group_event_id,
             group_event_code=group_event_code,
@@ -313,7 +315,9 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
 
     def _register_group(self, group: _GroupState) -> None:
         self._groups_by_id[group.group_event_id] = group
-        self._group_ids_by_source_stream.setdefault(group.source_stream_id, []).append(group.group_event_id)
+        self._group_ids_by_source_stream.setdefault(group.source_stream_id, []).append(
+            group.group_event_id
+        )
 
     def _extract_member(self, packet: Packet) -> _MemberSnapshot | None:
         subject = packet.payload.get("subject")
@@ -321,7 +325,9 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             return None
         if _normalize_string(subject.get("type")).lower() != "event":
             return None
-        event_id = _normalize_string(subject.get("id")) or _normalize_string(packet.payload.get("event_id"))
+        event_id = _normalize_string(subject.get("id")) or _normalize_string(
+            packet.payload.get("event_id")
+        )
         if not event_id:
             return None
         category = _normalize_label(subject.get("category"))
@@ -415,7 +421,10 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         interval = float(self._config.update_interval_seconds)
         if interval <= 0.0:
             return True
-        return self._emit_age_seconds(group, now_monotonic=now_monotonic, packet_ts=packet_ts) >= interval
+        return (
+            self._emit_age_seconds(group, now_monotonic=now_monotonic, packet_ts=packet_ts)
+            >= interval
+        )
 
     def _mark_emitted(
         self,
@@ -512,7 +521,9 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
 
     def _subject_for_group(self, group: _GroupState, *, lifecycle: Lifecycle) -> dict[str, Any]:
         member_event_ids = sorted(group.members.keys())
-        active_member_event_ids = sorted(item.event_id for item in group.members.values() if item.active)
+        active_member_event_ids = sorted(
+            item.event_id for item in group.members.values() if item.active
+        )
         bbox01 = self._group_bbox(group)
         subject: dict[str, Any] = {
             "type": "group_event",
@@ -631,7 +642,9 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             first_seen_packet_ts=first_seen,
             last_seen_packet_ts=packet_ts,
         )
-        self._group_id_by_member_key[self._member_key(member.source_stream_id, member.event_id)] = group.group_event_id
+        self._group_id_by_member_key[self._member_key(member.source_stream_id, member.event_id)] = (
+            group.group_event_id
+        )
 
     def _session_group(
         self,
@@ -649,7 +662,9 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                 self._config.idle_timeout_seconds
             ):
                 return group
-        group = self._next_group_state(source_stream_id=member.source_stream_id, camera_id=member.camera_id)
+        group = self._next_group_state(
+            source_stream_id=member.source_stream_id, camera_id=member.camera_id
+        )
         self._register_group(group)
         return group
 
@@ -704,7 +719,9 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         now_monotonic: float,
         packet_ts: float | None,
     ) -> _GroupState:
-        mapped_group_id = self._group_id_by_member_key.get(self._member_key(member.source_stream_id, member.event_id))
+        mapped_group_id = self._group_id_by_member_key.get(
+            self._member_key(member.source_stream_id, member.event_id)
+        )
         if mapped_group_id:
             mapped = self._groups_by_id.get(mapped_group_id)
             if mapped is not None:
@@ -726,7 +743,9 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                 best = (score, group)
         if best is not None:
             return best[1]
-        group = self._next_group_state(source_stream_id=member.source_stream_id, camera_id=member.camera_id)
+        group = self._next_group_state(
+            source_stream_id=member.source_stream_id, camera_id=member.camera_id
+        )
         self._register_group(group)
         return group
 
@@ -786,10 +805,14 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                 )
             self._groups_by_id.pop(group_id, None)
             self._group_ids_by_source_stream[source_stream_id] = [
-                item for item in self._group_ids_by_source_stream.get(source_stream_id, []) if item != group_id
+                item
+                for item in self._group_ids_by_source_stream.get(source_stream_id, [])
+                if item != group_id
             ]
             for member_id in list(group.members):
-                self._group_id_by_member_key.pop(self._member_key(source_stream_id, member_id), None)
+                self._group_id_by_member_key.pop(
+                    self._member_key(source_stream_id, member_id), None
+                )
         return outputs
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002

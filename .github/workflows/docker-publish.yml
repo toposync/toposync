@@ -98,6 +98,7 @@ jobs:
           packages = [
               ("toposync-streaming", os.environ["TOPOSYNC_VERSION"]),
               ("toposync-vision-cuda", os.environ["TOPOSYNC_VERSION"]),
+              ("toposync-ext-ptz-attention", os.environ["TOPOSYNC_VERSION"]),
               ("toposync-ext-streaming", os.environ["TOPOSYNC_EXT_STREAMING_VERSION"]),
           ]
           for package_name, version in packages:

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "com.toposync.ptz_attention",
+  "name": "PTZ Attention",
+  "version": "0.1.0",
+  "description": "Lifecycle-aware arbitration of relevant events for PTZ camera presets.",
+  "requires_extensions": ["com.toposync.cameras"],
+  "api_prefixes": ["/api/ptz-attention"],
+  "frontend": {
+    "kind": "module-federation",
+    "remote_entry": "remoteEntry.js",
+    "scope": "ptz_attention",
+    "module": "./activate"
+  }
+}

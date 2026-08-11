@@ -47,34 +47,25 @@ def _distribution_extension_names() -> tuple[str, ...]:
 DEFAULT_EXTENSION_NAMES = _distribution_extension_names()
 
 
-def _load_extension_ui_workspace(extension_name: str) -> str | None:
-    package_json_path = ROOT / "extensions" / extension_name / "ui" / "package.json"
-    if not package_json_path.is_file():
-        return None
-    package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
-    workspace = str(package_json.get("name") or "").strip()
-    if not workspace:
-        raise RuntimeError(f"Extension UI package is missing a workspace name: {package_json_path}")
-    return workspace
-
-
-DEFAULT_EXTENSION_UI_WORKSPACES = tuple(
-    workspace
-    for extension_name in DEFAULT_EXTENSION_NAMES
-    if (workspace := _load_extension_ui_workspace(extension_name)) is not None
-)
-
-
 def _load_extension_manifest(extension_name: str) -> dict[str, object]:
-    manifest_path = ROOT / "extensions" / extension_name / "src" / f"toposync_ext_{extension_name}" / "extension.json"
+    manifest_path = (
+        ROOT
+        / "extensions"
+        / extension_name
+        / "src"
+        / f"toposync_ext_{extension_name}"
+        / "extension.json"
+    )
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
 DEFAULT_EXTENSION_MANIFESTS = {
-    extension_name: _load_extension_manifest(extension_name) for extension_name in DEFAULT_EXTENSION_NAMES
+    extension_name: _load_extension_manifest(extension_name)
+    for extension_name in DEFAULT_EXTENSION_NAMES
 }
 EXPECTED_EXTENSION_IDS = tuple(
-    str(DEFAULT_EXTENSION_MANIFESTS[extension_name]["id"]) for extension_name in DEFAULT_EXTENSION_NAMES
+    str(DEFAULT_EXTENSION_MANIFESTS[extension_name]["id"])
+    for extension_name in DEFAULT_EXTENSION_NAMES
 )
 EXPECTED_FRONTEND_REMOTES = {
     str(manifest["id"]): f"/extensions/{manifest['id']}/{manifest['frontend']['remote_entry']}"
@@ -125,7 +116,9 @@ def _read_json(url: str, *, timeout: float = 5.0) -> object:
 
 
 def _read_text(url: str, *, timeout: float = 5.0) -> str:
-    request = urllib.request.Request(url, headers={"Accept": "text/html, text/plain;q=0.9, */*;q=0.1"})
+    request = urllib.request.Request(
+        url, headers={"Accept": "text/html, text/plain;q=0.9, */*;q=0.1"}
+    )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode("utf-8", errors="replace")
 
@@ -137,7 +130,9 @@ def _tail_lines(path: Path, *, limit: int = 120) -> str:
     return "\n".join(lines[-limit:])
 
 
-def _wait_for_server(*, base_url: str, process: subprocess.Popen[str], log_path: Path, timeout_s: float = 120.0) -> None:
+def _wait_for_server(
+    *, base_url: str, process: subprocess.Popen[str], log_path: Path, timeout_s: float = 120.0
+) -> None:
     deadline = time.time() + timeout_s
     last_error = "server did not become healthy"
     while time.time() < deadline:
@@ -170,8 +165,7 @@ def _wait_for_server(*, base_url: str, process: subprocess.Popen[str], log_path:
 def _build_frontends() -> None:
     _print_step("Building bundled frontend assets")
     _run(["npm", "run", "build:frontend"])
-    for workspace in DEFAULT_EXTENSION_UI_WORKSPACES:
-        _run(["npm", "--workspace", workspace, "run", "build"])
+    _run(["npm", "run", "build:extensions"])
 
 
 def _build_wheelhouse(wheelhouse_dir: Path) -> None:
@@ -190,7 +184,9 @@ def _build_wheelhouse(wheelhouse_dir: Path) -> None:
 def _assert_core_wheel_has_bundled_frontend(wheelhouse_dir: Path) -> None:
     core_wheels = sorted(wheelhouse_dir.glob("toposync_core-*.whl"))
     if len(core_wheels) != 1:
-        raise RuntimeError(f"Expected exactly one core wheel in wheelhouse, found {len(core_wheels)}")
+        raise RuntimeError(
+            f"Expected exactly one core wheel in wheelhouse, found {len(core_wheels)}"
+        )
     core_wheel = core_wheels[0]
     with zipfile.ZipFile(core_wheel) as archive:
         names = archive.namelist()
@@ -205,7 +201,9 @@ def _assert_core_wheel_has_bundled_frontend(wheelhouse_dir: Path) -> None:
 def _assert_vision_wheel_publishable(wheelhouse_dir: Path) -> None:
     vision_wheels = sorted(wheelhouse_dir.glob("toposync_ext_vision-*.whl"))
     if len(vision_wheels) != 1:
-        raise RuntimeError(f"Expected exactly one vision wheel in wheelhouse, found {len(vision_wheels)}")
+        raise RuntimeError(
+            f"Expected exactly one vision wheel in wheelhouse, found {len(vision_wheels)}"
+        )
     vision_wheel = vision_wheels[0]
     max_bytes = 100 * 1024 * 1024
     size_bytes = vision_wheel.stat().st_size
@@ -216,7 +214,9 @@ def _assert_vision_wheel_publishable(wheelhouse_dir: Path) -> None:
     with zipfile.ZipFile(vision_wheel) as archive:
         names = archive.namelist()
     if any(name.startswith("toposync_ext_vision/models/") for name in names):
-        raise RuntimeError(f"Vision wheel unexpectedly packaged model artifacts: {vision_wheel.name}")
+        raise RuntimeError(
+            f"Vision wheel unexpectedly packaged model artifacts: {vision_wheel.name}"
+        )
 
 
 def _wheel_for_project(wheelhouse_dir: Path, project_name: object) -> Path:
@@ -292,7 +292,9 @@ def _assert_extensions(payload: object) -> list[str]:
     for extension_id, remote_path in EXPECTED_FRONTEND_REMOTES.items():
         frontend = by_id[extension_id].get("frontend")
         if not isinstance(frontend, dict):
-            raise RuntimeError(f"Extension {extension_id!r} is missing frontend metadata in /api/extensions")
+            raise RuntimeError(
+                f"Extension {extension_id!r} is missing frontend metadata in /api/extensions"
+            )
         actual_remote_path = str(frontend.get("remote_entry_url") or "")
         if actual_remote_path != remote_path:
             raise RuntimeError(
@@ -345,7 +347,9 @@ def main() -> int:
 
         _build_frontends()
         _build_wheelhouse(wheelhouse_dir)
-        _install_distribution(wheelhouse_dir=wheelhouse_dir, venv_dir=venv_dir, constraints_path=constraints_path)
+        _install_distribution(
+            wheelhouse_dir=wheelhouse_dir, venv_dir=venv_dir, constraints_path=constraints_path
+        )
 
         port = _find_free_port()
         base_url = f"http://{HOST}:{port}"

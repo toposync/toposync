@@ -302,7 +302,8 @@ export type CameraPipelinePreset =
   | "people_quiet"
   | "presence_area"
   | "vehicle_stopped"
-  | "person_stopped";
+  | "person_stopped"
+  | "person_vehicle_interaction";
 export type CameraNotificationPriority = "low" | "medium" | "high";
 
 export type CameraPipelineSummary = {
@@ -332,6 +333,8 @@ export type CameraPipelinePresetRequest = {
   notification_title?: string;
   notification_description?: string;
   notification_priority?: CameraNotificationPriority;
+  enable_ptz_attention?: boolean;
+  ptz_attention_native_tracking_disabled_confirmed?: boolean;
 };
 
 export type CameraPipelinePresetResponse = {

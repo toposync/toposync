@@ -32,6 +32,9 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Validate first-party extension wheels
+        run: python scripts/check_extension_wheels.py
+
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 

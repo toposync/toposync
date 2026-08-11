@@ -28,7 +28,6 @@ def analyze_compiled_pipeline(
     _check_cancelled(cancel_check)
     nodes_by_id = {node.node_id: node for node in pipeline.nodes}
     edges = list(pipeline.edges)
-    order_index = {node_id: idx for idx, node_id in enumerate(pipeline.topological_order)}
 
     incoming: dict[str, list[Any]] = {}
     outgoing: dict[str, list[Any]] = {}
@@ -66,24 +65,29 @@ def analyze_compiled_pipeline(
                 q.append(nxt)
         return out
 
-    def _operator_ids_upstream(start_node_id: str) -> set[str]:
-        return {
-            str(node.operator_id)
-            for node_id in _upstream_nodes(start_node_id)
-            if (node := nodes_by_id.get(node_id)) is not None
-        }
-
     def _upstream_nodes(start_node_id: str) -> list[str]:
         return _walk(start_node_id, incoming, lambda edge: edge.source_node_id)
 
+    def _diagnostic_upstream_nodes(start_node_id: str) -> list[str]:
+        seen: set[str] = set()
+        q: deque[str] = deque([start_node_id])
+        out: list[str] = []
+        while q:
+            _check_cancelled(cancel_check)
+            current = q.popleft()
+            current_edges = incoming.get(current, [])
+            primary_edges = [edge for edge in current_edges if edge.target_port == "in"]
+            for edge in primary_edges or current_edges:
+                upstream_id = str(edge.source_node_id)
+                if upstream_id in seen:
+                    continue
+                seen.add(upstream_id)
+                out.append(upstream_id)
+                q.append(upstream_id)
+        return out
+
     def _downstream_nodes(start_node_id: str) -> list[str]:
         return _walk(start_node_id, outgoing, lambda edge: edge.target_node_id)
-
-    def _node_has_upstream_operator(node_id: str, operator_id: str) -> bool:
-        for upstream_id in _operator_ids_upstream(node_id):
-            if upstream_id == operator_id:
-                return True
-        return False
 
     def _node_ids_by_operator(operator_id: str) -> list[str]:
         return [node.node_id for node in pipeline.nodes if node.operator_id == operator_id]
@@ -95,10 +99,60 @@ def analyze_compiled_pipeline(
         cfg = node.normalized_config
         return cfg if isinstance(cfg, dict) else {}
 
+    def _configured_allowlist(config: dict[str, Any], field_name: str) -> set[str]:
+        if not field_name:
+            return set()
+        raw_values = config.get(field_name, [])
+        if not isinstance(raw_values, list):
+            return set()
+        return {str(item).strip() for item in raw_values if str(item).strip()}
+
+    def _limits_emission_rate(node_id: str) -> bool:
+        """Return whether this node bounds packets independently of upstream FPS."""
+        if node_id not in nodes_by_id:
+            return False
+        if nodes_by_id[node_id].operator_id in {
+            "core.fps_reducer",
+            "core.throttle",
+            "core.velocity_throttle",
+            "core.debounce",
+        }:
+            return True
+        if "rate_limited_emission" not in capabilities_by_node_id.get(node_id, set()):
+            return False
+        try:
+            return float(_resolve_config(node_id).get("update_interval_seconds") or 0.0) > 0.0
+        except (TypeError, ValueError):
+            return False
+
+    def _has_unbounded_tracking_path_to(store_node_id: str) -> bool:
+        """Detect a tracking-to-store path with no explicit downstream emission bound."""
+        queue: deque[tuple[str, bool]] = deque([(store_node_id, False)])
+        seen: set[tuple[str, bool]] = set()
+        while queue:
+            _check_cancelled(cancel_check)
+            node_id, already_limited = queue.popleft()
+            state = (node_id, already_limited)
+            if state in seen:
+                continue
+            seen.add(state)
+            rate_limited = already_limited or _limits_emission_rate(node_id)
+            for edge in incoming.get(node_id, []):
+                upstream_id = str(edge.source_node_id)
+                upstream = nodes_by_id.get(upstream_id)
+                if upstream is None:
+                    continue
+                if upstream.operator_id == "vision.track":
+                    if not rate_limited:
+                        return True
+                    continue
+                queue.append((upstream_id, rate_limited))
+        return False
+
     def _diagnostic_node_context(node_id: str) -> dict[str, Any]:
         node = nodes_by_id.get(node_id)
         upstream_nodes: list[dict[str, Any]] = []
-        for upstream_id in _upstream_nodes(node_id):
+        for upstream_id in _diagnostic_upstream_nodes(node_id):
             _check_cancelled(cancel_check)
             upstream = nodes_by_id.get(upstream_id)
             if upstream is None:
@@ -111,16 +165,32 @@ def analyze_compiled_pipeline(
                     "normalized_config": upstream_cfg if isinstance(upstream_cfg, dict) else {},
                 }
             )
+        incoming_edges = [
+            {
+                "uid": edge.uid,
+                "from": {"node": edge.source_node_id, "port": edge.source_port},
+                "to": {"node": edge.target_node_id, "port": edge.target_port},
+                **edge.as_contract_dict(),
+            }
+            for edge in incoming.get(node_id, [])
+        ]
         return {
             "node_id": node_id,
             "operator_id": str(node.operator_id) if node is not None else "",
             "pipeline_name": pipeline.name,
             "upstream_nodes": upstream_nodes,
+            "incoming_edges": incoming_edges,
         }
 
     alerts: list[PipelineAlert] = []
     diagnostic_context: dict[str, Any] = context if context is not None else {}
-    diagnostic_node_keys = ("node_id", "operator_id", "pipeline_name", "upstream_nodes")
+    diagnostic_node_keys = (
+        "node_id",
+        "operator_id",
+        "pipeline_name",
+        "upstream_nodes",
+        "incoming_edges",
+    )
     missing_context_value = object()
 
     # Extension/operator-owned diagnostics. Toposync aggregates these without
@@ -161,23 +231,40 @@ def analyze_compiled_pipeline(
             )
 
     # Operator contracts (lightweight requires/produces) for UX guidance.
-    available_payload_keys_out: dict[str, set[str]] = {}
-    available_artifacts_out: dict[str, set[str]] = {}
+    guaranteed_payload_keys_by_output: dict[tuple[str, str], set[str]] = {}
+    guaranteed_artifacts_by_output: dict[tuple[str, str], set[str]] = {}
     for node_id in pipeline.topological_order:
         _check_cancelled(cancel_check)
         node = nodes_by_id.get(node_id)
         if node is None:
             continue
-        upstream_payload_keys: set[str] = set()
-        upstream_artifacts: set[str] = set()
-        for edge in incoming.get(node_id, []):
+        incoming_edges = incoming.get(node_id, [])
+        primary_input_edges = [edge for edge in incoming_edges if edge.target_port == "in"]
+        contract_input_edges = primary_input_edges or incoming_edges
+        upstream_payload_paths: list[set[str]] = []
+        upstream_artifact_paths: list[set[str]] = []
+        for edge in contract_input_edges:
             _check_cancelled(cancel_check)
-            upstream_payload_keys.update(
-                available_payload_keys_out.get(str(edge.source_node_id), set())
+            source_output = (str(edge.source_node_id), str(edge.source_port))
+            upstream_payload_paths.append(
+                guaranteed_payload_keys_by_output.get(source_output, set())
             )
-            upstream_artifacts.update(available_artifacts_out.get(str(edge.source_node_id), set()))
+            upstream_artifact_paths.append(guaranteed_artifacts_by_output.get(source_output, set()))
+
+        # The canonical `in` port carries the packet forwarded by transform-like
+        # operators; auxiliary ports must not erase its guarantees. Operators
+        # without `in` are joins, so only values present on every input path are
+        # guaranteed on their output.
+        upstream_payload_keys = (
+            set.intersection(*upstream_payload_paths) if upstream_payload_paths else set()
+        )
+        upstream_artifacts = (
+            set.intersection(*upstream_artifact_paths) if upstream_artifact_paths else set()
+        )
 
         registered = registry.get(node.operator_id)
+        produced_payload_keys: set[str] = set()
+        produced_artifacts: set[str] = set()
         if registered is not None:
             cfg = node.normalized_config if isinstance(node.normalized_config, dict) else {}
             missing_payload_keys = [
@@ -228,48 +315,39 @@ def analyze_compiled_pipeline(
                     )
                 )
 
-            upstream_payload_keys.update(registered.definition.produces_payload_keys)
+            produced_payload_keys.update(registered.definition.produces_payload_keys)
 
-            produced_artifacts = set(registered.definition.produces_artifacts)
+            produced_artifacts.update(registered.definition.produces_artifacts)
             output_artifact_name = normalize_artifact_name(
                 cfg.get("output_artifact_name"), default=""
             )
             if output_artifact_name and MAIN_ARTIFACT_NAME in produced_artifacts:
                 produced_artifacts.remove(MAIN_ARTIFACT_NAME)
                 produced_artifacts.add(output_artifact_name)
-            upstream_artifacts.update(produced_artifacts)
 
-        available_payload_keys_out[node_id] = upstream_payload_keys
-        available_artifacts_out[node_id] = upstream_artifacts
-
-    for detect_node_id in _node_ids_by_operator("vision.detect"):
-        _check_cancelled(cancel_check)
-        cfg = _resolve_config(detect_node_id)
-        emit_mode = str(cfg.get("emit_mode") or "events").strip().lower()
-        if emit_mode == "event":
-            emit_mode = "events"
-        if emit_mode != "events":
-            continue
-        tracking_downstream = [
-            nid
-            for nid in _downstream_nodes(detect_node_id)
-            if nodes_by_id.get(nid, None) and nodes_by_id[nid].operator_id == "vision.track"
-        ]
-        if tracking_downstream:
-            alerts.append(
-                PipelineAlert(
-                    severity="error",
-                    code="detect_events_before_tracking",
-                    node_id=detect_node_id,
-                    operator_id="vision.detect",
-                    message=(
-                        "Vision Detect is emitting finite detection events before Vision Track. "
-                        "Tracking needs annotated frames to maintain object lifecycle."
-                    ),
-                    suggestion="Set Vision Detect result to annotate before Vision Track.",
-                    details={"tracking_nodes": tracking_downstream},
-                )
-            )
+        if registered is not None:
+            for output_port in registered.definition.outputs:
+                output_key = (node_id, output_port.name)
+                if output_port.preserves_input_contract:
+                    output_payload_keys = set(upstream_payload_keys)
+                    output_artifacts = set(upstream_artifacts)
+                    payload_allowlist = _configured_allowlist(
+                        cfg, output_port.payload_keys_allowlist_field
+                    )
+                    artifact_allowlist = _configured_allowlist(
+                        cfg, output_port.artifact_names_allowlist_field
+                    )
+                    if payload_allowlist:
+                        output_payload_keys.intersection_update(payload_allowlist)
+                    if artifact_allowlist:
+                        output_artifacts.intersection_update(artifact_allowlist)
+                else:
+                    output_payload_keys = set()
+                    output_artifacts = set()
+                output_payload_keys.update(produced_payload_keys)
+                output_artifacts.update(produced_artifacts)
+                guaranteed_payload_keys_by_output[output_key] = output_payload_keys
+                guaranteed_artifacts_by_output[output_key] = output_artifacts
 
     # Tracking defaults: too-aggressive closing and unthrottled update emission cause flicker under drops.
     for tracking_node_id in _node_ids_by_operator("vision.track"):
@@ -326,6 +404,13 @@ def analyze_compiled_pipeline(
     # Notify requires stored artifact references (it never stores images itself).
     for notify_node_id in _node_ids_by_operator("core.notify"):
         _check_cancelled(cancel_check)
+        notify_cfg = _resolve_config(notify_node_id)
+        explicit_artifact_name = str(notify_cfg.get("input_artifact_name") or "").strip()
+        if not explicit_artifact_name:
+            # Notifications can be intentionally text-only. An empty artifact
+            # preference lets the runtime attach an available thumbnail when
+            # one exists, but does not require image storage.
+            continue
         store_nodes = [
             nid
             for nid in _upstream_nodes(notify_node_id)
@@ -347,17 +432,21 @@ def analyze_compiled_pipeline(
             for store_id in store_nodes:
                 cfg = _resolve_config(store_id)
                 stored_artifacts.add(normalize_artifact_name(cfg.get("input_artifact_name")))
-            notify_cfg = _resolve_config(notify_node_id)
-            desired = normalize_artifact_name(notify_cfg.get("input_artifact_name"))
+            desired = normalize_artifact_name(explicit_artifact_name)
             if stored_artifacts and desired not in stored_artifacts:
                 alerts.append(
                     PipelineAlert(
-                        severity="warning",
+                        severity="info",
                         code="notify_thumbnail_not_stored",
                         node_id=notify_node_id,
                         operator_id="core.notify",
-                        message=f"Notify reads artifact '{desired}', but upstream Store Images stores {', '.join(sorted(stored_artifacts))}.",
-                        suggestion="Store the same artifact that Notify reads, or set both steps to the same advanced artifact name.",
+                        message=(
+                            f"Notify prefers artifact '{desired}', but upstream Store Images stores "
+                            f"{', '.join(sorted(stored_artifacts))}; it will fall back to another stored image."
+                        ),
+                        suggestion=(
+                            "Store the same artifact only when the notification must use that exact image."
+                        ),
                         details={
                             "input_artifact_name": desired,
                             "stored_artifacts": sorted(stored_artifacts),
@@ -365,20 +454,10 @@ def analyze_compiled_pipeline(
                     )
                 )
 
-    # Velocity/areas require a world mapping.
+    # Velocity's required world/frame fields are covered by the generic
+    # payload contract above. Keep only the separate rate-control guidance.
     for velocity_node_id in _node_ids_by_operator("camera.velocity_estimation"):
         _check_cancelled(cancel_check)
-        if not _node_has_upstream_operator(velocity_node_id, "camera.camera_mapping"):
-            alerts.append(
-                PipelineAlert(
-                    severity="warning",
-                    code="velocity_missing_camera_mapping",
-                    node_id=velocity_node_id,
-                    operator_id="camera.velocity_estimation",
-                    message="Velocity estimation depends on world mapping, but there is no Camera Mapping step upstream.",
-                    suggestion="Add 'Camera Mapping' before 'Velocity Estimation' (or remove Velocity Estimation if you don't need it).",
-                )
-            )
         for edge in incoming.get(velocity_node_id, []):
             src_id = str(edge.source_node_id)
             src_node = nodes_by_id.get(src_id)
@@ -402,20 +481,6 @@ def analyze_compiled_pipeline(
                     )
                 )
                 break
-
-    for area_node_id in _node_ids_by_operator("camera.area_restriction"):
-        _check_cancelled(cancel_check)
-        if not _node_has_upstream_operator(area_node_id, "camera.camera_mapping"):
-            alerts.append(
-                PipelineAlert(
-                    severity="warning",
-                    code="area_missing_camera_mapping",
-                    node_id=area_node_id,
-                    operator_id="camera.area_restriction",
-                    message="Area restriction depends on world mapping, but there is no Camera Mapping step upstream.",
-                    suggestion="Add 'Camera Mapping' before 'Area Restriction' (or set drop_when_unmapped=false if you want unmapped packets to pass through).",
-                )
-            )
 
     # Debug is great locally, but can destroy realtime performance when left enabled.
     for debug_node_id in _node_ids_by_operator("core.debug"):
@@ -459,41 +524,20 @@ def analyze_compiled_pipeline(
         cfg = _resolve_config(store_node_id)
         if not bool(cfg.get("drop_data_after_store", True)):
             continue
-        # If Store Images is fed directly by split/track streams without downstream rate control, it can be very heavy.
-        tracking_ids = [
-            nid
-            for nid in _upstream_nodes(store_node_id)
-            if nid in nodes_by_id and nodes_by_id[nid].operator_id == "vision.track"
-        ]
-        if tracking_ids:
-            tracking_idx = min(order_index.get(nid, 0) for nid in tracking_ids)
-            store_idx = order_index.get(store_node_id, tracking_idx + 1)
-            has_rate_control_after_tracking = False
-            for nid in _upstream_nodes(store_node_id):
-                if nid not in nodes_by_id:
-                    continue
-                idx = order_index.get(nid, -1)
-                if idx <= tracking_idx or idx >= store_idx:
-                    continue
-                if nodes_by_id[nid].operator_id in {
-                    "core.fps_reducer",
-                    "core.throttle",
-                    "core.velocity_throttle",
-                    "core.debounce",
-                }:
-                    has_rate_control_after_tracking = True
-                    break
-            if not has_rate_control_after_tracking:
-                alerts.append(
-                    PipelineAlert(
-                        severity="info",
-                        code="store_images_without_rate_control",
-                        node_id=store_node_id,
-                        operator_id="core.store_images",
-                        message="Store Images is fed by object tracking without any downstream rate control, which can be heavy on CPU/disk.",
-                        suggestion="Add FPS Reducer/Throttle before Store Images to limit how many frames are stored per second.",
-                    )
+        # A per-object tracker can emit at camera rate. Warn only if at least one
+        # path from it to storage lacks a downstream limiter; a semantic event
+        # operator with a positive update interval is such a limiter too.
+        if _has_unbounded_tracking_path_to(store_node_id):
+            alerts.append(
+                PipelineAlert(
+                    severity="info",
+                    code="store_images_without_rate_control",
+                    node_id=store_node_id,
+                    operator_id="core.store_images",
+                    message="Store Images is fed by object tracking without any downstream rate control, which can be heavy on CPU/disk.",
+                    suggestion="Add FPS Reducer/Throttle before Store Images to limit how many frames are stored per second.",
                 )
+            )
         downstream = _downstream_nodes(store_node_id)
         stored_artifacts = {normalize_artifact_name(cfg.get("input_artifact_name"))}
 
@@ -519,15 +563,19 @@ def analyze_compiled_pipeline(
                 break
 
         # Storing artifacts that are never produced upstream usually indicates a broken config.
-        produced: set[str] = set()
-        for edge in incoming.get(store_node_id, []):
+        store_input_edges = [
+            edge for edge in incoming.get(store_node_id, []) if edge.target_port == "in"
+        ] or incoming.get(store_node_id, [])
+        produced_paths: list[set[str]] = []
+        for edge in store_input_edges:
             _check_cancelled(cancel_check)
-            produced.update(available_artifacts_out.get(str(edge.source_node_id), set()))
-        for nid in _upstream_nodes(store_node_id):
-            _check_cancelled(cancel_check)
-            output_name = _resolve_config(nid).get("output_artifact_name")
-            if output_name:
-                produced.add(normalize_artifact_name(output_name))
+            produced_paths.append(
+                guaranteed_artifacts_by_output.get(
+                    (str(edge.source_node_id), str(edge.source_port)),
+                    set(),
+                )
+            )
+        produced = set.intersection(*produced_paths) if produced_paths else set()
         if not produced:
             produced.add(MAIN_ARTIFACT_NAME)
 

@@ -63,6 +63,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "toposync_ext_vision.pipelines.schemas",
         "VisionSegmentInstancesConfig",
     ),
+    "VisionSpatialRelationEventConfig": (
+        "toposync_ext_vision.pipelines.schemas",
+        "VisionSpatialRelationEventConfig",
+    ),
     "VisionSyntheticDetectionConfig": (
         "toposync_ext_vision.pipelines.schemas",
         "VisionSyntheticDetectionConfig",
@@ -93,6 +97,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "toposync_ext_vision.processing.tasks",
         "VisionSegmentInstancesRuntime",
     ),
+    "VisionSpatialRelationEventRuntime": (
+        "toposync_ext_vision.processing.tasks",
+        "VisionSpatialRelationEventRuntime",
+    ),
     "VisionSyntheticDetectionSourceRuntime": (
         "toposync_ext_vision.processing.tasks",
         "VisionSyntheticDetectionSourceRuntime",
@@ -106,7 +114,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "toposync_ext_vision.processing.runtime_backends",
         "build_detector_backend",
     ),
-    "build_default_model_registry": ("toposync_ext_vision.registry", "build_default_model_registry"),
+    "build_default_model_registry": (
+        "toposync_ext_vision.registry",
+        "build_default_model_registry",
+    ),
     "collect_vision_diagnostics": ("toposync_ext_vision.processing", "collect_vision_diagnostics"),
     "get_last_benchmark": ("toposync_ext_vision.processing", "get_last_benchmark"),
     "register_vision_pipeline_operators": (

@@ -210,6 +210,16 @@ const CAMERA_PIPELINE_PRESET_CARDS: {
   stepsFallback: string;
 }[] = [
   {
+    id: "person_vehicle_interaction",
+    requiresMapping: true,
+    titleKey: "ext.cameras.pipeline_preset.person_vehicle_interaction.title",
+    titleFallback: "Interação entre pessoa e veículo",
+    descriptionKey: "ext.cameras.pipeline_preset.person_vehicle_interaction.card_desc",
+    descriptionFallback: "Confirma quando uma pessoa permanece perto de um veículo e gera um evento semântico estável.",
+    stepsKey: "ext.cameras.pipeline_preset.person_vehicle_interaction.steps",
+    stepsFallback: "Pessoas e veículos -> mapeamento -> proximidade -> confirmação -> notificação",
+  },
+  {
     id: "people_individual",
     requiresMapping: true,
     titleKey: "ext.cameras.pipeline_preset.people_individual.title",
@@ -764,7 +774,9 @@ function CamerasSettingsPanelContent({
       id,
       name: controlType === "onvif" ? "Nova câmera ONVIF" : "Nova câmera manual",
       enabled: true,
-      control: { type: controlType },
+      control: {
+        type: controlType,
+      },
       onvif: controlType === "onvif" ? { xaddr: "", username: "", password: "" } : null,
       sources: controlType === "none" ? [createDefaultCameraSource(0)] : [],
       metadata: {},
@@ -788,7 +800,9 @@ function CamerasSettingsPanelContent({
       id,
       name,
       enabled: true,
-      control: { type: "onvif" },
+      control: {
+        type: "onvif",
+      },
       onvif: {
         device_id: String(device.device_id || "").trim(),
         xaddr,
@@ -1116,7 +1130,10 @@ function CamerasSettingsPanelContent({
                           const type = event.target.value === "onvif" ? "onvif" : "none";
                           updateCamera(activeCamera.id, (camera) => ({
                             ...camera,
-                            control: { type },
+                            control: {
+                              ...camera.control,
+                              type,
+                            },
                             onvif: type === "onvif" ? camera.onvif ?? { xaddr: "", username: "", password: "" } : null,
                           }));
                         }}
@@ -1146,6 +1163,9 @@ function CamerasSettingsPanelContent({
                               updateCamera(activeCamera.id, (camera) => ({
                                 ...camera,
                                 onvif: { ...(camera.onvif ?? { xaddr: "" }), xaddr: event.target.value },
+                                control: {
+                                  ...camera.control,
+                                },
                               }))
                             }
                           />

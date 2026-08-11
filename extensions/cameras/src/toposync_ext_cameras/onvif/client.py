@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 
@@ -27,6 +27,12 @@ ONVIF_ALTERNATE_DEVICE_SERVICE_PORTS = (2020, 8000, 8080, 8899)
 
 
 class OnvifError(RuntimeError):
+    pass
+
+
+class OnvifAmbiguousMutationError(OnvifError):
+    """A PTZ mutation may have reached the camera, but its result is unknown."""
+
     pass
 
 
@@ -462,6 +468,21 @@ def _parse_ptz_presets(payload: bytes, *, soap_ns: str) -> list[OnvifPtzPreset]:
     return out
 
 
+def _parse_ptz_preset_token(payload: bytes, *, soap_ns: str) -> str:
+    root = _parse_xml(payload)
+    _raise_if_fault(root, soap_ns=soap_ns)
+    token = _findtext(root, f".//{{{PTZ_NS}}}PresetToken", default="")
+    if token:
+        return token
+    for element in root.iter():
+        if str(element.tag or "").rsplit("}", 1)[-1] != "PresetToken":
+            continue
+        value = str(element.text or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _parse_ptz_status(payload: bytes, *, soap_ns: str) -> OnvifPtzStatus:
     root = _parse_xml(payload)
     _raise_if_fault(root, soap_ns=soap_ns)
@@ -525,6 +546,26 @@ def _tptz_get_presets_body(profile_token: str) -> str:
         f'<tptz:GetPresets xmlns:tptz="{PTZ_NS}">'
         f"<tptz:ProfileToken>{token}</tptz:ProfileToken>"
         "</tptz:GetPresets>"
+    )
+
+
+def _tptz_set_preset_body(
+    profile_token: str,
+    *,
+    preset_name: str = "",
+    preset_token: str = "",
+) -> str:
+    profile = _xml_escape(profile_token)
+    name = str(preset_name or "").strip()
+    token = str(preset_token or "").strip()
+    name_xml = f"<tptz:PresetName>{_xml_escape(name)}</tptz:PresetName>" if name else ""
+    token_xml = f"<tptz:PresetToken>{_xml_escape(token)}</tptz:PresetToken>" if token else ""
+    return (
+        f'<tptz:SetPreset xmlns:tptz="{PTZ_NS}">'
+        f"<tptz:ProfileToken>{profile}</tptz:ProfileToken>"
+        f"{name_xml}"
+        f"{token_xml}"
+        "</tptz:SetPreset>"
     )
 
 
@@ -655,6 +696,11 @@ class OnvifClient:
     password: str = ""
     timeout_s: float = 3.0
     auth_mode: Literal["auto", "digest", "text", "none"] = "auto"
+    _last_ptz_transport: tuple[Literal["1.1", "1.2"], str, Literal["none", "digest", "text"]] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     async def get_capabilities(self) -> tuple[str | None, str | None]:
         xaddr = normalize_onvif_xaddr(self.xaddr)
@@ -705,6 +751,52 @@ class OnvifClient:
         body_xml = _tptz_get_presets_body(token)
         soap_action = _action(PTZ_NS, "GetPresets")
         return await self._call_and_parse_ptz_presets(url=url, body_xml=body_xml, soap_action=soap_action)
+
+    async def set_preset(
+        self,
+        ptz_xaddr: str,
+        *,
+        profile_token: str,
+        preset_name: str = "",
+        preset_token: str = "",
+    ) -> str:
+        """Create one PTZ preset without re-sending an ambiguous mutation."""
+        url = str(ptz_xaddr or "").strip()
+        profile = str(profile_token or "").strip()
+        if not url:
+            raise OnvifError("Missing ONVIF PTZ service URL")
+        if not profile:
+            raise OnvifError("Missing ONVIF profile token")
+
+        # A successful read discovers the accepted SOAP/auth transport. The mutation below is
+        # deliberately sent exactly once; callers must reconcile an ambiguous outcome by reading.
+        await self.get_ptz_presets(url, profile_token=profile)
+        transport = self._last_ptz_transport
+        if transport is None:
+            raise OnvifError("ONVIF PTZ transport was not established")
+        version, soap_ns, auth = transport
+        body_xml = _tptz_set_preset_body(
+            profile,
+            preset_name=preset_name,
+            preset_token=preset_token,
+        )
+        try:
+            payload = await self._call(
+                url=url,
+                body_xml=body_xml,
+                soap_action=_action(PTZ_NS, "SetPreset"),
+                soap_ns=soap_ns,
+                soap_version=version,
+                auth=auth,
+            )
+            token = _parse_ptz_preset_token(payload, soap_ns=soap_ns)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise OnvifAmbiguousMutationError("ONVIF SetPreset outcome is ambiguous") from exc
+        if not token:
+            raise OnvifAmbiguousMutationError("ONVIF returned an empty preset token")
+        return token
 
     async def goto_preset(self, ptz_xaddr: str, *, profile_token: str, preset_token: str) -> None:
         url = str(ptz_xaddr or "").strip()
@@ -903,7 +995,9 @@ class OnvifClient:
             for auth in self._auth_attempts():
                 try:
                     payload = await self._call(url=url, body_xml=body_xml, soap_action=soap_action, soap_ns=ns, soap_version=version, auth=auth)  # type: ignore[arg-type]
-                    return _parse_ptz_presets(payload, soap_ns=ns)
+                    presets = _parse_ptz_presets(payload, soap_ns=ns)
+                    self._last_ptz_transport = (version, ns, auth)  # type: ignore[assignment]
+                    return presets
                 except Exception as exc:  # noqa: BLE001
                     last_error = exc
         raise OnvifError(str(last_error) if last_error else "ONVIF GetPresets failed")

@@ -14,7 +14,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _run(cmd: list[str], *, cwd: Path = ROOT, capture: bool = False) -> subprocess.CompletedProcess[str]:
+def _run(
+    cmd: list[str], *, cwd: Path = ROOT, capture: bool = False
+) -> subprocess.CompletedProcess[str]:
     printable = " ".join(cmd)
     print(f"+ {printable}", flush=True)
     return subprocess.run(
@@ -73,7 +75,12 @@ def _assert_extensions(base_url: str) -> None:
     if not isinstance(payload, (dict, list)):
         raise RuntimeError("/api/extensions did not return JSON")
     raw = json.dumps(payload)
-    for extension_id in ("com.toposync.cameras", "com.toposync.vision", "com.toposync.home_assistant"):
+    for extension_id in (
+        "com.toposync.cameras",
+        "com.toposync.vision",
+        "com.toposync.home_assistant",
+        "com.toposync.ptz_attention",
+    ):
         if extension_id not in raw:
             raise RuntimeError(f"/api/extensions does not include {extension_id}")
 
@@ -171,7 +178,9 @@ def _run_container(args: argparse.Namespace) -> None:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate Toposync distribution on linux/arm64 with Docker/QEMU.")
+    parser = argparse.ArgumentParser(
+        description="Validate Toposync distribution on linux/arm64 with Docker/QEMU."
+    )
     parser.add_argument("--platform", default="linux/arm64")
     parser.add_argument("--package-spec", default="toposync-streaming==0.8.0")
     parser.add_argument("--image-tag", default="toposync:arm64-test")

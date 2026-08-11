@@ -10,7 +10,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from toposync.runtime.config_store import ConfigStore
-from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
+from toposync.runtime.pipelines.execution import (
+    PipelineRuntimeDependencies,
+    TransformOperatorRuntime,
+)
 from toposync.runtime.pipelines.images import (
     MAIN_ARTIFACT_NAME,
     normalize_artifact_name,
@@ -21,7 +24,12 @@ from toposync.runtime.pipelines.operator_registry import (
     OperatorRegistry,
     payload_path_hint,
 )
-from toposync.runtime.pipelines.packet_contract import resolve_media_ts, resolve_source_device_id
+from toposync.runtime.pipelines.packet_contract import (
+    get_source_descriptor,
+    resolve_media_ts,
+    resolve_source_device_id,
+    resolve_source_id,
+)
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync.runtime.pipelines.safe_expression import SafeExpression
 from toposync.runtime.services import ServiceRegistry
@@ -46,59 +54,157 @@ from ..processing.mapping import (
 
 def _frame_crop_expression_hints() -> list[Any]:
     return [
-        payload_path_hint("payload.frame_crop", value_type="object", description="Crop metadata for the generated frame artifact."),
-        payload_path_hint("payload.frame_crop.bbox01", value_type="array", description="Configured normalized crop rectangle."),
-        payload_path_hint("payload.frame_crop.bbox01_current", value_type="array", description="Normalized crop rectangle applied to the current frame."),
-        payload_path_hint("payload.frame_crop.units", value_type="string", description="Units used to interpret crop values."),
-        payload_path_hint("payload.frame_crop.output_artifact_name", value_type="string", description="Artifact name emitted by the crop operator."),
+        payload_path_hint(
+            "payload.frame_crop",
+            value_type="object",
+            description="Crop metadata for the generated frame artifact.",
+        ),
+        payload_path_hint(
+            "payload.frame_crop.bbox01",
+            value_type="array",
+            description="Configured normalized crop rectangle.",
+        ),
+        payload_path_hint(
+            "payload.frame_crop.bbox01_current",
+            value_type="array",
+            description="Normalized crop rectangle applied to the current frame.",
+        ),
+        payload_path_hint(
+            "payload.frame_crop.units",
+            value_type="string",
+            description="Units used to interpret crop values.",
+        ),
+        payload_path_hint(
+            "payload.frame_crop.output_artifact_name",
+            value_type="string",
+            description="Artifact name emitted by the crop operator.",
+        ),
     ]
 
 
 def _frame_privacy_expression_hints() -> list[Any]:
     return [
-        payload_path_hint("payload.frame_privacy", value_type="object", description="Privacy-region metadata for the generated frame artifact."),
-        payload_path_hint("payload.frame_privacy.bbox01", value_type="array", description="Normalized privacy rectangle applied to the current frame."),
-        payload_path_hint("payload.frame_privacy.units", value_type="string", description="Units used to interpret the configured privacy region."),
-        payload_path_hint("payload.frame_privacy.effect", value_type="string", description="Privacy effect applied inside the region."),
-        payload_path_hint("payload.frame_privacy.output_artifact_name", value_type="string", description="Artifact name emitted by the privacy operator."),
+        payload_path_hint(
+            "payload.frame_privacy",
+            value_type="object",
+            description="Privacy-region metadata for the generated frame artifact.",
+        ),
+        payload_path_hint(
+            "payload.frame_privacy.bbox01",
+            value_type="array",
+            description="Normalized privacy rectangle applied to the current frame.",
+        ),
+        payload_path_hint(
+            "payload.frame_privacy.units",
+            value_type="string",
+            description="Units used to interpret the configured privacy region.",
+        ),
+        payload_path_hint(
+            "payload.frame_privacy.effect",
+            value_type="string",
+            description="Privacy effect applied inside the region.",
+        ),
+        payload_path_hint(
+            "payload.frame_privacy.output_artifact_name",
+            value_type="string",
+            description="Artifact name emitted by the privacy operator.",
+        ),
     ]
 
 
 def _artifact_privacy_expression_hints() -> list[Any]:
     return [
-        payload_path_hint("payload.artifact_privacy", value_type="object", description="Artifact-sanitization metadata attached when privacy stripping matches."),
-        payload_path_hint("payload.artifact_privacy.applied", value_type="boolean", description="Whether image-artifact stripping ran for the current packet."),
-        payload_path_hint("payload.artifact_privacy.mode", value_type="string", description="Privacy action applied to the packet artifacts."),
-        payload_path_hint("payload.artifact_privacy.removed_artifact_names", value_type="array", description="Artifact names removed from the packet to reduce image exposure."),
-        payload_path_hint("payload.artifact_privacy.requested_artifact_names", value_type="array", description="Configured artifact names the privacy operator tried to sanitize."),
+        payload_path_hint(
+            "payload.artifact_privacy",
+            value_type="object",
+            description="Artifact-sanitization metadata attached when privacy stripping matches.",
+        ),
+        payload_path_hint(
+            "payload.artifact_privacy.applied",
+            value_type="boolean",
+            description="Whether image-artifact stripping ran for the current packet.",
+        ),
+        payload_path_hint(
+            "payload.artifact_privacy.mode",
+            value_type="string",
+            description="Privacy action applied to the packet artifacts.",
+        ),
+        payload_path_hint(
+            "payload.artifact_privacy.removed_artifact_names",
+            value_type="array",
+            description="Artifact names removed from the packet to reduce image exposure.",
+        ),
+        payload_path_hint(
+            "payload.artifact_privacy.requested_artifact_names",
+            value_type="array",
+            description="Configured artifact names the privacy operator tried to sanitize.",
+        ),
     ]
 
 
 def _frame_warp_expression_hints() -> list[Any]:
     return [
-        payload_path_hint("payload.frame_warp", value_type="object", description="Perspective warp metadata for the generated artifact."),
-        payload_path_hint("payload.frame_warp.source_frame_width", value_type="number", description="Source frame width before the warp."),
-        payload_path_hint("payload.frame_warp.source_frame_height", value_type="number", description="Source frame height before the warp."),
-        payload_path_hint("payload.frame_warp.dest_frame_width", value_type="number", description="Output frame width after the warp."),
-        payload_path_hint("payload.frame_warp.dest_frame_height", value_type="number", description="Output frame height after the warp."),
-        payload_path_hint("payload.frame_warp.output_artifact_name", value_type="string", description="Artifact name emitted by the perspective crop."),
+        payload_path_hint(
+            "payload.frame_warp",
+            value_type="object",
+            description="Perspective warp metadata for the generated artifact.",
+        ),
+        payload_path_hint(
+            "payload.frame_warp.source_frame_width",
+            value_type="number",
+            description="Source frame width before the warp.",
+        ),
+        payload_path_hint(
+            "payload.frame_warp.source_frame_height",
+            value_type="number",
+            description="Source frame height before the warp.",
+        ),
+        payload_path_hint(
+            "payload.frame_warp.dest_frame_width",
+            value_type="number",
+            description="Output frame width after the warp.",
+        ),
+        payload_path_hint(
+            "payload.frame_warp.dest_frame_height",
+            value_type="number",
+            description="Output frame height after the warp.",
+        ),
+        payload_path_hint(
+            "payload.frame_warp.output_artifact_name",
+            value_type="string",
+            description="Artifact name emitted by the perspective crop.",
+        ),
     ]
 
 
 def _world_mapping_expression_hints() -> list[Any]:
     return [
-        payload_path_hint("payload.world", value_type="object", description="World-space coordinates mapped from the image plane."),
-        payload_path_hint("payload.world.x", value_type="number", description="Mapped world X coordinate."),
-        payload_path_hint("payload.world.z", value_type="number", description="Mapped world Z coordinate."),
-        payload_path_hint("payload.mapping", value_type="object", description="Mapping metadata produced alongside world coordinates."),
+        payload_path_hint(
+            "payload.world",
+            value_type="object",
+            description="World-space coordinates mapped from the image plane.",
+        ),
+        payload_path_hint(
+            "payload.world.x", value_type="number", description="Mapped world X coordinate."
+        ),
+        payload_path_hint(
+            "payload.world.z", value_type="number", description="Mapped world Z coordinate."
+        ),
+        payload_path_hint(
+            "payload.mapping",
+            value_type="object",
+            description="Mapping metadata produced alongside world coordinates.",
+        ),
     ]
 
 
-def _camera_mapping_diagnostics(config: dict[str, Any], context: dict[str, Any]) -> list[OperatorDiagnostic]:
+def _camera_mapping_diagnostics(
+    config: dict[str, Any], context: dict[str, Any]
+) -> list[OperatorDiagnostic]:
     parsed = CameraMappingConfig.model_validate(config)
-    if _control_point_sets_from_calibrated_view_models(parsed.calibrated_views) or _control_point_sets_from_models(
-        parsed.control_point_sets
-    ):
+    if _control_point_sets_from_calibrated_view_models(
+        parsed.calibrated_views
+    ) or _control_point_sets_from_models(parsed.control_point_sets):
         return []
 
     camera_id = parsed.camera_id or _infer_camera_mapping_camera_id(context)
@@ -140,7 +246,9 @@ def _camera_mapping_diagnostics(config: dict[str, Any], context: dict[str, Any])
         matched_without_mapping.append(composition)
 
     if matched_camera:
-        composition_names = ", ".join(_diagnostic_composition_label(item) for item in matched_without_mapping)
+        composition_names = ", ".join(
+            _diagnostic_composition_label(item) for item in matched_without_mapping
+        )
         return [
             OperatorDiagnostic(
                 severity="error",
@@ -152,7 +260,9 @@ def _camera_mapping_diagnostics(config: dict[str, Any], context: dict[str, Any])
                 suggestion="Calibrate a camera view in the composition, or provide inline calibrated_views.",
                 details={
                     "camera_id": camera_id,
-                    "composition_labels": [_diagnostic_composition_label(item) for item in matched_without_mapping],
+                    "composition_labels": [
+                        _diagnostic_composition_label(item) for item in matched_without_mapping
+                    ],
                 },
             )
         ]
@@ -206,7 +316,11 @@ def _diagnose_camera_mapping_composition(
     result = _camera_mapping_composition_status(composition=composition, camera_id=camera_id)
     composition_label = _diagnostic_composition_label(composition)
     if not result["found"]:
-        scope = f"selected composition {composition_label}" if selected_composition else f"composition {composition_label}"
+        scope = (
+            f"selected composition {composition_label}"
+            if selected_composition
+            else f"composition {composition_label}"
+        )
         return [
             OperatorDiagnostic(
                 severity="error",
@@ -272,26 +386,84 @@ def _diagnostic_get(value: Any, key: str, default: Any = "") -> Any:
 
 def _area_restriction_expression_hints() -> list[Any]:
     return [
-        payload_path_hint("payload.area_label", value_type="string", description="Primary matched world area label."),
-        payload_path_hint("payload.area_labels", value_type="array", description="All matched world area labels."),
-        payload_path_hint("payload.area_labels[0]", value_type="string", description="First matched world area label."),
+        payload_path_hint(
+            "payload.area_label",
+            value_type="string",
+            description="Primary matched world area label.",
+        ),
+        payload_path_hint(
+            "payload.area_labels", value_type="array", description="All matched world area labels."
+        ),
+        payload_path_hint(
+            "payload.area_labels[0]",
+            value_type="string",
+            description="First matched world area label.",
+        ),
     ]
 
 
 def _velocity_expression_hints() -> list[Any]:
     return [
-        payload_path_hint("payload.velocity", value_type="object", description="Velocity estimate derived from world coordinates."),
-        payload_path_hint("payload.velocity.speed", value_type="number", description="Velocity magnitude in native operator units."),
-        payload_path_hint("payload.velocity.speed_mps", value_type="number", description="Velocity magnitude in meters per second."),
-        payload_path_hint("payload.velocity.speed_kmh", value_type="number", description="Velocity magnitude in kilometers per hour."),
-        payload_path_hint("payload.velocity.distance", value_type="number", description="Accumulated travel distance in native operator units."),
-        payload_path_hint("payload.velocity.distance_m", value_type="number", description="Accumulated travel distance in meters."),
-        payload_path_hint("payload.velocity.elapsed_seconds", value_type="number", description="Elapsed time used for the current estimate."),
-        payload_path_hint("payload.velocity.moving", value_type="boolean", description="Whether the tracked object is moving."),
-        payload_path_hint("payload.velocity.stopped", value_type="boolean", description="Whether the tracked object is considered stopped."),
-        payload_path_hint("payload.velocity.valid", value_type="boolean", description="Whether the current velocity estimate is valid."),
-        payload_path_hint("payload.velocity.ever_stopped", value_type="boolean", description="Whether the tracked object has ever been stopped."),
-        payload_path_hint("payload.velocity.reason", value_type="string", description="Reason or status message for the current estimate."),
+        payload_path_hint(
+            "payload.velocity",
+            value_type="object",
+            description="Velocity estimate derived from world coordinates.",
+        ),
+        payload_path_hint(
+            "payload.velocity.speed",
+            value_type="number",
+            description="Velocity magnitude in native operator units.",
+        ),
+        payload_path_hint(
+            "payload.velocity.speed_mps",
+            value_type="number",
+            description="Velocity magnitude in meters per second.",
+        ),
+        payload_path_hint(
+            "payload.velocity.speed_kmh",
+            value_type="number",
+            description="Velocity magnitude in kilometers per hour.",
+        ),
+        payload_path_hint(
+            "payload.velocity.distance",
+            value_type="number",
+            description="Accumulated travel distance in native operator units.",
+        ),
+        payload_path_hint(
+            "payload.velocity.distance_m",
+            value_type="number",
+            description="Accumulated travel distance in meters.",
+        ),
+        payload_path_hint(
+            "payload.velocity.elapsed_seconds",
+            value_type="number",
+            description="Elapsed time used for the current estimate.",
+        ),
+        payload_path_hint(
+            "payload.velocity.moving",
+            value_type="boolean",
+            description="Whether the tracked object is moving.",
+        ),
+        payload_path_hint(
+            "payload.velocity.stopped",
+            value_type="boolean",
+            description="Whether the tracked object is considered stopped.",
+        ),
+        payload_path_hint(
+            "payload.velocity.valid",
+            value_type="boolean",
+            description="Whether the current velocity estimate is valid.",
+        ),
+        payload_path_hint(
+            "payload.velocity.ever_stopped",
+            value_type="boolean",
+            description="Whether the tracked object has ever been stopped.",
+        ),
+        payload_path_hint(
+            "payload.velocity.reason",
+            value_type="string",
+            description="Reason or status message for the current estimate.",
+        ),
     ]
 
 
@@ -398,7 +570,10 @@ class ImagePerspectiveCropConfig(BaseModel):
 
     output_artifact_name: str = MAIN_ARTIFACT_NAME
     min_output_edge_px: int = Field(default=8, ge=1, le=4096)
-    max_output_edge_px: int = Field(default=0, ge=0, le=16384, description="0 disables downscaling.")
+    max_output_edge_px: int = Field(
+        default=0, ge=0, le=16384, description="0 disables downscaling."
+    )
+
     @field_validator("points", mode="before")
     @classmethod
     def _normalize_points(cls, value: Any) -> Any:
@@ -509,7 +684,9 @@ class UnsharpMaskConfig(BaseModel):
 
     amount: float = Field(default=0.35, ge=0.0, le=2.0)
     sigma: float = Field(default=1.0, ge=0.1, le=10.0)
-    threshold: int = Field(default=0, ge=0, le=255, description="Apply sharpening only when |src-blur| > threshold.")
+    threshold: int = Field(
+        default=0, ge=0, le=255, description="Apply sharpening only when |src-blur| > threshold."
+    )
     luma_only: bool = True
     preserve_alpha: bool = True
 
@@ -573,7 +750,9 @@ class AutoGammaConfig(BaseModel):
         le=0.99,
         description="EMA factor for gamma: next = smoothing*prev + (1-smoothing)*new.",
     )
-    epsilon: float = Field(default=1e-3, ge=1e-6, le=0.05, description="Clamps luminance away from 0/1.")
+    epsilon: float = Field(
+        default=1e-3, ge=1e-6, le=0.05, description="Clamps luminance away from 0/1."
+    )
     preserve_alpha: bool = True
 
     @model_validator(mode="after")
@@ -757,7 +936,9 @@ class CameraMappingProjectionRefinementPoint(BaseModel):
 class CameraMappingProjectionRefinement(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: Literal["local_rbf_v1"] = "local_rbf_v1"
-    points: list[CameraMappingProjectionRefinementPoint] = Field(default_factory=list, max_length=24)
+    points: list[CameraMappingProjectionRefinementPoint] = Field(
+        default_factory=list, max_length=24
+    )
 
 
 class CameraMappingProjectionBoundaryPoint(BaseModel):
@@ -824,7 +1005,9 @@ class CameraMappingCalibratedView(BaseModel):
     pose_reference: CameraMappingPoseReference | None = None
     stream_scope: CameraMappingStreamScope = Field(default_factory=CameraMappingStreamScope)
     projection_model: CameraMappingProjectionModel
-    projection_quality: CameraMappingProjectionQuality = Field(default_factory=CameraMappingProjectionQuality)
+    projection_quality: CameraMappingProjectionQuality = Field(
+        default_factory=CameraMappingProjectionQuality
+    )
 
     @field_validator("id", mode="before")
     @classmethod
@@ -846,13 +1029,15 @@ class CameraMappingPoseSelectionConfig(BaseModel):
     sigma_tilt: float = Field(default=0.04, gt=0.0, le=1000.0)
     sigma_zoom: float = Field(default=0.06, gt=0.0, le=1000.0)
     max_distance: float = Field(default=3.0, ge=0.0, le=1000.0)
-    fallback_mode: Literal["default_set", "nearest_set", "none"] = "default_set"
+    fallback_mode: Literal["default_set", "nearest_set", "none"] = "none"
     min_shared_axes: int = Field(default=1, ge=1, le=3)
 
 
 class CameraMappingMotionPolicyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    mode: Literal["skip_when_moving", "use_last_idle_pose", "allow_when_confident"] = "skip_when_moving"
+    mode: Literal["skip_when_moving", "use_last_idle_pose", "allow_when_confident"] = (
+        "skip_when_moving"
+    )
 
 
 class CameraMappingHomographyConfig(BaseModel):
@@ -882,13 +1067,26 @@ class CameraMappingConfig(BaseModel):
     image_uv_field: str = "image_uv"
     world_field: str = "world"
     pose_state_field: str = "pan_tilt_zoom_state"
-    pose_selection: CameraMappingPoseSelectionConfig = Field(default_factory=CameraMappingPoseSelectionConfig)
-    motion_policy: CameraMappingMotionPolicyConfig = Field(default_factory=CameraMappingMotionPolicyConfig)
+    pose_selection: CameraMappingPoseSelectionConfig = Field(
+        default_factory=CameraMappingPoseSelectionConfig
+    )
+    motion_policy: CameraMappingMotionPolicyConfig = Field(
+        default_factory=CameraMappingMotionPolicyConfig
+    )
     homography: CameraMappingHomographyConfig = Field(default_factory=CameraMappingHomographyConfig)
-    ptz_state_fetch: CameraMappingPtzStateFetchConfig = Field(default_factory=CameraMappingPtzStateFetchConfig)
+    ptz_state_fetch: CameraMappingPtzStateFetchConfig = Field(
+        default_factory=CameraMappingPtzStateFetchConfig
+    )
     attach_mapping_metadata: bool = True
 
-    @field_validator("camera_id", "composition_id", "bbox_field", "image_uv_field", "world_field", "pose_state_field")
+    @field_validator(
+        "camera_id",
+        "composition_id",
+        "bbox_field",
+        "image_uv_field",
+        "world_field",
+        "pose_state_field",
+    )
     @classmethod
     def _trim(cls, value: str) -> str:
         return str(value or "").strip()
@@ -958,7 +1156,9 @@ class VelocityEstimationConfig(BaseModel):
     def _validate_filter_mode(cls, value: str) -> str:
         mode = str(value or "").strip().lower()
         if mode not in {"annotate", "stopped_once", "always_moving", "stopped_now", "moving_now"}:
-            raise ValueError("filter_mode must be annotate, stopped_once, always_moving, stopped_now, or moving_now")
+            raise ValueError(
+                "filter_mode must be annotate, stopped_once, always_moving, stopped_now, or moving_now"
+            )
         return mode
 
     @field_validator("min_elapsed_seconds")
@@ -985,7 +1185,9 @@ class ImageCropRuntime(TransformOperatorRuntime):
 
         snapshot_store = getattr(self._dependencies, "pipeline_snapshot_store", None)
         if snapshot_store is not None and packet.lifecycle != Lifecycle.CLOSE:
-            camera_id = str(packet.payload.get("camera_id") or packet.metadata.get("camera_id") or "").strip()
+            camera_id = str(
+                packet.payload.get("camera_id") or packet.metadata.get("camera_id") or ""
+            ).strip()
             source_id = camera_id or str(packet.stream_id or "").strip() or "-"
             occurrences = getattr(context, "stats_node_occurrences", None)
             if isinstance(occurrences, (list, tuple)) and occurrences:
@@ -1049,7 +1251,9 @@ class ImageCropRuntime(TransformOperatorRuntime):
                 ),
             )
 
-        crop = _crop_bbox01(image=frame, bbox01=bbox01_current, min_crop_size_px=self._config.min_crop_size_px)
+        crop = _crop_bbox01(
+            image=frame, bbox01=bbox01_current, min_crop_size_px=self._config.min_crop_size_px
+        )
         if crop is None:
             return [packet]
 
@@ -1090,7 +1294,9 @@ class ImageCropRuntime(TransformOperatorRuntime):
             "bottom": float(self._config.bottom),
         }
 
-        artifact_meta["bbox_px_total"] = list(_bbox01_to_px(bbox01_total, width=width, height=height))
+        artifact_meta["bbox_px_total"] = list(
+            _bbox01_to_px(bbox01_total, width=width, height=height)
+        )
 
         out = packet.with_artifact(
             Artifact(
@@ -1145,7 +1351,12 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
         payload = dict(packet.payload)
 
         shape = getattr(image, "shape", None)
-        if image is None or isinstance(image, (bytes, bytearray, memoryview)) or not shape or len(shape) < 2:
+        if (
+            image is None
+            or isinstance(image, (bytes, bytearray, memoryview))
+            or not shape
+            or len(shape) < 2
+        ):
             payload = _annotate_artifact_contract(
                 payload,
                 packet=packet,
@@ -1194,7 +1405,9 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
             )
 
         px1, py1, px2, py2 = _bbox01_to_px(bbox01, width=width, height=height)
-        if (px2 - px1) < int(self._config.min_region_size_px) or (py2 - py1) < int(self._config.min_region_size_px):
+        if (px2 - px1) < int(self._config.min_region_size_px) or (py2 - py1) < int(
+            self._config.min_region_size_px
+        ):
             payload["frame_privacy"] = {
                 "enabled": False,
                 "bbox01": list(bbox01),
@@ -1382,7 +1595,9 @@ class ImagePerspectiveCropRuntime(TransformOperatorRuntime):
 
         snapshot_store = getattr(self._dependencies, "pipeline_snapshot_store", None)
         if snapshot_store is not None and packet.lifecycle != Lifecycle.CLOSE:
-            camera_id = str(packet.payload.get("camera_id") or packet.metadata.get("camera_id") or "").strip()
+            camera_id = str(
+                packet.payload.get("camera_id") or packet.metadata.get("camera_id") or ""
+            ).strip()
             source_id = camera_id or str(packet.stream_id or "").strip() or "-"
             occurrences = getattr(context, "stats_node_occurrences", None)
             if isinstance(occurrences, (list, tuple)) and occurrences:
@@ -1687,7 +1902,9 @@ def _apply_privacy_region_opencv(
         import cv2  # type: ignore
         import numpy as np  # type: ignore
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError("camera.image_privacy requires opencv-python-headless and numpy") from exc
+        raise RuntimeError(
+            "camera.image_privacy requires opencv-python-headless and numpy"
+        ) from exc
 
     arr = np.asarray(image)
     if arr.size == 0:
@@ -1843,7 +2060,9 @@ def _clahe_image_opencv(
         import cv2  # type: ignore
         import numpy as np  # type: ignore
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError("camera.local_contrast_clahe requires opencv-python-headless and numpy") from exc
+        raise RuntimeError(
+            "camera.local_contrast_clahe requires opencv-python-headless and numpy"
+        ) from exc
 
     arr = np.asarray(image)
     if arr.size == 0:
@@ -1856,7 +2075,9 @@ def _clahe_image_opencv(
         alpha = arr[..., 3].copy()
         arr = arr[..., :3]
 
-    clahe = cv2.createCLAHE(clipLimit=float(clip_limit), tileGridSize=(int(tile_grid_size[0]), int(tile_grid_size[1])))
+    clahe = cv2.createCLAHE(
+        clipLimit=float(clip_limit), tileGridSize=(int(tile_grid_size[0]), int(tile_grid_size[1]))
+    )
 
     if arr.ndim == 2:
         out = clahe.apply(np.ascontiguousarray(arr))
@@ -2453,7 +2674,10 @@ class GlobalStabilizeRuntime(TransformOperatorRuntime):
             return [packet]
 
         stream_key = str(packet.stream_id or "").strip() or "stream"
-        if bool(self._config.reset_on_lifecycle) and packet.lifecycle in (Lifecycle.OPEN, Lifecycle.CLOSE):
+        if bool(self._config.reset_on_lifecycle) and packet.lifecycle in (
+            Lifecycle.OPEN,
+            Lifecycle.CLOSE,
+        ):
             self._reference_by_stream.pop(stream_key, None)
 
         state = self._reference_by_stream.get(stream_key) or {}
@@ -2562,7 +2786,9 @@ def _stabilize_global_translation_opencv(
         import cv2  # type: ignore
         import numpy as np  # type: ignore
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError("camera.global_stabilize requires opencv-python-headless and numpy") from exc
+        raise RuntimeError(
+            "camera.global_stabilize requires opencv-python-headless and numpy"
+        ) from exc
 
     arr = np.asarray(image)
     if arr.size == 0:
@@ -2599,7 +2825,13 @@ def _stabilize_global_translation_opencv(
         return {"image": arr, "reference_gray": gray_f, "dx": 0.0, "dy": 0.0, "response": 0.0}
 
     if not math.isfinite(dx) or not math.isfinite(dy):
-        return {"image": arr, "reference_gray": gray_f, "dx": 0.0, "dy": 0.0, "response": float(response or 0.0)}
+        return {
+            "image": arr,
+            "reference_gray": gray_f,
+            "dx": 0.0,
+            "dy": 0.0,
+            "response": float(response or 0.0),
+        }
 
     resp = float(response or 0.0)
     if resp < float(response_threshold):
@@ -2627,8 +2859,12 @@ def _stabilize_global_translation_opencv(
 
     M = np.asarray([[1.0, 0.0, -dx_s], [0.0, 1.0, -dy_s]], dtype=np.float32)
     h, w = int(gray_u8.shape[0]), int(gray_u8.shape[1])
-    out_bgr = cv2.warpAffine(bgr, M, (w, h), flags=flags, borderMode=bmode, borderValue=int(border_value))
-    out_gray = cv2.warpAffine(gray_f, M, (w, h), flags=flags, borderMode=bmode, borderValue=float(border_value))
+    out_bgr = cv2.warpAffine(
+        bgr, M, (w, h), flags=flags, borderMode=bmode, borderValue=int(border_value)
+    )
+    out_gray = cv2.warpAffine(
+        gray_f, M, (w, h), flags=flags, borderMode=bmode, borderValue=float(border_value)
+    )
 
     if arr.ndim == 2:
         out = cv2.cvtColor(out_bgr, cv2.COLOR_BGR2GRAY)
@@ -2636,7 +2872,9 @@ def _stabilize_global_translation_opencv(
         out = out_bgr
         if alpha is not None:
             try:
-                out_alpha = cv2.warpAffine(alpha, M, (w, h), flags=flags, borderMode=bmode, borderValue=255)
+                out_alpha = cv2.warpAffine(
+                    alpha, M, (w, h), flags=flags, borderMode=bmode, borderValue=255
+                )
                 out = np.dstack([out_bgr, out_alpha])
             except Exception:
                 pass
@@ -2710,7 +2948,9 @@ class LensUndistortRuntime(TransformOperatorRuntime):
                 metadata={
                     "source_artifact_name": selected_name,
                     "alpha": float(self._config.alpha),
-                    "use_optimal_new_camera_matrix": bool(self._config.use_optimal_new_camera_matrix),
+                    "use_optimal_new_camera_matrix": bool(
+                        self._config.use_optimal_new_camera_matrix
+                    ),
                     "crop_to_valid_roi": bool(self._config.crop_to_valid_roi),
                     "roi": result.get("roi"),
                 },
@@ -2754,7 +2994,9 @@ def _undistort_image_opencv(
         import cv2  # type: ignore
         import numpy as np  # type: ignore
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError("camera.lens_undistort requires opencv-python-headless and numpy") from exc
+        raise RuntimeError(
+            "camera.lens_undistort requires opencv-python-headless and numpy"
+        ) from exc
 
     arr = np.asarray(image)
     if arr.size == 0:
@@ -2813,7 +3055,9 @@ def _undistort_image_opencv(
     map2 = None
     try:
         map1, map2 = cv2.initUndistortRectifyMap(K, dist, None, newK, (w, h), cv2.CV_16SC2)
-        undistorted = cv2.remap(img, map1, map2, interpolation=flags, borderMode=bmode, borderValue=int(border_value))
+        undistorted = cv2.remap(
+            img, map1, map2, interpolation=flags, borderMode=bmode, borderValue=int(border_value)
+        )
     except Exception:
         try:
             undistorted = cv2.undistort(img, K, dist, None, newK)
@@ -2931,7 +3175,9 @@ class FrameAttachRuntime(TransformOperatorRuntime):
         if self._last_frame_packet is None:
             frames_channel = context.inputs.get("frames")
             if frames_channel is not None and float(self._config.wait_timeout_s) > 0:
-                result = await frames_channel.get(timeout_s=float(self._config.wait_timeout_s), cancel_event=context.cancel_event)
+                result = await frames_channel.get(
+                    timeout_s=float(self._config.wait_timeout_s), cancel_event=context.cancel_event
+                )
                 if result.accepted and result.item is not None:
                     self._last_frame_packet = result.item
         frame_packet = self._last_frame_packet
@@ -3116,10 +3362,13 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             fallback_mode=self._config.pose_selection.fallback_mode,
             min_shared_axes=int(self._config.pose_selection.min_shared_axes),
         )
-        self._resolved_sets_cache: dict[str, tuple[Any, str | None, tuple[ControlPointSet, ...]]] = {}
+        self._resolved_sets_cache: dict[
+            str, tuple[Any, str | None, tuple[ControlPointSet, ...]]
+        ] = {}
         self._mapper_cache: dict[str, ControlPointMapper | None] = {}
         self._ptz_state_cache: dict[str, _CameraMappingPtzStateCacheEntry] = {}
         self._ptz_state_tasks: dict[str, asyncio.Task[PanTiltZoomState | None]] = {}
+        self._ptz_device_by_camera_source: dict[str, str] = {}
 
     def _mapping_confidence(self, *, selection: Any, mapper: ControlPointMapper) -> float:
         confidence = 0.85
@@ -3223,7 +3472,19 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             return [packet]
 
         camera_id = _resolve_camera_id(packet, camera_id_override=self._config.camera_id)
-        composition_id, control_point_sets = await self._resolve_control_point_sets(camera_id=camera_id)
+        composition_id, control_point_sets = await self._resolve_control_point_sets(
+            camera_id=camera_id
+        )
+        camera_source_id, source_role = _resolve_camera_source_scope(packet)
+        control_point_sets = tuple(
+            item
+            for item in control_point_sets
+            if _control_point_set_matches_source_scope(
+                item,
+                source_id=camera_source_id,
+                source_role=source_role,
+            )
+        )
         if not control_point_sets:
             return [packet]
 
@@ -3232,6 +3493,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         if pose_state is None:
             pose_state = await self._resolve_ptz_state_when_missing(
                 camera_id=camera_id,
+                camera_source_id=camera_source_id,
                 control_point_sets=control_point_sets,
             )
             pose_state_fetched = pose_state is not None
@@ -3239,6 +3501,13 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         payload = dict(packet.payload)
         if pose_state_fetched and self._config.ptz_state_fetch.attach_to_payload:
             payload[self._config.pose_state_field] = _pan_tilt_zoom_state_to_payload(pose_state)
+
+        pose_bound = any(item.pose_reference is not None for item in control_point_sets)
+        geometry_guarded = pose_bound or pose_state is not None
+        if geometry_guarded and (pose_state is None or pose_state.geometry_safe is not True):
+            if pose_state_fetched:
+                return [replace(packet, payload=payload)]
+            return [packet]
 
         selection = select_control_point_set(
             list(control_point_sets),
@@ -3281,9 +3550,12 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 "control_point_set_id": selection.control_point_set.id,
                 "calibrated_view_id": selection.control_point_set.id,
                 "control_point_set_label": selection.control_point_set.label,
-                "pose_distance": (float(selection.pose_distance) if selection.pose_distance is not None else None),
+                "pose_distance": (
+                    float(selection.pose_distance) if selection.pose_distance is not None else None
+                ),
                 "pose_axes_used": list(selection.pose_axes_used),
                 "move_status": selection.move_status,
+                "motion_epoch": pose_state.motion_epoch if pose_state is not None else None,
                 "confidence": float(confidence),
                 "quality": mapper.quality.as_dict(),
             }
@@ -3294,7 +3566,9 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             metadata["calibrated_view_id"] = selection.control_point_set.id
         return [replace(packet, payload=payload, metadata=metadata)]
 
-    async def _resolve_control_point_sets(self, *, camera_id: str) -> tuple[str | None, tuple[ControlPointSet, ...]]:
+    async def _resolve_control_point_sets(
+        self, *, camera_id: str
+    ) -> tuple[str | None, tuple[ControlPointSet, ...]]:
         if self._inline_control_point_sets:
             return (self._config.composition_id or None), self._inline_control_point_sets
 
@@ -3318,7 +3592,9 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 if not camera_id_value or camera_id_value != camera_id:
                     continue
                 control_point_sets = tuple(_parse_mapping_control_point_sets_from_props(props))
-                valid_sets = tuple(item for item in control_point_sets if len(item.control_points) >= 4)
+                valid_sets = tuple(
+                    item for item in control_point_sets if len(item.control_points) >= 4
+                )
                 if not valid_sets:
                     continue
                 self._resolved_sets_cache[cache_key] = (cfg, composition.id, valid_sets)
@@ -3335,8 +3611,12 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         control_point_set: ControlPointSet,
     ) -> ControlPointMapper | None:
         points_signature = compute_control_points_signature(control_point_set.control_points)
-        refinement_signature = compute_refinement_points_signature(control_point_set.refinement_points)
-        boundary_signature = compute_boundary_refinement_points_signature(control_point_set.boundary_refinement_points)
+        refinement_signature = compute_refinement_points_signature(
+            control_point_set.refinement_points
+        )
+        boundary_signature = compute_boundary_refinement_points_signature(
+            control_point_set.boundary_refinement_points
+        )
         cache_key = "|".join(
             [
                 str(camera_id or "<inline>").strip() or "<inline>",
@@ -3376,6 +3656,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         self,
         *,
         camera_id: str,
+        camera_source_id: str | None,
         control_point_sets: tuple[ControlPointSet, ...],
     ) -> PanTiltZoomState | None:
         if not self._config.ptz_state_fetch.enabled:
@@ -3383,25 +3664,28 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         pose_bound_count = sum(1 for item in control_point_sets if item.pose_reference is not None)
         if pose_bound_count <= 0:
             return None
-        if len(control_point_sets) <= 1:
-            return None
 
         services = self._dependencies.services
         if not isinstance(services, ServiceRegistry):
             return None
 
         now = time.monotonic()
-        cached = self._ptz_state_cache.get(camera_id)
+        cache_key = f"{camera_id}|{camera_source_id or ''}"
+        cached = self._ptz_state_cache.get(cache_key)
         if cached is not None and cached.expires_monotonic > now:
             return cached.state
 
-        task = self._ptz_state_tasks.get(camera_id)
+        task = self._ptz_state_tasks.get(cache_key)
         if task is None or task.done():
             task = asyncio.create_task(
-                self._fetch_ptz_state_from_service(camera_id=camera_id, services=services),
-                name=f"camera-mapping-ptz-state[{camera_id}]",
+                self._fetch_ptz_state_from_service(
+                    camera_id=camera_id,
+                    camera_source_id=camera_source_id,
+                    services=services,
+                ),
+                name=f"camera-mapping-ptz-state[{cache_key}]",
             )
-            self._ptz_state_tasks[camera_id] = task
+            self._ptz_state_tasks[cache_key] = task
 
         try:
             state = await task
@@ -3410,18 +3694,18 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         except Exception:
             state = None
         finally:
-            current = self._ptz_state_tasks.get(camera_id)
+            current = self._ptz_state_tasks.get(cache_key)
             if current is task:
-                self._ptz_state_tasks.pop(camera_id, None)
+                self._ptz_state_tasks.pop(cache_key, None)
 
         ttl = float(self._config.ptz_state_fetch.unavailable_cache_ttl_seconds)
         if state is not None:
             normalized_status = normalize_move_status(state.move_status)
-            if normalized_status == "moving":
+            if state.geometry_safe is not True or normalized_status == "moving":
                 ttl = float(self._config.ptz_state_fetch.moving_cache_ttl_seconds)
             else:
                 ttl = float(self._config.ptz_state_fetch.cache_ttl_seconds)
-        self._ptz_state_cache[camera_id] = _CameraMappingPtzStateCacheEntry(
+        self._ptz_state_cache[cache_key] = _CameraMappingPtzStateCacheEntry(
             state=state,
             expires_monotonic=time.monotonic() + max(0.0, ttl),
         )
@@ -3431,27 +3715,54 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         self,
         *,
         camera_id: str,
+        camera_source_id: str | None,
         services: ServiceRegistry,
     ) -> PanTiltZoomState | None:
+        identity_key = f"{camera_id}|{camera_source_id or ''}"
+        ptz_device_id = self._ptz_device_by_camera_source.get(identity_key, "")
         try:
-            raw = await services.call("cameras.ptz.get_status", camera_id=camera_id)
+            if ptz_device_id:
+                raw = await services.call(
+                    "cameras.control.snapshot",
+                    ptz_device_id=ptz_device_id,
+                    include_readiness=False,
+                    refresh_physical=False,
+                )
+            else:
+                raw = await services.call(
+                    "cameras.control.snapshot",
+                    camera_id=camera_id,
+                    source_id=camera_source_id,
+                    include_readiness=False,
+                    refresh_physical=False,
+                )
         except Exception:
             return None
-        state = _read_pan_tilt_zoom_state(raw if isinstance(raw, dict) else None)
+        snapshot = raw if isinstance(raw, dict) else None
+        if snapshot is None:
+            return None
+        resolved_device_id = str(snapshot.get("ptz_device_id") or "").strip()
+        if resolved_device_id:
+            ptz_device_id = resolved_device_id
+            self._ptz_device_by_camera_source[identity_key] = resolved_device_id
+        if snapshot.get("geometry_safe") is not True:
+            try:
+                refreshed = await services.call(
+                    "cameras.control.snapshot",
+                    camera_id=camera_id,
+                    source_id=camera_source_id,
+                    ptz_device_id=ptz_device_id or None,
+                    include_readiness=False,
+                    refresh_physical=True,
+                )
+            except Exception:
+                refreshed = None
+            if isinstance(refreshed, dict):
+                snapshot = refreshed
+        state = _pan_tilt_zoom_state_from_control_snapshot(snapshot)
         if state is None:
             return None
-        if state.source:
-            return state
-        return PanTiltZoomState(
-            pan=state.pan,
-            tilt=state.tilt,
-            zoom=state.zoom,
-            move_status=state.move_status,
-            utc_time=state.utc_time,
-            error=state.error,
-            source="cameras.ptz.get_status",
-            confidence=state.confidence,
-        )
+        return state
 
 
 class AreaRestrictionRuntime(TransformOperatorRuntime):
@@ -3475,7 +3786,9 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
         except Exception:
             return [] if self._config.drop_when_unmapped else [packet]
 
-        matched_areas = [name for name, points in self._areas if _point_in_polygon(x=x, z=z, polygon=points)]
+        matched_areas = [
+            name for name, points in self._areas if _point_in_polygon(x=x, z=z, polygon=points)
+        ]
         if self._include and not any(name in self._include for name in matched_areas):
             return []
         if self._exclude and any(name in self._exclude for name in matched_areas):
@@ -3522,7 +3835,9 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         ever_stopped: bool,
     ) -> list[Packet]:
         self._state_by_key.pop(key, None)
-        return self._apply_filter_mode(packet, valid=valid, moving=moving, ever_stopped=ever_stopped)
+        return self._apply_filter_mode(
+            packet, valid=valid, moving=moving, ever_stopped=ever_stopped
+        )
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         event_id = str(packet.payload.get("event_id") or "").strip()
@@ -3542,7 +3857,9 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                 window_seconds=_VELOCITY_WINDOW_SECONDS,
                 reason="missing_event_id",
             )
-            return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=False)
+            return self._apply_filter_mode(
+                out_packet, valid=False, moving=False, ever_stopped=False
+            )
 
         key = _resolve_tracking_key(packet)
 
@@ -3577,7 +3894,9 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                     moving=False,
                     ever_stopped=ever_stopped,
                 )
-            return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=ever_stopped)
+            return self._apply_filter_mode(
+                out_packet, valid=False, moving=False, ever_stopped=ever_stopped
+            )
 
         try:
             x = float(world.get("x"))
@@ -3608,7 +3927,9 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                     moving=False,
                     ever_stopped=ever_stopped,
                 )
-            return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=ever_stopped)
+            return self._apply_filter_mode(
+                out_packet, valid=False, moving=False, ever_stopped=ever_stopped
+            )
 
         if state is None:
             state = _VelocityState(samples=deque(maxlen=_VELOCITY_MAX_SAMPLES))
@@ -3640,7 +3961,9 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                     moving=False,
                     ever_stopped=ever_stopped,
                 )
-            return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=ever_stopped)
+            return self._apply_filter_mode(
+                out_packet, valid=False, moving=False, ever_stopped=ever_stopped
+            )
 
         samples.append(_VelocitySample(x=float(x), z=float(z), ts=float(now_ts)))
         # Keep memory stable even if a stream stays open for a long time.
@@ -3722,7 +4045,9 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                 ever_stopped=ever_stopped,
             )
 
-        return self._apply_filter_mode(out_packet, valid=valid, moving=moving, ever_stopped=ever_stopped)
+        return self._apply_filter_mode(
+            out_packet, valid=valid, moving=moving, ever_stopped=ever_stopped
+        )
 
     def _annotate_packet(
         self,
@@ -3763,7 +4088,9 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         }
         return replace(packet, payload=payload)
 
-    def _apply_filter_mode(self, packet: Packet, *, valid: bool, moving: bool, ever_stopped: bool) -> list[Packet]:
+    def _apply_filter_mode(
+        self, packet: Packet, *, valid: bool, moving: bool, ever_stopped: bool
+    ) -> list[Packet]:
         mode = self._config.filter_mode
         if mode == "stopped_once" and not ever_stopped:
             return []
@@ -4061,6 +4388,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         runtime_factory=lambda config, _deps: VelocityEstimationRuntime(config),
     )
 
+
 def _normalize_artifact_names(values: list[str]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -4084,7 +4412,9 @@ def _resolve_input_image(
     *,
     input_artifact_name: str | None,
 ) -> tuple[str | None, Any | None]:
-    artifact_name, data = resolve_image_artifact_for_data(packet, input_artifact_name=input_artifact_name)
+    artifact_name, data = resolve_image_artifact_for_data(
+        packet, input_artifact_name=input_artifact_name
+    )
     return artifact_name, data
 
 
@@ -4192,7 +4522,9 @@ def _read_frame_crop_bbox01(
     return None
 
 
-def _read_frame_warp(packet: Packet, *, selected_artifact_name: str | None) -> dict[str, Any] | None:
+def _read_frame_warp(
+    packet: Packet, *, selected_artifact_name: str | None
+) -> dict[str, Any] | None:
     warp = packet.payload.get("frame_warp")
     if not _payload_transform_targets_artifact(warp, selected_artifact_name=selected_artifact_name):
         return None
@@ -4312,7 +4644,9 @@ def _reproject_bbox01_to_crop(
     )
 
 
-def _expand_bbox01(bbox01: tuple[float, float, float, float], *, padding_ratio: float) -> tuple[float, float, float, float]:
+def _expand_bbox01(
+    bbox01: tuple[float, float, float, float], *, padding_ratio: float
+) -> tuple[float, float, float, float]:
     ratio = float(padding_ratio)
     if ratio <= 0.0:
         return bbox01
@@ -4534,7 +4868,9 @@ def _warp_perspective_opencv(
         import cv2  # type: ignore
         import numpy as np  # type: ignore
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError("camera.image_perspective_crop requires opencv-python-headless and numpy") from exc
+        raise RuntimeError(
+            "camera.image_perspective_crop requires opencv-python-headless and numpy"
+        ) from exc
 
     arr = np.asarray(image)
     if arr.size == 0:
@@ -4599,7 +4935,9 @@ def _warp_perspective_opencv(
     }
 
 
-def _resolve_image_point(packet: Packet, *, bbox_field: str, image_uv_field: str) -> tuple[float, float] | None:
+def _resolve_image_point(
+    packet: Packet, *, bbox_field: str, image_uv_field: str
+) -> tuple[float, float] | None:
     image_uv = packet.payload.get(image_uv_field)
     if isinstance(image_uv, dict):
         try:
@@ -4621,6 +4959,38 @@ def _resolve_camera_id(packet: Packet, *, camera_id_override: str) -> str:
     if camera_id:
         return camera_id
     return resolve_source_device_id(packet)
+
+
+def _resolve_camera_source_scope(packet: Packet) -> tuple[str | None, str | None]:
+    source = get_source_descriptor(packet)
+    source_id = (
+        resolve_source_id(packet) or str(packet.payload.get("camera_source_id") or "").strip()
+    )
+    source_role = str(source.get("role") or "").strip().lower()
+    return source_id or None, source_role or None
+
+
+def _control_point_set_matches_source_scope(
+    control_point_set: ControlPointSet,
+    *,
+    source_id: str | None,
+    source_role: str | None,
+) -> bool:
+    if control_point_set.compatible_source_ids and (
+        source_id is None or source_id not in control_point_set.compatible_source_ids
+    ):
+        return False
+    if control_point_set.compatible_roles and (
+        source_role is None or source_role not in control_point_set.compatible_roles
+    ):
+        return False
+    if (
+        not control_point_set.compatible_source_ids
+        and not control_point_set.compatible_roles
+        and source_role not in {"main", "sub"}
+    ):
+        return False
+    return True
 
 
 def _parse_control_point_pairs(value: Any) -> list[ControlPointPair]:
@@ -4652,7 +5022,30 @@ def _parse_pose_reference(value: Any) -> PoseReference | None:
     preset_name = str(rec.get("preset_name") or "").strip() or None
     if pan is None and tilt is None and zoom is None and not preset_token and not preset_name:
         return None
-    return PoseReference(pan=pan, tilt=tilt, zoom=zoom, preset_token=preset_token, preset_name=preset_name)
+    return PoseReference(
+        pan=pan, tilt=tilt, zoom=zoom, preset_token=preset_token, preset_name=preset_name
+    )
+
+
+def _normalize_stream_scope_values(value: Any) -> tuple[str, ...]:
+    raw = value if isinstance(value, list) else []
+    normalized: list[str] = []
+    for item in raw:
+        text = str(item or "").strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    return tuple(normalized)
+
+
+def _parse_calibrated_view_stream_scope(value: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if not isinstance(value, dict):
+        return (), ()
+    return (
+        _normalize_stream_scope_values(value.get("compatible_source_ids")),
+        tuple(
+            item.lower() for item in _normalize_stream_scope_values(value.get("compatible_roles"))
+        ),
+    )
 
 
 def _parse_control_point_sets(value: Any) -> list[ControlPointSet]:
@@ -4724,7 +5117,9 @@ def _boundary_image_for_edge(edge: str, t: float) -> tuple[float, float]:
     return 0.0, 1.0 - normalized_t
 
 
-def _parse_boundary_refinement_points(value: Any) -> tuple[ControlPointBoundaryRefinementPoint, ...]:
+def _parse_boundary_refinement_points(
+    value: Any,
+) -> tuple[ControlPointBoundaryRefinementPoint, ...]:
     rec = value if isinstance(value, dict) else {}
     if str(rec.get("model") or "edge_handles_v1").strip() != "edge_handles_v1":
         return ()
@@ -4773,16 +5168,32 @@ def _parse_boundary_refinement_points(value: Any) -> tuple[ControlPointBoundaryR
     return tuple(out)
 
 
-def _control_point_set_from_calibrated_view_record(value: Any, *, index: int = 0) -> ControlPointSet | None:
+def _control_point_set_from_calibrated_view_record(
+    value: Any, *, index: int = 0
+) -> ControlPointSet | None:
     rec = value if isinstance(value, dict) else {}
     view_id = str(rec.get("id") or "").strip()
     if not view_id:
         return None
     label = str(rec.get("label") or "").strip() or view_id or f"view-{index + 1}"
-    projection_model = rec.get("projection_model") if isinstance(rec.get("projection_model"), dict) else {}
-    image_region = projection_model.get("image_region") if isinstance(projection_model.get("image_region"), dict) else {}
-    world_quad = projection_model.get("world_quad") if isinstance(projection_model.get("world_quad"), dict) else {}
-    top_left_image = image_region.get("top_left") if isinstance(image_region.get("top_left"), dict) else {"x": 0.0, "y": 0.0}
+    projection_model = (
+        rec.get("projection_model") if isinstance(rec.get("projection_model"), dict) else {}
+    )
+    image_region = (
+        projection_model.get("image_region")
+        if isinstance(projection_model.get("image_region"), dict)
+        else {}
+    )
+    world_quad = (
+        projection_model.get("world_quad")
+        if isinstance(projection_model.get("world_quad"), dict)
+        else {}
+    )
+    top_left_image = (
+        image_region.get("top_left")
+        if isinstance(image_region.get("top_left"), dict)
+        else {"x": 0.0, "y": 0.0}
+    )
     bottom_right_image = (
         image_region.get("bottom_right")
         if isinstance(image_region.get("bottom_right"), dict)
@@ -4795,7 +5206,12 @@ def _control_point_set_from_calibrated_view_record(value: Any, *, index: int = 0
         image_bottom = float(bottom_right_image.get("y"))
     except Exception:
         return None
-    if not (0.0 <= image_left <= 1.0 and 0.0 <= image_top <= 1.0 and 0.0 <= image_right <= 1.0 and 0.0 <= image_bottom <= 1.0):
+    if not (
+        0.0 <= image_left <= 1.0
+        and 0.0 <= image_top <= 1.0
+        and 0.0 <= image_right <= 1.0
+        and 0.0 <= image_bottom <= 1.0
+    ):
         return None
     if image_right <= image_left or image_bottom <= image_top:
         return None
@@ -4818,11 +5234,34 @@ def _control_point_set_from_calibrated_view_record(value: Any, *, index: int = 0
     if not top_left_world or not top_right_world or not bottom_right_world or not bottom_left_world:
         return None
 
+    compatible_source_ids, compatible_roles = _parse_calibrated_view_stream_scope(
+        rec.get("stream_scope")
+    )
     control_points = (
-        ControlPointPair(image_u=image_left, image_v=image_top, world_x=top_left_world[0], world_z=top_left_world[1]),
-        ControlPointPair(image_u=image_right, image_v=image_top, world_x=top_right_world[0], world_z=top_right_world[1]),
-        ControlPointPair(image_u=image_right, image_v=image_bottom, world_x=bottom_right_world[0], world_z=bottom_right_world[1]),
-        ControlPointPair(image_u=image_left, image_v=image_bottom, world_x=bottom_left_world[0], world_z=bottom_left_world[1]),
+        ControlPointPair(
+            image_u=image_left,
+            image_v=image_top,
+            world_x=top_left_world[0],
+            world_z=top_left_world[1],
+        ),
+        ControlPointPair(
+            image_u=image_right,
+            image_v=image_top,
+            world_x=top_right_world[0],
+            world_z=top_right_world[1],
+        ),
+        ControlPointPair(
+            image_u=image_right,
+            image_v=image_bottom,
+            world_x=bottom_right_world[0],
+            world_z=bottom_right_world[1],
+        ),
+        ControlPointPair(
+            image_u=image_left,
+            image_v=image_bottom,
+            world_x=bottom_left_world[0],
+            world_z=bottom_left_world[1],
+        ),
     )
     return ControlPointSet(
         id=view_id,
@@ -4830,7 +5269,11 @@ def _control_point_set_from_calibrated_view_record(value: Any, *, index: int = 0
         pose_reference=_parse_pose_reference(rec.get("pose_reference")),
         control_points=control_points,
         refinement_points=_parse_refinement_points(projection_model.get("refinement")),
-        boundary_refinement_points=_parse_boundary_refinement_points(projection_model.get("boundary_refinement")),
+        boundary_refinement_points=_parse_boundary_refinement_points(
+            projection_model.get("boundary_refinement")
+        ),
+        compatible_source_ids=compatible_source_ids,
+        compatible_roles=compatible_roles,
     )
 
 
@@ -4851,7 +5294,9 @@ def _parse_mapping_control_point_sets_from_props(props: dict[str, Any]) -> list[
     return _parse_control_point_sets(props.get("control_point_sets"))
 
 
-def _control_point_sets_from_models(value: list[CameraMappingControlPointSet]) -> tuple[ControlPointSet, ...]:
+def _control_point_sets_from_models(
+    value: list[CameraMappingControlPointSet],
+) -> tuple[ControlPointSet, ...]:
     out: list[ControlPointSet] = []
     for index, item in enumerate(value):
         control_points = tuple(
@@ -4867,7 +5312,9 @@ def _control_point_sets_from_models(value: list[CameraMappingControlPointSet]) -
         out.append(
             ControlPointSet(
                 id=str(item.id or "").strip(),
-                label=str(item.label or "").strip() or str(item.id or "").strip() or f"view-{index + 1}",
+                label=str(item.label or "").strip()
+                or str(item.id or "").strip()
+                or f"view-{index + 1}",
                 pose_reference=(
                     PoseReference(
                         pan=pose.pan,
@@ -4885,7 +5332,9 @@ def _control_point_sets_from_models(value: list[CameraMappingControlPointSet]) -
     return tuple(item for item in out if item.id and len(item.control_points) >= 4)
 
 
-def _control_point_sets_from_calibrated_view_models(value: list[CameraMappingCalibratedView]) -> tuple[ControlPointSet, ...]:
+def _control_point_sets_from_calibrated_view_models(
+    value: list[CameraMappingCalibratedView],
+) -> tuple[ControlPointSet, ...]:
     raw = [item.model_dump(mode="json") for item in value]
     return tuple(_parse_calibrated_views_as_control_point_sets(raw))
 
@@ -4900,6 +5349,11 @@ def _read_pan_tilt_zoom_state(value: Any) -> PanTiltZoomState | None:
     error = str(rec.get("error") or "").strip() or None
     source = str(rec.get("source") or "").strip() or None
     confidence = _optional_float(rec.get("confidence"))
+    preset_token = str(rec.get("preset_token") or "").strip() or None
+    geometry_safe = rec.get("geometry_safe") if isinstance(rec.get("geometry_safe"), bool) else None
+    motion_epoch = _optional_non_negative_int(rec.get("motion_epoch"))
+    motion_state = str(rec.get("motion_state") or "").strip().lower() or None
+    physical_updated_at = _optional_float(rec.get("physical_updated_at"))
     if (
         pan is None
         and tilt is None
@@ -4909,6 +5363,11 @@ def _read_pan_tilt_zoom_state(value: Any) -> PanTiltZoomState | None:
         and error is None
         and source is None
         and confidence is None
+        and preset_token is None
+        and geometry_safe is None
+        and motion_epoch is None
+        and motion_state is None
+        and physical_updated_at is None
     ):
         return None
     return PanTiltZoomState(
@@ -4920,6 +5379,33 @@ def _read_pan_tilt_zoom_state(value: Any) -> PanTiltZoomState | None:
         error=error,
         source=source,
         confidence=confidence,
+        preset_token=preset_token,
+        geometry_safe=geometry_safe,
+        motion_epoch=motion_epoch,
+        motion_state=motion_state,
+        physical_updated_at=physical_updated_at,
+    )
+
+
+def _pan_tilt_zoom_state_from_control_snapshot(value: Any) -> PanTiltZoomState | None:
+    snapshot = value if isinstance(value, dict) else {}
+    pose = snapshot.get("pose") if isinstance(snapshot.get("pose"), dict) else {}
+    last_command = (
+        snapshot.get("last_command") if isinstance(snapshot.get("last_command"), dict) else {}
+    )
+    return _read_pan_tilt_zoom_state(
+        {
+            "pan": pose.get("pan"),
+            "tilt": pose.get("tilt"),
+            "zoom": pose.get("zoom"),
+            "move_status": snapshot.get("move_status"),
+            "source": "cameras.control.snapshot",
+            "preset_token": last_command.get("preset_token"),
+            "geometry_safe": snapshot.get("geometry_safe"),
+            "motion_epoch": snapshot.get("motion_epoch"),
+            "motion_state": snapshot.get("motion_state"),
+            "physical_updated_at": snapshot.get("physical_updated_at"),
+        }
     )
 
 
@@ -4935,6 +5421,11 @@ def _pan_tilt_zoom_state_to_payload(value: PanTiltZoomState | None) -> dict[str,
         "error": value.error,
         "source": value.source,
         "confidence": value.confidence,
+        "preset_token": value.preset_token,
+        "geometry_safe": value.geometry_safe,
+        "motion_epoch": value.motion_epoch,
+        "motion_state": value.motion_state,
+        "physical_updated_at": value.physical_updated_at,
     }
 
 
@@ -4950,6 +5441,16 @@ def _optional_float(value: Any) -> float | None:
     return parsed
 
 
+def _optional_non_negative_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = int(value)
+    except Exception:
+        return None
+    return parsed if parsed >= 0 else None
+
+
 def _point_in_polygon(*, x: float, z: float, polygon: list[tuple[float, float]]) -> bool:
     if len(polygon) < 3:
         return False
@@ -4958,7 +5459,8 @@ def _point_in_polygon(*, x: float, z: float, polygon: list[tuple[float, float]])
     for current_index, (current_x, current_z) in enumerate(polygon):
         prev_x, prev_z = polygon[previous_index]
         intersects = ((current_z > z) != (prev_z > z)) and (
-            x < ((prev_x - current_x) * (z - current_z) / ((prev_z - current_z) or 1e-12)) + current_x
+            x
+            < ((prev_x - current_x) * (z - current_z) / ((prev_z - current_z) or 1e-12)) + current_x
         )
         if intersects:
             inside = not inside
@@ -4998,7 +5500,9 @@ def _resolve_tracking_key(packet: Packet) -> str:
     # - `correlation_id` (UUID per event/track) is the safest identifier for per-object state.
     event_id = str(packet.payload.get("event_id") or "").strip()
     if event_id:
-        source_stream_id = str(packet.payload.get("source_stream_id") or packet.metadata.get("source_stream_id") or "").strip()
+        source_stream_id = str(
+            packet.payload.get("source_stream_id") or packet.metadata.get("source_stream_id") or ""
+        ).strip()
         prefix = source_stream_id or packet.stream_id
         return f"{prefix}|{event_id}"
 
@@ -5008,7 +5512,9 @@ def _resolve_tracking_key(packet: Packet) -> str:
 
     tracking_id = str(packet.payload.get("tracking_id") or "").strip()
     if tracking_id:
-        source_stream_id = str(packet.payload.get("source_stream_id") or packet.metadata.get("source_stream_id") or "").strip()
+        source_stream_id = str(
+            packet.payload.get("source_stream_id") or packet.metadata.get("source_stream_id") or ""
+        ).strip()
         prefix = source_stream_id or packet.stream_id
         return f"{prefix}|{tracking_id}"
 

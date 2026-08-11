@@ -100,6 +100,12 @@ de pipeline: ela vincula uma transmissão de Streaming existente a um pipeline
 gerado e corta entre câmeras a partir de notificações. Esse é um fluxo
 especializado, não a configuração normal de live view de câmera.
 
+[Atenção PTZ semântica](ptz-attention.mdx) é outro tipo de fluxo. Ela consome
+ciclos de vida explícitos de eventos semânticos, seleciona uma vista PTZ calibrada
+permitida, mantém essa vista enquanto o evento estiver ativo e retorna para uma
+vista inicial configurada. Ela não segue qualquer objeto em movimento nem infere
+intenção criminosa.
+
 ## Mapeamento {/* #mapping */}
 
 Quando a câmera é posicionada em uma composição, o Toposync pode usá-la para
@@ -112,6 +118,9 @@ contexto espacial:
 
 Veja [Mapeamento de câmeras](camera-mapping.mdx) para calibração, poses PTZ e
 projeção espacial de vídeo.
+
+Vistas PTZ calibradas também formam o conjunto seguro de alvos usado pela atenção
+PTZ semântica.
 
 ## O que validar {/* #what-to-validate */}
 
@@ -126,5 +135,7 @@ Depois de adicionar uma câmera, valide nesta ordem:
 6. PTZ funciona apenas se a câmera suporta PTZ e as credenciais permitem.
 7. O mapeamento é calibrado apenas depois que a imagem e a fonte ao vivo estão
    estáveis.
+8. A atenção PTZ é revisada em modo de simulação antes de habilitar movimentos
+   ao vivo por preset.
 
 Evite ajustar transportes avançados até uma câmera estar confiável.

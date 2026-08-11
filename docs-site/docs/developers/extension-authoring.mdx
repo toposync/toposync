@@ -22,6 +22,7 @@ The extension runtime is real and powers the first-party product today:
 - `toposync-ext-home-assistant`;
 - `toposync-ext-cameras`;
 - `toposync-ext-vision`;
+- `toposync-ext-ptz-attention`;
 - optional extensions such as streaming, AI, and spatial video.
 
 The missing piece is ecosystem validation. Toposync does not yet have a proven set of independently maintained third-party extensions installed from outside this monorepo. Before considering the contract stable for a broader marketplace, we still need to validate packaging, upgrade behavior, frontend shared dependencies, version constraints, extension management UX, and security expectations with real external packages.
@@ -158,6 +159,30 @@ Use `setup()` for runtime registration:
 
 Use `capabilities()` when the core needs metadata about your extension. Today this is used for extension API authorization prefixes.
 
+For settings that control domain resources, override the synchronous
+`settings_authorization_requirements()` hook. It receives the effective current and
+proposed extension settings and returns every additional scoped permission that must
+be authorized before either `PATCH /api/settings/extensions/<id>` or
+`PUT /api/settings` can persist the change.
+
+```py
+def settings_authorization_requirements(
+    self, *, current_settings: object, proposed_settings: object
+) -> list[dict[str, str]]:
+    return [{
+        "action": "example:device:configure",
+        "resource_type": "example:device",
+        "resource_selector": "device-1",
+    }]
+```
+
+Return only resources whose effective records changed. If the affected resource
+cannot be determined safely, return a wildcard selector (`"*"`). The hook must be
+synchronous and return complete `action`, `resource_type`, and `resource_selector`
+strings; exceptions or malformed results fail closed and settings are not persisted.
+The contract remains active for an installed extension even when its runtime is
+disabled, preventing protected settings from being staged for a later reactivation.
+
 ## Manifest {/* #manifest */}
 
 Every extension must ship `extension.json` inside the Python package.
@@ -189,7 +214,7 @@ Fields:
 - `requires_extensions`: optional list of required extension ids, with optional version specifiers;
 - `frontend`: optional Module Federation remote description.
 
-Compatibility is enforced before `setup()`. If the core version or required extension versions do not match, the extension is skipped instead of partially loaded.
+Compatibility is enforced before `setup()`. If the core version or required extension versions do not match, the extension is skipped instead of partially loaded. Required extensions are set up before their dependents; shutdown callbacks registered during `setup()` consequently run in reverse dependency order.
 
 ## Static assets {/* #static-assets */}
 

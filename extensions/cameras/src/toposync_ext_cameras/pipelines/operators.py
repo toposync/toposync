@@ -117,56 +117,164 @@ def _read_env_int(name: str, fallback: int, *, min_value: int, max_value: int) -
 
 def _camera_source_expression_hints() -> list[Any]:
     return [
-        payload_path_hint("payload.camera_id", value_type="string", description="Camera identifier attached to the packet."),
-        payload_path_hint("payload.camera_name", value_type="string", description="Display name of the camera."),
-        payload_path_hint("payload.frame_ts", value_type="number", description="Capture timestamp for the frame."),
-        payload_path_hint("payload.frame_width", value_type="number", description="Frame width in pixels."),
-        payload_path_hint("payload.frame_height", value_type="number", description="Frame height in pixels."),
-        payload_path_hint("payload.capture", value_type="object", description="Capture runtime diagnostics for the source."),
-        payload_path_hint("payload.source", value_type="object", description="Source descriptor published for the stream."),
-        payload_path_hint("payload.source.device_id", value_type="string", description="Device identifier from the source descriptor."),
-        payload_path_hint("payload.source.source_id", value_type="string", description="Camera source identifier."),
-        payload_path_hint("payload.source.source_name", value_type="string", description="Camera source display name."),
-        payload_path_hint("payload.source.view_id", value_type="string", description="Camera physical view identifier."),
-        payload_path_hint("payload.source.role", value_type="string", description="Camera source role."),
-        payload_path_hint("payload.source.kind", value_type="string", description="Source kind published by the descriptor."),
+        payload_path_hint(
+            "payload.camera_id",
+            value_type="string",
+            description="Camera identifier attached to the packet.",
+        ),
+        payload_path_hint(
+            "payload.camera_name", value_type="string", description="Display name of the camera."
+        ),
+        payload_path_hint(
+            "payload.frame_ts", value_type="number", description="Capture timestamp for the frame."
+        ),
+        payload_path_hint(
+            "payload.frame_width", value_type="number", description="Frame width in pixels."
+        ),
+        payload_path_hint(
+            "payload.frame_height", value_type="number", description="Frame height in pixels."
+        ),
+        payload_path_hint(
+            "payload.capture",
+            value_type="object",
+            description="Capture runtime diagnostics for the source.",
+        ),
+        payload_path_hint(
+            "payload.source",
+            value_type="object",
+            description="Source descriptor published for the stream.",
+        ),
+        payload_path_hint(
+            "payload.source.device_id",
+            value_type="string",
+            description="Device identifier from the source descriptor.",
+        ),
+        payload_path_hint(
+            "payload.source.source_id", value_type="string", description="Camera source identifier."
+        ),
+        payload_path_hint(
+            "payload.source.source_name",
+            value_type="string",
+            description="Camera source display name.",
+        ),
+        payload_path_hint(
+            "payload.source.view_id",
+            value_type="string",
+            description="Camera physical view identifier.",
+        ),
+        payload_path_hint(
+            "payload.source.role", value_type="string", description="Camera source role."
+        ),
+        payload_path_hint(
+            "payload.source.kind",
+            value_type="string",
+            description="Source kind published by the descriptor.",
+        ),
         payload_path_hint(
             "payload.source.modality",
             value_type="string",
             description="Stream modality published by the source descriptor.",
             enum_values=["video"],
         ),
-        payload_path_hint("payload.source.name", value_type="string", description="Source display name published by the descriptor."),
-        payload_path_hint("payload.source.transport", value_type="string", description="Transport used by the source."),
-        payload_path_hint("payload.source.clock_domain", value_type="string", description="Clock domain used by the source."),
-        payload_path_hint("payload.media", value_type="object", description="Media descriptor for the packet."),
+        payload_path_hint(
+            "payload.source.name",
+            value_type="string",
+            description="Source display name published by the descriptor.",
+        ),
+        payload_path_hint(
+            "payload.source.transport",
+            value_type="string",
+            description="Transport used by the source.",
+        ),
+        payload_path_hint(
+            "payload.source.clock_domain",
+            value_type="string",
+            description="Clock domain used by the source.",
+        ),
+        payload_path_hint(
+            "payload.media", value_type="object", description="Media descriptor for the packet."
+        ),
         payload_path_hint(
             "payload.media.modality",
             value_type="string",
             description="Packet modality from the media descriptor.",
             enum_values=["video"],
         ),
-        payload_path_hint("payload.media.ts", value_type="number", description="Timestamp published by the media descriptor."),
-        payload_path_hint("payload.media.width", value_type="number", description="Media width in pixels."),
-        payload_path_hint("payload.media.height", value_type="number", description="Media height in pixels."),
-        payload_path_hint("payload.media.frame_rate", value_type="number", description="Configured frame rate for the source stream."),
-        metadata_path_hint("metadata.camera_id", value_type="string", description="Camera identifier copied into metadata."),
-        metadata_path_hint("metadata.camera_name", value_type="string", description="Camera display name copied into metadata."),
-        metadata_path_hint("metadata.capture_backend", value_type="string", description="Frame grabber backend used by the source."),
+        payload_path_hint(
+            "payload.media.ts",
+            value_type="number",
+            description="Timestamp published by the media descriptor.",
+        ),
+        payload_path_hint(
+            "payload.media.width", value_type="number", description="Media width in pixels."
+        ),
+        payload_path_hint(
+            "payload.media.height", value_type="number", description="Media height in pixels."
+        ),
+        payload_path_hint(
+            "payload.media.frame_rate",
+            value_type="number",
+            description="Configured frame rate for the source stream.",
+        ),
+        metadata_path_hint(
+            "metadata.camera_id",
+            value_type="string",
+            description="Camera identifier copied into metadata.",
+        ),
+        metadata_path_hint(
+            "metadata.camera_name",
+            value_type="string",
+            description="Camera display name copied into metadata.",
+        ),
+        metadata_path_hint(
+            "metadata.capture_backend",
+            value_type="string",
+            description="Frame grabber backend used by the source.",
+        ),
         artifact_name_hint(MAIN_ARTIFACT_NAME, description="Primary image/frame artifact."),
     ]
 
 
 def _motion_gate_expression_hints() -> list[Any]:
     return [
-        payload_path_hint("payload.motion", value_type="object", description="Motion summary generated by the gate."),
-        payload_path_hint("payload.motion.active", value_type="boolean", description="Whether motion is currently active."),
-        payload_path_hint("payload.motion.score", value_type="number", description="Motion score used by the gate."),
-        payload_path_hint("payload.motion.bboxes01", value_type="array", description="Normalized motion bounding boxes."),
-        payload_path_hint("payload.motion.latency_ms", value_type="number", description="Motion detector latency in milliseconds."),
-        payload_path_hint("payload.motion.fps", value_type="number", description="Estimated motion detector FPS."),
-        payload_path_hint("payload.motion.hold_active", value_type="boolean", description="Whether the hold window keeps the stream open."),
-        metadata_path_hint("metadata.motion_gate_open", value_type="boolean", description="Current gate-open state copied into metadata."),
+        payload_path_hint(
+            "payload.motion",
+            value_type="object",
+            description="Motion summary generated by the gate.",
+        ),
+        payload_path_hint(
+            "payload.motion.active",
+            value_type="boolean",
+            description="Whether motion is currently active.",
+        ),
+        payload_path_hint(
+            "payload.motion.score",
+            value_type="number",
+            description="Motion score used by the gate.",
+        ),
+        payload_path_hint(
+            "payload.motion.bboxes01",
+            value_type="array",
+            description="Normalized motion bounding boxes.",
+        ),
+        payload_path_hint(
+            "payload.motion.latency_ms",
+            value_type="number",
+            description="Motion detector latency in milliseconds.",
+        ),
+        payload_path_hint(
+            "payload.motion.fps", value_type="number", description="Estimated motion detector FPS."
+        ),
+        payload_path_hint(
+            "payload.motion.hold_active",
+            value_type="boolean",
+            description="Whether the hold window keeps the stream open.",
+        ),
+        metadata_path_hint(
+            "metadata.motion_gate_open",
+            value_type="boolean",
+            description="Current gate-open state copied into metadata.",
+        ),
     ]
 
 
@@ -217,7 +325,10 @@ _GLOBAL_CAMERA_CAPTURE_SERVICE_HUB: Any | None = None
 
 def get_global_camera_capture_service() -> CameraCaptureService:
     global _GLOBAL_CAMERA_CAPTURE_SERVICE, _GLOBAL_CAMERA_CAPTURE_SERVICE_HUB
-    if _GLOBAL_CAMERA_CAPTURE_SERVICE is None or _GLOBAL_CAMERA_CAPTURE_SERVICE_HUB is not _GLOBAL_CAMERA_HUB:
+    if (
+        _GLOBAL_CAMERA_CAPTURE_SERVICE is None
+        or _GLOBAL_CAMERA_CAPTURE_SERVICE_HUB is not _GLOBAL_CAMERA_HUB
+    ):
         _GLOBAL_CAMERA_CAPTURE_SERVICE = CameraCaptureService(
             config_factory=lambda request: CameraSourceConfig(
                 camera_id=request.camera_id,
@@ -488,6 +599,99 @@ async def _resolve_onvif_rtsp_url_cached(
             created_ts=time.time(),
         )
         return rtsp_url
+
+
+_PTZ_PHYSICAL_REFRESH_AFTER_BY_DEVICE: dict[str, float] = {}
+
+
+def _raw_camera_device(value: Any, *, camera_id: str) -> dict[str, Any] | None:
+    """Resolve a device without discarding forward-compatible control fields."""
+    target = str(camera_id or "").strip()
+    if not target:
+        return None
+    if isinstance(value, dict):
+        devices = value.get("devices")
+        if isinstance(devices, list):
+            for item in devices:
+                if isinstance(item, dict) and str(item.get("id") or "").strip() == target:
+                    return item
+    return get_camera_device(value, camera_id=target)
+
+
+def _camera_ptz_capability_confirmed(camera: Any) -> bool:
+    if not isinstance(camera, dict) or camera.get("enabled") is not True:
+        return False
+    control = camera.get("control") if isinstance(camera.get("control"), dict) else {}
+    if str(control.get("type") or "").strip().lower() != "onvif":
+        return False
+
+    explicit_capability = control.get("ptz_capable")
+    if explicit_capability is False:
+        return False
+
+    sources = camera.get("sources") if isinstance(camera.get("sources"), list) else []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        if source.get("enabled") is not True:
+            continue
+        if str(source.get("kind") or "").strip().lower() != "video":
+            continue
+        origin = source.get("origin") if isinstance(source.get("origin"), dict) else {}
+        if origin.get("has_ptz") is True:
+            return True
+    return False
+
+
+def _pan_tilt_zoom_state_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    pose = snapshot.get("pose") if isinstance(snapshot.get("pose"), dict) else {}
+    last_command = (
+        snapshot.get("last_command") if isinstance(snapshot.get("last_command"), dict) else {}
+    )
+    return {
+        "pan": pose.get("pan"),
+        "tilt": pose.get("tilt"),
+        "zoom": pose.get("zoom"),
+        "move_status": snapshot.get("move_status"),
+        "preset_token": last_command.get("preset_token"),
+        "geometry_safe": snapshot.get("geometry_safe") is True,
+        "motion_epoch": _nonnegative_motion_epoch(snapshot.get("motion_epoch")),
+        "motion_state": str(snapshot.get("motion_state") or "unknown").strip().lower(),
+        "physical_updated_at": snapshot.get("physical_updated_at"),
+        "source": "cameras.control.snapshot",
+    }
+
+
+def _packet_ptz_motion_epoch(packet: Packet) -> int:
+    state = packet.payload.get("pan_tilt_zoom_state")
+    state = state if isinstance(state, dict) else {}
+    return _nonnegative_motion_epoch(state.get("motion_epoch"))
+
+
+def _nonnegative_motion_epoch(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except Exception:
+        return 0
+
+
+def _motion_runtime_key(packet: Packet) -> str:
+    stream_id = str(packet.stream_id or "").strip() or "-"
+    return f"{stream_id}|ptz:{_packet_ptz_motion_epoch(packet)}"
+
+
+def _prune_stale_motion_epochs(
+    scene_key: str,
+    *caches: dict[str, Any],
+) -> None:
+    stream_key, separator, _epoch = scene_key.rpartition("|ptz:")
+    if not separator:
+        return
+    prefix = f"{stream_key}|ptz:"
+    for cache in caches:
+        for key in tuple(cache):
+            if key != scene_key and key.startswith(prefix):
+                cache.pop(key, None)
 
 
 class CameraSourceConfig(BaseModel):
@@ -900,11 +1104,15 @@ def _onvif_gate_stream_id(config: OnvifStateGateConfig, context: Any) -> str:
     return f"onvif_gate:{camera_id}:{topic}:{item_name}:{context.pipeline_name}:{context.node_id}"
 
 
-def _onvif_event_stream_id(config: OnvifEventSourceConfig, context: Any, event: dict[str, Any]) -> str:
+def _onvif_event_stream_id(
+    config: OnvifEventSourceConfig, context: Any, event: dict[str, Any]
+) -> str:
     configured = str(config.stream_id or "").strip()
     if configured:
         return configured
-    camera_id = str(config.camera_id or "").strip() or str(event.get("camera_id") or "").strip() or "camera"
+    camera_id = (
+        str(config.camera_id or "").strip() or str(event.get("camera_id") or "").strip() or "camera"
+    )
     topic = str(event.get("topic") or "").strip().replace("/", ":") or "event"
     return f"onvif_event:{camera_id}:{topic}:{context.pipeline_name}:{context.node_id}"
 
@@ -914,7 +1122,9 @@ def _onvif_event_bool(event: dict[str, Any], item_name: str = "") -> bool | None
     return value
 
 
-def _onvif_event_bool_with_item(event: dict[str, Any], item_name: str = "") -> tuple[bool | None, str]:
+def _onvif_event_bool_with_item(
+    event: dict[str, Any], item_name: str = ""
+) -> tuple[bool | None, str]:
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     wanted = str(item_name or "").strip()
     values: list[tuple[str, Any]] = []
@@ -993,12 +1203,16 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
     async def idle_sleep(self, context) -> None:  # noqa: ANN001
         await context.sleep(max(0.1, float(self._config.poll_interval_ms) / 1000.0))
 
-    def _observe_gate_telemetry(self, context: Any, *, gate_open: bool, payload: dict[str, Any]) -> None:
+    def _observe_gate_telemetry(
+        self, context: Any, *, gate_open: bool, payload: dict[str, Any]
+    ) -> None:
         observe_numeric = getattr(context, "observe_telemetry_numeric", None)
         if not callable(observe_numeric):
             return
         ts_s = _onvif_gate_telemetry_ts(payload)
-        state_changed = self._last_telemetry_open is None or self._last_telemetry_open != bool(gate_open)
+        state_changed = self._last_telemetry_open is None or self._last_telemetry_open != bool(
+            gate_open
+        )
         due = (ts_s - float(self._last_telemetry_ts or 0.0)) >= _ONVIF_GATE_TELEMETRY_INTERVAL_S
         if not state_changed and not due:
             return
@@ -1068,7 +1282,9 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
             reason = "matched"
         else:
             if self._last_raw_active is True and float(self._config.hold_seconds) > 0.0:
-                self._hold_until_ts = max(self._hold_until_ts, now + float(self._config.hold_seconds))
+                self._hold_until_ts = max(
+                    self._hold_until_ts, now + float(self._config.hold_seconds)
+                )
             gate_open = bool(self._hold_until_ts and now < self._hold_until_ts)
             reason = "hold" if gate_open else ("unknown" if not known else "not_matched")
         self._last_raw_active = bool(matched)
@@ -1163,7 +1379,9 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
             item_name = str(filters[0].item_name or "").strip()
         return _onvif_event_bool_with_item(event, item_name=item_name)
 
-    def _is_duplicate_boolean_event(self, event: dict[str, Any], *, item_name: str, value: bool | None) -> bool:
+    def _is_duplicate_boolean_event(
+        self, event: dict[str, Any], *, item_name: str, value: bool | None
+    ) -> bool:
         if value is None:
             return False
         key = _onvif_event_state_key(event, item_name=item_name)
@@ -1176,7 +1394,9 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
             self._last_boolean_values.pop(oldest_key, None)
         return False
 
-    def _packet_for_event(self, event: dict[str, Any], context: Any, *, boolean_value: bool | None) -> Packet:
+    def _packet_for_event(
+        self, event: dict[str, Any], context: Any, *, boolean_value: bool | None
+    ) -> Packet:
         value = boolean_value
         operation = str(event.get("operation") or "").strip().lower()
         lifecycle = Lifecycle.UPDATE
@@ -1266,6 +1486,11 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             max_value=1_800.0,
         )
         self._last_backend_failover_monotonic = 0.0
+        self._ptz_guard_required: bool | None = None
+        self._ptz_device_id = ""
+        self._ptz_settings_refresh_after_monotonic = 0.0
+        self._ptz_settings_refresh_interval_s = 5.0
+        self._ptz_physical_refresh_interval_s = 0.25
 
     async def _ensure_grabber(self, context) -> None:  # noqa: ANN001
         if self._grabber is not None:
@@ -1313,6 +1538,91 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._last_start_error = ""
         self._start_retry_after_monotonic = 0.0
         self._grabber_started_monotonic = time.monotonic()
+
+    async def _uses_ptz_geometry_guard(self) -> bool:
+        now = time.monotonic()
+        if (
+            self._ptz_guard_required is not None
+            and now < self._ptz_settings_refresh_after_monotonic
+        ):
+            return self._ptz_guard_required
+        camera_id = self._camera_id or str(self._config.camera_id or "").strip()
+        if not camera_id:
+            self._ptz_guard_required = False
+            self._ptz_device_id = ""
+            self._ptz_settings_refresh_after_monotonic = now + self._ptz_settings_refresh_interval_s
+            return False
+        store = self._dependencies.config_store
+        if store is None or not callable(getattr(store, "get_settings", None)):
+            self._ptz_guard_required = False
+            self._ptz_device_id = ""
+            self._ptz_settings_refresh_after_monotonic = now + self._ptz_settings_refresh_interval_s
+            return False
+        try:
+            settings = await store.get_settings()
+            extensions = getattr(settings, "extensions", None)
+            extension_settings = (
+                extensions.get("com.toposync.cameras", {}) if isinstance(extensions, dict) else {}
+            )
+            camera = _raw_camera_device(extension_settings, camera_id=camera_id)
+            guard_required = _camera_ptz_capability_confirmed(camera)
+            self._ptz_guard_required = guard_required
+            self._ptz_device_id = camera_id if guard_required else ""
+        except Exception:
+            if self._ptz_guard_required is None:
+                self._ptz_guard_required = False
+                self._ptz_device_id = ""
+        self._ptz_settings_refresh_after_monotonic = now + self._ptz_settings_refresh_interval_s
+        return self._ptz_guard_required
+
+    async def _ptz_geometry_snapshot(self) -> dict[str, Any] | None:
+        if not await self._uses_ptz_geometry_guard():
+            return None
+        services = self._dependencies.services
+        if services is None:
+            return {"geometry_safe": False, "motion_state": "unknown", "motion_epoch": 0}
+        camera_id = self._camera_id or str(self._config.camera_id or "").strip()
+        source_id = self._source_id or str(self._config.source_id or "").strip()
+        ptz_device_id = str(self._ptz_device_id or "").strip()
+        if not ptz_device_id:
+            return {"geometry_safe": False, "motion_state": "unknown", "motion_epoch": 0}
+        try:
+            raw = await services.call(
+                "cameras.control.snapshot",
+                ptz_device_id=ptz_device_id,
+                include_readiness=False,
+                refresh_physical=False,
+            )
+        except Exception:
+            return {"geometry_safe": False, "motion_state": "unknown", "motion_epoch": 0}
+        snapshot = raw if isinstance(raw, dict) else {}
+        now = time.monotonic()
+        device_key = ptz_device_id
+        refresh_after = _PTZ_PHYSICAL_REFRESH_AFTER_BY_DEVICE.get(device_key, 0.0)
+        if now >= refresh_after:
+            next_refresh = now + self._ptz_physical_refresh_interval_s
+            _PTZ_PHYSICAL_REFRESH_AFTER_BY_DEVICE[device_key] = next_refresh
+            try:
+                refreshed = await services.call(
+                    "cameras.control.snapshot",
+                    camera_id=camera_id,
+                    source_id=source_id or None,
+                    ptz_device_id=ptz_device_id,
+                    include_readiness=False,
+                    refresh_physical=True,
+                )
+            except Exception:
+                refreshed = None
+            if isinstance(refreshed, dict):
+                snapshot = refreshed
+            else:
+                _PTZ_PHYSICAL_REFRESH_AFTER_BY_DEVICE[device_key] = 0.0
+                return {
+                    "geometry_safe": False,
+                    "motion_state": "unknown",
+                    "motion_epoch": _nonnegative_motion_epoch(snapshot.get("motion_epoch")),
+                }
+        return snapshot
 
     async def _consume_gate_packets(self, context) -> None:  # noqa: ANN001
         gate_channel = context.inputs.get("gate")
@@ -1554,7 +1864,9 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         if self._grabber is None:
             return None
         self._waiting_for_source_config = False
-        capture_frame = await self._capture_service.get_latest(self._lease_id, min_frame_ts=self._last_ts)
+        capture_frame = await self._capture_service.get_latest(
+            self._lease_id, min_frame_ts=self._last_ts
+        )
         if capture_frame.released:
             self._grabber = None
             self._grabber_started_monotonic = 0.0
@@ -1569,9 +1881,18 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             return None
         self._last_ts = frame_ts
 
+        ptz_snapshot = await self._ptz_geometry_snapshot()
+        if ptz_snapshot is not None and ptz_snapshot.get("geometry_safe") is not True:
+            return None
+        ptz_state = (
+            _pan_tilt_zoom_state_from_snapshot(ptz_snapshot) if ptz_snapshot is not None else None
+        )
+
         height = int(capture_frame.height)
         width = int(capture_frame.width)
-        stream_suffix = ":".join(item for item in (self._camera_id, self._source_id) if item) or "adhoc"
+        stream_suffix = (
+            ":".join(item for item in (self._camera_id, self._source_id) if item) or "adhoc"
+        )
         capture_metrics = dict(capture_frame.metrics)
         frame_artifacts = {
             MAIN_ARTIFACT_NAME: Artifact(
@@ -1616,6 +1937,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "frame_width": width,
                 "frame_height": height,
                 "capture": capture_metrics,
+                **({"pan_tilt_zoom_state": ptz_state} if ptz_state is not None else {}),
             },
             artifacts=frame_artifacts,
             metadata={
@@ -1625,6 +1947,14 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "camera_source_id": self._source_id or None,
                 "capture_backend": str(capture_metrics.get("backend") or ""),
                 "source_status": str(capture_metrics.get("source_status") or ""),
+                **(
+                    {
+                        "ptz_motion_epoch": int(ptz_state.get("motion_epoch") or 0),
+                        "ptz_geometry_safe": True,
+                    }
+                    if ptz_state is not None
+                    else {}
+                ),
             },
         )
 
@@ -1819,7 +2149,9 @@ def _resolve_motion_activity(
     else:
         state["active_frames"] = 0
 
-    detected_active = bool(detected) and int(state.get("active_frames", 0)) >= int(activation_frames)
+    detected_active = bool(detected) and int(state.get("active_frames", 0)) >= int(
+        activation_frames
+    )
     if detected_active:
         state["hold_until"] = float(now) + float(hold_seconds)
     hold_until = float(state.get("hold_until", 0.0) or 0.0)
@@ -1873,11 +2205,16 @@ class MotionGateRuntime(TransformOperatorRuntime):
             frame=frame,
         )
 
-        roi_mask, roi_total = self._resolve_roi(
-            frame, key=str(packet.stream_id or "").strip() or "-"
+        scene_key = _motion_runtime_key(packet)
+        _prune_stale_motion_epochs(
+            scene_key,
+            self._detector_by_key,
+            self._state_by_key,
+            self._roi_cache_by_key,
         )
+        roi_mask, roi_total = self._resolve_roi(frame, key=scene_key)
 
-        key = packet.stream_id
+        key = scene_key
         detector = self._detector_by_key.get(key)
         if detector is None:
             detector = MotionDetector(threshold=self._threshold)
@@ -2000,7 +2337,13 @@ class MotionBgSubAdaptiveRuntime(TransformOperatorRuntime):
             frame=frame,
         )
 
-        stream_key = str(packet.stream_id or "").strip() or "-"
+        stream_key = _motion_runtime_key(packet)
+        _prune_stale_motion_epochs(
+            stream_key,
+            self._detector_by_key,
+            self._state_by_key,
+            self._roi_cache_by_key,
+        )
         roi_mask, roi_total = self._resolve_roi(frame, key=stream_key)
 
         detector = self._detector_by_key.get(stream_key)
@@ -2144,7 +2487,13 @@ class MotionSampleBgRuntime(TransformOperatorRuntime):
             frame=frame,
         )
 
-        stream_key = str(packet.stream_id or "").strip() or "-"
+        stream_key = _motion_runtime_key(packet)
+        _prune_stale_motion_epochs(
+            stream_key,
+            self._detector_by_key,
+            self._state_by_key,
+            self._roi_cache_by_key,
+        )
         roi_mask, roi_total = self._resolve_roi(frame, key=stream_key)
 
         detector = self._detector_by_key.get(stream_key)
@@ -2400,7 +2749,12 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         bbox01: list[float] = [0.0, 0.0, 0.0, 0.0]
         if isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) >= 4:
             try:
-                bbox01 = [float(raw_bbox[0]), float(raw_bbox[1]), float(raw_bbox[2]), float(raw_bbox[3])]
+                bbox01 = [
+                    float(raw_bbox[0]),
+                    float(raw_bbox[1]),
+                    float(raw_bbox[2]),
+                    float(raw_bbox[3]),
+                ]
             except Exception:
                 bbox01 = [0.0, 0.0, 0.0, 0.0]
         try:
@@ -2408,7 +2762,9 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         except Exception:
             score = 0.0
         item: dict[str, Any] = {
-            "label": str(object_data.get("label") or object_data.get("category") or "").strip().lower(),
+            "label": str(object_data.get("label") or object_data.get("category") or "")
+            .strip()
+            .lower(),
             "score": max(0.0, min(1.0, score)),
             "bbox01": bbox01,
         }
@@ -3081,7 +3437,18 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
             "capture",
         ],
         produces_artifacts=[MAIN_ARTIFACT_NAME],
-        produces_source_fields=["device_id", "source_id", "source_name", "view_id", "role", "kind", "modality", "name", "transport", "clock_domain"],
+        produces_source_fields=[
+            "device_id",
+            "source_id",
+            "source_name",
+            "view_id",
+            "role",
+            "kind",
+            "modality",
+            "name",
+            "transport",
+            "clock_domain",
+        ],
         produces_media_fields=["modality", "ts", "width", "height", "frame_rate"],
         output_modalities=["video"],
         expression_hints=_camera_source_expression_hints(),
@@ -3243,7 +3610,9 @@ async def _resolve_camera_stream(
 
     if not rtsp_url:
         source_id = str(source.get("id") or "").strip()
-        raise _CameraSourcePendingError(f"Camera '{camera_id}' source '{source_id}' has empty rtsp_url")
+        raise _CameraSourcePendingError(
+            f"Camera '{camera_id}' source '{source_id}' has empty rtsp_url"
+        )
 
     username, password = get_camera_source_credentials(camera, source)
     return _ResolvedCameraStream(rtsp_url=rtsp_url, username=username, password=password)
@@ -3287,13 +3656,17 @@ async def _resolve_camera_source(
     if camera is None:
         raise _CameraSourcePendingError(f"Camera '{camera_id}' not found in settings yet")
 
-    source = get_camera_source(camera, source_id=requested_source_id, kind="video", enabled_only=True)
+    source = get_camera_source(
+        camera, source_id=requested_source_id, kind="video", enabled_only=True
+    )
     if source is None:
         if requested_source_id:
             raise _CameraSourcePendingError(
                 f"Camera '{camera_id}' source '{requested_source_id}' not found or disabled"
             )
-        raise _CameraSourcePendingError(f"Camera '{camera_id}' has no default video source configured")
+        raise _CameraSourcePendingError(
+            f"Camera '{camera_id}' has no default video source configured"
+        )
 
     stream = await _resolve_camera_stream(camera_id=camera_id, camera=camera, source=source)
     url = _apply_rtsp_auth(stream.rtsp_url, stream.username, stream.password)
@@ -3309,7 +3682,9 @@ async def _resolve_camera_source(
     ingest_mode = str(ingest_settings.get("mode") or "centralized").strip().lower()
     if ingest_mode not in {"centralized", "runtime_local", "direct"}:
         ingest_mode = "centralized"
-    centralizer_server_id = str(ingest_settings.get("host_server_id") or "local").strip().lower() or "local"
+    centralizer_server_id = (
+        str(ingest_settings.get("host_server_id") or "local").strip().lower() or "local"
+    )
     used_ingest = False
     ingest_path = ""
     ingest_warnings: tuple[str, ...] = ()
@@ -3327,7 +3702,9 @@ async def _resolve_camera_source(
                 ingest_mode=ingest_mode,
                 centralizer_server_id=centralizer_server_id,
             )
-        ingest_warnings = tuple(str(item) for item in resolution.get("warnings", []) if str(item).strip())
+        ingest_warnings = tuple(
+            str(item) for item in resolution.get("warnings", []) if str(item).strip()
+        )
         ingest_blocking_errors = tuple(
             str(item) for item in resolution.get("blocking_errors", []) if str(item).strip()
         )
@@ -3370,7 +3747,9 @@ async def _resolve_camera_source(
         transport=get_camera_source_origin_type(source),
         used_ingest=used_ingest,
         ingest_mode=ingest_mode,
-        centralizer_server_id=centralizer_server_id if ingest_mode in {"centralized", "runtime_local"} else "",
+        centralizer_server_id=centralizer_server_id
+        if ingest_mode in {"centralized", "runtime_local"}
+        else "",
         ingest_path=ingest_path,
         ingest_warnings=ingest_warnings,
         ingest_blocking_errors=ingest_blocking_errors,
@@ -3489,7 +3868,9 @@ def _read_frame_crop_bbox01(
     return None
 
 
-def _read_frame_warp(packet: Packet, *, selected_artifact_name: str | None) -> dict[str, Any] | None:
+def _read_frame_warp(
+    packet: Packet, *, selected_artifact_name: str | None
+) -> dict[str, Any] | None:
     warp = packet.payload.get("frame_warp")
     if not _payload_transform_targets_artifact(warp, selected_artifact_name=selected_artifact_name):
         return None

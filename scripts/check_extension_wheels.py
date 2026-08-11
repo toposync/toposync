@@ -14,19 +14,28 @@ EXTENSIONS: tuple[dict[str, object], ...] = (
     {
         "name": "structural",
         "package": "toposync_ext_structural",
-        "required_files": ("toposync_ext_structural/extension.json", "toposync_ext_structural/static/remoteEntry.js"),
+        "required_files": (
+            "toposync_ext_structural/extension.json",
+            "toposync_ext_structural/static/remoteEntry.js",
+        ),
         "optional_source_dirs": (),
     },
     {
         "name": "models",
         "package": "toposync_ext_models",
-        "required_files": ("toposync_ext_models/extension.json", "toposync_ext_models/static/remoteEntry.js"),
+        "required_files": (
+            "toposync_ext_models/extension.json",
+            "toposync_ext_models/static/remoteEntry.js",
+        ),
         "optional_source_dirs": (),
     },
     {
         "name": "images",
         "package": "toposync_ext_images",
-        "required_files": ("toposync_ext_images/extension.json", "toposync_ext_images/static/remoteEntry.js"),
+        "required_files": (
+            "toposync_ext_images/extension.json",
+            "toposync_ext_images/static/remoteEntry.js",
+        ),
         "optional_source_dirs": (),
     },
     {
@@ -41,13 +50,25 @@ EXTENSIONS: tuple[dict[str, object], ...] = (
     {
         "name": "cameras",
         "package": "toposync_ext_cameras",
-        "required_files": ("toposync_ext_cameras/extension.json", "toposync_ext_cameras/static/remoteEntry.js"),
+        "required_files": (
+            "toposync_ext_cameras/extension.json",
+            "toposync_ext_cameras/static/remoteEntry.js",
+        ),
         "optional_source_dirs": (),
     },
     {
         "name": "cinematic",
         "package": "toposync_ext_cinematic",
         "required_files": ("toposync_ext_cinematic/extension.json",),
+        "optional_source_dirs": (),
+    },
+    {
+        "name": "ptz_attention",
+        "package": "toposync_ext_ptz_attention",
+        "required_files": (
+            "toposync_ext_ptz_attention/extension.json",
+            "toposync_ext_ptz_attention/static/remoteEntry.js",
+        ),
         "optional_source_dirs": (),
     },
     {

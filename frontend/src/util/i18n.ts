@@ -948,6 +948,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.image_privacy": "Hide image area",
     "core.ui.pipelines.operator_name.vision.track": "Track objects",
     "core.ui.pipelines.operator_name.vision.group_events": "Group events",
+    "core.ui.pipelines.operator_name.vision.spatial_relation_event": "Confirm nearby objects",
     "core.ui.pipelines.operator_name.vision.classify_image": "Classify scene",
     "core.ui.pipelines.operator_name.vision.detect": "Detect objects",
     "core.ui.pipelines.recipe_name.vision.detect_objects": "Detect objects",
@@ -1031,6 +1032,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Links detections over time, stitches technical tracklets, and emits stable object events with subject.id.",
     "core.ui.pipelines.operator_description.vision.group_events":
       "Groups related object events into quieter group_event subjects for storage and notifications.",
+    "core.ui.pipelines.operator_description.vision.spatial_relation_event":
+      "Confirms a persistent spatial relation between required categories and emits its own finite event lifecycle.",
     "core.ui.pipelines.operator_description.vision.classify_image":
       "Classifies the full image with semantic labels and attaches the results to the flow.",
     "core.ui.pipelines.operator_description.vision.detect":
@@ -1808,6 +1811,26 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.group_events.include_stationary_members": "Include stationary members",
     "core.ui.pipelines.panels.group_events.bbox_padding_ratio": "Group crop padding",
     "core.ui.pipelines.panels.group_events.max_crop_area_ratio": "Maximum crop area",
+    "core.ui.pipelines.panels.spatial_relation_event.hint":
+      "Opens an event only after the selected object types remain near each other for the dwell time. Trusted world coordinates are preferred; image boxes are the fallback.",
+    "core.ui.pipelines.panels.spatial_relation_event.group_name": "Group {{number}} name",
+    "core.ui.pipelines.panels.spatial_relation_event.group_categories":
+      "Group {{number}} categories ({{role}})",
+    "core.ui.pipelines.panels.spatial_relation_event.categories_hint":
+      "Enter comma-separated detector category names. The two groups must not overlap.",
+    "core.ui.pipelines.panels.spatial_relation_event.enter_distance_meters": "Open within (m)",
+    "core.ui.pipelines.panels.spatial_relation_event.exit_distance_meters": "Keep open within (m)",
+    "core.ui.pipelines.panels.spatial_relation_event.minimum_world_anchor_confidence":
+      "Minimum world-anchor confidence",
+    "core.ui.pipelines.panels.spatial_relation_event.minimum_world_anchor_confidence_hint":
+      "Both anchors must declare at least this confidence. Otherwise, image distance is used.",
+    "core.ui.pipelines.panels.spatial_relation_event.enter_image_center_distance": "Open within image distance",
+    "core.ui.pipelines.panels.spatial_relation_event.exit_image_center_distance": "Keep open within image distance",
+    "core.ui.pipelines.panels.spatial_relation_event.dwell_seconds": "Confirmation time (seconds)",
+    "core.ui.pipelines.panels.spatial_relation_event.close_grace_seconds": "Close grace (seconds)",
+    "core.ui.pipelines.panels.spatial_relation_event.stale_timeout_seconds": "Stale timeout (seconds)",
+    "core.ui.pipelines.panels.spatial_relation_event.update_interval_seconds": "Update interval (seconds)",
+    "core.ui.pipelines.panels.spatial_relation_event.event_id_prefix": "Event identifier prefix",
     "core.ui.pipelines.panels.yolo.model_id": "Model",
     "core.ui.pipelines.panels.yolo.model_id_hint":
       "Choose the detection model. This quick list favors models that fit the selected machine.",
@@ -3343,6 +3366,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.image_privacy": "Ocultar área da imagem",
     "core.ui.pipelines.operator_name.vision.track": "Acompanhar objetos",
     "core.ui.pipelines.operator_name.vision.group_events": "Agrupar eventos",
+    "core.ui.pipelines.operator_name.vision.spatial_relation_event": "Confirmar objetos próximos",
     "core.ui.pipelines.operator_name.vision.classify_image": "Classificar cena",
     "core.ui.pipelines.operator_name.vision.detect": "Detectar objetos",
     "core.ui.pipelines.recipe_name.vision.detect_objects": "Detectar objetos",
@@ -3426,6 +3450,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Liga detecções ao longo do tempo, junta tracklets técnicos e emite eventos de objeto estáveis com subject.id.",
     "core.ui.pipelines.operator_description.vision.group_events":
       "Agrupa eventos de objeto relacionados em subjects group_event mais silenciosos para armazenamento e notificações.",
+    "core.ui.pipelines.operator_description.vision.spatial_relation_event":
+      "Confirma uma relação espacial persistente entre categorias exigidas e emite seu próprio ciclo de evento finito.",
     "core.ui.pipelines.operator_description.vision.classify_image":
       "Classifica a imagem inteira com rótulos semânticos e anexa os resultados ao fluxo.",
     "core.ui.pipelines.operator_description.vision.detect":
@@ -4210,6 +4236,26 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.group_events.include_stationary_members": "Incluir membros parados",
     "core.ui.pipelines.panels.group_events.bbox_padding_ratio": "Margem do recorte do grupo",
     "core.ui.pipelines.panels.group_events.max_crop_area_ratio": "Área máxima do recorte",
+    "core.ui.pipelines.panels.spatial_relation_event.hint":
+      "Abre um evento somente depois que os tipos de objeto selecionados permanecem próximos durante o tempo de confirmação. Prefere coordenadas confiáveis do ambiente e usa as caixas da imagem como alternativa.",
+    "core.ui.pipelines.panels.spatial_relation_event.group_name": "Nome do grupo {{number}}",
+    "core.ui.pipelines.panels.spatial_relation_event.group_categories":
+      "Categorias do grupo {{number}} ({{role}})",
+    "core.ui.pipelines.panels.spatial_relation_event.categories_hint":
+      "Informe nomes de categorias do detector separados por vírgula. Os dois grupos não podem se sobrepor.",
+    "core.ui.pipelines.panels.spatial_relation_event.enter_distance_meters": "Abrir até (m)",
+    "core.ui.pipelines.panels.spatial_relation_event.exit_distance_meters": "Manter aberto até (m)",
+    "core.ui.pipelines.panels.spatial_relation_event.minimum_world_anchor_confidence":
+      "Confiança mínima da âncora no ambiente",
+    "core.ui.pipelines.panels.spatial_relation_event.minimum_world_anchor_confidence_hint":
+      "As duas âncoras precisam declarar pelo menos esta confiança. Caso contrário, a distância na imagem é usada.",
+    "core.ui.pipelines.panels.spatial_relation_event.enter_image_center_distance": "Abrir até a distância na imagem",
+    "core.ui.pipelines.panels.spatial_relation_event.exit_image_center_distance": "Manter aberto até a distância na imagem",
+    "core.ui.pipelines.panels.spatial_relation_event.dwell_seconds": "Tempo de confirmação (segundos)",
+    "core.ui.pipelines.panels.spatial_relation_event.close_grace_seconds": "Tolerância para fechamento (segundos)",
+    "core.ui.pipelines.panels.spatial_relation_event.stale_timeout_seconds": "Limite sem atualização (segundos)",
+    "core.ui.pipelines.panels.spatial_relation_event.update_interval_seconds": "Intervalo de atualização (segundos)",
+    "core.ui.pipelines.panels.spatial_relation_event.event_id_prefix": "Prefixo do identificador de evento",
     "core.ui.pipelines.panels.yolo.model_id": "Modelo",
     "core.ui.pipelines.panels.yolo.model_id_hint":
       "Escolha o modelo de detecção. Esta lista rápida prioriza opções que cabem na máquina selecionada.",

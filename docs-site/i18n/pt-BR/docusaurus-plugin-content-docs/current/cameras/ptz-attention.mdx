@@ -1,0 +1,309 @@
+---
+title: Atenção PTZ semântica
+description: "Configure o Toposync para manter uma câmera PTZ em eventos semânticos relevantes e retornar com segurança para uma vista inicial calibrada."
+keywords: ["toposync", "local-first", "automação residencial", "PTZ", "ONVIF", "eventos semânticos", "atenção da câmera", "vistas calibradas"]
+image: /img/social-card.png
+sidebar_position: 3.5
+---
+
+# Atenção PTZ semântica {/* #semantic-ptz-attention */}
+
+A atenção PTZ semântica mantém uma câmera focada em um evento relevante, em vez
+de seguir cada pessoa, bicicleta ou veículo que passa pela imagem. Ela consome
+um ciclo de vida explícito do evento, seleciona uma vista PTZ calibrada permitida,
+mantém essa vista enquanto o evento estiver ativo e retorna para uma vista
+inicial configurada depois que o evento termina.
+
+Este recurso é um experimento inicial. Comece no modo de simulação, revise as
+decisões e habilite o movimento físico somente depois de testar a câmera, os
+presets, o mapeamento e a tomada de controle manual em um ambiente controlado.
+
+A atenção PTZ não é um classificador de crimes. Uma relação como pessoas
+permanecendo perto de um veículo pode justificar uma vista mais próxima, mas não
+prova furto nem intenção maliciosa.
+
+## O que ela faz {/* #what-it-does */}
+
+Para cada dispositivo PTZ físico, o runtime de atenção pode:
+
+- aceitar pacotes de evento semântico `OPEN`, `UPDATE` e `CLOSE`;
+- confirmar um candidato antes de mover a câmera;
+- escolher somente entre vistas calibradas permitidas pelo perfil;
+- adquirir o controle automatizado exclusivo da câmera física;
+- enviar um movimento de preset quando uma sessão de foco é aberta;
+- manter a mesma vista durante atualizações comuns do evento;
+- aguardar um curto período de tolerância depois que o evento termina;
+- retornar para a vista inicial configurada;
+- registrar decisões de seleção, supressão, simulação, movimento, retorno e falha.
+
+Isso é diferente do rastreamento automático do firmware da câmera. O rastreamento
+do firmware reage ao movimento dentro da câmera. A atenção PTZ reage a eventos
+semânticos produzidos pelos pipelines do Toposync e usa todo o ciclo de vida deles.
+
+## Modelo de segurança {/* #safety-model */}
+
+A câmera física continua sendo o recurso protegido:
+
+- um dispositivo Câmera representa um cabeçote físico; as lentes ampla e com
+  zoom são fontes desse mesmo dispositivo;
+- o controle manual tem prioridade maior que a automação;
+- depois da tomada de controle manual, a automação não move nem retorna a câmera;
+- o modo `shadow` registra decisões sem enviar comandos ao motor;
+- o modo `live_preset` exige uma vista inicial e pelo menos uma vista de foco
+  permitida com identificador diferente;
+- comandos obsoletos são rejeitados pelo contrato de concessão e isolamento do
+  controle da câmera;
+- o número de movimentos por minuto é limitado;
+- uma falha interrompe a sessão automatizada em vez de tentar adivinhar um
+  movimento de recuperação.
+
+Desabilite o rastreamento automático, o movimento para o ponto de monitoramento e
+o retorno automático do firmware antes de habilitar a atenção PTZ ao vivo. Em
+seguida, confirme o controle exclusivo da automação nas configurações de
+Câmeras. O movimento do firmware acontece fora do modelo de propriedade do
+Toposync e pode invalidar a pose esperada.
+
+Não use a atenção PTZ como a única vista de uma área sensível à segurança. Sempre
+que possível, preserve uma gravação ampla ou outro observador fixo.
+
+## Pré-requisitos {/* #prerequisites */}
+
+Antes de criar um perfil ao vivo:
+
+1. Adicione a câmera e verifique sua conexão ONVIF.
+2. Confirme que a descoberta marca uma fonte de vídeo habilitada como compatível
+   com PTZ e que ela aceita movimento por preset, estado e parada. ONVIF sozinho
+   não comprova capacidade PTZ.
+3. Teste manualmente cada preset pretendido.
+4. Coloque a câmera em uma composição.
+5. Crie vistas calibradas prontas e não estimadas para uma posição inicial e as
+   posições de foco úteis.
+6. Mantenha pequeno o conjunto de foco permitido e exclua vistas privadas ou
+   inseguras.
+7. Produza um evento semântico com identificador estável, ciclo de vida completo
+   e alvo espacial.
+8. Confirme que o controle PTZ manual consegue assumir a propriedade
+   imediatamente.
+
+Consulte [Mapeamento de câmeras](camera-mapping.mdx) para vistas PTZ calibradas e
+[Pipelines](../developers/pipelines.mdx) para o comportamento do ciclo de vida do
+evento.
+
+### Câmeras com duas lentes e TrackMix {/* #dual-lens-and-trackmix-cameras */}
+
+As fontes ampla e com zoom de uma câmera com duas lentes podem compartilhar um
+único cabeçote físico. Modele-as como fontes de um único dispositivo Câmera. O
+identificador da câmera também é o identificador canônico do atuador físico, para
+que dispositivos distintos não compartilhem por engano geometria nem concessões.
+
+Se a fonte observadora se mover com o cabeçote PTZ, o movimento altera a cena que
+produziu o evento. O mapeamento fica temporariamente indisponível durante o
+movimento e a estabilização, e o rastreamento pode precisar readquirir o objeto
+depois. Mantenha essa configuração no modo de simulação até validar a transição e
+a reaquisição no mesmo cabeçote. Um observador fixo separado evita esse ciclo de
+realimentação. Perfis ao vivo em que observador e atuador usam a mesma Câmera exigem
+uma confirmação persistida no perfil; selecionar outra fonte dessa Câmera não
+contorna o bloqueio, pois ambas ainda compartilham o cabeçote físico. Uma alteração
+posterior do pipeline para um observador no mesmo cabeçote fica bloqueada até que a
+confirmação seja salva.
+
+## Configure um perfil {/* #configure-a-profile */}
+
+Abra **Configurações > Atenção PTZ** e crie um perfil. O assistente tem quatro
+etapas.
+
+### 1. Eventos {/* #configure-events */}
+
+Escolha somente fontes de eventos semânticos que exponham:
+
+- um identificador de evento estável;
+- pacotes de ciclo de vida `OPEN`, `UPDATE` e `CLOSE`;
+- um envelope no mundo, uma âncora no mundo ou uma caixa delimitadora na imagem.
+  Alvos somente na imagem também precisam de uma vista calibrada preferencial
+  permitida;
+- persistência suficiente para distinguir um evento relevante do tráfego comum
+  de passagem.
+
+Exemplos incluem uma pessoa parada em uma área de entrada mapeada ou uma ou mais
+pessoas permanecendo perto de um veículo. O detector de eventos decide a
+relevância; a atenção PTZ apenas arbitra eventos já qualificados.
+
+### 2. Câmera e vistas {/* #configure-camera-and-views */}
+
+Escolha:
+
+- a câmera PTZ física;
+- a composição que contém suas vistas calibradas;
+- uma vista inicial pronta;
+- uma ou mais vistas de foco prontas e distintas da vista inicial.
+
+O perfil nunca se move para uma pose arbitrária sem calibração. Uma vista
+preferencial do evento só é aceita quando pertence ao conjunto permitido do
+perfil.
+
+### 3. Política {/* #configure-policy */}
+
+A tabela apresenta os padrões do modelo da API. Para reduzir o desgaste mecânico,
+o assistente de novo perfil começa deliberadamente de forma mais conservadora: `3 s`
+para confirmação, `6 s` para tolerância de encerramento, `18 s` para inatividade e
+`2/min` para o máximo de movimentos. Ajuste somente com base nas decisões registradas
+no modo de simulação.
+
+| Configuração | Padrão | Finalidade |
+| --- | ---: | --- |
+| Confirmação do candidato | `0.5 s` | Impede que um pacote transitório mova a câmera. |
+| Foco mínimo | `10 s` | Mantém estável o evento selecionado em vez de alternar rapidamente. |
+| Foco máximo | `120 s` | Força um retorno limitado mesmo quando o evento nunca termina. |
+| Tolerância de encerramento | `5 s` | Tolera breves lacunas depois que o evento termina. |
+| Intervalo de resfriamento | `10 s` | Evita um ciclo imediato de retorno e novo foco. |
+| Tempo limite de inatividade | `12 s` | Encerra a atenção quando as atualizações desaparecem sem um fechamento correto. |
+| Tempo limite de estabilização | `8 s` | Limita a espera pelo movimento e pela estabilização. |
+| Concessão de controle | `15 s` | Exige que a automação mantenha sua propriedade ativa. |
+| Máximo de movimentos | `6/min` | Limita o desgaste mecânico. |
+| Confiança mínima do alvo | `0` | Quando aumentado, rejeita alvos espaciais fracos. |
+
+### 4. Segurança e modo {/* #configure-safety-and-mode */}
+
+| Modo armazenado | Comportamento |
+| --- | --- |
+| `disabled` | O perfil permanece configurado, mas não avalia nem move. |
+| `shadow` | Avalia eventos e registra decisões sem comandos ao motor. |
+| `live_preset` | Move somente entre os presets calibrados configurados. |
+| `paused` | Suspende a automação até que seja retomada e lembra o modo anterior retomável. |
+
+Use `shadow` primeiro. Trate `live_preset` como uma etapa supervisionada de
+ativação, não como padrão.
+
+## Conecte um pipeline {/* #connect-a-pipeline */}
+
+Adicione `ptz_attention.request` depois do operador que produz o evento
+qualificado. O operador é executado no servidor principal do Toposync porque cria
+um efeito externo de controle de dispositivo.
+
+```text
+evento semântico com OPEN / UPDATE / CLOSE
+    -> ptz_attention.request
+    -> perfil de Atenção PTZ
+    -> concessão de controle de Câmeras
+    -> preset calibrado
+```
+
+Um pacote `OPEN` deve incluir um alvo espacial. Pacotes `UPDATE` apenas renovam a
+sessão ativa; eles não alteram o alvo resolvido nem a vista selecionada. `CLOSE`
+libera o evento semântico e inicia a tolerância e o comportamento de retorno
+configurados. As arestas do grafo devem preservar `OPEN` e `CLOSE`; somente
+atualizações intermediárias podem ser compactadas.
+
+Para pessoas perto de um veículo, uma ramificação típica de percepção é:
+
+```text
+camera.source
+    -> core.fps_reducer
+    -> vision.detect
+    -> camera.camera_mapping
+    -> vision.track
+    -> camera.velocity_estimation
+    -> vision.group_events
+    -> vision.spatial_relation_event
+    -> ptz_attention.request
+```
+
+Configure `vision.group_events` no modo de proximidade, com categorias de
+pessoa e veículo e `include_stationary_members=true`. Defina o `event_type`
+fixo do nó de requisição como `person_vehicle_interaction`; a política do perfil
+deve usar o mesmo valor.
+
+Para uma pessoa parada em frente à casa, use `core.stationary_event` depois do
+rastreamento e da estimativa de velocidade. Prefira `core.fps_reducer` a um
+filtro de movimento nesses fluxos; um filtro de movimento pode eliminar a
+evidência estacionária necessária para o evento.
+
+## Estados do runtime {/* #runtime-states */}
+
+| Estado | Significado |
+| --- | --- |
+| `IDLE` | Nenhum evento possui a atenção; esse estado sozinho não comprova a pose física. |
+| `CANDIDATE` | Um possível evento aguarda confirmação. |
+| `ACQUIRING` | O controle e a vista de destino estão sendo adquiridos. |
+| `FOCUSED` | O evento selecionado possui a vista de foco calibrada. |
+| `GRACE` | O evento terminou e o runtime aguarda a tolerância de encerramento. |
+| `RETURNING` | A câmera está retornando para a vista inicial. |
+| `MANUAL_OVERRIDE` | O controle manual possui a câmera física. |
+| `FAULT` | A automação parou depois de uma falha de controle ou validação. |
+
+O painel de configurações expõe o estado atual, o evento ativo, a vista lógica,
+se há uma concessão ativa, a contagem de movimentos, as decisões recentes, os
+problemas de prontidão e as falhas.
+
+## Controle manual e ações do operador {/* #manual-control-and-operator-actions */}
+
+- **Pausar aqui** interrompe decisões automatizadas sem forçar um movimento.
+- **Retomar automação** devolve o perfil ao modo habilitado anterior.
+- **Retornar à vista inicial** solicita o preset inicial configurado. Pause
+  primeiro quando o perfil precisar continuar pausado depois do retorno.
+- Abrir o controle PTZ manual interrompe a automação. Fechar os controles manuais
+  não envia silenciosamente a câmera para a vista inicial.
+
+Quando um retorno falhar, inspecione a falha e a imagem ao vivo antes de tentar
+novamente. Não repita movimentos às cegas quando a câmera, a rede ou a cena física
+estiver incerta.
+
+## Solução de problemas {/* #troubleshooting */}
+
+### O perfil não consegue entrar no modo de preset ao vivo
+
+Confirme que a descoberta informa capacidade PTZ real, que o controle exclusivo
+da automação foi confirmado explicitamente, que a vista inicial está pronta e
+não é estimada e que pelo menos uma vista de foco pronta está permitida. Resolva
+também qualquer aviso de privacidade, compatibilidade da fonte ou observador
+compartilhado exibido pelo assistente.
+A vista de foco precisa ser distinta da vista inicial.
+
+### A câmera não se move
+
+Verifique se o perfil está `disabled`, `shadow` ou `paused`; se o controle manual
+possui a câmera; se o usuário tem permissão de controle da câmera; e se o evento
+selecionado atingiu a confirmação de candidato.
+
+### A câmera se move com muita frequência
+
+Aumente a confirmação do candidato, o foco mínimo ou a tolerância de
+encerramento. Reduza o número de fontes de eventos e vistas permitidas. Mantenha
+habilitado o limite de movimentos por minuto.
+
+### A câmera nunca retorna para a vista inicial
+
+Procure um `CLOSE` ausente, um evento inativo, uma tomada de controle manual ou um
+estado `FAULT`. Depois de reiniciar o processo, uma sessão ao vivo interrompida
+entra em `FAULT`, pois a pose física é desconhecida. Inspecione a imagem e use
+**Retornar à vista inicial** explicitamente; o runtime nunca tenta adivinhar um
+movimento de recuperação. Só chame o preset depois de confirmar que ele é seguro.
+
+### O mapeamento desaparece durante o movimento
+
+Isso é esperado quando a observação e o movimento PTZ compartilham um único
+cabeçote físico. Use um observador fixo ou mantenha a operação no mesmo cabeçote
+em simulação até que a reaquisição seja confiável.
+
+## Valide antes do movimento ao vivo {/* #validate-before-live-movement */}
+
+1. Execute o perfil em `shadow` e revise eventos representativos.
+2. Confirme que passantes rápidos são suprimidos.
+3. Teste manualmente `home`, um preset de foco e `home` novamente.
+4. Habilite uma vista de foco ao vivo durante uma janela de teste supervisionada.
+5. Assuma o controle manual e confirme que a automação para imediatamente.
+6. Encerre o evento e confirme um único retorno seguro.
+7. Teste falhas da câmera, da rede e do processo antes do uso sem supervisão.
+
+Não dependa deste recurso alfa para monitoramento de segurança sem supervisão,
+controle de acesso, resposta a emergências ou qualquer automação em que perder um
+evento ou produzir um movimento inesperado possa causar danos.
+
+## Documentação relacionada {/* #related-documentation */}
+
+- [Visão geral das câmeras](overview.mdx)
+- [Mapeamento de câmeras](camera-mapping.mdx)
+- [Visualização ao vivo](live-viewing.mdx)
+- [Processamento de imagem](image-processing.mdx)
+- [Pipelines](../developers/pipelines.mdx)
+- [Arquitetura](../developers/architecture.mdx)

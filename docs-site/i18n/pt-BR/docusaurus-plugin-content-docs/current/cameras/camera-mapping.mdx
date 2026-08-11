@@ -87,6 +87,11 @@ Quando a câmera se move:
 Avisos de qualidade de pose não significam que o stream está quebrado. Eles
 significam que a posição projetada pode estar imprecisa.
 
+[Atenção PTZ semântica](ptz-attention.mdx) usa somente as vistas calibradas
+permitidas pelo perfil. Uma vista pronta é escolhida como inicial e as demais
+vistas permitidas formam o conjunto de alvos de foco. Um token de preset é um
+alvo de movimento, não uma prova de que a câmera alcançou a composição esperada.
+
 ## Recorte de área para Visão 360 {/* #area-clipping-for-visao-360 */}
 
 Um elemento de câmera pode escolher opcionalmente uma área como recorte para
@@ -119,7 +124,7 @@ Mapeamento de câmera pode afetar:
 - marcadores de câmera e contexto espacial;
 - **Spatial Events** produzidos a partir de detecções de câmera mapeadas;
 - pipelines que usam coordenadas de câmera para mundo;
-- futuros controles e overlays sensíveis a PTZ.
+- seleção de vista e comportamento de retorno da atenção PTZ semântica.
 
 Ele não substitui a transmissão ao vivo. A câmera ainda precisa ter uma
 transmissão/publicação ativa antes de ser projetada como vídeo ao vivo.
@@ -132,5 +137,7 @@ transmissão/publicação ativa antes de ser projetada como vídeo ao vivo.
 4. Adicione quatro pares de cantos confiáveis.
 5. Use a transformação global antes de adicionar pontos internos de refinamento.
 6. Adicione vistas PTZ apenas para posições ou presets significativos.
-7. Use recorte de área apenas quando quiser um recorte espacial na Visão 360.
-8. Abra a Visão 360 e confira se vídeo, marcador e avisos fazem sentido.
+7. Para atenção PTZ, marque uma vista pronta como inicial e mantenha pequeno o
+   conjunto de focos permitidos.
+8. Use recorte de área apenas quando quiser um recorte espacial na Visão 360.
+9. Abra a Visão 360 e confira se vídeo, marcador e avisos fazem sentido.

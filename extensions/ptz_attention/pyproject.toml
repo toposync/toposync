@@ -1,0 +1,19 @@
+[project]
+name = "toposync-ext-ptz-attention"
+version = "0.8.0"
+description = "Toposync first-party extension for lifecycle-aware PTZ attention arbitration."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["toposync-core>=0.3.0", "toposync-ext-cameras>=0.8.0"]
+
+[project.entry-points."toposync.extensions"]
+ptz_attention = "toposync_ext_ptz_attention.plugin:PtzAttentionExtension"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/toposync_ext_ptz_attention"]

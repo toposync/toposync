@@ -13,6 +13,7 @@ dependencies = [
   "toposync-ext-home-assistant==0.8.0",
   "toposync-ext-images==0.8.0",
   "toposync-ext-cameras==0.8.0",
+  "toposync-ext-ptz-attention==0.8.0",
   "toposync-ext-vision==0.8.0",
   "toposync-ext-spatial-video==0.8.0",
   "onnxruntime-gpu>=1.20",
@@ -32,5 +33,6 @@ toposync-ext-models = { path = "../../extensions/models" }
 toposync-ext-home-assistant = { path = "../../extensions/home_assistant" }
 toposync-ext-images = { path = "../../extensions/images" }
 toposync-ext-cameras = { path = "../../extensions/cameras" }
+toposync-ext-ptz-attention = { path = "../../extensions/ptz_attention" }
 toposync-ext-vision = { path = "../../extensions/vision" }
 toposync-ext-spatial-video = { path = "../../extensions/spatial_video" }

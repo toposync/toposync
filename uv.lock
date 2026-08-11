@@ -2525,6 +2525,7 @@ extensions = [
     { name = "toposync-ext-home-assistant" },
     { name = "toposync-ext-images" },
     { name = "toposync-ext-models" },
+    { name = "toposync-ext-ptz-attention" },
     { name = "toposync-ext-spatial-video" },
     { name = "toposync-ext-streaming" },
     { name = "toposync-ext-structural" },
@@ -2554,6 +2555,7 @@ extensions = [
     { name = "toposync-ext-home-assistant", editable = "extensions/home_assistant" },
     { name = "toposync-ext-images", editable = "extensions/images" },
     { name = "toposync-ext-models", editable = "extensions/models" },
+    { name = "toposync-ext-ptz-attention", editable = "extensions/ptz_attention" },
     { name = "toposync-ext-spatial-video", editable = "extensions/spatial_video" },
     { name = "toposync-ext-streaming", editable = "extensions/streaming" },
     { name = "toposync-ext-structural", editable = "extensions/structural" },
@@ -2647,6 +2649,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
+
+[[package]]
+name = "toposync-ext-ptz-attention"
+version = "0.8.0"
+source = { editable = "extensions/ptz_attention" }
+dependencies = [
+    { name = "toposync-core" },
+    { name = "toposync-ext-cameras" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "toposync-core", specifier = ">=0.3.0" },
+    { name = "toposync-ext-cameras", specifier = ">=0.8.0" },
+]
 
 [[package]]
 name = "toposync-ext-spatial-video"

@@ -89,10 +89,26 @@ def _add_mapped_composition(client: TestClient, *, with_area: bool = False) -> N
                         "id": "main",
                         "label": "Main",
                         "control_points": [
-                            {"id": "A", "image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
-                            {"id": "B", "image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                            {"id": "C", "image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
-                            {"id": "D", "image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                            {
+                                "id": "A",
+                                "image": {"x": 0.0, "y": 0.0},
+                                "world": {"x": 0.0, "z": 0.0},
+                            },
+                            {
+                                "id": "B",
+                                "image": {"x": 1.0, "y": 0.0},
+                                "world": {"x": 10.0, "z": 0.0},
+                            },
+                            {
+                                "id": "C",
+                                "image": {"x": 1.0, "y": 1.0},
+                                "world": {"x": 10.0, "z": 10.0},
+                            },
+                            {
+                                "id": "D",
+                                "image": {"x": 0.0, "y": 1.0},
+                                "world": {"x": 0.0, "z": 10.0},
+                            },
                         ],
                     }
                 ],
@@ -184,7 +200,7 @@ def _edge_config(
     return {}
 
 
-def test_camera_pipeline_combined_stopped_suggested_name_and_requires_mapping(
+def test_person_vehicle_interaction_suggested_name_and_requires_mapping(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -194,19 +210,19 @@ def test_camera_pipeline_combined_stopped_suggested_name_and_requires_mapping(
         overview = client.get("/api/cameras/cameras/cam1/pipelines")
         assert overview.status_code == 200, overview.text
         assert (
-            overview.json()["suggested_pipeline_names"]["person_vehicle_stopped"]
-            == "entrada_principal_pessoa_veiculo_parou"
+            overview.json()["suggested_pipeline_names"]["person_vehicle_interaction"]
+            == "entrada_principal_interacao_pessoa_veiculo"
         )
 
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
-            json={"preset": "person_vehicle_stopped"},
+            json={"preset": "person_vehicle_interaction"},
         )
         assert res.status_code == 409, res.text
         assert "Mapping preset requires" in res.json()["detail"]
 
 
-def test_camera_pipeline_combined_stopped_builds_shared_detection_and_branches(
+def test_person_vehicle_interaction_builds_semantic_relation_graph_v2(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -216,21 +232,33 @@ def test_camera_pipeline_combined_stopped_builds_shared_detection_and_branches(
 
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
-            json={"preset": "person_vehicle_stopped"},
+            json={"preset": "person_vehicle_interaction"},
         )
         assert res.status_code == 200, res.text
         pipeline_name = res.json()["pipeline_name"]
-        assert pipeline_name == "entrada_principal_pessoa_veiculo_parou"
+        assert pipeline_name == "entrada_principal_interacao_pessoa_veiculo"
 
         res = client.get(f"/api/pipelines/{pipeline_name}")
         assert res.status_code == 200, res.text
         pipeline = res.json()
 
+        assert pipeline["graph"]["schema_version"] == 2
+        assert pipeline["graph"]["uid"] == pipeline_name
         operator_ids = _operator_ids(pipeline)
-        assert operator_ids.count("vision.detect") == 1
-        assert operator_ids.count("core.route_by_category") == 2
-        assert operator_ids.count("core.notify") == 2
-        assert operator_ids.index("vision.detect") < operator_ids.index("core.route_by_category")
+        assert operator_ids == [
+            "camera.source",
+            "core.fps_reducer",
+            "vision.detect",
+            "camera.camera_mapping",
+            "vision.track",
+            "camera.velocity_estimation",
+            "vision.group_events",
+            "vision.spatial_relation_event",
+            "vision.crop_objects",
+            "core.store_images",
+            "core.notify",
+        ]
+        assert _node_config(pipeline, "core.fps_reducer").get("target_fps") == 4.0
         assert _vision_detect_config(pipeline).get("categories") == [
             "person",
             "car",
@@ -242,42 +270,48 @@ def test_camera_pipeline_combined_stopped_builds_shared_detection_and_branches(
         assert _node_config(pipeline, "camera.velocity_estimation").get(
             "stopped_speed_threshold"
         ) == pytest.approx(1.0 / 3.6)
-        assert _node_config_by_id(pipeline, "person_router").get("categories") == ["person"]
-        assert _node_config_by_id(pipeline, "vehicle_router").get("categories") == [
-            "car",
-            "truck",
-            "bus",
-            "motorcycle",
-        ]
+        group = _node_config(pipeline, "vision.group_events")
+        assert group.get("mode") == "proximity"
+        assert group.get("categories") == ["person", "car", "truck", "bus", "motorcycle"]
+        assert group.get("group_distance_meters") == 5.0
+        assert group.get("include_stationary_members") is True
+        relation = _node_config(pipeline, "vision.spatial_relation_event")
+        assert relation.get("required_categories") == {
+            "person": ["person"],
+            "vehicle": ["car", "truck", "bus", "motorcycle"],
+        }
+        assert relation.get("enter_distance_meters") == 3.0
+        assert relation.get("exit_distance_meters") == 4.0
+        assert relation.get("dwell_seconds") == 4.0
+        assert relation.get("close_grace_seconds") == 6.0
+        assert relation.get("stale_timeout_seconds") == 15.0
 
-        person_notify = _node_config_by_id(pipeline, "person_notify")
-        vehicle_notify = _node_config_by_id(pipeline, "vehicle_notify")
-        assert person_notify.get("priority") == "medium"
-        assert vehicle_notify.get("priority") == "high"
-        assert person_notify.get("title") == "{{camera_name}}: pessoa parada"
-        assert vehicle_notify.get("title") == "{{camera_name}}: veículo parado"
+        notify = _node_config(pipeline, "core.notify")
+        assert notify.get("priority") == "high"
+        assert notify.get("title") == "{{camera_name}}: interação entre pessoa e veículo"
+        assert notify.get("dedupe_key_template") == "{{subject.id}}"
 
         assert _edge_config(pipeline, "detect", "map").get("maxsize") == 8
-        assert _edge_config(pipeline, "velocity", "person_router").get("drop_policy") == (
+        assert _edge_config(pipeline, "velocity", "group").get("drop_policy") == (
             "keyed_latest_only"
         )
-        assert _edge_config(
-            pipeline, "person_router", "person_stationary", source_port="match"
-        ).get("drop_policy") == "keyed_latest_only"
-        assert _edge_config(
-            pipeline, "person_router", "vehicle_router", source_port="other"
-        ).get("drop_policy") == "keyed_latest_only"
-        assert _edge_config(
-            pipeline, "vehicle_router", "vehicle_stationary", source_port="match"
-        ).get("drop_policy") == "keyed_latest_only"
+        assert _edge_config(pipeline, "group", "relation").get("drop_policy") == (
+            "keyed_latest_only"
+        )
+        assert _edge_config(pipeline, "crop", "store").get("drop_policy") == "block"
+        assert _edge_config(pipeline, "store", "notify").get("drop_policy") == "block"
 
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
-        assert alert_codes == set()
+        assert alert_codes == {
+            "continuous_stream_to_sparse_operator",
+            "store_images_without_rate_control",
+            "vision_model_artifact_missing",
+        }
 
 
-def test_camera_pipeline_combined_stopped_area_thresholds_and_priority_override(
+def test_person_vehicle_interaction_applies_optional_area_and_notification_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -288,31 +322,21 @@ def test_camera_pipeline_combined_stopped_area_thresholds_and_priority_override(
         res = client.post(
             "/api/cameras/cameras/cam1/pipelines/presets",
             json={
-                "preset": "person_vehicle_stopped",
+                "preset": "person_vehicle_interaction",
                 "area_id": "area-1",
-                "stopped_speed_threshold": 0.5,
-                "min_stationary_seconds": 2.0,
                 "notification_priority": "low",
+                "notification_title": "Atenção ao veículo",
             },
         )
         assert res.status_code == 200, res.text
 
         pipeline = client.get(f"/api/pipelines/{res.json()['pipeline_name']}").json()
         operators = _operator_ids(pipeline)
-        assert operators.index("camera.area_restriction") < operators.index(
-            "core.route_by_category"
-        )
-        assert _edge_config(pipeline, "area", "person_router").get("drop_policy") == (
-            "keyed_latest_only"
-        )
+        assert operators.index("camera.area_restriction") < operators.index("vision.group_events")
+        assert _edge_config(pipeline, "area", "group").get("drop_policy") == ("keyed_latest_only")
         assert _node_config(pipeline, "camera.area_restriction").get("include_area_names") == [
             "Gate"
         ]
-        assert _node_config_by_id(pipeline, "person_stationary").get(
-            "max_speed_mps"
-        ) == pytest.approx(0.5)
-        assert _node_config_by_id(pipeline, "vehicle_stationary").get(
-            "min_stationary_seconds"
-        ) == pytest.approx(2.0)
-        assert _node_config_by_id(pipeline, "person_notify").get("priority") == "low"
-        assert _node_config_by_id(pipeline, "vehicle_notify").get("priority") == "low"
+        notify = _node_config(pipeline, "core.notify")
+        assert notify.get("priority") == "low"
+        assert notify.get("title") == "Atenção ao veículo"

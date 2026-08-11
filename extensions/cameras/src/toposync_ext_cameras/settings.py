@@ -22,7 +22,9 @@ class CameraOnvifConfig(BaseModel):
     def _trim_text(cls, value: Any) -> str:
         return str(value or "").strip()
 
-    @field_validator("device_id", "media_xaddr", "ptz_xaddr", "event_xaddr", "hardware", mode="before")
+    @field_validator(
+        "device_id", "media_xaddr", "ptz_xaddr", "event_xaddr", "hardware", mode="before"
+    )
     @classmethod
     def _trim_strings(cls, value: Any) -> str | None:
         if value is None:
@@ -35,6 +37,13 @@ class CameraControlSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["onvif", "none"] = "none"
+    automation_exclusive_control_confirmed: bool = Field(
+        default=False,
+        description=(
+            "Operator confirmation that native auto-tracking, automatic return, and "
+            "monitor-point movement are disabled for this physical PTZ device."
+        ),
+    )
 
     @field_validator("type", mode="before")
     @classmethod
@@ -192,6 +201,9 @@ class CameraDeviceSettings(BaseModel):
             self.onvif = CameraOnvifConfig()
         if self.control.type != "onvif":
             self.onvif = None
+            self.control = self.control.model_copy(
+                update={"automation_exclusive_control_confirmed": False}
+            )
 
         normalized: list[CameraSourceSettings] = []
         seen_ids: set[str] = set()
@@ -219,6 +231,55 @@ class CamerasExtensionSettings(BaseModel):
 
     schema_version: int = 4
     devices: list[CameraDeviceSettings] = Field(default_factory=list)
+
+
+def camera_settings_authorization_selectors(
+    current_settings: Any,
+    proposed_settings: Any,
+) -> list[str]:
+    """Identify camera records changed by an effective settings replacement.
+
+    A wildcard is returned when the camera list cannot be inspected safely. The
+    caller can then require a global camera-configure grant instead of guessing a
+    narrower authorization scope.
+    """
+
+    def devices_by_id(value: Any) -> dict[str, dict[str, Any]] | None:
+        if isinstance(value, CamerasExtensionSettings):
+            value = value.model_dump(mode="json")
+        if not isinstance(value, dict):
+            return None
+        raw_devices = value.get("devices", [])
+        if not isinstance(raw_devices, list):
+            return None
+        devices: dict[str, dict[str, Any]] = {}
+        for raw_device in raw_devices:
+            if not isinstance(raw_device, dict):
+                return None
+            camera_id = str(raw_device.get("id") or "").strip()
+            if not camera_id or camera_id in devices:
+                return None
+            devices[camera_id] = raw_device
+        return devices
+
+    if current_settings == proposed_settings:
+        return []
+
+    current_devices = devices_by_id(current_settings)
+    proposed_devices = devices_by_id(proposed_settings)
+    if current_devices is None or proposed_devices is None:
+        return ["*"]
+
+    changed = sorted(
+        camera_id
+        for camera_id in set(current_devices) | set(proposed_devices)
+        if current_devices.get(camera_id) != proposed_devices.get(camera_id)
+    )
+    if changed:
+        return changed
+    if not current_devices and not proposed_devices:
+        return ["*"]
+    return []
 
 
 def normalize_cameras_settings(value: Any) -> dict[str, Any]:
@@ -257,7 +318,9 @@ def get_camera_device(value: Any, *, camera_id: str) -> dict[str, Any] | None:
     return None
 
 
-def iter_camera_sources(device: Any, *, kind: str | None = None, enabled_only: bool = False) -> list[dict[str, Any]]:
+def iter_camera_sources(
+    device: Any, *, kind: str | None = None, enabled_only: bool = False
+) -> list[dict[str, Any]]:
     if not isinstance(device, dict):
         return []
     sources = device.get("sources")
@@ -277,7 +340,9 @@ def iter_camera_sources(device: Any, *, kind: str | None = None, enabled_only: b
     return out
 
 
-def get_default_camera_source(device: Any, *, kind: str = "video", enabled_only: bool = False) -> dict[str, Any] | None:
+def get_default_camera_source(
+    device: Any, *, kind: str = "video", enabled_only: bool = False
+) -> dict[str, Any] | None:
     sources = iter_camera_sources(device, kind=kind, enabled_only=enabled_only)
     for item in sources:
         if bool(item.get("is_default")):
@@ -317,9 +382,24 @@ def get_camera_source_origin(source: Any) -> dict[str, Any]:
     return origin if isinstance(origin, dict) else {}
 
 
+def camera_source_has_ptz(source: Any) -> bool:
+    """Return the explicit PTZ capability of a configured source.
+
+    PTZ is intentionally not inferred from camera type, source role, or free-form
+    metadata. Physical control must stay fail-closed until discovery or the
+    operator marks the concrete source profile as PTZ-capable.
+    """
+
+    return get_camera_source_origin(source).get("has_ptz") is True
+
+
 def get_camera_source_origin_type(source: Any) -> Literal["onvif_profile", "rtsp"]:
     origin = get_camera_source_origin(source)
-    return "onvif_profile" if str(origin.get("type") or "").strip().lower() == "onvif_profile" else "rtsp"
+    return (
+        "onvif_profile"
+        if str(origin.get("type") or "").strip().lower() == "onvif_profile"
+        else "rtsp"
+    )
 
 
 def get_camera_source_credentials(device: Any, source: Any) -> tuple[str, str]:
@@ -348,10 +428,73 @@ def flatten_camera_device_for_ui(device: Any) -> dict[str, Any] | None:
     camera_id = str(device.get("id") or "").strip()
     if not camera_id:
         return None
+
+    camera_enabled = bool(device.get("enabled", True))
+    control = device.get("control") if isinstance(device.get("control"), dict) else {}
+    control_type = "onvif" if str(control.get("type") or "").strip().lower() == "onvif" else "none"
+    sources: list[dict[str, Any]] = []
+    has_enabled_ptz_source = False
+    for source in iter_camera_sources(device):
+        source_id = str(source.get("id") or "").strip()
+        if not source_id:
+            continue
+        source_enabled = bool(source.get("enabled", True))
+        source_kind = str(source.get("kind") or "video").strip().lower() or "video"
+        source_has_ptz = camera_source_has_ptz(source)
+        has_enabled_ptz_source = has_enabled_ptz_source or (
+            source_enabled and source_kind == "video" and source_has_ptz
+        )
+
+        origin = get_camera_source_origin(source)
+        safe_origin: dict[str, Any] = {
+            "type": get_camera_source_origin_type(source),
+            "has_ptz": source_has_ptz,
+        }
+        profile_name = str(origin.get("profile_name") or "").strip()
+        if profile_name:
+            safe_origin["profile_name"] = profile_name
+
+        safe_source: dict[str, Any] = {
+            "id": source_id,
+            "name": str(source.get("name") or "").strip(),
+            "enabled": source_enabled,
+            "is_default": bool(source.get("is_default", False)),
+            "kind": source_kind,
+            "role": str(source.get("role") or "custom").strip().lower() or "custom",
+            "view_id": str(source.get("view_id") or "").strip(),
+            "has_ptz": source_has_ptz,
+            "origin": safe_origin,
+        }
+
+        video = source.get("video") if isinstance(source.get("video"), dict) else {}
+        safe_source["video"] = {
+            key: video.get(key)
+            for key in ("width", "height", "fps", "codec")
+            if video.get(key) is not None
+        }
+        ingest = source.get("ingest") if isinstance(source.get("ingest"), dict) else {}
+        safe_source["ingest"] = {
+            key: ingest.get(key)
+            for key in ("mode", "host_server_id")
+            if ingest.get(key) is not None
+        }
+        sources.append(safe_source)
+
+    control_has_ptz = camera_enabled and control_type == "onvif" and has_enabled_ptz_source
+    safe_control: dict[str, Any] = {
+        "type": control_type,
+        "has_ptz": control_has_ptz,
+        "automation_exclusive_control_confirmed": bool(
+            control_has_ptz and control.get("automation_exclusive_control_confirmed") is True
+        ),
+    }
+    if control_has_ptz:
+        safe_control["ptz_device_id"] = camera_id
+
     return {
         "id": camera_id,
         "name": str(device.get("name") or "").strip(),
-        "control": device.get("control") if isinstance(device.get("control"), dict) else {"type": "none"},
-        "onvif": dict(device.get("onvif")) if isinstance(device.get("onvif"), dict) else None,
-        "sources": [dict(item) for item in iter_camera_sources(device)],
+        "enabled": camera_enabled,
+        "control": safe_control,
+        "sources": sources,
     }

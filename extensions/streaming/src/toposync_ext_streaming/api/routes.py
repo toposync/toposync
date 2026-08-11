@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import hmac
 import json
+import logging
 import os
 import posixpath
 import re
@@ -18,7 +19,15 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 
 from toposync.runtime.auth import AuthContext, AuthRuntime
 from toposync.runtime.config_store import (
@@ -151,6 +160,9 @@ from .models import (
     quality_profile_by_id,
     resolve_output_engine_path,
 )
+
+
+_LOGGER = logging.getLogger(__name__)
 
 MSE_PROXY_DEMAND_TTL_S = 45.0
 MSE_PROXY_PATH_READY_TIMEOUT_S = 8.0
@@ -442,7 +454,9 @@ def _addon_published_port_keys() -> set[str]:
     raw_ports = snapshot.get("network") or snapshot.get("ports") or snapshot.get("published_ports")
     if not isinstance(raw_ports, dict):
         return set()
-    return {str(key).strip().lower() for key, value in raw_ports.items() if value not in {None, "", 0}}
+    return {
+        str(key).strip().lower() for key, value in raw_ports.items() if value not in {None, "", 0}
+    }
 
 
 def _network_contract_expected_ports() -> StreamingNetworkContractPorts:
@@ -461,7 +475,9 @@ def _public_hls_mode() -> Literal["direct", "proxy"]:
     return "proxy" if raw == "proxy" else "direct"
 
 
-def _effective_public_hls_mode(settings: StreamingExtensionSettings | None) -> Literal["direct", "proxy"]:
+def _effective_public_hls_mode(
+    settings: StreamingExtensionSettings | None,
+) -> Literal["direct", "proxy"]:
     if settings is not None and settings.engine.media_auth.mode == "signed_proxy":
         return "proxy"
     return _public_hls_mode()
@@ -832,7 +848,10 @@ def _build_network_contract(
     if settings is not None and bool(settings.engine.expose_to_lan):
         whep_host = _request_host(request)
         covered_hosts = {item.lower() for item in additional_hosts}
-        if whep_host.lower() not in {"127.0.0.1", "localhost", "::1"} and whep_host.lower() not in covered_hosts:
+        if (
+            whep_host.lower() not in {"127.0.0.1", "localhost", "::1"}
+            and whep_host.lower() not in covered_hosts
+        ):
             warnings.append(
                 f"WebRTC WHEP host '{whep_host}' is not listed in WebRTC additional hosts; ICE may fail outside localhost."
             )
@@ -912,7 +931,11 @@ def _build_network_contract(
     if environment == "home_assistant_addon":
         published_port_keys = _addon_published_port_keys()
         expected_webrtc_udp = expected_ports.webrtc_udp
-        if published_port_keys and expected_webrtc_udp is not None and f"{expected_webrtc_udp}/udp" not in published_port_keys:
+        if (
+            published_port_keys
+            and expected_webrtc_udp is not None
+            and f"{expected_webrtc_udp}/udp" not in published_port_keys
+        ):
             warnings.append(
                 f"WebRTC UDP port {expected_webrtc_udp}/udp is not published by the Home Assistant add-on; "
                 "HLS proxy playback is unaffected, but low latency WebRTC media may fail."
@@ -948,8 +971,16 @@ def _build_network_contract(
 def _merge_webrtc_additional_hosts(settings: StreamingExtensionSettings | None) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
-    configured = list(getattr(settings.engine, "webrtc_additional_hosts", []) or []) if settings is not None else []
-    env_items = str(os.getenv("TOPOSYNC_STREAMING_WEBRTC_ADDITIONAL_HOSTS") or "").replace(";", ",").split(",")
+    configured = (
+        list(getattr(settings.engine, "webrtc_additional_hosts", []) or [])
+        if settings is not None
+        else []
+    )
+    env_items = (
+        str(os.getenv("TOPOSYNC_STREAMING_WEBRTC_ADDITIONAL_HOSTS") or "")
+        .replace(";", ",")
+        .split(",")
+    )
     for item in [*configured, *env_items]:
         text = str(item or "").strip()
         if not text:
@@ -1239,12 +1270,15 @@ def _hls_proxy_uri_for_playlist(
     )
     if not target_file_path:
         return uri
-    return _hls_proxy_url(
-        request,
-        engine_path,
-        target_file_path,
-        media_token=media_token,
-    ) or uri
+    return (
+        _hls_proxy_url(
+            request,
+            engine_path,
+            target_file_path,
+            media_token=media_token,
+        )
+        or uri
+    )
 
 
 def _rewrite_hls_playlist_for_proxy(
@@ -1283,7 +1317,7 @@ def _rewrite_hls_playlist_for_proxy(
         stripped = line.strip()
         if stripped and not stripped.startswith("#"):
             line = rewrite_uri(stripped)
-        elif "URI=\"" in line:
+        elif 'URI="' in line:
             line = uri_attr_pattern.sub(lambda match: f'URI="{rewrite_uri(match.group(1))}"', line)
         out_lines.append(f"{line}{line_ending}")
     return "".join(out_lines).encode("utf-8")
@@ -1670,9 +1704,7 @@ async def _resolve_local_transmission_urls(
         [message for message in network_contract.warnings if _is_hls_contract_message(message)]
     )
     generic_warnings.extend(
-        message
-        for message in network_contract.warnings
-        if not _is_webrtc_contract_message(message)
+        message for message in network_contract.warnings if not _is_webrtc_contract_message(message)
     )
     signed_hls = settings.engine.media_auth.mode == "signed_proxy"
     blocking_errors: list[str] = list(network_contract.blocking_errors)
@@ -1692,7 +1724,9 @@ async def _resolve_local_transmission_urls(
         else []
     )
     if settings.engine.media_auth.mode == "open":
-        open_hls_warning = "Open HLS media access is enabled. Use it only on trusted LAN or for diagnostics."
+        open_hls_warning = (
+            "Open HLS media access is enabled. Use it only on trusted LAN or for diagnostics."
+        )
         generic_warnings.append(open_hls_warning)
         hls_warnings = _dedupe_messages([*hls_warnings, open_hls_warning])
 
@@ -1985,7 +2019,9 @@ def _rtsp_url(host: str, port: int, path: str) -> str:
     return f"rtsp://{host}:{port}/{path}"
 
 
-def _rtsp_url_with_userinfo(host: str, port: int, path: str, *, username: str, password: str) -> str:
+def _rtsp_url_with_userinfo(
+    host: str, port: int, path: str, *, username: str, password: str
+) -> str:
     user = urllib_parse.quote(str(username or ""), safe="")
     pwd = urllib_parse.quote(str(password or ""), safe="")
     return f"rtsp://{user}:{pwd}@{host}:{port}/{path}"
@@ -2053,7 +2089,11 @@ def _output_content_rect(
         return _full_media_content_rect()
     source_width, source_height = source_dimensions
     target_width, target_height = target_dimensions
-    if _output_resize_mode(output) != "contain" and source_width == target_width and source_height == target_height:
+    if (
+        _output_resize_mode(output) != "contain"
+        and source_width == target_width
+        and source_height == target_height
+    ):
         return _full_media_content_rect()
     return contain_content_rect(source_width, source_height, target_width, target_height)
 
@@ -2153,7 +2193,9 @@ async def _transmission_media_source_dimensions(
             for device in iter_camera_devices_from_app_settings(app_settings):
                 if str(device.get("id") or "").strip() != camera_id:
                     continue
-                source = resolve_camera_video_source(device, source_id=camera_source_id, enabled_only=False)
+                source = resolve_camera_video_source(
+                    device, source_id=camera_source_id, enabled_only=False
+                )
                 dimensions = _source_video_dimensions(source)
                 if dimensions is not None:
                     return dimensions
@@ -2283,7 +2325,9 @@ def _runtime_health_for_playback_plan(
         "placeholder_active": runtime_health.placeholder_active,
     }
     if output_id:
-        output = next((item for item in runtime_health.outputs if item.output_id == output_id), None)
+        output = next(
+            (item for item in runtime_health.outputs if item.output_id == output_id), None
+        )
         if output is not None:
             health.update(
                 {
@@ -2336,13 +2380,10 @@ def _build_playback_plan_response(
         webrtc_blocking.append(
             "Home Assistant entity playback is negotiated by the Home Assistant camera platform."
         )
-    web_webrtc_contextual = (
-        client == "web"
-        and (
-            bool(low_latency_requested)
-            or str(visual_context or "").strip().lower() == "ptz"
-            or str(transmission_role or "").strip().lower() == "zoom"
-        )
+    web_webrtc_contextual = client == "web" and (
+        bool(low_latency_requested)
+        or str(visual_context or "").strip().lower() == "ptz"
+        or str(transmission_role or "").strip().lower() == "zoom"
     )
     if client == "web" and not web_webrtc_contextual:
         webrtc_blocking.append("WebRTC is reserved for explicit low-latency or PTZ playback.")
@@ -2419,14 +2460,18 @@ def _build_playback_plan_response(
                     available=hls_output is not None and not hls_blocking,
                     blocking_errors=hls_blocking,
                     warnings=list(urls.hls_warnings),
-                    health=_runtime_health_for_playback_plan(runtime_health, hls_output.output_id if hls_output else None),
+                    health=_runtime_health_for_playback_plan(
+                        runtime_health, hls_output.output_id if hls_output else None
+                    ),
                 )
             )
         elif transport == "webrtc":
             warnings = [
                 *list(urls.webrtc_warnings),
                 *(
-                    ["WebRTC is reserved for Home Assistant native camera/WebRTC relay in HA ingress mode."]
+                    [
+                        "WebRTC is reserved for Home Assistant native camera/WebRTC relay in HA ingress mode."
+                    ]
                     if client == "ha_ingress"
                     else ["WebRTC is reserved for low-latency/PTZ in Home Assistant proxy mode."]
                     if home_assistant_proxy_hls
@@ -2438,10 +2483,16 @@ def _build_playback_plan_response(
                     transport="webrtc",
                     rank=rank,
                     output=webrtc_output,
-                    available=webrtc_output is not None and not webrtc_blocking and client not in {"app", "ha_ingress"},
-                    blocking_errors=webrtc_blocking if client not in {"app"} else [*webrtc_blocking, "Native app playback uses HLS first."],
+                    available=webrtc_output is not None
+                    and not webrtc_blocking
+                    and client not in {"app", "ha_ingress"},
+                    blocking_errors=webrtc_blocking
+                    if client not in {"app"}
+                    else [*webrtc_blocking, "Native app playback uses HLS first."],
                     warnings=warnings,
-                    health=_runtime_health_for_playback_plan(runtime_health, webrtc_output.output_id if webrtc_output else None),
+                    health=_runtime_health_for_playback_plan(
+                        runtime_health, webrtc_output.output_id if webrtc_output else None
+                    ),
                 )
             )
         elif transport == "mse":
@@ -2453,7 +2504,9 @@ def _build_playback_plan_response(
                         output=mse_output,
                         available=not mse_blocking,
                         blocking_errors=mse_blocking,
-                        health=_runtime_health_for_playback_plan(runtime_health, mse_output.output_id),
+                        health=_runtime_health_for_playback_plan(
+                            runtime_health, mse_output.output_id
+                        ),
                     )
                 )
             else:
@@ -2476,7 +2529,9 @@ def _build_playback_plan_response(
                         output=jsmpeg_output,
                         available=not jsmpeg_blocking,
                         blocking_errors=jsmpeg_blocking,
-                        health=_runtime_health_for_playback_plan(runtime_health, jsmpeg_output.output_id),
+                        health=_runtime_health_for_playback_plan(
+                            runtime_health, jsmpeg_output.output_id
+                        ),
                     )
                 )
             else:
@@ -2496,7 +2551,9 @@ def _build_playback_plan_response(
     if home_assistant_proxy_hls:
         plan_warnings.append("Home Assistant proxy mode prefers signed HLS for stable playback.")
     if client == "ha_ingress":
-        plan_warnings.append("Home Assistant ingress prefers HLS; use HA camera entities for Home Assistant Cloud/WebRTC relay.")
+        plan_warnings.append(
+            "Home Assistant ingress prefers HLS; use HA camera entities for Home Assistant Cloud/WebRTC relay."
+        )
     return StreamingPlaybackPlanResponse(
         transmission_id=transmission_id,
         client=client,
@@ -2534,7 +2591,9 @@ def _redact_url_credentials(url: str | None) -> str | None:
     host = parsed.hostname or ""
     port = f":{parsed.port}" if parsed.port is not None else ""
     netloc = f"[REDACTED]@{host}{port}"
-    return urllib_parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    return urllib_parse.urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
 
 
 def _url_has_loopback_host(url: str | None) -> bool:
@@ -2613,11 +2672,7 @@ def _remote_rtsp_url_for_home_assistant(
     output: TransmissionOutput,
 ) -> str | None:
     selected = next(
-        (
-            item
-            for item in urls.outputs
-            if item.protocol == "rtsp" and item.output_id == output.id
-        ),
+        (item for item in urls.outputs if item.protocol == "rtsp" and item.output_id == output.id),
         None,
     ) or next((item for item in urls.outputs if item.protocol == "rtsp"), None)
     if selected is not None:
@@ -2651,7 +2706,9 @@ async def _remote_transmission_server(
             detail=f"host_server_id '{host_server_id}' does not support remote HTTP access.",
         )
     if not str(server.url or "").strip():
-        raise HTTPException(status_code=400, detail=f"host_server_id '{host_server_id}' has an empty URL.")
+        raise HTTPException(
+            status_code=400, detail=f"host_server_id '{host_server_id}' has an empty URL."
+        )
     return server
 
 
@@ -2759,7 +2816,9 @@ def _best_transmission_output_for_home_assistant(
         for output in enabled_outputs:
             if output.protocol == "hls" and output.quality_profile_id == preferred:
                 return output
-    return next((item for item in enabled_outputs if item.protocol == "hls"), None) or next(iter(enabled_outputs), None)
+    return next((item for item in enabled_outputs if item.protocol == "hls"), None) or next(
+        iter(enabled_outputs), None
+    )
 
 
 def _best_webrtc_output_for_home_assistant(
@@ -2768,7 +2827,9 @@ def _best_webrtc_output_for_home_assistant(
     quality_profile_id: str | None = None,
 ) -> TransmissionOutput | None:
     selected_profile_id = str(quality_profile_id or "").strip()
-    enabled_webrtc = [item for item in transmission.outputs if item.enabled and item.protocol == "webrtc"]
+    enabled_webrtc = [
+        item for item in transmission.outputs if item.enabled and item.protocol == "webrtc"
+    ]
     if selected_profile_id:
         for output in enabled_webrtc:
             if output.quality_profile_id == selected_profile_id:
@@ -2779,7 +2840,9 @@ def _best_webrtc_output_for_home_assistant(
 def _output_dimensions_for_still(output: TransmissionOutput | None) -> tuple[int, int]:
     if output is not None and output.resolution is not None:
         return int(output.resolution.width), int(output.resolution.height)
-    profile = quality_profile_by_id(output.quality_profile_id if output is not None else DEFAULT_QUALITY_PROFILE_ID)
+    profile = quality_profile_by_id(
+        output.quality_profile_id if output is not None else DEFAULT_QUALITY_PROFILE_ID
+    )
     if profile is not None:
         return int(profile.resolution.width), int(profile.resolution.height)
     return 1280, 720
@@ -2825,7 +2888,9 @@ def _post_whep_offer_sync(*, url: str, sdp: str) -> str:
             return response.read().decode("utf-8", errors="replace")
     except urllib_error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace") if exc.fp is not None else str(exc)
-        raise HTTPException(status_code=502, detail=f"WHEP offer failed: {exc.code} {detail[:300]}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"WHEP offer failed: {exc.code} {detail[:300]}"
+        ) from exc
     except urllib_error.URLError as exc:
         raise HTTPException(status_code=502, detail=f"WHEP offer failed: {exc.reason}") from exc
 
@@ -2848,11 +2913,15 @@ async def _build_home_assistant_camera_item(
         output_id=variant.output_id if variant is not None else None,
         quality_profile_id=variant.quality_profile_id if variant is not None else None,
     )
-    output_id = output.id if output is not None else (variant.output_id if variant is not None else None)
+    output_id = (
+        output.id if output is not None else (variant.output_id if variant is not None else None)
+    )
     quality_profile_id = (
         output.quality_profile_id
         if output is not None and output.quality_profile_id is not None
-        else variant.quality_profile_id if variant is not None else None
+        else variant.quality_profile_id
+        if variant is not None
+        else None
     )
     current_server_id = _current_server_id(request)
     rtsp_url: str | None = None
@@ -2891,7 +2960,9 @@ async def _build_home_assistant_camera_item(
             detail = str(exc.detail or exc)
             blocking_errors.append(detail)
         except Exception as exc:
-            blocking_errors.append(f"Failed to resolve remote Home Assistant camera playback: {exc}")
+            blocking_errors.append(
+                f"Failed to resolve remote Home Assistant camera playback: {exc}"
+            )
     else:
         engine_path = resolve_output_engine_path(transmission, output)
         home_assistant_rtsp_host = _home_assistant_rtsp_host(request)
@@ -3276,9 +3347,11 @@ def _runtime_pipeline_graph_edges(graph: dict[str, Any]) -> list[StreamingRuntim
         edges.append(
             StreamingRuntimePipelineEdge(
                 source_node_id=source_node_id,
-                source_port=str(source.get("port") or edge.get("source_port") or "out").strip() or "out",
+                source_port=str(source.get("port") or edge.get("source_port") or "out").strip()
+                or "out",
                 target_node_id=target_node_id,
-                target_port=str(target.get("port") or edge.get("target_port") or "in").strip() or "in",
+                target_port=str(target.get("port") or edge.get("target_port") or "in").strip()
+                or "in",
             )
         )
     return edges
@@ -3358,7 +3431,10 @@ def _runtime_pipeline_demand_driven(
     streaming = streaming if isinstance(streaming, dict) else {}
     if bool(streaming.get("demand_driven")):
         return True
-    return any(nodes_by_id.get(node_id, ("", {}))[0] == "stream.demand_gate" for node_id in upstream_node_ids)
+    return any(
+        nodes_by_id.get(node_id, ("", {}))[0] == "stream.demand_gate"
+        for node_id in upstream_node_ids
+    )
 
 
 def _runtime_source_health_id(
@@ -3374,7 +3450,9 @@ def _runtime_source_health_id(
     normalized_camera_id = str(camera_id or "").strip()
     normalized_camera_source_id = str(camera_source_id or "").strip()
     if normalized_camera_id and normalized_camera_source_id:
-        return f"{pipeline}:{node}:camera:{normalized_camera_id}:source:{normalized_camera_source_id}"
+        return (
+            f"{pipeline}:{node}:camera:{normalized_camera_id}:source:{normalized_camera_source_id}"
+        )
     if normalized_camera_id:
         return f"{pipeline}:{node}:camera:{normalized_camera_id}"
     normalized_rtsp_url = str(rtsp_url or "").strip()
@@ -3591,7 +3669,9 @@ def _event_text(event: Any) -> str:
         str(getattr(event, "message", "") or ""),
     ]
     if isinstance(data, dict):
-        parts.extend(str(value) for value in data.values() if isinstance(value, str | int | float | bool))
+        parts.extend(
+            str(value) for value in data.values() if isinstance(value, str | int | float | bool)
+        )
     return " ".join(parts).lower()
 
 
@@ -3671,13 +3751,11 @@ async def _streaming_demand_snapshot(
     return raw if isinstance(raw, dict) else {}
 
 
-def _recent_events(events: list[Any], *, now_unix: float, window_seconds: float = 30.0) -> list[Any]:
+def _recent_events(
+    events: list[Any], *, now_unix: float, window_seconds: float = 30.0
+) -> list[Any]:
     cutoff = float(now_unix) - max(1.0, float(window_seconds))
-    return [
-        event
-        for event in events
-        if _event_at_unix(event) >= cutoff
-    ]
+    return [event for event in events if _event_at_unix(event) >= cutoff]
 
 
 def _source_health_classification_evidence(
@@ -3725,7 +3803,8 @@ def _recent_auth_url_classification(
     last_auth_url_at = _event_at_unix(last_auth_url_event)
     playback_recovered_at = _latest_event_at(
         recent,
-        lambda event: _event_type(event) in {"hls_browser_probe", "hls_start", "playing", "ready_to_play"},
+        lambda event: _event_type(event)
+        in {"hls_browser_probe", "hls_start", "playing", "ready_to_play"},
     )
     recovered_after_auth_url = (
         runtime_recovered
@@ -3758,7 +3837,11 @@ def _classify_observability(
             ["Stream is demand-driven and currently has no viewer or heartbeat demand."],
         )
 
-    if bool(getattr(output, "event_gated_idle", False) if output is not None else health.event_gated_idle):
+    if bool(
+        getattr(output, "event_gated_idle", False)
+        if output is not None
+        else health.event_gated_idle
+    ):
         return (
             "event_gated_idle",
             ["Stream is event-gated and currently has no event frames."],
@@ -3779,7 +3862,8 @@ def _classify_observability(
         return auth_url_classification
 
     if source_health is not None and (
-        source_health.status in {
+        source_health.status
+        in {
             "stale",
             "unreachable",
             "unauthorized",
@@ -3804,10 +3888,17 @@ def _classify_observability(
         return "publisher_down", evidence
 
     if any("tail_unavailable" in text or "tail segment" in text for text in texts):
-        return "hls_tail_unavailable", ["Recent HLS liveness event reports tail segment unavailable."]
+        return "hls_tail_unavailable", [
+            "Recent HLS liveness event reports tail segment unavailable."
+        ]
 
-    if any("stale_hls" in text or "playlist stopped" in text or "playlist stale" in text for text in texts):
-        return "hls_playlist_stale", ["Recent HLS liveness event reports playlist stopped advancing."]
+    if any(
+        "stale_hls" in text or "playlist stopped" in text or "playlist stale" in text
+        for text in texts
+    ):
+        return "hls_playlist_stale", [
+            "Recent HLS liveness event reports playlist stopped advancing."
+        ]
 
     runtime_recovered = _runtime_playback_recovered(health, output)
     webrtc_error_terms = (
@@ -3847,7 +3938,9 @@ def _classify_observability(
             )
         )
         if not recovered_after_error:
-            return "webrtc_transport_error", ["Recent WebRTC event reports signaling or ICE transport failure."]
+            return "webrtc_transport_error", [
+                "Recent WebRTC event reports signaling or ICE transport failure."
+            ]
 
     transient_lifecycle_terms = (
         "bufferstall",
@@ -3873,14 +3966,17 @@ def _classify_observability(
         last_lifecycle_at = max(_event_at_unix(event) for event in terminal_lifecycle_events)
         playback_recovered_at = _latest_event_at(
             recent,
-            lambda event: _event_type(event) in {"hls_browser_probe", "hls_start", "playing", "ready_to_play"},
+            lambda event: _event_type(event)
+            in {"hls_browser_probe", "hls_start", "playing", "ready_to_play"},
         )
         if not (
             runtime_recovered
             and playback_recovered_at is not None
             and playback_recovered_at >= last_lifecycle_at
         ):
-            return "app_player_lifecycle", ["Recent playback/player lifecycle event indicates stall or error."]
+            return "app_player_lifecycle", [
+                "Recent playback/player lifecycle event indicates stall or error."
+            ]
 
     transient_lifecycle_events = [
         event
@@ -3898,7 +3994,9 @@ def _classify_observability(
             and playback_recovered_at is not None
             and playback_recovered_at >= last_lifecycle_at
         ):
-            return "app_player_lifecycle", ["Recent playback/player lifecycle event indicates stall or error."]
+            return "app_player_lifecycle", [
+                "Recent playback/player lifecycle event indicates stall or error."
+            ]
 
     if target_status == "live" and (output is None or output.publisher_running):
         return "healthy", ["Runtime health is live and no recent playback error was reported."]
@@ -3978,12 +4076,19 @@ def _runtime_health_summary(
     output: StreamingRuntimeOutputHealth | None,
 ) -> dict[str, Any]:
     target_status = output.status if output is not None else health.status
-    classification = str(output.classification if output is not None else health.classification or "unknown")
+    classification = str(
+        output.classification if output is not None else health.classification or "unknown"
+    )
     source_health = output.source_health if output is not None else health.source_health
     fresh_frame = _runtime_summary_has_fresh_frame(health=health, output=output)
     demand_idle = bool(output.demand_idle if output is not None else health.demand_idle)
-    event_gated_idle = bool(output.event_gated_idle if output is not None else health.event_gated_idle)
-    fallback_active = bool(health.fallback_active or (output.publisher_encoder_fallback_active if output is not None else False))
+    event_gated_idle = bool(
+        output.event_gated_idle if output is not None else health.event_gated_idle
+    )
+    fallback_active = bool(
+        health.fallback_active
+        or (output.publisher_encoder_fallback_active if output is not None else False)
+    )
 
     if classification == "network_contract_error":
         return _runtime_summary_payload(
@@ -4011,7 +4116,11 @@ def _runtime_health_summary(
 
     if classification == "publisher_down":
         publisher_running = bool(output.publisher_running) if output is not None else True
-        active_demand = bool(_output_has_active_demand(output)) if output is not None else health.active_playback_session_count > 0
+        active_demand = (
+            bool(_output_has_active_demand(output))
+            if output is not None
+            else health.active_playback_session_count > 0
+        )
         if active_demand and not (fresh_frame and publisher_running):
             return _runtime_summary_payload(
                 status="action_required",
@@ -4098,7 +4207,9 @@ def _runtime_health_summary(
     )
 
 
-def _apply_runtime_health_summaries(health: StreamingRuntimeHealthResponse) -> StreamingRuntimeHealthResponse:
+def _apply_runtime_health_summaries(
+    health: StreamingRuntimeHealthResponse,
+) -> StreamingRuntimeHealthResponse:
     for transmission in health.transmissions:
         for output in transmission.outputs:
             payload = _runtime_health_summary(health=transmission, output=output)
@@ -4162,7 +4273,9 @@ async def _annotate_runtime_health_observability(
         active_sessions = summarize_active_sessions(events, now_unix=now_unix)
         last_event_at = max(
             (
-                float(getattr(event, "at_unix", 0.0) or getattr(event, "received_at_unix", 0.0) or 0.0)
+                float(
+                    getattr(event, "at_unix", 0.0) or getattr(event, "received_at_unix", 0.0) or 0.0
+                )
                 for event in events
             ),
             default=None,
@@ -4195,7 +4308,10 @@ async def _annotate_runtime_health_observability(
         )
         winner = (base_classification, base_evidence)
         for result in output_results:
-            if OBSERVABILITY_CLASSIFICATION_PRIORITY[result[0]] < OBSERVABILITY_CLASSIFICATION_PRIORITY[winner[0]]:
+            if (
+                OBSERVABILITY_CLASSIFICATION_PRIORITY[result[0]]
+                < OBSERVABILITY_CLASSIFICATION_PRIORITY[winner[0]]
+            ):
                 winner = result
         transmission.classification = winner[0]
         transmission.evidence = winner[1]
@@ -4207,13 +4323,23 @@ async def _annotate_runtime_health_observability(
 def _mediamtx_output_snapshot(mediamtx_snapshot: dict[str, Any], *, path: str) -> dict[str, Any]:
     normalized_path = str(path or "").strip()
     paths = mediamtx_snapshot.get("paths") if isinstance(mediamtx_snapshot, dict) else None
-    hls_muxers = mediamtx_snapshot.get("hls_muxers") if isinstance(mediamtx_snapshot, dict) else None
+    hls_muxers = (
+        mediamtx_snapshot.get("hls_muxers") if isinstance(mediamtx_snapshot, dict) else None
+    )
     path_info = next(
-        (item for item in paths or [] if isinstance(item, dict) and item.get("name") == normalized_path),
+        (
+            item
+            for item in paths or []
+            if isinstance(item, dict) and item.get("name") == normalized_path
+        ),
         None,
     )
     hls_info = next(
-        (item for item in hls_muxers or [] if isinstance(item, dict) and item.get("name") == normalized_path),
+        (
+            item
+            for item in hls_muxers or []
+            if isinstance(item, dict) and item.get("name") == normalized_path
+        ),
         None,
     )
     return {
@@ -4372,21 +4498,35 @@ async def _build_runtime_health(
             links=pipeline_links_by_transmission.get(transmission.id, []),
             selected=selected,
         )
-        stream_behavior = pipeline_link.stream_behavior if pipeline_link is not None else "continuous"
+        stream_behavior = (
+            pipeline_link.stream_behavior if pipeline_link is not None else "continuous"
+        )
         event_gated = bool(pipeline_link.event_gated) if pipeline_link is not None else False
-        event_gate_reasons = list(pipeline_link.event_gate_reasons) if pipeline_link is not None else []
+        event_gate_reasons = (
+            list(pipeline_link.event_gate_reasons) if pipeline_link is not None else []
+        )
         demand_driven = bool(pipeline_link.demand_driven) if pipeline_link is not None else False
         demand_snapshot = await _streaming_demand_snapshot(request, transmission_id=transmission.id)
-        demand_outputs = demand_snapshot.get("outputs") if isinstance(demand_snapshot.get("outputs"), list) else []
+        demand_outputs = (
+            demand_snapshot.get("outputs")
+            if isinstance(demand_snapshot.get("outputs"), list)
+            else []
+        )
         demand_by_output_id = {
             str(item.get("output_id") or "").strip(): item
             for item in demand_outputs
             if isinstance(item, dict) and str(item.get("output_id") or "").strip()
         }
-        demand_active = bool(demand_snapshot.get("demand_active") or demand_snapshot.get("demand_signal"))
-        demand_idle = bool(demand_driven and not demand_active and selection_status in {"offline", "stale"})
+        demand_active = bool(
+            demand_snapshot.get("demand_active") or demand_snapshot.get("demand_signal")
+        )
+        demand_idle = bool(
+            demand_driven and not demand_active and selection_status in {"offline", "stale"}
+        )
         health_selection_status = "offline" if demand_idle else selection_status
-        event_gated_idle = bool(event_gated and not demand_idle and health_selection_status in {"offline", "stale"})
+        event_gated_idle = bool(
+            event_gated and not demand_idle and health_selection_status in {"offline", "stale"}
+        )
         source_health = _select_source_health(
             source_health_by_id=source_health_by_id,
             pipeline_link=pipeline_link,
@@ -4394,7 +4534,9 @@ async def _build_runtime_health(
 
         outputs: list[StreamingRuntimeOutputHealth] = []
         output_statuses: list[str] = []
-        for output, output_id, protocol, resolved_engine_path in _iter_enabled_outputs(transmission):
+        for output, output_id, protocol, resolved_engine_path in _iter_enabled_outputs(
+            transmission
+        ):
             output_key = build_transmission_output_key(
                 transmission_id=transmission.id,
                 output_id=output_id,
@@ -4402,9 +4544,7 @@ async def _build_runtime_health(
             viewer_count = int(viewer_count_by_output.get(output_key, 0))
             output_demand = demand_by_output_id.get(output_id, {})
             output_demand_signal = bool(
-                viewer_count > 0
-                or output_demand.get("primed")
-                or output_demand.get("hint_active")
+                viewer_count > 0 or output_demand.get("primed") or output_demand.get("hint_active")
             )
             publisher_key = f"{transmission.id}:{resolved_engine_path}"
             publisher_status = publisher_status_by_output.get(publisher_key)
@@ -4435,10 +4575,10 @@ async def _build_runtime_health(
                     publisher_hardware_accelerated=bool(
                         getattr(publisher_status, "hardware_accelerated", False)
                     ),
-                    publisher_restart_count=int(
-                        getattr(publisher_status, "restart_count", 0) or 0
+                    publisher_restart_count=int(getattr(publisher_status, "restart_count", 0) or 0),
+                    publisher_last_frame_at_unix=getattr(
+                        publisher_status, "last_frame_at_unix", None
                     ),
-                    publisher_last_frame_at_unix=getattr(publisher_status, "last_frame_at_unix", None),
                     publisher_encoder_mode=getattr(publisher_status, "encoder_mode", "auto"),
                     publisher_encoder_state=getattr(publisher_status, "encoder_state", "candidate"),
                     publisher_encoder_reason=getattr(publisher_status, "encoder_reason", None),
@@ -4554,7 +4694,9 @@ async def _runtime_diagnostics_payload(
 
     return {
         "server_id": _current_server_id(request),
-        "quality_profiles": [profile.model_dump(mode="python") for profile in build_quality_profiles()],
+        "quality_profiles": [
+            profile.model_dump(mode="python") for profile in build_quality_profiles()
+        ],
         "public_media": {
             "public_base_path": _request_public_base_path(request),
             "media_url_origin": _media_url_origin(request),
@@ -4665,14 +4807,22 @@ def _camera_source_ingest(source: dict[str, Any]) -> dict[str, Any]:
 
 def _is_enabled_video_source(source: dict[str, Any]) -> bool:
     kind = str(source.get("kind") or "video").strip().lower() or "video"
-    return bool(source.get("enabled", True)) and kind == "video" and bool(str(source.get("id") or "").strip())
+    return (
+        bool(source.get("enabled", True))
+        and kind == "video"
+        and bool(str(source.get("id") or "").strip())
+    )
 
 
 def _enabled_camera_video_sources(device: dict[str, Any]) -> list[dict[str, Any]]:
     raw_sources = device.get("sources")
     if not isinstance(raw_sources, list):
         return []
-    return [source for source in raw_sources if isinstance(source, dict) and _is_enabled_video_source(source)]
+    return [
+        source
+        for source in raw_sources
+        if isinstance(source, dict) and _is_enabled_video_source(source)
+    ]
 
 
 def _pick_camera_source(
@@ -4681,7 +4831,9 @@ def _pick_camera_source(
     preferred_role: str,
     fallback: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    preferred = next((source for source in sources if _camera_source_role(source) == preferred_role), None)
+    preferred = next(
+        (source for source in sources if _camera_source_role(source) == preferred_role), None
+    )
     if preferred is not None:
         return preferred
     if fallback is not None:
@@ -4806,7 +4958,9 @@ def _publication_variant_id(publication: StreamPublicationSpec) -> str:
     if publication.owner_kind == "pipeline_output" and publication.role in {"main", "sub", "zoom"}:
         return publication.role
     if publication.owner_kind == "camera_source":
-        return _live_slug(str(publication.camera_source_id or publication.id), fallback=publication.id)
+        return _live_slug(
+            str(publication.camera_source_id or publication.id), fallback=publication.id
+        )
     return _live_slug(
         publication.role,
         _publication_variant_label(publication),
@@ -4994,7 +5148,9 @@ def _reconcile_publication_specs(
         graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
         meta = graph.get("meta") if isinstance(graph, dict) else {}
         streaming_meta = meta.get("streaming") if isinstance(meta, dict) else {}
-        if isinstance(streaming_meta, dict) and str(streaming_meta.get("generated_by") or "").strip() in {
+        if isinstance(streaming_meta, dict) and str(
+            streaming_meta.get("generated_by") or ""
+        ).strip() in {
             "stream_publication",
             "camera_live_view",
         }:
@@ -5002,7 +5158,9 @@ def _reconcile_publication_specs(
         nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
         runtime_nodes = _runtime_pipeline_graph_nodes(graph)
         runtime_edges = _runtime_pipeline_graph_edges(graph)
-        runtime_nodes_by_id = {node_id: (operator_id, cfg) for node_id, operator_id, cfg in runtime_nodes}
+        runtime_nodes_by_id = {
+            node_id: (operator_id, cfg) for node_id, operator_id, cfg in runtime_nodes
+        }
         for node in nodes:
             if not isinstance(node, dict):
                 continue
@@ -5021,10 +5179,12 @@ def _reconcile_publication_specs(
                 publish_node_id=node_id,
                 edges=runtime_edges,
             )
-            _source_node_id, _source_id, inferred_camera_id, inferred_camera_source_id = _runtime_pipeline_source_node(
-                pipeline_name=pipeline_name,
-                nodes_by_id=runtime_nodes_by_id,
-                upstream_node_ids=upstream_node_ids,
+            _source_node_id, _source_id, inferred_camera_id, inferred_camera_source_id = (
+                _runtime_pipeline_source_node(
+                    pipeline_name=pipeline_name,
+                    nodes_by_id=runtime_nodes_by_id,
+                    upstream_node_ids=upstream_node_ids,
+                )
             )
             if not camera_id and inferred_camera_id:
                 camera_id = inferred_camera_id
@@ -5036,7 +5196,9 @@ def _reconcile_publication_specs(
             seen_pipeline_publication_ids.add(publication_id)
             existing = existing_by_id.get(publication_id)
             payload = existing.model_dump(mode="python") if existing is not None else {}
-            role = str(cfg.get("publication_role") or payload.get("role") or "custom").strip().lower()
+            role = (
+                str(cfg.get("publication_role") or payload.get("role") or "custom").strip().lower()
+            )
             if role not in {"main", "sub", "zoom", "custom"}:
                 role = "custom"
             variant_label = str(
@@ -5047,17 +5209,28 @@ def _reconcile_publication_specs(
                 or ""
             ).strip()
             if not variant_label:
-                variant_label = "Principal" if role == "main" else "Baixa resolução" if role == "sub" else "Zoom" if role == "zoom" else "Personalizada"
+                variant_label = (
+                    "Principal"
+                    if role == "main"
+                    else "Baixa resolução"
+                    if role == "sub"
+                    else "Zoom"
+                    if role == "zoom"
+                    else "Personalizada"
+                )
             label = variant_label
             device = camera_devices_by_id.get(camera_id)
             live_view_label = str(
-                cfg.get("publication_live_view_label")
-                or payload.get("live_view_label")
-                or ""
+                cfg.get("publication_live_view_label") or payload.get("live_view_label") or ""
             ).strip()
             live_view_id = str(cfg.get("publication_live_view_id") or "").strip()
             explicit_camera_target = bool(str(cfg.get("publication_camera_id") or "").strip())
-            if not live_view_id and explicit_camera_target and device is not None and not live_view_label:
+            if (
+                not live_view_id
+                and explicit_camera_target
+                and device is not None
+                and not live_view_label
+            ):
                 live_view_id = _camera_live_view_id(device)
             if not live_view_id:
                 live_view_id = _pipeline_publication_live_view_id(
@@ -5066,8 +5239,14 @@ def _reconcile_publication_specs(
                     fallback=publication_id,
                 )
             if not live_view_label:
-                live_view_label = _camera_live_name(device) if explicit_camera_target and device is not None else pipeline_name
-            variant_id = str(cfg.get("publication_variant_id") or payload.get("variant_id") or "").strip()
+                live_view_label = (
+                    _camera_live_name(device)
+                    if explicit_camera_target and device is not None
+                    else pipeline_name
+                )
+            variant_id = str(
+                cfg.get("publication_variant_id") or payload.get("variant_id") or ""
+            ).strip()
             quality_policy = dict(payload.get("quality_policy") or {})
             quality_profile_id = str(cfg.get("publication_quality_profile_id") or "").strip()
             if quality_profile_id in QUALITY_PROFILE_ORDER:
@@ -5116,7 +5295,9 @@ def _reconcile_publication_specs(
         if publication.id in seen_camera_publication_ids:
             continue
 
-    next_publications.sort(key=lambda item: (item.owner_kind, item.camera_id or "", item.role, item.label, item.id))
+    next_publications.sort(
+        key=lambda item: (item.owner_kind, item.camera_id or "", item.role, item.label, item.id)
+    )
     return next_publications
 
 
@@ -5215,13 +5396,25 @@ def _build_artifacts_from_publications(
         if not variants:
             continue
         defaults = CameraLiveViewDefaults(
-            thumbnail_variant_id=_pick_default_variant_id(variants, preferred_roles=("sub", "main", "zoom", "custom")),
-            pip_variant_id=_pick_default_variant_id(variants, preferred_roles=("sub", "main", "zoom", "custom")),
-            large_variant_id=_pick_default_variant_id(variants, preferred_roles=("main", "zoom", "sub", "custom")),
-            fullscreen_variant_id=_pick_default_variant_id(variants, preferred_roles=("main", "zoom", "sub", "custom")),
-            ptz_variant_id=_pick_default_variant_id(variants, preferred_roles=("zoom", "main", "sub", "custom")),
+            thumbnail_variant_id=_pick_default_variant_id(
+                variants, preferred_roles=("sub", "main", "zoom", "custom")
+            ),
+            pip_variant_id=_pick_default_variant_id(
+                variants, preferred_roles=("sub", "main", "zoom", "custom")
+            ),
+            large_variant_id=_pick_default_variant_id(
+                variants, preferred_roles=("main", "zoom", "sub", "custom")
+            ),
+            fullscreen_variant_id=_pick_default_variant_id(
+                variants, preferred_roles=("main", "zoom", "sub", "custom")
+            ),
+            ptz_variant_id=_pick_default_variant_id(
+                variants, preferred_roles=("zoom", "main", "sub", "custom")
+            ),
         )
-        host_server_id = normalize_server_id(live_view_publications[0].host_server_id, fallback="local")
+        host_server_id = normalize_server_id(
+            live_view_publications[0].host_server_id, fallback="local"
+        )
         live_views.append(
             CameraLiveView(
                 id=live_view_id,
@@ -5234,7 +5427,9 @@ def _build_artifacts_from_publications(
                 variants=variants,
             )
         )
-        transmissions.extend(_transmission_for_publication(publication) for publication in live_view_publications)
+        transmissions.extend(
+            _transmission_for_publication(publication) for publication in live_view_publications
+        )
 
     return live_views, transmissions, warnings
 
@@ -5251,8 +5446,7 @@ def _merge_generated_publication_artifacts(
     managed_camera_ids = {
         str(publication.camera_id or "").strip()
         for publication in publications
-        if publication.owner_kind == "camera_source"
-        and str(publication.camera_id or "").strip()
+        if publication.owner_kind == "camera_source" and str(publication.camera_id or "").strip()
     }
     active_artifact_publication_ids = {
         str((item.model_extra or {}).get("publication_id") or "").strip()
@@ -5369,7 +5563,9 @@ def _camera_live_variant_for_source(
 ) -> tuple[CameraLiveVariant, Transmission]:
     quality_profile_id = _camera_live_quality_for_role(role)
     preferred_transport = "webrtc" if role == "ptz" and include_webrtc else "auto"
-    output_id = "webrtc_low_latency" if role == "ptz" and include_webrtc else f"hls_{quality_profile_id}"
+    output_id = (
+        "webrtc_low_latency" if role == "ptz" and include_webrtc else f"hls_{quality_profile_id}"
+    )
     transmission_id = _camera_live_transmission_id(device=device, source=source, role=role)
     camera_id = str(device.get("id") or "").strip()
     source_id = str(source.get("id") or "").strip()
@@ -5507,7 +5703,11 @@ def _resolve_live_variant(
 ) -> CameraLiveVariant | None:
     selected_id = str(variant_id or "").strip() or _variant_id_for_context(live_view, context)
     return next(
-        (variant for variant in live_view.variants if variant.enabled and variant.id == selected_id),
+        (
+            variant
+            for variant in live_view.variants
+            if variant.enabled and variant.id == selected_id
+        ),
         None,
     )
 
@@ -5622,7 +5822,8 @@ def _sync_generated_camera_live_transmissions(
         existing = existing_by_id.get(variant.transmission_id)
         generated_for_view = (
             existing is not None
-            and str(existing.model_extra.get("camera_live_view_id") if existing.model_extra else "") == live_view.id
+            and str(existing.model_extra.get("camera_live_view_id") if existing.model_extra else "")
+            == live_view.id
         )
         if existing is not None and not generated_for_view:
             next_variants.append(variant)
@@ -5673,9 +5874,13 @@ async def _apply_streaming_engine_state(
     settings: StreamingExtensionSettings,
 ) -> None:
     app = target.app if isinstance(target, Request) else target
-    host_server_id = _current_server_id(target) if isinstance(target, Request) else normalize_server_id(
-        getattr(app.state, "streaming_server_id", "local"),
-        fallback="local",
+    host_server_id = (
+        _current_server_id(target)
+        if isinstance(target, Request)
+        else normalize_server_id(
+            getattr(app.state, "streaming_server_id", "local"),
+            fallback="local",
+        )
     )
     config_store = getattr(app.state, "config_store", None)
     manager = getattr(app.state, "streaming_engine_manager", None)
@@ -5738,8 +5943,12 @@ async def _upsert_camera_live_pipelines(
             },
         )
         graph.setdefault("meta", {}).setdefault("streaming", {})
-        graph["meta"]["streaming"]["camera_live_view_id"] = str(extra.get("camera_live_view_id") or "")
-        graph["meta"]["streaming"]["camera_live_variant_role"] = str(extra.get("camera_live_variant_role") or "")
+        graph["meta"]["streaming"]["camera_live_view_id"] = str(
+            extra.get("camera_live_view_id") or ""
+        )
+        graph["meta"]["streaming"]["camera_live_variant_role"] = str(
+            extra.get("camera_live_variant_role") or ""
+        )
         graph["meta"]["streaming"]["generated_by"] = "camera_live_view"
         graph["meta"]["streaming"]["demand_driven"] = True
         pipeline = Pipeline(
@@ -5898,7 +6107,10 @@ async def _sync_pipeline_output_publication_nodes(
     publications: list[StreamPublicationSpec],
 ) -> list[str]:
     publication_by_pipeline_node = {
-        (str(publication.pipeline_name or "").strip(), str(publication.publish_node_id or "").strip()): publication
+        (
+            str(publication.pipeline_name or "").strip(),
+            str(publication.publish_node_id or "").strip(),
+        ): publication
         for publication in publications
         if publication.owner_kind == "pipeline_output"
         and publication.pipeline_name
@@ -6007,7 +6219,9 @@ def _sync_demand_gates_for_publication_targets(
         ]
         if len(reachable_publications) != 1:
             continue
-        transmission_id, output_id, quality_profile_id = publication_targets[reachable_publications[0]]
+        transmission_id, output_id, quality_profile_id = publication_targets[
+            reachable_publications[0]
+        ]
         cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
         demand_scope = str(cfg.get("demand_scope") or "").strip().lower()
         use_specific_output = demand_scope == "output"
@@ -6015,7 +6229,9 @@ def _sync_demand_gates_for_publication_targets(
         if use_specific_output:
             next_cfg["demand_scope"] = "output"
             next_cfg["output_id"] = str(cfg.get("output_id") or "").strip() or output_id
-            next_cfg["quality_profile_id"] = str(cfg.get("quality_profile_id") or "").strip() or quality_profile_id
+            next_cfg["quality_profile_id"] = (
+                str(cfg.get("quality_profile_id") or "").strip() or quality_profile_id
+            )
         else:
             next_cfg["demand_scope"] = "transmission"
             next_cfg["output_id"] = ""
@@ -6087,8 +6303,13 @@ async def _validate_camera_live_view_references(
     host_server_id = await _validate_host_server_id_for_request(request, live_view.host_server_id)
     app_settings = await _config_store(request).get_settings()
     live_view_camera_id = str(live_view.camera_id or "").strip()
-    if str(getattr(live_view, "owner_kind", "") or "").strip() == "camera_source" and not live_view_camera_id:
-        raise HTTPException(status_code=409, detail="Camera not found or has no enabled video source")
+    if (
+        str(getattr(live_view, "owner_kind", "") or "").strip() == "camera_source"
+        and not live_view_camera_id
+    ):
+        raise HTTPException(
+            status_code=409, detail="Camera not found or has no enabled video source"
+        )
     resolved_camera = (
         _resolve_camera_source_from_settings(
             app_settings,
@@ -6099,7 +6320,9 @@ async def _validate_camera_live_view_references(
         else None
     )
     if live_view_camera_id and resolved_camera is None:
-        raise HTTPException(status_code=409, detail="Camera not found or has no enabled video source")
+        raise HTTPException(
+            status_code=409, detail="Camera not found or has no enabled video source"
+        )
 
     transmission_by_id = {item.id: item for item in settings.transmissions}
     payload = live_view.model_dump(mode="python")
@@ -6141,13 +6364,19 @@ async def _reconcile_streaming_publications(
 ) -> tuple[StreamingExtensionSettings, list[str]]:
     target_app = request.app if request is not None else app
     if target_app is None:
-        raise HTTPException(status_code=500, detail="Streaming reconciliation requires an app context")
+        raise HTTPException(
+            status_code=500, detail="Streaming reconciliation requires an app context"
+        )
     config_store = getattr(target_app.state, "config_store", None)
     if not isinstance(config_store, ConfigStore):
         raise HTTPException(status_code=500, detail="Config store is unavailable")
-    current_server_id = _current_server_id(request) if request is not None else normalize_server_id(
-        getattr(target_app.state, "streaming_server_id", "local"),
-        fallback="local",
+    current_server_id = (
+        _current_server_id(request)
+        if request is not None
+        else normalize_server_id(
+            getattr(target_app.state, "streaming_server_id", "local"),
+            fallback="local",
+        )
     )
     loaded_settings = settings or await _load_settings(config_store)
     app_settings = await config_store.get_settings()
@@ -6191,7 +6420,9 @@ async def _reconcile_streaming_publications(
     return saved, warnings
 
 
-async def reconcile_streaming_publications_for_app(app: FastAPI) -> tuple[StreamingExtensionSettings, list[str]]:
+async def reconcile_streaming_publications_for_app(
+    app: FastAPI,
+) -> tuple[StreamingExtensionSettings, list[str]]:
     return await _reconcile_streaming_publications(app=app)
 
 
@@ -6500,7 +6731,9 @@ def create_streaming_router() -> APIRouter:
             warnings=warnings,
             restart_count=status.restart_count,
             orphan_pids=orphan_pids,
-            port_policy=status.port_policy if status.port_policy in {"stable", "flexible"} else "flexible",
+            port_policy=status.port_policy
+            if status.port_policy in {"stable", "flexible"}
+            else "flexible",
             port_resolution=status.port_resolution,
             port_blocking_errors=list(status.port_blocking_errors),
         )
@@ -6794,7 +7027,9 @@ def create_streaming_router() -> APIRouter:
                 version=settings.engine.mse_sidecar.go2rtc_version,
             )
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to download go2rtc sidecar: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to download go2rtc sidecar: {exc}"
+            ) from exc
         return await mse_sidecar_status(request)
 
     @router.post("/mse/start", response_model=StreamingMseSidecarStatusResponse)
@@ -6812,7 +7047,9 @@ def create_streaming_router() -> APIRouter:
         try:
             await _apply_mse_sidecar_state(request, settings=settings)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to start MSE sidecar: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to start MSE sidecar: {exc}"
+            ) from exc
         return await mse_sidecar_status(request)
 
     @router.post("/mse/stop", response_model=StreamingMseSidecarStatusResponse)
@@ -6844,10 +7081,14 @@ def create_streaming_router() -> APIRouter:
         settings = await _save_settings(config_store, settings)
         try:
             streams = await _build_mse_sidecar_streams(request, settings=settings)
-            status = await _mse_sidecar_manager(request).restart(settings.engine.mse_sidecar, streams=streams)
+            status = await _mse_sidecar_manager(request).restart(
+                settings.engine.mse_sidecar, streams=streams
+            )
             await _wait_for_mse_sidecar_api_reachable(status, timeout_s=2.5)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to restart MSE sidecar: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to restart MSE sidecar: {exc}"
+            ) from exc
         return await mse_sidecar_status(request)
 
     @router.get("/jsmpeg/status", response_model=StreamingJsmpegStatusResponse)
@@ -6893,7 +7134,9 @@ def create_streaming_router() -> APIRouter:
         "/home-assistant/cameras",
         response_model=StreamingHomeAssistantCamerasResponse,
     )
-    async def home_assistant_cameras_manifest(request: Request) -> StreamingHomeAssistantCamerasResponse:
+    async def home_assistant_cameras_manifest(
+        request: Request,
+    ) -> StreamingHomeAssistantCamerasResponse:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
@@ -6942,7 +7185,9 @@ def create_streaming_router() -> APIRouter:
             # preserving obsolete context-owned generated artifacts.
             pass
 
-        saved, warnings = await _reconcile_streaming_publications(request=request, settings=settings)
+        saved, warnings = await _reconcile_streaming_publications(
+            request=request, settings=settings
+        )
         target_camera_ids = {str(device.get("id") or "").strip() for device in devices}
         generated_views = [
             live_view
@@ -7060,7 +7305,11 @@ def create_streaming_router() -> APIRouter:
             transmission
             for transmission in settings.transmissions
             if not (
-                str(transmission.model_extra.get("camera_live_view_id") if transmission.model_extra else "")
+                str(
+                    transmission.model_extra.get("camera_live_view_id")
+                    if transmission.model_extra
+                    else ""
+                )
                 == live_view_id
                 and transmission.id not in referenced_transmissions
             )
@@ -7106,7 +7355,9 @@ def create_streaming_router() -> APIRouter:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        live_view = next((item for item in settings.camera_live_views if item.id == live_view_id), None)
+        live_view = next(
+            (item for item in settings.camera_live_views if item.id == live_view_id), None
+        )
         if live_view is None or not live_view.enabled:
             raise HTTPException(status_code=404, detail="Camera live view not found")
 
@@ -7147,7 +7398,9 @@ def create_streaming_router() -> APIRouter:
         if transmission is None:
             raise HTTPException(status_code=409, detail="Transmission not found for live variant")
 
-        transmission_host_server_id = normalize_server_id(transmission.host_server_id, fallback="local")
+        transmission_host_server_id = normalize_server_id(
+            transmission.host_server_id, fallback="local"
+        )
         current_server_id = _current_server_id(request)
         if transmission_host_server_id == current_server_id:
             urls = await _resolve_local_transmission_urls(
@@ -7167,7 +7420,11 @@ def create_streaming_router() -> APIRouter:
 
         selected_output = _select_live_playback_output(urls=urls, variant=variant)
         warnings = [
-            *(_camera_live_warnings(source=source, transmission=transmission) if source is not None else []),
+            *(
+                _camera_live_warnings(source=source, transmission=transmission)
+                if source is not None
+                else []
+            ),
             *list(urls.warnings),
         ]
         blocking_errors = list(urls.blocking_errors)
@@ -7310,7 +7567,9 @@ def create_streaming_router() -> APIRouter:
         )
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        existing = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        existing = next(
+            (item for item in settings.transmissions if item.id == transmission_id), None
+        )
         if existing is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
@@ -7408,7 +7667,9 @@ def create_streaming_router() -> APIRouter:
         )
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        existing = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        existing = next(
+            (item for item in settings.transmissions if item.id == transmission_id), None
+        )
         if existing is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
@@ -7597,12 +7858,37 @@ def create_streaming_router() -> APIRouter:
         return registry
 
     async def _require_transmission_camera_controls(
-        request: Request, *, transmission_id: str
+        request: Request,
+        *,
+        transmission_id: str,
+        action: str,
     ) -> tuple[Transmission, str, str | None]:
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
 
-        transmission = next((t for t in settings.transmissions if t.id == transmission_id), None)
+        normalized_transmission_id = str(transmission_id or "").strip()
+        authorization_camera_id = ""
+        for candidate in settings.transmissions:
+            if candidate.id != normalized_transmission_id:
+                continue
+            candidate_controls = getattr(candidate, "camera_controls", None)
+            authorization_camera_id = str(
+                getattr(candidate_controls, "camera_id", "") or ""
+            ).strip()
+            break
+        _require_auth(
+            request,
+            action=action,
+            resource_type="core:camera",
+            resource_selector=(
+                authorization_camera_id or f"transmission:{normalized_transmission_id or 'unknown'}"
+            ),
+        )
+
+        transmission = next(
+            (item for item in settings.transmissions if item.id == normalized_transmission_id),
+            None,
+        )
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
@@ -7627,6 +7913,109 @@ def create_streaming_router() -> APIRouter:
             )
         return transmission, camera_id, camera_source_id or None
 
+    def _manual_camera_owner_id(request: Request, *, camera_id: str) -> str:
+        maybe = _maybe_auth(request)
+        if maybe is None or maybe[1].principal is None:
+            principal_id = "local"
+        else:
+            principal_id = str(maybe[1].principal.user_id or "local").strip() or "local"
+        return f"manual:{principal_id}:{camera_id}"
+
+    async def _submit_manual_camera_command(
+        request: Request,
+        *,
+        camera_id: str,
+        camera_source_id: str | None,
+        command: dict[str, Any],
+    ) -> None:
+        services = _services(request)
+        command_id = str(request.headers.get("x-idempotency-key") or "").strip()
+        if not command_id:
+            command_id = f"manual_{secrets.token_hex(16)}"
+        try:
+            lease = await services.call(
+                "cameras.control.acquire",
+                camera_id=camera_id,
+                camera_source_id=camera_source_id,
+                owner_kind="manual",
+                owner_id=_manual_camera_owner_id(request, camera_id=camera_id),
+                ttl_s=15.0,
+            )
+            await services.call(
+                "cameras.control.submit",
+                lease_id=str(lease.get("lease_id") or ""),
+                fence=int(lease.get("fence") or 0),
+                command_id=command_id,
+                command=command,
+            )
+        except KeyError:
+            raise HTTPException(
+                status_code=503,
+                detail="Camera controls are not available (cameras extension not loaded)",
+            ) from None
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if str(command.get("kind") or "").strip() == "stop":
+                try:
+                    await services.call(
+                        "cameras.control.emergency_stop",
+                        camera_id=camera_id,
+                        camera_source_id=camera_source_id,
+                    )
+                    return
+                except KeyError:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Camera emergency stop is not available (cameras extension not loaded)",
+                    ) from None
+                except Exception as emergency_error:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "Transmission camera emergency stop failed for camera_id=%s source_id=%s",
+                        camera_id,
+                        camera_source_id,
+                        exc_info=True,
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "camera_ptz_fault: Camera PTZ emergency stop could not be confirmed."
+                        ),
+                    ) from emergency_error
+            raw_error = str(exc).lower()
+            _LOGGER.debug(
+                "Transmission camera command failed for camera_id=%s source_id=%s kind=%s",
+                camera_id,
+                camera_source_id,
+                str(command.get("kind") or ""),
+                exc_info=True,
+            )
+            if "fault" in raw_error or "emergency_stop" in raw_error:
+                raise HTTPException(
+                    status_code=409,
+                    detail="camera_ptz_fault: Camera PTZ control is faulted.",
+                ) from exc
+            if any(
+                marker in raw_error
+                for marker in (
+                    "lease",
+                    "fence",
+                    "busy",
+                    "conflict",
+                    "already",
+                    "owned",
+                    "shutting down",
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="camera_ptz_conflict: Camera PTZ command conflicted with active control.",
+                ) from exc
+            raise HTTPException(
+                status_code=503,
+                detail="camera_ptz_unavailable: Camera PTZ command could not be completed.",
+            ) from exc
+
     @router.get(
         "/transmissions/{transmission_id}/camera/presets",
         response_model=TransmissionCameraPresetsResponse,
@@ -7634,9 +8023,10 @@ def create_streaming_router() -> APIRouter:
     async def transmission_camera_presets(
         request: Request, transmission_id: str
     ) -> TransmissionCameraPresetsResponse:
-        _require_auth(request, action="core:settings:read")
         _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
-            request, transmission_id=transmission_id
+            request,
+            action="core:camera:read",
+            transmission_id=transmission_id,
         )
 
         services = _services(request)
@@ -7678,24 +8068,17 @@ def create_streaming_router() -> APIRouter:
         transmission_id: str,
         body: TransmissionCameraGotoPresetRequest,
     ) -> TransmissionCameraActionResponse:
-        _require_auth(request, action="core:settings:read")
         _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
-            request, transmission_id=transmission_id
+            request,
+            action="core:camera:control",
+            transmission_id=transmission_id,
         )
-
-        services = _services(request)
-        try:
-            await services.call(
-                "cameras.ptz.goto_preset",
-                camera_id=camera_id,
-                camera_source_id=camera_source_id,
-                preset_token=body.preset_token,
-            )
-        except KeyError:
-            raise HTTPException(
-                status_code=503,
-                detail="Camera controls are not available (cameras extension not loaded)",
-            ) from None
+        await _submit_manual_camera_command(
+            request,
+            camera_id=camera_id,
+            camera_source_id=camera_source_id,
+            command={"kind": "goto_preset", "preset_token": body.preset_token},
+        )
 
         return TransmissionCameraActionResponse(ok=True)
 
@@ -7706,9 +8089,10 @@ def create_streaming_router() -> APIRouter:
     async def transmission_camera_status(
         request: Request, transmission_id: str
     ) -> TransmissionCameraStatusResponse:
-        _require_auth(request, action="core:settings:read")
         _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
-            request, transmission_id=transmission_id
+            request,
+            action="core:camera:read",
+            transmission_id=transmission_id,
         )
 
         services = _services(request)
@@ -7741,27 +8125,23 @@ def create_streaming_router() -> APIRouter:
         transmission_id: str,
         body: TransmissionCameraMoveRequest,
     ) -> TransmissionCameraActionResponse:
-        _require_auth(request, action="core:settings:read")
         _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
-            request, transmission_id=transmission_id
+            request,
+            action="core:camera:control",
+            transmission_id=transmission_id,
         )
-
-        services = _services(request)
-        try:
-            await services.call(
-                "cameras.ptz.continuous_move",
-                camera_id=camera_id,
-                camera_source_id=camera_source_id,
-                pan=float(body.pan),
-                tilt=float(body.tilt),
-                zoom=float(body.zoom),
-                timeout_s=body.timeout_s,
-            )
-        except KeyError:
-            raise HTTPException(
-                status_code=503,
-                detail="Camera controls are not available (cameras extension not loaded)",
-            ) from None
+        await _submit_manual_camera_command(
+            request,
+            camera_id=camera_id,
+            camera_source_id=camera_source_id,
+            command={
+                "kind": "continuous_move",
+                "pan": float(body.pan),
+                "tilt": float(body.tilt),
+                "zoom": float(body.zoom),
+                "timeout_s": body.timeout_s,
+            },
+        )
 
         return TransmissionCameraActionResponse(ok=True)
 
@@ -7774,25 +8154,21 @@ def create_streaming_router() -> APIRouter:
         transmission_id: str,
         body: TransmissionCameraStopRequest,
     ) -> TransmissionCameraActionResponse:
-        _require_auth(request, action="core:settings:read")
         _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
-            request, transmission_id=transmission_id
+            request,
+            action="core:camera:control",
+            transmission_id=transmission_id,
         )
-
-        services = _services(request)
-        try:
-            await services.call(
-                "cameras.ptz.stop",
-                camera_id=camera_id,
-                camera_source_id=camera_source_id,
-                pan_tilt=bool(body.pan_tilt),
-                zoom=bool(body.zoom),
-            )
-        except KeyError:
-            raise HTTPException(
-                status_code=503,
-                detail="Camera controls are not available (cameras extension not loaded)",
-            ) from None
+        await _submit_manual_camera_command(
+            request,
+            camera_id=camera_id,
+            camera_source_id=camera_source_id,
+            command={
+                "kind": "stop",
+                "pan_tilt": bool(body.pan_tilt),
+                "zoom": bool(body.zoom),
+            },
+        )
 
         return TransmissionCameraActionResponse(ok=True)
 
@@ -7825,7 +8201,9 @@ def create_streaming_router() -> APIRouter:
         )
         if resolved_camera_source is None:
             raise HTTPException(status_code=409, detail="Camera source not found or disabled")
-        _resolved_camera_id, _camera, resolved_camera_source_id, camera_source = resolved_camera_source
+        _resolved_camera_id, _camera, resolved_camera_source_id, camera_source = (
+            resolved_camera_source
+        )
 
         optional = body.optional_parameters
         optional_payload = (
@@ -8029,6 +8407,7 @@ def create_streaming_router() -> APIRouter:
                 close_timeout=2.0,
                 max_size=None,
             ) as upstream:
+
                 async def client_to_upstream() -> None:
                     try:
                         while True:
@@ -8099,7 +8478,9 @@ def create_streaming_router() -> APIRouter:
             transmission_id=transmission.id,
         )
         if blocking_errors:
-            await websocket.close(code=1013 if "limit" in " ".join(blocking_errors).lower() else 1011)
+            await websocket.close(
+                code=1013 if "limit" in " ".join(blocking_errors).lower() else 1011
+            )
             return
 
         async def _prime_demand() -> object:
@@ -8179,21 +8560,26 @@ def create_streaming_router() -> APIRouter:
                 else "",
             )
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"HLS media proxy unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"HLS media proxy unavailable: {exc}"
+            ) from exc
 
         passthrough_headers: dict[str, str] = {}
-        for header_name in ("cache-control", "accept-ranges", "content-range", "etag", "last-modified"):
+        for header_name in (
+            "cache-control",
+            "accept-ranges",
+            "content-range",
+            "etag",
+            "last-modified",
+        ):
             header_value = response_headers.get(header_name)
             if header_value:
                 passthrough_headers[header_name] = header_value
         media_type = response_headers.get("content-type") or None
-        is_playlist = (
-            200 <= status_code < 300
-            and (
-                normalized_file_path.endswith(".m3u8")
-                or "mpegurl" in str(media_type or "").lower()
-                or body.startswith(b"#EXTM3U")
-            )
+        is_playlist = 200 <= status_code < 300 and (
+            normalized_file_path.endswith(".m3u8")
+            or "mpegurl" in str(media_type or "").lower()
+            or body.startswith(b"#EXTM3U")
         )
         if is_playlist and settings.engine.media_auth.mode == "signed_proxy":
             body = _rewrite_hls_playlist_for_proxy(
@@ -8221,11 +8607,15 @@ def create_streaming_router() -> APIRouter:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        transmission = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        transmission = next(
+            (item for item in settings.transmissions if item.id == transmission_id), None
+        )
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
-        if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
+        if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(
+            request
+        ):
             server = await _remote_transmission_server(
                 config_store=config_store,
                 transmission=transmission,
@@ -8267,7 +8657,9 @@ def create_streaming_router() -> APIRouter:
             request,
             transmission_id=transmission.id,
             output_id=output.id if output is not None else None,
-            quality_profile_id=output.quality_profile_id if output is not None else quality_profile_id,
+            quality_profile_id=output.quality_profile_id
+            if output is not None
+            else quality_profile_id,
         )
 
         stale_policy = settings.stale_policy
@@ -8286,7 +8678,9 @@ def create_streaming_router() -> APIRouter:
         try:
             body, _ext, media_type = _encode_image_bytes(frame, fmt="jpg", jpeg_quality=82)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to encode still image: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to encode still image: {exc}"
+            ) from exc
 
         headers = {
             "cache-control": "no-store, max-age=0",
@@ -8294,7 +8688,9 @@ def create_streaming_router() -> APIRouter:
             "x-toposync-frame-state": frame_state,
         }
         if selected.selected_frame_age_seconds is not None:
-            headers["x-toposync-selected-frame-age-seconds"] = f"{float(selected.selected_frame_age_seconds):.3f}"
+            headers["x-toposync-selected-frame-age-seconds"] = (
+                f"{float(selected.selected_frame_age_seconds):.3f}"
+            )
         return Response(content=body, media_type=media_type, headers=headers)
 
     @router.get("/transmissions/{transmission_id}/urls", response_model=TransmissionUrlsResponse)
@@ -8352,11 +8748,15 @@ def create_streaming_router() -> APIRouter:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        transmission = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        transmission = next(
+            (item for item in settings.transmissions if item.id == transmission_id), None
+        )
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
-        transmission_host_server_id = normalize_server_id(transmission.host_server_id, fallback="local")
+        transmission_host_server_id = normalize_server_id(
+            transmission.host_server_id, fallback="local"
+        )
         current_server_id = _current_server_id(request)
         if transmission_host_server_id == current_server_id:
             urls = await _resolve_local_transmission_urls(
@@ -8371,7 +8771,11 @@ def create_streaming_router() -> APIRouter:
             try:
                 health = await _build_runtime_health(request=request, settings=settings)
                 runtime_health = next(
-                    (item for item in health.transmissions if item.transmission_id == transmission.id),
+                    (
+                        item
+                        for item in health.transmissions
+                        if item.transmission_id == transmission.id
+                    ),
                     None,
                 )
             except Exception:
@@ -8393,7 +8797,9 @@ def create_streaming_router() -> APIRouter:
             runtime_health=runtime_health,
             quality_profile_id=quality_profile_id,
             visual_context=context,
-            transmission_role=str((getattr(transmission, "model_extra", {}) or {}).get("role") or ""),
+            transmission_role=str(
+                (getattr(transmission, "model_extra", {}) or {}).get("role") or ""
+            ),
             low_latency_requested=low_latency,
         )
 
@@ -8417,10 +8823,14 @@ def create_streaming_router() -> APIRouter:
 
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        transmission = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        transmission = next(
+            (item for item in settings.transmissions if item.id == transmission_id), None
+        )
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
-        if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
+        if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(
+            request
+        ):
             server = await _remote_transmission_server(
                 config_store=config_store,
                 transmission=transmission,
@@ -8469,7 +8879,9 @@ def create_streaming_router() -> APIRouter:
             )
             webrtc_output = _best_webrtc_output(urls=urls)
         if webrtc_output is None:
-            raise HTTPException(status_code=409, detail="No WebRTC/WHEP output is available for this transmission.")
+            raise HTTPException(
+                status_code=409, detail="No WebRTC/WHEP output is available for this transmission."
+            )
 
         await _prime_home_assistant_entity_demand(
             request,
@@ -8477,7 +8889,9 @@ def create_streaming_router() -> APIRouter:
             output_id=webrtc_output.output_id,
             quality_profile_id=webrtc_output.quality_profile_id,
         )
-        answer_sdp = await asyncio.to_thread(_post_whep_offer_sync, url=webrtc_output.url, sdp=body.sdp)
+        answer_sdp = await asyncio.to_thread(
+            _post_whep_offer_sync, url=webrtc_output.url, sdp=body.sdp
+        )
         if not answer_sdp.strip():
             raise HTTPException(status_code=502, detail="WHEP answer is empty.")
         return StreamingHomeAssistantWebRtcOfferResponse(
@@ -8655,7 +9069,9 @@ def create_streaming_router() -> APIRouter:
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
         health = await _build_runtime_health(request=request, settings=settings)
-        health = await _annotate_runtime_health_observability(request=request, settings=settings, health=health)
+        health = await _annotate_runtime_health_observability(
+            request=request, settings=settings, health=health
+        )
         outputs: list[StreamingOutputRuntimeStatus] = []
         for transmission in health.transmissions:
             for output in transmission.outputs:
@@ -8686,7 +9102,9 @@ def create_streaming_router() -> APIRouter:
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
         health = await _build_runtime_health(request=request, settings=settings)
-        return await _annotate_runtime_health_observability(request=request, settings=settings, health=health)
+        return await _annotate_runtime_health_observability(
+            request=request, settings=settings, health=health
+        )
 
     @router.post("/runtime/playback-events", response_model=StreamingPlaybackEventsResponse)
     async def streaming_runtime_playback_events(
@@ -8725,7 +9143,9 @@ def create_streaming_router() -> APIRouter:
         snapshot = await _publisher_manager(request).encoders_snapshot()
         return StreamingRuntimeEncodersResponse.model_validate(snapshot)
 
-    @router.post("/runtime/encoders/quarantine/clear", response_model=StreamingEncoderQuarantineClearResponse)
+    @router.post(
+        "/runtime/encoders/quarantine/clear", response_model=StreamingEncoderQuarantineClearResponse
+    )
     async def streaming_runtime_encoder_quarantine_clear(
         request: Request,
         body: StreamingEncoderQuarantineClearRequest,
@@ -8733,7 +9153,9 @@ def create_streaming_router() -> APIRouter:
         _require_auth(request, action="core:settings:write")
         manager = _publisher_manager(request)
         cleared = await manager.clear_encoder_quarantine(body.encoder)
-        snapshot = StreamingRuntimeEncodersResponse.model_validate(await manager.encoders_snapshot())
+        snapshot = StreamingRuntimeEncodersResponse.model_validate(
+            await manager.encoders_snapshot()
+        )
         return StreamingEncoderQuarantineClearResponse(cleared=cleared, encoders=snapshot)
 
     @router.get("/runtime/camera-ingest/auth", response_model=StreamingCameraIngestAuthResponse)
@@ -8741,8 +9163,12 @@ def create_streaming_router() -> APIRouter:
         _require_auth(request, action="core:settings:read")
         return await _build_camera_ingest_auth_response(request, reveal=False)
 
-    @router.post("/runtime/camera-ingest/auth/reveal", response_model=StreamingCameraIngestAuthResponse)
-    async def streaming_camera_ingest_auth_reveal(request: Request) -> StreamingCameraIngestAuthResponse:
+    @router.post(
+        "/runtime/camera-ingest/auth/reveal", response_model=StreamingCameraIngestAuthResponse
+    )
+    async def streaming_camera_ingest_auth_reveal(
+        request: Request,
+    ) -> StreamingCameraIngestAuthResponse:
         _require_auth(
             request,
             action="core:extension:settings:write",
@@ -8751,8 +9177,12 @@ def create_streaming_router() -> APIRouter:
         )
         return await _build_camera_ingest_auth_response(request, reveal=True)
 
-    @router.post("/runtime/camera-ingest/auth/rotate", response_model=StreamingCameraIngestAuthResponse)
-    async def streaming_camera_ingest_auth_rotate(request: Request) -> StreamingCameraIngestAuthResponse:
+    @router.post(
+        "/runtime/camera-ingest/auth/rotate", response_model=StreamingCameraIngestAuthResponse
+    )
+    async def streaming_camera_ingest_auth_rotate(
+        request: Request,
+    ) -> StreamingCameraIngestAuthResponse:
         _require_auth(
             request,
             action="core:extension:settings:write",
@@ -8802,9 +9232,13 @@ def create_streaming_router() -> APIRouter:
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
         health = await _build_runtime_health(request=request, settings=settings)
-        health = await _annotate_runtime_health_observability(request=request, settings=settings, health=health)
+        health = await _annotate_runtime_health_observability(
+            request=request, settings=settings, health=health
+        )
         outputs = [
-            _runtime_output_status(transmission=transmission, output=output).model_dump(mode="python")
+            _runtime_output_status(transmission=transmission, output=output).model_dump(
+                mode="python"
+            )
             for transmission in health.transmissions
             for output in transmission.outputs
         ]
@@ -8952,13 +9386,17 @@ def create_streaming_router() -> APIRouter:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        transmission = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        transmission = next(
+            (item for item in settings.transmissions if item.id == transmission_id), None
+        )
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
         default_lease_seconds = 90.0 if payload.source == "home_assistant_entity" else 45.0
         lease_seconds = float(payload.ttl_seconds or default_lease_seconds)
-        if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
+        if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(
+            request
+        ):
             remote_payload = await _post_remote_transmission(
                 config_store=config_store,
                 transmission=transmission,
@@ -8995,7 +9433,9 @@ def create_streaming_router() -> APIRouter:
                 )
             )
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to renew streaming demand: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to renew streaming demand: {exc}"
+            ) from exc
 
         return TransmissionDemandHeartbeatResponse(
             transmission_id=transmission_id,

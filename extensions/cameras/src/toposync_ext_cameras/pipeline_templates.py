@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from typing import Any, Literal
 
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
@@ -10,64 +9,53 @@ NotificationPriority = Literal["low", "medium", "high"]
 
 PERSON_STOPPED_OBJECT_CATEGORIES = ["person"]
 VEHICLE_STOPPED_OBJECT_CATEGORIES = ["car", "truck", "bus", "motorcycle"]
-PERSON_VEHICLE_STOPPED_OBJECT_CATEGORIES = [
+PERSON_VEHICLE_INTERACTION_OBJECT_CATEGORIES = [
     *PERSON_STOPPED_OBJECT_CATEGORIES,
     *VEHICLE_STOPPED_OBJECT_CATEGORIES,
 ]
 STOPPED_DEFAULT_SPEED_THRESHOLD_MPS = 1.0 / 3.6
 STOPPED_DEFAULT_MIN_STATIONARY_SECONDS = 1.25
 
+PERSON_VEHICLE_INTERACTION_TARGET_FPS = 4.0
+PERSON_VEHICLE_INTERACTION_ENTER_DISTANCE_METERS = 3.0
+PERSON_VEHICLE_INTERACTION_EXIT_DISTANCE_METERS = 4.0
+PERSON_VEHICLE_INTERACTION_DWELL_SECONDS = 4.0
+PERSON_VEHICLE_INTERACTION_CLOSE_GRACE_SECONDS = 6.0
+PERSON_VEHICLE_INTERACTION_STALE_TIMEOUT_SECONDS = 15.0
 
-def build_person_vehicle_stopped_graph(
+
+def build_person_vehicle_interaction_graph(
     *,
     camera_id: str,
     source_id: str,
     detection_model_id: str,
     composition_id: str,
     area_restriction_config: dict[str, Any] | None,
-    stopped_speed_threshold: float | None,
-    min_stationary_seconds: float | None,
     notification_title: str,
     notification_description: str,
     notification_priority: NotificationPriority | None,
-    graph_uid: str = "camera_person_vehicle_stopped",
+    graph_uid: str = "camera_person_vehicle_interaction",
 ) -> dict[str, Any]:
     if not composition_id:
-        raise ValueError("composition_id is required for person_vehicle_stopped")
+        raise ValueError("composition_id is required for person_vehicle_interaction")
 
-    speed_threshold = _finite_non_negative(
-        stopped_speed_threshold,
-        default=STOPPED_DEFAULT_SPEED_THRESHOLD_MPS,
-    )
-    stationary_seconds = _finite_non_negative(
-        min_stationary_seconds,
-        default=STOPPED_DEFAULT_MIN_STATIONARY_SECONDS,
-    )
-    person_priority = notification_priority or "medium"
-    vehicle_priority = notification_priority or "high"
-
-    shared_nodes: list[dict[str, Any]] = [
+    nodes: list[dict[str, Any]] = [
         {
             "id": "source",
             "operator": "camera.source",
             "config": {"camera_id": camera_id, "source_id": source_id},
         },
         {
-            "id": "motion",
-            "operator": "camera.motion_gate",
-            "config": {
-                "threshold": 0.010,
-                "activation_frames": 2,
-                "hold_seconds": 6.0,
-                "emit_when_idle": False,
-            },
+            "id": "fps",
+            "operator": "core.fps_reducer",
+            "config": {"target_fps": PERSON_VEHICLE_INTERACTION_TARGET_FPS},
         },
         {
             "id": "detect",
             "operator": "vision.detect",
             "config": {
                 "model_id": detection_model_id,
-                "categories": PERSON_VEHICLE_STOPPED_OBJECT_CATEGORIES,
+                "categories": PERSON_VEHICLE_INTERACTION_OBJECT_CATEGORIES,
                 "confidence_threshold": 0.25,
                 "emit_mode": "annotate",
             },
@@ -97,12 +85,12 @@ def build_person_vehicle_stopped_graph(
             "config": {
                 "filter_mode": "annotate",
                 "min_elapsed_seconds": 0.05,
-                "stopped_speed_threshold": speed_threshold,
+                "stopped_speed_threshold": STOPPED_DEFAULT_SPEED_THRESHOLD_MPS,
             },
         },
     ]
     if area_restriction_config:
-        shared_nodes.append(
+        nodes.append(
             {
                 "id": "area",
                 "operator": "camera.area_restriction",
@@ -110,139 +98,84 @@ def build_person_vehicle_stopped_graph(
             }
         )
 
-    router_input = "area" if area_restriction_config else "velocity"
-    route_nodes = [
-        {
-            "id": "person_router",
-            "operator": "core.route_by_category",
-            "config": {"categories": PERSON_STOPPED_OBJECT_CATEGORIES},
-        },
-        {
-            "id": "vehicle_router",
-            "operator": "core.route_by_category",
-            "config": {"categories": VEHICLE_STOPPED_OBJECT_CATEGORIES},
-        },
-    ]
-    nodes = [
-        *shared_nodes,
-        *route_nodes,
-        *_stopped_branch_nodes(
-            prefix="person",
-            title=notification_title or "{{camera_name}}: pessoa parada",
-            description=notification_description,
-            priority=person_priority,
-            speed_threshold=speed_threshold,
-            stationary_seconds=stationary_seconds,
-        ),
-        *_stopped_branch_nodes(
-            prefix="vehicle",
-            title=notification_title or "{{camera_name}}: veículo parado",
-            description=notification_description,
-            priority=vehicle_priority,
-            speed_threshold=speed_threshold,
-            stationary_seconds=stationary_seconds,
-        ),
-    ]
-
-    shared_ids = [str(node["id"]) for node in shared_nodes]
-    edges = _linear_edges(shared_ids)
-    edges.append(_keyed_edge(router_input, "person_router", maxsize=32))
-    edges.append(
-        _keyed_edge(
-            "person_router",
-            "vehicle_router",
-            source_port="other",
-            maxsize=32,
-        )
-    )
-    edges.extend(
+    nodes.extend(
         [
-            _keyed_edge("person_router", "person_stationary", source_port="match", maxsize=32),
-            *_branch_edges("person"),
-            _keyed_edge("vehicle_router", "vehicle_stationary", source_port="match", maxsize=32),
-            *_branch_edges("vehicle"),
+            {
+                "id": "group",
+                "operator": "vision.group_events",
+                "config": {
+                    "mode": "proximity",
+                    "categories": PERSON_VEHICLE_INTERACTION_OBJECT_CATEGORIES,
+                    "idle_timeout_seconds": PERSON_VEHICLE_INTERACTION_STALE_TIMEOUT_SECONDS,
+                    "update_interval_seconds": 1.0,
+                    "use_world_anchor": "auto",
+                    "group_distance_meters": 5.0,
+                    "image_center_distance": 0.32,
+                    "include_stationary_members": True,
+                },
+            },
+            {
+                "id": "relation",
+                "operator": "vision.spatial_relation_event",
+                "config": {
+                    "required_categories": {
+                        "person": PERSON_STOPPED_OBJECT_CATEGORIES,
+                        "vehicle": VEHICLE_STOPPED_OBJECT_CATEGORIES,
+                    },
+                    "enter_distance_meters": (PERSON_VEHICLE_INTERACTION_ENTER_DISTANCE_METERS),
+                    "exit_distance_meters": PERSON_VEHICLE_INTERACTION_EXIT_DISTANCE_METERS,
+                    "minimum_world_anchor_confidence": 0.70,
+                    "enter_image_center_distance": 0.20,
+                    "exit_image_center_distance": 0.28,
+                    "dwell_seconds": PERSON_VEHICLE_INTERACTION_DWELL_SECONDS,
+                    "close_grace_seconds": PERSON_VEHICLE_INTERACTION_CLOSE_GRACE_SECONDS,
+                    "stale_timeout_seconds": PERSON_VEHICLE_INTERACTION_STALE_TIMEOUT_SECONDS,
+                    "update_interval_seconds": 1.0,
+                    "event_id_prefix": "person_vehicle_interaction",
+                },
+            },
+            {"id": "crop", "operator": "vision.crop_objects", "config": {}},
+            {"id": "store", "operator": "core.store_images", "config": {"format": "webp"}},
+            {
+                "id": "notify",
+                "operator": "core.notify",
+                "config": {
+                    "notification_type": "pipelines.tracking",
+                    "title": notification_title
+                    or "{{camera_name}}: interação entre pessoa e veículo",
+                    "description": notification_description
+                    or "Pessoa próxima de veículo por {{payload.spatial_relation_event.dwell_seconds}} s",
+                    "priority": notification_priority or "high",
+                    "dedupe_key_template": "{{subject.id}}",
+                },
+            },
         ]
     )
 
+    edges = _linear_edges([str(node["id"]) for node in nodes])
     return build_pipeline_graph_v2(graph_uid=graph_uid, nodes=nodes, edges=edges)
-
-
-def _stopped_branch_nodes(
-    *,
-    prefix: str,
-    title: str,
-    description: str,
-    priority: NotificationPriority,
-    speed_threshold: float,
-    stationary_seconds: float,
-) -> list[dict[str, Any]]:
-    return [
-        {
-            "id": f"{prefix}_stationary",
-            "operator": "core.stationary_event",
-            "config": {
-                "key_field": "payload.subject.id",
-                "stopped_field": "payload.velocity.stopped",
-                "valid_field": "payload.velocity.valid",
-                "speed_field": "payload.velocity.speed_mps",
-                "max_speed_mps": speed_threshold,
-                "min_stationary_seconds": stationary_seconds,
-                "min_valid_samples": 3,
-                "max_stationary_distance_m": 0.35,
-                "require_arrival": True,
-                "arrival_min_distance_m": 0.50,
-                "close_after_moving_seconds": 0.75,
-                "merge_moving_gap_seconds": 15.0,
-            },
-        },
-        {
-            "id": f"{prefix}_debounce",
-            "operator": "core.debounce",
-            "config": {
-                "key_field": "payload.subject.id",
-                "quiet_period_seconds": 120.0,
-            },
-        },
-        {"id": f"{prefix}_crop", "operator": "vision.crop_objects", "config": {}},
-        {"id": f"{prefix}_store", "operator": "core.store_images", "config": {"format": "webp"}},
-        {
-            "id": f"{prefix}_notify",
-            "operator": "core.notify",
-            "config": {
-                "notification_type": "pipelines.tracking",
-                "title": title,
-                "description": description
-                or "{{subject.category}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h - {{payload.stationary_event.stationary_seconds}} s",
-                "priority": priority,
-                "dedupe_key_template": "{{subject.id}}",
-            },
-        },
-    ]
-
-
-def _branch_edges(prefix: str) -> list[dict[str, Any]]:
-    return [
-        _keyed_edge(f"{prefix}_stationary", f"{prefix}_debounce"),
-        _keyed_edge(f"{prefix}_debounce", f"{prefix}_crop"),
-        _edge(f"{prefix}_crop", f"{prefix}_store", maxsize=8, drop_policy="block"),
-        _edge(f"{prefix}_store", f"{prefix}_notify", maxsize=16, drop_policy="block"),
-    ]
 
 
 def _linear_edges(node_ids: list[str]) -> list[dict[str, Any]]:
     edges: list[dict[str, Any]] = []
     for index in range(len(node_ids) - 1):
+        source_id = node_ids[index]
         target_id = node_ids[index + 1]
         drop_policy = "drop_oldest"
-        maxsize = 2 if index < 2 else 8
-        if target_id == "detect":
+        maxsize = 8
+        if target_id == "fps":
+            maxsize = 2
+        elif target_id == "detect":
             maxsize = 1
-        elif target_id == "track":
+        elif target_id in {"track", "velocity", "area", "group", "relation", "crop"}:
             maxsize = 32
             drop_policy = "keyed_latest_only"
+        elif target_id in {"store", "notify"}:
+            maxsize = 16
+            drop_policy = "block"
         edges.append(
             _edge(
-                node_ids[index],
+                source_id,
                 target_id,
                 maxsize=maxsize,
                 drop_policy=drop_policy,
@@ -266,29 +199,3 @@ def _edge(
         "maxsize": maxsize,
         "drop_policy": drop_policy,
     }
-
-
-def _keyed_edge(
-    source_node: str,
-    target_node: str,
-    *,
-    source_port: str = "out",
-    maxsize: int = 8,
-) -> dict[str, Any]:
-    return _edge(
-        source_node,
-        target_node,
-        source_port=source_port,
-        maxsize=maxsize,
-        drop_policy="keyed_latest_only",
-    )
-
-
-def _finite_non_negative(value: float | None, *, default: float) -> float:
-    if value is None:
-        return float(default)
-    try:
-        parsed = float(value)
-    except Exception:
-        return float(default)
-    return max(0.0, parsed) if math.isfinite(parsed) else float(default)

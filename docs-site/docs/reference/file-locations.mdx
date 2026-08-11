@@ -51,8 +51,10 @@ Inside the data directory:
 | `auth/auth.sqlite3` | Local auth database. |
 | `notifications/notifications.sqlite3` | Notification storage. |
 | `storage/pipeline_storage.sqlite3` | Pipeline key/value storage. |
+| `ptz_attention/attention.sqlite3` | PTZ Attention profiles, decisions, and focus-session history. SQLite may keep `-wal` and `-shm` companion files beside it while Toposync is running. |
 | `telemetry/*.tlm1` | Pipeline telemetry snapshots. |
 | `runtime/` | Runtime-generated files and extension runtime state. |
+| `runtime/cameras/ptz-control.json` | Persisted PTZ fencing counters used to reject stale camera-control commands after a restart. |
 | `vision-models/` | Official or installed vision model artifacts. |
 | `vision-manifests/` | Custom vision manifests. |
 

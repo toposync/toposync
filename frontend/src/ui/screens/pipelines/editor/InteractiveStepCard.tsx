@@ -77,6 +77,7 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "core.filter" ||
     operatorId === "vision.track" ||
     operatorId === "vision.group_events" ||
+    operatorId === "vision.spatial_relation_event" ||
     operatorId === "vision.classify_image" ||
     operatorId === "vision.detect" ||
     operatorId === "vision.segment_instances"

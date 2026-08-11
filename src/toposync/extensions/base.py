@@ -55,7 +55,11 @@ class BaseExtension:
 
     def manifest(self) -> ExtensionManifest:
         if self._manifest is None:
-            raw = resources.files(self.package).joinpath(self.manifest_name).read_text(encoding="utf-8")
+            raw = (
+                resources.files(self.package)
+                .joinpath(self.manifest_name)
+                .read_text(encoding="utf-8")
+            )
             self._manifest = ExtensionManifest.model_validate(json.loads(raw))
         return self._manifest
 
@@ -73,3 +77,19 @@ class BaseExtension:
 
     def capabilities(self) -> dict[str, Any]:
         return {}
+
+    def settings_authorization_requirements(
+        self,
+        *,
+        current_settings: Any,
+        proposed_settings: Any,
+    ) -> list[dict[str, str]]:
+        """Return additional authorization requirements for settings changes.
+
+        The core settings routes invoke this hook before persistence. Extensions
+        can bind domain-sensitive settings to their own resource-scoped actions
+        without introducing extension-specific policy into the core API.
+        """
+
+        del current_settings, proposed_settings
+        return []

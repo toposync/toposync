@@ -78,6 +78,14 @@ RECOMMENDED_EXTENSIONS: tuple[RecommendedExtension, ...] = (
         category="camera",
     ),
     RecommendedExtension(
+        extension_id="com.toposync.ptz_attention",
+        name="PTZ Attention",
+        description="Direciona cameras PTZ para eventos relevantes durante seu ciclo de vida.",
+        package="toposync-ext-ptz-attention",
+        pip_spec="toposync-ext-ptz-attention",
+        category="camera",
+    ),
+    RecommendedExtension(
         extension_id="com.toposync.cinematic",
         name="Cinematic",
         description="Cria uma fonte de video cinematica dirigida por eventos para pipelines.",
@@ -540,7 +548,9 @@ async def build_extension_management_catalog(
             if loaded_manifest is not None
             else ""
         )
-        loaded_categories = loaded_manifest.get("categories") if loaded_manifest is not None else None
+        loaded_categories = (
+            loaded_manifest.get("categories") if loaded_manifest is not None else None
+        )
         category = (
             rec.category
             if rec is not None
@@ -766,9 +776,7 @@ def _uv_pip_fallback_command(args: list[str]) -> list[str] | None:
 
     command = [uv_path, "pip", action, "--python", sys.executable]
     command.extend(
-        arg
-        for arg in args[1:]
-        if arg not in {"--disable-pip-version-check", "--no-input", "--yes"}
+        arg for arg in args[1:] if arg not in {"--disable-pip-version-check", "--no-input", "--yes"}
     )
     return command
 

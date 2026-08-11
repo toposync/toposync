@@ -206,6 +206,324 @@ def test_cameras_pipeline_preset_requires_pipelines_write(
         assert res.json()["detail"] == "Permission denied"
 
 
+def test_camera_settings_require_scoped_configure_grants_before_patch_or_put(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CameraEntryPoint:
+        name = "cameras"
+        value = "toposync_ext_cameras.plugin:CamerasExtension"
+
+        def load(self):  # type: ignore[no-untyped-def]
+            from toposync_ext_cameras.plugin import CamerasExtension
+
+            return CamerasExtension
+
+    initial_devices = [
+        {
+            "id": "front",
+            "name": "Front",
+            "enabled": True,
+            "control": {"type": "none"},
+            "sources": [],
+        },
+        {
+            "id": "back",
+            "name": "Back",
+            "enabled": True,
+            "control": {"type": "none"},
+            "sources": [],
+        },
+    ]
+
+    with _create_client(
+        tmp_path,
+        monkeypatch,
+        entry_points=[_CameraEntryPoint()],
+    ) as client:
+        _setup_owner(client)
+        response = client.patch(
+            "/api/settings/extensions/com.toposync.cameras",
+            json={"schema_version": 4, "devices": initial_devices},
+        )
+        assert response.status_code == 200, response.text
+
+        response = client.post(
+            "/api/access/users",
+            json={
+                "username": "camera-operator",
+                "display_name": "Camera operator",
+                "role": "member",
+                "password": "password123",
+            },
+        )
+        assert response.status_code == 200, response.text
+        member_id = response.json()["id"]
+        grants = [
+            {
+                "action": "core:extension:settings:write",
+                "resource_type": "core:extension",
+                "include": ["com.toposync.cameras"],
+                "exclude": [],
+            },
+            {
+                "action": "core:settings:write",
+                "resource_type": "core:global",
+                "include": [],
+                "exclude": [],
+            },
+            {
+                "action": "core:camera:configure",
+                "resource_type": "core:camera",
+                "include": ["front"],
+                "exclude": [],
+            },
+        ]
+        for grant in grants:
+            response = client.post(
+                f"/api/access/users/{member_id}/grants",
+                json=grant,
+            )
+            assert response.status_code == 200, response.text
+
+        response = client.post(
+            "/api/auth/login",
+            json={
+                "username": "camera-operator",
+                "password": "password123",
+                "device_label": "pytest-camera-operator",
+            },
+        )
+        assert response.status_code == 200, response.text
+
+        front_changed = [
+            {**initial_devices[0], "name": "Front door"},
+            initial_devices[1],
+        ]
+        response = client.patch(
+            "/api/settings/extensions/com.toposync.cameras",
+            json={"schema_version": 4, "devices": front_changed},
+        )
+        assert response.status_code == 200, response.text
+
+        async def stored_settings() -> dict:
+            settings = await client.app.state.config_store.get_settings()
+            return settings.model_dump(mode="json")
+
+        before_denied_write = client.portal.call(stored_settings)
+        back_changed = [front_changed[0], {**initial_devices[1], "name": "Back door"}]
+        response = client.patch(
+            "/api/settings/extensions/com.toposync.cameras",
+            json={"schema_version": 4, "devices": back_changed},
+        )
+        assert response.status_code == 403, response.text
+        assert client.portal.call(stored_settings) == before_denied_write
+
+        response = client.patch(
+            "/api/settings/extensions/com.toposync.cameras",
+            json={"devices": [front_changed[0]]},
+        )
+        assert response.status_code == 403, response.text
+        assert client.portal.call(stored_settings) == before_denied_write
+
+        denied_put = {
+            **before_denied_write,
+            "extensions": {
+                **before_denied_write["extensions"],
+                "com.toposync.cameras": {
+                    "schema_version": 4,
+                    "devices": back_changed,
+                },
+            },
+        }
+        response = client.put("/api/settings", json=denied_put)
+        assert response.status_code == 403, response.text
+        assert client.portal.call(stored_settings) == before_denied_write
+
+        response = client.patch(
+            "/api/settings/extensions/com.toposync.cameras",
+            json={"devices": "invalid"},
+        )
+        assert response.status_code == 403, response.text
+        assert client.portal.call(stored_settings) == before_denied_write
+
+
+def test_camera_index_filters_each_camera_by_scoped_read_grant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CameraEntryPoint:
+        name = "cameras"
+        value = "toposync_ext_cameras.plugin:CamerasExtension"
+
+        def load(self):  # type: ignore[no-untyped-def]
+            from toposync_ext_cameras.plugin import CamerasExtension
+
+            return CamerasExtension
+
+    devices = [
+        {
+            "id": "front",
+            "name": "Front",
+            "enabled": True,
+            "control": {"type": "onvif"},
+            "onvif": {
+                "xaddr": "http://front/onvif/device_service",
+                "username": "front-user-secret",
+                "password": "front-password-secret",
+            },
+            "sources": [],
+        },
+        {
+            "id": "back",
+            "name": "Back private camera",
+            "enabled": True,
+            "control": {"type": "none"},
+            "sources": [],
+        },
+    ]
+
+    with _create_client(
+        tmp_path,
+        monkeypatch,
+        entry_points=[_CameraEntryPoint()],
+    ) as client:
+        _setup_owner(client)
+        response = client.patch(
+            "/api/settings/extensions/com.toposync.cameras",
+            json={"schema_version": 4, "devices": devices},
+        )
+        assert response.status_code == 200, response.text
+
+        response = client.post(
+            "/api/access/users",
+            json={
+                "username": "front-viewer",
+                "display_name": "Front viewer",
+                "role": "member",
+                "password": "password123",
+            },
+        )
+        assert response.status_code == 200, response.text
+        member_id = response.json()["id"]
+        for grant in (
+            {
+                "action": "core:extension:use",
+                "resource_type": "core:extension",
+                "include": ["com.toposync.cameras"],
+                "exclude": [],
+            },
+            {
+                "action": "core:camera:read",
+                "resource_type": "core:camera",
+                "include": ["front"],
+                "exclude": [],
+            },
+        ):
+            response = client.post(
+                f"/api/access/users/{member_id}/grants",
+                json=grant,
+            )
+            assert response.status_code == 200, response.text
+
+        response = client.post(
+            "/api/auth/login",
+            json={
+                "username": "front-viewer",
+                "password": "password123",
+                "device_label": "pytest-front-viewer",
+            },
+        )
+        assert response.status_code == 200, response.text
+
+        response = client.get("/api/cameras/index")
+
+    assert response.status_code == 200, response.text
+    assert [camera["id"] for camera in response.json()["cameras"]] == ["front"]
+    assert "Back private camera" not in response.text
+    assert "front-user-secret" not in response.text
+    assert "front-password-secret" not in response.text
+
+
+def test_disabled_camera_extension_still_requires_camera_configure_grant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CameraEntryPoint:
+        name = "cameras"
+        value = "toposync_ext_cameras.plugin:CamerasExtension"
+
+        def load(self):  # type: ignore[no-untyped-def]
+            from toposync_ext_cameras.plugin import CamerasExtension
+
+            return CamerasExtension
+
+    monkeypatch.setattr(
+        "toposync.app.disabled_extension_ids_from_settings",
+        lambda _settings: {"com.toposync.cameras"},
+    )
+    with _create_client(
+        tmp_path,
+        monkeypatch,
+        entry_points=[_CameraEntryPoint()],
+    ) as client:
+        _setup_owner(client)
+        response = client.post(
+            "/api/access/users",
+            json={
+                "username": "disabled-camera-operator",
+                "display_name": "Disabled camera operator",
+                "role": "member",
+                "password": "password123",
+            },
+        )
+        assert response.status_code == 200, response.text
+        member_id = response.json()["id"]
+        response = client.post(
+            f"/api/access/users/{member_id}/grants",
+            json={
+                "action": "core:extension:settings:write",
+                "resource_type": "core:extension",
+                "include": ["com.toposync.cameras"],
+                "exclude": [],
+            },
+        )
+        assert response.status_code == 200, response.text
+        response = client.post(
+            "/api/auth/login",
+            json={
+                "username": "disabled-camera-operator",
+                "password": "password123",
+                "device_label": "pytest-disabled-camera-operator",
+            },
+        )
+        assert response.status_code == 200, response.text
+
+        async def stored_settings() -> dict:
+            settings = await client.app.state.config_store.get_settings()
+            return settings.model_dump(mode="json")
+
+        before_denied_write = client.portal.call(stored_settings)
+        response = client.patch(
+            "/api/settings/extensions/com.toposync.cameras",
+            json={
+                "schema_version": 4,
+                "devices": [
+                    {
+                        "id": "front",
+                        "name": "Front",
+                        "enabled": True,
+                        "control": {"type": "none"},
+                        "sources": [],
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 403, response.text
+        assert client.portal.call(stored_settings) == before_denied_write
+
+
 def test_auth_store_deletes_tokens_and_grants_on_user_delete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

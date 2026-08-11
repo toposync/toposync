@@ -27,6 +27,7 @@ RUN mkdir -p /wheelhouse \
  && uv build --wheel --out-dir /wheelhouse extensions/home_assistant \
  && uv build --wheel --out-dir /wheelhouse extensions/cameras \
  && uv build --wheel --out-dir /wheelhouse extensions/cinematic \
+ && uv build --wheel --out-dir /wheelhouse extensions/ptz_attention \
  && uv build --wheel --out-dir /wheelhouse extensions/vision \
  && uv build --wheel --out-dir /wheelhouse extensions/spatial_video \
  && uv build --wheel --out-dir /wheelhouse extensions/streaming
@@ -93,7 +94,7 @@ PY
 FROM python:3.12-slim-bookworm AS runtime-cpu
 
 ARG TOPOSYNC_INSTALL_WHEEL="/wheelhouse/toposync-*.whl"
-ARG TOPOSYNC_BUNDLE_WHEELS="/wheelhouse/toposync_core-*.whl /wheelhouse/toposync_ext_structural-*.whl /wheelhouse/toposync_ext_models-*.whl /wheelhouse/toposync_ext_home_assistant-*.whl /wheelhouse/toposync_ext_images-*.whl /wheelhouse/toposync_ext_cameras-*.whl /wheelhouse/toposync_ext_vision-*.whl /wheelhouse/toposync_ext_spatial_video-*.whl"
+ARG TOPOSYNC_BUNDLE_WHEELS="/wheelhouse/toposync_core-*.whl /wheelhouse/toposync_ext_structural-*.whl /wheelhouse/toposync_ext_models-*.whl /wheelhouse/toposync_ext_home_assistant-*.whl /wheelhouse/toposync_ext_images-*.whl /wheelhouse/toposync_ext_cameras-*.whl /wheelhouse/toposync_ext_ptz_attention-*.whl /wheelhouse/toposync_ext_vision-*.whl /wheelhouse/toposync_ext_spatial_video-*.whl"
 ARG TOPOSYNC_EXTRA_WHEELS=""
 ARG TOPOSYNC_EXTRA_PIP_PACKAGES=""
 ARG TOPOSYNC_APT_PACKAGES=""
@@ -137,7 +138,7 @@ CMD ["toposync", "serve", "--host", "0.0.0.0", "--port", "8000", "--data-dir", "
 FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04 AS runtime-cuda
 
 ARG TOPOSYNC_INSTALL_WHEEL="/wheelhouse/toposync_vision_cuda-*.whl"
-ARG TOPOSYNC_BUNDLE_WHEELS="/wheelhouse/toposync_core-*.whl /wheelhouse/toposync_ext_structural-*.whl /wheelhouse/toposync_ext_models-*.whl /wheelhouse/toposync_ext_home_assistant-*.whl /wheelhouse/toposync_ext_images-*.whl /wheelhouse/toposync_ext_cameras-*.whl /wheelhouse/toposync_ext_vision-*.whl /wheelhouse/toposync_ext_spatial_video-*.whl"
+ARG TOPOSYNC_BUNDLE_WHEELS="/wheelhouse/toposync_core-*.whl /wheelhouse/toposync_ext_structural-*.whl /wheelhouse/toposync_ext_models-*.whl /wheelhouse/toposync_ext_home_assistant-*.whl /wheelhouse/toposync_ext_images-*.whl /wheelhouse/toposync_ext_cameras-*.whl /wheelhouse/toposync_ext_ptz_attention-*.whl /wheelhouse/toposync_ext_vision-*.whl /wheelhouse/toposync_ext_spatial_video-*.whl"
 ARG TOPOSYNC_EXTRA_WHEELS=""
 ARG TOPOSYNC_EXTRA_PIP_PACKAGES=""
 ARG TOPOSYNC_APT_PACKAGES=""

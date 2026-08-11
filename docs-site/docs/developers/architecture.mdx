@@ -98,9 +98,12 @@ The default `toposync` package is an application bundle. It depends on `toposync
 - Home Assistant: Home Assistant server integration and entity context.
 - Cameras: camera registry, RTSP/ONVIF utilities, snapshots, calibration, and camera pipeline operators.
 - Vision: ONNX-based model management and vision pipeline operators.
+- PTZ Attention: lifecycle-aware arbitration that selects relevant semantic events, focuses allowed calibrated PTZ presets, and coordinates return behavior.
 - Spatial Video: spatial video extension surface.
 
 Streaming and AI are extension paths, not assumptions baked into the core architecture. Streaming is shipped as an optional bundle because it brings external media runtime concerns. AI is also modeled as an extension so provider-specific behavior stays outside the core.
+
+The Cameras extension owns physical PTZ actuation, leases, command fencing, and manual takeover. PTZ Attention owns semantic selection, focus sessions, timing, and return policy. This keeps device control generic while allowing event-specific attention behavior to evolve independently.
 
 ## Pipelines and processing {/* #pipelines-and-processing */}
 

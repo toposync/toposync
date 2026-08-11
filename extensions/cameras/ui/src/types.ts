@@ -26,6 +26,7 @@ export type CameraOnvifConfig = {
 
 export type CameraControlConfig = {
   type: CameraControlType;
+  automation_exclusive_control_confirmed: boolean;
 };
 
 export type CameraSourceOriginConfig = {
@@ -302,7 +303,8 @@ export type CameraPipelinePreset =
   | "people_quiet"
   | "presence_area"
   | "vehicle_stopped"
-  | "person_stopped";
+  | "person_stopped"
+  | "person_vehicle_interaction";
 export type CameraNotificationPriority = "low" | "medium" | "high";
 
 export type CameraPipelineSummary = {

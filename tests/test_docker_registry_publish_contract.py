@@ -19,6 +19,21 @@ def _project_version(path: str) -> str:
         return str(tomllib.load(handle)["project"]["version"])
 
 
+def test_application_bundles_include_ptz_attention() -> None:
+    app_version = _project_version("packages/toposync/pyproject.toml")
+    dependency = f'"toposync-ext-ptz-attention=={app_version}"'
+    source = 'toposync-ext-ptz-attention = { path = "../../extensions/ptz_attention" }'
+
+    for path in (
+        "packages/toposync/pyproject.toml",
+        "packages/toposync-vision-cuda/pyproject.toml",
+        "packages/toposync-vision-directml/pyproject.toml",
+    ):
+        project = _read(path)
+        assert dependency in project
+        assert source in project
+
+
 def _load_registry_smoke_script() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "check_docker_registry_image",
@@ -89,7 +104,7 @@ def test_registry_dockerfile_resolves_go2rtc_from_streaming_extension_wheel() ->
 
     assert "ARG GO2RTC_VERSION" in go2rtc_stage
     assert (
-        'python -m pip download --no-deps --dest /tmp/streaming-wheel '
+        "python -m pip download --no-deps --dest /tmp/streaming-wheel "
         '"toposync-ext-streaming==${TOPOSYNC_EXT_STREAMING_VERSION}"'
     ) in go2rtc_stage
     assert "GO2RTC_VERSION" in go2rtc_stage
@@ -106,7 +121,10 @@ def test_compose_defaults_pull_public_ghcr_images() -> None:
     app_version = _project_version("packages/toposync/pyproject.toml")
 
     assert f"image: ${{TOPOSYNC_IMAGE:-ghcr.io/toposync/toposync:{app_version}}}" in compose
-    assert f"image: ${{TOPOSYNC_CUDA_IMAGE:-ghcr.io/toposync/toposync:{app_version}-cuda}}" in compose_cuda
+    assert (
+        f"image: ${{TOPOSYNC_CUDA_IMAGE:-ghcr.io/toposync/toposync:{app_version}-cuda}}"
+        in compose_cuda
+    )
     assert "image: ${TOPOSYNC_LOCAL_IMAGE:-toposync:local}" in local_build
     assert "target: ${TOPOSYNC_DOCKER_TARGET:-runtime-cpu}" in local_build
     assert re.search(r"(?m)^\s+build:", compose) is None
@@ -131,6 +149,7 @@ def test_docker_publish_workflow_uses_ghcr_tags_and_attestations() -> None:
     assert "platforms: linux/amd64" in workflow
     assert "toposync-streaming" in workflow
     assert "toposync-vision-cuda" in workflow
+    assert "toposync-ext-ptz-attention" in workflow
     assert "${{ steps.release.outputs.version }}-cuda" in workflow
     assert "Verify anonymous GHCR pull" in workflow
     assert 'docker logout "${{ env.REGISTRY }}" || true' in workflow
@@ -149,9 +168,13 @@ def test_registry_public_version_defaults_match_project_versions() -> None:
             f"ARG TOPOSYNC_EXT_STREAMING_VERSION={streaming_version}",
         ],
         ".github/workflows/docker-publish.yml": [f'default: "{app_version}"'],
-        "scripts/check_docker_registry_image.py": [f'DEFAULT_IMAGE = "ghcr.io/toposync/toposync:{app_version}"'],
+        "scripts/check_docker_registry_image.py": [
+            f'DEFAULT_IMAGE = "ghcr.io/toposync/toposync:{app_version}"'
+        ],
         "docs-site/docs/installation/docker-cpu.mdx": [f"ghcr.io/toposync/toposync:{app_version}"],
-        "docs-site/docs/installation/docker-cuda.mdx": [f"ghcr.io/toposync/toposync:{app_version}-cuda"],
+        "docs-site/docs/installation/docker-cuda.mdx": [
+            f"ghcr.io/toposync/toposync:{app_version}-cuda"
+        ],
         "docs-site/docs/installation/processing-server-docker.mdx": [
             f"ghcr.io/toposync/toposync:{app_version}",
             f"ghcr.io/toposync/toposync:{app_version}-cuda",
@@ -198,3 +221,15 @@ def test_registry_smoke_uses_disposable_docker_volume_for_data() -> None:
     assert '"docker", "volume", "create", volume_name' in smoke_script
     assert '"docker", "volume", "rm", "-f", volume_name' in smoke_script
     assert 'f"{volume_name}:/data"' in smoke_script
+
+
+def test_distribution_smokes_require_ptz_attention() -> None:
+    registry_smoke = _read("scripts/check_docker_registry_image.py")
+    arm64_smoke = _read("scripts/check_arm64_distribution.py")
+
+    assert '"com.toposync.ptz_attention"' in registry_smoke
+    assert (
+        '_assert_python_distribution(container_id, "toposync-ext-ptz-attention")' in registry_smoke
+    )
+    assert '"toposync_ext_ptz_attention.plugin"' in registry_smoke
+    assert '"com.toposync.ptz_attention"' in arm64_smoke

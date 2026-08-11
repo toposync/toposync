@@ -210,6 +210,16 @@ const CAMERA_PIPELINE_PRESET_CARDS: {
   stepsFallback: string;
 }[] = [
   {
+    id: "person_vehicle_interaction",
+    requiresMapping: true,
+    titleKey: "ext.cameras.pipeline_preset.person_vehicle_interaction.title",
+    titleFallback: "Interação entre pessoa e veículo",
+    descriptionKey: "ext.cameras.pipeline_preset.person_vehicle_interaction.card_desc",
+    descriptionFallback: "Confirma quando uma pessoa permanece perto de um veículo e gera um evento semântico estável.",
+    stepsKey: "ext.cameras.pipeline_preset.person_vehicle_interaction.steps",
+    stepsFallback: "Pessoas e veículos -> mapeamento -> proximidade -> confirmação -> notificação",
+  },
+  {
     id: "people_individual",
     requiresMapping: true,
     titleKey: "ext.cameras.pipeline_preset.people_individual.title",
@@ -540,6 +550,12 @@ function CamerasSettingsPanelContent({
   const activeSource = activeCamera?.sources.find((source) => source.id === activeSourceId) ?? activeCamera?.sources[0] ?? null;
   const activeHealth = activeCamera && activeSource ? sourceHealthFor(sourceHealth, activeCamera.id, activeSource.id) : null;
   const activeCameraPersisted = Boolean(activeCamera && savedCameraIds?.has(activeCamera.id));
+  const activeCameraHasEnabledPtzVideoSource = Boolean(
+    activeCamera?.control.type === "onvif" &&
+      activeCamera.sources.some(
+        (source) => source.enabled && source.kind === "video" && source.origin.has_ptz === true,
+      ),
+  );
   const mappedCompositions = useMemo(
     () =>
       (cameraContexts?.compositions ?? []).filter((composition) =>
@@ -764,7 +780,10 @@ function CamerasSettingsPanelContent({
       id,
       name: controlType === "onvif" ? "Nova câmera ONVIF" : "Nova câmera manual",
       enabled: true,
-      control: { type: controlType },
+      control: {
+        type: controlType,
+        automation_exclusive_control_confirmed: false,
+      },
       onvif: controlType === "onvif" ? { xaddr: "", username: "", password: "" } : null,
       sources: controlType === "none" ? [createDefaultCameraSource(0)] : [],
       metadata: {},
@@ -788,7 +807,10 @@ function CamerasSettingsPanelContent({
       id,
       name,
       enabled: true,
-      control: { type: "onvif" },
+      control: {
+        type: "onvif",
+        automation_exclusive_control_confirmed: false,
+      },
       onvif: {
         device_id: String(device.device_id || "").trim(),
         xaddr,
@@ -1116,7 +1138,12 @@ function CamerasSettingsPanelContent({
                           const type = event.target.value === "onvif" ? "onvif" : "none";
                           updateCamera(activeCamera.id, (camera) => ({
                             ...camera,
-                            control: { type },
+                            control: {
+                              ...camera.control,
+                              type,
+                              automation_exclusive_control_confirmed:
+                                type === "onvif" && camera.control.automation_exclusive_control_confirmed,
+                            },
                             onvif: type === "onvif" ? camera.onvif ?? { xaddr: "", username: "", password: "" } : null,
                           }));
                         }}
@@ -1146,6 +1173,12 @@ function CamerasSettingsPanelContent({
                               updateCamera(activeCamera.id, (camera) => ({
                                 ...camera,
                                 onvif: { ...(camera.onvif ?? { xaddr: "" }), xaddr: event.target.value },
+                                control: {
+                                  ...camera.control,
+                                  automation_exclusive_control_confirmed:
+                                    event.target.value.trim() === (camera.onvif?.xaddr ?? "").trim() &&
+                                    camera.control.automation_exclusive_control_confirmed,
+                                },
                               }))
                             }
                           />
@@ -1185,6 +1218,46 @@ function CamerasSettingsPanelContent({
                       </div>
                       {inspectError ? <div className="errorText">{inspectError}</div> : null}
                       {inspectResult?.warnings?.length ? <div className="settingsStatusMuted">{inspectResult.warnings.join(" ")}</div> : null}
+                      {activeCameraHasEnabledPtzVideoSource ? (
+                        <div className="rowWrap">
+                          <div className="field" style={{ flex: 2, minWidth: 280 }}>
+                            <span className="label">
+                              {t("ext.cameras.settings.automation_exclusive_control", {}, "Exclusive automation control")}
+                            </span>
+                            <div className="errorText" role="note" style={{ marginTop: 0 }}>
+                              <label className="row" style={{ alignItems: "flex-start" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={activeCamera.control.automation_exclusive_control_confirmed}
+                                  onChange={(event) =>
+                                    updateCamera(activeCamera.id, (camera) => ({
+                                      ...camera,
+                                      control: {
+                                        ...camera.control,
+                                        automation_exclusive_control_confirmed: event.target.checked,
+                                      },
+                                    }))
+                                  }
+                                />
+                                <span>
+                                  {t(
+                                    "ext.cameras.settings.automation_exclusive_control_help",
+                                    {},
+                                    "I confirm that native auto-tracking, monitor-point movement, and automatic return are disabled.",
+                                  )}
+                                </span>
+                              </label>
+                              <div style={{ marginTop: 8 }}>
+                                {t(
+                                  "ext.cameras.settings.automation_exclusive_control_warning",
+                                  {},
+                                  "Keep this unchecked while the camera can move itself. Competing controls can make PTZ automation unstable or unsafe.",
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>

@@ -20,8 +20,9 @@ from toposync_ext_ptz_attention.api import (
     _event_is_visible,
     create_router,
 )
+from toposync_ext_ptz_attention.bindings import attention_bindings, live_observer_binding_issue
 from toposync_ext_ptz_attention.controller import PtzAttentionController
-from toposync_ext_ptz_attention.models import AttentionIntent, AttentionProfile, AttentionTarget
+from toposync_ext_ptz_attention.models import AttentionIntent, AttentionProfile, AttentionTarget, operator_profile_id
 from toposync_ext_ptz_attention.pipelines import (
     PtzAttentionRequestRuntime,
     register_pipeline_operators,
@@ -96,6 +97,90 @@ def attention_pipeline(
             ],
         },
     )
+
+
+def direct_attention_pipeline(*, name: str = "events") -> Pipeline:
+    return Pipeline(
+        name=name,
+        enabled=True,
+        graph={
+            "schema_version": 2,
+            "nodes": [
+                {"id": "source", "operator": "camera.source", "config": {"camera_id": "front"}},
+                {
+                    "id": "attention",
+                    "operator": "ptz_attention.request",
+                    "config": {
+                        "profile_id": "attention_profile",
+                        "camera_id": "front",
+                        "source_id": "wide",
+                        "composition_id": "yard",
+                        "native_tracking_disabled_confirmed": True,
+                    },
+                },
+            ],
+            "edges": [
+                {
+                    "uid": "edge_source_attention",
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "attention", "port": "in"},
+                }
+            ],
+        },
+    )
+
+
+def test_direct_operator_binding_uses_its_camera_profile_id() -> None:
+    binding = attention_bindings([direct_attention_pipeline()])
+    assert len(binding) == 1
+    assert binding[0].profile_id == operator_profile_id("front")
+    profile = AttentionProfile.model_validate(
+        profile_payload(
+            id=operator_profile_id("front"),
+            mode="live_preset",
+            same_head_observer_acknowledged=True,
+        )
+    )
+    assert live_observer_binding_issue(profile, binding, require_effective_binding=True) is None
+
+
+@pytest.mark.asyncio
+async def test_direct_operator_uses_its_governed_event_type_when_packet_omits_one() -> None:
+    profile = AttentionProfile.model_validate(
+        profile_payload(
+            id=operator_profile_id("front"),
+            mode="live_preset",
+            same_head_observer_acknowledged=True,
+        )
+    )
+    store = AttentionStore(None)
+    store.create_profile(profile)
+    controller = PtzAttentionController(store=store, services=ServiceRegistry())
+    controller.register_operator_binding = lambda *_args, **_kwargs: "operator:events:attention"  # type: ignore[method-assign]
+    controller.ensure_operator_profile = AsyncMock(return_value=profile)  # type: ignore[method-assign]
+    controller.submit_intent = AsyncMock()  # type: ignore[method-assign]
+    runtime = PtzAttentionRequestRuntime(
+        direct_attention_pipeline().graph["nodes"][1]["config"],
+        PipelineRuntimeDependencies(config_store=MutableConfigStore([direct_attention_pipeline()])),
+        controller,
+    )
+    packet = Packet.create(
+        stream_id="relation-one",
+        lifecycle=Lifecycle.OPEN,
+        payload={
+            "event_id": "relation-one",
+            "world_envelope": {"center": {"x": 1.0, "z": 2.0}, "radius_meters": 1.0},
+        },
+    )
+
+    assert await runtime.process_packet(
+        packet,
+        SimpleNamespace(pipeline_name="events", node_id="attention"),
+    ) == []
+    submitted = controller.submit_intent.await_args.args[0]
+    assert submitted.event_type == "operator:events:attention"
+    assert submitted.event_id == "relation-one"
+    store.close()
 
 
 class MutableConfigStore:

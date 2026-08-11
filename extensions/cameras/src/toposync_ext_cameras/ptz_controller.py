@@ -61,6 +61,7 @@ class PtzLease:
         repr=False,
         compare=False,
     )
+    automation_tracking_disabled_confirmed: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -161,6 +162,7 @@ class PtzController:
         minimum_idle_observations: int = 2,
         stop_command_timeout_s: float = 1.0,
         shutdown_timeout_s: float = 2.0,
+        require_automation_tracking_confirmation: bool = False,
     ) -> None:
         self._state_path = Path(state_path)
         self._resolve_device = resolve_device
@@ -188,6 +190,9 @@ class PtzController:
         self._minimum_idle_observations = max(2, min(10, int(minimum_idle_observations)))
         self._stop_command_timeout_s = max(0.1, min(5.0, float(stop_command_timeout_s)))
         self._shutdown_timeout_s = max(0.05, min(10.0, float(shutdown_timeout_s)))
+        self._require_automation_tracking_confirmation = bool(
+            require_automation_tracking_confirmation
+        )
         self._lock = asyncio.Lock()
         self._shutdown_lock = asyncio.Lock()
         self._shutting_down = False
@@ -207,6 +212,7 @@ class PtzController:
         source_id: str | None = None,
         ttl_s: float = 15.0,
         purpose: str | None = None,  # accepted for service contract; owner_kind controls policy
+        automation_tracking_disabled_confirmed: bool = False,
     ) -> dict[str, Any]:
         self._ensure_accepting_commands()
         del purpose
@@ -220,6 +226,13 @@ class PtzController:
         ttl = _normalize_ttl(ttl_s)
         ptz_device_id = await self._device_id(cid)
         if kind == "automation":
+            if (
+                self._require_automation_tracking_confirmation
+                and not bool(automation_tracking_disabled_confirmed)
+            ):
+                raise PtzControlError(
+                    "Automation PTZ control requires native tracking disabled confirmation"
+                )
             automation_ready, reason = await self._automation_readiness(cid)
             if not automation_ready:
                 raise PtzControlError(f"Automation PTZ control is not ready: {reason}")
@@ -314,6 +327,9 @@ class PtzController:
                     owner_id=owner,
                     ttl_s=ttl,
                     transport_binding=transport_binding,
+                    automation_tracking_disabled_confirmed=bool(
+                        automation_tracking_disabled_confirmed
+                    ),
                 ).as_dict()
 
         device, previous_lease, preemption_fence, stop_command_id = preemption
@@ -347,6 +363,9 @@ class PtzController:
                         owner_id=owner,
                         ttl_s=ttl,
                         transport_binding=transport_binding,
+                        automation_tracking_disabled_confirmed=bool(
+                            automation_tracking_disabled_confirmed
+                        ),
                     ).as_dict()
         except asyncio.CancelledError:
             async with self._lock:
@@ -408,6 +427,9 @@ class PtzController:
                 expires_at=now_wall + ttl,
                 expires_at_monotonic=now_monotonic + ttl,
                 transport_binding=lease.transport_binding,
+                automation_tracking_disabled_confirmed=(
+                    lease.automation_tracking_disabled_confirmed
+                ),
             )
             device.lease = renewed
             self._schedule_lease_expiry_watchdog_locked(device, renewed)
@@ -487,6 +509,13 @@ class PtzController:
                         f"current lease is stopped and released: {binding_reason}"
                     )
             if lease.owner_kind == "automation" and normalized_command["kind"] != "stop":
+                if (
+                    self._require_automation_tracking_confirmation
+                    and not lease.automation_tracking_disabled_confirmed
+                ):
+                    raise PtzControlError(
+                        "Automation PTZ control requires native tracking disabled confirmation"
+                    )
                 automation_ready, reason = await self._automation_readiness(lease.camera_id)
                 if not automation_ready:
                     raise PtzControlError(f"Automation PTZ control is not ready: {reason}")
@@ -1296,6 +1325,7 @@ class PtzController:
         owner_id: str,
         ttl_s: float,
         transport_binding: PtzTransportBinding | None,
+        automation_tracking_disabled_confirmed: bool = False,
     ) -> PtzLease:
         now_wall = self._wall_time()
         now_monotonic = self._monotonic()
@@ -1310,6 +1340,7 @@ class PtzController:
             expires_at=now_wall + ttl_s,
             expires_at_monotonic=now_monotonic + ttl_s,
             transport_binding=transport_binding,
+            automation_tracking_disabled_confirmed=automation_tracking_disabled_confirmed,
         )
         device.lease = lease
         device.last_transport_binding = transport_binding

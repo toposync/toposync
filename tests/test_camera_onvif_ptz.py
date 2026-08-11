@@ -59,6 +59,18 @@ def test_onvif_client_ptz_presets_status_and_moves(monkeypatch: pytest.MonkeyPat
 </s:Envelope>
 """
 
+    set_preset_envelope = b"""<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl">
+  <s:Body>
+    <tptz:SetPresetResponse>
+      <tptz:PresetToken>toposync-guard</tptz:PresetToken>
+    </tptz:SetPresetResponse>
+  </s:Body>
+</s:Envelope>
+"""
+    calls = {"set_preset": 0}
+
     async def fake_post_soap(*, url: str, body: bytes, timeout_s: float, soap_action: str | None, soap_version: str) -> bytes:
         _ = url, body, timeout_s, soap_version
         action = soap_action or ""
@@ -66,6 +78,11 @@ def test_onvif_client_ptz_presets_status_and_moves(monkeypatch: pytest.MonkeyPat
             return presets_xml
         if action.endswith("/GetStatus"):
             return status_xml
+        if action.endswith("/SetPreset"):
+            calls["set_preset"] += 1
+            assert b"<tptz:PresetName>Guard</tptz:PresetName>" in body
+            assert b"<tptz:PresetToken>toposync-guard</tptz:PresetToken>" in body
+            return set_preset_envelope
         if action.endswith("/GotoPreset"):
             return ok_envelope
         if action.endswith("/AbsoluteMove"):
@@ -96,6 +113,14 @@ def test_onvif_client_ptz_presets_status_and_moves(monkeypatch: pytest.MonkeyPat
         assert presets[0].pan == pytest.approx(0.1)
         assert presets[0].tilt == pytest.approx(-0.2)
         assert presets[0].zoom == pytest.approx(0.3)
+        created_preset = await client.set_preset(
+            "http://192.168.0.10/onvif/ptz_service",
+            profile_token="profile-main",
+            preset_name="Guard",
+            preset_token="toposync-guard",
+        )
+        assert created_preset == "toposync-guard"
+        assert calls["set_preset"] == 1
 
         status = await client.get_ptz_status("http://192.168.0.10/onvif/ptz_service", profile_token="profile-main")
         assert status.pan == pytest.approx(0.5)

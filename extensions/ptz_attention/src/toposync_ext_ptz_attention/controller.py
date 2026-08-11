@@ -17,8 +17,11 @@ from .models import (
     AttentionProfile,
     ControllerState,
     DeviceStatus,
+    EventPolicy,
+    PtzAttentionRequestConfig,
     ResolvedTarget,
     effective_mode,
+    operator_profile_id,
 )
 from .store import AttentionStore, ProfileNotFoundError
 
@@ -90,6 +93,16 @@ class _DeviceRuntime:
     recovery_required: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _OperatorBinding:
+    profile_id: str
+    camera_id: str
+    source_id: str
+    composition_id: str
+    priority: int
+    hold_after_close_seconds: float
+
+
 class PtzAttentionController:
     """Global, in-memory arbiter for every pipeline targeting a PTZ device."""
 
@@ -110,6 +123,7 @@ class PtzAttentionController:
         self._tick_interval_seconds = max(0.05, float(tick_interval_seconds))
         self._devices: dict[str, _DeviceRuntime] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._operator_bindings: dict[tuple[str, str, str], _OperatorBinding] = {}
         self._task: asyncio.Task[None] | None = None
         self._closed = False
 
@@ -123,6 +137,43 @@ class PtzAttentionController:
                 service_id, service_id in getattr(self.services, "_services", {})
             )
         )
+
+    def register_operator_binding(
+        self,
+        config: PtzAttentionRequestConfig,
+        *,
+        pipeline_name: str,
+        node_id: str,
+    ) -> str:
+        """Register a declared pipeline policy; this never sends a camera command."""
+        if not (
+            config.camera_id
+            and config.source_id
+            and config.composition_id
+            and config.native_tracking_disabled_confirmed
+        ):
+            raise ValueError("operator_live_requirements_not_met")
+        key = (config.camera_id, str(pipeline_name or "").strip(), str(node_id or "").strip())
+        if not key[1] or not key[2]:
+            raise ValueError("operator_context_required")
+        binding = _OperatorBinding(
+            profile_id=operator_profile_id(config.camera_id),
+            camera_id=config.camera_id,
+            source_id=config.source_id,
+            composition_id=config.composition_id,
+            priority=config.priority,
+            hold_after_close_seconds=config.hold_after_close_seconds,
+        )
+        previous = self._operator_bindings.get(key)
+        if previous is not None and previous != binding:
+            runtime = self._devices.get(config.camera_id)
+            if runtime is not None and (
+                runtime.lease_id
+                or runtime.state not in {"IDLE", "MANUAL_OVERRIDE", "FAULT"}
+            ):
+                raise ValueError("operator_binding_change_while_active")
+        self._operator_bindings[key] = binding
+        return f"operator:{key[1]}:{key[2]}"
 
     async def start(self) -> None:
         if self._closed:
@@ -260,34 +311,67 @@ class PtzAttentionController:
                 )
                 return
 
-            policy = next(
-                (item for item in profile.event_policies if item.event_type == intent.event_type),
-                None,
+            operator_binding = self._operator_bindings.get(
+                (profile.ptz_device_id, intent.pipeline_name, intent.node_id)
             )
-            if policy is None:
+            if profile.operator_managed and operator_binding is None:
                 self._record(
                     profile,
                     runtime,
                     action="intent_rejected",
-                    reason="event_policy_missing",
+                    reason="operator_binding_missing",
                     intent=intent,
                 )
                 return
-            if not policy.enabled:
+            if profile.operator_managed and (
+                operator_binding.camera_id != profile.camera_id
+                or operator_binding.source_id != profile.source_id
+                or operator_binding.composition_id != profile.composition_id
+            ):
                 self._record(
                     profile,
                     runtime,
-                    action="intent_ignored",
-                    reason="event_policy_disabled",
+                    action="intent_rejected",
+                    reason="operator_binding_mismatch",
                     intent=intent,
                 )
                 return
-            governed = intent.model_copy(
-                update={
-                    "priority": policy.priority,
-                    "preferred_view_id": intent.preferred_view_id or policy.preferred_view_id,
-                }
-            )
+            if profile.operator_managed:
+                governed = intent.model_copy(
+                    update={
+                        "priority": operator_binding.priority,
+                        "hold_after_close_seconds": operator_binding.hold_after_close_seconds,
+                    }
+                )
+            else:
+                policy = next(
+                    (item for item in profile.event_policies if item.event_type == intent.event_type),
+                    None,
+                )
+                if policy is None:
+                    self._record(
+                        profile,
+                        runtime,
+                        action="intent_rejected",
+                        reason="event_policy_missing",
+                        intent=intent,
+                    )
+                    return
+                if not policy.enabled:
+                    self._record(
+                        profile,
+                        runtime,
+                        action="intent_ignored",
+                        reason="event_policy_disabled",
+                        intent=intent,
+                    )
+                    return
+                governed = intent.model_copy(
+                    update={
+                        "priority": policy.priority,
+                        "preferred_view_id": intent.preferred_view_id or policy.preferred_view_id,
+                    }
+                )
 
             existing = runtime.events.get(governed.key)
             if governed.lifecycle == "update":
@@ -557,6 +641,121 @@ class PtzAttentionController:
             and (runtime.lease_id or runtime.state not in {"IDLE", "MANUAL_OVERRIDE", "FAULT"})
         )
 
+    async def ensure_operator_profile(
+        self, config: PtzAttentionRequestConfig, *, operator_event_type: str
+    ) -> AttentionProfile:
+        """Create a live profile only after the camera proves the operator is safe."""
+        governed_event_type = str(operator_event_type or "").strip()
+        if not (
+            config.camera_id
+            and config.source_id
+            and config.composition_id
+            and config.native_tracking_disabled_confirmed
+            and governed_event_type
+        ):
+            raise ValueError("operator_live_requirements_not_met")
+        if not (
+            self.has_service("cameras.views.resolve_target")
+            and self.has_service("cameras.control.snapshot")
+        ):
+            raise ValueError("operator_live_services_unavailable")
+        try:
+            home_raw = await self.services.call(
+                "cameras.views.resolve_target",
+                camera_id=config.camera_id,
+                source_id=config.source_id,
+                ptz_device_id=config.camera_id,
+                composition_id=config.composition_id,
+                target={"home": True},
+                preferred_view_id=None,
+                eligible_view_ids=None,
+            )
+            home = ResolvedTarget.model_validate(home_raw)
+            snapshot = await self.services.call(
+                "cameras.control.snapshot",
+                camera_id=config.camera_id,
+                source_id=config.source_id,
+                ptz_device_id=config.camera_id,
+            )
+        except Exception as error:
+            raise ValueError("operator_mapping_or_camera_not_ready") from error
+        if (
+            not isinstance(snapshot, dict)
+            or snapshot.get("automation_ready") is not True
+            or str(snapshot.get("ptz_device_id") or "") != config.camera_id
+            or not home.eligible_view_ids
+        ):
+            raise ValueError("operator_mapping_or_camera_not_ready")
+        device_id = config.camera_id
+        async with self._lock_for(device_id):
+            existing = self.store.get_profile_by_device(device_id)
+            runtime = self._devices.get(device_id)
+            if existing is not None and existing.operator_managed:
+                if (
+                    existing.source_id != config.source_id
+                    or existing.composition_id != config.composition_id
+                ):
+                    raise ValueError("camera_operator_mapping_conflict")
+                if runtime is not None and (
+                    runtime.lease_id
+                    or runtime.state not in {"IDLE", "MANUAL_OVERRIDE", "FAULT"}
+                ):
+                    return existing
+            if runtime is not None and (
+                runtime.lease_id
+                or runtime.state not in {"IDLE", "MANUAL_OVERRIDE", "FAULT"}
+            ):
+                raise ValueError("camera_operator_profile_busy")
+            existing_policies = list(existing.event_policies) if existing and existing.operator_managed else []
+            event_policies = [
+                policy
+                for policy in existing_policies
+                if policy.event_type != governed_event_type
+            ]
+            event_policies.append(
+                EventPolicy(
+                    event_type=governed_event_type,
+                    enabled=True,
+                    priority=config.priority,
+                )
+            )
+            desired = AttentionProfile(
+                id=existing.id if existing is not None else operator_profile_id(config.camera_id),
+                name=f"PTZ operator {config.camera_id}",
+                mode="live_preset",
+                camera_id=config.camera_id,
+                source_id=config.source_id,
+                ptz_device_id=config.camera_id,
+                operator_managed=True,
+                same_head_observer_acknowledged=True,
+                composition_id=config.composition_id,
+                home_view_id=home.view_id,
+                eligible_view_ids=home.eligible_view_ids,
+                event_policies=event_policies,
+                candidate_confirm_seconds=0.0,
+                min_focus_seconds=0.0,
+                max_focus_seconds=120.0,
+                close_grace_seconds=0.0,
+                cooldown_seconds=10.0,
+                stale_timeout_seconds=15.0,
+                settle_timeout_seconds=8.0,
+                lease_ttl_seconds=15.0,
+                max_movements_per_minute=6,
+                minimum_target_confidence=0.0,
+            )
+            if existing is None:
+                self.store.create_profile(desired)
+            elif existing.operator_managed and (
+                existing.source_id != desired.source_id
+                or existing.composition_id != desired.composition_id
+            ):
+                raise ValueError("camera_operator_mapping_conflict")
+            else:
+                self.store.replace_profile(desired)
+            if runtime is not None:
+                runtime.profile_id = desired.id
+            return desired
+
     async def synchronize_profile(
         self,
         previous: AttentionProfile | None,
@@ -713,7 +912,12 @@ class PtzAttentionController:
                     ) + profile.min_focus_seconds
                     runtime.grace_deadline_monotonic = max(
                         min_until,
-                        closed_at + profile.close_grace_seconds,
+                        closed_at
+                        + (
+                            active.intent.hold_after_close_seconds
+                            if active.intent.hold_after_close_seconds is not None
+                            else profile.close_grace_seconds
+                        ),
                     )
                     runtime.grace_until = self._public_deadline(
                         runtime.grace_deadline_monotonic,
@@ -1263,6 +1467,9 @@ class PtzAttentionController:
             owner_id=f"ptz_attention:{profile.id}",
             owner_kind="automation",
             ttl_s=profile.lease_ttl_seconds,
+            automation_tracking_disabled_confirmed=(
+                profile.same_head_observer_acknowledged
+            ),
         )
         if not isinstance(raw, dict):
             raise RuntimeError("invalid lease response")

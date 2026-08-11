@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+import uuid
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -23,6 +24,11 @@ ControllerState = Literal[
 
 _PROFILE_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
 _PACKET_PATH_RE = re.compile(r"^(payload|metadata)(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
+
+
+def operator_profile_id(camera_id: str) -> str:
+    """Stable internal profile identity for the pipeline PTZ operator."""
+    return f"operator_{uuid.uuid5(uuid.NAMESPACE_URL, str(camera_id or '').strip()).hex[:24]}"
 
 
 class StrictModel(BaseModel):
@@ -122,6 +128,7 @@ class AttentionProfile(StrictModel):
     camera_id: str
     source_id: str = ""
     ptz_device_id: str
+    operator_managed: bool = False
     same_head_observer_acknowledged: bool = False
     composition_id: str = ""
     home_view_id: str = ""
@@ -194,16 +201,17 @@ class AttentionProfile(StrictModel):
                 raise ValueError("source_id is required in live_preset mode")
             if not self.composition_id:
                 raise ValueError("composition_id is required in live_preset mode")
-            if not self.home_view_id:
-                raise ValueError("home_view_id is required in live_preset mode")
-            if not self.eligible_view_ids:
-                raise ValueError("eligible_view_ids is required in live_preset mode")
-            if self.home_view_id not in self.eligible_view_ids:
-                raise ValueError("home_view_id must be included in eligible_view_ids")
-            if not any(view_id != self.home_view_id for view_id in self.eligible_view_ids):
-                raise ValueError(
-                    "live_preset requires an eligible event view distinct from home_view_id"
-                )
+            if not self.operator_managed:
+                if not self.home_view_id:
+                    raise ValueError("home_view_id is required in live_preset mode")
+                if not self.eligible_view_ids:
+                    raise ValueError("eligible_view_ids is required in live_preset mode")
+                if self.home_view_id not in self.eligible_view_ids:
+                    raise ValueError("home_view_id must be included in eligible_view_ids")
+                if not any(view_id != self.home_view_id for view_id in self.eligible_view_ids):
+                    raise ValueError(
+                        "live_preset requires an eligible event view distinct from home_view_id"
+                    )
         event_types: set[str] = set()
         for policy in self.event_policies:
             if policy.event_type in event_types:
@@ -230,6 +238,7 @@ class AttentionIntent(StrictModel):
     node_id: str
     lifecycle: IntentLifecycle
     priority: int = Field(default=0, ge=-1000, le=1000)
+    hold_after_close_seconds: float | None = Field(default=None, ge=0.0, le=3600.0)
     target: AttentionTarget | None = None
     preferred_view_id: str = ""
     event_at: float
@@ -277,6 +286,7 @@ class ResolvedTarget(StrictModel):
     preset_token: str
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     reason: str = ""
+    eligible_view_ids: list[str] = Field(default_factory=list)
 
     @field_validator("view_id", "preset_token", "reason", mode="before")
     @classmethod
@@ -292,7 +302,13 @@ class ResolvedTarget(StrictModel):
 
 
 class PtzAttentionRequestConfig(StrictModel):
-    profile_id: str
+    profile_id: str = ""
+    camera_id: str = ""
+    source_id: str = ""
+    composition_id: str = ""
+    priority: int = Field(default=0, ge=-1000, le=1000)
+    hold_after_close_seconds: float = Field(default=8.0, ge=0.0, le=3600.0)
+    native_tracking_disabled_confirmed: bool = False
     event_type: str = ""
     event_type_field: str = "payload.event_type"
     event_id_field: str = "payload.event_id"
@@ -301,13 +317,10 @@ class PtzAttentionRequestConfig(StrictModel):
     bbox01_field: str = "payload.subject.bbox01"
     preferred_view_id_field: str = "payload.ptz_attention.preferred_view_id"
 
-    @field_validator("profile_id", mode="before")
+    @field_validator("profile_id", "camera_id", "source_id", "composition_id", mode="before")
     @classmethod
     def _profile_id(cls, value: Any) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("profile_id is required")
-        return text
+        return str(value or "").strip()
 
     @field_validator("event_type", mode="before")
     @classmethod
@@ -319,7 +332,6 @@ class PtzAttentionRequestConfig(StrictModel):
         "event_type_field",
         "world_envelope_field",
         "world_anchor_field",
-        "bbox01_field",
         "preferred_view_id_field",
         mode="before",
     )
@@ -332,8 +344,11 @@ class PtzAttentionRequestConfig(StrictModel):
 
     @model_validator(mode="after")
     def _event_type_source(self) -> "PtzAttentionRequestConfig":
-        if not self.profile_id:
-            raise ValueError("profile_id is required")
+        direct_fields = (self.camera_id, self.source_id, self.composition_id)
+        if any(direct_fields) and not all(direct_fields):
+            raise ValueError("camera_id, source_id and composition_id must be configured together")
+        if not self.profile_id and not all(direct_fields):
+            raise ValueError("camera_id, source_id and composition_id are required")
         if not self.event_type and not self.event_type_field:
             raise ValueError("event_type or event_type_field is required")
         return self

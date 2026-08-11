@@ -6,7 +6,12 @@ import pytest
 
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_ptz_attention.controller import PtzAttentionController
-from toposync_ext_ptz_attention.models import AttentionIntent, AttentionProfile, AttentionTarget
+from toposync_ext_ptz_attention.models import (
+    AttentionIntent,
+    AttentionProfile,
+    AttentionTarget,
+    PtzAttentionRequestConfig,
+)
 from toposync_ext_ptz_attention.store import AttentionStore
 
 
@@ -96,7 +101,11 @@ def intent(
 def register_resolver(services: ServiceRegistry, calls: list[dict]) -> None:
     async def resolve(**kwargs):  # noqa: ANN003, ANN202
         calls.append(kwargs)
-        view_id = kwargs.get("preferred_view_id") or "driveway"
+        view_id = (
+            "home"
+            if kwargs.get("target") == {"home": True}
+            else kwargs.get("preferred_view_id") or "driveway"
+        )
         return {
             "view_id": view_id,
             "preset_token": f"preset-{view_id}",
@@ -367,6 +376,7 @@ class LiveCamera:
         self.motion_epoch = 0
         self.releases = 0
         self.acquires = 0
+        self.acquire_calls: list[dict] = []
         self.renews = 0
         self.snapshot_calls: list[dict] = []
         self.resolve_calls: list[dict] = []
@@ -385,16 +395,24 @@ class LiveCamera:
 
     async def resolve(self, **kwargs):  # noqa: ANN003, ANN202
         self.resolve_calls.append(kwargs)
-        view_id = kwargs.get("preferred_view_id") or "driveway"
-        return {
+        view_id = (
+            "home"
+            if kwargs.get("target") == {"home": True}
+            else kwargs.get("preferred_view_id") or "driveway"
+        )
+        result = {
             "view_id": view_id,
             "preset_token": f"preset-{view_id}",
             "confidence": 1,
             "reason": "test",
         }
+        if kwargs.get("target") == {"home": True}:
+            result["eligible_view_ids"] = ["home", "driveway", "gate"]
+        return result
 
     async def acquire(self, **kwargs):  # noqa: ANN003, ANN202
         self.acquires += 1
+        self.acquire_calls.append(kwargs)
         self.lease = {
             "ptz_device_id": "front",
             "lease_id": "lease-1",
@@ -519,6 +537,72 @@ def live_services(camera: LiveCamera) -> ServiceRegistry:
     services.register("cameras.control.snapshot", camera.snapshot)
     services.register("cameras.control.emergency_stop", camera.emergency_stop)
     return services
+
+
+@pytest.mark.asyncio
+async def test_operator_profile_uses_calibrated_views_and_governs_pipeline_priority() -> None:
+    clock = Clock()
+    camera = LiveCamera()
+    store = AttentionStore(None)
+    controller = PtzAttentionController(store=store, services=live_services(camera), clock=clock)
+    low = PtzAttentionRequestConfig(
+        camera_id="front",
+        source_id="wide",
+        composition_id="yard",
+        priority=10,
+        hold_after_close_seconds=12,
+        native_tracking_disabled_confirmed=True,
+    )
+    high = low.model_copy(update={"priority": 50})
+    low_event_type = controller.register_operator_binding(
+        low, pipeline_name="low_pipeline", node_id="focus"
+    )
+    profile = await controller.ensure_operator_profile(low, operator_event_type=low_event_type)
+    high_event_type = controller.register_operator_binding(
+        high, pipeline_name="high_pipeline", node_id="focus"
+    )
+    shared = await controller.ensure_operator_profile(high, operator_event_type=high_event_type)
+    assert shared.id == profile.id
+    assert profile.home_view_id == "home"
+    assert profile.eligible_view_ids == ["home", "driveway", "gate"]
+
+    target = AttentionTarget(world_anchor={"x": 2.0, "z": 3.0})
+    await controller.submit_intent(
+        AttentionIntent(
+            key="front:low_pipeline:focus:one",
+            event_id="one",
+            event_type=low_event_type,
+            profile_id=profile.id,
+            ptz_device_id="front",
+            pipeline_name="low_pipeline",
+            node_id="focus",
+            lifecycle="open",
+            target=target,
+            event_at=clock(),
+            received_at=clock(),
+        )
+    )
+    await controller.tick_once()
+    await controller.submit_intent(
+        AttentionIntent(
+            key="front:high_pipeline:focus:two",
+            event_id="two",
+            event_type=high_event_type,
+            profile_id=profile.id,
+            ptz_device_id="front",
+            pipeline_name="high_pipeline",
+            node_id="focus",
+            lifecycle="open",
+            target=target,
+            event_at=clock(),
+            received_at=clock(),
+        )
+    )
+    status = controller.status()[0]
+    assert status.active_priority == 50
+    assert camera.acquire_calls[0]["automation_tracking_disabled_confirmed"] is True
+    await controller.shutdown()
+    store.close()
 
 
 @pytest.mark.asyncio

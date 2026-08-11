@@ -550,12 +550,6 @@ function CamerasSettingsPanelContent({
   const activeSource = activeCamera?.sources.find((source) => source.id === activeSourceId) ?? activeCamera?.sources[0] ?? null;
   const activeHealth = activeCamera && activeSource ? sourceHealthFor(sourceHealth, activeCamera.id, activeSource.id) : null;
   const activeCameraPersisted = Boolean(activeCamera && savedCameraIds?.has(activeCamera.id));
-  const activeCameraHasEnabledPtzVideoSource = Boolean(
-    activeCamera?.control.type === "onvif" &&
-      activeCamera.sources.some(
-        (source) => source.enabled && source.kind === "video" && source.origin.has_ptz === true,
-      ),
-  );
   const mappedCompositions = useMemo(
     () =>
       (cameraContexts?.compositions ?? []).filter((composition) =>
@@ -782,7 +776,6 @@ function CamerasSettingsPanelContent({
       enabled: true,
       control: {
         type: controlType,
-        automation_exclusive_control_confirmed: false,
       },
       onvif: controlType === "onvif" ? { xaddr: "", username: "", password: "" } : null,
       sources: controlType === "none" ? [createDefaultCameraSource(0)] : [],
@@ -809,7 +802,6 @@ function CamerasSettingsPanelContent({
       enabled: true,
       control: {
         type: "onvif",
-        automation_exclusive_control_confirmed: false,
       },
       onvif: {
         device_id: String(device.device_id || "").trim(),
@@ -1141,8 +1133,6 @@ function CamerasSettingsPanelContent({
                             control: {
                               ...camera.control,
                               type,
-                              automation_exclusive_control_confirmed:
-                                type === "onvif" && camera.control.automation_exclusive_control_confirmed,
                             },
                             onvif: type === "onvif" ? camera.onvif ?? { xaddr: "", username: "", password: "" } : null,
                           }));
@@ -1175,9 +1165,6 @@ function CamerasSettingsPanelContent({
                                 onvif: { ...(camera.onvif ?? { xaddr: "" }), xaddr: event.target.value },
                                 control: {
                                   ...camera.control,
-                                  automation_exclusive_control_confirmed:
-                                    event.target.value.trim() === (camera.onvif?.xaddr ?? "").trim() &&
-                                    camera.control.automation_exclusive_control_confirmed,
                                 },
                               }))
                             }
@@ -1218,46 +1205,6 @@ function CamerasSettingsPanelContent({
                       </div>
                       {inspectError ? <div className="errorText">{inspectError}</div> : null}
                       {inspectResult?.warnings?.length ? <div className="settingsStatusMuted">{inspectResult.warnings.join(" ")}</div> : null}
-                      {activeCameraHasEnabledPtzVideoSource ? (
-                        <div className="rowWrap">
-                          <div className="field" style={{ flex: 2, minWidth: 280 }}>
-                            <span className="label">
-                              {t("ext.cameras.settings.automation_exclusive_control", {}, "Exclusive automation control")}
-                            </span>
-                            <div className="errorText" role="note" style={{ marginTop: 0 }}>
-                              <label className="row" style={{ alignItems: "flex-start" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={activeCamera.control.automation_exclusive_control_confirmed}
-                                  onChange={(event) =>
-                                    updateCamera(activeCamera.id, (camera) => ({
-                                      ...camera,
-                                      control: {
-                                        ...camera.control,
-                                        automation_exclusive_control_confirmed: event.target.checked,
-                                      },
-                                    }))
-                                  }
-                                />
-                                <span>
-                                  {t(
-                                    "ext.cameras.settings.automation_exclusive_control_help",
-                                    {},
-                                    "I confirm that native auto-tracking, monitor-point movement, and automatic return are disabled.",
-                                  )}
-                                </span>
-                              </label>
-                              <div style={{ marginTop: 8 }}>
-                                {t(
-                                  "ext.cameras.settings.automation_exclusive_control_warning",
-                                  {},
-                                  "Keep this unchecked while the camera can move itself. Competing controls can make PTZ automation unstable or unsafe.",
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ) : null}
                     </div>
                   ) : null}
                 </div>

@@ -193,6 +193,12 @@ export type AttentionCommand = "pause" | "resume" | "return-home";
 
 export type AttentionRequestOperatorConfig = {
   profile_id: string;
+  camera_id: string;
+  source_id: string;
+  composition_id: string;
+  priority: number;
+  hold_after_close_seconds: number;
+  native_tracking_disabled_confirmed: boolean;
   event_type: string;
   event_type_field: string;
   event_id_field: string;

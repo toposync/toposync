@@ -483,19 +483,12 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
     const controlRecord = readRecord(device.control);
     const controlType = readString(controlRecord.type).trim().toLowerCase() === "onvif" ? "onvif" : "none";
     const sources = readCameraSources(device.sources);
-    const hasEnabledPtzVideoSource = sources.some(
-      (source) => source.enabled && source.kind === "video" && source.origin.has_ptz === true,
-    );
     output.push({
       id,
       name: readString(device.name).trim(),
       enabled: typeof device.enabled === "boolean" ? device.enabled : true,
       control: {
         type: controlType,
-        automation_exclusive_control_confirmed:
-          controlType === "onvif" &&
-          hasEnabledPtzVideoSource &&
-          controlRecord.automation_exclusive_control_confirmed === true,
       },
       onvif: controlType === "onvif" ? readOnvifConfig(device.onvif) ?? { xaddr: "", username: "", password: "" } : null,
       sources,
@@ -509,9 +502,6 @@ export function serializeCameras(settings: CameraConfig[]): Record<string, unkno
   return {
     schema_version: 4,
     devices: settings.map((camera) => {
-      const hasEnabledPtzVideoSource = camera.sources.some(
-        (source) => source.enabled && source.kind === "video" && source.origin.has_ptz === true,
-      );
       return {
         id: camera.id,
         name: camera.name,
@@ -520,10 +510,6 @@ export function serializeCameras(settings: CameraConfig[]): Record<string, unkno
         clock_domain: `device:${camera.id}`,
         control: {
           type: camera.control?.type === "onvif" ? "onvif" : "none",
-          automation_exclusive_control_confirmed:
-            camera.control?.type === "onvif" &&
-            hasEnabledPtzVideoSource &&
-            camera.control.automation_exclusive_control_confirmed === true,
         },
         onvif: camera.control?.type === "onvif" ? camera.onvif ?? { xaddr: "", username: "", password: "" } : null,
         sources: normalizeCameraSourcesForSave(camera.sources),

@@ -82,12 +82,17 @@ from .settings import (
     normalize_cameras_settings,
 )
 from .onvif import (
+    REOLINK_PRESET_TOKEN_PREFIX,
     OnvifCameraEventContext,
+    OnvifAmbiguousMutationError,
     OnvifClient,
     OnvifDiscoveredDevice,
     OnvifEventStateManager,
     OnvifError,
     OnvifProfile,
+    OnvifPtzPreset,
+    ReolinkCgiClient,
+    ReolinkCgiError,
     discover_onvif_devices,
     normalize_onvif_xaddr,
     onvif_xaddr_candidates,
@@ -396,6 +401,12 @@ class CameraPtzActionResponse(BaseModel):
     ok: bool = True
 
 
+class CameraPtzSetPresetRequest(BaseModel):
+    source_id: str = ""
+    name: str = Field(default="", max_length=120)
+    idempotency_key: str = Field(default="", max_length=120)
+
+
 class CameraPtzGotoPresetRequest(BaseModel):
     preset_token: str
     source_id: str = ""
@@ -457,6 +468,8 @@ class CameraPipelinePresetRequest(BaseModel):
     notification_title: str = ""
     notification_description: str = ""
     notification_priority: NotificationPriority | None = None
+    enable_ptz_attention: bool = False
+    ptz_attention_native_tracking_disabled_confirmed: bool = False
 
     @field_validator("notification_priority", mode="before")
     @classmethod
@@ -1946,8 +1959,12 @@ class CamerasExtension(BaseExtension):
                 camera_source_id=camera_source_id,
             )
             try:
-                presets = await client.get_ptz_presets(ptz_xaddr, profile_token=profile_token)
-            except OnvifError as exc:
+                presets, _reolink = await _list_ptz_presets_with_reolink_fallback(
+                    client=client,
+                    ptz_xaddr=ptz_xaddr,
+                    profile_token=profile_token,
+                )
+            except (OnvifError, ReolinkCgiError) as exc:
                 raise _ptz_transport_error(
                     exc,
                     operation="list_presets",
@@ -1964,6 +1981,155 @@ class CamerasExtension(BaseExtension):
                 for p in presets
                 if str(p.token or "").strip()
             ]
+
+        def _reolink_cgi_client(client: OnvifClient) -> ReolinkCgiClient:
+            return ReolinkCgiClient(
+                device_xaddr=client.xaddr,
+                username=client.username,
+                password=client.password,
+                timeout_s=client.timeout_s,
+            )
+
+        async def _list_ptz_presets_with_reolink_fallback(
+            *,
+            client: OnvifClient,
+            ptz_xaddr: str,
+            profile_token: str,
+        ) -> tuple[list[OnvifPtzPreset], ReolinkCgiClient | None]:
+            """Read CGI slots only when ONVIF cannot enumerate a preset.
+
+            A valid empty ONVIF response remains authoritative for ordinary
+            cameras.  The CGI fallback is opt-in in practice: it is returned
+            only after the Reolink endpoint independently confirms at least one
+            enabled slot, whose token is namespaced as ``reolink:<slot>``.
+            """
+
+            onvif_error: OnvifError | None = None
+            try:
+                presets = await client.get_ptz_presets(
+                    ptz_xaddr,
+                    profile_token=profile_token,
+                )
+            except OnvifError as exc:
+                presets = []
+                onvif_error = exc
+            if presets:
+                return presets, None
+
+            reolink = _reolink_cgi_client(client)
+            try:
+                cgi_slots = await reolink.list_presets(include_disabled=True)
+            except ReolinkCgiError:
+                if onvif_error is not None:
+                    raise onvif_error
+                return presets, None
+            if not cgi_slots:
+                return presets, None
+            cgi_presets = [preset for preset in cgi_slots if preset.enabled]
+            return (
+                [
+                    OnvifPtzPreset(token=preset.token, name=preset.name)
+                    for preset in cgi_presets
+                ],
+                reolink,
+            )
+
+        async def _svc_ptz_set_preset(
+            *,
+            camera_id: str,
+            preset_name: str = "",
+            idempotency_key: str = "",
+            camera_source_id: str | None = None,
+        ) -> dict[str, Any]:
+            cid = str(camera_id or "").strip()
+            source_id = str(camera_source_id or "").strip()
+            name = str(preset_name or "").strip()
+            key = str(idempotency_key or "").strip()
+            if not cid or not source_id:
+                raise HTTPException(status_code=400, detail="camera_id and source_id are required")
+            if not name:
+                raise HTTPException(status_code=400, detail="preset name is required")
+            if not key:
+                raise HTTPException(status_code=400, detail="idempotency_key is required")
+            requested_token = "toposync-" + hashlib.sha256(
+                f"{cid}|{source_id}|{key}".encode("utf-8")
+            ).hexdigest()[:32]
+            (
+                client,
+                ptz_xaddr,
+                profile_token,
+                _resolved_source_id,
+                _bound,
+            ) = await _resolve_ptz_operation_context(
+                camera_id=cid,
+                camera_source_id=source_id,
+                transport_context=None,
+            )
+            try:
+                existing, reolink = await _list_ptz_presets_with_reolink_fallback(
+                    client=client,
+                    ptz_xaddr=ptz_xaddr,
+                    profile_token=profile_token,
+                )
+            except (OnvifError, ReolinkCgiError) as exc:
+                raise _ptz_transport_error(exc, operation="list_presets", camera_id=cid) from exc
+            for preset in existing:
+                if str(preset.token or "").strip() == requested_token:
+                    return {
+                        "token": requested_token,
+                        "name": str(preset.name or name).strip() or name,
+                        "pan": preset.pan,
+                        "tilt": preset.tilt,
+                    "zoom": preset.zoom,
+                }
+            if reolink is not None:
+                try:
+                    created = await reolink.set_current_position_preset(name=name)
+                except ReolinkCgiError as exc:
+                    raise _ptz_transport_error(
+                        exc,
+                        operation="set_preset",
+                        camera_id=cid,
+                    ) from exc
+                return {"token": created.token, "name": created.name}
+            try:
+                token = await client.set_preset(
+                    ptz_xaddr,
+                    profile_token=profile_token,
+                    preset_name=name,
+                    preset_token=requested_token,
+                )
+            except OnvifAmbiguousMutationError as exc:
+                # Do not retry the write. Reconcile once by the deterministic token.
+                try:
+                    reconciled, _reolink = await _list_ptz_presets_with_reolink_fallback(
+                        client=client,
+                        ptz_xaddr=ptz_xaddr,
+                        profile_token=profile_token,
+                    )
+                except (OnvifError, ReolinkCgiError) as reconciliation_error:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="SetPreset outcome is being reconciled",
+                        headers={"Retry-After": "1"},
+                    ) from reconciliation_error
+                for preset in reconciled:
+                    if str(preset.token or "").strip() == requested_token:
+                        return {
+                            "token": requested_token,
+                            "name": str(preset.name or name).strip() or name,
+                            "pan": preset.pan,
+                            "tilt": preset.tilt,
+                            "zoom": preset.zoom,
+                        }
+                raise HTTPException(
+                    status_code=503,
+                    detail="SetPreset outcome is being reconciled",
+                    headers={"Retry-After": "1"},
+                ) from exc
+            except OnvifError as exc:
+                raise _ptz_transport_error(exc, operation="set_preset", camera_id=cid) from exc
+            return {"token": str(token or "").strip(), "name": name}
 
         async def _svc_ptz_goto_preset(
             *,
@@ -1987,8 +2153,15 @@ class CamerasExtension(BaseExtension):
                 transport_context=transport_context,
             )
             try:
-                await client.goto_preset(ptz_xaddr, profile_token=profile_token, preset_token=token)
-            except OnvifError as exc:
+                if token.startswith(REOLINK_PRESET_TOKEN_PREFIX):
+                    await _reolink_cgi_client(client).goto_preset(preset_token=token)
+                else:
+                    await client.goto_preset(
+                        ptz_xaddr,
+                        profile_token=profile_token,
+                        preset_token=token,
+                    )
+            except (OnvifError, ReolinkCgiError) as exc:
                 raise _ptz_transport_error(
                     exc,
                     operation="goto_preset",
@@ -2388,13 +2561,22 @@ class CamerasExtension(BaseExtension):
             control = camera.get("control") if isinstance(camera.get("control"), dict) else {}
             if str(control.get("type") or "none").strip() != "onvif":
                 return {"ready": False, "reason": "camera_control_not_ptz"}
-            ready = bool(control.get("automation_exclusive_control_confirmed", False))
+            # The operator owns the native-tracking acknowledgement.  The PTZ
+            # controller receives and persists that acknowledgement on each
+            # automation lease; this reader only establishes physical capability.
+            ready = any(
+                bool(source.get("enabled", True))
+                and str(source.get("kind") or "").strip().lower() == "video"
+                and camera_source_has_ptz(source)
+                for source in iter_camera_sources(camera)
+                if isinstance(source, dict)
+            )
             return {
                 "ready": ready,
                 "reason": (
-                    "exclusive_control_confirmed"
+                    "ptz_control_source_available"
                     if ready
-                    else "native_tracking_and_automatic_return_not_confirmed_disabled"
+                    else "camera_source_not_ptz_capable"
                 ),
             }
 
@@ -2453,6 +2635,7 @@ class CamerasExtension(BaseExtension):
             execute_command=_execute_ptz_command,
             get_status=_svc_ptz_get_status,
             get_automation_readiness=_get_ptz_automation_readiness,
+            require_automation_tracking_confirmation=True,
             resolve_transport_binding=_resolve_ptz_transport_binding,
             validate_transport_binding=_validate_ptz_transport_binding,
         )
@@ -2460,6 +2643,7 @@ class CamerasExtension(BaseExtension):
         register_extension_shutdown_callback(app, ptz_controller.shutdown)
 
         services.register("cameras.ptz.list_presets", _svc_ptz_list_presets)
+        services.register("cameras.ptz.set_preset", _svc_ptz_set_preset)
         services.register("cameras.ptz.get_status", _svc_ptz_get_status)
         services.register("cameras.control.acquire", ptz_controller.acquire)
         services.register("cameras.control.renew", ptz_controller.renew)
@@ -3206,6 +3390,44 @@ class CamerasExtension(BaseExtension):
                 camera_source_id=resolved_source_id,
                 presets=presets,
             )
+
+        @app.post(
+            "/api/cameras/cameras/{camera_id}/ptz/presets",
+            response_model=CameraPtzPreset,
+        )
+        async def camera_ptz_set_preset(
+            request: Request,
+            camera_id: str,
+            body: CameraPtzSetPresetRequest,
+        ) -> CameraPtzPreset:
+            _require_auth(
+                request,
+                action="core:camera:control",
+                resource_type="core:camera",
+                resource_selector=str(camera_id or "").strip(),
+            )
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+            source_id = str(body.source_id or "").strip()
+            if not source_id:
+                raise HTTPException(status_code=400, detail="source_id is required")
+            services = _services(request)
+            try:
+                result = await services.call(
+                    "cameras.ptz.set_preset",
+                    camera_id=cid,
+                    camera_source_id=source_id,
+                    preset_name=str(body.name or "").strip(),
+                    idempotency_key=str(body.idempotency_key or "").strip(),
+                )
+            except KeyError:
+                raise HTTPException(
+                    status_code=503, detail="Camera PTZ controls are not available"
+                ) from None
+            if not isinstance(result, dict):
+                raise HTTPException(status_code=502, detail="ONVIF returned an invalid preset")
+            return CameraPtzPreset.model_validate(result)
 
         @app.post(
             "/api/cameras/cameras/{camera_id}/ptz/goto-preset",
@@ -4210,7 +4432,10 @@ class CamerasExtension(BaseExtension):
 
             composition_id = str(body.composition_id or "").strip()
             area_restriction_config: dict[str, Any] | None = None
-            if preset in CAMERA_MAPPING_REQUIRED_PRESETS:
+            requires_mapping = preset in CAMERA_MAPPING_REQUIRED_PRESETS or bool(
+                body.enable_ptz_attention
+            )
+            if requires_mapping:
                 if (
                     preset in {"vehicle_stopped", "person_stopped", "person_vehicle_interaction"}
                     and str(body.area_id or "").strip()
@@ -4234,6 +4459,26 @@ class CamerasExtension(BaseExtension):
                     raise HTTPException(
                         status_code=409,
                         detail="Mapping preset requires this camera to have at least four mapped points in a composition.",
+                    )
+
+            if body.enable_ptz_attention:
+                if not camera_source_has_ptz(source):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="PTZ focus requires a PTZ-capable selected camera source.",
+                    )
+                if not body.ptz_attention_native_tracking_disabled_confirmed:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "PTZ focus requires confirmation that native tracking, monitor point, "
+                            "and automatic return are disabled."
+                        ),
+                    )
+                if request.app.state.pipeline_operator_registry.get("ptz_attention.request") is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="PTZ attention operator is unavailable.",
                     )
 
             requested_name = str(body.pipeline_name or "").strip()
@@ -4282,6 +4527,51 @@ class CamerasExtension(BaseExtension):
                     notification_priority=notification_priority,
                     graph_uid=pipeline_name,
                 )
+                if body.enable_ptz_attention:
+                    event_node = next(
+                        (
+                            item
+                            for item in reversed(list(graph.get("nodes") or []))
+                            if str(item.get("operator") or "")
+                            in {
+                                "vision.spatial_relation_event",
+                                "core.stationary_event",
+                                "vision.group_events",
+                            }
+                        ),
+                        None,
+                    )
+                    if not isinstance(event_node, dict):
+                        raise ValueError("Preset does not expose a mapped lifecycle event for PTZ focus")
+                    graph["nodes"].append(
+                        {
+                            "uid": "ptz_attention",
+                            "id": "ptz_attention",
+                            "operator": "ptz_attention.request",
+                            "config": {
+                                "camera_id": cid,
+                                "source_id": source_id,
+                                "composition_id": composition_id,
+                                "priority": 0,
+                                "hold_after_close_seconds": 8.0,
+                                "native_tracking_disabled_confirmed": True,
+                            },
+                        }
+                    )
+                    graph["edges"].append(
+                        {
+                            "uid": "edge_ptz_attention_request",
+                            "from": {"node": str(event_node.get("id") or ""), "port": "out"},
+                            "to": {"node": "ptz_attention", "port": "in"},
+                            "traffic": {
+                                "modality": "data.event",
+                                "semantic_class": "event",
+                                "continuous": False,
+                            },
+                            "queue": {"max_items": 16, "drop_policy": "block"},
+                            "backpressure": {"mode": "pause_upstream"},
+                        }
+                    )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 

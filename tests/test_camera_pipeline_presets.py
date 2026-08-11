@@ -50,6 +50,7 @@ def _create_client(
     monkeypatch: pytest.MonkeyPatch,
     *,
     patch_model_readiness: bool = True,
+    include_ptz_attention: bool = False,
 ) -> TestClient:
     monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
@@ -64,14 +65,17 @@ def _create_client(
             "_ensure_camera_preset_detection_model_ready",
             _allow_detection_model,
         )
-    monkeypatch.setattr(
-        ext_manager_mod,
-        "_iter_entry_points",
-        lambda _group: [
-            _ExtensionEntryPoint("toposync_ext_cameras.plugin:CamerasExtension"),
-            _ExtensionEntryPoint("toposync_ext_vision.plugin:VisionExtension"),
-        ],
-    )
+    entry_points = [
+        _ExtensionEntryPoint("toposync_ext_cameras.plugin:CamerasExtension"),
+        _ExtensionEntryPoint("toposync_ext_vision.plugin:VisionExtension"),
+    ]
+    if include_ptz_attention:
+        entry_points.append(
+            _ExtensionEntryPoint(
+                "toposync_ext_ptz_attention.plugin:PtzAttentionExtension"
+            )
+        )
+    monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: entry_points)
     return TestClient(create_app())
 
 
@@ -165,6 +169,43 @@ def _configure_camera(client: TestClient) -> None:
                             "kind": "video",
                             "role": "main",
                             "origin": {"type": "rtsp", "rtsp_url": "rtsp://example.local/front"},
+                            "ingest": {"mode": "direct"},
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    assert res.status_code == 200, res.text
+
+
+def _configure_ptz_camera(client: TestClient) -> None:
+    res = client.patch(
+        "/api/settings/extensions/com.toposync.cameras",
+        json={
+            "devices": [
+                {
+                    "id": "cam1",
+                    "name": "Entrada Principal",
+                    "control": {"type": "onvif"},
+                    "onvif": {
+                        "xaddr": "http://camera.local/onvif/device_service",
+                        "username": "operator",
+                        "password": "not-used-in-test",
+                    },
+                    "sources": [
+                        {
+                            "id": "main",
+                            "name": "Principal",
+                            "enabled": True,
+                            "is_default": True,
+                            "kind": "video",
+                            "role": "main",
+                            "origin": {
+                                "type": "onvif_profile",
+                                "profile_token": "profile-main",
+                                "has_ptz": True,
+                            },
                             "ingest": {"mode": "direct"},
                         }
                     ],
@@ -496,6 +537,56 @@ def test_camera_pipeline_individual_preset_requires_and_uses_mapping(
         assert _node_config(pipeline, "vision.track").get("tracker_id") == "byte_world"
         assert "vision.group_events" not in _operator_ids(pipeline)
         assert _node_config(pipeline, "core.notify").get("dedupe_key_template") == "{{subject.id}}"
+
+
+def test_camera_pipeline_preset_option_adds_configured_ptz_attention_operator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _create_client(tmp_path, monkeypatch, include_ptz_attention=True) as client:
+        _configure_ptz_camera(client)
+        _add_mapped_composition(client)
+
+        rejected = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={
+                "preset": "person_vehicle_interaction",
+                "source_id": "main",
+                "composition_id": "yard",
+                "enable_ptz_attention": True,
+            },
+        )
+        assert rejected.status_code == 409, rejected.text
+        assert "native tracking" in rejected.json()["detail"]
+
+        created = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={
+                "preset": "person_vehicle_interaction",
+                "source_id": "main",
+                "composition_id": "yard",
+                "enable_ptz_attention": True,
+                "ptz_attention_native_tracking_disabled_confirmed": True,
+            },
+        )
+        assert created.status_code == 200, created.text
+
+        pipeline = client.get(f"/api/pipelines/{created.json()['pipeline_name']}").json()
+        assert "ptz_attention.request" in _operator_ids(pipeline)
+        assert _node_config_by_id(pipeline, "ptz_attention") == {
+            "camera_id": "cam1",
+            "source_id": "main",
+            "composition_id": "yard",
+            "priority": 0,
+            "hold_after_close_seconds": 8.0,
+            "native_tracking_disabled_confirmed": True,
+        }
+        assert _edge_config(pipeline, "relation", "ptz_attention")["queue"] == {
+            "max_items": 16,
+            "drop_policy": "block",
+        }
+        compiled = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert compiled.status_code == 200, compiled.text
 
 
 def test_camera_pipeline_quiet_preset_adds_session_grouping(

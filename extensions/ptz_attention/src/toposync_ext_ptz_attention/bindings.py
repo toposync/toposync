@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .constants import OPERATOR_ID_REQUEST
-from .models import AttentionProfile, effective_mode
+from .models import AttentionProfile, effective_mode, operator_profile_id
 
 
 ObserverBindingIssue = Literal[
@@ -68,11 +68,19 @@ def attention_bindings(pipelines: list[Any]) -> list[AttentionBinding]:
                 nodes=nodes,
                 incoming=incoming,
             )
+            camera_id = str(config.get("camera_id") or "").strip()
+            source_id = str(config.get("source_id") or "").strip()
+            composition_id = str(config.get("composition_id") or "").strip()
+            profile_id = (
+                operator_profile_id(camera_id)
+                if camera_id and source_id and composition_id
+                else str(config.get("profile_id") or "").strip()
+            )
             result.append(
                 AttentionBinding(
                     pipeline_name=str(getattr(pipeline, "name", "") or "").strip(),
                     node_id=node_id,
-                    profile_id=str(config.get("profile_id") or "").strip(),
+                    profile_id=profile_id,
                     event_type=str(config.get("event_type") or "").strip(),
                     event_type_field=str(config.get("event_type_field") or "").strip(),
                     enabled=bool(getattr(pipeline, "enabled", True)),

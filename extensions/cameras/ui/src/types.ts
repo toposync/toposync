@@ -26,7 +26,6 @@ export type CameraOnvifConfig = {
 
 export type CameraControlConfig = {
   type: CameraControlType;
-  automation_exclusive_control_confirmed: boolean;
 };
 
 export type CameraSourceOriginConfig = {
@@ -334,6 +333,8 @@ export type CameraPipelinePresetRequest = {
   notification_title?: string;
   notification_description?: string;
   notification_priority?: CameraNotificationPriority;
+  enable_ptz_attention?: boolean;
+  ptz_attention_native_tracking_disabled_confirmed?: boolean;
 };
 
 export type CameraPipelinePresetResponse = {

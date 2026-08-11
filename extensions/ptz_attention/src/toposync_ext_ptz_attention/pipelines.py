@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, SinkRuntime
 from toposync.runtime.pipelines.operator_registry import (
+    OperatorDiagnostic,
     OperatorRegistry,
     metadata_path_hint,
     payload_path_hint,
@@ -22,6 +23,7 @@ from .models import (
     AttentionTarget,
     PtzAttentionRequestConfig,
     effective_mode,
+    operator_profile_id,
 )
 
 
@@ -45,8 +47,9 @@ def _target_from_packet(
     candidates = (
         ("world_envelope", _packet_value(packet, config.world_envelope_field)),
         ("world_anchor", _packet_value(packet, config.world_anchor_field)),
-        ("bbox01", _packet_value(packet, config.bbox01_field)),
     )
+    if not config.camera_id:
+        candidates += (("bbox01", _packet_value(packet, config.bbox01_field)),)
     for key, raw in candidates:
         if raw is None:
             continue
@@ -55,6 +58,41 @@ def _target_from_packet(
         except ValidationError:
             continue
     return None
+
+
+def _ptz_attention_diagnostics(
+    config: dict[str, Any], context: dict[str, Any]
+) -> list[OperatorDiagnostic]:
+    parsed = PtzAttentionRequestConfig.model_validate(config)
+    if not parsed.camera_id:
+        return []
+    diagnostics: list[OperatorDiagnostic] = []
+    if not parsed.native_tracking_disabled_confirmed:
+        diagnostics.append(
+            OperatorDiagnostic(
+                severity="error",
+                code="ptz_attention_native_tracking_confirmation_required",
+                message=(
+                    "PTZ focus is blocked until native tracking, monitor point, and automatic "
+                    "return are confirmed disabled in this operator."
+                ),
+                suggestion="Confirm the camera is not competing for control, then enable the acknowledgement.",
+            )
+        )
+    upstream = list(context.get("upstream_nodes") or [])
+    if not any(
+        isinstance(item, dict) and item.get("operator_id") == "camera.camera_mapping"
+        for item in upstream
+    ):
+        diagnostics.append(
+            OperatorDiagnostic(
+                severity="error",
+                code="ptz_attention_mapping_required",
+                message="PTZ focus needs a calibrated world mapping upstream of this operator.",
+                suggestion="Add Map position in space before PTZ focus and select the same composition.",
+            )
+        )
+    return diagnostics
 
 
 class PtzAttentionRequestRuntime(SinkRuntime):
@@ -70,7 +108,46 @@ class PtzAttentionRequestRuntime(SinkRuntime):
         self._event_types: dict[str, str] = {}
 
     async def process_packet(self, packet: Packet, context: Any) -> list[Packet]:
-        profile = self.controller.store.get_profile(self.config.profile_id)
+        direct_operator = bool(self.config.camera_id)
+        profile_id = (
+            operator_profile_id(self.config.camera_id)
+            if direct_operator
+            else self.config.profile_id
+        )
+        if direct_operator and not self.config.native_tracking_disabled_confirmed:
+            self.controller.record_operator_rejection(
+                profile_id=profile_id,
+                pipeline_name=context.pipeline_name,
+                node_id=context.node_id,
+                event_id=str(_packet_value(packet, self.config.event_id_field) or packet.stream_id),
+                event_type=str(self.config.event_type or ""),
+                reason="native_tracking_disabled_confirmation_required",
+            )
+            return []
+        governance_event_type = ""
+        if direct_operator:
+            try:
+                governance_event_type = self.controller.register_operator_binding(
+                    self.config,
+                    pipeline_name=context.pipeline_name,
+                    node_id=context.node_id,
+                )
+                profile = await self.controller.ensure_operator_profile(
+                    self.config,
+                    operator_event_type=governance_event_type,
+                )
+            except ValueError as error:
+                self.controller.record_operator_rejection(
+                    profile_id=profile_id,
+                    pipeline_name=context.pipeline_name,
+                    node_id=context.node_id,
+                    event_id=str(_packet_value(packet, self.config.event_id_field) or packet.stream_id),
+                    event_type=str(self.config.event_type or ""),
+                    reason=str(error),
+                )
+                return []
+        else:
+            profile = self.controller.store.get_profile(self.config.profile_id)
         event_id = str(
             _packet_value(packet, self.config.event_id_field) or packet.stream_id
         ).strip()
@@ -82,6 +159,12 @@ class PtzAttentionRequestRuntime(SinkRuntime):
             or _packet_value(packet, self.config.event_type_field)
             or ""
         ).strip()
+        # Directly configured operators govern their own stable event type.  Event
+        # operators such as spatial_relation_event intentionally expose an event
+        # id/code instead of a generic payload.event_type, so requiring that
+        # optional field here would make an otherwise valid PTZ branch inert.
+        if not event_type and direct_operator:
+            event_type = governance_event_type
         if profile is None:
             self.controller.record_operator_rejection(
                 profile_id=self.config.profile_id,
@@ -124,13 +207,16 @@ class PtzAttentionRequestRuntime(SinkRuntime):
                 safe_close = AttentionIntent(
                     key=event_key,
                     event_id=event_id,
-                    event_type=close_event_type,
+                    event_type=governance_event_type or close_event_type,
                     profile_id=profile.id,
                     ptz_device_id=profile.ptz_device_id,
                     pipeline_name=context.pipeline_name,
                     node_id=context.node_id,
                     lifecycle="close",
-                    priority=0,
+                    priority=self.config.priority if direct_operator else 0,
+                    hold_after_close_seconds=(
+                        self.config.hold_after_close_seconds if direct_operator else None
+                    ),
                     target=None,
                     preferred_view_id="",
                     event_at=float(packet.created_at or now),
@@ -189,13 +275,16 @@ class PtzAttentionRequestRuntime(SinkRuntime):
         intent = AttentionIntent(
             key=f"{profile.ptz_device_id}:{context.pipeline_name}:{context.node_id}:{event_id}",
             event_id=event_id,
-            event_type=event_type,
+            event_type=governance_event_type or event_type,
             profile_id=profile.id,
             ptz_device_id=profile.ptz_device_id,
             pipeline_name=context.pipeline_name,
             node_id=context.node_id,
             lifecycle=lifecycle,
-            priority=0,
+            priority=self.config.priority if direct_operator else 0,
+            hold_after_close_seconds=(
+                self.config.hold_after_close_seconds if direct_operator else None
+            ),
             target=target,
             preferred_view_id=preferred_view_id,
             event_at=float(packet.created_at or now),
@@ -223,8 +312,6 @@ class PtzAttentionRequestRuntime(SinkRuntime):
         return live_observer_binding_issue(
             profile,
             attention_bindings(list(getattr(app_config, "pipelines", []) or [])),
-            pipeline_name=str(context.pipeline_name or "").strip(),
-            node_id=str(context.node_id or "").strip(),
             require_effective_binding=True,
         )
 
@@ -238,7 +325,7 @@ def register_pipeline_operators(
     defaults = PtzAttentionRequestConfig(profile_id="attention_profile").model_dump(mode="json")
     registry.register_operator(
         operator_id=OPERATOR_ID_REQUEST,
-        description="Submits lifecycle-aware semantic attention intents to the global PTZ arbiter.",
+        description="Focuses a calibrated PTZ camera on an active mapped event.",
         config_model=PtzAttentionRequestConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[],
@@ -253,6 +340,12 @@ def register_pipeline_operators(
         ordering="strict",
         preserves_lifecycle=True,
         can_drop_updates=True,
+        ui={
+            "pipeline_group": "output",
+            "pipeline_level": "basic",
+            "pipeline_order": 45,
+            "aliases": ["ptz", "focus", "event"],
+        },
         expression_hints=[
             payload_path_hint(
                 "payload.event_type",
@@ -280,6 +373,7 @@ def register_pipeline_operators(
                 description="Optional event type source.",
             ),
         ],
+        diagnostics_factory=_ptz_attention_diagnostics,
         owner=EXTENSION_ID,
         runtime_factory=lambda config, dependencies: PtzAttentionRequestRuntime(
             config,

@@ -141,6 +141,20 @@ def resolve_ptz_target_view(
         return _failure("duplicate_eligible_view_id")
 
     preferred = str(preferred_view_id or "").strip()
+    if target.get("home") is True:
+        if preferred:
+            matching = [item for item in candidates if item["view_id"] == preferred]
+            if len(matching) != 1:
+                return _failure("preferred_home_view_not_unique_or_unavailable")
+            selected = matching[0]
+        else:
+            selected = candidates[0]
+        return _success(
+            selected,
+            confidence=1.0,
+            reason="first_eligible_calibrated_view",
+            eligible_view_ids=candidate_view_ids,
+        )
     bbox = _bbox01(target)
     if bbox is not None:
         if not requested_source_id or not preferred:
@@ -350,13 +364,17 @@ def _success(
     *,
     confidence: float,
     reason: str,
+    eligible_view_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "view_id": candidate["view_id"],
         "preset_token": candidate["preset_token"],
         "confidence": float(confidence),
         "reason": reason,
     }
+    if eligible_view_ids is not None:
+        result["eligible_view_ids"] = list(eligible_view_ids)
+    return result
 
 
 def _failure(reason: str) -> dict[str, Any]:

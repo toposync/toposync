@@ -614,12 +614,17 @@ def test_camera_source_bootstraps_ptz_guard_and_leaves_non_ptz_unchanged() -> No
     assert all(call.get("ptz_device_id") == "front" for call in fast_calls)
     assert all(call.get("include_readiness") is False for call in fast_calls)
     assert all("camera_id" not in call and "source_id" not in call for call in fast_calls)
-    assert packets[0] is None
+    assert all(packet is not None for packet in packets)
+    first_packet = packets[0]
+    assert first_packet is not None
+    assert first_packet.payload["pan_tilt_zoom_state"]["geometry_safe"] is False
+    assert first_packet.metadata["ptz_geometry_safe"] is False
     safe_packets = [packet for packet in packets[1:] if packet is not None]
     assert len(safe_packets) == 5
     assert all(
         packet.payload["pan_tilt_zoom_state"]["geometry_safe"] is True for packet in safe_packets
     )
+    assert all(packet.metadata["ptz_geometry_safe"] is True for packet in safe_packets)
     assert fixed_packet is not None
     assert "pan_tilt_zoom_state" not in fixed_packet.payload
     assert ptz_settings_calls == 1

@@ -1882,11 +1882,14 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._last_ts = frame_ts
 
         ptz_snapshot = await self._ptz_geometry_snapshot()
-        if ptz_snapshot is not None and ptz_snapshot.get("geometry_safe") is not True:
-            return None
         ptz_state = (
             _pan_tilt_zoom_state_from_snapshot(ptz_snapshot) if ptz_snapshot is not None else None
         )
+        # A missing or inconclusive PTZ status must never be interpreted as a
+        # stable pose.  It also must not turn a healthy camera into a silent
+        # pipeline: downstream mapping observes ``geometry_safe`` and fails
+        # closed for world/pose-bound geometry, while raw frame telemetry and
+        # non-geometric analysis continue to flow.
 
         height = int(capture_frame.height)
         width = int(capture_frame.width)
@@ -1950,7 +1953,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 **(
                     {
                         "ptz_motion_epoch": int(ptz_state.get("motion_epoch") or 0),
-                        "ptz_geometry_safe": True,
+                        "ptz_geometry_safe": ptz_state.get("geometry_safe") is True,
                     }
                     if ptz_state is not None
                     else {}

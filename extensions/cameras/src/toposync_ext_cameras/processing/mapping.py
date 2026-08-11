@@ -72,6 +72,10 @@ class PanTiltZoomState:
     confidence: float | None = None
     preset_token: str | None = None
     preset_name: str | None = None
+    geometry_safe: bool | None = None
+    motion_epoch: int | None = None
+    motion_state: str | None = None
+    physical_updated_at: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

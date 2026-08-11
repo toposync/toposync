@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import re
@@ -1937,7 +1938,9 @@ class CamerasExtension(BaseExtension):
             camera_id: str,
             camera_source_id: str | None = None,
             allow_disabled_for_stop: bool = False,
-        ) -> tuple[OnvifClient, str, str, str, str]:
+            transport_context: Any | None = None,
+        ) -> tuple[OnvifClient, str, str, str]:
+            _ = transport_context
             cid = str(camera_id or "").strip()
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
@@ -2016,7 +2019,7 @@ class CamerasExtension(BaseExtension):
                     ),
                     auth_mode="auto",
                 )
-                return client, cached.ptz_xaddr, cached.profile_token, source_id, signature
+                return client, cached.ptz_xaddr, cached.profile_token, source_id
 
             async with _get_onvif_ptz_lock(cache_key):
                 now = time.time()
@@ -2040,7 +2043,7 @@ class CamerasExtension(BaseExtension):
                         ),
                         auth_mode="auto",
                     )
-                    return client, cached.ptz_xaddr, cached.profile_token, source_id, signature
+                    return client, cached.ptz_xaddr, cached.profile_token, source_id
 
                 timeout_s = _env_float(
                     "TOPOSYNC_CAMERA_ONVIF_TIMEOUT_S",
@@ -2126,7 +2129,7 @@ class CamerasExtension(BaseExtension):
                     move_mode=prev_mode,
                 )
 
-                return client, ptz_xaddr, profile_token, source_id, signature
+                return client, ptz_xaddr, profile_token, source_id
 
         def _clamp(value: float, minimum: float, maximum: float) -> float:
             return max(minimum, min(maximum, float(value)))
@@ -2574,103 +2577,6 @@ class CamerasExtension(BaseExtension):
                 reolink,
             )
 
-        async def _svc_ptz_set_preset(
-            *,
-            camera_id: str,
-            preset_name: str = "",
-            idempotency_key: str = "",
-            camera_source_id: str | None = None,
-        ) -> dict[str, Any]:
-            cid = str(camera_id or "").strip()
-            source_id = str(camera_source_id or "").strip()
-            name = str(preset_name or "").strip()
-            key = str(idempotency_key or "").strip()
-            if not cid or not source_id:
-                raise HTTPException(status_code=400, detail="camera_id and source_id are required")
-            if not name:
-                raise HTTPException(status_code=400, detail="preset name is required")
-            if not key:
-                raise HTTPException(status_code=400, detail="idempotency_key is required")
-            requested_token = "toposync-" + hashlib.sha256(
-                f"{cid}|{source_id}|{key}".encode("utf-8")
-            ).hexdigest()[:32]
-            (
-                client,
-                ptz_xaddr,
-                profile_token,
-                _resolved_source_id,
-                _bound,
-            ) = await _resolve_ptz_operation_context(
-                camera_id=cid,
-                camera_source_id=source_id,
-                transport_context=None,
-            )
-            try:
-                existing, reolink = await _list_ptz_presets_with_reolink_fallback(
-                    client=client,
-                    ptz_xaddr=ptz_xaddr,
-                    profile_token=profile_token,
-                )
-            except (OnvifError, ReolinkCgiError) as exc:
-                raise _ptz_transport_error(exc, operation="list_presets", camera_id=cid) from exc
-            for preset in existing:
-                if str(preset.token or "").strip() == requested_token:
-                    return {
-                        "token": requested_token,
-                        "name": str(preset.name or name).strip() or name,
-                        "pan": preset.pan,
-                        "tilt": preset.tilt,
-                    "zoom": preset.zoom,
-                }
-            if reolink is not None:
-                try:
-                    created = await reolink.set_current_position_preset(name=name)
-                except ReolinkCgiError as exc:
-                    raise _ptz_transport_error(
-                        exc,
-                        operation="set_preset",
-                        camera_id=cid,
-                    ) from exc
-                return {"token": created.token, "name": created.name}
-            try:
-                token = await client.set_preset(
-                    ptz_xaddr,
-                    profile_token=profile_token,
-                    preset_name=name,
-                    preset_token=requested_token,
-                )
-            except OnvifAmbiguousMutationError as exc:
-                # Do not retry the write. Reconcile once by the deterministic token.
-                try:
-                    reconciled, _reolink = await _list_ptz_presets_with_reolink_fallback(
-                        client=client,
-                        ptz_xaddr=ptz_xaddr,
-                        profile_token=profile_token,
-                    )
-                except (OnvifError, ReolinkCgiError) as reconciliation_error:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="SetPreset outcome is being reconciled",
-                        headers={"Retry-After": "1"},
-                    ) from reconciliation_error
-                for preset in reconciled:
-                    if str(preset.token or "").strip() == requested_token:
-                        return {
-                            "token": requested_token,
-                            "name": str(preset.name or name).strip() or name,
-                            "pan": preset.pan,
-                            "tilt": preset.tilt,
-                            "zoom": preset.zoom,
-                        }
-                raise HTTPException(
-                    status_code=503,
-                    detail="SetPreset outcome is being reconciled",
-                    headers={"Retry-After": "1"},
-                ) from exc
-            except OnvifError as exc:
-                raise _ptz_transport_error(exc, operation="set_preset", camera_id=cid) from exc
-            return {"token": str(token or "").strip(), "name": name}
-
         async def _svc_ptz_goto_preset(
             *,
             camera_id: str,
@@ -2721,7 +2627,11 @@ class CamerasExtension(BaseExtension):
                 try:
                     status = await client.get_ptz_status(ptz_xaddr, profile_token=profile_token)
                 except OnvifError as exc:
-                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+                    raise _ptz_transport_error(
+                        exc,
+                        operation="get_status",
+                        camera_id=cid,
+                    ) from exc
                 tracking = _get_ptz_preset_tracking(key)
                 move_status = str(status.move_status or "").strip().upper()
                 error = str(status.error or "").strip()

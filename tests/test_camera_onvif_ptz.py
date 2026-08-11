@@ -121,6 +121,10 @@ def test_onvif_client_ptz_presets_status_and_moves(monkeypatch: pytest.MonkeyPat
         if action.endswith("/SetPreset"):
             assert b"<tptz:SetPreset" in body
             assert b"<tptz:ProfileToken>profile-main</tptz:ProfileToken>" in body
+            calls["set_preset"] += 1
+            if b"<tptz:PresetName>Guard</tptz:PresetName>" in body:
+                assert b"<tptz:PresetToken>toposync-guard</tptz:PresetToken>" in body
+                return set_preset_envelope
             assert b"<tptz:PresetName>Temporary &amp; safe</tptz:PresetName>" in body
             assert b"<tptz:PresetToken>requested&lt;slot&gt;</tptz:PresetToken>" in body
             return set_preset_xml

@@ -5542,6 +5542,10 @@ def _read_pan_tilt_zoom_state(value: Any) -> PanTiltZoomState | None:
     confidence = _optional_float(rec.get("confidence"))
     preset_token = str(rec.get("preset_token") or "").strip() or None
     preset_name = str(rec.get("preset_name") or "").strip() or None
+    geometry_safe = rec.get("geometry_safe") if isinstance(rec.get("geometry_safe"), bool) else None
+    motion_epoch = _optional_non_negative_int(rec.get("motion_epoch"))
+    motion_state = str(rec.get("motion_state") or "").strip() or None
+    physical_updated_at = _optional_float(rec.get("physical_updated_at"))
     if (
         pan is None
         and tilt is None
@@ -5553,6 +5557,10 @@ def _read_pan_tilt_zoom_state(value: Any) -> PanTiltZoomState | None:
         and confidence is None
         and preset_token is None
         and preset_name is None
+        and geometry_safe is None
+        and motion_epoch is None
+        and motion_state is None
+        and physical_updated_at is None
     ):
         return None
     return PanTiltZoomState(
@@ -5566,7 +5574,21 @@ def _read_pan_tilt_zoom_state(value: Any) -> PanTiltZoomState | None:
         confidence=confidence,
         preset_token=preset_token,
         preset_name=preset_name,
+        geometry_safe=geometry_safe,
+        motion_epoch=motion_epoch,
+        motion_state=motion_state,
+        physical_updated_at=physical_updated_at,
     )
+
+
+def _pan_tilt_zoom_state_from_control_snapshot(value: Any) -> PanTiltZoomState | None:
+    """Normalize a controller or direct ONVIF status payload for mapping selection."""
+    rec = value if isinstance(value, dict) else {}
+    for nested_key in ("physical", "status", "ptz_status"):
+        nested = rec.get(nested_key)
+        if isinstance(nested, dict):
+            return _read_pan_tilt_zoom_state({**rec, **nested})
+    return _read_pan_tilt_zoom_state(rec)
 
 
 def _pan_tilt_zoom_state_to_payload(value: PanTiltZoomState | None) -> dict[str, Any] | None:
@@ -5583,6 +5605,10 @@ def _pan_tilt_zoom_state_to_payload(value: PanTiltZoomState | None) -> dict[str,
         "confidence": value.confidence,
         "preset_token": value.preset_token,
         "preset_name": value.preset_name,
+        "geometry_safe": value.geometry_safe,
+        "motion_epoch": value.motion_epoch,
+        "motion_state": value.motion_state,
+        "physical_updated_at": value.physical_updated_at,
     }
 
 

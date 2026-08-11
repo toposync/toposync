@@ -861,52 +861,6 @@ class OnvifClient:
         )
         _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
 
-    async def set_preset(
-        self,
-        ptz_xaddr: str,
-        *,
-        profile_token: str,
-        preset_name: str = "",
-        preset_token: str = "",
-    ) -> str:
-        """Create one PTZ preset without re-sending an ambiguous mutation."""
-        url = str(ptz_xaddr or "").strip()
-        profile = str(profile_token or "").strip()
-        if not url:
-            raise OnvifError("Missing ONVIF PTZ service URL")
-        if not profile:
-            raise OnvifError("Missing ONVIF profile token")
-
-        # A successful read discovers the accepted SOAP/auth transport. The mutation below is
-        # deliberately sent exactly once; callers must reconcile an ambiguous outcome by reading.
-        await self.get_ptz_presets(url, profile_token=profile)
-        transport = self._last_ptz_transport
-        if transport is None:
-            raise OnvifError("ONVIF PTZ transport was not established")
-        version, soap_ns, auth = transport
-        body_xml = _tptz_set_preset_body(
-            profile,
-            preset_name=preset_name,
-            preset_token=preset_token,
-        )
-        try:
-            payload = await self._call(
-                url=url,
-                body_xml=body_xml,
-                soap_action=_action(PTZ_NS, "SetPreset"),
-                soap_ns=soap_ns,
-                soap_version=version,
-                auth=auth,
-            )
-            token = _parse_ptz_preset_token(payload, soap_ns=soap_ns)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise OnvifAmbiguousMutationError("ONVIF SetPreset outcome is ambiguous") from exc
-        if not token:
-            raise OnvifAmbiguousMutationError("ONVIF returned an empty preset token")
-        return token
-
     async def goto_preset(self, ptz_xaddr: str, *, profile_token: str, preset_token: str) -> None:
         url = str(ptz_xaddr or "").strip()
         profile = str(profile_token or "").strip()

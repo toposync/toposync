@@ -14,6 +14,7 @@ import type {
   CameraProjectionModel,
   CameraProjectionRefinementPoint,
   CameraProjectionWorldQuad,
+  CameraVisualPoseSignature,
   CameraMappingQuality,
   CameraSourceConfig,
   CameraSourceOriginConfig,
@@ -254,6 +255,41 @@ function readProjectionBoundaryRefinement(value: unknown): CameraProjectionModel
   return points.length > 0 ? { model: "edge_handles_v1", points } : null;
 }
 
+function readVisualPoseSignature(value: unknown): CameraVisualPoseSignature | null {
+  const record = readRecord(value);
+  const algorithm = readString(record.algorithm).trim();
+  const keypointCount = readFiniteNumber(record.keypoint_count, NaN);
+  const keypointsBase64 = readString(record.keypoints_base64).trim();
+  const descriptorsBase64 = readString(record.descriptors_base64).trim();
+  const originalWidth = readFiniteNumber(record.original_width, NaN);
+  const originalHeight = readFiniteNumber(record.original_height, NaN);
+  const digestSha256 = readString(record.digest_sha256).trim().toLowerCase();
+  if (
+    algorithm !== "orb_hamming_v1" ||
+    !Number.isInteger(keypointCount) ||
+    keypointCount < 1 ||
+    keypointCount > 320 ||
+    !keypointsBase64 ||
+    !descriptorsBase64 ||
+    !Number.isInteger(originalWidth) ||
+    originalWidth < 2 ||
+    !Number.isInteger(originalHeight) ||
+    originalHeight < 2 ||
+    !/^[0-9a-f]{64}$/.test(digestSha256)
+  ) {
+    return null;
+  }
+  return {
+    algorithm,
+    keypoint_count: keypointCount,
+    keypoints_base64: keypointsBase64,
+    descriptors_base64: descriptorsBase64,
+    original_width: originalWidth,
+    original_height: originalHeight,
+    digest_sha256: digestSha256,
+  };
+}
+
 export function readProjectionModel(value: unknown, fallbackCenter?: { x: number; z: number }): CameraProjectionModel {
   const record = readRecord(value);
   return {
@@ -262,6 +298,7 @@ export function readProjectionModel(value: unknown, fallbackCenter?: { x: number
     world_quad: readWorldQuad(record.world_quad) ?? createDefaultWorldQuad(fallbackCenter ?? { x: 0, z: 0 }, { estimated: true }),
     refinement: readProjectionRefinement(record.refinement),
     boundary_refinement: readProjectionBoundaryRefinement(record.boundary_refinement),
+    visual_pose_signature: readVisualPoseSignature(record.visual_pose_signature),
   };
 }
 

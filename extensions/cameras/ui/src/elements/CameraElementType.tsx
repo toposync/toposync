@@ -17,14 +17,17 @@ import type {
 } from "@toposync/plugin-api";
 
 import {
+  createCameraPtzPreset,
   fetchCameraPtzPresets,
   fetchCameraPtzStatus,
   fetchCameraSnapshot,
   fetchCamerasIndex,
   gotoCameraPtzPreset,
+  isCameraSnapshotFreshnessUnverifiableError,
   mapControlPoint,
   moveCameraPtz,
   moveCameraPtzAbsolute,
+  propagateCameraProjection,
   stopCameraPtz,
 } from "../api/camerasApi";
 import { CAMERA_ELEMENT_TYPE_ID, CONTROL_POINT_COLORS } from "../constants";
@@ -33,7 +36,6 @@ import {
   createDefaultCalibratedView,
   createDefaultControlPointSet,
   createUniqueId,
-  defaultImageRegion,
   duplicateControlPointSetForNewView,
   labelForIndex,
   readCalibratedViews,
@@ -56,6 +58,7 @@ import type {
   CameraPtzPreset,
   CameraSourceConfig,
   CameraSourceRole,
+  CameraVisualCalibrationResult,
   CamerasIndex,
   PanTiltZoomState,
 } from "../types";
@@ -266,6 +269,182 @@ function poseHasAbsoluteTarget(poseReference: CameraPoseReference | null | undef
   );
 }
 
+function poseHasCompleteAbsoluteTarget(poseReference: CameraPoseReference | null | undefined): boolean {
+  return Boolean(
+    poseReference &&
+      typeof poseReference.pan === "number" &&
+      Number.isFinite(poseReference.pan) &&
+      typeof poseReference.tilt === "number" &&
+      Number.isFinite(poseReference.tilt) &&
+      typeof poseReference.zoom === "number" &&
+      Number.isFinite(poseReference.zoom),
+  );
+}
+
+function ptzStatusMatchesPose(
+  status: PanTiltZoomState | null,
+  poseReference: CameraPoseReference,
+  tolerance = 0.03,
+): boolean {
+  let compared = false;
+  const hasPanTiltTarget =
+    typeof poseReference.pan === "number" &&
+    Number.isFinite(poseReference.pan) &&
+    typeof poseReference.tilt === "number" &&
+    Number.isFinite(poseReference.tilt);
+  if (hasPanTiltTarget) {
+    if (
+      typeof status?.pan !== "number" ||
+      !Number.isFinite(status.pan) ||
+      typeof status.tilt !== "number" ||
+      !Number.isFinite(status.tilt)
+    ) {
+      return false;
+    }
+    compared = true;
+    if (
+      Math.abs(status.pan - poseReference.pan!) > tolerance ||
+      Math.abs(status.tilt - poseReference.tilt!) > tolerance
+    ) {
+      return false;
+    }
+  }
+  if (typeof poseReference.zoom === "number" && Number.isFinite(poseReference.zoom)) {
+    if (typeof status?.zoom !== "number" || !Number.isFinite(status.zoom)) return false;
+    compared = true;
+    if (Math.abs(status.zoom - poseReference.zoom) > tolerance) return false;
+  }
+  return compared;
+}
+
+function ptzStatusContradictsPose(
+  status: PanTiltZoomState | null,
+  poseReference: CameraPoseReference,
+  tolerance = 0.03,
+): boolean {
+  const hasPanTiltTarget =
+    typeof poseReference.pan === "number" &&
+    Number.isFinite(poseReference.pan) &&
+    typeof poseReference.tilt === "number" &&
+    Number.isFinite(poseReference.tilt);
+  if (hasPanTiltTarget) {
+    if (
+      typeof status?.pan === "number" &&
+      Number.isFinite(status.pan) &&
+      Math.abs(status.pan - poseReference.pan!) > tolerance
+    ) {
+      return true;
+    }
+    if (
+      typeof status?.tilt === "number" &&
+      Number.isFinite(status.tilt) &&
+      Math.abs(status.tilt - poseReference.tilt!) > tolerance
+    ) {
+      return true;
+    }
+  }
+  if (
+    typeof poseReference.zoom === "number" &&
+    Number.isFinite(poseReference.zoom) &&
+    typeof status?.zoom === "number" &&
+    Number.isFinite(status.zoom) &&
+    Math.abs(status.zoom - poseReference.zoom) > tolerance
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function ptzTelemetryIsStable(
+  previous: PanTiltZoomState | null,
+  current: PanTiltZoomState | null,
+  tolerance = 0.002,
+): boolean {
+  let compared = 0;
+  for (const axis of ["pan", "tilt", "zoom"] as const) {
+    const previousValue = previous?.[axis];
+    const currentValue = current?.[axis];
+    if (
+      typeof previousValue !== "number" ||
+      !Number.isFinite(previousValue) ||
+      typeof currentValue !== "number" ||
+      !Number.isFinite(currentValue)
+    ) {
+      continue;
+    }
+    compared += 1;
+    if (Math.abs(currentValue - previousValue) > tolerance) return false;
+  }
+  return compared > 0;
+}
+
+type PtzSettleExpectation = {
+  baselineVisualFingerprint?: VisualStabilityFingerprint | null;
+  targetPose?: CameraPoseReference | null;
+  requireTargetEvidence?: boolean;
+  requireVisualTransition?: boolean;
+};
+
+type VisualStabilityFingerprint = {
+  luminance: Float32Array;
+  meanLuminance: number;
+};
+
+function ptzSettleTargetIsConfirmed(
+  status: PanTiltZoomState | null,
+  expectation?: PtzSettleExpectation,
+): boolean {
+  return Boolean(expectation?.targetPose && poseHasAbsoluteTarget(expectation.targetPose) && ptzStatusMatchesPose(status, expectation.targetPose));
+}
+
+function ptzSettleRequiresVisualConfirmation(expectation?: PtzSettleExpectation): boolean {
+  return expectation?.requireTargetEvidence === true;
+}
+
+function visualFingerprintDistance(
+  left: VisualStabilityFingerprint,
+  right: VisualStabilityFingerprint,
+): number {
+  if (left.luminance.length !== right.luminance.length || !left.luminance.length) return Number.POSITIVE_INFINITY;
+  let centeredDifference = 0;
+  for (let index = 0; index < left.luminance.length; index += 1) {
+    const leftCentered = left.luminance[index] - left.meanLuminance;
+    const rightCentered = right.luminance[index] - right.meanLuminance;
+    centeredDifference += Math.abs(leftCentered - rightCentered);
+  }
+  const exposureDifference = Math.abs(left.meanLuminance - right.meanLuminance) * 0.25;
+  return centeredDifference / left.luminance.length + exposureDifference;
+}
+
+async function visualStabilityFingerprintFromBlob(
+  blob: Blob,
+  signal: AbortSignal,
+): Promise<VisualStabilityFingerprint | null> {
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+  if (typeof createImageBitmap !== "function") return null;
+  const bitmap = await createImageBitmap(blob);
+  try {
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    const canvas = document.createElement("canvas");
+    canvas.width = 32;
+    canvas.height = 18;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return null;
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const luminance = new Float32Array(canvas.width * canvas.height);
+    let sum = 0;
+    for (let sourceIndex = 0, targetIndex = 0; sourceIndex < pixels.length; sourceIndex += 4, targetIndex += 1) {
+      const value = (pixels[sourceIndex] * 0.2126 + pixels[sourceIndex + 1] * 0.7152 + pixels[sourceIndex + 2] * 0.0722) / 255;
+      luminance[targetIndex] = value;
+      sum += value;
+    }
+    return { luminance, meanLuminance: sum / luminance.length };
+  } finally {
+    bitmap.close();
+  }
+}
+
 function absoluteMovePayloadForPose(
   sourceId: string,
   poseReference: CameraPoseReference,
@@ -287,6 +466,42 @@ function formatPtzTelemetryValue(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "—";
 }
 
+function safeCameraPresetName(
+  viewLabel: string,
+  fallbackLabel: string,
+  presets: CameraPtzPreset[],
+): string {
+  const sanitize = (value: string) =>
+    Array.from(
+      value
+        .normalize("NFKC")
+        .replace(/[\u0000-\u001f\u007f]/g, " ")
+        .replace(/[\\/:*?"<>|]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+      .slice(0, 48)
+      .join("")
+      .trim();
+
+  const baseName = sanitize(viewLabel) || sanitize(fallbackLabel) || "Camera view";
+  const existingNames = new Set(
+    presets
+      .map((preset) => String(preset.name ?? "").trim().toLocaleLowerCase())
+      .filter(Boolean),
+  );
+  if (!existingNames.has(baseName.toLocaleLowerCase())) return baseName;
+
+  for (let index = 2; index < 1000; index += 1) {
+    const suffix = ` ${index}`;
+    const availableLength = Math.max(1, 48 - Array.from(suffix).length);
+    const candidate = `${Array.from(baseName).slice(0, availableLength).join("").trim()}${suffix}`;
+    if (!existingNames.has(candidate.toLocaleLowerCase())) return candidate;
+  }
+
+  return `${Array.from(baseName).slice(0, 41).join("").trim()} ${Date.now().toString().slice(-6)}`;
+}
+
 function cameraBounds(element: CompositionElement): BoundsXZ {
   return {
     minX: element.position.x - 0.42,
@@ -304,6 +519,53 @@ type CameraSnapshotSourceOption = Pick<CameraSourceConfig, "id" | "name" | "enab
   has_ptz?: boolean;
 };
 
+type VisualCalibrationReference = {
+  view: CameraCalibratedView;
+  image: Blob;
+  sourceId: string;
+};
+
+type VisualCalibrationRun = {
+  status: "idle" | "analyzing" | "proposed" | "accepted" | "rejected" | "error";
+  targetViewId: string | null;
+  result: CameraVisualCalibrationResult | null;
+  proposedView: CameraCalibratedView | null;
+  errorMessage: string | null;
+};
+
+function emptyVisualCalibrationRun(): VisualCalibrationRun {
+  return {
+    status: "idle",
+    targetViewId: null,
+    result: null,
+    proposedView: null,
+    errorMessage: null,
+  };
+}
+
+function isVisualCalibrationView(view: CameraCalibratedView): boolean {
+  return String(view.projection_quality?.note ?? "")
+    .trim()
+    .toLowerCase()
+    .startsWith("visual calibration;");
+}
+
+function invalidateVisualCalibrationApproval(view: CameraCalibratedView): CameraCalibratedView {
+  const invalidatedStatus = view.projection_quality?.status === "incomplete" ? "incomplete" : "estimated";
+  return {
+    ...view,
+    projection_model: {
+      ...view.projection_model,
+      visual_pose_signature: null,
+    },
+    projection_quality: {
+      ...(view.projection_quality ?? {}),
+      status: invalidatedStatus,
+      estimated: invalidatedStatus === "estimated",
+    },
+  };
+}
+
 const CALIBRATION_SNAPSHOT_ROLE_ORDER: CameraSourceRole[] = ["sub", "main", "custom", "zoom"];
 
 function isAbortError(error: unknown): boolean {
@@ -314,6 +576,11 @@ function isTransientSnapshotError(error: unknown): boolean {
   if (isAbortError(error)) return false;
   const message = error instanceof Error ? error.message : String(error);
   return /failed to fetch|networkerror|load failed|ecconnrefused|temporarily unavailable/i.test(message);
+}
+
+function calibrationSnapshotErrorMessage(error: unknown, freshnessUnverifiableMessage: string): string {
+  if (isCameraSnapshotFreshnessUnverifiableError(error)) return freshnessUnverifiableMessage;
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
@@ -332,6 +599,72 @@ async function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function runPtzMutationWithFence<T>(startMutation: () => Promise<T>): Promise<T> {
+  // The mutable request intentionally outlives the UI AbortController. Its backend-owned
+  // timeout must settle before a queued Stop can be sent, preserving Goto -> Stop ordering.
+  return Promise.resolve().then(startMutation);
+}
+
+const pendingCameraPtzStopCompletions = new Map<string, Promise<void>>();
+
+function cameraPtzStopScopeKey(cameraId: string): string {
+  return cameraId;
+}
+
+function pendingCameraPtzStopCompletion(cameraId: string): Promise<void> | null {
+  if (!cameraId) return null;
+  return pendingCameraPtzStopCompletions.get(cameraPtzStopScopeKey(cameraId)) ?? null;
+}
+
+function trackCameraPtzStopCompletion(
+  cameraId: string,
+  completion: Promise<void>,
+): Promise<void> {
+  const key = cameraPtzStopScopeKey(cameraId);
+  pendingCameraPtzStopCompletions.set(key, completion);
+  void completion.then(
+    () => {
+      if (pendingCameraPtzStopCompletions.get(key) === completion) {
+        pendingCameraPtzStopCompletions.delete(key);
+      }
+    },
+    () => {
+      if (pendingCameraPtzStopCompletions.get(key) === completion) {
+        pendingCameraPtzStopCompletions.delete(key);
+      }
+    },
+  );
+  return completion;
+}
+
+async function waitForPendingCameraPtzStops(cameraId: string): Promise<void> {
+  let pendingCompletion = pendingCameraPtzStopCompletion(cameraId);
+  while (pendingCompletion) {
+    await pendingCompletion.catch(() => undefined);
+    const latestCompletion = pendingCameraPtzStopCompletion(cameraId);
+    if (!latestCompletion || latestCompletion === pendingCompletion) return;
+    pendingCompletion = latestCompletion;
+  }
+}
+
+function enqueueCameraPtzStop(
+  cameraId: string,
+  sourceId: string,
+  mutationPromise: Promise<unknown> | null,
+): Promise<void> {
+  const previousCompletion = pendingCameraPtzStopCompletion(cameraId);
+  const completion = (async () => {
+    if (previousCompletion) await previousCompletion.catch(() => undefined);
+    if (mutationPromise) await mutationPromise.catch(() => undefined);
+    await stopCameraPtz(cameraId, {
+      source_id: sourceId,
+      pan_tilt: true,
+      zoom: true,
+    }).catch(() => undefined);
+  })();
+  return trackCameraPtzStopCompletion(cameraId, completion);
+}
+
 async function fetchCameraSnapshotWithRetry(
   cameraId: string,
   sourceId: string,
@@ -341,7 +674,9 @@ async function fetchCameraSnapshotWithRetry(
   let lastError: unknown = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await fetchCameraSnapshot(cameraId, sourceId, signal);
+      // PTZ causality is established by the required visual transition below;
+      // this only drains newly published decoder frames.
+      return await fetchCameraSnapshot(cameraId, sourceId, signal, true, "decoder");
     } catch (error) {
       if (isAbortError(error)) throw error;
       lastError = error;
@@ -350,6 +685,75 @@ async function fetchCameraSnapshotWithRetry(
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Snapshot failed"));
+}
+
+async function captureVisualStabilityFingerprint(
+  cameraId: string,
+  sourceId: string,
+  signal: AbortSignal,
+): Promise<VisualStabilityFingerprint | null> {
+  const snapshot = await fetchCameraSnapshotWithRetry(cameraId, sourceId, signal, 2);
+  return visualStabilityFingerprintFromBlob(snapshot, signal);
+}
+
+async function capturePtzMovementBaseline(
+  cameraId: string,
+  ptzSourceId: string,
+  snapshotSourceId: string,
+  targetPose: CameraPoseReference | null | undefined,
+  signal: AbortSignal,
+  fingerprintUnavailableMessage: string,
+  requireCompletePoseForTargetConfirmation = false,
+): Promise<{
+  visualFingerprint: VisualStabilityFingerprint;
+  targetAlreadyConfirmed: boolean;
+}> {
+  const [status, visualFingerprint] = await Promise.all([
+    fetchCameraPtzStatus(cameraId, ptzSourceId, signal)
+      .then((response) => response.status ?? null)
+      .catch((error) => {
+        if (isAbortError(error) || signal.aborted) throw error;
+        return null;
+      }),
+    captureVisualStabilityFingerprint(cameraId, snapshotSourceId, signal),
+  ]);
+  if (!visualFingerprint) throw new Error(fingerprintUnavailableMessage);
+  return {
+    visualFingerprint,
+    targetAlreadyConfirmed:
+      ptzSettleTargetIsConfirmed(status, { targetPose }) &&
+      (!requireCompletePoseForTargetConfirmation || poseHasCompleteAbsoluteTarget(targetPose)),
+  };
+}
+
+async function waitForCameraVisualStability(
+  cameraId: string,
+  sourceId: string,
+  signal: AbortSignal,
+  baseline: VisualStabilityFingerprint | null | undefined,
+  requireTransition: boolean,
+): Promise<boolean> {
+  await waitForRetry(900, signal);
+  let previous: VisualStabilityFingerprint | null = null;
+  let consecutiveStablePairs = 0;
+  let observedTransition = !requireTransition;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const current = await captureVisualStabilityFingerprint(cameraId, sourceId, signal);
+    if (current) {
+      if (baseline && visualFingerprintDistance(baseline, current) >= 0.055) observedTransition = true;
+      if (previous && visualFingerprintDistance(previous, current) <= 0.025) {
+        consecutiveStablePairs += 1;
+      } else {
+        consecutiveStablePairs = 0;
+      }
+      if (observedTransition && consecutiveStablePairs >= 2) return true;
+      previous = current;
+    } else {
+      consecutiveStablePairs = 0;
+    }
+    await waitForRetry(650, signal);
+  }
+  return false;
 }
 
 function snapshotSourceDisplayName(source: CameraSnapshotSourceOption | null): string {
@@ -362,25 +766,26 @@ function resolvePreferredCalibrationSnapshotSourceId(
   sources: CameraSnapshotSourceOption[],
 ): string {
   const enabledVideoSources = sources.filter((source) => source.enabled !== false && source.kind === "video");
-  if (!enabledVideoSources.length) return "";
+  if (!view || !enabledVideoSources.length) return "";
 
   const compatibleSourceIds = (view?.stream_scope?.compatible_source_ids ?? []).map((item) => String(item || "").trim()).filter(Boolean);
   for (const sourceId of compatibleSourceIds) {
     if (enabledVideoSources.some((source) => source.id === sourceId)) return sourceId;
   }
+  if (compatibleSourceIds.length > 0) return "";
 
-  const compatibleRoles = view?.stream_scope?.compatible_roles?.length
-    ? view.stream_scope.compatible_roles.map((role) => String(role || "").trim())
-    : ["main", "sub"];
-  const explicitZoomAllowed = compatibleRoles.includes("zoom") || compatibleSourceIds.length > 0;
-  const allowedRoles = new Set(compatibleRoles.filter((role) => explicitZoomAllowed || role !== "zoom"));
+  const explicitCompatibleRoles = (view?.stream_scope?.compatible_roles ?? [])
+    .map((role) => String(role || "").trim())
+    .filter(Boolean);
+  if (!explicitCompatibleRoles.length) return "";
+  const allowedRoles = new Set(explicitCompatibleRoles);
   const roleCandidates = enabledVideoSources.filter((source) => allowedRoles.has(source.role));
-  const candidates = roleCandidates.length ? roleCandidates : enabledVideoSources;
+  if (!roleCandidates.length) return "";
 
-  const defaultCandidate = candidates.find((source) => source.is_default);
-  if (defaultCandidate && allowedRoles.has(defaultCandidate.role)) return defaultCandidate.id;
+  const defaultCandidate = roleCandidates.find((source) => source.is_default);
+  if (defaultCandidate) return defaultCandidate.id;
 
-  const sorted = [...candidates].sort((left, right) => {
+  const sorted = [...roleCandidates].sort((left, right) => {
     const leftIndex = CALIBRATION_SNAPSHOT_ROLE_ORDER.indexOf(left.role);
     const rightIndex = CALIBRATION_SNAPSHOT_ROLE_ORDER.indexOf(right.role);
     return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
@@ -392,31 +797,13 @@ function resolvePreferredCalibrationPtzSourceId(
   view: CameraCalibratedView | null,
   sources: CameraSnapshotSourceOption[],
 ): string {
-  const ptzSources = sources.filter((source) => source.enabled !== false && source.kind === "video" && source.has_ptz === true);
-  if (!ptzSources.length) return "";
-
-  const compatibleSourceIds = (view?.stream_scope?.compatible_source_ids ?? []).map((item) => String(item || "").trim()).filter(Boolean);
-  for (const sourceId of compatibleSourceIds) {
-    if (ptzSources.some((source) => source.id === sourceId)) return sourceId;
-  }
-
-  const compatibleRoles = view?.stream_scope?.compatible_roles?.length
-    ? view.stream_scope.compatible_roles.map((role) => String(role || "").trim())
-    : ["main", "sub"];
-  const explicitZoomAllowed = compatibleRoles.includes("zoom") || compatibleSourceIds.length > 0;
-  const allowedRoles = new Set(compatibleRoles.filter((role) => explicitZoomAllowed || role !== "zoom"));
-  const roleCandidates = ptzSources.filter((source) => allowedRoles.has(source.role));
-  const candidates = roleCandidates.length ? roleCandidates : ptzSources;
-
-  const defaultCandidate = candidates.find((source) => source.is_default);
-  if (defaultCandidate) return defaultCandidate.id;
-
-  const sorted = [...candidates].sort((left, right) => {
-    const leftIndex = CALIBRATION_SNAPSHOT_ROLE_ORDER.indexOf(left.role);
-    const rightIndex = CALIBRATION_SNAPSHOT_ROLE_ORDER.indexOf(right.role);
-    return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
-  });
-  return sorted[0]?.id ?? "";
+  const snapshotSourceId = resolvePreferredCalibrationSnapshotSourceId(view, sources);
+  if (!snapshotSourceId) return "";
+  const snapshotSource = sources.find(
+    (source) => source.id === snapshotSourceId && source.enabled !== false && source.kind === "video",
+  );
+  if (!snapshotSource || snapshotSource.has_ptz === false) return "";
+  return snapshotSource.id;
 }
 
 export function createCameraElementType(host: ToposyncHost): ElementType {
@@ -1056,6 +1443,35 @@ function cloneBoundaryPoints(points: CameraProjectionBoundaryPoint[]): CameraPro
     image: { ...point.image },
     world: { ...point.world },
   }));
+}
+
+function cloneCalibratedView(view: CameraCalibratedView): CameraCalibratedView {
+  return {
+    ...view,
+    pose_reference: view.pose_reference ? { ...view.pose_reference } : null,
+    stream_scope: {
+      compatible_roles: [...(view.stream_scope?.compatible_roles ?? [])],
+      compatible_source_ids: [...(view.stream_scope?.compatible_source_ids ?? [])],
+    },
+    projection_model: {
+      ...view.projection_model,
+      visual_pose_signature: view.projection_model.visual_pose_signature
+        ? { ...view.projection_model.visual_pose_signature }
+        : null,
+      image_region: {
+        top_left: { ...view.projection_model.image_region.top_left },
+        bottom_right: { ...view.projection_model.image_region.bottom_right },
+      },
+      world_quad: cloneWorldQuad(view.projection_model.world_quad),
+      refinement: view.projection_model.refinement?.points.length
+        ? { model: "local_rbf_v1", points: cloneRefinementPoints(view.projection_model.refinement.points) }
+        : null,
+      boundary_refinement: view.projection_model.boundary_refinement?.points.length
+        ? { model: "edge_handles_v1", points: cloneBoundaryPoints(view.projection_model.boundary_refinement.points) }
+        : null,
+    },
+    projection_quality: { ...(view.projection_quality ?? {}) },
+  };
 }
 
 function normalizeBoundaryPoints(points: CameraProjectionBoundaryPoint[]): CameraProjectionBoundaryPoint[] {
@@ -1868,7 +2284,11 @@ function CameraCalibrationModal({
   const [dragging, setDragging] = useState(false);
   const [importingPresets, setImportingPresets] = useState(false);
   const [movingToViewId, setMovingToViewId] = useState<string | null>(null);
+  const [visualReference, setVisualReference] = useState<VisualCalibrationReference | null>(null);
+  const [visualReferenceLoading, setVisualReferenceLoading] = useState(false);
+  const [visualRun, setVisualRun] = useState<VisualCalibrationRun>(emptyVisualCalibrationRun);
   const snapshotAbortRef = useRef<AbortController | null>(null);
+  const snapshotErrorMessageRef = useRef<string | null>(null);
   const snapshotUrlRef = useRef<string | null>(null);
   const selectedViewIdRef = useRef<string | null>(null);
   const viewsRef = useRef<CameraCalibratedView[]>([]);
@@ -1877,20 +2297,22 @@ function CameraCalibrationModal({
   const viewportRef = useRef<Viewport2DContext | null>(null);
   const viewportScaleRef = useRef(30);
   const viewSelectionRequestRef = useRef(0);
+  const movingToViewIdRef = useRef<string | null>(null);
+  const viewMovementAbortRef = useRef<AbortController | null>(null);
+  const viewMovementCameraIdRef = useRef("");
+  const viewMovementSourceIdRef = useRef("");
+  const viewMovementMutationPromiseRef = useRef<Promise<unknown> | null>(null);
+  const viewMovementIssuedRef = useRef(false);
+  const viewMovementStopIssuedRef = useRef(false);
+  const viewMovementStopCompletionRef = useRef<Promise<void> | null>(null);
+  const visualReferenceRequestRef = useRef(0);
+  const visualReferenceAbortRef = useRef<AbortController | null>(null);
+  const visualCalibrationAbortRef = useRef<AbortController | null>(null);
 
   const selectedView = useMemo(
     () => views.find((view) => view.id === selectedViewId) ?? views[0] ?? null,
     [selectedViewId, views],
   );
-  const preferredSnapshotSourceId = useMemo(
-    () => resolvePreferredCalibrationSnapshotSourceId(selectedView, cameraSources),
-    [cameraSources, selectedView?.stream_scope],
-  );
-  const preferredSnapshotSource = useMemo(
-    () => cameraSources.find((source) => source.id === preferredSnapshotSourceId) ?? null,
-    [cameraSources, preferredSnapshotSourceId],
-  );
-
   useEffect(() => {
     selectedViewIdRef.current = selectedViewId;
   }, [selectedViewId]);
@@ -1914,44 +2336,35 @@ function CameraCalibrationModal({
     }
 
     window.addEventListener("keydown", preventCompositionHistoryShortcut, true);
+    cancelActiveViewMovement(true);
+    visualCalibrationAbortRef.current?.abort();
+    visualReferenceAbortRef.current?.abort();
+    visualReferenceRequestRef.current += 1;
+    setVisualReference(null);
+    setVisualReferenceLoading(false);
+    setVisualRun(emptyVisualCalibrationRun());
     const baseViews: CameraCalibratedView[] = initialViews.length
-      ? initialViews.map((view) => ({
-          ...view,
-          pose_reference: view.pose_reference ? { ...view.pose_reference } : null,
-          stream_scope: {
-            compatible_roles:
-              view.stream_scope?.compatible_roles && view.stream_scope.compatible_roles.length
-                ? [...view.stream_scope.compatible_roles]
-                : ["main", "sub"],
-            compatible_source_ids: [...(view.stream_scope?.compatible_source_ids ?? [])],
-          },
-          projection_model: {
-            ...view.projection_model,
-            image_region: defaultImageRegion(),
-            world_quad: cloneWorldQuad(view.projection_model.world_quad),
-            refinement: view.projection_model.refinement?.points.length
-              ? { model: "local_rbf_v1", points: cloneRefinementPoints(view.projection_model.refinement.points) }
-              : null,
-            boundary_refinement: view.projection_model.boundary_refinement?.points.length
-              ? { model: "edge_handles_v1", points: cloneBoundaryPoints(view.projection_model.boundary_refinement.points) }
-              : null,
-          },
-          projection_quality: { ...(view.projection_quality ?? {}) },
-        }))
+      ? initialViews.map(cloneCalibratedView)
       : [createDefaultCalibratedView(0, element.position, { label: t("ext.cameras.calibration.default_view") })];
     setViews(baseViews);
     setSelectedViewId(baseViews[0]?.id ?? null);
-    if (baseViews[0]) void selectView(baseViews[0]);
     return () => window.removeEventListener("keydown", preventCompositionHistoryShortcut, true);
   }, [element.position, initialViews, open, t]);
 
   const loadCalibrationSnapshotFromSourceAsync = useCallback(
-    async (sourceId: string, sourceName: string) => {
-      if (!cameraId) return;
+    async (sourceId: string, sourceName: string): Promise<Blob | null> => {
+      if (!cameraId) return null;
+      if (!sourceId) {
+        const message = t("ext.cameras.visual_calibration.source_unavailable");
+        snapshotErrorMessageRef.current = message;
+        setSnapshotErrorMessage(message);
+        return null;
+      }
       snapshotAbortRef.current?.abort();
       const controller = new AbortController();
       snapshotAbortRef.current = controller;
       setSnapshotLoading(true);
+      snapshotErrorMessageRef.current = null;
       setSnapshotErrorMessage(null);
       try {
         const blob = await fetchCameraSnapshotWithRetry(cameraId, sourceId, controller.signal);
@@ -1960,15 +2373,22 @@ function CameraCalibrationModal({
           if (previous) URL.revokeObjectURL(previous);
           return nextUrl;
         });
+        return blob;
       } catch (error) {
-        if (controller.signal.aborted) return;
-        const message = error instanceof Error ? error.message : String(error);
-        setSnapshotErrorMessage(sourceName ? `${sourceName}: ${message}` : message);
+        if (controller.signal.aborted) return null;
+        const message = calibrationSnapshotErrorMessage(
+          error,
+          t("ext.cameras.visual_calibration.freshness_unverifiable"),
+        );
+        const displayMessage = sourceName ? `${sourceName}: ${message}` : message;
+        snapshotErrorMessageRef.current = displayMessage;
+        setSnapshotErrorMessage(displayMessage);
+        return null;
       } finally {
         if (!controller.signal.aborted) setSnapshotLoading(false);
       }
     },
-    [cameraId],
+    [cameraId, t],
   );
 
   const loadCalibrationSnapshotFromSource = useCallback(
@@ -1979,16 +2399,11 @@ function CameraCalibrationModal({
     [loadCalibrationSnapshotFromSourceAsync],
   );
 
-  const loadCalibrationSnapshot = useCallback(() => {
-    if (!cameraId) return () => undefined;
-    return loadCalibrationSnapshotFromSource(preferredSnapshotSourceId, snapshotSourceDisplayName(preferredSnapshotSource));
-  }, [cameraId, loadCalibrationSnapshotFromSource, preferredSnapshotSource, preferredSnapshotSourceId]);
-
   const loadCalibrationSnapshotForViewAsync = useCallback(
     async (view: CameraCalibratedView | null) => {
       const sourceId = resolvePreferredCalibrationSnapshotSourceId(view, cameraSources);
       const source = cameraSources.find((item) => item.id === sourceId) ?? null;
-      await loadCalibrationSnapshotFromSourceAsync(sourceId, snapshotSourceDisplayName(source));
+      return loadCalibrationSnapshotFromSourceAsync(sourceId, snapshotSourceDisplayName(source));
     },
     [cameraSources, loadCalibrationSnapshotFromSourceAsync],
   );
@@ -2007,10 +2422,85 @@ function CameraCalibrationModal({
     loadCalibrationSnapshotForView(currentView);
   }, [loadCalibrationSnapshotForView]);
 
+  function cancelActiveViewMovement(sendStop: boolean): void {
+    const controller = viewMovementAbortRef.current;
+    const movementCameraId = viewMovementCameraIdRef.current;
+    const sourceId = viewMovementSourceIdRef.current;
+    const mutationPromise = viewMovementMutationPromiseRef.current;
+    const shouldStop =
+      sendStop &&
+      Boolean(movementCameraId) &&
+      Boolean(sourceId) &&
+      viewMovementIssuedRef.current &&
+      !viewMovementStopIssuedRef.current;
+    if (shouldStop) viewMovementStopIssuedRef.current = true;
+    controller?.abort();
+    viewMovementAbortRef.current = null;
+    viewMovementCameraIdRef.current = "";
+    viewMovementSourceIdRef.current = "";
+    viewMovementMutationPromiseRef.current = null;
+    viewMovementIssuedRef.current = false;
+    if (shouldStop) {
+      const stopCompletion = enqueueCameraPtzStop(
+        movementCameraId,
+        sourceId,
+        mutationPromise,
+      );
+      viewMovementStopCompletionRef.current = stopCompletion;
+      void stopCompletion.finally(() => {
+        if (viewMovementStopCompletionRef.current === stopCompletion) {
+          viewMovementStopCompletionRef.current = null;
+        }
+      });
+    }
+  }
+
+  async function registerActiveViewMovement(
+    controller: AbortController,
+    sourceId: string,
+  ): Promise<boolean> {
+    cancelActiveViewMovement(true);
+    viewMovementAbortRef.current = controller;
+    viewMovementCameraIdRef.current = cameraId;
+    viewMovementSourceIdRef.current = sourceId;
+    viewMovementMutationPromiseRef.current = null;
+    viewMovementIssuedRef.current = false;
+    viewMovementStopIssuedRef.current = false;
+    const pendingStop = viewMovementStopCompletionRef.current;
+    if (pendingStop) await pendingStop;
+    await waitForPendingCameraPtzStops(cameraId);
+    return viewMovementAbortRef.current === controller && !controller.signal.aborted;
+  }
+
+  function markActiveViewMovementIssued(
+    controller: AbortController,
+    mutationPromise: Promise<unknown>,
+  ): void {
+    if (viewMovementAbortRef.current !== controller) return;
+    viewMovementMutationPromiseRef.current = mutationPromise;
+    viewMovementIssuedRef.current = true;
+  }
+
+  function releaseActiveViewMovement(controller: AbortController): void {
+    if (viewMovementAbortRef.current !== controller) return;
+    viewMovementAbortRef.current = null;
+    viewMovementCameraIdRef.current = "";
+    viewMovementSourceIdRef.current = "";
+    viewMovementMutationPromiseRef.current = null;
+    viewMovementIssuedRef.current = false;
+    viewMovementStopIssuedRef.current = false;
+  }
+
   useEffect(() => {
     if (!open) {
+      setPoseModalOpen(false);
       viewSelectionRequestRef.current += 1;
+      cancelActiveViewMovement(true);
       snapshotAbortRef.current?.abort();
+      visualCalibrationAbortRef.current?.abort();
+      visualReferenceAbortRef.current?.abort();
+      visualReferenceRequestRef.current += 1;
+      snapshotErrorMessageRef.current = null;
       setSnapshotErrorMessage(null);
       setSnapshotLoading(false);
       setSnapshotImage(null);
@@ -2019,7 +2509,11 @@ function CameraCalibrationModal({
         return null;
       });
       setDragging(false);
+      movingToViewIdRef.current = null;
       setMovingToViewId(null);
+      setVisualReference(null);
+      setVisualReferenceLoading(false);
+      setVisualRun(emptyVisualCalibrationRun());
       dragStateRef.current = null;
       return;
     }
@@ -2046,14 +2540,30 @@ function CameraCalibrationModal({
 
   useEffect(() => {
     return () => {
+      viewSelectionRequestRef.current += 1;
+      cancelActiveViewMovement(true);
       snapshotAbortRef.current?.abort();
+      visualCalibrationAbortRef.current?.abort();
+      visualReferenceAbortRef.current?.abort();
+      visualReferenceRequestRef.current += 1;
       if (snapshotUrlRef.current) URL.revokeObjectURL(snapshotUrlRef.current);
     };
   }, []);
 
   function updateSelectedView(updater: (view: CameraCalibratedView) => CameraCalibratedView) {
+    if (movingToViewIdRef.current) return;
     const currentId = selectedViewIdRef.current;
     if (!currentId) return;
+    visualCalibrationAbortRef.current?.abort();
+    visualReferenceAbortRef.current?.abort();
+    visualReferenceRequestRef.current += 1;
+    setVisualReferenceLoading(false);
+    setVisualReference((previous) => (previous?.view.id === currentId ? null : previous));
+    setVisualRun((previous) =>
+      previous.targetViewId === currentId || visualReference?.view.id === currentId
+        ? emptyVisualCalibrationRun()
+        : previous,
+    );
     setViews((previous) => previous.map((view) => (view.id === currentId ? updater(view) : view)));
   }
 
@@ -2107,72 +2617,574 @@ function CameraCalibrationModal({
     updateSelectedView((view) => withBoundaryPoints(view, updater(cloneBoundaryPoints(boundaryPointsForView(view)))));
   }
 
-  async function waitForPtzToSettle(sourceId: string): Promise<PanTiltZoomState | null> {
-    await sleep(750);
+  async function waitForPtzToSettle(
+    sourceId: string,
+    signal?: AbortSignal,
+    expectation?: PtzSettleExpectation,
+  ): Promise<PanTiltZoomState | null> {
+    if (signal) await waitForRetry(500, signal);
+    else await sleep(500);
     let latestStatus: PanTiltZoomState | null = null;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
+    let previousStatus: PanTiltZoomState | null = null;
+    let consecutiveIdleReads = 0;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
       try {
-        const response = await fetchCameraPtzStatus(cameraId, sourceId);
-        latestStatus = response.status ?? latestStatus;
+        const response = await fetchCameraPtzStatus(cameraId, sourceId, signal);
+        latestStatus = response.status ?? null;
       } catch (error) {
-        setSnapshotErrorMessage(error instanceof Error ? error.message : String(error));
-        break;
+        if (isAbortError(error) || signal?.aborted) throw error;
+        return null;
       }
-      if (attempt > 0 && normalizePtzMoveStatus(latestStatus?.move_status) !== "moving") break;
-      await sleep(450);
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      const moveStatus = normalizePtzMoveStatus(latestStatus?.move_status);
+      const targetPoseIsContradicted = Boolean(
+        expectation?.targetPose &&
+          poseHasAbsoluteTarget(expectation.targetPose) &&
+          ptzStatusContradictsPose(latestStatus, expectation.targetPose),
+      );
+      if (
+        !targetPoseIsContradicted &&
+        (moveStatus === "idle" ||
+          (moveStatus === "unknown" && ptzTelemetryIsStable(previousStatus, latestStatus)))
+      ) {
+        consecutiveIdleReads += 1;
+        if (consecutiveIdleReads >= 2) {
+          if (ptzSettleRequiresVisualConfirmation(expectation)) {
+            if (!signal) return null;
+            const visuallyStable = await waitForCameraVisualStability(
+              cameraId,
+              sourceId,
+              signal,
+              expectation?.baselineVisualFingerprint,
+              expectation?.requireVisualTransition === true,
+            );
+            if (!visuallyStable) return null;
+          }
+          if (signal) await waitForRetry(350, signal);
+          else await sleep(350);
+          return latestStatus;
+        }
+      } else {
+        consecutiveIdleReads = 0;
+      }
+      previousStatus = latestStatus;
+      if (signal) await waitForRetry(450, signal);
+      else await sleep(450);
     }
-    await sleep(350);
-    return latestStatus;
+    return null;
+  }
+
+  async function useSelectedViewAsVisualReference(): Promise<void> {
+    if (movingToViewIdRef.current) return;
+    const sourceView = selectedView;
+    if (
+      !sourceView ||
+      summarizeCalibratedViewQuality(sourceView).status !== "good" ||
+      sourceView.projection_quality?.status !== "ready" ||
+      sourceView.projection_quality?.estimated === true
+    ) {
+      setVisualRun({
+        status: "error",
+        targetViewId: sourceView?.id ?? null,
+        result: null,
+        proposedView: null,
+        errorMessage: t("ext.cameras.visual_calibration.reference_not_ready"),
+      });
+      return;
+    }
+
+    const sourcePose = sourceView.pose_reference ?? null;
+    const sourcePresetToken = String(sourcePose?.preset_token ?? "").trim();
+    if (isPtzCamera && !sourcePresetToken && !poseHasAbsoluteTarget(sourcePose)) {
+      setVisualRun({
+        status: "error",
+        targetViewId: sourceView.id,
+        result: null,
+        proposedView: null,
+        errorMessage: t("ext.cameras.visual_calibration.reference_pose_required"),
+      });
+      return;
+    }
+
+    setVisualReferenceLoading(true);
+    cancelActiveViewMovement(true);
+    visualReferenceAbortRef.current?.abort();
+    const controller = new AbortController();
+    visualReferenceAbortRef.current = controller;
+    const referenceRequestId = visualReferenceRequestRef.current + 1;
+    visualReferenceRequestRef.current = referenceRequestId;
+    try {
+      const sourceId = resolvePreferredCalibrationSnapshotSourceId(sourceView, cameraSources);
+      if (!sourceId) {
+        throw new Error(t("ext.cameras.visual_calibration.source_unavailable"));
+      }
+      if (isPtzCamera) {
+        const ptzSourceId = resolvePreferredCalibrationPtzSourceId(sourceView, cameraSources);
+        if (!ptzSourceId) {
+          throw new Error(t("ext.cameras.visual_calibration.source_unavailable"));
+        }
+        if (!(await registerActiveViewMovement(controller, ptzSourceId))) return;
+        const baseline = await capturePtzMovementBaseline(
+          cameraId,
+          ptzSourceId,
+          sourceId,
+          sourcePose,
+          controller.signal,
+          t("ext.cameras.visual_calibration.snapshot_failed"),
+          Boolean(sourcePresetToken),
+        );
+        if (!baseline.targetAlreadyConfirmed) {
+          const mutationPromise = sourcePresetToken
+            ? runPtzMutationWithFence(() => gotoCameraPtzPreset(cameraId, sourcePresetToken, ptzSourceId))
+            : runPtzMutationWithFence(() =>
+                moveCameraPtzAbsolute(cameraId, absoluteMovePayloadForPose(ptzSourceId, sourcePose!)),
+              );
+          markActiveViewMovementIssued(controller, mutationPromise);
+          await mutationPromise;
+        }
+        if (controller.signal.aborted) return;
+        const status = await waitForPtzToSettle(ptzSourceId, controller.signal, {
+          baselineVisualFingerprint: baseline.visualFingerprint,
+          targetPose: sourcePose,
+          requireTargetEvidence: true,
+          requireVisualTransition: !baseline.targetAlreadyConfirmed,
+        });
+        if (visualReferenceRequestRef.current !== referenceRequestId) return;
+        if (
+          !status ||
+          (sourcePose &&
+            poseHasAbsoluteTarget(sourcePose) &&
+            ptzStatusContradictsPose(status, sourcePose))
+        ) {
+          cancelActiveViewMovement(true);
+          setVisualRun({
+            status: "error",
+            targetViewId: sourceView.id,
+            result: null,
+            proposedView: null,
+            errorMessage: t("ext.cameras.visual_calibration.camera_status_unavailable"),
+          });
+          return;
+        }
+        releaseActiveViewMovement(controller);
+      }
+      const image = await loadCalibrationSnapshotForViewAsync(sourceView);
+      if (controller.signal.aborted || visualReferenceRequestRef.current !== referenceRequestId) return;
+      if (!image) {
+        setVisualRun({
+          status: "error",
+          targetViewId: sourceView.id,
+          result: null,
+          proposedView: null,
+          errorMessage:
+            snapshotErrorMessageRef.current ?? t("ext.cameras.visual_calibration.snapshot_failed"),
+        });
+        return;
+      }
+
+      const frozenView = cloneCalibratedView(sourceView);
+      const frozenSource = cameraSources.find((source) => source.id === sourceId) ?? null;
+      frozenView.stream_scope = {
+        compatible_roles: frozenSource?.role ? [frozenSource.role] : [],
+        compatible_source_ids: [sourceId],
+      };
+      setVisualReference({ view: frozenView, image, sourceId });
+      setVisualRun(emptyVisualCalibrationRun());
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        isAbortError(error) ||
+        visualReferenceRequestRef.current !== referenceRequestId
+      ) {
+        return;
+      }
+      setVisualRun({
+        status: "error",
+        targetViewId: sourceView.id,
+        result: null,
+        proposedView: null,
+        errorMessage: calibrationSnapshotErrorMessage(
+          error,
+          t("ext.cameras.visual_calibration.freshness_unverifiable"),
+        ),
+      });
+    } finally {
+      if (viewMovementAbortRef.current === controller) cancelActiveViewMovement(true);
+      if (visualReferenceAbortRef.current === controller) {
+        visualReferenceAbortRef.current = null;
+      }
+      if (visualReferenceRequestRef.current === referenceRequestId) {
+        setVisualReferenceLoading(false);
+      }
+    }
+  }
+
+  async function analyzeSelectedViewVisually(): Promise<void> {
+    if (movingToViewIdRef.current) return;
+    const reference = visualReference;
+    const targetView = selectedView;
+    if (!reference || !targetView || targetView.id === reference.view.id) return;
+
+    const targetSourceId = resolvePreferredCalibrationSnapshotSourceId(targetView, cameraSources);
+    if (!targetSourceId) {
+      setVisualRun({
+        status: "error",
+        targetViewId: targetView.id,
+        result: null,
+        proposedView: null,
+        errorMessage: t("ext.cameras.visual_calibration.source_unavailable"),
+      });
+      return;
+    }
+    if (targetSourceId !== reference.sourceId) {
+      setVisualRun({
+        status: "error",
+        targetViewId: targetView.id,
+        result: null,
+        proposedView: null,
+        errorMessage: t("ext.cameras.visual_calibration.same_lens_required"),
+      });
+      return;
+    }
+
+    cancelActiveViewMovement(true);
+    visualCalibrationAbortRef.current?.abort();
+    const controller = new AbortController();
+    visualCalibrationAbortRef.current = controller;
+    setVisualRun({
+      status: "analyzing",
+      targetViewId: targetView.id,
+      result: null,
+      proposedView: null,
+      errorMessage: null,
+    });
+
+    try {
+      let poseReference = targetView.pose_reference ? { ...targetView.pose_reference } : null;
+      if (isPtzCamera) {
+        const targetPresetToken = String(poseReference?.preset_token ?? "").trim();
+        if (!targetPresetToken && !poseHasAbsoluteTarget(poseReference)) {
+          throw new Error(t("ext.cameras.visual_calibration.target_pose_required"));
+        }
+        const ptzSourceId = resolvePreferredCalibrationPtzSourceId(targetView, cameraSources);
+        if (!ptzSourceId) {
+          throw new Error(t("ext.cameras.visual_calibration.source_unavailable"));
+        }
+        if (!(await registerActiveViewMovement(controller, ptzSourceId))) return;
+        const baseline = await capturePtzMovementBaseline(
+          cameraId,
+          ptzSourceId,
+          targetSourceId,
+          poseReference,
+          controller.signal,
+          t("ext.cameras.visual_calibration.snapshot_failed"),
+          Boolean(targetPresetToken),
+        );
+        if (!baseline.targetAlreadyConfirmed) {
+          const mutationPromise = targetPresetToken
+            ? runPtzMutationWithFence(() => gotoCameraPtzPreset(cameraId, targetPresetToken, ptzSourceId))
+            : runPtzMutationWithFence(() =>
+                moveCameraPtzAbsolute(cameraId, absoluteMovePayloadForPose(ptzSourceId, poseReference!)),
+              );
+          markActiveViewMovementIssued(controller, mutationPromise);
+          await mutationPromise;
+        }
+        if (controller.signal.aborted) return;
+        const status = await waitForPtzToSettle(ptzSourceId, controller.signal, {
+          baselineVisualFingerprint: baseline.visualFingerprint,
+          targetPose: poseReference,
+          requireTargetEvidence: true,
+          requireVisualTransition: !baseline.targetAlreadyConfirmed,
+        });
+        if (controller.signal.aborted) return;
+        if (
+          !status ||
+          (poseReference &&
+            poseHasAbsoluteTarget(poseReference) &&
+            ptzStatusContradictsPose(status, poseReference))
+        ) {
+          cancelActiveViewMovement(true);
+          throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
+        }
+        releaseActiveViewMovement(controller);
+        poseReference = {
+          ...poseReference,
+          pan: typeof status.pan === "number" && Number.isFinite(status.pan) ? status.pan : poseReference?.pan ?? null,
+          tilt: typeof status.tilt === "number" && Number.isFinite(status.tilt) ? status.tilt : poseReference?.tilt ?? null,
+          zoom: typeof status.zoom === "number" && Number.isFinite(status.zoom) ? status.zoom : poseReference?.zoom ?? null,
+        };
+      }
+
+      if (controller.signal.aborted) return;
+      const targetImage = await loadCalibrationSnapshotForViewAsync(targetView);
+      if (controller.signal.aborted) return;
+      if (!targetImage) {
+        throw new Error(
+          snapshotErrorMessageRef.current ?? t("ext.cameras.visual_calibration.snapshot_failed"),
+        );
+      }
+      const result = await propagateCameraProjection(
+        reference.view,
+        reference.sourceId,
+        reference.image,
+        targetImage,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+
+      if (!result.accepted || !result.projection_model) {
+        setVisualRun({
+          status: "rejected",
+          targetViewId: targetView.id,
+          result,
+          proposedView: null,
+          errorMessage: null,
+        });
+        return;
+      }
+      if (!result.source_visual_pose_signature || !result.projection_model.visual_pose_signature) {
+        setVisualRun({
+          status: "rejected",
+          targetViewId: targetView.id,
+          result: {
+            ...result,
+            accepted: false,
+            reason: "visual_pose_signature_failed",
+            projection_model: null,
+          },
+          proposedView: null,
+          errorMessage: null,
+        });
+        return;
+      }
+
+      const targetSource = cameraSources.find((source) => source.id === targetSourceId) ?? null;
+      const proposedView: CameraCalibratedView = {
+        ...cloneCalibratedView(targetView),
+        pose_reference: poseReference,
+        stream_scope: {
+          compatible_roles: targetSource?.role ? [targetSource.role] : [],
+          compatible_source_ids: [targetSourceId],
+        },
+        projection_model: result.projection_model,
+        projection_quality: {
+          status: "estimated",
+          estimated: true,
+          note: `visual calibration; ${result.quality.inliers} inliers; p95=${result.quality.p95_reprojection_error_px ?? "n/a"}px`,
+        },
+      };
+      setVisualRun({
+        status: "proposed",
+        targetViewId: targetView.id,
+        result,
+        proposedView,
+        errorMessage: null,
+      });
+    } catch (error) {
+      if (controller.signal.aborted || isAbortError(error)) return;
+      setVisualRun({
+        status: "error",
+        targetViewId: targetView.id,
+        result: null,
+        proposedView: null,
+        errorMessage: calibrationSnapshotErrorMessage(
+          error,
+          t("ext.cameras.visual_calibration.freshness_unverifiable"),
+        ),
+      });
+    } finally {
+      if (viewMovementAbortRef.current === controller) cancelActiveViewMovement(true);
+      if (visualCalibrationAbortRef.current === controller) visualCalibrationAbortRef.current = null;
+    }
+  }
+
+  function acceptVisualCalibration(): void {
+    if (movingToViewIdRef.current) return;
+    const targetViewId = visualRun.targetViewId;
+    const proposedView = visualRun.proposedView;
+    if (!targetViewId || visualRun.status !== "proposed" || !proposedView) return;
+    const sourceViewId = visualReference?.view.id ?? null;
+    const frozenSourceScope = visualReference?.view.stream_scope ?? null;
+    const sourceVisualPoseSignature = visualRun.result?.source_visual_pose_signature ?? null;
+    setViews((previous) =>
+      previous.map((view) => {
+        if (view.id === targetViewId) {
+          return {
+            ...cloneCalibratedView(proposedView),
+            projection_quality: {
+              ...(proposedView.projection_quality ?? {}),
+              status: "ready",
+              estimated: false,
+            },
+          };
+        }
+        if (sourceViewId && view.id === sourceViewId && sourceVisualPoseSignature) {
+          return {
+            ...view,
+            stream_scope: frozenSourceScope
+              ? {
+                  compatible_roles: [...(frozenSourceScope.compatible_roles ?? [])],
+                  compatible_source_ids: [...(frozenSourceScope.compatible_source_ids ?? [])],
+                }
+              : view.stream_scope,
+            projection_model: {
+              ...view.projection_model,
+              visual_pose_signature: { ...sourceVisualPoseSignature },
+            },
+          };
+        }
+        return view;
+      }),
+    );
+    setVisualRun((previous) => ({ ...previous, status: "accepted", proposedView: null }));
+  }
+
+  function discardVisualCalibration(): void {
+    if (movingToViewIdRef.current) return;
+    visualCalibrationAbortRef.current?.abort();
+    setVisualRun(emptyVisualCalibrationRun());
   }
 
   async function selectView(view: CameraCalibratedView) {
+    if (movingToViewIdRef.current) return;
+    const poseReference = view.pose_reference ?? null;
+    const presetToken = String(poseReference?.preset_token ?? "").trim();
+    const shouldRepositionCamera =
+      isPtzCamera &&
+      Boolean(cameraId) &&
+      (Boolean(presetToken) || poseHasAbsoluteTarget(poseReference));
+    const movementFenceSourceId = isPtzCamera
+      ? resolvePreferredCalibrationPtzSourceId(view, cameraSources)
+      : "";
+    const pendingMovementStop = isPtzCamera
+      ? pendingCameraPtzStopCompletion(cameraId)
+      : null;
     const requestId = viewSelectionRequestRef.current + 1;
     viewSelectionRequestRef.current = requestId;
     selectedViewIdRef.current = view.id;
     setSelectedViewId(view.id);
-    setMovingToViewId(view.id);
+    if (shouldRepositionCamera || pendingMovementStop) {
+      movingToViewIdRef.current = view.id;
+      setMovingToViewId(view.id);
+    }
+    snapshotErrorMessageRef.current = null;
     setSnapshotErrorMessage(null);
     setSnapshotImage(null);
+    let movementController: AbortController | null = null;
     try {
-      if (isPtzCamera && cameraId) {
-        const poseReference = view.pose_reference ?? null;
-        const presetToken = String(poseReference?.preset_token ?? "").trim();
-        const sourceId = resolvePreferredCalibrationPtzSourceId(view, cameraSources);
-        if (presetToken) {
-          await gotoCameraPtzPreset(cameraId, presetToken, sourceId);
-          await waitForPtzToSettle(sourceId);
-        } else if (poseHasAbsoluteTarget(poseReference)) {
-          await moveCameraPtzAbsolute(cameraId, absoluteMovePayloadForPose(sourceId, poseReference!));
-          await waitForPtzToSettle(sourceId);
+      if (pendingMovementStop) {
+        await waitForPendingCameraPtzStops(cameraId);
+        if (viewSelectionRequestRef.current !== requestId) return;
+      }
+      if (shouldRepositionCamera) {
+        const sourceId = movementFenceSourceId;
+        if (!sourceId) {
+          throw new Error(t("ext.cameras.visual_calibration.source_unavailable"));
         }
+        movementController = new AbortController();
+        if (!(await registerActiveViewMovement(movementController, sourceId))) return;
+        const targetPose: CameraPoseReference | null = presetToken
+          ? {
+              pan: poseReference?.pan ?? null,
+              tilt: poseReference?.tilt ?? null,
+              zoom: poseReference?.zoom ?? null,
+            }
+          : poseReference;
+        const baseline = await capturePtzMovementBaseline(
+          cameraId,
+          sourceId,
+          sourceId,
+          targetPose,
+          movementController.signal,
+          t("ext.cameras.visual_calibration.snapshot_failed"),
+          Boolean(presetToken),
+        );
+        if (presetToken) {
+          if (!baseline.targetAlreadyConfirmed) {
+            const mutationPromise = runPtzMutationWithFence(() =>
+              gotoCameraPtzPreset(cameraId, presetToken, sourceId),
+            );
+            markActiveViewMovementIssued(movementController, mutationPromise);
+            await mutationPromise;
+          }
+          if (!(await waitForPtzToSettle(sourceId, movementController.signal, {
+            baselineVisualFingerprint: baseline.visualFingerprint,
+            targetPose,
+            requireTargetEvidence: true,
+            requireVisualTransition: !baseline.targetAlreadyConfirmed,
+          }))) {
+            throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
+          }
+        } else if (poseHasAbsoluteTarget(poseReference)) {
+          if (!baseline.targetAlreadyConfirmed) {
+            const mutationPromise = runPtzMutationWithFence(() =>
+              moveCameraPtzAbsolute(cameraId, absoluteMovePayloadForPose(sourceId, poseReference!)),
+            );
+            markActiveViewMovementIssued(movementController, mutationPromise);
+            await mutationPromise;
+          }
+          if (!(await waitForPtzToSettle(sourceId, movementController.signal, {
+            baselineVisualFingerprint: baseline.visualFingerprint,
+            targetPose: poseReference,
+            requireTargetEvidence: true,
+            requireVisualTransition: !baseline.targetAlreadyConfirmed,
+          }))) {
+            throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
+          }
+        }
+        releaseActiveViewMovement(movementController);
       }
       if (viewSelectionRequestRef.current === requestId) await loadCalibrationSnapshotForViewAsync(view);
     } catch (error) {
-      if (viewSelectionRequestRef.current === requestId) setSnapshotErrorMessage(error instanceof Error ? error.message : String(error));
+      if (viewSelectionRequestRef.current === requestId && !isAbortError(error)) {
+        setSnapshotErrorMessage(
+          calibrationSnapshotErrorMessage(
+            error,
+            t("ext.cameras.visual_calibration.freshness_unverifiable"),
+          ),
+        );
+      }
     } finally {
-      if (viewSelectionRequestRef.current === requestId) setMovingToViewId(null);
+      if (movementController && viewMovementAbortRef.current === movementController) {
+        cancelActiveViewMovement(true);
+      }
+      if (viewSelectionRequestRef.current === requestId) {
+        movingToViewIdRef.current = null;
+        setMovingToViewId(null);
+      }
     }
   }
 
-  function addView() {
-    setViews((previous) => {
-      const source = selectedView ?? previous[0] ?? null;
-      const nextView = createDefaultCalibratedView(previous.length, element.position, {
-        label: t("ext.cameras.calibration.view_label", { index: previous.length + 1 }),
-      });
-      if (source?.stream_scope) {
-        nextView.stream_scope = {
-          compatible_roles: source.stream_scope.compatible_roles?.length ? [...source.stream_scope.compatible_roles] : ["main", "sub"],
-          compatible_source_ids: [...(source.stream_scope.compatible_source_ids ?? [])],
-        };
-      }
-      setSelectedViewId(nextView.id);
-      return [...previous, nextView];
+  function addView(options?: { visualTarget?: boolean }) {
+    if (movingToViewIdRef.current) return;
+    const previous = viewsRef.current;
+    const source = selectedView ?? previous[0] ?? null;
+    const nextView = createDefaultCalibratedView(previous.length, element.position, {
+      label: t("ext.cameras.calibration.view_label", { index: previous.length + 1 }),
     });
+    if (source?.stream_scope) {
+      nextView.stream_scope = {
+        compatible_roles: source.stream_scope.compatible_roles?.length ? [...source.stream_scope.compatible_roles] : ["main", "sub"],
+        compatible_source_ids: [...(source.stream_scope.compatible_source_ids ?? [])],
+      };
+    }
+    selectedViewIdRef.current = nextView.id;
+    setSelectedViewId(nextView.id);
+    setViews((current) => [...current, nextView]);
+    if (options?.visualTarget) {
+      setVisualRun({
+        ...emptyVisualCalibrationRun(),
+        targetViewId: nextView.id,
+      });
+      window.setTimeout(() => setPoseModalOpen(true), 0);
+    }
   }
 
   function removeSelectedView() {
+    if (movingToViewIdRef.current) return;
     if (!selectedViewId || views.length <= 1) return;
+    if (visualReference?.view.id === selectedViewId) setVisualReference(null);
+    if (visualRun.targetViewId === selectedViewId) setVisualRun(emptyVisualCalibrationRun());
     setViews((previous) => {
       const filtered = previous.filter((view) => view.id !== selectedViewId);
       setSelectedViewId(filtered[0]?.id ?? null);
@@ -2181,11 +3193,13 @@ function CameraCalibrationModal({
   }
 
   async function importPresetViews() {
-    if (!cameraId || !isPtzCamera) return;
+    if (!cameraId || !isPtzCamera || movingToViewIdRef.current) return;
     setImportingPresets(true);
     setSnapshotErrorMessage(null);
     try {
-      const response = await fetchCameraPtzPresets(cameraId, resolvePreferredCalibrationPtzSourceId(selectedView, cameraSources));
+      const sourceId = resolvePreferredCalibrationPtzSourceId(selectedView, cameraSources);
+      if (!sourceId) throw new Error(t("ext.cameras.visual_calibration.source_unavailable"));
+      const response = await fetchCameraPtzPresets(cameraId, sourceId);
       const presets = Array.isArray(response.presets) ? response.presets : [];
       setViews((previous) => {
         const existingTokens = new Set(previous.map((view) => String(view.pose_reference?.preset_token ?? "").trim()).filter(Boolean));
@@ -2226,15 +3240,19 @@ function CameraCalibrationModal({
     updateSelectedView((view) => {
       const current = view.stream_scope?.compatible_roles?.length ? view.stream_scope.compatible_roles : ["main", "sub"];
       const next = enabled ? Array.from(new Set([...current, role])) : current.filter((item) => item !== role);
-      return {
+      return invalidateVisualCalibrationApproval({
         ...view,
         stream_scope: {
           compatible_roles: next,
           compatible_source_ids: [...(view.stream_scope?.compatible_source_ids ?? [])],
         },
-      };
+      });
     });
   }
+
+  const visualInteractionLocked =
+    visualReferenceLoading || visualRun.status === "analyzing" || visualRun.status === "proposed";
+  const calibrationInteractionLocked = visualInteractionLocked || movingToViewId !== null;
 
   const toolSession = useMemo<EditorToolSession>(() => {
     function resolveHoverState(
@@ -2275,16 +3293,22 @@ function CameraCalibrationModal({
 
     return {
       shouldCapturePointer: (event: EditorToolPointerEvent) => {
-        if (movingToViewId || event.kind !== "down" || event.button !== 0) return false;
+        if (movingToViewId || visualInteractionLocked || event.kind !== "down" || event.button !== 0) return false;
         const viewId = selectedViewIdRef.current;
         const currentView = viewsRef.current.find((view) => view.id === viewId) ?? viewsRef.current[0] ?? null;
         if (!currentView) return false;
         return Boolean(resolveHoverState(event, currentView, viewportRef.current));
       },
       onPointerEvent: (event: EditorToolPointerEvent) => {
-        if (movingToViewId) return;
+        if (movingToViewId || visualInteractionLocked) return;
         const viewId = selectedViewIdRef.current;
-        const currentView = viewsRef.current.find((view) => view.id === viewId) ?? viewsRef.current[0] ?? null;
+        const storedView = viewsRef.current.find((view) => view.id === viewId) ?? viewsRef.current[0] ?? null;
+        const currentView =
+          visualRun.status === "proposed" &&
+          visualRun.targetViewId === storedView?.id &&
+          visualRun.proposedView
+            ? visualRun.proposedView
+            : storedView;
         if (!currentView) return;
         const quad = currentView.projection_model.world_quad;
         if (event.kind === "down") {
@@ -2458,7 +3482,13 @@ function CameraCalibrationModal({
         viewportScaleRef.current = viewport.scale;
         if (movingToViewId) return;
         const viewId = selectedViewIdRef.current;
-        const currentView = viewsRef.current.find((view) => view.id === viewId) ?? viewsRef.current[0] ?? null;
+        const storedView = viewsRef.current.find((view) => view.id === viewId) ?? viewsRef.current[0] ?? null;
+        const currentView =
+          visualRun.status === "proposed" &&
+          visualRun.targetViewId === storedView?.id &&
+          visualRun.proposedView
+            ? visualRun.proposedView
+            : storedView;
         if (!currentView) return;
         const quad = currentView.projection_model.world_quad;
         const points = worldQuadPoints(quad).map((point) => viewport.worldToScreen(point));
@@ -2661,7 +3691,7 @@ function CameraCalibrationModal({
         ctx.restore();
       },
       getCursor: () => {
-        if (movingToViewId) return "default";
+        if (movingToViewId || visualInteractionLocked) return "default";
         if (dragStateRef.current) return "grabbing";
         if (hoverStateRef.current?.kind === "move") return "move";
         if (hoverStateRef.current?.kind === "new_refinement" || hoverStateRef.current?.kind === "new_boundary") return "crosshair";
@@ -2669,24 +3699,52 @@ function CameraCalibrationModal({
         return "default";
       },
     };
-  }, [dragging, movingToViewId, snapshotImage]);
-
-  if (!open) return null;
+  }, [dragging, movingToViewId, snapshotImage, visualInteractionLocked, visualRun.proposedView, visualRun.status, visualRun.targetViewId]);
 
   const selectedQuality = selectedView ? summarizeCalibratedViewQuality(selectedView) : null;
   const compatibleRoles = selectedView?.stream_scope?.compatible_roles?.length ? selectedView.stream_scope.compatible_roles : ["main", "sub"];
   const invalidMeshViewLabels = views
     .filter((view) => !buildCalibrationMesh(view))
     .map((view, index) => view.label.trim() || t("ext.cameras.calibration.view_label", { index: index + 1 }));
+  const unapprovedViewLabels = views
+    .filter(
+      (view) =>
+        (visualRun.status === "proposed" && visualRun.targetViewId === view.id) ||
+        (isVisualCalibrationView(view) &&
+          (view.projection_quality?.status !== "ready" || view.projection_quality?.estimated === true)),
+    )
+    .map((view, index) => view.label.trim() || t("ext.cameras.calibration.view_label", { index: index + 1 }));
+  const selectedCanBeReference = Boolean(
+    selectedView &&
+      summarizeCalibratedViewQuality(selectedView).status === "good" &&
+      selectedView.projection_quality?.status === "ready" &&
+      selectedView.projection_quality?.estimated !== true,
+  );
+  const visualRunForSelected = Boolean(selectedView && visualRun.targetViewId === selectedView.id);
+  const visualResult = visualRunForSelected ? visualRun.result : null;
+  const visualReason = visualResult?.reason
+    ? t(
+        `ext.cameras.visual_calibration.reason.${visualResult.reason}`,
+        {},
+        t("ext.cameras.visual_calibration.reason.generic"),
+      )
+    : null;
+  const visualBusy =
+    visualReferenceLoading ||
+    visualRun.status === "analyzing" ||
+    snapshotLoading ||
+    movingToViewId !== null;
 
   return (
-    <SubModal
-      open={open}
-      onClose={onClose}
-      title={t("ext.cameras.calibration.title")}
-      panelStyle={{ width: "min(1440px, calc(100vw - 28px))", height: "calc(100vh - 28px)", maxHeight: "calc(100vh - 28px)" }}
-      bodyStyle={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
-    >
+    <>
+      {open ? (
+        <SubModal
+          open
+          onClose={onClose}
+          title={t("ext.cameras.calibration.title")}
+          panelStyle={{ width: "min(1440px, calc(100vw - 28px))", height: "calc(100dvh - 28px)", maxHeight: "calc(100dvh - 28px)" }}
+          bodyStyle={{ padding: 0, overflowX: "hidden", overflowY: "auto", display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
+        >
       <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 12, flex: 1, minHeight: 0 }}>
         <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
           <div className="rowWrap" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -2705,6 +3763,8 @@ function CameraCalibrationModal({
                   type="button"
                   className="chipButton"
                   onClick={() => void selectView(view)}
+                  aria-current={isSelected ? "true" : undefined}
+                  disabled={calibrationInteractionLocked}
                   style={{
                     minWidth: 190,
                     justifyContent: "space-between",
@@ -2730,11 +3790,11 @@ function CameraCalibrationModal({
             })}
             {isPtzCamera ? (
               <>
-                <button className="chipButton" type="button" onClick={addView}>
+                <button className="chipButton" type="button" onClick={() => addView()} disabled={calibrationInteractionLocked}>
                   <i className="fa-solid fa-plus" aria-hidden="true" />
                   <span>{t("ext.cameras.calibration.add_view")}</span>
                 </button>
-                <button className="chipButton" type="button" onClick={() => void importPresetViews()} disabled={importingPresets}>
+                <button className="chipButton" type="button" onClick={() => void importPresetViews()} disabled={importingPresets || calibrationInteractionLocked}>
                   {importingPresets ? t("ext.cameras.control.loading") : t("ext.cameras.calibration.import_presets")}
                 </button>
               </>
@@ -2744,7 +3804,7 @@ function CameraCalibrationModal({
               type="button"
               onClick={removeSelectedView}
               aria-label={t("core.actions.delete")}
-              disabled={!isPtzCamera || views.length <= 1}
+              disabled={!isPtzCamera || views.length <= 1 || calibrationInteractionLocked}
             >
               <i className="fa-solid fa-trash" aria-hidden="true" />
             </button>
@@ -2764,10 +3824,12 @@ function CameraCalibrationModal({
             <button
               className="iconButton"
               type="button"
-              onClick={loadCalibrationSnapshot}
-              disabled={snapshotLoading || !cameraId}
-              aria-label={t("ext.cameras.control.refresh_snapshot")}
-              title={t("ext.cameras.control.refresh_snapshot")}
+              onClick={() => {
+                if (selectedView) void selectView(selectedView);
+              }}
+              disabled={snapshotLoading || !cameraId || !selectedView || calibrationInteractionLocked}
+              aria-label={t("ext.cameras.calibration.reposition_and_refresh")}
+              title={t("ext.cameras.calibration.reposition_and_refresh")}
             >
               <i className="fa-solid fa-rotate-right" aria-hidden="true" />
             </button>
@@ -2777,15 +3839,27 @@ function CameraCalibrationModal({
         {selectedView ? (
           <div style={{ display: "grid", gridTemplateColumns: isPtzCamera ? "minmax(260px, 1fr) auto" : "minmax(260px, 1fr)", gap: 10, alignItems: "end" }}>
             <div className="field" style={{ marginBottom: 0 }}>
-              <label className="label">{t("ext.cameras.control.position_name")}</label>
+              <label className="label" htmlFor="camera-calibration-view-name">
+                {t("ext.cameras.control.position_name")}
+              </label>
               <input
+                id="camera-calibration-view-name"
+                name="camera-calibration-view-name"
                 className="input"
                 value={selectedView.label}
+                disabled={calibrationInteractionLocked}
                 onChange={(event) => updateSelectedView((view) => ({ ...view, label: event.target.value }))}
               />
             </div>
             {isPtzCamera ? (
-              <button className="chipButton" type="button" onClick={() => setPoseModalOpen(true)}>
+              <button
+                className="chipButton"
+                type="button"
+                onClick={() => {
+                  if (!movingToViewIdRef.current) setPoseModalOpen(true);
+                }}
+                disabled={calibrationInteractionLocked}
+              >
                 <i className="fa-solid fa-video" aria-hidden="true" />
                 <span>{t("ext.cameras.calibration.position_camera")}</span>
               </button>
@@ -2793,7 +3867,131 @@ function CameraCalibrationModal({
           </div>
         ) : null}
 
-        <div style={{ position: "relative", flex: 1, minHeight: 0, borderRadius: 14, border: "1px solid rgba(255,255,255,0.14)", overflow: "hidden", background: "rgba(0,0,0,0.20)" }}>
+        {isPtzCamera && selectedView ? (
+          <section className="card" style={{ marginBottom: 0 }} aria-busy={visualBusy}>
+            <div
+              className="cardBody"
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: 12, flexWrap: "wrap" }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 240, flex: "1 1 460px" }}>
+                <strong>{t("ext.cameras.visual_calibration.title")}</strong>
+                <span className="cardMeta">
+                  {visualReference
+                    ? t("ext.cameras.visual_calibration.reference_selected", { view: visualReference.view.label })
+                    : t("ext.cameras.visual_calibration.description")}
+                </span>
+                {visualRun.status === "analyzing" && visualRunForSelected ? (
+                  <span className="cardMeta" role="status" aria-live="polite">
+                    {t("ext.cameras.visual_calibration.analyzing")}
+                  </span>
+                ) : null}
+                {visualRun.status === "proposed" && visualRunForSelected ? (
+                  <span className="cardMeta" role="status" aria-live="polite">
+                    {t("ext.cameras.visual_calibration.proposal_ready")}
+                  </span>
+                ) : null}
+                {visualRun.status === "accepted" && visualRunForSelected ? (
+                  <span className="cardMeta" role="status" aria-live="polite">
+                    {t("ext.cameras.visual_calibration.accepted")}
+                  </span>
+                ) : null}
+                {visualRun.status === "rejected" && visualRunForSelected ? (
+                  <span className="errorText" role="alert">
+                    {visualReason ?? t("ext.cameras.visual_calibration.reason.generic")}
+                  </span>
+                ) : null}
+                {visualRun.status === "error" && visualRunForSelected ? (
+                  <span className="errorText" role="alert">
+                    {visualRun.errorMessage}
+                  </span>
+                ) : null}
+                {visualResult ? (
+                  <details>
+                    <summary className="cardMeta" style={{ cursor: "pointer" }}>
+                      {t("ext.cameras.visual_calibration.quality_details")}
+                    </summary>
+                    <div className="cardMeta" style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 6 }}>
+                      <span>
+                        {t("ext.cameras.visual_calibration.matches", {
+                          inliers: visualResult.quality.inliers,
+                          matches: visualResult.quality.candidate_matches,
+                        })}
+                      </span>
+                      <span>
+                        {t("ext.cameras.visual_calibration.coverage", {
+                          coverage: Math.round(100 * Math.min(visualResult.quality.source_coverage_ratio, visualResult.quality.target_coverage_ratio)),
+                        })}
+                      </span>
+                      <span>
+                        {t("ext.cameras.visual_calibration.overlap", {
+                          overlap: Math.round(100 * visualResult.quality.overlap_ratio),
+                        })}
+                      </span>
+                      {visualResult.quality.p95_reprojection_error_px !== null ? (
+                        <span>
+                          {t("ext.cameras.visual_calibration.reprojection_error", {
+                            error: visualResult.quality.p95_reprojection_error_px.toFixed(1),
+                          })}
+                        </span>
+                      ) : null}
+                    </div>
+                  </details>
+                ) : null}
+              </div>
+              <div className="rowWrap" style={{ gap: 8, justifyContent: "flex-end" }}>
+                {!visualReference ? (
+                  <button
+                    className="primaryButton"
+                    type="button"
+                    onClick={() => void useSelectedViewAsVisualReference()}
+                    disabled={!selectedCanBeReference || visualBusy}
+                  >
+                    {visualReferenceLoading || snapshotLoading
+                      ? t("ext.cameras.control.loading")
+                      : t("ext.cameras.visual_calibration.use_reference")}
+                  </button>
+                ) : visualReference.view.id === selectedView.id ? (
+                  <button className="primaryButton" type="button" onClick={() => addView({ visualTarget: true })} disabled={visualBusy}>
+                    {t("ext.cameras.visual_calibration.add_target")}
+                  </button>
+                ) : visualRun.status === "proposed" && visualRunForSelected ? (
+                  <>
+                    <button className="chipButton" type="button" onClick={discardVisualCalibration} disabled={calibrationInteractionLocked}>
+                      {t("ext.cameras.visual_calibration.discard")}
+                    </button>
+                    <button className="primaryButton" type="button" onClick={acceptVisualCalibration} disabled={calibrationInteractionLocked}>
+                      {t("ext.cameras.visual_calibration.accept")}
+                    </button>
+                  </>
+                ) : visualRun.status === "accepted" && visualRunForSelected ? (
+                  <button
+                    className="chipButton"
+                    type="button"
+                    onClick={() => void useSelectedViewAsVisualReference()}
+                    disabled={!selectedCanBeReference || visualBusy}
+                  >
+                    {t("ext.cameras.visual_calibration.use_as_next_reference")}
+                  </button>
+                ) : (
+                  <button
+                    className="primaryButton"
+                    type="button"
+                    onClick={() => void analyzeSelectedViewVisually()}
+                    disabled={visualBusy}
+                  >
+                    {visualRun.status === "analyzing" && visualRunForSelected
+                      ? t("ext.cameras.visual_calibration.analyzing")
+                      : visualRunForSelected && (visualRun.status === "rejected" || visualRun.status === "error")
+                        ? t("ext.cameras.visual_calibration.retry")
+                        : t("ext.cameras.visual_calibration.analyze")}
+                  </button>
+                )}
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        <div style={{ position: "relative", flex: 1, minHeight: 280, borderRadius: 14, border: "1px solid rgba(255,255,255,0.14)", overflow: "hidden", background: "rgba(0,0,0,0.20)" }}>
           <host.ui.Viewport2DReplica
             initialFit="content"
             interactionMode="navigate"
@@ -2813,10 +4011,16 @@ function CameraCalibrationModal({
           </div>
         ) : null}
 
+        {unapprovedViewLabels.length > 0 ? (
+          <div className="errorText" role="status">
+            {t("ext.cameras.visual_calibration.unapproved_views", { views: unapprovedViewLabels.join(", ") })}
+          </div>
+        ) : null}
+
         {selectedView ? (
           <div className="card" style={{ marginBottom: 0 }}>
             <div className="cardBody" style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12 }}>
-              <button className="chipButton" type="button" onClick={() => setAdvancedOpen((value) => !value)} style={{ alignSelf: "flex-start" }}>
+              <button className="chipButton" type="button" onClick={() => setAdvancedOpen((value) => !value)} disabled={calibrationInteractionLocked} style={{ alignSelf: "flex-start" }}>
                 {t("ext.cameras.calibration.advanced_streams")}
               </button>
               {advancedOpen ? (
@@ -2826,6 +4030,7 @@ function CameraCalibrationModal({
                       <input
                         type="checkbox"
                         checked={compatibleRoles.includes(role)}
+                        disabled={calibrationInteractionLocked}
                         onChange={(event) => setCompatibleRole(role, event.target.checked)}
                       />
                       {role === "main"
@@ -2850,8 +4055,9 @@ function CameraCalibrationModal({
           <button
             className="primaryButton"
             type="button"
-            disabled={invalidMeshViewLabels.length > 0}
+            disabled={invalidMeshViewLabels.length > 0 || unapprovedViewLabels.length > 0 || calibrationInteractionLocked}
             onClick={() => {
+              if (movingToViewIdRef.current) return;
               onSave(
                 views.map((view, index) => ({
                   ...view,
@@ -2866,7 +4072,13 @@ function CameraCalibrationModal({
                   },
                   projection_model: {
                     ...view.projection_model,
-                    image_region: defaultImageRegion(),
+                    visual_pose_signature: view.projection_model.visual_pose_signature
+                      ? { ...view.projection_model.visual_pose_signature }
+                      : null,
+                    image_region: {
+                      top_left: { ...view.projection_model.image_region.top_left },
+                      bottom_right: { ...view.projection_model.image_region.bottom_right },
+                    },
                     refinement: view.projection_model.refinement?.points.length
                       ? { model: "local_rbf_v1", points: cloneRefinementPoints(view.projection_model.refinement.points) }
                       : null,
@@ -2883,23 +4095,28 @@ function CameraCalibrationModal({
           </button>
         </div>
       </div>
+        </SubModal>
+      ) : null}
       <CameraPoseModal
-        open={poseModalOpen}
+        open={open && poseModalOpen}
         onClose={() => setPoseModalOpen(false)}
         i18n={i18n}
         cameraId={cameraId}
         cameraSources={cameraSources}
         selectedView={selectedView}
         onSnapshotRefreshRequested={refreshCurrentCalibrationSnapshot}
-        onCapture={(poseReference, label) => {
-          updateSelectedView((view) => ({
-            ...view,
-            label: label || view.label,
-            pose_reference: poseReference,
-          }));
+        onCapture={(poseReference, label, viewId) => {
+          if (selectedViewIdRef.current !== viewId) return;
+          updateSelectedView((view) =>
+            invalidateVisualCalibrationApproval({
+              ...view,
+              label: label || view.label,
+              pose_reference: poseReference,
+            }),
+          );
         }}
       />
-    </SubModal>
+    </>
   );
 }
 
@@ -2920,7 +4137,7 @@ function CameraPoseModal({
   cameraSources: CameraSnapshotSourceOption[];
   selectedView: CameraCalibratedView | null;
   onSnapshotRefreshRequested: () => void;
-  onCapture: (poseReference: CameraPoseReference, label?: string | null) => void;
+  onCapture: (poseReference: CameraPoseReference, label: string | null | undefined, viewId: string) => void;
 }): React.ReactElement | null {
   const { t } = i18n.useI18n();
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
@@ -2928,11 +4145,46 @@ function CameraPoseModal({
   const [status, setStatus] = useState<PanTiltZoomState | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [creatingPreset, setCreatingPreset] = useState(false);
   const [activeMoveId, setActiveMoveId] = useState<string | null>(null);
   const [selectedPresetToken, setSelectedPresetToken] = useState("");
+  type ContinuousMoveRegistration = {
+    cameraId: string;
+    sourceId: string;
+    freshnessGeneration: number;
+    vector: { pan: number; tilt: number; zoom: number };
+    baselineVisualFingerprint: VisualStabilityFingerprint;
+    mutationPromise: Promise<unknown> | null;
+    motionIssued: boolean;
+  };
   const moveTimerRef = useRef<number | null>(null);
   const moveVectorRef = useRef<{ pan: number; tilt: number; zoom: number } | null>(null);
+  const moveFreshnessGenerationRef = useRef<number | null>(null);
+  const moveSourceIdRef = useRef("");
+  const moveCommandAbortRef = useRef<AbortController | null>(null);
+  const continuousMoveRef = useRef<ContinuousMoveRegistration | null>(null);
+  const moveStopInProgressRef = useRef(false);
+  const moveStopCompletionRef = useRef<Promise<void> | null>(null);
+  const snapshotRefreshAbortRef = useRef<AbortController | null>(null);
   const snapshotUrlRef = useRef<string | null>(null);
+  const freshSnapshotFingerprintRef = useRef<VisualStabilityFingerprint | null>(null);
+  const operationGenerationRef = useRef(0);
+  const operationAbortRef = useRef<AbortController | null>(null);
+  type PoseMovementRegistration = {
+    generation: number;
+    cameraId: string;
+    sourceId: string;
+    baselineVisualFingerprint: VisualStabilityFingerprint;
+    mutationPromise: Promise<unknown> | null;
+    motionIssued: boolean;
+    stopIssued: boolean;
+  };
+  const poseMovementRef = useRef<PoseMovementRegistration | null>(null);
+  const poseStopCompletionRef = useRef<Promise<void> | null>(null);
+  const openRef = useRef(open);
+  const selectedViewIdRef = useRef(selectedView?.id ?? null);
+  const preferredPtzSourceIdRef = useRef("");
+  const preferredSnapshotSourceIdRef = useRef("");
   const preferredSnapshotSourceId = useMemo(
     () => resolvePreferredCalibrationSnapshotSourceId(selectedView, cameraSources),
     [cameraSources, selectedView?.stream_scope],
@@ -2941,6 +4193,46 @@ function CameraPoseModal({
     () => resolvePreferredCalibrationPtzSourceId(selectedView, cameraSources),
     [cameraSources, selectedView?.stream_scope],
   );
+  type FreshSnapshotGate = {
+    generation: number;
+    status: "checking" | "ready" | "blocked";
+    retryable: boolean;
+    requiresStop: boolean;
+    requiresVisualTransition: boolean;
+  };
+  const freshnessScope = open
+    ? JSON.stringify([cameraId, selectedView?.id ?? "", preferredSnapshotSourceId, preferredPtzSourceId])
+    : "";
+  const freshnessScopeRef = useRef("");
+  const freshnessGenerationRef = useRef(0);
+  if (freshnessScopeRef.current !== freshnessScope) {
+    freshnessScopeRef.current = freshnessScope;
+    freshnessGenerationRef.current += 1;
+  }
+  const freshnessGeneration = freshnessGenerationRef.current;
+  const [freshSnapshotGate, setFreshSnapshotGate] = useState<FreshSnapshotGate>({
+    generation: -1,
+    status: "checking",
+    retryable: false,
+    requiresStop: false,
+    requiresVisualTransition: false,
+  });
+  const currentFreshSnapshotGate =
+    freshSnapshotGate.generation === freshnessGeneration
+      ? freshSnapshotGate
+      : {
+          generation: freshnessGeneration,
+          status: "checking" as const,
+          retryable: false,
+          requiresStop: false,
+          requiresVisualTransition: false,
+        };
+  const freshSnapshotReady = Boolean(freshnessScope) && currentFreshSnapshotGate.status === "ready";
+  const freshSnapshotBlocked = currentFreshSnapshotGate.status === "blocked";
+  openRef.current = open;
+  selectedViewIdRef.current = selectedView?.id ?? null;
+  preferredPtzSourceIdRef.current = preferredPtzSourceId;
+  preferredSnapshotSourceIdRef.current = preferredSnapshotSourceId;
   const panTiltControls = useMemo(
     () => [
       {
@@ -2998,104 +4290,337 @@ function CameraPoseModal({
     snapshotUrlRef.current = snapshotUrl;
   }, [snapshotUrl]);
 
-  useEffect(() => {
-    if (!open) return;
-    setSelectedPresetToken(String(selectedView?.pose_reference?.preset_token ?? "").trim());
-  }, [open, selectedView?.id]);
+  type PoseOperation = {
+    generation: number;
+    freshnessGeneration: number;
+    controller: AbortController;
+    viewId: string;
+    ptzSourceId: string;
+    snapshotSourceId: string;
+  };
 
-  const refreshStatus = useCallback(async () => {
-    if (!cameraId) return null;
+  function claimRegisteredPoseMovementStop(): PoseMovementRegistration | null {
+    const movement = poseMovementRef.current;
+    poseMovementRef.current = null;
+    if (!movement || !movement.motionIssued || movement.stopIssued) return null;
+    movement.stopIssued = true;
+    return movement;
+  }
+
+  function cancelRegisteredPoseMovement(sendStop: boolean): void {
+    if (!sendStop) {
+      poseMovementRef.current = null;
+      return;
+    }
+    const movement = claimRegisteredPoseMovementStop();
+    if (!movement) return;
+    const stopCompletion = enqueueCameraPtzStop(
+      movement.cameraId,
+      movement.sourceId,
+      movement.mutationPromise,
+    );
+    poseStopCompletionRef.current = stopCompletion;
+    void stopCompletion.finally(() => {
+      if (poseStopCompletionRef.current === stopCompletion) poseStopCompletionRef.current = null;
+    });
+  }
+
+  function cancelPoseOperation(sendStop = true): void {
+    operationAbortRef.current?.abort();
+    operationAbortRef.current = null;
+    operationGenerationRef.current += 1;
+    cancelRegisteredPoseMovement(sendStop);
+  }
+
+  function blockFreshSnapshot(
+    error: unknown,
+    generation = freshnessGenerationRef.current,
+    requiresStop = false,
+    requiresVisualTransition = false,
+  ): void {
+    if (freshnessGenerationRef.current !== generation) return;
+    setFreshSnapshotGate({
+      generation,
+      status: "blocked",
+      retryable: !isCameraSnapshotFreshnessUnverifiableError(error),
+      requiresStop,
+      requiresVisualTransition,
+    });
+  }
+
+  function beginPoseOperation(options?: {
+    stopPreviousMovement?: boolean;
+    allowFreshSnapshotCheck?: boolean;
+  }): PoseOperation | null {
+    const viewId = selectedViewIdRef.current;
+    cancelPoseOperation(options?.stopPreviousMovement !== false);
+    if (!freshSnapshotReady && !options?.allowFreshSnapshotCheck) return null;
+    if (!openRef.current || !cameraId || !viewId || !preferredPtzSourceId || !preferredSnapshotSourceId) {
+      setErrorMessage(t("ext.cameras.visual_calibration.source_unavailable"));
+      return null;
+    }
+    const controller = new AbortController();
+    const generation = operationGenerationRef.current;
+    operationAbortRef.current = controller;
+    return {
+      generation,
+      freshnessGeneration,
+      controller,
+      viewId,
+      ptzSourceId: preferredPtzSourceId,
+      snapshotSourceId: preferredSnapshotSourceId,
+    };
+  }
+
+  function registerPoseMovement(
+    operation: PoseOperation,
+    baselineVisualFingerprint: VisualStabilityFingerprint,
+  ): void {
+    cancelRegisteredPoseMovement(true);
+    poseMovementRef.current = {
+      generation: operation.generation,
+      cameraId,
+      sourceId: operation.ptzSourceId,
+      baselineVisualFingerprint,
+      mutationPromise: null,
+      motionIssued: false,
+      stopIssued: false,
+    };
+  }
+
+  function markPoseMovementIssued(operation: PoseOperation, mutationPromise: Promise<unknown>): void {
+    const movement = poseMovementRef.current;
+    if (movement?.generation !== operation.generation) return;
+    movement.mutationPromise = mutationPromise;
+    movement.motionIssued = true;
+  }
+
+  function releasePoseMovement(operation: PoseOperation): void {
+    if (poseMovementRef.current?.generation === operation.generation) poseMovementRef.current = null;
+  }
+
+  function poseOperationIsCurrent(operation: PoseOperation): boolean {
+    return (
+      !operation.controller.signal.aborted &&
+      operationGenerationRef.current === operation.generation &&
+      freshnessGenerationRef.current === operation.freshnessGeneration &&
+      openRef.current &&
+      selectedViewIdRef.current === operation.viewId &&
+      preferredPtzSourceIdRef.current === operation.ptzSourceId &&
+      preferredSnapshotSourceIdRef.current === operation.snapshotSourceId
+    );
+  }
+
+  const refreshStatus = useCallback(async (sourceId: string, signal?: AbortSignal) => {
+    if (!cameraId || !sourceId || signal?.aborted) return null;
     try {
-      const response = await fetchCameraPtzStatus(cameraId, preferredPtzSourceId);
+      const response = await fetchCameraPtzStatus(cameraId, sourceId, signal);
+      if (signal?.aborted) return null;
       const nextStatus = response.status ?? null;
       setStatus(nextStatus);
       return nextStatus;
     } catch (error) {
+      if (isAbortError(error) || signal?.aborted) return null;
       setErrorMessage(error instanceof Error ? error.message : String(error));
       return null;
     }
-  }, [cameraId, preferredPtzSourceId]);
+  }, [cameraId]);
 
-  const refreshSnapshot = useCallback(async () => {
-    if (!cameraId) return;
-    const controller = new AbortController();
+  const refreshSnapshot = useCallback(async (sourceId: string, signal?: AbortSignal) => {
+    if (!cameraId || !sourceId || signal?.aborted) return false;
+    const requestFreshnessGeneration = freshnessGeneration;
+    const localController = signal ? null : new AbortController();
+    if (localController) {
+      snapshotRefreshAbortRef.current?.abort();
+      snapshotRefreshAbortRef.current = localController;
+    }
+    const effectiveSignal = signal ?? localController!.signal;
     try {
-      setErrorMessage(null);
-      const blob = await fetchCameraSnapshotWithRetry(cameraId, preferredSnapshotSourceId, controller.signal);
+      const blob = await fetchCameraSnapshotWithRetry(cameraId, sourceId, effectiveSignal);
+      const fingerprint = await visualStabilityFingerprintFromBlob(blob, effectiveSignal);
+      if (!fingerprint) {
+        throw new Error(t("ext.cameras.visual_calibration.snapshot_failed"));
+      }
+      if (
+        effectiveSignal.aborted ||
+        freshnessGenerationRef.current !== requestFreshnessGeneration
+      ) {
+        return false;
+      }
       const nextUrl = URL.createObjectURL(blob);
+      if (
+        effectiveSignal.aborted ||
+        freshnessGenerationRef.current !== requestFreshnessGeneration
+      ) {
+        URL.revokeObjectURL(nextUrl);
+        return false;
+      }
       setSnapshotUrl((previous) => {
         if (previous) URL.revokeObjectURL(previous);
         return nextUrl;
       });
+      freshSnapshotFingerprintRef.current = fingerprint;
+      setFreshSnapshotGate({
+        generation: requestFreshnessGeneration,
+        status: "ready",
+        retryable: false,
+        requiresStop: false,
+        requiresVisualTransition: false,
+      });
+      return true;
     } catch (error) {
-      if (isAbortError(error)) return;
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      if (
+        isAbortError(error) ||
+        effectiveSignal.aborted ||
+        freshnessGenerationRef.current !== requestFreshnessGeneration
+      ) {
+        return false;
+      }
+      blockFreshSnapshot(error, requestFreshnessGeneration);
+      setErrorMessage(
+        calibrationSnapshotErrorMessage(
+          error,
+          t("ext.cameras.visual_calibration.freshness_unverifiable"),
+        ),
+      );
+      throw error;
+    } finally {
+      if (localController && snapshotRefreshAbortRef.current === localController) {
+        snapshotRefreshAbortRef.current = null;
+      }
     }
-  }, [cameraId, preferredSnapshotSourceId]);
+  }, [cameraId, freshnessGeneration, t]);
 
-  const waitForPtzSettle = useCallback(async () => {
-    await sleep(750);
+  const waitForPtzSettle = useCallback(async (
+    sourceId: string,
+    signal: AbortSignal,
+    expectation?: PtzSettleExpectation,
+  ) => {
+    await waitForRetry(500, signal);
     let nextStatus: PanTiltZoomState | null = null;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      nextStatus = await refreshStatus();
-      if (attempt > 0 && normalizePtzMoveStatus(nextStatus?.move_status) !== "moving") break;
-      await sleep(450);
+    let previousStatus: PanTiltZoomState | null = null;
+    let consecutiveIdleReads = 0;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      nextStatus = await refreshStatus(sourceId, signal);
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const moveStatus = normalizePtzMoveStatus(nextStatus?.move_status);
+      const targetPoseIsContradicted = Boolean(
+        expectation?.targetPose &&
+          poseHasAbsoluteTarget(expectation.targetPose) &&
+          ptzStatusContradictsPose(nextStatus, expectation.targetPose),
+      );
+      if (
+        !targetPoseIsContradicted &&
+        (moveStatus === "idle" ||
+          (moveStatus === "unknown" && ptzTelemetryIsStable(previousStatus, nextStatus)))
+      ) {
+        consecutiveIdleReads += 1;
+        if (consecutiveIdleReads >= 2) {
+          if (ptzSettleRequiresVisualConfirmation(expectation)) {
+            const visuallyStable = await waitForCameraVisualStability(
+              cameraId,
+              sourceId,
+              signal,
+              expectation?.baselineVisualFingerprint,
+              expectation?.requireVisualTransition === true,
+            );
+            if (!visuallyStable) return null;
+          }
+          await waitForRetry(350, signal);
+          return nextStatus;
+        }
+      } else {
+        consecutiveIdleReads = 0;
+      }
+      previousStatus = nextStatus;
+      await waitForRetry(450, signal);
     }
-    await sleep(350);
-    return nextStatus;
+    return null;
   }, [refreshStatus]);
 
   useEffect(() => {
-    if (!open) return;
+    cancelPoseOperation();
+    snapshotRefreshAbortRef.current?.abort();
+    snapshotRefreshAbortRef.current = null;
+    setPresets([]);
+    setStatus(null);
+    freshSnapshotFingerprintRef.current = null;
+    setFreshSnapshotGate({
+      generation: freshnessGeneration,
+      status: "checking",
+      retryable: false,
+      requiresStop: false,
+      requiresVisualTransition: false,
+    });
+    setCreatingPreset(false);
+    // Opening the modal never implies that the camera is already at the view's saved preset.
+    // Keep the current position selected until the user explicitly chooses a preset to move to.
+    setSelectedPresetToken("");
+    if (!open) {
+      setBusy(false);
+      return;
+    }
+    if (!preferredPtzSourceId || !preferredSnapshotSourceId) {
+      setBusy(false);
+      setErrorMessage(t("ext.cameras.visual_calibration.source_unavailable"));
+      return;
+    }
     let cancelled = false;
+    const controller = new AbortController();
     setErrorMessage(null);
-    void fetchCameraPtzPresets(cameraId, preferredPtzSourceId)
-      .then((items) => {
-        if (!cancelled) setPresets(Array.isArray(items.presets) ? items.presets : []);
-      })
-      .catch((error) => {
-        if (!cancelled) setErrorMessage(error instanceof Error ? error.message : String(error));
-      });
+    setBusy(true);
     void (async () => {
-      const poseReference = selectedView?.pose_reference ?? null;
-      const presetToken = String(poseReference?.preset_token ?? "").trim();
-      const needsMove = Boolean(presetToken) || poseHasAbsoluteTarget(poseReference);
-      if (needsMove) {
-        setBusy(true);
-        setSnapshotUrl((previous) => {
-          if (previous) URL.revokeObjectURL(previous);
-          return null;
-        });
-      }
       try {
-        if (presetToken) {
-          await gotoCameraPtzPreset(cameraId, presetToken, preferredPtzSourceId);
-          if (cancelled) return;
-          await waitForPtzSettle();
-        } else if (poseHasAbsoluteTarget(poseReference)) {
-          await moveCameraPtzAbsolute(cameraId, absoluteMovePayloadForPose(preferredPtzSourceId, poseReference!));
-          if (cancelled) return;
-          await waitForPtzSettle();
-        } else {
-          await refreshStatus();
+        const pendingPoseStop = poseStopCompletionRef.current;
+        if (pendingPoseStop) await pendingPoseStop;
+        const pendingMoveStop = moveStopCompletionRef.current;
+        if (pendingMoveStop) await pendingMoveStop;
+        await waitForPendingCameraPtzStops(cameraId);
+        if (cancelled || controller.signal.aborted) return;
+        const [items, settledStatus] = await Promise.all([
+          fetchCameraPtzPresets(cameraId, preferredPtzSourceId, controller.signal),
+          waitForPtzSettle(preferredPtzSourceId, controller.signal, {
+            requireTargetEvidence: true,
+            requireVisualTransition: false,
+          }),
+        ]);
+        if (cancelled || controller.signal.aborted) return;
+        if (!settledStatus) {
+          const error = new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
+          blockFreshSnapshot(error, freshnessGeneration, true);
+          throw error;
         }
-        if (cancelled) return;
-        await refreshSnapshot();
-        onSnapshotRefreshRequested();
+        await refreshSnapshot(preferredSnapshotSourceId, controller.signal);
+        if (cancelled || controller.signal.aborted) return;
+        setPresets(Array.isArray(items.presets) ? items.presets : []);
       } catch (error) {
-        if (!cancelled) setErrorMessage(error instanceof Error ? error.message : String(error));
+        if (!cancelled && !controller.signal.aborted && !isAbortError(error)) {
+          setErrorMessage(
+            calibrationSnapshotErrorMessage(
+              error,
+              t("ext.cameras.visual_calibration.freshness_unverifiable"),
+            ),
+          );
+        }
       } finally {
-        if (!cancelled) setBusy(false);
+        if (!cancelled && !controller.signal.aborted) setBusy(false);
       }
     })();
     const interval = window.setInterval(() => {
-      void refreshStatus();
+      if (!operationAbortRef.current && !moveVectorRef.current) {
+        void refreshStatus(preferredPtzSourceId, controller.signal);
+      }
     }, 1500);
     return () => {
       cancelled = true;
+      controller.abort();
+      snapshotRefreshAbortRef.current?.abort();
+      snapshotRefreshAbortRef.current = null;
+      cancelPoseOperation();
       window.clearInterval(interval);
     };
-  }, [cameraId, onSnapshotRefreshRequested, open, preferredPtzSourceId, refreshSnapshot, refreshStatus, selectedView?.id, waitForPtzSettle]);
+  }, [cameraId, freshnessGeneration, open, preferredPtzSourceId, preferredSnapshotSourceId, refreshSnapshot, refreshStatus, selectedView?.id, t, waitForPtzSettle]);
 
   useEffect(() => {
     if (open) return;
@@ -3105,6 +4630,9 @@ function CameraPoseModal({
     });
     setActiveMoveId(null);
     moveVectorRef.current = null;
+    moveSourceIdRef.current = "";
+    moveCommandAbortRef.current?.abort();
+    moveCommandAbortRef.current = null;
     if (moveTimerRef.current !== null) {
       window.clearInterval(moveTimerRef.current);
       moveTimerRef.current = null;
@@ -3112,7 +4640,31 @@ function CameraPoseModal({
   }, [open]);
 
   useEffect(() => {
+    if (!open) return;
+    const stopAfterLostControl = () => {
+      if (moveVectorRef.current) void stopMove(false, { refresh: false });
+    };
+    const stopAfterVisibilityLoss = () => {
+      if (document.visibilityState !== "visible") stopAfterLostControl();
+    };
+    window.addEventListener("blur", stopAfterLostControl);
+    document.addEventListener("visibilitychange", stopAfterVisibilityLoss);
     return () => {
+      window.removeEventListener("blur", stopAfterLostControl);
+      document.removeEventListener("visibilitychange", stopAfterVisibilityLoss);
+      stopAfterLostControl();
+    };
+  }, [freshnessGeneration, open, preferredPtzSourceId]);
+
+  useEffect(() => {
+    return () => {
+      openRef.current = false;
+      cancelPoseOperation();
+      snapshotRefreshAbortRef.current?.abort();
+      if (continuousMoveRef.current || moveVectorRef.current) {
+        void stopMove(false, { refresh: false });
+      }
+      moveCommandAbortRef.current?.abort();
       if (snapshotUrlRef.current) URL.revokeObjectURL(snapshotUrlRef.current);
       if (moveTimerRef.current !== null) window.clearInterval(moveTimerRef.current);
     };
@@ -3129,75 +4681,427 @@ function CameraPoseModal({
     };
   }
 
+  async function createPresetAtCurrentPosition() {
+    if (!cameraId || busy || activeMoveId || !freshSnapshotReady) return;
+    const operation = beginPoseOperation();
+    if (!operation) return;
+    const presetName = safeCameraPresetName(
+      selectedView?.label ?? "",
+      t("ext.cameras.calibration.default_view"),
+      presets,
+    );
+    setBusy(true);
+    setCreatingPreset(true);
+    setErrorMessage(null);
+    let createdPresetToken = "";
+    let presetCaptureCompleted = false;
+    try {
+      const response = await createCameraPtzPreset(cameraId, {
+        source_id: operation.ptzSourceId,
+        name: presetName,
+      }, operation.controller.signal);
+      if (!poseOperationIsCurrent(operation)) return;
+      const token = String(response.token ?? "").trim();
+      if (!token) {
+        throw new Error(t("ext.cameras.visual_calibration.preset_creation_failed"));
+      }
+      const createdPreset: CameraPtzPreset = {
+        ...response,
+        token,
+        name: String(response.name ?? "").trim() || presetName,
+      };
+      createdPresetToken = token;
+      setPresets((currentPresets) => {
+        const existingIndex = currentPresets.findIndex((preset) => preset.token === token);
+        if (existingIndex < 0) return [...currentPresets, createdPreset];
+        return currentPresets.map((preset, index) => (index === existingIndex ? createdPreset : preset));
+      });
+      setSelectedPresetToken(token);
+
+      const nextStatus = await waitForPtzSettle(operation.ptzSourceId, operation.controller.signal);
+      if (!poseOperationIsCurrent(operation)) return;
+      if (!nextStatus) {
+        throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
+      }
+      const pose = poseFromStatus(nextStatus, createdPreset);
+      if (!pose) {
+        throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
+      }
+      onCapture(pose, selectedView?.label ?? null, operation.viewId);
+      presetCaptureCompleted = true;
+      if (!poseOperationIsCurrent(operation)) return;
+      onSnapshotRefreshRequested();
+      cancelPoseOperation();
+      onClose();
+    } catch (error) {
+      if (poseOperationIsCurrent(operation) && !isAbortError(error)) {
+        if (createdPresetToken) {
+          blockFreshSnapshot(error, operation.freshnessGeneration, true);
+        }
+        setErrorMessage(
+          calibrationSnapshotErrorMessage(
+            error,
+            t("ext.cameras.visual_calibration.freshness_unverifiable"),
+          ),
+        );
+      }
+    } finally {
+      if (
+        createdPresetToken &&
+        !presetCaptureCompleted &&
+        openRef.current &&
+        freshnessGenerationRef.current === operation.freshnessGeneration
+      ) {
+        setSelectedPresetToken((current) =>
+          current === createdPresetToken ? "" : current,
+        );
+      }
+      if (operationGenerationRef.current === operation.generation) {
+        operationAbortRef.current = null;
+        setCreatingPreset(false);
+        setBusy(false);
+      }
+    }
+  }
+
   async function stopMove(force?: boolean, options?: { refresh?: boolean }) {
-    const vector = moveVectorRef.current;
+    if (moveStopInProgressRef.current) {
+      const requestedFreshnessGeneration = freshnessGenerationRef.current;
+      const pendingStop = moveStopCompletionRef.current;
+      if (pendingStop) await pendingStop;
+      if (
+        force &&
+        options?.refresh !== false &&
+        openRef.current &&
+        freshnessGenerationRef.current === requestedFreshnessGeneration
+      ) {
+        await stopMove(force, options);
+      }
+      return;
+    }
+    const continuousMovement = continuousMoveRef.current;
+    continuousMoveRef.current = null;
+    const vector = continuousMovement?.vector ?? moveVectorRef.current;
+    const movementFreshnessGeneration =
+      continuousMovement?.freshnessGeneration ??
+      moveFreshnessGenerationRef.current ??
+      freshnessGenerationRef.current;
+    const registeredMovement = force ? claimRegisteredPoseMovementStop() : null;
+    const registeredMovementSourceId = registeredMovement?.sourceId ?? "";
+    const moveSourceId =
+      continuousMovement?.sourceId ||
+      moveSourceIdRef.current ||
+      registeredMovementSourceId ||
+      preferredPtzSourceId;
+    const movementCameraId =
+      continuousMovement?.cameraId || registeredMovement?.cameraId || cameraId;
+    const movementBaselineVisualFingerprint =
+      continuousMovement?.baselineVisualFingerprint ||
+      registeredMovement?.baselineVisualFingerprint ||
+      freshSnapshotFingerprintRef.current;
+    const movementWasIssued = Boolean(
+      continuousMovement?.motionIssued ||
+      registeredMovement?.motionIssued ||
+      currentFreshSnapshotGate.requiresVisualTransition
+    );
     moveVectorRef.current = null;
+    moveFreshnessGenerationRef.current = null;
+    moveSourceIdRef.current = "";
+    moveCommandAbortRef.current?.abort();
+    moveCommandAbortRef.current = null;
     setActiveMoveId(null);
     if (moveTimerRef.current !== null) {
       window.clearInterval(moveTimerRef.current);
       moveTimerRef.current = null;
     }
-    if (!cameraId || (!force && !vector)) return;
+    if (
+      !movementCameraId ||
+      (!force && !vector && !continuousMovement?.motionIssued)
+    ) {
+      return;
+    }
+    if (!moveSourceId) {
+      setErrorMessage(t("ext.cameras.visual_calibration.source_unavailable"));
+      return;
+    }
+    moveStopInProgressRef.current = true;
+    const previousGlobalStop = pendingCameraPtzStopCompletion(movementCameraId);
+    let resolveMoveStopCompletion!: () => void;
+    const moveStopCompletion = new Promise<void>((resolve) => {
+      resolveMoveStopCompletion = resolve;
+    });
+    moveStopCompletionRef.current = moveStopCompletion;
+    trackCameraPtzStopCompletion(movementCameraId, moveStopCompletion);
+    const refreshAfterStop = options?.refresh !== false && movementCameraId === cameraId;
+    const operation = refreshAfterStop
+      ? beginPoseOperation({
+          stopPreviousMovement: false,
+          allowFreshSnapshotCheck: true,
+        })
+      : null;
+    if (refreshAfterStop) setBusy(true);
     try {
-      await stopCameraPtz(cameraId, {
-        ...(preferredPtzSourceId ? { source_id: preferredPtzSourceId } : {}),
+      if (previousGlobalStop) await previousGlobalStop.catch(() => undefined);
+      const pendingPoseStop = poseStopCompletionRef.current;
+      if (pendingPoseStop) await pendingPoseStop;
+      if (continuousMovement?.mutationPromise) {
+        await continuousMovement.mutationPromise.catch(() => undefined);
+      }
+      if (registeredMovement?.mutationPromise) {
+        await registeredMovement.mutationPromise.catch(() => undefined);
+      }
+      await stopCameraPtz(movementCameraId, {
+        source_id: moveSourceId,
         pan_tilt: force || Boolean(vector && (Math.abs(vector.pan) > 1e-6 || Math.abs(vector.tilt) > 1e-6)),
         zoom: force || Boolean(vector && Math.abs(vector.zoom) > 1e-6),
       });
-      if (options?.refresh === false) return;
-      await waitForPtzSettle();
-      await refreshSnapshot();
-      onSnapshotRefreshRequested();
+      if (!refreshAfterStop) {
+        if (freshnessGenerationRef.current === movementFreshnessGeneration) {
+          blockFreshSnapshot(
+            new Error("fresh snapshot required"),
+            movementFreshnessGeneration,
+            true,
+            true,
+          );
+          setErrorMessage(t("ext.cameras.visual_calibration.freshness_refresh_required"));
+        }
+        return;
+      }
+      if (!operation || !poseOperationIsCurrent(operation)) return;
+      if (!(await waitForPtzSettle(operation.ptzSourceId, operation.controller.signal, {
+        baselineVisualFingerprint: movementBaselineVisualFingerprint,
+        requireTargetEvidence: true,
+        requireVisualTransition: movementWasIssued,
+      }))) {
+        throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
+      }
+      if (!poseOperationIsCurrent(operation)) return;
+      await refreshSnapshot(operation.snapshotSourceId, operation.controller.signal);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      const failureFreshnessGeneration =
+        operation?.freshnessGeneration ?? movementFreshnessGeneration;
+      if (
+        (!operation || poseOperationIsCurrent(operation)) &&
+        freshnessGenerationRef.current === failureFreshnessGeneration &&
+        !isAbortError(error)
+      ) {
+        blockFreshSnapshot(
+          error,
+          failureFreshnessGeneration,
+          true,
+          movementWasIssued,
+        );
+        setErrorMessage(
+          calibrationSnapshotErrorMessage(
+            error,
+            t("ext.cameras.visual_calibration.freshness_unverifiable"),
+          ),
+        );
+      }
+    } finally {
+      moveStopInProgressRef.current = false;
+      resolveMoveStopCompletion();
+      if (moveStopCompletionRef.current === moveStopCompletion) {
+        moveStopCompletionRef.current = null;
+      }
+      if (refreshAfterStop) {
+        if (operation && operationGenerationRef.current === operation.generation) {
+          operationAbortRef.current = null;
+          setBusy(false);
+        } else if (!operation) {
+          setBusy(false);
+        }
+      }
     }
   }
 
   function beginMove(moveId: string, vector: { pan: number; tilt: number; zoom: number }) {
-    if (!cameraId || busy) return;
+    if (!cameraId || busy || !freshSnapshotReady || moveStopInProgressRef.current) return;
+    const baselineVisualFingerprint = freshSnapshotFingerprintRef.current;
+    if (!baselineVisualFingerprint) {
+      const error = new Error(t("ext.cameras.visual_calibration.snapshot_failed"));
+      blockFreshSnapshot(error);
+      setErrorMessage(error.message);
+      return;
+    }
+    if (!preferredPtzSourceId) {
+      setErrorMessage(t("ext.cameras.visual_calibration.source_unavailable"));
+      return;
+    }
+    cancelPoseOperation();
+    moveCommandAbortRef.current?.abort();
+    const controller = new AbortController();
+    moveCommandAbortRef.current = controller;
     moveVectorRef.current = vector;
+    moveFreshnessGenerationRef.current = freshnessGenerationRef.current;
+    moveSourceIdRef.current = preferredPtzSourceId;
+    const continuousMovement: ContinuousMoveRegistration = {
+      cameraId,
+      sourceId: preferredPtzSourceId,
+      freshnessGeneration: freshnessGenerationRef.current,
+      vector,
+      baselineVisualFingerprint,
+      mutationPromise: null,
+      motionIssued: false,
+    };
+    continuousMoveRef.current = continuousMovement;
+    setFreshSnapshotGate({
+      generation: freshnessGenerationRef.current,
+      status: "checking",
+      retryable: false,
+      requiresStop: false,
+      requiresVisualTransition: false,
+    });
+    setErrorMessage(null);
     setSelectedPresetToken("");
     setActiveMoveId(moveId);
-    const send = async () => {
-      try {
-        await moveCameraPtz(cameraId, {
-          ...(preferredPtzSourceId ? { source_id: preferredPtzSourceId } : {}),
+    const send = () => {
+      if (
+        controller.signal.aborted ||
+        moveCommandAbortRef.current !== controller ||
+        continuousMoveRef.current !== continuousMovement ||
+        moveVectorRef.current !== vector ||
+        continuousMovement.freshnessGeneration !== freshnessGenerationRef.current ||
+        continuousMovement.mutationPromise
+      ) {
+        return;
+      }
+      const mutationPromise = runPtzMutationWithFence(() =>
+        moveCameraPtz(cameraId, {
+          source_id: continuousMovement.sourceId,
           ...vector,
           timeout_s: PTZ_MOVE_TIMEOUT_S,
-        });
-      } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : String(error));
-        await stopMove(true);
-      }
+        }),
+      );
+      continuousMovement.mutationPromise = mutationPromise;
+      continuousMovement.motionIssued = true;
+      void mutationPromise.then(
+        () => {
+          if (continuousMovement.mutationPromise === mutationPromise) {
+            continuousMovement.mutationPromise = null;
+          }
+        },
+        (error) => {
+          if (continuousMovement.mutationPromise === mutationPromise) {
+            continuousMovement.mutationPromise = null;
+          }
+          if (
+            controller.signal.aborted ||
+            continuousMoveRef.current !== continuousMovement ||
+            continuousMovement.freshnessGeneration !== freshnessGenerationRef.current
+          ) {
+            return;
+          }
+          setErrorMessage(error instanceof Error ? error.message : String(error));
+          void stopMove(true);
+        },
+      );
     };
-    void send();
+    send();
     if (moveTimerRef.current !== null) window.clearInterval(moveTimerRef.current);
     moveTimerRef.current = window.setInterval(() => {
-      void send();
+      send();
     }, PTZ_MOVE_REPEAT_MS);
   }
 
   async function gotoPreset(token: string) {
+    if (!freshSnapshotReady) return;
     const preset = presets.find((item) => item.token === token) ?? null;
     if (!preset) return;
+    const operation = beginPoseOperation();
+    if (!operation) return;
     setSelectedPresetToken(token);
     setBusy(true);
     setErrorMessage(null);
+    let presetPositionConfirmed = false;
+    let gotoMovementIssued = false;
     try {
-      await gotoCameraPtzPreset(cameraId, token, preferredPtzSourceId);
-      const nextStatus = await waitForPtzSettle();
-      await refreshSnapshot();
+      const presetPose: CameraPoseReference = {
+        pan: preset.pan ?? null,
+        tilt: preset.tilt ?? null,
+        zoom: preset.zoom ?? null,
+      };
+      const baseline = await capturePtzMovementBaseline(
+        cameraId,
+        operation.ptzSourceId,
+        operation.snapshotSourceId,
+        presetPose,
+        operation.controller.signal,
+        t("ext.cameras.visual_calibration.snapshot_failed"),
+        true,
+      );
+      if (!poseOperationIsCurrent(operation)) return;
+      if (!baseline.targetAlreadyConfirmed) {
+        registerPoseMovement(operation, baseline.visualFingerprint);
+        const mutationPromise = runPtzMutationWithFence(() =>
+          gotoCameraPtzPreset(cameraId, token, operation.ptzSourceId),
+        );
+        markPoseMovementIssued(operation, mutationPromise);
+        gotoMovementIssued = true;
+        await mutationPromise;
+      }
+      if (!poseOperationIsCurrent(operation)) return;
+      const nextStatus = await waitForPtzSettle(operation.ptzSourceId, operation.controller.signal, {
+        baselineVisualFingerprint: baseline.visualFingerprint,
+        targetPose: presetPose,
+        requireTargetEvidence: true,
+        requireVisualTransition: !baseline.targetAlreadyConfirmed,
+      });
+      if (!poseOperationIsCurrent(operation)) return;
+      if (!nextStatus) {
+        throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
+      }
+      if (
+        poseHasAbsoluteTarget(presetPose) &&
+        ptzStatusContradictsPose(nextStatus, presetPose)
+      ) {
+        throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
+      }
+      releasePoseMovement(operation);
+      await refreshSnapshot(operation.snapshotSourceId, operation.controller.signal);
+      if (!poseOperationIsCurrent(operation)) return;
+      presetPositionConfirmed = true;
       const pose = poseFromStatus(nextStatus, preset);
-      if (pose) onCapture(pose);
+      if (pose) onCapture(pose, null, operation.viewId);
+      if (!poseOperationIsCurrent(operation)) return;
       onSnapshotRefreshRequested();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      if (poseOperationIsCurrent(operation) && !isAbortError(error)) {
+        blockFreshSnapshot(
+          error,
+          operation.freshnessGeneration,
+          true,
+          gotoMovementIssued,
+        );
+        setErrorMessage(
+          calibrationSnapshotErrorMessage(
+            error,
+            t("ext.cameras.visual_calibration.freshness_unverifiable"),
+          ),
+        );
+      }
     } finally {
-      setBusy(false);
+      if (
+        !presetPositionConfirmed &&
+        openRef.current &&
+        freshnessGenerationRef.current === operation.freshnessGeneration &&
+        selectedViewIdRef.current === operation.viewId
+      ) {
+        setSelectedPresetToken((current) => (current === token ? "" : current));
+      }
+      if (poseMovementRef.current?.generation === operation.generation) cancelRegisteredPoseMovement(true);
+      if (operationGenerationRef.current === operation.generation) {
+        operationAbortRef.current = null;
+        setBusy(false);
+      }
     }
   }
 
   function renderMoveButton(control: (typeof panTiltControls)[number] | (typeof zoomControls)[number]) {
+    const stopCapturedMove = (element: HTMLButtonElement, pointerId: number) => {
+      if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
+      if (control.id !== "stop" && moveVectorRef.current) void stopMove();
+    };
     return (
       <button
         key={control.id}
@@ -3205,21 +5109,60 @@ function CameraPoseModal({
         className="iconButton"
         aria-label={control.label}
         title={control.label}
-        onMouseDown={() => (control.id === "stop" ? void stopMove(true) : beginMove(control.id, control.vector))}
-        onMouseUp={() => void stopMove()}
-        onMouseLeave={() => void stopMove()}
-        style={{ background: activeMoveId === control.id ? "rgba(56,189,248,0.14)" : undefined }}
+        disabled={
+          !preferredPtzSourceId ||
+          ((busy || (!freshSnapshotReady && activeMoveId !== control.id)) && control.id !== "stop")
+        }
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          if (control.id === "stop") {
+            void stopMove(true);
+            return;
+          }
+          event.currentTarget.setPointerCapture(event.pointerId);
+          beginMove(control.id, control.vector);
+        }}
+        onPointerUp={(event) => stopCapturedMove(event.currentTarget, event.pointerId)}
+        onPointerCancel={(event) => stopCapturedMove(event.currentTarget, event.pointerId)}
+        onLostPointerCapture={() => {
+          if (control.id !== "stop" && moveVectorRef.current) void stopMove();
+        }}
+        onKeyDown={(event) => {
+          if (event.repeat || (event.key !== " " && event.key !== "Enter")) return;
+          event.preventDefault();
+          if (control.id === "stop") void stopMove(true);
+          else beginMove(control.id, control.vector);
+        }}
+        onKeyUp={(event) => {
+          if ((event.key === " " || event.key === "Enter") && control.id !== "stop" && moveVectorRef.current) {
+            event.preventDefault();
+            void stopMove();
+          }
+        }}
+        style={{
+          background: activeMoveId === control.id ? "rgba(56,189,248,0.14)" : undefined,
+          touchAction: "none",
+        }}
       >
         <i className={`fa-solid ${control.icon}`} aria-hidden="true" />
       </button>
     );
   }
 
+  function requestClose(): void {
+    cancelPoseOperation();
+    setBusy(false);
+    setCreatingPreset(false);
+    if (moveVectorRef.current) void stopMove(false, { refresh: false });
+    onClose();
+  }
+
   if (!open) return null;
 
   return (
-    <SubModal open={open} onClose={() => void stopMove(true, { refresh: false }).then(onClose)} title={t("ext.cameras.calibration.position_camera")}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <SubModal open={open} onClose={requestClose} title={t("ext.cameras.calibration.position_camera")}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }} aria-busy={busy}>
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="cardBody" style={{ padding: 10 }}>
             {snapshotUrl ? (
@@ -3232,14 +5175,14 @@ function CameraPoseModal({
         <div className="rowWrap" style={{ gap: 8 }}>
           <select
             className="input"
-            style={{ maxWidth: 280 }}
+            style={{ minWidth: 0, maxWidth: 320, flex: "1 1 220px" }}
             value={selectedPresetToken}
             onChange={(event) => {
               const token = event.target.value;
               setSelectedPresetToken(token);
               if (token) void gotoPreset(token);
             }}
-            disabled={busy}
+            disabled={busy || !freshSnapshotReady || Boolean(activeMoveId) || !preferredPtzSourceId}
           >
             <option value="">{t("ext.cameras.control.preset_optional")}</option>
             {presets.map((preset) => (
@@ -3249,11 +5192,39 @@ function CameraPoseModal({
             ))}
           </select>
           <button
+            className="chipButton"
+            type="button"
+            disabled={
+              busy ||
+              !freshSnapshotReady ||
+              Boolean(activeMoveId) ||
+              !preferredPtzSourceId ||
+              !preferredSnapshotSourceId
+            }
+            onClick={() => void createPresetAtCurrentPosition()}
+          >
+            <i className="fa-solid fa-bookmark" aria-hidden="true" />
+            <span>
+              {creatingPreset
+                ? t("ext.cameras.calibration.creating_preset")
+                : t("ext.cameras.calibration.create_preset_current_position")}
+            </span>
+          </button>
+          <button
             className="primaryButton"
             type="button"
+            disabled={busy || !freshSnapshotReady || Boolean(activeMoveId) || !preferredPtzSourceId}
             onClick={() => {
-              const pose = poseFromStatus(status, null);
-              if (pose) onCapture(pose, selectedView?.label ?? null);
+              const selectedPreset = presets.find((preset) => preset.token === selectedPresetToken) ?? null;
+              const pose = poseFromStatus(status, selectedPreset);
+              if (!pose || (!poseHasAbsoluteTarget(pose) && !pose.preset_token)) {
+                setErrorMessage(t("ext.cameras.visual_calibration.camera_status_unavailable"));
+                return;
+              }
+              const viewId = selectedViewIdRef.current;
+              if (!viewId) return;
+              cancelPoseOperation();
+              onCapture(pose, selectedView?.label ?? null, viewId);
               onSnapshotRefreshRequested();
               onClose();
             }}
@@ -3279,7 +5250,46 @@ function CameraPoseModal({
           {t("ext.cameras.control.pose_pan")}: {formatPtzTelemetryValue(status?.pan)} · {t("ext.cameras.control.pose_tilt")}:{" "}
           {formatPtzTelemetryValue(status?.tilt)} · {t("ext.cameras.control.pose_zoom")}: {formatPtzTelemetryValue(status?.zoom)}
         </div>
-        {errorMessage ? <div className="errorText">{errorMessage}</div> : null}
+        {freshSnapshotBlocked && currentFreshSnapshotGate.retryable ? (
+          <button
+            className="chipButton"
+            type="button"
+            disabled={busy || !preferredSnapshotSourceId}
+            onClick={() => {
+              if (!preferredSnapshotSourceId) return;
+              const retryFreshnessGeneration = freshnessGenerationRef.current;
+              const retryRequiresStop = currentFreshSnapshotGate.requiresStop;
+              const retryRequiresVisualTransition =
+                currentFreshSnapshotGate.requiresVisualTransition;
+              setBusy(true);
+              setErrorMessage(null);
+              setFreshSnapshotGate({
+                generation: retryFreshnessGeneration,
+                status: "checking",
+                retryable: false,
+                requiresStop: retryRequiresStop,
+                requiresVisualTransition: retryRequiresVisualTransition,
+              });
+              if (retryRequiresStop) {
+                void stopMove(true);
+                return;
+              }
+              void refreshSnapshot(preferredSnapshotSourceId)
+                .catch(() => false)
+                .finally(() => {
+                  if (
+                    openRef.current &&
+                    freshnessGenerationRef.current === retryFreshnessGeneration
+                  ) {
+                    setBusy(false);
+                  }
+                });
+            }}
+          >
+            {t("ext.cameras.visual_calibration.retry")}
+          </button>
+        ) : null}
+        {errorMessage ? <div className="errorText" role="alert">{errorMessage}</div> : null}
       </div>
     </SubModal>
   );

@@ -365,11 +365,280 @@ def test_saved_onvif_custom_stream_probe_uses_stream_credentials(
     assert response.json()["status"] == "ok"
 
 
+def test_onvif_ptz_control_infers_only_unique_discovered_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from toposync_ext_cameras.onvif import OnvifProfile, OnvifPtzStatus
+
+    capability_reads: list[bool] = []
+    profile_reads: list[str] = []
+    status_tokens: list[str] = []
+    goto_calls: list[tuple[str, str]] = []
+
+    class FakeOnvifClient:
+        def __init__(
+            self,
+            *,
+            xaddr: str,
+            username: str,
+            password: str,
+            timeout_s: float,
+            auth_mode: str,
+        ) -> None:
+            assert xaddr == "http://camera.local/onvif/device_service"
+            _ = username, password, timeout_s, auth_mode
+
+        async def get_capabilities(self) -> tuple[str, str]:
+            capability_reads.append(True)
+            return (
+                "http://camera.local/onvif/media_service",
+                "http://camera.local/onvif/ptz_service",
+            )
+
+        async def get_profiles(self, media_xaddr: str) -> list[OnvifProfile]:
+            profile_reads.append(media_xaddr)
+            return [
+                OnvifProfile(token="fixed-only", name="Fixed", has_ptz=False),
+                OnvifProfile(token="ptz-only", name="PTZ", has_ptz=True),
+            ]
+
+        async def get_ptz_status(
+            self, ptz_xaddr: str, *, profile_token: str
+        ) -> OnvifPtzStatus:
+            assert ptz_xaddr == "http://camera.local/onvif/ptz_service"
+            status_tokens.append(profile_token)
+            return OnvifPtzStatus(move_status="IDLE")
+
+        async def goto_preset(
+            self, ptz_xaddr: str, *, profile_token: str, preset_token: str
+        ) -> None:
+            assert ptz_xaddr == "http://camera.local/onvif/ptz_service"
+            goto_calls.append((profile_token, preset_token))
+
+    monkeypatch.setattr("toposync_ext_cameras.plugin.OnvifClient", FakeOnvifClient)
+
+    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        config_store = client.app.state.config_store
+        client.portal.call(
+            config_store.save_config,
+            AppConfig(
+                settings=AppSettings(
+                    extensions={
+                        "com.toposync.cameras": {
+                            "devices": [
+                                {
+                                    "id": "cam1",
+                                    "name": "Legacy camera",
+                                    "kind": "camera",
+                                    "control": {"type": "onvif"},
+                                    "onvif": {
+                                        "xaddr": "http://camera.local/onvif/device_service",
+                                    },
+                                    "sources": [
+                                        {
+                                            "id": "legacy",
+                                            "kind": "video",
+                                            "is_default": True,
+                                            "role": "main",
+                                            "origin": {
+                                                "type": "rtsp",
+                                                "rtsp_url": "rtsp://camera.local/legacy",
+                                                "has_ptz": True,
+                                            },
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                )
+            ),
+        )
+
+        status = client.get(
+            "/api/cameras/cameras/cam1/ptz/status",
+            params={"source_id": "legacy"},
+        )
+        assert status.status_code == 200
+        goto = client.post(
+            "/api/cameras/cameras/cam1/ptz/goto-preset",
+            json={"source_id": "legacy", "preset_token": "home"},
+        )
+        assert goto.status_code == 200
+
+    assert capability_reads == [True]
+    assert profile_reads == ["http://camera.local/onvif/media_service"]
+    assert status_tokens == ["ptz-only"]
+    assert goto_calls == [("ptz-only", "home")]
+
+
+def test_onvif_ptz_control_rejects_ambiguous_source_profile_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from toposync_ext_cameras.onvif import OnvifProfile, OnvifPtzStatus
+
+    constructed_clients: list[str] = []
+    profile_reads: list[str] = []
+    status_tokens: list[str] = []
+    goto_tokens: list[str] = []
+
+    class FakeOnvifClient:
+        def __init__(
+            self,
+            *,
+            xaddr: str,
+            username: str,
+            password: str,
+            timeout_s: float,
+            auth_mode: str,
+        ) -> None:
+            _ = username, password, timeout_s, auth_mode
+            constructed_clients.append(xaddr)
+
+        async def get_profiles(self, media_xaddr: str) -> list[OnvifProfile]:
+            profile_reads.append(media_xaddr)
+            return [
+                OnvifProfile(token="000", name="Wide main", has_ptz=True),
+                OnvifProfile(token="001", name="Wide sub", has_ptz=True),
+            ]
+
+        async def get_ptz_status(
+            self, ptz_xaddr: str, *, profile_token: str
+        ) -> OnvifPtzStatus:
+            assert ptz_xaddr == "http://camera.local/onvif/ptz_service"
+            status_tokens.append(profile_token)
+            return OnvifPtzStatus(move_status="IDLE")
+
+        async def goto_preset(
+            self, ptz_xaddr: str, *, profile_token: str, preset_token: str
+        ) -> None:
+            _ = ptz_xaddr, preset_token
+            goto_tokens.append(profile_token)
+
+    monkeypatch.setattr("toposync_ext_cameras.plugin.OnvifClient", FakeOnvifClient)
+
+    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        config_store = client.app.state.config_store
+        client.portal.call(
+            config_store.save_config,
+            AppConfig(
+                settings=AppSettings(
+                    extensions={
+                        "com.toposync.cameras": {
+                            "devices": [
+                                {
+                                    "id": "cam1",
+                                    "name": "Camera 1",
+                                    "kind": "camera",
+                                    "control": {"type": "onvif"},
+                                    "onvif": {
+                                        "xaddr": "http://camera.local/onvif/device_service",
+                                        "media_xaddr": "http://camera.local/onvif/media_service",
+                                        "ptz_xaddr": "http://camera.local/onvif/ptz_service",
+                                    },
+                                    "sources": [
+                                        {
+                                            "id": "wide_main",
+                                            "kind": "video",
+                                            "is_default": True,
+                                            "role": "main",
+                                            "origin": {
+                                                "type": "onvif_profile",
+                                                "profile_token": "000",
+                                                "has_ptz": True,
+                                            },
+                                        },
+                                        {
+                                            "id": "zoom_main",
+                                            "kind": "video",
+                                            "role": "zoom",
+                                            "origin": {
+                                                "type": "rtsp",
+                                                "rtsp_url": "rtsp://camera.local/zoom",
+                                                "has_ptz": True,
+                                            },
+                                        },
+                                        {
+                                            "id": "wide_sub",
+                                            "kind": "video",
+                                            "role": "sub",
+                                            "origin": {
+                                                "type": "onvif_profile",
+                                                "profile_token": "001",
+                                                "has_ptz": True,
+                                            },
+                                        },
+                                        {
+                                            "id": "zoom_sub",
+                                            "kind": "video",
+                                            "role": "zoom",
+                                            "origin": {
+                                                "type": "rtsp",
+                                                "rtsp_url": "rtsp://camera.local/zoom-sub",
+                                                "has_ptz": True,
+                                            },
+                                        },
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                )
+            ),
+        )
+
+        for source_id in ("zoom_main", "zoom_sub"):
+            unbound = client.get(
+                "/api/cameras/cameras/cam1/ptz/status",
+                params={"source_id": source_id},
+            )
+            assert unbound.status_code == 409
+            assert unbound.json() == {
+                "detail": (
+                    f"Camera source '{source_id}' has no explicit ONVIF profile binding and "
+                    "discovery found 2 PTZ candidates; PTZ control is unavailable for this "
+                    "image source"
+                )
+            }
+
+        ambiguous_goto = client.post(
+            "/api/cameras/cameras/cam1/ptz/goto-preset",
+            json={"source_id": "zoom_main", "preset_token": "home"},
+        )
+        assert ambiguous_goto.status_code == 409
+        assert len(constructed_clients) == 3
+        assert profile_reads == ["http://camera.local/onvif/media_service"] * 3
+        assert status_tokens == []
+        assert goto_tokens == []
+
+        for source_id in ("wide_main", "wide_sub"):
+            bound = client.get(
+                "/api/cameras/cameras/cam1/ptz/status",
+                params={"source_id": source_id},
+            )
+            assert bound.status_code == 200
+        assert constructed_clients == [
+            "http://camera.local/onvif/device_service",
+            "http://camera.local/onvif/device_service",
+            "http://camera.local/onvif/device_service",
+            "http://camera.local/onvif/device_service",
+            "http://camera.local/onvif/device_service",
+        ]
+        assert status_tokens == ["000", "001"]
+        assert goto_tokens == []
+
+
 def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from toposync_ext_cameras.onvif import OnvifPtzStatus
+    from toposync_ext_cameras.onvif import OnvifError, OnvifPtzPreset, OnvifPtzStatus
+
+    device_state = {"move_status": "IDLE", "continuous_unsupported": False}
+    calls: list[str] = []
+    preset_records = {"home": "Home"}
 
     class FakeOnvifClient:
         def __init__(self, *, xaddr: str, username: str, password: str, timeout_s: float, auth_mode: str) -> None:  # noqa: ARG002
@@ -381,7 +650,105 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
         async def get_ptz_status(self, ptz_xaddr: str, *, profile_token: str) -> OnvifPtzStatus:
             assert ptz_xaddr == "http://192.168.0.10/onvif/ptz_service"
             assert profile_token == "ptz-token"
-            return OnvifPtzStatus(pan=0.1, tilt=0.2, zoom=0.3, move_status="IDLE")
+            return OnvifPtzStatus(
+                pan=0.1,
+                tilt=0.2,
+                zoom=0.3,
+                move_status=str(device_state["move_status"]),
+            )
+
+        async def get_ptz_presets(
+            self, ptz_xaddr: str, *, profile_token: str
+        ) -> list[OnvifPtzPreset]:
+            assert ptz_xaddr == "http://192.168.0.10/onvif/ptz_service"
+            assert profile_token == "ptz-token"
+            return [
+                OnvifPtzPreset(token=token, name=name)
+                for token, name in preset_records.items()
+            ]
+
+        async def set_preset(
+            self,
+            ptz_xaddr: str,
+            *,
+            profile_token: str,
+            preset_name: str = "",
+        ) -> str:
+            assert ptz_xaddr == "http://192.168.0.10/onvif/ptz_service"
+            assert profile_token == "ptz-token"
+            assert preset_name == "Temporary restore"
+            calls.append("set")
+            preset_records["temporary-42"] = preset_name
+            return "temporary-42"
+
+        async def goto_preset(
+            self, ptz_xaddr: str, *, profile_token: str, preset_token: str
+        ) -> None:
+            assert ptz_xaddr == "http://192.168.0.10/onvif/ptz_service"
+            assert profile_token == "ptz-token"
+            assert preset_token == "home"
+            calls.append("goto")
+
+        async def remove_preset(
+            self, ptz_xaddr: str, *, profile_token: str, preset_token: str
+        ) -> None:
+            assert ptz_xaddr == "http://192.168.0.10/onvif/ptz_service"
+            assert profile_token == "ptz-token"
+            assert preset_token == "temporary-42"
+            calls.append("remove")
+            preset_records.pop(preset_token, None)
+
+        async def absolute_move(
+            self,
+            ptz_xaddr: str,
+            *,
+            profile_token: str,
+            pan: float | None,
+            tilt: float | None,
+            zoom: float | None,
+        ) -> None:
+            assert ptz_xaddr == "http://192.168.0.10/onvif/ptz_service"
+            assert profile_token == "ptz-token"
+            assert (pan, tilt, zoom) == (0.1, 0.2, 0.3)
+            calls.append("absolute")
+
+        async def continuous_move(
+            self,
+            ptz_xaddr: str,
+            *,
+            profile_token: str,
+            pan: float,
+            tilt: float,
+            zoom: float,
+            timeout_s: float | None,
+        ) -> None:
+            _ = ptz_xaddr, profile_token, pan, tilt, zoom, timeout_s
+            calls.append("continuous")
+            if bool(device_state["continuous_unsupported"]):
+                raise OnvifError("ONVIF HTTP error (400)")
+
+        async def relative_move(
+            self,
+            ptz_xaddr: str,
+            *,
+            profile_token: str,
+            pan: float,
+            tilt: float,
+            zoom: float,
+        ) -> None:
+            _ = ptz_xaddr, profile_token, pan, tilt, zoom
+            calls.append("relative")
+
+        async def stop(
+            self,
+            ptz_xaddr: str,
+            *,
+            profile_token: str,
+            pan_tilt: bool,
+            zoom: bool,
+        ) -> None:
+            _ = ptz_xaddr, profile_token, pan_tilt, zoom
+            calls.append("stop")
 
     monkeypatch.setattr("toposync_ext_cameras.plugin.OnvifClient", FakeOnvifClient)
 
@@ -431,9 +798,113 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
                 )
             ),
         )
-        async def get_status() -> dict[str, object]:
-            return await client.app.state.services.call("cameras.ptz.get_status", camera_id="cam1")
+        async def exercise_tracking() -> dict[str, object]:
+            services = client.app.state.services
+            common = {"camera_id": "cam1", "camera_source_id": "zoom"}
 
-        status = client.portal.call(get_status)
+            cold_start = await services.call("cameras.ptz.get_status", **common)
+            device_state["move_status"] = "MOVING"
+            created = await services.call(
+                "cameras.ptz.set_preset",
+                preset_name="Temporary restore",
+                **common,
+            )
+            pending = await services.call("cameras.ptz.get_status", **common)
 
-    assert status["move_status"] == "IDLE"
+            device_state["move_status"] = "IDLE"
+            active = await services.call("cameras.ptz.get_status", **common)
+            await services.call("cameras.ptz.stop", **common)
+            after_stop = await services.call("cameras.ptz.get_status", **common)
+
+            device_state["move_status"] = "MOVING"
+            external_movement = await services.call("cameras.ptz.get_status", **common)
+            device_state["move_status"] = "IDLE"
+            after_external_movement = await services.call("cameras.ptz.get_status", **common)
+
+            await services.call(
+                "cameras.ptz.set_preset",
+                preset_name="Temporary restore",
+                **common,
+            )
+            await services.call("cameras.ptz.get_status", **common)
+            await services.call(
+                "cameras.ptz.absolute_move",
+                pan=0.1,
+                tilt=0.2,
+                zoom=0.3,
+                **common,
+            )
+            after_absolute = await services.call("cameras.ptz.get_status", **common)
+
+            await services.call("cameras.ptz.list_presets", **common)
+            device_state["move_status"] = "MOVING"
+            await services.call("cameras.ptz.goto_preset", preset_token="home", **common)
+            goto_pending = await services.call("cameras.ptz.get_status", **common)
+            device_state["move_status"] = "IDLE"
+            goto_active = await services.call("cameras.ptz.get_status", **common)
+
+            device_state["continuous_unsupported"] = True
+            await services.call(
+                "cameras.ptz.continuous_move",
+                pan=0.5,
+                tilt=0.0,
+                zoom=0.0,
+                **common,
+            )
+            after_relative_fallback = await services.call("cameras.ptz.get_status", **common)
+
+            await services.call(
+                "cameras.ptz.set_preset",
+                preset_name="Temporary restore",
+                **common,
+            )
+            await services.call("cameras.ptz.get_status", **common)
+            await services.call(
+                "cameras.ptz.remove_preset",
+                preset_token="temporary-42",
+                **common,
+            )
+            after_remove = await services.call("cameras.ptz.get_status", **common)
+
+            return {
+                "cold_start": cold_start,
+                "created": created,
+                "pending": pending,
+                "active": active,
+                "after_stop": after_stop,
+                "external_movement": external_movement,
+                "after_external_movement": after_external_movement,
+                "after_absolute": after_absolute,
+                "goto_pending": goto_pending,
+                "goto_active": goto_active,
+                "after_relative_fallback": after_relative_fallback,
+                "after_remove": after_remove,
+            }
+
+        result = client.portal.call(exercise_tracking)
+
+    assert result["cold_start"]["preset_token"] == ""
+    assert result["created"] == {"token": "temporary-42", "name": "Temporary restore"}
+    assert result["pending"]["preset_token"] == ""
+    assert result["active"]["preset_token"] == "temporary-42"
+    assert result["active"]["preset_name"] == "Temporary restore"
+    assert result["after_stop"]["preset_token"] == "temporary-42"
+    assert result["external_movement"]["preset_token"] == ""
+    assert result["after_external_movement"]["preset_token"] == ""
+    assert result["after_absolute"]["preset_token"] == ""
+    assert result["goto_pending"]["preset_token"] == ""
+    assert result["goto_active"]["preset_token"] == "home"
+    assert result["goto_active"]["preset_name"] == "Home"
+    assert result["after_relative_fallback"]["preset_token"] == ""
+    assert result["after_remove"]["preset_token"] == ""
+    assert calls == [
+        "set",
+        "stop",
+        "set",
+        "absolute",
+        "goto",
+        "continuous",
+        "relative",
+        "set",
+        "remove",
+    ]

@@ -4,6 +4,7 @@ This intentionally avoids external dependencies to keep the extension lightweigh
 """
 
 from .client import (
+    OnvifAmbiguousMutationError,
     OnvifClient,
     OnvifError,
     OnvifProfile,
@@ -36,6 +37,7 @@ from .events import (
 )
 
 __all__ = [
+    "OnvifAmbiguousMutationError",
     "OnvifClient",
     "OnvifError",
     "OnvifProfile",

@@ -157,6 +157,32 @@ class CaptureBackendMetrics:
     last_error: str | None
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class CaptureFrameSample:
+    """Atomic frame plus its timing evidence.
+
+    ``published_at`` is when the decoded frame became visible to consumers. It
+    must never be used as proof that the camera captured the image after an
+    external event. ``source_received_*`` marks the local decoder boundary and
+    is useful for diagnostics, but is not physical capture evidence either.
+
+    Backends may set ``physical_capture_verified`` only when they can bind the
+    frame to a trustworthy source capture timestamp in this process' monotonic
+    clock domain. The OpenCV and FFmpeg RTSP paths do not currently expose such
+    evidence, so they deliberately leave the physical fields unset.
+    """
+
+    frame: Any | None
+    published_at: float = 0.0
+    source_received_at: float = 0.0
+    source_received_monotonic: float = 0.0
+    generation: int = 0
+    sequence: int = 0
+    captured_at: float = 0.0
+    captured_monotonic: float = 0.0
+    physical_capture_verified: bool = False
+
+
 class CaptureBackend(Protocol):
     backend_name: str
 
@@ -171,6 +197,8 @@ class CaptureBackend(Protocol):
 
     def get_latest(self) -> tuple[Any | None, float]: ...
 
+    def get_latest_sample(self) -> CaptureFrameSample: ...
+
     def metrics_snapshot(self) -> CaptureBackendMetrics: ...
 
     def stop(self) -> None: ...
@@ -179,22 +207,48 @@ class CaptureBackend(Protocol):
 class _LatestFrameBuffer:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._frame: Any | None = None
-        self._ts: float = 0.0
+        self._generation = 1
+        self._sequence = 0
+        self._sample = CaptureFrameSample(frame=None, generation=self._generation)
 
-    def set(self, frame: Any, ts: float) -> None:
+    def set(
+        self,
+        frame: Any,
+        published_at: float,
+        *,
+        source_received_at: float,
+        source_received_monotonic: float,
+        captured_at: float = 0.0,
+        captured_monotonic: float = 0.0,
+        physical_capture_verified: bool = False,
+    ) -> None:
         with self._lock:
-            self._frame = frame
-            self._ts = float(ts)
+            self._sequence += 1
+            self._sample = CaptureFrameSample(
+                frame=frame,
+                published_at=float(published_at),
+                source_received_at=float(source_received_at),
+                source_received_monotonic=float(source_received_monotonic),
+                generation=self._generation,
+                sequence=self._sequence,
+                captured_at=float(captured_at),
+                captured_monotonic=float(captured_monotonic),
+                physical_capture_verified=bool(physical_capture_verified),
+            )
 
     def clear(self) -> None:
         with self._lock:
-            self._frame = None
-            self._ts = 0.0
+            self._generation += 1
+            self._sequence = 0
+            self._sample = CaptureFrameSample(frame=None, generation=self._generation)
 
     def get(self) -> tuple[Any | None, float]:
         with self._lock:
-            return self._frame, self._ts
+            return self._sample.frame, self._sample.published_at
+
+    def get_sample(self) -> CaptureFrameSample:
+        with self._lock:
+            return self._sample
 
 
 class OpenCvFrameGrabber:
@@ -393,6 +447,9 @@ class OpenCvFrameGrabber:
             except Exception:
                 ok_grab = False
 
+            source_received_at = time.time()
+            source_received_monotonic = time.monotonic()
+
             if not ok_grab:
                 self._fail_count += 1
                 _, last_frame_ts = self._frame_buffer.get()
@@ -416,6 +473,8 @@ class OpenCvFrameGrabber:
                 frame = None
 
             if not ok or frame is None:
+                read_started_at = time.time()
+                read_started_monotonic = time.monotonic()
                 try:
                     ok2, frame2 = self.cap.read() if self.cap is not None else (False, None)
                 except Exception:
@@ -431,16 +490,28 @@ class OpenCvFrameGrabber:
                         time.sleep(0.02)
                     continue
                 frame = frame2
+                # Use the start of the blocking read as a conservative local
+                # receive boundary. This is still not physical capture proof.
+                source_received_at = read_started_at
+                source_received_monotonic = read_started_monotonic
 
             self._last_retrieve_ts = now
             self._fail_count = 0
             self._frames_captured += 1
             self._fps_samples.append(time.monotonic())
 
-            self._frame_buffer.set(frame, time.time())
+            self._frame_buffer.set(
+                frame,
+                time.time(),
+                source_received_at=source_received_at,
+                source_received_monotonic=source_received_monotonic,
+            )
 
     def get_latest(self) -> tuple[Any | None, float]:
         return self._frame_buffer.get()
+
+    def get_latest_sample(self) -> CaptureFrameSample:
+        return self._frame_buffer.get_sample()
 
     def _effective_fps(self) -> float:
         if len(self._fps_samples) < 2:
@@ -555,6 +626,9 @@ class FfmpegFrameGrabber:
 
     def get_latest(self) -> tuple[Any | None, float]:
         return self._frame_buffer.get()
+
+    def get_latest_sample(self) -> CaptureFrameSample:
+        return self._frame_buffer.get_sample()
 
     def _effective_fps(self) -> float:
         if len(self._fps_samples) < 2:
@@ -716,6 +790,8 @@ class FfmpegFrameGrabber:
                 jpg = bytes(buffer[start : end + 2])
                 del buffer[: end + 2]
 
+                source_received_at = time.time()
+                source_received_monotonic = time.monotonic()
                 frame = _decode_jpeg_frame(jpg)
 
                 if frame is None:
@@ -726,7 +802,12 @@ class FfmpegFrameGrabber:
 
                 self._frames_captured += 1
                 self._fps_samples.append(time.monotonic())
-                self._frame_buffer.set(frame, time.time())
+                self._frame_buffer.set(
+                    frame,
+                    time.time(),
+                    source_received_at=source_received_at,
+                    source_received_monotonic=source_received_monotonic,
+                )
 
         self._stop_process()
 
@@ -830,6 +911,11 @@ class FrameGrabber:
         if self._backend is None:
             return None, 0.0
         return self._backend.get_latest()
+
+    def get_latest_sample(self) -> CaptureFrameSample:
+        if self._backend is None:
+            return CaptureFrameSample(frame=None)
+        return self._backend.get_latest_sample()
 
     def metrics_snapshot(self) -> CaptureBackendMetrics:
         if self._backend is None:

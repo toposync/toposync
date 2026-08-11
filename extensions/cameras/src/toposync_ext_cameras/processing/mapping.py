@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import math
+import struct
 from dataclasses import dataclass
+from io import BytesIO
 from typing import Any, Literal
 
 
@@ -16,6 +20,7 @@ HomographyMethod = Literal["usac_magsac", "usac_default", "ransac", "dlt"]
 FallbackMode = Literal["default_set", "nearest_set", "none"]
 MotionPolicyMode = Literal["skip_when_moving", "use_last_idle_pose", "allow_when_confident"]
 BoundaryRefinementEdge = Literal["top", "right", "bottom", "left"]
+MAX_VISUAL_POSE_SIGNATURE_CANDIDATES = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,10 +71,18 @@ class PanTiltZoomState:
     source: str | None = None
     confidence: float | None = None
     preset_token: str | None = None
-    geometry_safe: bool | None = None
-    motion_epoch: int | None = None
-    motion_state: str | None = None
-    physical_updated_at: float | None = None
+    preset_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VisualPoseSignature:
+    algorithm: Literal["orb_hamming_v1"]
+    keypoint_count: int
+    keypoints_base64: str
+    descriptors_base64: str
+    original_width: int
+    original_height: int
+    digest_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +95,7 @@ class ControlPointSet:
     boundary_refinement_points: tuple[ControlPointBoundaryRefinementPoint, ...] = ()
     compatible_source_ids: tuple[str, ...] = ()
     compatible_roles: tuple[str, ...] = ()
+    visual_pose_signature: VisualPoseSignature | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +164,23 @@ class ControlPointSetSelection:
     pose_axes_used: tuple[str, ...]
     move_status: str | None
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class VisualPoseMatch:
+    candidate_match_count: int
+    inlier_count: int
+    inlier_ratio: float
+    current_coverage: float
+    reference_coverage: float
+    p95_reprojection_error_px: float
+    overlap_ratio: float
+    median_displacement_diagonal_ratio: float
+    homography_current_to_reference: tuple[
+        tuple[float, float, float],
+        tuple[float, float, float],
+        tuple[float, float, float],
+    ]
 
 
 def normalize_move_status(value: Any) -> str | None:
@@ -288,9 +319,528 @@ def select_control_point_set(
     return None
 
 
-def compute_control_points_signature(
-    control_points: list[ControlPointPair] | tuple[ControlPointPair, ...],
-) -> str:
+def select_control_point_set_by_unique_numeric_pose(
+    control_point_sets: list[ControlPointSet] | tuple[ControlPointSet, ...],
+    pan_tilt_zoom_state: PanTiltZoomState | None,
+    config: PoseSelectionConfig,
+    motion_policy_mode: MotionPolicyMode,
+) -> ControlPointSetSelection | None:
+    """Return numeric pose evidence only when it identifies one plausible view.
+
+    A partially observed pose cannot exclude a view whose calibrated axes are
+    unavailable in the current state. Likewise, two views inside the configured
+    tolerance remain ambiguous even when one happens to have the smaller raw
+    distance.
+    """
+
+    if pan_tilt_zoom_state is None:
+        return None
+    normalized_status = normalize_move_status(pan_tilt_zoom_state.move_status)
+    if motion_policy_mode == "skip_when_moving" and normalized_status == "moving":
+        return None
+
+    pose_bound_sets = [
+        item
+        for item in control_point_sets
+        if len(item.control_points) >= 4 and item.pose_reference is not None
+    ]
+    if not pose_bound_sets:
+        return None
+
+    plausible: list[tuple[float, tuple[str, ...], ControlPointSet]] = []
+    for item in pose_bound_sets:
+        pose_reference = item.pose_reference
+        if pose_reference is None:
+            continue
+        distance_info = compute_pose_distance(
+            pose_reference,
+            pan_tilt_zoom_state,
+            config,
+        )
+        if distance_info is None:
+            return None
+        distance, axes_used = distance_info
+        if distance <= float(config.max_distance):
+            plausible.append((float(distance), axes_used, item))
+
+    if len(plausible) != 1:
+        return None
+    distance, axes_used, selected = plausible[0]
+    return ControlPointSetSelection(
+        control_point_set=selected,
+        pose_distance=distance,
+        pose_axes_used=axes_used,
+        move_status=normalized_status,
+        reason="unique_numeric_pose_match",
+    )
+
+
+def select_control_point_set_by_visual_signature(
+    control_point_sets: list[ControlPointSet] | tuple[ControlPointSet, ...],
+    frame: Any,
+) -> tuple[ControlPointSet, VisualPoseMatch] | None:
+    """Select a single view whose signed visual pose matches the exact frame.
+
+    A preset token is deliberately not accepted here: command history can become
+    stale after an external camera move or a process restart. Every in-scope
+    signature is evaluated and an ambiguous result fails closed.
+    """
+
+    signed_sets = [
+        control_point_set
+        for control_point_set in control_point_sets
+        if control_point_set.visual_pose_signature is not None
+    ]
+    if not signed_sets or len(signed_sets) > MAX_VISUAL_POSE_SIGNATURE_CANDIDATES:
+        return None
+
+    current_features = _extract_orb_visual_pose_features(frame)
+    if current_features is None:
+        return None
+    current_points, current_descriptors = current_features
+
+    accepted: list[tuple[ControlPointSet, VisualPoseMatch]] = []
+    for control_point_set in signed_sets:
+        signature = control_point_set.visual_pose_signature
+        if signature is None:
+            continue
+        reference_features = _decode_visual_pose_signature(signature)
+        if reference_features is None:
+            continue
+        reference_points, reference_descriptors = reference_features
+        match = _match_orb_visual_pose(
+            current_points=current_points,
+            current_descriptors=current_descriptors,
+            reference_points=reference_points,
+            reference_descriptors=reference_descriptors,
+            reference_width=int(signature.original_width),
+            reference_height=int(signature.original_height),
+        )
+        if match is not None:
+            accepted.append((control_point_set, match))
+            if len(accepted) > 1:
+                return None
+
+    return accepted[0] if len(accepted) == 1 else None
+
+
+def _extract_orb_visual_pose_features(frame: Any) -> tuple[Any, Any] | None:
+    if np is None or frame is None:
+        return None
+    try:
+        import cv2  # type: ignore
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        if isinstance(frame, (bytes, bytearray, memoryview)):
+            encoded = bytes(frame)
+            if not encoded or len(encoded) > 16 * 1024 * 1024:
+                return None
+            try:
+                from PIL import Image
+
+                with Image.open(BytesIO(encoded)) as image_header:
+                    encoded_width, encoded_height = image_header.size
+                encoded_width = int(encoded_width)
+                encoded_height = int(encoded_height)
+            except Exception:  # noqa: BLE001
+                return None
+            if (
+                encoded_width < 2
+                or encoded_height < 2
+                or encoded_width > 50000
+                or encoded_height > 50000
+                or encoded_width * encoded_height > 50_000_000
+            ):
+                return None
+            image = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+            if image is None or image.ndim != 2:
+                return None
+            if (
+                int(image.shape[1]) != encoded_width
+                or int(image.shape[0]) != encoded_height
+            ):
+                return None
+        else:
+            if not isinstance(frame, np.ndarray):
+                return None
+            image = frame
+            if image.ndim not in {2, 3}:
+                return None
+            height, width = int(image.shape[0]), int(image.shape[1])
+            if (
+                height < 32
+                or width < 32
+                or height > 50000
+                or width > 50000
+                or height * width > 50_000_000
+            ):
+                return None
+            if image.ndim == 3 and image.shape[2] not in {1, 3, 4}:
+                return None
+            if image.dtype != np.uint8 and not np.issubdtype(image.dtype, np.number):
+                return None
+            if image.ndim == 3:
+                if image.shape[2] == 4:
+                    image = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+                elif image.shape[2] == 3:
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                elif image.shape[2] == 1:
+                    image = image[:, :, 0]
+                else:
+                    return None
+            if image.dtype != np.uint8:
+                image = np.clip(image, 0, 255).astype(np.uint8)
+        if image is None or image.size == 0:
+            return None
+
+        height, width = int(image.shape[0]), int(image.shape[1])
+        if height < 32 or width < 32 or height > 50000 or width > 50000:
+            return None
+        if height * width > 50_000_000:
+            return None
+        max_edge = max(height, width)
+        if max_edge > 1600:
+            scale = 1600.0 / float(max_edge)
+            width = max(2, int(round(float(width) * scale)))
+            height = max(2, int(round(float(height) * scale)))
+            image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+
+        orb = cv2.ORB_create(nfeatures=320)
+        keypoints, descriptors = orb.detectAndCompute(np.ascontiguousarray(image), None)
+        if descriptors is None or not keypoints:
+            return None
+        ordered = sorted(
+            range(len(keypoints)),
+            key=lambda index: (
+                -float(keypoints[index].response),
+                float(keypoints[index].pt[1]),
+                float(keypoints[index].pt[0]),
+                float(keypoints[index].size),
+                float(keypoints[index].angle),
+                int(keypoints[index].octave),
+                int(keypoints[index].class_id),
+            ),
+        )[:320]
+        if not ordered:
+            return None
+        denominator_x = float(max(1, width - 1))
+        denominator_y = float(max(1, height - 1))
+        points = np.asarray(
+            [
+                (
+                    max(0.0, min(1.0, float(keypoints[index].pt[0]) / denominator_x)),
+                    max(0.0, min(1.0, float(keypoints[index].pt[1]) / denominator_y)),
+                )
+                for index in ordered
+            ],
+            dtype=np.float32,
+        )
+        selected_descriptors = np.ascontiguousarray(descriptors[ordered], dtype=np.uint8)
+        if selected_descriptors.ndim != 2 or selected_descriptors.shape[1] != 32:
+            return None
+        return points, selected_descriptors
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _decode_visual_pose_signature(signature: VisualPoseSignature) -> tuple[Any, Any] | None:
+    if np is None:
+        return None
+    try:
+        keypoint_count = int(signature.keypoint_count)
+        width = int(signature.original_width)
+        height = int(signature.original_height)
+        if signature.algorithm != "orb_hamming_v1":
+            return None
+        if keypoint_count < 16 or keypoint_count > 320:
+            return None
+        if width < 2 or width > 50000 or height < 2 or height > 50000:
+            return None
+        if width * height > 50_000_000:
+            return None
+        if len(signature.keypoints_base64) > 2048 or len(signature.descriptors_base64) > 14000:
+            return None
+        keypoint_bytes = base64.b64decode(signature.keypoints_base64, validate=True)
+        descriptor_bytes = base64.b64decode(signature.descriptors_base64, validate=True)
+        if len(keypoint_bytes) != keypoint_count * 4:
+            return None
+        if len(descriptor_bytes) != keypoint_count * 32:
+            return None
+
+        digest = str(signature.digest_sha256 or "").strip().lower()
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            return None
+        digest_payload = (
+            b"orb_hamming_v1\0"
+            + struct.pack("<III", width, height, keypoint_count)
+            + keypoint_bytes
+            + descriptor_bytes
+        )
+        expected_digest = hashlib.sha256(digest_payload).hexdigest()
+        if not hmac.compare_digest(digest, expected_digest):
+            return None
+
+        quantized_points = np.frombuffer(keypoint_bytes, dtype="<u2").reshape(keypoint_count, 2)
+        points = np.asarray(quantized_points, dtype=np.float32) / 65535.0
+        descriptors = np.frombuffer(descriptor_bytes, dtype=np.uint8).reshape(keypoint_count, 32)
+        return np.ascontiguousarray(points), np.ascontiguousarray(descriptors)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _match_orb_visual_pose(
+    *,
+    current_points: Any,
+    current_descriptors: Any,
+    reference_points: Any,
+    reference_descriptors: Any,
+    reference_width: int,
+    reference_height: int,
+) -> VisualPoseMatch | None:
+    if np is None:
+        return None
+    try:
+        import cv2  # type: ignore
+
+        matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        forward_rows = matcher.knnMatch(current_descriptors, reference_descriptors, k=2)
+        reverse_rows = matcher.knnMatch(reference_descriptors, current_descriptors, k=2)
+
+        def _ratio_matches(rows: Any) -> dict[int, tuple[int, float]]:
+            accepted: dict[int, tuple[int, float]] = {}
+            for row in rows:
+                if len(row) < 2:
+                    continue
+                best, second = row[0], row[1]
+                if float(best.distance) < 0.80 * float(second.distance):
+                    accepted[int(best.queryIdx)] = (int(best.trainIdx), float(best.distance))
+            return accepted
+
+        forward = _ratio_matches(forward_rows)
+        reverse = _ratio_matches(reverse_rows)
+        reciprocal = [
+            (current_index, reference_index)
+            for current_index, (reference_index, _distance) in forward.items()
+            if reverse.get(reference_index, (-1, 0.0))[0] == current_index
+        ]
+        if len(reciprocal) < 16:
+            return None
+
+        current_normalized = np.asarray(
+            [current_points[current_index] for current_index, _ in reciprocal],
+            dtype=np.float64,
+        )
+        reference_normalized = np.asarray(
+            [reference_points[reference_index] for _, reference_index in reciprocal],
+            dtype=np.float64,
+        )
+        pixel_scale = np.asarray(
+            [float(max(1, reference_width - 1)), float(max(1, reference_height - 1))],
+            dtype=np.float64,
+        )
+        current_pixels = current_normalized * pixel_scale
+        reference_pixels = reference_normalized * pixel_scale
+        method = getattr(cv2, "USAC_MAGSAC", cv2.RANSAC)
+        homography, mask = cv2.findHomography(
+            current_pixels,
+            reference_pixels,
+            method=method,
+            ransacReprojThreshold=4.0,
+            maxIters=5000,
+            confidence=0.999,
+        )
+        if homography is None or mask is None or not np.isfinite(homography).all():
+            return None
+        inliers = np.asarray(mask, dtype=np.uint8).reshape(-1).astype(bool)
+        inlier_count = int(np.count_nonzero(inliers))
+        inlier_ratio = float(inlier_count) / float(max(1, len(reciprocal)))
+        if inlier_count < 12 or inlier_ratio < 0.60:
+            return None
+
+        current_inliers_normalized = current_normalized[inliers]
+        reference_inliers_normalized = reference_normalized[inliers]
+        current_coverage = _normalized_convex_hull_area(current_inliers_normalized, cv2=cv2)
+        reference_coverage = _normalized_convex_hull_area(reference_inliers_normalized, cv2=cv2)
+        if current_coverage < 0.03 or reference_coverage < 0.03:
+            return None
+
+        projected = cv2.perspectiveTransform(
+            current_pixels[inliers].reshape(-1, 1, 2).astype(np.float64),
+            homography,
+        ).reshape(-1, 2)
+        reprojection_errors = np.linalg.norm(projected - reference_pixels[inliers], axis=1)
+        p95_reprojection_error = float(np.percentile(reprojection_errors, 95))
+        if not math.isfinite(p95_reprojection_error) or p95_reprojection_error > 6.0:
+            return None
+
+        displacements = np.linalg.norm(
+            current_inliers_normalized - reference_inliers_normalized,
+            axis=1,
+        ) / math.sqrt(2.0)
+        median_displacement = float(np.median(displacements))
+        if not math.isfinite(median_displacement) or median_displacement > 0.025:
+            return None
+
+        overlap = _visual_pose_homography_overlap(
+            homography,
+            reference_width=reference_width,
+            reference_height=reference_height,
+            cv2=cv2,
+        )
+        if overlap < 0.90:
+            return None
+
+        normalized_homography = _normalize_visual_pose_homography(
+            homography,
+            reference_width=reference_width,
+            reference_height=reference_height,
+        )
+        if normalized_homography is None:
+            return None
+
+        return VisualPoseMatch(
+            candidate_match_count=len(reciprocal),
+            inlier_count=inlier_count,
+            inlier_ratio=inlier_ratio,
+            current_coverage=current_coverage,
+            reference_coverage=reference_coverage,
+            p95_reprojection_error_px=p95_reprojection_error,
+            overlap_ratio=overlap,
+            median_displacement_diagonal_ratio=median_displacement,
+            homography_current_to_reference=normalized_homography,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _normalize_visual_pose_homography(
+    homography: Any,
+    *,
+    reference_width: int,
+    reference_height: int,
+) -> tuple[
+    tuple[float, float, float],
+    tuple[float, float, float],
+    tuple[float, float, float],
+] | None:
+    if np is None:
+        return None
+    try:
+        scale = np.asarray(
+            [
+                [float(max(1, reference_width - 1)), 0.0, 0.0],
+                [0.0, float(max(1, reference_height - 1)), 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        normalized = np.linalg.inv(scale) @ np.asarray(homography, dtype=np.float64) @ scale
+        denominator = float(normalized[2, 2])
+        if abs(denominator) <= 1e-12:
+            return None
+        normalized = normalized / denominator
+        if not np.isfinite(normalized).all():
+            return None
+        return tuple(
+            tuple(float(normalized[row, column]) for column in range(3))
+            for row in range(3)
+        )  # type: ignore[return-value]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def align_image_point_to_visual_pose_reference(
+    point: tuple[float, float],
+    visual_pose_match: VisualPoseMatch,
+) -> tuple[float, float] | None:
+    homography = visual_pose_match.homography_current_to_reference
+    u = float(point[0])
+    v = float(point[1])
+    denominator = (
+        float(homography[2][0]) * u
+        + float(homography[2][1]) * v
+        + float(homography[2][2])
+    )
+    if abs(denominator) <= 1e-12:
+        return None
+    aligned_u = (
+        float(homography[0][0]) * u
+        + float(homography[0][1]) * v
+        + float(homography[0][2])
+    ) / denominator
+    aligned_v = (
+        float(homography[1][0]) * u
+        + float(homography[1][1]) * v
+        + float(homography[1][2])
+    ) / denominator
+    if not math.isfinite(aligned_u) or not math.isfinite(aligned_v):
+        return None
+    epsilon = 1e-6
+    if (
+        aligned_u < -epsilon
+        or aligned_u > 1.0 + epsilon
+        or aligned_v < -epsilon
+        or aligned_v > 1.0 + epsilon
+    ):
+        return None
+    return (
+        max(0.0, min(1.0, aligned_u)),
+        max(0.0, min(1.0, aligned_v)),
+    )
+
+
+def _normalized_convex_hull_area(points: Any, *, cv2: Any) -> float:
+    if np is None or len(points) < 3:
+        return 0.0
+    try:
+        hull = cv2.convexHull(np.asarray(points, dtype=np.float32).reshape(-1, 1, 2))
+        area = abs(float(cv2.contourArea(hull)))
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return max(0.0, min(1.0, area))
+
+
+def _visual_pose_homography_overlap(
+    homography: Any,
+    *,
+    reference_width: int,
+    reference_height: int,
+    cv2: Any,
+) -> float:
+    if np is None:
+        return 0.0
+    width = float(max(1, reference_width - 1))
+    height = float(max(1, reference_height - 1))
+    reference_quad = np.asarray(
+        [[0.0, 0.0], [width, 0.0], [width, height], [0.0, height]],
+        dtype=np.float32,
+    )
+    try:
+        projected_quad = cv2.perspectiveTransform(
+            reference_quad.reshape(-1, 1, 2).astype(np.float64),
+            homography,
+        ).reshape(-1, 2)
+        if not np.isfinite(projected_quad).all():
+            return 0.0
+        projected_quad = projected_quad.astype(np.float32)
+        if not cv2.isContourConvex(projected_quad.reshape(-1, 1, 2)):
+            return 0.0
+        reference_area = abs(float(cv2.contourArea(reference_quad.reshape(-1, 1, 2))))
+        projected_area = abs(float(cv2.contourArea(projected_quad.reshape(-1, 1, 2))))
+        if reference_area <= 1e-9 or projected_area <= 1e-9:
+            return 0.0
+        intersection_area, _intersection = cv2.intersectConvexConvex(reference_quad, projected_quad)
+        return max(
+            0.0,
+            min(1.0, float(intersection_area) / max(reference_area, projected_area)),
+        )
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def compute_control_points_signature(control_points: list[ControlPointPair] | tuple[ControlPointPair, ...]) -> str:
     raw = "\n".join(
         f"{float(point.image_u):.12g}|{float(point.image_v):.12g}|{float(point.world_x):.12g}|{float(point.world_z):.12g}"
         for point in control_points

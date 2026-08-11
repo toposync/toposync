@@ -1,4 +1,4 @@
-import { requestJson, requestVoid, resolveToposyncUrl } from "@toposync/plugin-api";
+import { requestForm, requestJson, requestVoid, resolveToposyncUrl } from "@toposync/plugin-api";
 
 import type {
   CameraCalibratedView,
@@ -9,6 +9,7 @@ import type {
   CameraPipelinesResponse,
   CameraPtzPreset,
   CameraSourceHealthResponse,
+  CameraVisualCalibrationResult,
   CamerasIndex,
   OnvifDiscoverRequest,
   OnvifDiscoverResponse,
@@ -44,9 +45,38 @@ async function readErrorDetail(response: Response, fallback: string): Promise<st
   return text;
 }
 
+const CAMERA_SNAPSHOT_FRESHNESS_UNVERIFIABLE = "camera_snapshot_freshness_unverifiable";
+
+class CameraSnapshotFreshnessUnverifiableError extends Error {
+  readonly code = CAMERA_SNAPSHOT_FRESHNESS_UNVERIFIABLE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "CameraSnapshotFreshnessUnverifiableError";
+  }
+}
+
+export function isCameraSnapshotFreshnessUnverifiableError(
+  error: unknown,
+): error is CameraSnapshotFreshnessUnverifiableError {
+  return (
+    error instanceof CameraSnapshotFreshnessUnverifiableError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === CAMERA_SNAPSHOT_FRESHNESS_UNVERIFIABLE)
+  );
+}
+
 async function requestBlob(input: string, init: RequestInit | undefined, fallback: string): Promise<Blob> {
   const response = await fetch(resolveToposyncUrl(input), init);
-  if (!response.ok) throw new Error(await readErrorDetail(response, fallback));
+  if (!response.ok) {
+    const detail = await readErrorDetail(response, fallback);
+    if (response.headers.get("X-Toposync-Snapshot-Freshness")?.toLowerCase() === "unverifiable") {
+      throw new CameraSnapshotFreshnessUnverifiableError(detail);
+    }
+    throw new Error(detail);
+  }
   return response.blob();
 }
 
@@ -176,9 +206,19 @@ export async function probeCameraRtsp(
   });
 }
 
-export async function fetchCameraSnapshot(cameraId: string, sourceIdOrSignal: string | AbortSignal = "", signal?: AbortSignal): Promise<Blob> {
+export async function fetchCameraSnapshot(
+  cameraId: string,
+  sourceIdOrSignal: string | AbortSignal = "",
+  signal?: AbortSignal,
+  fresh = false,
+  freshness: "physical" | "decoder" = "physical",
+): Promise<Blob> {
   const resolved = splitSourceAndSignal(sourceIdOrSignal, signal);
-  const query = resolved.sourceId ? `?source_id=${encodeURIComponent(resolved.sourceId)}` : "";
+  const search = new URLSearchParams();
+  if (resolved.sourceId) search.set("source_id", resolved.sourceId);
+  if (fresh) search.set("fresh", "true");
+  if (fresh && freshness !== "physical") search.set("freshness", freshness);
+  const query = search.size ? `?${search.toString()}` : "";
   return requestBlob(
     `/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot${query}`,
     { signal: resolved.signal },
@@ -209,6 +249,35 @@ export async function fetchCameraPtzStatus(
   return requestJson<{ camera_id: string; status: PanTiltZoomState | null }>(
     `/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/status${query}`,
     { signal: resolved.signal },
+  );
+}
+
+export async function createCameraPtzPreset(
+  cameraId: string,
+  body: { source_id?: string; name?: string },
+  signal?: AbortSignal,
+): Promise<CameraPtzPreset> {
+  return requestJson<CameraPtzPreset>(
+    `/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/presets`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    },
+  );
+}
+
+export async function removeCameraPtzPreset(
+  cameraId: string,
+  presetToken: string,
+  sourceId = "",
+  signal?: AbortSignal,
+): Promise<void> {
+  const query = sourceId ? `?source_id=${encodeURIComponent(sourceId)}` : "";
+  await requestVoid(
+    `/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/presets/${encodeURIComponent(presetToken)}${query}`,
+    { method: "DELETE", signal },
   );
 }
 
@@ -288,6 +357,21 @@ export async function mapCameraProjection(
     body: JSON.stringify({ calibrated_view: calibratedView, query }),
     signal,
   });
+}
+
+export async function propagateCameraProjection(
+  sourceView: CameraCalibratedView,
+  sourceId: string,
+  sourceImage: Blob,
+  targetImage: Blob,
+  signal?: AbortSignal,
+): Promise<CameraVisualCalibrationResult> {
+  const form = new FormData();
+  form.append("source_view_json", JSON.stringify(sourceView));
+  form.append("source_id", sourceId);
+  form.append("source_image", sourceImage, "reference.jpg");
+  form.append("target_image", targetImage, "current.jpg");
+  return requestForm<CameraVisualCalibrationResult>("/api/cameras/projection/propagate", form, { signal });
 }
 
 export async function fetchCameraContexts(cameraId: string, signal?: AbortSignal): Promise<CameraContextsResponse> {

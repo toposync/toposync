@@ -125,6 +125,8 @@ def _camera_mapping_alerts(
         name="mapping_diagnostics",
         graph={
             "schema_version": 2,
+            "uid": "graph_mapping_diagnostics",
+            "revision": 1,
             "nodes": [
                 {
                     "uid": "node_source",
@@ -145,6 +147,7 @@ def _camera_mapping_alerts(
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "map", "port": "in"},
                     "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 1, "drop_policy": "latest_only"},
                 }
             ],
         },
@@ -305,6 +308,8 @@ def test_pipeline_compile_returns_camera_mapping_diagnostic_from_compositions(
             name="mapping_diagnostics",
             graph={
                 "schema_version": 2,
+                "uid": "graph_mapping_diagnostics_api",
+                "revision": 1,
                 "nodes": [
                     {
                         "uid": "node_source",
@@ -325,6 +330,7 @@ def test_pipeline_compile_returns_camera_mapping_diagnostic_from_compositions(
                         "from": {"node": "source", "port": "out"},
                         "to": {"node": "map", "port": "in"},
                         "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                        "queue": {"max_items": 1, "drop_policy": "latest_only"},
                     }
                 ],
             },
@@ -489,6 +495,35 @@ def test_camera_ptz_routes_forward_to_services(
             assert camera_source_id is None
             return [{"token": "home", "name": "Home", "pan": 0.1, "tilt": -0.2, "zoom": 0.3}]
 
+        async def set_preset(
+            *,
+            camera_id: str,
+            preset_name: str = "",
+            camera_source_id: str | None = None,
+            idempotency_key: str = "",
+            automatic_idempotency_key: bool = False,
+        ):
+            assert camera_id == "cam1"
+            assert camera_source_id == "source-main"
+            assert preset_name == "Temporary restore"
+            assert idempotency_key == "create-temporary-42"
+            assert automatic_idempotency_key is False
+            return {"token": "temporary-42", "name": preset_name}
+
+        async def remove_preset(
+            *, camera_id: str, preset_token: str, camera_source_id: str | None = None
+        ):
+            assert camera_id == "cam1"
+            assert camera_source_id == "source-main"
+            assert preset_token == "temporary-42"
+            return {"ok": True}
+
+        async def goto_preset(*, camera_id: str, preset_token: str, camera_source_id: str | None = None):
+            assert camera_id == "cam1"
+            assert camera_source_id is None
+            assert preset_token == "home"
+            return {"ok": True}
+
         async def get_status(*, camera_id: str, camera_source_id: str | None = None):
             assert camera_id == "cam1"
             assert camera_source_id is None
@@ -499,6 +534,8 @@ def test_camera_ptz_routes_forward_to_services(
                 "move_status": "IDLE",
                 "error": "",
                 "utc_time": "2026-01-01T00:00:00Z",
+                "preset_token": "home",
+                "preset_name": "Home",
             }
 
         async def acquire(**kwargs):
@@ -532,6 +569,9 @@ def test_camera_ptz_routes_forward_to_services(
             assert submitted[3] == {"kind": "stop", "pan_tilt": True, "zoom": False}
 
         services.register("cameras.ptz.list_presets", list_presets)
+        services.register("cameras.ptz.set_preset", set_preset)
+        services.register("cameras.ptz.remove_preset", remove_preset)
+        services.register("cameras.ptz.goto_preset", goto_preset)
         services.register("cameras.ptz.get_status", get_status)
         services.register("cameras.control.acquire", acquire)
         services.register("cameras.control.submit", submit)
@@ -540,15 +580,48 @@ def test_camera_ptz_routes_forward_to_services(
         assert presets.status_code == 200, presets.text
         assert presets.json()["presets"][0]["token"] == "home"
 
-        goto = client.post(
-            "/api/cameras/cameras/cam1/ptz/goto-preset", json={"preset_token": "home"}
+        auth_actions: list[str] = []
+        original_authorize = client.app.state.auth.authorize
+
+        def recording_authorize(**kwargs):
+            auth_actions.append(str(kwargs.get("action") or ""))
+            return original_authorize(**kwargs)
+
+        monkeypatch.setattr(client.app.state.auth, "authorize", recording_authorize)
+
+        created = client.post(
+            "/api/cameras/cameras/cam1/ptz/presets",
+            json={"source_id": "source-main", "name": "Temporary restore"},
+            headers={"Idempotency-Key": "create-temporary-42"},
         )
+        assert created.status_code == 200, created.text
+        assert created.json() == {
+            "token": "temporary-42",
+            "name": "Temporary restore",
+            "pan": None,
+            "tilt": None,
+            "zoom": None,
+        }
+        assert "core:settings:write" in auth_actions
+
+        auth_actions.clear()
+        removed = client.delete(
+            "/api/cameras/cameras/cam1/ptz/presets/temporary-42",
+            params={"source_id": "source-main"},
+        )
+        assert removed.status_code == 200, removed.text
+        assert removed.json() == {"ok": True}
+        assert "core:settings:write" in auth_actions
+
+        goto = client.post("/api/cameras/cameras/cam1/ptz/goto-preset", json={"preset_token": "home"})
         assert goto.status_code == 200, goto.text
         assert goto.json()["ok"] is True
 
         status = client.get("/api/cameras/cameras/cam1/ptz/status")
         assert status.status_code == 200, status.text
         assert status.json()["status"]["move_status"] == "IDLE"
+        assert status.json()["status"]["preset_token"] == "home"
+        assert status.json()["status"]["preset_name"] == "Home"
 
         absolute_move_res = client.post(
             "/api/cameras/cameras/cam1/ptz/absolute-move",

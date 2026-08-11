@@ -31,9 +31,7 @@ class OnvifError(RuntimeError):
 
 
 class OnvifAmbiguousMutationError(OnvifError):
-    """A PTZ mutation may have reached the camera, but its result is unknown."""
-
-    pass
+    """The device may have applied a mutating request before the response failed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,19 +466,34 @@ def _parse_ptz_presets(payload: bytes, *, soap_ns: str) -> list[OnvifPtzPreset]:
     return out
 
 
-def _parse_ptz_preset_token(payload: bytes, *, soap_ns: str) -> str:
-    root = _parse_xml(payload)
-    _raise_if_fault(root, soap_ns=soap_ns)
+def _ptz_preset_token_from_root(root: ET.Element) -> str:
     token = _findtext(root, f".//{{{PTZ_NS}}}PresetToken", default="")
     if token:
         return token
+
+    # A few ONVIF implementations omit the expected namespace on response children.
     for element in root.iter():
-        if str(element.tag or "").rsplit("}", 1)[-1] != "PresetToken":
+        if str(element.tag).rsplit("}", 1)[-1] != "PresetToken":
             continue
         value = str(element.text or "").strip()
         if value:
             return value
     return ""
+
+
+def _parse_ptz_preset_token(payload: bytes, *, soap_ns: str) -> str:
+    root = _parse_xml(payload)
+    _raise_if_fault(root, soap_ns=soap_ns)
+    return _ptz_preset_token_from_root(root)
+
+
+def _parse_ptz_mutation_response(payload: bytes, *, soap_ns: str) -> ET.Element:
+    try:
+        root = _parse_xml(payload)
+    except OnvifError as exc:
+        raise OnvifAmbiguousMutationError(str(exc)) from exc
+    _raise_if_fault(root, soap_ns=soap_ns)
+    return root
 
 
 def _parse_ptz_status(payload: bytes, *, soap_ns: str) -> OnvifPtzStatus:
@@ -492,7 +505,24 @@ def _parse_ptz_status(payload: bytes, *, soap_ns: str) -> OnvifPtzStatus:
     pan_tilt = position.find(f".//{{{TT_NS}}}PanTilt") if position is not None else None
     zoom_el = position.find(f".//{{{TT_NS}}}Zoom") if position is not None else None
 
-    move_status = _findtext(status, f".//{{{TT_NS}}}MoveStatus", default="") if status is not None else ""
+    move_status = ""
+    if status is not None:
+        move_status_element = status.find(f".//{{{TT_NS}}}MoveStatus")
+        if move_status_element is not None:
+            direct_status = str(move_status_element.text or "").strip().upper()
+            axis_statuses = [
+                str(child.text or "").strip().upper()
+                for child in list(move_status_element)
+                if str(child.text or "").strip()
+            ]
+            if direct_status:
+                move_status = direct_status
+            elif any(value == "MOVING" for value in axis_statuses):
+                move_status = "MOVING"
+            elif axis_statuses and all(value == "IDLE" for value in axis_statuses):
+                move_status = "IDLE"
+            elif axis_statuses:
+                move_status = "UNKNOWN"
     error = _findtext(status, f".//{{{TT_NS}}}Error", default="") if status is not None else ""
     utc_time = _findtext(status, f".//{{{TT_NS}}}UtcTime", default="") if status is not None else ""
 
@@ -566,6 +596,17 @@ def _tptz_set_preset_body(
         f"{name_xml}"
         f"{token_xml}"
         "</tptz:SetPreset>"
+    )
+
+
+def _tptz_remove_preset_body(profile_token: str, preset_token: str) -> str:
+    profile = _xml_escape(profile_token)
+    preset = _xml_escape(preset_token)
+    return (
+        f'<tptz:RemovePreset xmlns:tptz="{PTZ_NS}">'
+        f"<tptz:ProfileToken>{profile}</tptz:ProfileToken>"
+        f"<tptz:PresetToken>{preset}</tptz:PresetToken>"
+        "</tptz:RemovePreset>"
     )
 
 
@@ -696,11 +737,10 @@ class OnvifClient:
     password: str = ""
     timeout_s: float = 3.0
     auth_mode: Literal["auto", "digest", "text", "none"] = "auto"
-    _last_ptz_transport: tuple[Literal["1.1", "1.2"], str, Literal["none", "digest", "text"]] | None = field(
-        default=None,
-        init=False,
-        repr=False,
-    )
+    _ptz_transport_cache: dict[
+        tuple[str, str],
+        tuple[Literal["1.1", "1.2"], str, Literal["none", "digest", "text"]],
+    ] = field(default_factory=dict, init=False, repr=False)
 
     async def get_capabilities(self) -> tuple[str | None, str | None]:
         xaddr = normalize_onvif_xaddr(self.xaddr)
@@ -750,7 +790,76 @@ class OnvifClient:
 
         body_xml = _tptz_get_presets_body(token)
         soap_action = _action(PTZ_NS, "GetPresets")
-        return await self._call_and_parse_ptz_presets(url=url, body_xml=body_xml, soap_action=soap_action)
+        return await self._call_and_parse_ptz_presets(
+            url=url,
+            body_xml=body_xml,
+            soap_action=soap_action,
+            transport_profile_token=token,
+        )
+
+    async def set_preset(
+        self,
+        ptz_xaddr: str,
+        *,
+        profile_token: str,
+        preset_name: str = "",
+        preset_token: str = "",
+    ) -> str:
+        url = str(ptz_xaddr or "").strip()
+        profile = str(profile_token or "").strip()
+        if not url:
+            raise OnvifError("Missing ONVIF PTZ service URL")
+        if not profile:
+            raise OnvifError("Missing ONVIF profile token")
+
+        body_xml = _tptz_set_preset_body(
+            profile,
+            preset_name=preset_name,
+            preset_token=preset_token,
+        )
+        soap_action = _action(PTZ_NS, "SetPreset")
+        payload, soap_ns = await self._call_ptz_mutation_once(
+            url=url,
+            profile_token=profile,
+            body_xml=body_xml,
+            soap_action=soap_action,
+            operation="SetPreset",
+            preflight="presets",
+        )
+        root = _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
+        token = _ptz_preset_token_from_root(root)
+        if not token:
+            raise OnvifAmbiguousMutationError("ONVIF returned an empty preset token")
+        return token
+
+    async def remove_preset(
+        self,
+        ptz_xaddr: str,
+        *,
+        profile_token: str,
+        preset_token: str,
+    ) -> None:
+        url = str(ptz_xaddr or "").strip()
+        profile = str(profile_token or "").strip()
+        preset = str(preset_token or "").strip()
+        if not url:
+            raise OnvifError("Missing ONVIF PTZ service URL")
+        if not profile:
+            raise OnvifError("Missing ONVIF profile token")
+        if not preset:
+            raise OnvifError("Missing ONVIF preset token")
+
+        body_xml = _tptz_remove_preset_body(profile, preset)
+        soap_action = _action(PTZ_NS, "RemovePreset")
+        payload, soap_ns = await self._call_ptz_mutation_once(
+            url=url,
+            profile_token=profile,
+            body_xml=body_xml,
+            soap_action=soap_action,
+            operation="RemovePreset",
+            preflight="presets",
+        )
+        _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
 
     async def set_preset(
         self,
@@ -811,7 +920,14 @@ class OnvifClient:
 
         body_xml = _tptz_goto_preset_body(profile, preset)
         soap_action = _action(PTZ_NS, "GotoPreset")
-        await self._call_and_raise_if_fault(url=url, body_xml=body_xml, soap_action=soap_action, operation="GotoPreset")
+        payload, soap_ns = await self._call_ptz_mutation_once(
+            url=url,
+            profile_token=profile,
+            body_xml=body_xml,
+            soap_action=soap_action,
+            operation="GotoPreset",
+        )
+        _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
 
     async def get_ptz_status(self, ptz_xaddr: str, *, profile_token: str) -> OnvifPtzStatus:
         url = str(ptz_xaddr or "").strip()
@@ -823,7 +939,12 @@ class OnvifClient:
 
         body_xml = _tptz_get_status_body(token)
         soap_action = _action(PTZ_NS, "GetStatus")
-        return await self._call_and_parse_ptz_status(url=url, body_xml=body_xml, soap_action=soap_action)
+        return await self._call_and_parse_ptz_status(
+            url=url,
+            body_xml=body_xml,
+            soap_action=soap_action,
+            transport_profile_token=token,
+        )
 
     async def absolute_move(
         self,
@@ -847,12 +968,14 @@ class OnvifClient:
 
         body_xml = _tptz_absolute_move_body(token, pan=pan, tilt=tilt, zoom=zoom)
         soap_action = _action(PTZ_NS, "AbsoluteMove")
-        await self._call_and_raise_if_fault(
+        payload, soap_ns = await self._call_ptz_mutation_once(
             url=url,
+            profile_token=token,
             body_xml=body_xml,
             soap_action=soap_action,
             operation="AbsoluteMove",
         )
+        _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
 
     async def continuous_move(
         self,
@@ -873,12 +996,14 @@ class OnvifClient:
 
         body_xml = _tptz_continuous_move_body(token, pan=pan, tilt=tilt, zoom=zoom, timeout_s=timeout_s)
         soap_action = _action(PTZ_NS, "ContinuousMove")
-        await self._call_and_raise_if_fault(
+        payload, soap_ns = await self._call_ptz_mutation_once(
             url=url,
+            profile_token=token,
             body_xml=body_xml,
             soap_action=soap_action,
             operation="ContinuousMove",
         )
+        _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
 
     async def relative_move(
         self,
@@ -898,12 +1023,14 @@ class OnvifClient:
 
         body_xml = _tptz_relative_move_body(token, pan=pan, tilt=tilt, zoom=zoom)
         soap_action = _action(PTZ_NS, "RelativeMove")
-        await self._call_and_raise_if_fault(
+        payload, soap_ns = await self._call_ptz_mutation_once(
             url=url,
+            profile_token=token,
             body_xml=body_xml,
             soap_action=soap_action,
             operation="RelativeMove",
         )
+        _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
 
     async def stop(self, ptz_xaddr: str, *, profile_token: str, pan_tilt: bool = True, zoom: bool = True) -> None:
         url = str(ptz_xaddr or "").strip()
@@ -915,7 +1042,14 @@ class OnvifClient:
 
         body_xml = _tptz_stop_body(token, pan_tilt=bool(pan_tilt), zoom=bool(zoom))
         soap_action = _action(PTZ_NS, "Stop")
-        await self._call_and_raise_if_fault(url=url, body_xml=body_xml, soap_action=soap_action, operation="Stop")
+        payload, soap_ns = await self._call_ptz_mutation_once(
+            url=url,
+            profile_token=token,
+            body_xml=body_xml,
+            soap_action=soap_action,
+            operation="Stop",
+        )
+        _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
 
     def _auth_attempts(self) -> list[Literal["none", "digest", "text"]]:
         mode = str(self.auth_mode or "").strip().lower()
@@ -989,6 +1123,7 @@ class OnvifClient:
         url: str,
         body_xml: str,
         soap_action: str,
+        transport_profile_token: str,
     ) -> list[OnvifPtzPreset]:
         last_error: Exception | None = None
         for version, ns in (("1.2", SOAP12_NS), ("1.1", SOAP11_NS)):
@@ -996,11 +1131,73 @@ class OnvifClient:
                 try:
                     payload = await self._call(url=url, body_xml=body_xml, soap_action=soap_action, soap_ns=ns, soap_version=version, auth=auth)  # type: ignore[arg-type]
                     presets = _parse_ptz_presets(payload, soap_ns=ns)
-                    self._last_ptz_transport = (version, ns, auth)  # type: ignore[assignment]
-                    return presets
                 except Exception as exc:  # noqa: BLE001
                     last_error = exc
+                    continue
+                self._ptz_transport_cache[(url, transport_profile_token)] = (version, ns, auth)  # type: ignore[assignment]
+                return presets
         raise OnvifError(str(last_error) if last_error else "ONVIF GetPresets failed")
+
+    async def _resolve_ptz_transport(
+        self,
+        *,
+        url: str,
+        profile_token: str,
+        preflight: Literal["presets", "status"],
+    ) -> tuple[Literal["1.1", "1.2"], str, Literal["none", "digest", "text"]]:
+        cache_key = (url, profile_token)
+        cached = self._ptz_transport_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        if preflight == "presets":
+            await self._call_and_parse_ptz_presets(
+                url=url,
+                body_xml=_tptz_get_presets_body(profile_token),
+                soap_action=_action(PTZ_NS, "GetPresets"),
+                transport_profile_token=profile_token,
+            )
+        else:
+            await self._call_and_parse_ptz_status(
+                url=url,
+                body_xml=_tptz_get_status_body(profile_token),
+                soap_action=_action(PTZ_NS, "GetStatus"),
+                transport_profile_token=profile_token,
+            )
+        resolved = self._ptz_transport_cache.get(cache_key)
+        if resolved is None:
+            raise OnvifError("ONVIF PTZ transport preflight did not resolve a transport")
+        return resolved
+
+    async def _call_ptz_mutation_once(
+        self,
+        *,
+        url: str,
+        profile_token: str,
+        body_xml: str,
+        soap_action: str,
+        operation: str,
+        preflight: Literal["presets", "status"] = "status",
+    ) -> tuple[bytes, str]:
+        soap_version, soap_ns, auth = await self._resolve_ptz_transport(
+            url=url,
+            profile_token=profile_token,
+            preflight=preflight,
+        )
+        try:
+            payload = await self._call(
+                url=url,
+                body_xml=body_xml,
+                soap_action=soap_action,
+                soap_ns=soap_ns,
+                soap_version=soap_version,
+                auth=auth,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise OnvifAmbiguousMutationError(
+                str(exc) or f"ONVIF {operation} response failed"
+            ) from exc
+        return payload, soap_ns
 
     async def _call_and_parse_ptz_status(
         self,
@@ -1008,36 +1205,20 @@ class OnvifClient:
         url: str,
         body_xml: str,
         soap_action: str,
+        transport_profile_token: str,
     ) -> OnvifPtzStatus:
         last_error: Exception | None = None
         for version, ns in (("1.2", SOAP12_NS), ("1.1", SOAP11_NS)):
             for auth in self._auth_attempts():
                 try:
                     payload = await self._call(url=url, body_xml=body_xml, soap_action=soap_action, soap_ns=ns, soap_version=version, auth=auth)  # type: ignore[arg-type]
-                    return _parse_ptz_status(payload, soap_ns=ns)
+                    status = _parse_ptz_status(payload, soap_ns=ns)
                 except Exception as exc:  # noqa: BLE001
                     last_error = exc
+                    continue
+                self._ptz_transport_cache[(url, transport_profile_token)] = (version, ns, auth)  # type: ignore[assignment]
+                return status
         raise OnvifError(str(last_error) if last_error else "ONVIF GetStatus failed")
-
-    async def _call_and_raise_if_fault(
-        self,
-        *,
-        url: str,
-        body_xml: str,
-        soap_action: str,
-        operation: str,
-    ) -> None:
-        last_error: Exception | None = None
-        for version, ns in (("1.2", SOAP12_NS), ("1.1", SOAP11_NS)):
-            for auth in self._auth_attempts():
-                try:
-                    payload = await self._call(url=url, body_xml=body_xml, soap_action=soap_action, soap_ns=ns, soap_version=version, auth=auth)  # type: ignore[arg-type]
-                    root = _parse_xml(payload)
-                    _raise_if_fault(root, soap_ns=ns)
-                    return
-                except Exception as exc:  # noqa: BLE001
-                    last_error = exc
-        raise OnvifError(str(last_error) if last_error else f"ONVIF {operation} failed")
 
     async def _call(
         self,

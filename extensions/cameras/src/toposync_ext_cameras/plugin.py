@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
-import logging
+import hmac
+import json
 import math
 import os
 import re
@@ -16,7 +19,8 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from starlette.datastructures import UploadFile
 
 from toposync.extensions import BaseExtension, register_extension_shutdown_callback
 from toposync.runtime.auth import AuthContext, AuthRuntime
@@ -62,9 +66,12 @@ from .processing.camera_hub import get_global_camera_hub
 from .processing.mapping import ControlPointMapper
 from .ptz_controller import PtzControlError, PtzController, PtzTransportBinding
 from .pipelines.postprocess import (  # noqa: PLC2701
+    CameraMappingCalibratedView,
+    CameraMappingProjectionModel,
     _parse_calibrated_views_as_control_point_sets,
     _parse_mapping_control_point_sets_from_props,
 )
+from .processing.visual_calibration import propagate_visual_calibration
 from .source_health import get_global_source_health_store
 from .view_resolver import resolve_ptz_target_view
 from .settings import (
@@ -82,7 +89,7 @@ from .settings import (
     normalize_cameras_settings,
 )
 from .onvif import (
-    REOLINK_PRESET_TOKEN_PREFIX,
+    OnvifAmbiguousMutationError,
     OnvifCameraEventContext,
     OnvifAmbiguousMutationError,
     OnvifClient,
@@ -91,8 +98,6 @@ from .onvif import (
     OnvifError,
     OnvifProfile,
     OnvifPtzPreset,
-    ReolinkCgiClient,
-    ReolinkCgiError,
     discover_onvif_devices,
     normalize_onvif_xaddr,
     onvif_xaddr_candidates,
@@ -126,6 +131,42 @@ CAMERA_MAPPING_REQUIRED_PRESETS = {
     "person_stopped",
     "person_vehicle_interaction",
 }
+MAX_VISUAL_CALIBRATION_IMAGE_BYTES = 12 * 1024 * 1024
+MAX_VISUAL_CALIBRATION_VIEW_JSON_BYTES = 256 * 1024
+MAX_VISUAL_CALIBRATION_REQUEST_BYTES = (
+    2 * MAX_VISUAL_CALIBRATION_IMAGE_BYTES + MAX_VISUAL_CALIBRATION_VIEW_JSON_BYTES + 1024 * 1024
+)
+
+
+async def _read_visual_calibration_request_body(
+    request: Request,
+    *,
+    timeout_ms: int,
+) -> bytes:
+    async def _read_bounded_body() -> bytes:
+        bounded_body = bytearray()
+        async for chunk in request.stream():
+            if len(chunk) > MAX_VISUAL_CALIBRATION_REQUEST_BYTES - len(bounded_body):
+                raise HTTPException(
+                    status_code=413,
+                    detail="Visual calibration request is too large",
+                )
+            bounded_body.extend(chunk)
+        if not bounded_body:
+            raise HTTPException(status_code=400, detail="Visual calibration request is empty")
+        return bytes(bounded_body)
+
+    try:
+        return await asyncio.wait_for(
+            _read_bounded_body(),
+            timeout=max(0.001, float(timeout_ms) / 1000.0),
+        )
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=408,
+            detail="Visual calibration upload timed out",
+            headers={"Connection": "close"},
+        ) from exc
 
 
 def _normalize_snapshot_transport_policy(value: Any) -> RtspSnapshotTransportPolicy:
@@ -368,6 +409,90 @@ class ProjectionMapRequest(BaseModel):
     query: ControlPointMapQuery
 
 
+class CameraVisualCalibrationQuality(BaseModel):
+    method: str = ""
+    source_width: int = 0
+    source_height: int = 0
+    target_width: int = 0
+    target_height: int = 0
+    source_keypoints: int = 0
+    target_keypoints: int = 0
+    candidate_matches: int = 0
+    inliers: int = 0
+    inlier_ratio: float = 0.0
+    competing_inliers: int = 0
+    ambiguity_ratio: float = 0.0
+    symmetry_inliers: int = 0
+    symmetry_coverage_ratio: float = 0.0
+    median_reprojection_error_px: float | None = None
+    p95_reprojection_error_px: float | None = None
+    source_coverage_ratio: float = 0.0
+    target_coverage_ratio: float = 0.0
+    overlap_ratio: float = 0.0
+    median_displacement_ratio: float = 0.0
+    refinement_points: int = 0
+    discarded_refinement_points: int = 0
+    duration_ms: int = 0
+
+
+class CameraVisualPoseSignature(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    algorithm: Literal["orb_hamming_v1"] = "orb_hamming_v1"
+    keypoint_count: int = Field(ge=16, le=320)
+    keypoints_base64: str = Field(min_length=88, max_length=2048)
+    descriptors_base64: str = Field(min_length=684, max_length=14000)
+    original_width: int = Field(ge=2, le=50000)
+    original_height: int = Field(ge=2, le=50000)
+    digest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _validate_compact_payload(self) -> CameraVisualPoseSignature:
+        if self.original_width * self.original_height > 50_000_000:
+            raise ValueError("visual pose signature image dimensions are too large")
+        try:
+            keypoint_bytes = base64.b64decode(self.keypoints_base64, validate=True)
+            descriptor_bytes = base64.b64decode(self.descriptors_base64, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("visual pose signature payload is not valid base64") from exc
+        if len(keypoint_bytes) != self.keypoint_count * 4:
+            raise ValueError("visual pose signature keypoint payload has an invalid size")
+        if len(descriptor_bytes) != self.keypoint_count * 32:
+            raise ValueError("visual pose signature descriptor payload has an invalid size")
+
+        digest = hashlib.sha256()
+        digest.update(self.algorithm.encode("ascii"))
+        digest.update(b"\0")
+        digest.update(int(self.original_width).to_bytes(4, "little"))
+        digest.update(int(self.original_height).to_bytes(4, "little"))
+        digest.update(int(self.keypoint_count).to_bytes(4, "little"))
+        digest.update(keypoint_bytes)
+        digest.update(descriptor_bytes)
+        if not hmac.compare_digest(digest.hexdigest(), self.digest_sha256):
+            raise ValueError("visual pose signature digest does not match its payload")
+        return self
+
+
+class CameraVisualCalibrationProjectionModel(CameraMappingProjectionModel):
+    visual_pose_signature: CameraVisualPoseSignature
+
+
+class CameraVisualCalibrationResponse(BaseModel):
+    accepted: bool
+    reason: str | None = None
+    projection_model: CameraVisualCalibrationProjectionModel | None = None
+    source_visual_pose_signature: CameraVisualPoseSignature | None = None
+    quality: CameraVisualCalibrationQuality = Field(default_factory=CameraVisualCalibrationQuality)
+
+    @model_validator(mode="after")
+    def _validate_accepted_signatures(self) -> CameraVisualCalibrationResponse:
+        if self.accepted and (
+            self.projection_model is None or self.source_visual_pose_signature is None
+        ):
+            raise ValueError("accepted visual calibration requires source and target signatures")
+        return self
+
+
 class CameraPtzPreset(BaseModel):
     token: str
     name: str = ""
@@ -383,6 +508,8 @@ class CameraPtzStatus(BaseModel):
     move_status: str = ""
     error: str = ""
     utc_time: str = ""
+    preset_token: str = ""
+    preset_name: str = ""
 
 
 class CameraPtzPresetsResponse(BaseModel):
@@ -403,8 +530,8 @@ class CameraPtzActionResponse(BaseModel):
 
 class CameraPtzSetPresetRequest(BaseModel):
     source_id: str = ""
-    name: str = Field(default="", max_length=120)
-    idempotency_key: str = Field(default="", max_length=120)
+    name: str = ""
+    idempotency_key: str = Field(default="", max_length=200)
 
 
 class CameraPtzGotoPresetRequest(BaseModel):
@@ -715,7 +842,31 @@ class RtspSnapshotResult:
 class WarmSnapshotResult:
     blob: bytes
     backend: str
+    frame_ts: float = 0.0
     frame_age_seconds: float | None = None
+    source_received_at: float = 0.0
+    source_received_monotonic: float = 0.0
+    capture_generation: int = 0
+    capture_sequence: int = 0
+    captured_at: float = 0.0
+    physical_capture_verified: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class WaitedSnapshotFrame:
+    frame: Any | None
+    published_at: float = 0.0
+    source_received_at: float = 0.0
+    source_received_monotonic: float = 0.0
+    generation: int = 0
+    sequence: int = 0
+    captured_at: float = 0.0
+    physical_capture_verified: bool = False
+    freshness_unverifiable: bool = False
+
+
+class SnapshotFreshnessUnverifiableError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -886,28 +1037,110 @@ async def _wait_for_grabber_frame(
     grabber: Any,
     *,
     wait_ms: int,
-) -> tuple[Any | None, float]:
+    min_frame_ts: float = 0.0,
+    minimum_distinct_frames: int = 1,
+    physical_capture_fence_monotonic: float | None = None,
+) -> WaitedSnapshotFrame:
     deadline = time.monotonic() + max(0.0, float(wait_ms) / 1000.0)
+    required_frames = max(1, int(minimum_distinct_frames))
+    accepted_frames = 0
+    last_accepted_ts = float(min_frame_ts or 0.0)
+    last_accepted_identity: tuple[int, int] | None = None
+    sample_reader = getattr(grabber, "get_latest_sample", None)
+    requires_physical_evidence = physical_capture_fence_monotonic is not None
+    if requires_physical_evidence and not callable(sample_reader):
+        return WaitedSnapshotFrame(frame=None, freshness_unverifiable=True)
+
     while True:
         try:
-            frame, frame_ts = grabber.get_latest()
+            if callable(sample_reader):
+                sample = sample_reader()
+                frame = getattr(sample, "frame", None)
+                parsed_frame_ts = float(getattr(sample, "published_at", 0.0) or 0.0)
+                source_received_at = float(getattr(sample, "source_received_at", 0.0) or 0.0)
+                source_received_monotonic = float(
+                    getattr(sample, "source_received_monotonic", 0.0) or 0.0
+                )
+                generation = int(getattr(sample, "generation", 0) or 0)
+                sequence = int(getattr(sample, "sequence", 0) or 0)
+                captured_at = float(getattr(sample, "captured_at", 0.0) or 0.0)
+                captured_monotonic = float(getattr(sample, "captured_monotonic", 0.0) or 0.0)
+                physical_capture_verified = bool(
+                    getattr(sample, "physical_capture_verified", False)
+                )
+            else:
+                frame, frame_ts = grabber.get_latest()
+                parsed_frame_ts = float(frame_ts or 0.0)
+                source_received_at = 0.0
+                source_received_monotonic = 0.0
+                generation = 0
+                sequence = 0
+                captured_at = 0.0
+                captured_monotonic = 0.0
+                physical_capture_verified = False
         except Exception:
-            return None, 0.0
+            return WaitedSnapshotFrame(frame=None)
+
         if frame is not None:
-            return frame, float(frame_ts or 0.0)
+            if requires_physical_evidence and (
+                not physical_capture_verified
+                or captured_at <= 0.0
+                or captured_monotonic <= 0.0
+                or generation <= 0
+                or sequence <= 0
+            ):
+                return WaitedSnapshotFrame(frame=None, freshness_unverifiable=True)
+
+            identity = (generation, sequence)
+            identity_is_new = identity != last_accepted_identity and sequence > 0
+            physical_fence_passed = not requires_physical_evidence or captured_monotonic > float(
+                physical_capture_fence_monotonic or 0.0
+            )
+            timestamp_is_new = parsed_frame_ts > last_accepted_ts
+            distinct_frame = (
+                identity_is_new
+                if requires_physical_evidence
+                else (accepted_frames == 0 or identity_is_new or timestamp_is_new)
+            )
+            if physical_fence_passed and distinct_frame:
+                accepted_frames += 1
+                last_accepted_ts = parsed_frame_ts
+                last_accepted_identity = identity
+                if accepted_frames >= required_frames:
+                    return WaitedSnapshotFrame(
+                        frame=frame,
+                        published_at=parsed_frame_ts,
+                        source_received_at=source_received_at,
+                        source_received_monotonic=source_received_monotonic,
+                        generation=generation,
+                        sequence=sequence,
+                        captured_at=captured_at,
+                        physical_capture_verified=physical_capture_verified,
+                    )
 
         remaining = deadline - time.monotonic()
         if remaining <= 0.0:
-            return None, 0.0
+            return WaitedSnapshotFrame(frame=None)
         await asyncio.sleep(min(0.1, max(0.01, remaining)))
 
 
-def _encode_snapshot_frame(frame: Any, *, frame_ts: float) -> WarmSnapshotResult:
-    blob, _ext, _mime = _encode_image_bytes(frame, fmt="jpg", jpeg_quality=85)
+def _encode_snapshot_frame(waited: WaitedSnapshotFrame) -> WarmSnapshotResult:
+    blob, _ext, _mime = _encode_image_bytes(waited.frame, fmt="jpg", jpeg_quality=85)
     age_seconds: float | None = None
-    if frame_ts > 0.0:
-        age_seconds = max(0.0, time.time() - float(frame_ts))
-    return WarmSnapshotResult(blob=blob, backend="camera-hub", frame_age_seconds=age_seconds)
+    if waited.published_at > 0.0:
+        age_seconds = max(0.0, time.time() - float(waited.published_at))
+    return WarmSnapshotResult(
+        blob=blob,
+        backend="camera-hub",
+        frame_ts=float(waited.published_at or 0.0),
+        frame_age_seconds=age_seconds,
+        source_received_at=float(waited.source_received_at or 0.0),
+        source_received_monotonic=float(waited.source_received_monotonic or 0.0),
+        capture_generation=int(waited.generation or 0),
+        capture_sequence=int(waited.sequence or 0),
+        captured_at=float(waited.captured_at or 0.0),
+        physical_capture_verified=bool(waited.physical_capture_verified),
+    )
 
 
 async def _ffmpeg_rtsp_probe(rtsp_url: str, *, timeout_ms: int) -> RtspProbeResponse:
@@ -1255,6 +1488,43 @@ class CamerasExtension(BaseExtension):
             os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_FFMPEG_CONCURRENCY", "2") or "2"
         )
         snapshot_ffmpeg_sema = asyncio.Semaphore(max(1, snapshot_ffmpeg_concurrency))
+        visual_calibration_concurrency = _env_int(
+            "TOPOSYNC_CAMERA_VISUAL_CALIBRATION_CONCURRENCY",
+            1,
+            min_value=1,
+            max_value=4,
+        )
+        visual_calibration_upload_concurrency = _env_int(
+            "TOPOSYNC_CAMERA_VISUAL_CALIBRATION_UPLOAD_CONCURRENCY",
+            max(2, visual_calibration_concurrency * 2),
+            min_value=1,
+            max_value=8,
+        )
+        visual_calibration_upload_timeout_ms = _env_int(
+            "TOPOSYNC_CAMERA_VISUAL_CALIBRATION_UPLOAD_TIMEOUT_MS",
+            15000,
+            min_value=250,
+            max_value=120000,
+        )
+        visual_calibration_executor = ThreadPoolExecutor(
+            max_workers=visual_calibration_concurrency,
+            thread_name_prefix="toposync-camera-calibration",
+        )
+        visual_calibration_upload_slots: asyncio.Queue[object] = asyncio.Queue(
+            maxsize=visual_calibration_upload_concurrency
+        )
+        for _index in range(visual_calibration_upload_concurrency):
+            visual_calibration_upload_slots.put_nowait(object())
+        visual_calibration_slots: asyncio.Queue[object] = asyncio.Queue(
+            maxsize=visual_calibration_concurrency
+        )
+        for _index in range(visual_calibration_concurrency):
+            visual_calibration_slots.put_nowait(object())
+
+        async def _shutdown_visual_calibration_executor() -> None:
+            visual_calibration_executor.shutdown(wait=False, cancel_futures=True)
+
+        register_extension_shutdown_callback(app, _shutdown_visual_calibration_executor)
         snapshot_warm_wait_ms = _env_int(
             "TOPOSYNC_CAMERA_SNAPSHOT_WARM_WAIT_MS",
             5000,
@@ -1377,6 +1647,9 @@ class CamerasExtension(BaseExtension):
             *,
             cache_key: str,
             resolved: ResolvedCameraSource,
+            min_frame_ts: float = 0.0,
+            minimum_distinct_frames: int = 1,
+            physical_capture_fence_monotonic: float | None = None,
         ) -> WarmSnapshotResult | None:
             hub_key = _camera_hub_key(
                 camera_id=resolved.camera_id,
@@ -1421,11 +1694,19 @@ class CamerasExtension(BaseExtension):
                     )
                     _ensure_snapshot_hub_release_task(cache_key)
 
-            frame, frame_ts = await _wait_for_grabber_frame(grabber, wait_ms=snapshot_warm_wait_ms)
-            if frame is None:
+            waited = await _wait_for_grabber_frame(
+                grabber,
+                wait_ms=snapshot_warm_wait_ms,
+                min_frame_ts=min_frame_ts,
+                minimum_distinct_frames=minimum_distinct_frames,
+                physical_capture_fence_monotonic=physical_capture_fence_monotonic,
+            )
+            if waited.freshness_unverifiable:
+                raise SnapshotFreshnessUnverifiableError
+            if waited.frame is None:
                 return None
             try:
-                return _encode_snapshot_frame(frame, frame_ts=frame_ts)
+                return _encode_snapshot_frame(waited)
             except Exception:
                 return None
 
@@ -1445,19 +1726,29 @@ class CamerasExtension(BaseExtension):
             created_ts: float
             move_mode: str = "continuous"
 
-        @dataclass(slots=True, repr=False)
-        class _BoundOnvifPtzTransportContext:
-            client: OnvifClient
-            ptz_xaddr: str
-            media_xaddr: str
-            profile_token: str
-            source_id: str
-            cache_key: str
-            resolution_lock: asyncio.Lock
-            move_mode: str = "continuous"
+        @dataclass(slots=True)
+        class _OnvifPtzPresetTracking:
+            pending: tuple[str, str] | None = None
+            active: tuple[str, str] | None = None
+
+        @dataclass(slots=True)
+        class _OnvifPtzSetPresetOperation:
+            preset_name: str
+            requested_token: str
+            baseline_tokens: frozenset[str]
+            automatic: bool = False
+            ambiguous: bool = False
+            removed: bool = False
+            resolved_token: str = ""
+            updated_ts: float = 0.0
 
         onvif_ptz_cache: dict[str, _OnvifPtzContextCacheEntry] = {}
         onvif_ptz_locks: dict[str, asyncio.Lock] = {}
+        # Runtime-only evidence: after a restart, status alone never invents an active preset.
+        onvif_ptz_preset_tracking: dict[str, _OnvifPtzPresetTracking] = {}
+        onvif_ptz_preset_names: dict[str, dict[str, str]] = {}
+        onvif_ptz_set_preset_operations: dict[tuple[str, str], _OnvifPtzSetPresetOperation] = {}
+        onvif_ptz_remove_preset_ambiguous: dict[tuple[str, str], float] = {}
         try:
             onvif_ptz_cache_ttl_s = float(
                 os.getenv("TOPOSYNC_CAMERA_ONVIF_PTZ_CONTEXT_TTL_S", "600") or "600"
@@ -1602,27 +1893,6 @@ class CamerasExtension(BaseExtension):
             raw = "\n".join(parts).encode("utf-8")
             return hashlib.sha256(raw).hexdigest()
 
-        def _pick_best_ptz_profile(profiles: list[OnvifProfile]) -> OnvifProfile | None:
-            if not profiles:
-                return None
-
-            def score(item: OnvifProfile) -> tuple[int, int, int, int, int, str]:
-                ptz_score = 1 if bool(item.has_ptz) else 0
-                encoding = str(item.encoding or "").strip().upper()
-                enc_score = 0
-                if encoding in {"H264", "H.264"}:
-                    enc_score = 3
-                elif encoding in {"H265", "HEVC", "H.265"}:
-                    enc_score = 2
-                elif encoding:
-                    enc_score = 1
-                pixels = int(item.width or 0) * int(item.height or 0)
-                fps = int(item.fps or 0)
-                has_name = 1 if str(item.name or "").strip() else 0
-                return (ptz_score, enc_score, pixels, fps, has_name, str(item.token or ""))
-
-            return max(profiles, key=score)
-
         def _pick_best_stream_profile(profiles: list[OnvifProfile]) -> OnvifProfile | None:
             if not profiles:
                 return None
@@ -1699,11 +1969,6 @@ class CamerasExtension(BaseExtension):
             )
             if not isinstance(source, dict):
                 raise HTTPException(status_code=409, detail="Camera has no video source configured")
-            if not camera_source_has_ptz(source):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Camera source is not marked as PTZ-capable",
-                )
 
             control = camera.get("control") if isinstance(camera.get("control"), dict) else {}
             if str(control.get("type") or "").strip().lower() != "onvif":
@@ -1820,24 +2085,37 @@ class CamerasExtension(BaseExtension):
                     try:
                         profiles = await client.get_profiles(media_xaddr)
                     except OnvifError as exc:
-                        raise _ptz_transport_error(
-                            exc,
-                            operation="get_profiles",
-                            camera_id=cid,
-                        ) from exc
-                    selected = _pick_best_ptz_profile(profiles) or (
-                        profiles[0] if profiles else None
-                    )
-                    if selected is None or not str(selected.token or "").strip():
+                        raise HTTPException(status_code=502, detail=str(exc)) from exc
+                    candidates = [
+                        item
+                        for item in profiles
+                        if bool(item.has_ptz) and str(item.token or "").strip()
+                    ]
+                    if len(candidates) != 1:
+                        source_label = source_id or "<default>"
                         raise HTTPException(
-                            status_code=502, detail="ONVIF returned no usable profiles for PTZ"
+                            status_code=409,
+                            detail=(
+                                f"Camera source '{source_label}' has no explicit ONVIF profile "
+                                f"binding and discovery found {len(candidates)} PTZ candidates; "
+                                "PTZ control is unavailable for this image source"
+                            ),
                         )
-                    profile_token = str(selected.token or "").strip()
+                    profile_token = str(candidates[0].token or "").strip()
 
                 prev = onvif_ptz_cache.get(cache_key)
                 prev_mode = "continuous"
                 if prev is not None and str(getattr(prev, "signature", "") or "") == signature:
                     prev_mode = str(getattr(prev, "move_mode", "") or "").strip() or "continuous"
+                elif prev is not None:
+                    onvif_ptz_preset_tracking.pop(cache_key, None)
+                    onvif_ptz_preset_names.pop(cache_key, None)
+                    for operation_key in list(onvif_ptz_set_preset_operations):
+                        if operation_key[0] == cache_key:
+                            onvif_ptz_set_preset_operations.pop(operation_key, None)
+                    for operation_key in list(onvif_ptz_remove_preset_ambiguous):
+                        if operation_key[0] == cache_key:
+                            onvif_ptz_remove_preset_ambiguous.pop(operation_key, None)
 
                 onvif_ptz_cache[cache_key] = _OnvifPtzContextCacheEntry(
                     signature=signature,
@@ -1853,124 +2131,110 @@ class CamerasExtension(BaseExtension):
         def _clamp(value: float, minimum: float, maximum: float) -> float:
             return max(minimum, min(maximum, float(value)))
 
-        async def _resolve_ptz_operation_context(
-            *,
-            camera_id: str,
-            camera_source_id: str | None,
-            transport_context: Any | None,
-            allow_disabled_for_stop: bool = False,
-        ) -> tuple[
-            OnvifClient,
-            str,
-            str,
-            str,
-            _BoundOnvifPtzTransportContext | None,
-        ]:
-            if transport_context is not None:
-                if not isinstance(transport_context, _BoundOnvifPtzTransportContext):
-                    raise PtzControlError("Invalid bound ONVIF PTZ transport context")
-                await _ensure_bound_ptz_transport_context(
-                    transport_context,
-                    camera_id=camera_id,
-                )
-                return (
-                    transport_context.client,
-                    transport_context.ptz_xaddr,
-                    transport_context.profile_token,
-                    transport_context.source_id,
-                    transport_context,
-                )
-            (
-                client,
-                ptz_xaddr,
-                profile_token,
-                source_id,
-                _signature,
-            ) = await _resolve_onvif_ptz_context(
-                camera_id=camera_id,
-                camera_source_id=camera_source_id,
-                allow_disabled_for_stop=allow_disabled_for_stop,
+        def _ptz_tracking_key(camera_id: str, camera_source_id: str) -> str:
+            return (
+                f"{str(camera_id or '').strip()}:{str(camera_source_id or '').strip() or 'default'}"
             )
-            return client, ptz_xaddr, profile_token, source_id, None
 
-        async def _ensure_bound_ptz_transport_context(
-            context: _BoundOnvifPtzTransportContext,
-            *,
-            camera_id: str,
-        ) -> None:
-            if context.ptz_xaddr and context.profile_token:
+        def _get_ptz_preset_tracking(key: str) -> _OnvifPtzPresetTracking:
+            tracking = onvif_ptz_preset_tracking.get(key)
+            if tracking is None:
+                tracking = _OnvifPtzPresetTracking()
+                onvif_ptz_preset_tracking[key] = tracking
+            return tracking
+
+        def _clear_ptz_preset_tracking(key: str) -> None:
+            tracking = onvif_ptz_preset_tracking.get(key)
+            if tracking is None:
                 return
-            async with context.resolution_lock:
-                if context.ptz_xaddr and context.profile_token:
-                    return
-                if not context.ptz_xaddr or not context.media_xaddr:
-                    try:
-                        cap_media, cap_ptz = await context.client.get_capabilities()
-                    except OnvifError as exc:
-                        raise _ptz_transport_error(
-                            exc,
-                            operation="get_capabilities",
-                            camera_id=camera_id,
-                        ) from exc
-                    if not context.media_xaddr:
-                        context.media_xaddr = str(cap_media or "").strip()
-                    if not context.ptz_xaddr:
-                        context.ptz_xaddr = str(cap_ptz or "").strip()
-                if not context.ptz_xaddr:
-                    raise HTTPException(
-                        status_code=502,
-                        detail="ONVIF did not report a PTZ service address (ptz_xaddr)",
-                    )
-                if not context.profile_token:
-                    if not context.media_xaddr:
-                        raise HTTPException(
-                            status_code=502,
-                            detail="ONVIF did not report a Media service address (media_xaddr)",
-                        )
-                    try:
-                        profiles = await context.client.get_profiles(context.media_xaddr)
-                    except OnvifError as exc:
-                        raise _ptz_transport_error(
-                            exc,
-                            operation="get_profiles",
-                            camera_id=camera_id,
-                        ) from exc
-                    selected = _pick_best_ptz_profile(profiles) or (
-                        profiles[0] if profiles else None
-                    )
-                    if selected is None or not str(selected.token or "").strip():
-                        raise HTTPException(
-                            status_code=502,
-                            detail="ONVIF returned no usable profiles for PTZ",
-                        )
-                    context.profile_token = str(selected.token or "").strip()
+            tracking.pending = None
+            tracking.active = None
+
+        def _remember_ptz_preset_name(key: str, token: str, name: str) -> None:
+            normalized_token = str(token or "").strip()
+            normalized_name = str(name or "").strip()
+            if not normalized_token or not normalized_name:
+                return
+            onvif_ptz_preset_names.setdefault(key, {})[normalized_token] = normalized_name
+
+        def _prune_ptz_preset_operations() -> None:
+            now = time.time()
+            cutoff = now - 3600.0
+            for operation_key, operation in list(onvif_ptz_set_preset_operations.items()):
+                if not operation.ambiguous and float(operation.updated_ts or 0.0) < cutoff:
+                    onvif_ptz_set_preset_operations.pop(operation_key, None)
+
+            overflow = len(onvif_ptz_set_preset_operations) - 512
+            if overflow > 0:
+                oldest = sorted(
+                    (
+                        item
+                        for item in onvif_ptz_set_preset_operations.items()
+                        if not item[1].ambiguous
+                    ),
+                    key=lambda item: float(item[1].updated_ts or 0.0),
+                )[:overflow]
+                for operation_key, _operation in oldest:
+                    onvif_ptz_set_preset_operations.pop(operation_key, None)
+
+        def _ptz_set_operation_id(key: str, idempotency_key: str) -> str:
+            material = f"toposync-ptz-set-v1\0{key}\0{idempotency_key}".encode("utf-8")
+            return hashlib.sha256(material).hexdigest()
+
+        def _reconcile_ptz_set_preset(
+            presets: list[OnvifPtzPreset],
+            operation: _OnvifPtzSetPresetOperation,
+        ) -> OnvifPtzPreset | None:
+            preferred_tokens = {
+                token
+                for token in (operation.resolved_token, operation.requested_token)
+                if str(token or "").strip()
+            }
+            for preset in presets:
+                if str(preset.token or "").strip() in preferred_tokens:
+                    return preset
+
+            if not operation.preset_name:
+                return None
+            candidates = [
+                preset
+                for preset in presets
+                if str(preset.name or "").strip() == operation.preset_name
+                and str(preset.token or "").strip() not in operation.baseline_tokens
+            ]
+            return candidates[0] if len(candidates) == 1 else None
+
+        def _clear_removed_ptz_preset(key: str, token: str) -> None:
+            tracking = _get_ptz_preset_tracking(key)
+            if tracking.pending is not None and tracking.pending[0] == token:
+                tracking.pending = None
+            if tracking.active is not None and tracking.active[0] == token:
+                tracking.active = None
+            onvif_ptz_preset_names.get(key, {}).pop(token, None)
+            for operation_key, operation in list(onvif_ptz_set_preset_operations.items()):
+                if operation_key[0] != key:
+                    continue
+                if token in {operation.requested_token, operation.resolved_token}:
+                    if operation.automatic:
+                        onvif_ptz_set_preset_operations.pop(operation_key, None)
+                    else:
+                        operation.ambiguous = False
+                        operation.removed = True
+                        operation.updated_ts = time.time()
 
         async def _svc_ptz_list_presets(
             *, camera_id: str, camera_source_id: str | None = None
         ) -> list[dict[str, Any]]:
-            (
-                client,
-                ptz_xaddr,
-                profile_token,
-                _source_id,
-                _signature,
-            ) = await _resolve_onvif_ptz_context(
-                camera_id=str(camera_id or "").strip(),
+            cid = str(camera_id or "").strip()
+            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+                camera_id=cid,
                 camera_source_id=camera_source_id,
             )
             try:
-                presets, _reolink = await _list_ptz_presets_with_reolink_fallback(
-                    client=client,
-                    ptz_xaddr=ptz_xaddr,
-                    profile_token=profile_token,
-                )
-            except (OnvifError, ReolinkCgiError) as exc:
-                raise _ptz_transport_error(
-                    exc,
-                    operation="list_presets",
-                    camera_id=str(camera_id or "").strip(),
-                ) from exc
-            return [
+                presets = await client.get_ptz_presets(ptz_xaddr, profile_token=profile_token)
+            except OnvifError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            result = [
                 {
                     "token": str(p.token or "").strip(),
                     "name": str(p.name or "").strip(),
@@ -1981,6 +2245,282 @@ class CamerasExtension(BaseExtension):
                 for p in presets
                 if str(p.token or "").strip()
             ]
+            key = _ptz_tracking_key(cid, resolved_source_id)
+            onvif_ptz_preset_names[key] = {
+                str(item["token"]): str(item["name"])
+                for item in result
+                if str(item["name"] or "").strip()
+            }
+            return result
+
+        async def _svc_ptz_set_preset(
+            *,
+            camera_id: str,
+            preset_name: str = "",
+            camera_source_id: str | None = None,
+            idempotency_key: str = "",
+            automatic_idempotency_key: bool = False,
+        ) -> dict[str, Any]:
+            cid = str(camera_id or "").strip()
+            name = str(preset_name or "").strip()
+            normalized_idempotency_key = str(idempotency_key or "").strip()
+            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+                camera_id=cid,
+                camera_source_id=camera_source_id,
+            )
+            key = _ptz_tracking_key(cid, resolved_source_id)
+            async with _get_onvif_ptz_lock(key):
+                _prune_ptz_preset_operations()
+                operation_key: tuple[str, str] | None = None
+                operation: _OnvifPtzSetPresetOperation | None = None
+                operation_id = ""
+                if normalized_idempotency_key:
+                    operation_id = _ptz_set_operation_id(key, normalized_idempotency_key)
+                    operation_key = (key, operation_id)
+                    operation = onvif_ptz_set_preset_operations.get(operation_key)
+                    if operation is not None and operation.preset_name != name:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Idempotency-Key was already used with another preset name",
+                        )
+                    if operation is not None and operation.removed:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Preset created by this Idempotency-Key was removed",
+                        )
+
+                try:
+                    presets_before = await client.get_ptz_presets(
+                        ptz_xaddr,
+                        profile_token=profile_token,
+                    )
+                except OnvifError as exc:
+                    if operation is not None and operation.ambiguous:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="SetPreset outcome is still being reconciled",
+                            headers={"Retry-After": "1"},
+                        ) from exc
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+                if operation is not None and operation.resolved_token:
+                    resolved_match = next(
+                        (
+                            preset
+                            for preset in presets_before
+                            if str(preset.token or "").strip() == operation.resolved_token
+                        ),
+                        None,
+                    )
+                    if resolved_match is not None:
+                        return {"token": operation.resolved_token, "name": operation.preset_name}
+                    if not operation.automatic:
+                        operation.removed = True
+                        operation.updated_ts = time.time()
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Preset created by this Idempotency-Key no longer exists",
+                        )
+                    if operation_key is not None:
+                        onvif_ptz_set_preset_operations.pop(operation_key, None)
+                    operation = None
+
+                if operation is not None:
+                    reconciled = _reconcile_ptz_set_preset(presets_before, operation)
+                    if reconciled is not None:
+                        operation.resolved_token = str(reconciled.token or "").strip()
+                        operation.updated_ts = time.time()
+                        _remember_ptz_preset_name(key, operation.resolved_token, name)
+                        return {"token": operation.resolved_token, "name": name}
+                    if operation.ambiguous:
+                        operation.updated_ts = time.time()
+                        raise HTTPException(
+                            status_code=503,
+                            detail="SetPreset outcome is still being reconciled",
+                            headers={"Retry-After": "1"},
+                        )
+
+                baseline_tokens = frozenset(
+                    str(preset.token or "").strip()
+                    for preset in presets_before
+                    if str(preset.token or "").strip()
+                )
+                # Preset tokens are allocated by the device. Supplying a client-generated
+                # token is optional in ONVIF but rejected by some cameras, including the
+                # TrackMix. Idempotency is reconciled from the immutable operation key,
+                # the preset name, and the pre-mutation catalog instead.
+                requested_token = ""
+                if operation is None:
+                    if (
+                        operation_key is not None
+                        and sum(
+                            1 for item in onvif_ptz_set_preset_operations.values() if item.ambiguous
+                        )
+                        >= 512
+                    ):
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Too many SetPreset outcomes are awaiting reconciliation",
+                            headers={"Retry-After": "1"},
+                        )
+                    operation = _OnvifPtzSetPresetOperation(
+                        preset_name=name,
+                        requested_token=requested_token,
+                        baseline_tokens=baseline_tokens,
+                        automatic=bool(automatic_idempotency_key),
+                        updated_ts=time.time(),
+                    )
+                    if operation_key is not None:
+                        stable_match = next(
+                            (
+                                preset
+                                for preset in presets_before
+                                if str(preset.token or "").strip() == requested_token
+                            ),
+                            None,
+                        )
+                        if stable_match is not None:
+                            existing_name = str(stable_match.name or "").strip()
+                            if existing_name and existing_name != name:
+                                raise HTTPException(
+                                    status_code=409,
+                                    detail="Idempotency-Key resolves to another preset",
+                                )
+                            operation.resolved_token = requested_token
+                            onvif_ptz_set_preset_operations[operation_key] = operation
+                            _remember_ptz_preset_name(key, requested_token, name)
+                            return {"token": requested_token, "name": name}
+                        onvif_ptz_set_preset_operations[operation_key] = operation
+
+                set_preset_kwargs: dict[str, Any] = {
+                    "profile_token": profile_token,
+                    "preset_name": name,
+                }
+                mutation_response_confirmed = False
+                operation.ambiguous = True
+                operation.updated_ts = time.time()
+                try:
+                    token = await client.set_preset(
+                        ptz_xaddr,
+                        **set_preset_kwargs,
+                    )
+                    mutation_response_confirmed = True
+                except OnvifAmbiguousMutationError as exc:
+                    operation.updated_ts = time.time()
+                    try:
+                        presets_after = await client.get_ptz_presets(
+                            ptz_xaddr,
+                            profile_token=profile_token,
+                        )
+                    except OnvifError as reconciliation_exc:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="SetPreset outcome is still being reconciled",
+                            headers={"Retry-After": "1"},
+                        ) from reconciliation_exc
+                    reconciled = _reconcile_ptz_set_preset(presets_after, operation)
+                    if reconciled is None:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="SetPreset outcome is still being reconciled",
+                            headers={"Retry-After": "1"},
+                        ) from exc
+                    token = str(reconciled.token or "").strip()
+                    operation.resolved_token = token
+                except OnvifError as exc:
+                    if operation_key is not None:
+                        onvif_ptz_set_preset_operations.pop(operation_key, None)
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+                operation.resolved_token = token
+                operation.ambiguous = False
+                operation.updated_ts = time.time()
+                if mutation_response_confirmed:
+                    tracking = _get_ptz_preset_tracking(key)
+                    tracking.pending = (token, name)
+                    tracking.active = None
+                _remember_ptz_preset_name(key, token, name)
+            return {"token": token, "name": name}
+
+        async def _svc_ptz_remove_preset(
+            *, camera_id: str, preset_token: str, camera_source_id: str | None = None
+        ) -> dict[str, Any]:
+            cid = str(camera_id or "").strip()
+            token = str(preset_token or "").strip()
+            if not token:
+                raise HTTPException(status_code=400, detail="preset_token is required")
+            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+                camera_id=cid,
+                camera_source_id=camera_source_id,
+            )
+            key = _ptz_tracking_key(cid, resolved_source_id)
+            async with _get_onvif_ptz_lock(key):
+                _prune_ptz_preset_operations()
+                operation_key = (key, token)
+                try:
+                    presets_before = await client.get_ptz_presets(
+                        ptz_xaddr,
+                        profile_token=profile_token,
+                    )
+                except OnvifError as exc:
+                    if operation_key in onvif_ptz_remove_preset_ambiguous:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="RemovePreset outcome is still being reconciled",
+                            headers={"Retry-After": "1"},
+                        ) from exc
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+                if not any(str(preset.token or "").strip() == token for preset in presets_before):
+                    onvif_ptz_remove_preset_ambiguous.pop(operation_key, None)
+                    _clear_removed_ptz_preset(key, token)
+                    return {"ok": True}
+                if operation_key in onvif_ptz_remove_preset_ambiguous:
+                    onvif_ptz_remove_preset_ambiguous[operation_key] = time.time()
+                    raise HTTPException(
+                        status_code=503,
+                        detail="RemovePreset outcome is still being reconciled",
+                        headers={"Retry-After": "1"},
+                    )
+
+                if len(onvif_ptz_remove_preset_ambiguous) >= 512:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Too many RemovePreset outcomes are awaiting reconciliation",
+                        headers={"Retry-After": "1"},
+                    )
+                onvif_ptz_remove_preset_ambiguous[operation_key] = time.time()
+                try:
+                    await client.remove_preset(
+                        ptz_xaddr,
+                        profile_token=profile_token,
+                        preset_token=token,
+                    )
+                except OnvifAmbiguousMutationError as exc:
+                    onvif_ptz_remove_preset_ambiguous[operation_key] = time.time()
+                    try:
+                        presets_after = await client.get_ptz_presets(
+                            ptz_xaddr,
+                            profile_token=profile_token,
+                        )
+                    except OnvifError as reconciliation_exc:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="RemovePreset outcome is still being reconciled",
+                            headers={"Retry-After": "1"},
+                        ) from reconciliation_exc
+                    if any(str(preset.token or "").strip() == token for preset in presets_after):
+                        raise HTTPException(
+                            status_code=503,
+                            detail="RemovePreset outcome is still being reconciled",
+                            headers={"Retry-After": "1"},
+                        ) from exc
+                    onvif_ptz_remove_preset_ambiguous.pop(operation_key, None)
+                except OnvifError as exc:
+                    onvif_ptz_remove_preset_ambiguous.pop(operation_key, None)
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+                onvif_ptz_remove_preset_ambiguous.pop(operation_key, None)
+                _clear_removed_ptz_preset(key, token)
+            return {"ok": True}
 
         def _reolink_cgi_client(client: OnvifClient) -> ReolinkCgiClient:
             return ReolinkCgiClient(
@@ -2138,35 +2678,30 @@ class CamerasExtension(BaseExtension):
             camera_source_id: str | None = None,
             transport_context: Any | None = None,
         ) -> dict[str, Any]:
+            cid = str(camera_id or "").strip()
             token = str(preset_token or "").strip()
             if not token:
                 raise HTTPException(status_code=400, detail="preset_token is required")
-            (
-                client,
-                ptz_xaddr,
-                profile_token,
-                _source_id,
-                _bound,
-            ) = await _resolve_ptz_operation_context(
-                camera_id=str(camera_id or "").strip(),
+            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+                camera_id=cid,
                 camera_source_id=camera_source_id,
                 transport_context=transport_context,
             )
-            try:
-                if token.startswith(REOLINK_PRESET_TOKEN_PREFIX):
-                    await _reolink_cgi_client(client).goto_preset(preset_token=token)
-                else:
+            key = _ptz_tracking_key(cid, resolved_source_id)
+            async with _get_onvif_ptz_lock(key):
+                tracking = _get_ptz_preset_tracking(key)
+                tracking.pending = None
+                tracking.active = None
+                try:
                     await client.goto_preset(
                         ptz_xaddr,
                         profile_token=profile_token,
                         preset_token=token,
                     )
-            except (OnvifError, ReolinkCgiError) as exc:
-                raise _ptz_transport_error(
-                    exc,
-                    operation="goto_preset",
-                    camera_id=str(camera_id or "").strip(),
-                ) from exc
+                except OnvifError as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+                preset_name = onvif_ptz_preset_names.get(key, {}).get(token, "")
+                tracking.pending = (token, preset_name)
             return {"ok": True}
 
         async def _svc_ptz_get_status(
@@ -2175,32 +2710,36 @@ class CamerasExtension(BaseExtension):
             camera_source_id: str | None = None,
             transport_context: Any | None = None,
         ) -> dict[str, Any]:
-            (
-                client,
-                ptz_xaddr,
-                profile_token,
-                _source_id,
-                _bound,
-            ) = await _resolve_ptz_operation_context(
-                camera_id=str(camera_id or "").strip(),
+            cid = str(camera_id or "").strip()
+            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+                camera_id=cid,
                 camera_source_id=camera_source_id,
                 transport_context=transport_context,
             )
-            try:
-                status = await client.get_ptz_status(ptz_xaddr, profile_token=profile_token)
-            except OnvifError as exc:
-                raise _ptz_transport_error(
-                    exc,
-                    operation="get_status",
-                    camera_id=str(camera_id or "").strip(),
-                ) from exc
+            key = _ptz_tracking_key(cid, resolved_source_id)
+            async with _get_onvif_ptz_lock(key):
+                try:
+                    status = await client.get_ptz_status(ptz_xaddr, profile_token=profile_token)
+                except OnvifError as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+                tracking = _get_ptz_preset_tracking(key)
+                move_status = str(status.move_status or "").strip().upper()
+                error = str(status.error or "").strip()
+                if move_status == "MOVING" and tracking.pending is None:
+                    tracking.active = None
+                elif move_status == "IDLE" and not error and tracking.pending is not None:
+                    tracking.active = tracking.pending
+                    tracking.pending = None
+                active_preset = tracking.active
             return {
                 "pan": status.pan,
                 "tilt": status.tilt,
                 "zoom": status.zoom,
-                "move_status": str(status.move_status or "").strip(),
-                "error": str(status.error or "").strip(),
+                "move_status": move_status,
+                "error": error,
                 "utc_time": str(status.utc_time or "").strip(),
+                "preset_token": active_preset[0] if active_preset is not None else "",
+                "preset_name": active_preset[1] if active_preset is not None else "",
             }
 
         async def _svc_ptz_absolute_move(
@@ -2230,31 +2769,25 @@ class CamerasExtension(BaseExtension):
                     status_code=400, detail="at least one absolute PTZ position axis is required"
                 )
 
-            (
-                client,
-                ptz_xaddr,
-                profile_token,
-                _source_id,
-                _bound,
-            ) = await _resolve_ptz_operation_context(
-                camera_id=str(camera_id or "").strip(),
+            cid = str(camera_id or "").strip()
+            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+                camera_id=cid,
                 camera_source_id=camera_source_id,
                 transport_context=transport_context,
             )
-            try:
-                await client.absolute_move(
-                    ptz_xaddr,
-                    profile_token=profile_token,
-                    pan=safe_pan,
-                    tilt=safe_tilt,
-                    zoom=safe_zoom,
-                )
-            except OnvifError as exc:
-                raise _ptz_transport_error(
-                    exc,
-                    operation="absolute_move",
-                    camera_id=str(camera_id or "").strip(),
-                ) from exc
+            key = _ptz_tracking_key(cid, resolved_source_id)
+            async with _get_onvif_ptz_lock(key):
+                _clear_ptz_preset_tracking(key)
+                try:
+                    await client.absolute_move(
+                        ptz_xaddr,
+                        profile_token=profile_token,
+                        pan=safe_pan,
+                        tilt=safe_tilt,
+                        zoom=safe_zoom,
+                    )
+                except OnvifError as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
             return {"ok": True}
 
         async def _svc_ptz_continuous_move(
@@ -2293,14 +2826,8 @@ class CamerasExtension(BaseExtension):
             safe_tilt = _clamp(float(tilt), -1.0, 1.0)
             safe_zoom = _clamp(float(zoom), -1.0, 1.0)
 
-            entry = (
-                None
-                if bound_context is not None
-                else onvif_ptz_cache.get(f"{cid}:{resolved_source_id or 'default'}")
-            )
-            move_mode = (
-                str(getattr(bound_context or entry, "move_mode", "") or "").strip() or "continuous"
-            )
+            key = _ptz_tracking_key(cid, resolved_source_id)
+            entry = onvif_ptz_cache.get(key)
 
             async def _do_relative_move() -> None:
                 step = 0.08
@@ -2312,48 +2839,37 @@ class CamerasExtension(BaseExtension):
                     zoom=safe_zoom * step,
                 )
 
-            if move_mode == "relative":
-                try:
-                    await _do_relative_move()
-                except OnvifError as exc:
-                    raise _ptz_transport_error(
-                        exc,
-                        operation="relative_move",
-                        camera_id=cid,
-                    ) from exc
-                return {"ok": True}
-
-            try:
-                await client.continuous_move(
-                    ptz_xaddr,
-                    profile_token=profile_token,
-                    pan=safe_pan,
-                    tilt=safe_tilt,
-                    zoom=safe_zoom,
-                    timeout_s=safe_timeout,
-                )
-            except OnvifError as exc:
-                # Some devices reject ContinuousMove (HTTP 400) but support RelativeMove.
-                message = str(exc)
-                if "HTTP error (400)" in message:
-                    if bound_context is not None:
-                        bound_context.move_mode = "relative"
-                    elif entry is not None:
-                        entry.move_mode = "relative"
+            async with _get_onvif_ptz_lock(key):
+                _clear_ptz_preset_tracking(key)
+                move_mode = str(getattr(entry, "move_mode", "") or "").strip() or "continuous"
+                if move_mode == "relative":
                     try:
                         await _do_relative_move()
-                    except OnvifError as exc2:
-                        raise _ptz_transport_error(
-                            exc2,
-                            operation="relative_move_fallback",
-                            camera_id=cid,
-                        ) from exc2
-                else:
-                    raise _ptz_transport_error(
-                        exc,
-                        operation="continuous_move",
-                        camera_id=cid,
-                    ) from exc
+                    except OnvifError as exc:
+                        raise HTTPException(status_code=502, detail=str(exc)) from exc
+                    return {"ok": True}
+
+                try:
+                    await client.continuous_move(
+                        ptz_xaddr,
+                        profile_token=profile_token,
+                        pan=safe_pan,
+                        tilt=safe_tilt,
+                        zoom=safe_zoom,
+                        timeout_s=safe_timeout,
+                    )
+                except OnvifError as exc:
+                    # Some devices reject ContinuousMove (HTTP 400) but support RelativeMove.
+                    message = str(exc)
+                    if "HTTP error (400)" in message:
+                        if entry is not None:
+                            entry.move_mode = "relative"
+                        try:
+                            await _do_relative_move()
+                        except OnvifError as exc2:
+                            raise HTTPException(status_code=502, detail=str(exc2)) from exc2
+                    else:
+                        raise HTTPException(status_code=502, detail=message) from exc
             return {"ok": True}
 
         async def _svc_ptz_stop(
@@ -2365,28 +2881,24 @@ class CamerasExtension(BaseExtension):
             allow_disabled_for_stop: bool = False,
             transport_context: Any | None = None,
         ) -> dict[str, Any]:
-            (
-                client,
-                ptz_xaddr,
-                profile_token,
-                _source_id,
-                _bound,
-            ) = await _resolve_ptz_operation_context(
-                camera_id=str(camera_id or "").strip(),
+            cid = str(camera_id or "").strip()
+            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+                camera_id=cid,
                 camera_source_id=camera_source_id,
                 transport_context=transport_context,
                 allow_disabled_for_stop=allow_disabled_for_stop,
             )
-            try:
-                await client.stop(
-                    ptz_xaddr, profile_token=profile_token, pan_tilt=bool(pan_tilt), zoom=bool(zoom)
-                )
-            except OnvifError as exc:
-                raise _ptz_transport_error(
-                    exc,
-                    operation="stop",
-                    camera_id=str(camera_id or "").strip(),
-                ) from exc
+            key = _ptz_tracking_key(cid, resolved_source_id)
+            async with _get_onvif_ptz_lock(key):
+                try:
+                    await client.stop(
+                        ptz_xaddr,
+                        profile_token=profile_token,
+                        pan_tilt=bool(pan_tilt),
+                        zoom=bool(zoom),
+                    )
+                except OnvifError as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
             return {"ok": True}
 
         async def _resolve_ptz_device_id(camera_id: str) -> str:
@@ -2644,6 +3156,8 @@ class CamerasExtension(BaseExtension):
 
         services.register("cameras.ptz.list_presets", _svc_ptz_list_presets)
         services.register("cameras.ptz.set_preset", _svc_ptz_set_preset)
+        services.register("cameras.ptz.remove_preset", _svc_ptz_remove_preset)
+        services.register("cameras.ptz.goto_preset", _svc_ptz_goto_preset)
         services.register("cameras.ptz.get_status", _svc_ptz_get_status)
         services.register("cameras.control.acquire", ptz_controller.acquire)
         services.register("cameras.control.renew", ptz_controller.renew)
@@ -3346,6 +3860,175 @@ class CamerasExtension(BaseExtension):
             control_point_set = control_point_sets[0] if control_point_sets else None
             return _map_control_point_set(control_point_set, body.query)
 
+        @app.post(
+            "/api/cameras/projection/propagate",
+            response_model=CameraVisualCalibrationResponse,
+        )
+        async def propagate_camera_projection(
+            request: Request,
+        ) -> CameraVisualCalibrationResponse:
+            _require_auth(request, action="core:settings:write")
+            raw_content_length = str(request.headers.get("content-length") or "").strip()
+            if raw_content_length:
+                try:
+                    content_length = int(raw_content_length)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail="Invalid Content-Length") from exc
+                if content_length <= 0 or content_length > MAX_VISUAL_CALIBRATION_REQUEST_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Visual calibration request is too large",
+                    )
+
+            try:
+                upload_slot = visual_calibration_upload_slots.get_nowait()
+            except asyncio.QueueEmpty:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Visual calibration upload capacity is busy",
+                    headers={"Retry-After": "1"},
+                ) from None
+
+            try:
+                bounded_body = await _read_visual_calibration_request_body(
+                    request,
+                    timeout_ms=visual_calibration_upload_timeout_ms,
+                )
+            finally:
+                visual_calibration_upload_slots.put_nowait(upload_slot)
+
+            try:
+                calibration_slot = visual_calibration_slots.get_nowait()
+            except asyncio.QueueEmpty:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Visual calibration capacity is busy",
+                    headers={"Retry-After": "1"},
+                ) from None
+
+            release_slot_directly = True
+            try:
+                body_sent = False
+
+                async def _receive_bounded_body() -> dict[str, Any]:
+                    nonlocal body_sent
+                    if body_sent:
+                        return {"type": "http.request", "body": b"", "more_body": False}
+                    body_sent = True
+                    return {
+                        "type": "http.request",
+                        "body": bounded_body,
+                        "more_body": False,
+                    }
+
+                bounded_request = Request(request.scope, _receive_bounded_body)
+                async with bounded_request.form(
+                    max_files=2,
+                    max_fields=2,
+                    max_part_size=MAX_VISUAL_CALIBRATION_VIEW_JSON_BYTES,
+                ) as form:
+                    source_view_value = form.get("source_view_json")
+                    source_id_value = form.get("source_id")
+                    source_image = form.get("source_image")
+                    target_image = form.get("target_image")
+                    if not isinstance(source_view_value, str):
+                        raise HTTPException(status_code=400, detail="Calibration view is required")
+                    if not isinstance(source_image, UploadFile) or not isinstance(
+                        target_image, UploadFile
+                    ):
+                        raise HTTPException(
+                            status_code=400, detail="Both calibration images are required"
+                        )
+                    source_view_json = source_view_value
+                    source_id = source_id_value.strip() if isinstance(source_id_value, str) else ""
+                    if not source_id:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Camera source identifier is required",
+                        )
+
+                    if (
+                        len(source_view_json.encode("utf-8"))
+                        > MAX_VISUAL_CALIBRATION_VIEW_JSON_BYTES
+                    ):
+                        raise HTTPException(status_code=413, detail="Calibration view is too large")
+
+                    try:
+                        source_view_data = json.loads(source_view_json)
+                        source_view = CameraMappingCalibratedView.model_validate(source_view_data)
+                    except Exception as exc:
+                        raise HTTPException(
+                            status_code=400, detail="Invalid calibration view"
+                        ) from exc
+                    if (
+                        source_view.projection_quality.status != "ready"
+                        or source_view.projection_quality.estimated
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Reference calibration view must be approved",
+                        )
+                    compatible_source_ids = source_view.stream_scope.compatible_source_ids
+                    if not compatible_source_ids or source_id not in compatible_source_ids:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Reference calibration view belongs to another camera source",
+                        )
+
+                    async def _read_image(upload: UploadFile, label: str) -> bytes:
+                        content = await upload.read(MAX_VISUAL_CALIBRATION_IMAGE_BYTES + 1)
+                        if len(content) > MAX_VISUAL_CALIBRATION_IMAGE_BYTES:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=f"{label} image is too large",
+                            )
+                        if not content:
+                            raise HTTPException(status_code=400, detail=f"{label} image is empty")
+                        return content
+
+                    source_bytes, target_bytes = await asyncio.gather(
+                        _read_image(source_image, "Reference"),
+                        _read_image(target_image, "Current"),
+                    )
+
+                control_point_sets = _parse_calibrated_views_as_control_point_sets(
+                    [source_view.model_dump(mode="json")]
+                )
+                if not control_point_sets:
+                    raise HTTPException(status_code=400, detail="Calibration view cannot be mapped")
+
+                await _raise_if_request_disconnected(request)
+                loop = asyncio.get_running_loop()
+                calibration_future = loop.run_in_executor(
+                    visual_calibration_executor,
+                    propagate_visual_calibration,
+                    source_bytes,
+                    target_bytes,
+                    control_point_sets[0],
+                )
+
+                def _release_calibration_slot(_future: Any) -> None:
+                    try:
+                        visual_calibration_slots.put_nowait(calibration_slot)
+                    except asyncio.QueueFull:
+                        pass
+
+                calibration_future.add_done_callback(_release_calibration_slot)
+                release_slot_directly = False
+                try:
+                    result = await asyncio.shield(calibration_future)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                except RuntimeError as exc:
+                    raise HTTPException(status_code=503, detail=str(exc)) from exc
+            finally:
+                if release_slot_directly:
+                    visual_calibration_slots.put_nowait(calibration_slot)
+
+            if result.reason in {"invalid_source_image", "invalid_target_image"}:
+                raise HTTPException(status_code=400, detail="Calibration image is invalid")
+            return CameraVisualCalibrationResponse.model_validate(result.as_dict())
+
         @app.get(
             "/api/cameras/cameras/{camera_id}/ptz/presets", response_model=CameraPtzPresetsResponse
         )
@@ -3400,34 +4083,82 @@ class CamerasExtension(BaseExtension):
             camera_id: str,
             body: CameraPtzSetPresetRequest,
         ) -> CameraPtzPreset:
-            _require_auth(
-                request,
-                action="core:camera:control",
-                resource_type="core:camera",
-                resource_selector=str(camera_id or "").strip(),
-            )
+            _require_auth(request, action="core:settings:write")
             cid = str(camera_id or "").strip()
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
-            source_id = str(body.source_id or "").strip()
-            if not source_id:
-                raise HTTPException(status_code=400, detail="source_id is required")
+            header_idempotency_key = str(request.headers.get("idempotency-key") or "").strip()
+            body_idempotency_key = str(body.idempotency_key or "").strip()
+            if (
+                header_idempotency_key
+                and body_idempotency_key
+                and header_idempotency_key != body_idempotency_key
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Idempotency-Key header and body value must match",
+                )
+            idempotency_key = header_idempotency_key or body_idempotency_key
+            automatic_idempotency_key = not idempotency_key
+            if not idempotency_key:
+                automatic_material = (
+                    f"{cid}\0{str(body.source_id or '').strip()}\0{str(body.name or '').strip()}"
+                ).encode("utf-8")
+                idempotency_key = f"auto-{hashlib.sha256(automatic_material).hexdigest()}"
+            if len(idempotency_key) > 200:
+                raise HTTPException(status_code=400, detail="Idempotency-Key is too long")
+
             services = _services(request)
             try:
                 result = await services.call(
                     "cameras.ptz.set_preset",
                     camera_id=cid,
-                    camera_source_id=source_id,
+                    camera_source_id=str(body.source_id or "").strip() or None,
                     preset_name=str(body.name or "").strip(),
-                    idempotency_key=str(body.idempotency_key or "").strip(),
+                    idempotency_key=idempotency_key,
+                    automatic_idempotency_key=automatic_idempotency_key,
                 )
             except KeyError:
                 raise HTTPException(
                     status_code=503, detail="Camera PTZ controls are not available"
                 ) from None
+
             if not isinstance(result, dict):
                 raise HTTPException(status_code=502, detail="ONVIF returned an invalid preset")
             return CameraPtzPreset.model_validate(result)
+
+        @app.delete(
+            "/api/cameras/cameras/{camera_id}/ptz/presets/{preset_token}",
+            response_model=CameraPtzActionResponse,
+        )
+        async def camera_ptz_remove_preset(
+            request: Request,
+            camera_id: str,
+            preset_token: str,
+            source_id: str = "",
+        ) -> CameraPtzActionResponse:
+            _require_auth(request, action="core:settings:write")
+            cid = str(camera_id or "").strip()
+            token = str(preset_token or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+            if not token:
+                raise HTTPException(status_code=400, detail="preset_token is required")
+
+            services = _services(request)
+            try:
+                await services.call(
+                    "cameras.ptz.remove_preset",
+                    camera_id=cid,
+                    camera_source_id=str(source_id or "").strip() or None,
+                    preset_token=token,
+                )
+            except KeyError:
+                raise HTTPException(
+                    status_code=503, detail="Camera PTZ controls are not available"
+                ) from None
+
+            return CameraPtzActionResponse(ok=True)
 
         @app.post(
             "/api/cameras/cameras/{camera_id}/ptz/goto-preset",
@@ -3621,6 +4352,7 @@ class CamerasExtension(BaseExtension):
                 "X-Toposync-Snapshot-Source": result.source,
                 "X-Toposync-Snapshot-Transport": result.transport,
                 "X-Toposync-Snapshot-Mode": result.capture_mode,
+                "X-Toposync-Snapshot-Capture-Evidence": "unverified",
             }
             snapshot_cache[cache_key] = SnapshotCacheEntry(
                 blob=result.blob,
@@ -3632,8 +4364,14 @@ class CamerasExtension(BaseExtension):
 
         @app.get("/api/cameras/cameras/{camera_id}/snapshot")
         async def camera_snapshot(
-            request: Request, camera_id: str, source_id: str = ""
+            request: Request,
+            camera_id: str,
+            source_id: str = "",
+            fresh: bool = False,
+            freshness: Literal["physical", "decoder"] = "physical",
         ) -> Response:
+            requested_at = time.time()
+            capture_fence_monotonic = time.monotonic()
             cid = camera_id.strip()
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
@@ -3655,7 +4393,7 @@ class CamerasExtension(BaseExtension):
             lock = _get_lock(cache_key)
             async with lock:
                 now = time.time()
-                cached = snapshot_cache.get(cache_key)
+                cached = None if fresh else snapshot_cache.get(cache_key)
                 if cached and (now - cached.created_ts) <= snapshot_cache_ttl_s:
                     return Response(
                         content=cached.blob, media_type="image/jpeg", headers=cached.headers
@@ -3669,10 +4407,28 @@ class CamerasExtension(BaseExtension):
                     source=source,
                 )
 
-                warm = await _capture_warm_camera_snapshot(
-                    cache_key=cache_key,
-                    resolved=resolved,
-                )
+                try:
+                    warm = await _capture_warm_camera_snapshot(
+                        cache_key=cache_key,
+                        resolved=resolved,
+                        min_frame_ts=requested_at if fresh else 0.0,
+                        minimum_distinct_frames=2 if fresh else 1,
+                        physical_capture_fence_monotonic=(
+                            capture_fence_monotonic if fresh and freshness == "physical" else None
+                        ),
+                    )
+                except SnapshotFreshnessUnverifiableError as exc:
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            "Physical camera capture freshness cannot be verified by the active "
+                            "decoder; visual calibration was not allowed"
+                        ),
+                        headers={
+                            "X-Toposync-Snapshot-Capture-Evidence": "unverified",
+                            "X-Toposync-Snapshot-Freshness": "unverifiable",
+                        },
+                    ) from exc
                 if warm is not None:
                     headers = {
                         "Cache-Control": "no-store",
@@ -3685,13 +4441,57 @@ class CamerasExtension(BaseExtension):
                         headers["X-Toposync-Snapshot-Frame-Age-Seconds"] = (
                             f"{float(warm.frame_age_seconds):.3f}"
                         )
+                    if warm.frame_ts > 0.0:
+                        headers["X-Toposync-Snapshot-Frame-Timestamp"] = (
+                            f"{float(warm.frame_ts):.6f}"
+                        )
+                    if warm.source_received_at > 0.0:
+                        headers["X-Toposync-Snapshot-Source-Received-Timestamp"] = (
+                            f"{float(warm.source_received_at):.6f}"
+                        )
+                    if warm.source_received_monotonic > 0.0:
+                        headers["X-Toposync-Snapshot-Source-Received-Monotonic"] = (
+                            f"{float(warm.source_received_monotonic):.6f}"
+                        )
+                    if warm.capture_generation > 0:
+                        headers["X-Toposync-Snapshot-Frame-Generation"] = str(
+                            int(warm.capture_generation)
+                        )
+                    if warm.capture_sequence > 0:
+                        headers["X-Toposync-Snapshot-Frame-Sequence"] = str(
+                            int(warm.capture_sequence)
+                        )
+                    if warm.physical_capture_verified and warm.captured_at > 0.0:
+                        headers["X-Toposync-Snapshot-Captured-Timestamp"] = (
+                            f"{float(warm.captured_at):.6f}"
+                        )
+                        headers["X-Toposync-Snapshot-Capture-Evidence"] = "verified"
+                        if fresh:
+                            headers["X-Toposync-Snapshot-Freshness"] = "verified"
+                    else:
+                        headers["X-Toposync-Snapshot-Capture-Evidence"] = "unverified"
+                        if fresh and freshness == "decoder":
+                            # Decoder freshness proves new local output only. PTZ callers
+                            # must still establish causality from a visual transition.
+                            headers["X-Toposync-Snapshot-Freshness"] = "decoder"
+                    cache_headers = dict(headers)
+                    # Freshness is relative to this request's monotonic fence.
+                    # Keep reusable capture evidence, never cache that verdict.
+                    cache_headers.pop("X-Toposync-Snapshot-Freshness", None)
                     snapshot_cache[cache_key] = SnapshotCacheEntry(
                         blob=warm.blob,
                         created_ts=time.time(),
-                        frame_ts=time.time(),
-                        headers=headers,
+                        frame_ts=warm.frame_ts,
+                        headers=cache_headers,
                     )
                     return Response(content=warm.blob, media_type="image/jpeg", headers=headers)
+
+                if fresh:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Fresh camera frame is temporarily unavailable",
+                        headers={"Retry-After": "1"},
+                    )
 
                 async with snapshot_ffmpeg_sema:
                     result = await _ffmpeg_snapshot(
@@ -3707,6 +4507,7 @@ class CamerasExtension(BaseExtension):
                     "X-Toposync-Snapshot-Source": result.source,
                     "X-Toposync-Snapshot-Transport": result.transport,
                     "X-Toposync-Snapshot-Mode": result.capture_mode,
+                    "X-Toposync-Snapshot-Capture-Evidence": "unverified",
                 }
                 snapshot_cache[cache_key] = SnapshotCacheEntry(
                     blob=result.blob,
@@ -4509,7 +5310,7 @@ class CamerasExtension(BaseExtension):
             try:
                 notification_priority = (
                     body.notification_priority
-                    if preset == "person_vehicle_interaction"
+                    if preset == "person_vehicle_stopped"
                     else body.notification_priority
                     or ("high" if preset == "vehicle_stopped" else "medium")
                 )

@@ -226,12 +226,61 @@ export type CameraProjectionBoundaryRefinement = {
   points: CameraProjectionBoundaryPoint[];
 };
 
+export type CameraVisualPoseSignature = {
+  algorithm: "orb_hamming_v1";
+  keypoint_count: number;
+  keypoints_base64: string;
+  descriptors_base64: string;
+  original_width: number;
+  original_height: number;
+  digest_sha256: string;
+};
+
 export type CameraProjectionModel = {
   type: "image_quad_on_world";
   image_region: CameraImageRegion;
   world_quad: CameraProjectionWorldQuad;
   refinement?: CameraProjectionRefinement | null;
   boundary_refinement?: CameraProjectionBoundaryRefinement | null;
+  visual_pose_signature?: CameraVisualPoseSignature | null;
+};
+
+export type CameraVisualCalibrationProjectionModel = CameraProjectionModel & {
+  visual_pose_signature: CameraVisualPoseSignature;
+};
+
+export type CameraVisualCalibrationQuality = {
+  method: string;
+  source_width: number;
+  source_height: number;
+  target_width: number;
+  target_height: number;
+  source_keypoints: number;
+  target_keypoints: number;
+  candidate_matches: number;
+  inliers: number;
+  inlier_ratio: number;
+  competing_inliers: number;
+  ambiguity_ratio: number;
+  symmetry_inliers: number;
+  symmetry_coverage_ratio: number;
+  median_reprojection_error_px: number | null;
+  p95_reprojection_error_px: number | null;
+  source_coverage_ratio: number;
+  target_coverage_ratio: number;
+  overlap_ratio: number;
+  median_displacement_ratio: number;
+  refinement_points: number;
+  discarded_refinement_points: number;
+  duration_ms: number;
+};
+
+export type CameraVisualCalibrationResult = {
+  accepted: boolean;
+  reason: string | null;
+  projection_model: CameraVisualCalibrationProjectionModel | null;
+  source_visual_pose_signature: CameraVisualPoseSignature | null;
+  quality: CameraVisualCalibrationQuality;
 };
 
 export type CameraCalibratedView = {
@@ -259,6 +308,8 @@ export type PanTiltZoomState = {
   error?: string | null;
   source?: string | null;
   confidence?: number | null;
+  preset_token?: string | null;
+  preset_name?: string | null;
 };
 
 export type CameraPtzPreset = {

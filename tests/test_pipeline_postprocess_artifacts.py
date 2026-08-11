@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import struct
 from collections import deque
 from typing import Any
 
@@ -23,6 +26,7 @@ from toposync.runtime.pipelines import (
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
+from toposync_ext_cameras.processing import mapping as camera_mapping
 from toposync_ext_cameras.processing.mapping import ControlPointBoundaryRefinementPoint, ControlPointMapper, ControlPointPair
 from toposync_ext_cameras.pipelines.postprocess import (
     CameraMappingConfig,
@@ -152,6 +156,789 @@ def test_camera_mapping_annotates_detection_world_anchors_before_tracking() -> N
         assert detections[0]["world_anchor"]["z"] == pytest.approx(5.0, abs=1e-6)
         assert detections[1]["world_anchor"]["x"] == pytest.approx(7.0, abs=1e-6)
         assert detections[1]["world_anchor"]["z"] == pytest.approx(8.0, abs=1e-6)
+
+    asyncio.run(scenario())
+
+
+def _calibrated_view_with_stream_scope(
+    *,
+    compatible_source_ids: list[str],
+    compatible_roles: list[str],
+    view_id: str = "scoped-view",
+    world_offset: float = 0.0,
+    pose_reference: dict[str, Any] | None = None,
+    visual_pose_signature: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": view_id,
+        "label": "Scoped view",
+        "pose_reference": pose_reference,
+        "stream_scope": {
+            "compatible_source_ids": compatible_source_ids,
+            "compatible_roles": compatible_roles,
+        },
+        "projection_model": {
+            "type": "image_quad_on_world",
+            "image_region": {
+                "top_left": {"x": 0.0, "y": 0.0},
+                "bottom_right": {"x": 1.0, "y": 1.0},
+            },
+            "world_quad": {
+                "top_left": {"x": world_offset, "z": world_offset},
+                "top_right": {"x": world_offset + 10.0, "z": world_offset},
+                "bottom_right": {"x": world_offset + 10.0, "z": world_offset + 10.0},
+                "bottom_left": {"x": world_offset, "z": world_offset + 10.0},
+            },
+            **(
+                {"visual_pose_signature": visual_pose_signature}
+                if visual_pose_signature is not None
+                else {}
+            ),
+        },
+    }
+
+
+def _synthetic_visual_pose_frame(seed: int) -> np.ndarray:
+    import cv2
+
+    rng = np.random.default_rng(seed)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame[:] = (18, 24, 31)
+    for index in range(90):
+        center = (int(rng.integers(25, 615)), int(rng.integers(25, 455)))
+        radius = int(rng.integers(3, 15))
+        color = tuple(int(value) for value in rng.integers(70, 256, size=3))
+        cv2.circle(frame, center, radius, color, 1 + index % 3, cv2.LINE_AA)
+    for index in range(25):
+        start = (int(rng.integers(0, 640)), int(rng.integers(0, 480)))
+        end = (int(rng.integers(0, 640)), int(rng.integers(0, 480)))
+        cv2.line(frame, start, end, (220, 220, 220), 1, cv2.LINE_AA)
+    cv2.putText(
+        frame,
+        f"TOPOSYNC {seed}",
+        (55, 245),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.4,
+        (255, 255, 255),
+        3,
+        cv2.LINE_AA,
+    )
+    return frame
+
+
+def _orb_visual_pose_signature(frame: np.ndarray) -> dict[str, Any]:
+    import cv2
+
+    height, width = frame.shape[:2]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    orb = cv2.ORB_create(nfeatures=320)
+    keypoints, descriptors = orb.detectAndCompute(gray, None)
+    assert descriptors is not None
+    ordered = sorted(
+        range(len(keypoints)),
+        key=lambda index: (
+            -float(keypoints[index].response),
+            float(keypoints[index].pt[1]),
+            float(keypoints[index].pt[0]),
+            float(keypoints[index].size),
+            float(keypoints[index].angle),
+            int(keypoints[index].octave),
+            int(keypoints[index].class_id),
+        ),
+    )[:320]
+    keypoint_values = np.asarray(
+        [
+            (
+                round(max(0.0, min(1.0, keypoints[index].pt[0] / (width - 1))) * 65535.0),
+                round(max(0.0, min(1.0, keypoints[index].pt[1] / (height - 1))) * 65535.0),
+            )
+            for index in ordered
+        ],
+        dtype="<u2",
+    )
+    keypoint_bytes = keypoint_values.tobytes()
+    descriptor_bytes = np.ascontiguousarray(descriptors[ordered], dtype=np.uint8).tobytes()
+    count = len(ordered)
+    digest = hashlib.sha256(
+        b"orb_hamming_v1\0"
+        + struct.pack("<III", width, height, count)
+        + keypoint_bytes
+        + descriptor_bytes
+    ).hexdigest()
+    return {
+        "algorithm": "orb_hamming_v1",
+        "keypoint_count": count,
+        "keypoints_base64": base64.b64encode(keypoint_bytes).decode("ascii"),
+        "descriptors_base64": base64.b64encode(descriptor_bytes).decode("ascii"),
+        "original_width": width,
+        "original_height": height,
+        "digest_sha256": digest,
+    }
+
+
+@pytest.mark.parametrize("encoded_size", [(50001, 2), (10000, 5001)])
+def test_visual_pose_frame_rejects_oversized_encoded_header_before_decode(
+    monkeypatch: pytest.MonkeyPatch,
+    encoded_size: tuple[int, int],
+) -> None:
+    import cv2
+    from PIL import Image
+
+    class _ImageHeader:
+        size = encoded_size
+
+        def __enter__(self) -> "_ImageHeader":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    monkeypatch.setattr(Image, "open", lambda _buffer: _ImageHeader())
+
+    def _unexpected_decode(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("cv2.imdecode must not run for an oversized encoded image")
+
+    monkeypatch.setattr(cv2, "imdecode", _unexpected_decode)
+
+    assert camera_mapping._extract_orb_visual_pose_features(b"synthetic-header") is None
+
+
+def test_visual_pose_frame_rejects_oversized_array_before_conversion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cv2
+
+    base = np.zeros((1,), dtype=np.float32)
+    oversized = np.lib.stride_tricks.as_strided(
+        base,
+        shape=(8000, 7000, 3),
+        strides=(0, 0, 0),
+        writeable=False,
+    )
+
+    def _unexpected_allocation(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("pixel conversion must not run for an oversized array")
+
+    monkeypatch.setattr(cv2, "cvtColor", _unexpected_allocation)
+    monkeypatch.setattr(np, "clip", _unexpected_allocation)
+
+    assert camera_mapping._extract_orb_visual_pose_features(oversized) is None
+
+
+def test_visual_pose_signature_decoder_requires_minimum_matchable_keypoints() -> None:
+    keypoint_count = 15
+    keypoint_bytes = bytes(keypoint_count * 4)
+    descriptor_bytes = bytes(keypoint_count * 32)
+    width = 640
+    height = 480
+    digest = hashlib.sha256(
+        b"orb_hamming_v1\0"
+        + struct.pack("<III", width, height, keypoint_count)
+        + keypoint_bytes
+        + descriptor_bytes
+    ).hexdigest()
+    signature = camera_mapping.VisualPoseSignature(
+        algorithm="orb_hamming_v1",
+        keypoint_count=keypoint_count,
+        keypoints_base64=base64.b64encode(keypoint_bytes).decode("ascii"),
+        descriptors_base64=base64.b64encode(descriptor_bytes).decode("ascii"),
+        original_width=width,
+        original_height=height,
+        digest_sha256=digest,
+    )
+
+    assert camera_mapping._decode_visual_pose_signature(signature) is None
+
+
+def test_camera_mapping_runtime_applies_calibrated_view_for_compatible_source_scope() -> None:
+    async def scenario() -> None:
+        runtime = CameraMappingRuntime(
+            {
+                "calibrated_views": [
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["secondary"],
+                        compatible_roles=["sub"],
+                    )
+                ]
+            },
+            PipelineRuntimeDependencies(),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "source": {"source_id": "secondary", "role": "sub"},
+                "image_uv": {"u": 0.5, "v": 0.5},
+            },
+        )
+
+        outputs = await runtime.process_packet(packet, None)
+        payload = outputs[0].payload
+
+        assert payload["world"] == pytest.approx({"x": 5.0, "z": 5.0}, abs=1e-6)
+        assert payload["mapping"]["calibrated_view_id"] == "scoped-view"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "source_payload",
+    [
+        pytest.param({"source": {"source_id": "secondary", "role": "main"}}, id="nested-source-id"),
+        pytest.param({"camera_source_id": "secondary"}, id="camera-source-id"),
+        pytest.param({"source": {"source_id": "primary", "role": "zoom"}}, id="source-role"),
+    ],
+)
+def test_camera_mapping_runtime_skips_calibrated_view_for_incompatible_source_scope(
+    source_payload: dict[str, Any],
+) -> None:
+    async def scenario() -> None:
+        runtime = CameraMappingRuntime(
+            {
+                "calibrated_views": [
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["primary"],
+                        compatible_roles=["main"],
+                    )
+                ]
+            },
+            PipelineRuntimeDependencies(),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "image_uv": {"u": 0.5, "v": 0.5},
+                **source_payload,
+            },
+        )
+
+        outputs = await runtime.process_packet(packet, None)
+        payload = outputs[0].payload
+
+        assert "world" not in payload
+        assert "world_anchor" not in payload
+        assert "mapping" not in payload
+
+    asyncio.run(scenario())
+
+
+def test_camera_mapping_runtime_skips_scoped_view_when_source_identity_is_missing() -> None:
+    async def scenario() -> None:
+        runtime = CameraMappingRuntime(
+            {
+                "calibrated_views": [
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["primary"],
+                        compatible_roles=["main"],
+                    )
+                ]
+            },
+            PipelineRuntimeDependencies(),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "image_uv": {"u": 0.5, "v": 0.5},
+            },
+        )
+
+        outputs = await runtime.process_packet(packet, None)
+
+        assert "world" not in outputs[0].payload
+        assert "mapping" not in outputs[0].payload
+
+    asyncio.run(scenario())
+
+
+def test_camera_mapping_runtime_skips_role_scoped_view_when_source_role_is_missing() -> None:
+    async def scenario() -> None:
+        runtime = CameraMappingRuntime(
+            {
+                "calibrated_views": [
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=[],
+                        compatible_roles=["main"],
+                    )
+                ]
+            },
+            PipelineRuntimeDependencies(),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "camera_source_id": "secondary",
+                "image_uv": {"u": 0.5, "v": 0.5},
+            },
+        )
+
+        outputs = await runtime.process_packet(packet, None)
+
+        assert "world" not in outputs[0].payload
+        assert "mapping" not in outputs[0].payload
+
+    asyncio.run(scenario())
+
+
+def test_camera_mapping_runtime_selects_preset_only_view() -> None:
+    async def scenario() -> None:
+        frame_a = _synthetic_visual_pose_frame(41)
+        frame_b = _synthetic_visual_pose_frame(73)
+        runtime = CameraMappingRuntime(
+            {
+                "calibrated_views": [
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="preset-a",
+                        pose_reference={"preset_token": "A", "preset_name": "A"},
+                        visual_pose_signature=_orb_visual_pose_signature(frame_a),
+                    ),
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="preset-b",
+                        world_offset=100.0,
+                        pose_reference={"preset_token": "B", "preset_name": "B"},
+                        visual_pose_signature=_orb_visual_pose_signature(frame_b),
+                    ),
+                ]
+            },
+            PipelineRuntimeDependencies(),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "source": {"source_id": "wide_main", "role": "main"},
+                "image_uv": {"u": 0.5, "v": 0.5},
+                "pan_tilt_zoom_state": {
+                    "move_status": "IDLE",
+                    "preset_token": "B",
+                    "preset_name": "B",
+                },
+            },
+            artifacts=_main_frame_artifacts(frame_b),
+        )
+
+        outputs = await runtime.process_packet(packet, None)
+        payload = outputs[0].payload
+
+        assert payload["world"] == pytest.approx({"x": 105.0, "z": 105.0}, abs=1e-4)
+        assert payload["mapping"]["calibrated_view_id"] == "preset-b"
+        assert payload["mapping"]["pose_axes_used"] == ["visual"]
+        assert payload["mapping"]["pose_evidence"] == "visual_signature"
+
+    asyncio.run(scenario())
+
+
+def test_camera_mapping_runtime_fetches_active_preset_for_exact_source() -> None:
+    async def scenario() -> None:
+        frame_a = _synthetic_visual_pose_frame(41)
+        frame_b = _synthetic_visual_pose_frame(73)
+        services = ServiceRegistry()
+        calls: list[tuple[str, str | None]] = []
+
+        async def get_status(
+            *, camera_id: str, camera_source_id: str | None = None
+        ) -> dict[str, Any]:
+            calls.append((camera_id, camera_source_id))
+            return {
+                "move_status": "IDLE",
+                "preset_token": "B",
+                "preset_name": "B",
+            }
+
+        services.register("cameras.ptz.get_status", get_status)
+        runtime = CameraMappingRuntime(
+            {
+                "calibrated_views": [
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="preset-a",
+                        pose_reference={"preset_token": "A"},
+                        visual_pose_signature=_orb_visual_pose_signature(frame_a),
+                    ),
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="preset-b",
+                        world_offset=100.0,
+                        pose_reference={"preset_token": "B"},
+                        visual_pose_signature=_orb_visual_pose_signature(frame_b),
+                    ),
+                ]
+            },
+            PipelineRuntimeDependencies(services=services),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "source": {"source_id": "wide_main", "role": "main"},
+                "image_uv": {"u": 0.5, "v": 0.5},
+            },
+            artifacts=_main_frame_artifacts(frame_b),
+        )
+
+        outputs = await runtime.process_packet(packet, None)
+        payload = outputs[0].payload
+
+        assert calls == [("camera-main", "wide_main")]
+        assert payload["mapping"]["calibrated_view_id"] == "preset-b"
+        assert payload["pan_tilt_zoom_state"]["preset_token"] == "B"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "pose_state",
+    [
+        pytest.param(None, id="restart-without-token"),
+        pytest.param(
+            {"move_status": "IDLE", "preset_token": "A"},
+            id="stale-command-history-token",
+        ),
+    ],
+)
+def test_camera_mapping_runtime_recovers_preset_only_view_from_visual_pose(
+    pose_state: dict[str, Any] | None,
+) -> None:
+    async def scenario() -> None:
+        frame_a = _synthetic_visual_pose_frame(41)
+        frame_b = _synthetic_visual_pose_frame(73)
+        runtime = CameraMappingRuntime(
+            {
+                "ptz_state_fetch": {"enabled": False},
+                "calibrated_views": [
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="preset-a",
+                        pose_reference={"preset_token": "A"},
+                        visual_pose_signature=_orb_visual_pose_signature(frame_a),
+                    ),
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="preset-b",
+                        world_offset=100.0,
+                        pose_reference={"preset_token": "B"},
+                        visual_pose_signature=_orb_visual_pose_signature(frame_b),
+                    ),
+                ],
+            },
+            PipelineRuntimeDependencies(),
+        )
+        payload: dict[str, Any] = {
+            "camera_id": "camera-main",
+            "source": {"source_id": "wide_main", "role": "main"},
+            "image_uv": {"u": 0.5, "v": 0.5},
+        }
+        if pose_state is not None:
+            payload["pan_tilt_zoom_state"] = pose_state
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload=payload,
+            artifacts=_main_frame_artifacts(frame_b),
+        )
+
+        output = (await runtime.process_packet(packet, None))[0]
+
+        assert output.payload["mapping"]["calibrated_view_id"] == "preset-b"
+        assert output.payload["mapping"]["pose_evidence"] == "visual_signature"
+        assert output.payload["world"] == pytest.approx({"x": 105.0, "z": 105.0})
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "evidence_mode",
+    [
+        "missing-frame",
+        "missing-signature",
+        "missing-source",
+        "shifted-frame",
+        "ambiguous",
+        "moving",
+    ],
+)
+def test_camera_mapping_runtime_abstains_without_unique_visual_pose(evidence_mode: str) -> None:
+    async def scenario() -> None:
+        frame_a = _synthetic_visual_pose_frame(41)
+        frame_b = _synthetic_visual_pose_frame(73)
+        signature_a = _orb_visual_pose_signature(frame_a)
+        signature_b = _orb_visual_pose_signature(frame_b)
+        if evidence_mode == "ambiguous":
+            signature_a = signature_b
+        runtime = CameraMappingRuntime(
+            {
+                "ptz_state_fetch": {"enabled": False},
+                "calibrated_views": [
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="preset-a",
+                        pose_reference={"preset_token": "A"},
+                        visual_pose_signature=signature_a,
+                    ),
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="preset-b",
+                        world_offset=100.0,
+                        pose_reference={"preset_token": "B"},
+                        visual_pose_signature=(
+                            None if evidence_mode == "missing-signature" else signature_b
+                        ),
+                    ),
+                ],
+            },
+            PipelineRuntimeDependencies(),
+        )
+        artifacts: dict[str, Artifact] = {}
+        if evidence_mode == "shifted-frame":
+            shifted = np.roll(frame_b, shift=80, axis=1)
+            artifacts = _main_frame_artifacts(shifted)
+        elif evidence_mode != "missing-frame":
+            artifacts = _main_frame_artifacts(frame_b)
+        source_payload = (
+            {}
+            if evidence_mode == "missing-source"
+            else {"source": {"source_id": "wide_main", "role": "main"}}
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                **source_payload,
+                "image_uv": {"u": 0.5, "v": 0.5},
+                "pan_tilt_zoom_state": {
+                    "move_status": "MOVING" if evidence_mode == "moving" else "IDLE",
+                    "preset_token": "B",
+                },
+            },
+            artifacts=artifacts,
+        )
+
+        output = (await runtime.process_packet(packet, None))[0]
+
+        assert "mapping" not in output.payload
+        assert "world" not in output.payload
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("digest_mode", ["missing", "mismatch"])
+def test_camera_mapping_config_rejects_invalid_visual_pose_signature_digest(
+    digest_mode: str,
+) -> None:
+    frame = _synthetic_visual_pose_frame(73)
+    signature = _orb_visual_pose_signature(frame)
+    if digest_mode == "missing":
+        signature.pop("digest_sha256")
+    else:
+        signature["digest_sha256"] = "0" * 64
+    view = _calibrated_view_with_stream_scope(
+        compatible_source_ids=["wide_main"],
+        compatible_roles=["main"],
+        view_id="preset-b",
+        pose_reference={"preset_token": "B"},
+        visual_pose_signature=signature,
+    )
+
+    with pytest.raises(ValueError, match="digest"):
+        CameraMappingConfig.model_validate({"calibrated_views": [view]})
+
+
+def test_camera_mapping_runtime_keeps_numeric_pose_selection_without_frame() -> None:
+    async def scenario() -> None:
+        runtime = CameraMappingRuntime(
+            {
+                "calibrated_views": [
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="numeric-a",
+                        pose_reference={"pan": 0.1, "tilt": 0.2, "zoom": 0.3},
+                    ),
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="numeric-b",
+                        world_offset=100.0,
+                        pose_reference={"pan": 0.8, "tilt": 0.2, "zoom": 0.3},
+                    ),
+                ]
+            },
+            PipelineRuntimeDependencies(),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "source": {"source_id": "wide_main", "role": "main"},
+                "image_uv": {"u": 0.5, "v": 0.5},
+                "pan_tilt_zoom_state": {
+                    "pan": 0.8,
+                    "move_status": "IDLE",
+                    "preset_token": "stale-a",
+                },
+            },
+        )
+
+        output = (await runtime.process_packet(packet, None))[0]
+
+        assert output.payload["mapping"]["calibrated_view_id"] == "numeric-b"
+        assert output.payload["mapping"]["pose_evidence"] == "numeric_pose"
+        assert output.payload["mapping"]["pose_axes_used"] == ["pan"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("include_frame", [False, True])
+def test_camera_mapping_runtime_requires_visual_proof_for_ambiguous_partial_numeric_pose(
+    include_frame: bool,
+) -> None:
+    async def scenario() -> None:
+        frame_a = _synthetic_visual_pose_frame(41)
+        frame_b = _synthetic_visual_pose_frame(73)
+        runtime = CameraMappingRuntime(
+            {
+                "ptz_state_fetch": {"enabled": False},
+                "calibrated_views": [
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="numeric-a",
+                        pose_reference={
+                            "pan": 0.25,
+                            "tilt": -0.5,
+                            "preset_token": "A",
+                        },
+                        visual_pose_signature=_orb_visual_pose_signature(frame_a),
+                    ),
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="numeric-b",
+                        world_offset=100.0,
+                        pose_reference={
+                            "pan": 0.25,
+                            "tilt": 0.5,
+                            "preset_token": "B",
+                        },
+                        visual_pose_signature=_orb_visual_pose_signature(frame_b),
+                    ),
+                ],
+            },
+            PipelineRuntimeDependencies(),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "source": {"source_id": "wide_main", "role": "main"},
+                "image_uv": {"u": 0.5, "v": 0.5},
+                "pan_tilt_zoom_state": {
+                    "pan": 0.25,
+                    "move_status": "IDLE",
+                    "preset_token": "A",
+                },
+            },
+            artifacts=_main_frame_artifacts(frame_b) if include_frame else {},
+        )
+
+        output = (await runtime.process_packet(packet, None))[0]
+
+        if include_frame:
+            assert output.payload["mapping"]["calibrated_view_id"] == "numeric-b"
+            assert output.payload["mapping"]["pose_evidence"] == "visual_signature"
+            assert output.payload["world"] == pytest.approx(
+                {"x": 105.0, "z": 105.0},
+                abs=1e-4,
+            )
+        else:
+            assert "mapping" not in output.payload
+            assert "world" not in output.payload
+
+    asyncio.run(scenario())
+
+
+def test_camera_mapping_runtime_aligns_current_frame_point_before_world_projection() -> None:
+    async def scenario() -> None:
+        import cv2
+
+        reference_frame = _synthetic_visual_pose_frame(73)
+        height, width = reference_frame.shape[:2]
+        translation_x = 8.0
+        translation_y = -4.0
+        current_frame = cv2.warpAffine(
+            reference_frame,
+            np.asarray(
+                [[1.0, 0.0, translation_x], [0.0, 1.0, translation_y]],
+                dtype=np.float32,
+            ),
+            (width, height),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT,
+        )
+        reference_u = 0.42
+        reference_v = 0.56
+        current_u = reference_u + translation_x / float(width - 1)
+        current_v = reference_v + translation_y / float(height - 1)
+        runtime = CameraMappingRuntime(
+            {
+                "ptz_state_fetch": {"enabled": False},
+                "calibrated_views": [
+                    _calibrated_view_with_stream_scope(
+                        compatible_source_ids=["wide_main"],
+                        compatible_roles=["main"],
+                        view_id="preset-b",
+                        pose_reference={"preset_token": "B"},
+                        visual_pose_signature=_orb_visual_pose_signature(reference_frame),
+                    )
+                ],
+            },
+            PipelineRuntimeDependencies(),
+        )
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "camera_id": "camera-main",
+                "source": {"source_id": "wide_main", "role": "main"},
+                "image_uv": {"u": current_u, "v": current_v},
+                "vision": {
+                    "detections": [
+                        {
+                            "label": "edge",
+                            "bbox01": [0.0, 0.2, 0.01, 0.5],
+                        }
+                    ]
+                },
+                "pan_tilt_zoom_state": {
+                    "move_status": "IDLE",
+                    "preset_token": "B",
+                },
+            },
+            artifacts=_main_frame_artifacts(current_frame),
+        )
+
+        output = (await runtime.process_packet(packet, None))[0]
+        mapping = output.payload["mapping"]
+
+        assert mapping["pose_evidence"] == "visual_signature"
+        assert float(mapping["aligned_u"]) == pytest.approx(reference_u, abs=0.003)
+        assert float(mapping["aligned_v"]) == pytest.approx(reference_v, abs=0.003)
+        assert output.payload["world"] == pytest.approx(
+            {"x": reference_u * 10.0, "z": reference_v * 10.0},
+            abs=0.03,
+        )
+        assert mapping["visual_alignment"]["p95_reprojection_error_px"] <= 6.0
+        assert "world_anchor" not in output.payload["vision"]["detections"][0]
 
     asyncio.run(scenario())
 
@@ -385,14 +1172,18 @@ def test_object_crop_reprojects_bbox_for_cropped_stream_frame() -> None:
         ]
 
         graph = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "uid": "graph_object_crop_stream_frame",
+            "revision": 1,
             "nodes": [
                 {
+                    "uid": "node_source",
                     "id": "source",
                     "operator": "test.sequence_source",
                     "config": {"stream_id": "camera:test"},
                 },
                 {
+                    "uid": "node_crop",
                     "id": "crop",
                     "operator": "vision.crop_objects",
                     "config": {
@@ -402,20 +1193,27 @@ def test_object_crop_reprojects_bbox_for_cropped_stream_frame() -> None:
                         "min_crop_size_px": 1,
                     },
                 },
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+                {
+                    "uid": "node_sink",
+                    "id": "sink",
+                    "operator": "test.collect_sink",
+                    "config": {"sink_name": "sink"},
+                },
             ],
             "edges": [
                 {
+                    "uid": "edge_source_crop",
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "crop", "port": "in"},
-                    "maxsize": 4,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 4, "drop_policy": "drop_oldest"},
                 },
                 {
+                    "uid": "edge_crop_sink",
                     "from": {"node": "crop", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
-                    "maxsize": 8,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 8, "drop_policy": "drop_oldest"},
                 },
             ],
         }
@@ -476,14 +1274,18 @@ def test_object_crop_reprojects_bbox_for_perspective_warped_stream_frame() -> No
         ]
 
         graph = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "uid": "graph_object_crop_perspective_frame",
+            "revision": 1,
             "nodes": [
                 {
+                    "uid": "node_source",
                     "id": "source",
                     "operator": "test.sequence_source",
                     "config": {"stream_id": "camera:test"},
                 },
                 {
+                    "uid": "node_crop",
                     "id": "crop",
                     "operator": "vision.crop_objects",
                     "config": {
@@ -493,20 +1295,27 @@ def test_object_crop_reprojects_bbox_for_perspective_warped_stream_frame() -> No
                         "min_crop_size_px": 1,
                     },
                 },
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+                {
+                    "uid": "node_sink",
+                    "id": "sink",
+                    "operator": "test.collect_sink",
+                    "config": {"sink_name": "sink"},
+                },
             ],
             "edges": [
                 {
+                    "uid": "edge_source_crop",
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "crop", "port": "in"},
-                    "maxsize": 4,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 4, "drop_policy": "drop_oldest"},
                 },
                 {
+                    "uid": "edge_crop_sink",
                     "from": {"node": "crop", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
-                    "maxsize": 8,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 8, "drop_policy": "drop_oldest"},
                 },
             ],
         }
@@ -545,34 +1354,45 @@ def test_image_resize_downscales_selected_artifacts_in_place() -> None:
         ]
 
         graph = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "uid": "graph_image_resize_downscale",
+            "revision": 1,
             "nodes": [
                 {
+                    "uid": "node_source",
                     "id": "source",
                     "operator": "test.sequence_source",
                     "config": {"stream_id": "camera:test"},
                 },
                 {
+                    "uid": "node_resize",
                     "id": "resize",
                     "operator": "camera.image_resize",
                     "config": {
                         "max_edge_px": 50,
                     },
                 },
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+                {
+                    "uid": "node_sink",
+                    "id": "sink",
+                    "operator": "test.collect_sink",
+                    "config": {"sink_name": "sink"},
+                },
             ],
             "edges": [
                 {
+                    "uid": "edge_source_resize",
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "resize", "port": "in"},
-                    "maxsize": 8,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 8, "drop_policy": "drop_oldest"},
                 },
                 {
+                    "uid": "edge_resize_sink",
                     "from": {"node": "resize", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
-                    "maxsize": 8,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 8, "drop_policy": "drop_oldest"},
                 },
             ],
         }
@@ -634,14 +1454,18 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
             },
         ]
         graph = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "uid": "graph_mapping_area_velocity",
+            "revision": 1,
             "nodes": [
                 {
+                    "uid": "node_source",
                     "id": "source",
                     "operator": "test.sequence_source",
                     "config": {"stream_id": "camera:test"},
                 },
                 {
+                    "uid": "node_mapping",
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
                     "config": {
@@ -665,6 +1489,7 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                     },
                 },
                 {
+                    "uid": "node_area",
                     "id": "area",
                     "operator": "camera.area_restriction",
                     "config": {
@@ -683,6 +1508,7 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                     },
                 },
                 {
+                    "uid": "node_velocity",
                     "id": "velocity",
                     "operator": "camera.velocity_estimation",
                     "config": {
@@ -690,32 +1516,41 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                         "filter_mode": "annotate",
                     },
                 },
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+                {
+                    "uid": "node_sink",
+                    "id": "sink",
+                    "operator": "test.collect_sink",
+                    "config": {"sink_name": "sink"},
+                },
             ],
             "edges": [
                 {
+                    "uid": "edge_source_mapping",
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "mapping", "port": "in"},
-                    "maxsize": 8,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 8, "drop_policy": "drop_oldest"},
                 },
                 {
+                    "uid": "edge_mapping_area",
                     "from": {"node": "mapping", "port": "out"},
                     "to": {"node": "area", "port": "in"},
-                    "maxsize": 8,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 8, "drop_policy": "drop_oldest"},
                 },
                 {
+                    "uid": "edge_area_velocity",
                     "from": {"node": "area", "port": "out"},
                     "to": {"node": "velocity", "port": "in"},
-                    "maxsize": 8,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 8, "drop_policy": "drop_oldest"},
                 },
                 {
+                    "uid": "edge_velocity_sink",
                     "from": {"node": "velocity", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
-                    "maxsize": 8,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 8, "drop_policy": "drop_oldest"},
                 },
             ],
         }
@@ -773,14 +1608,18 @@ def test_velocity_stopped_now_drops_close_when_first_valid_world_sample_arrives_
             },
         ]
         graph = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "uid": "graph_velocity_close_only",
+            "revision": 1,
             "nodes": [
                 {
+                    "uid": "node_source",
                     "id": "source",
                     "operator": "test.sequence_source",
                     "config": {"stream_id": "camera:test"},
                 },
                 {
+                    "uid": "node_velocity",
                     "id": "velocity",
                     "operator": "camera.velocity_estimation",
                     "config": {
@@ -789,20 +1628,27 @@ def test_velocity_stopped_now_drops_close_when_first_valid_world_sample_arrives_
                         "stopped_speed_threshold": 0.07,
                     },
                 },
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+                {
+                    "uid": "node_sink",
+                    "id": "sink",
+                    "operator": "test.collect_sink",
+                    "config": {"sink_name": "sink"},
+                },
             ],
             "edges": [
                 {
+                    "uid": "edge_source_velocity",
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "velocity", "port": "in"},
-                    "maxsize": 8,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 8, "drop_policy": "drop_oldest"},
                 },
                 {
+                    "uid": "edge_velocity_sink",
                     "from": {"node": "velocity", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
-                    "maxsize": 8,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 8, "drop_policy": "drop_oldest"},
                 },
             ],
         }
@@ -836,14 +1682,18 @@ def test_mapping_selects_pose_bound_set_when_ptz_state_matches() -> None:
             }
         ]
         graph = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "uid": "graph_mapping_pose_payload",
+            "revision": 1,
             "nodes": [
                 {
+                    "uid": "node_source",
                     "id": "source",
                     "operator": "test.sequence_source",
                     "config": {"stream_id": "camera:test"},
                 },
                 {
+                    "uid": "node_mapping",
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
                     "config": {
@@ -888,20 +1738,27 @@ def test_mapping_selects_pose_bound_set_when_ptz_state_matches() -> None:
                         ]
                     },
                 },
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+                {
+                    "uid": "node_sink",
+                    "id": "sink",
+                    "operator": "test.collect_sink",
+                    "config": {"sink_name": "sink"},
+                },
             ],
             "edges": [
                 {
+                    "uid": "edge_source_mapping",
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "mapping", "port": "in"},
-                    "maxsize": 4,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 4, "drop_policy": "drop_oldest"},
                 },
                 {
+                    "uid": "edge_mapping_sink",
                     "from": {"node": "mapping", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
-                    "maxsize": 4,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 4, "drop_policy": "drop_oldest"},
                 },
             ],
         }
@@ -938,14 +1795,18 @@ def test_mapping_fetches_ptz_state_from_service_when_payload_missing() -> None:
             }
         ]
         graph = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "uid": "graph_mapping_fetch_pose_service",
+            "revision": 1,
             "nodes": [
                 {
+                    "uid": "node_source",
                     "id": "source",
                     "operator": "test.sequence_source",
                     "config": {"stream_id": "camera:test"},
                 },
                 {
+                    "uid": "node_mapping",
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
                     "config": {
@@ -990,20 +1851,27 @@ def test_mapping_fetches_ptz_state_from_service_when_payload_missing() -> None:
                         ]
                     },
                 },
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+                {
+                    "uid": "node_sink",
+                    "id": "sink",
+                    "operator": "test.collect_sink",
+                    "config": {"sink_name": "sink"},
+                },
             ],
             "edges": [
                 {
+                    "uid": "edge_source_mapping",
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "mapping", "port": "in"},
-                    "maxsize": 4,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 4, "drop_policy": "drop_oldest"},
                 },
                 {
+                    "uid": "edge_mapping_sink",
                     "from": {"node": "mapping", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
-                    "maxsize": 4,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 4, "drop_policy": "drop_oldest"},
                 },
             ],
         }
@@ -1059,14 +1927,18 @@ def test_mapping_caches_fetched_ptz_state_between_packets() -> None:
             },
         ]
         graph = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "uid": "graph_mapping_cached_pose_service",
+            "revision": 1,
             "nodes": [
                 {
+                    "uid": "node_source",
                     "id": "source",
                     "operator": "test.sequence_source",
                     "config": {"stream_id": "camera:test"},
                 },
                 {
+                    "uid": "node_mapping",
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
                     "config": {
@@ -1112,20 +1984,27 @@ def test_mapping_caches_fetched_ptz_state_between_packets() -> None:
                         ],
                     },
                 },
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+                {
+                    "uid": "node_sink",
+                    "id": "sink",
+                    "operator": "test.collect_sink",
+                    "config": {"sink_name": "sink"},
+                },
             ],
             "edges": [
                 {
+                    "uid": "edge_source_mapping",
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "mapping", "port": "in"},
-                    "maxsize": 4,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 4, "drop_policy": "drop_oldest"},
                 },
                 {
+                    "uid": "edge_mapping_sink",
                     "from": {"node": "mapping", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
-                    "maxsize": 4,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 4, "drop_policy": "drop_oldest"},
                 },
             ],
         }
@@ -1177,14 +2056,18 @@ def test_mapping_skips_when_ptz_state_reports_moving() -> None:
             }
         ]
         graph = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "uid": "graph_mapping_moving_pose",
+            "revision": 1,
             "nodes": [
                 {
+                    "uid": "node_source",
                     "id": "source",
                     "operator": "test.sequence_source",
                     "config": {"stream_id": "camera:test"},
                 },
                 {
+                    "uid": "node_mapping",
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
                     "config": {
@@ -1215,20 +2098,27 @@ def test_mapping_skips_when_ptz_state_reports_moving() -> None:
                         ]
                     },
                 },
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+                {
+                    "uid": "node_sink",
+                    "id": "sink",
+                    "operator": "test.collect_sink",
+                    "config": {"sink_name": "sink"},
+                },
             ],
             "edges": [
                 {
+                    "uid": "edge_source_mapping",
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "mapping", "port": "in"},
-                    "maxsize": 4,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 4, "drop_policy": "drop_oldest"},
                 },
                 {
+                    "uid": "edge_mapping_sink",
                     "from": {"node": "mapping", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
-                    "maxsize": 4,
-                    "drop_policy": "drop_oldest",
+                    "traffic": {"modality": "video.frame", "semantic_class": "frame"},
+                    "queue": {"max_items": 4, "drop_policy": "drop_oldest"},
                 },
             ],
         }

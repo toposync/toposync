@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "webpack serve --mode development",
     "test:main2d": "rm -rf .test-dist && tsc -p tsconfig.main2d-test.json && node --test .test-dist/ui/main2d/shared.test.js && rm -rf .test-dist",
-    "test:runtime-graph-projection": "rm -rf .test-dist && tsc -p tsconfig.runtime-graph-projection-test.json && node --test .test-dist/ui/screens/pipelines/topology/runtimeGraphProjection.test.js && rm -rf .test-dist",
+    "test:runtime-graph-projection": "rm -rf .test-dist && tsc -p tsconfig.runtime-graph-projection-test.json && node --test .test-dist/ui/screens/pipelines/topology/runtimeGraphProjection.test.js .test-dist/ui/screens/pipelines/topology/topologyLabels.test.js && rm -rf .test-dist",
     "typecheck": "tsc -p tsconfig.json",
     "build": "npm run typecheck && webpack --mode production"
   },

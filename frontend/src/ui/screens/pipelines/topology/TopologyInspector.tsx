@@ -8,6 +8,13 @@ import { localizePipelineAlert } from "../utils";
 import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../types";
 import { OperatorConfigPanel } from "../editor/panels/OperatorConfigPanel";
 import type { TopologyEdgePolicyPatch } from "./topologyGraph";
+import {
+  pressureBehaviorLabel,
+  pressureCauseLabel,
+  pressureStateLabel,
+  resourceKindLabel,
+  runtimeStateLabel,
+} from "./topologyLabels";
 import type { TopologyEdge, TopologyModel, TopologyNode, TopologyRuntimeStatus, TopologySelection } from "./topologyTypes";
 
 type Props = {
@@ -176,7 +183,10 @@ function SummaryInspector({
         <Field label={field("sources", "Sources")} value={model.summary.sourceCount} />
         <Field label={field("sinks", "Sinks")} value={model.summary.sinkCount} />
         <Field label={field("runtime", "Runtime")} value={runtimeLabel} />
-        <Field label={field("pressure", "Pressure")} value={model.summary.pressureActive ? model.summary.pressureCause : undefined} />
+        <Field
+          label={field("pressure", "Pressure")}
+          value={model.summary.pressureActive ? pressureCauseLabel(model.summary.pressureCause, t) : undefined}
+        />
         <Field label={field("updated", "Updated")} value={timestampText(runtimeGeneratedAt, t)} />
       </div>
       {runtimeStatus.error ? <div className="pipelineTopologyInspectorNotice">{runtimeStatus.error}</div> : null}
@@ -346,10 +356,13 @@ function NodeInspector({
       <div className="pipelineTopologyInspectorGrid">
         <Field label={field("node_id", "Node ID")} value={node.data.nodeId} />
         <Field label={field("uid", "UID")} value={node.data.uid} />
-        <Field label={field("runtime", "Runtime")} value={runtime?.runtime_state ?? runtime?.task_state} />
-        <Field label={field("resource", "Resource")} value={node.data.resourceKind} />
-        <Field label={field("pressure", "Pressure")} value={node.data.pressureState} />
-        <Field label={field("behavior", "Behavior")} value={node.data.pressureBehavior} />
+        <Field
+          label={field("runtime", "Runtime")}
+          value={runtimeStateLabel(runtime?.runtime_state ?? runtime?.task_state ?? (runtime ? "idle" : undefined), t)}
+        />
+        <Field label={field("resource", "Resource")} value={resourceKindLabel(node.data.resourceKind, t)} />
+        <Field label={field("pressure", "Pressure")} value={pressureStateLabel(node.data.pressureState, t)} />
+        <Field label={field("behavior", "Behavior")} value={pressureBehaviorLabel(node.data.pressureBehavior, t)} />
         <Field label={field("processed", "Processed")} value={runtime?.progress?.processed_packets} />
         <Field label={field("emitted", "Emitted")} value={runtime?.progress?.emitted_packets} />
         <Field label={field("dropped", "Dropped")} value={runtime?.progress?.dropped_packets} />
@@ -514,7 +527,7 @@ function EdgeInspector({
         <EdgeField label={field("backpressure", "Backpressure")} kind="pressure_mode" value={data.pressureMode} />
         <Field label={field("depth", "Depth")} value={runtime?.depth} />
         <Field label={field("utilization", "Utilization")} value={runtime?.utilization} />
-        <Field label={field("cause", "Cause")} value={runtime?.pressure_cause} />
+        <Field label={field("cause", "Cause")} value={pressureCauseLabel(runtime?.pressure_cause, t)} />
         <Field label={field("dropped", "Dropped")} value={runtime?.progress?.dropped_total} />
         <Field label={field("blocked_put_ms", "Blocked put ms")} value={runtime?.metrics?.blocked_put_time_ms} />
         <Field label={field("waiting_get_ms", "Waiting get ms")} value={runtime?.metrics?.waiting_get_time_ms} />

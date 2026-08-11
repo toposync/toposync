@@ -10,7 +10,10 @@
   },
   "include": [
     "src/util/api.ts",
+    "src/util/i18n.ts",
     "src/ui/screens/pipelines/topology/runtimeGraphProjection.ts",
-    "src/ui/screens/pipelines/topology/runtimeGraphProjection.test.ts"
+    "src/ui/screens/pipelines/topology/runtimeGraphProjection.test.ts",
+    "src/ui/screens/pipelines/topology/topologyLabels.ts",
+    "src/ui/screens/pipelines/topology/topologyLabels.test.ts"
   ]
 }

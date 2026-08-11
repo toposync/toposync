@@ -3,6 +3,7 @@ import { useLayoutEffect } from "react";
 import { Handle, Position, type NodeProps, useUpdateNodeInternals } from "@xyflow/react";
 
 import { i18n } from "../../../../util/i18n";
+import { resourceKindLabel, runtimeStateLabel } from "./topologyLabels";
 import type { TopologyNode, TopologyNodeData } from "./topologyTypes";
 
 type NodeTelemetry = {
@@ -90,9 +91,7 @@ export function TopologyNodeComponent({ id, data, selected, isConnectable }: Nod
   const inputPorts = data.inputPorts.length ? data.inputPorts : [];
   const outputPorts = data.outputPorts.length ? data.outputPorts : [];
   const portKey = `${inputPorts.join("|")}=>${outputPorts.join("|")}`;
-  const runtimeState = data.runtime
-    ? String(data.runtime.runtime_state ?? data.runtime.task_state ?? t("core.ui.pipelines.topology.runtime.idle", {}, "idle"))
-    : t("core.ui.pipelines.topology.runtime.no_runtime", {}, "no runtime");
+  const runtimeState = runtimeStateLabel(data.runtime?.runtime_state ?? data.runtime?.task_state ?? (data.runtime ? "idle" : undefined), t);
   const alertLabel =
     data.alertCount === 1
       ? t("core.ui.pipelines.topology.alert_count_one", {}, "1 alert")
@@ -154,7 +153,7 @@ export function TopologyNodeComponent({ id, data, selected, isConnectable }: Nod
         {telemetry && metricLabels && telemetry.processed !== telemetry.emitted ? <span>{metricLabels.processed}</span> : null}
         {telemetry && metricLabels && telemetry.dropped > 0 ? <span data-tone="warning">{metricLabels.dropped}</span> : null}
         {telemetry && metricLabels && telemetry.errors > 0 ? <span data-tone="error">{metricLabels.errors}</span> : null}
-        {data.resourceKind !== "none" ? <span>{data.resourceKind}</span> : null}
+        {data.resourceKind !== "none" ? <span>{resourceKindLabel(data.resourceKind, t)}</span> : null}
         {data.alertCount > 0 ? <span>{alertLabel}</span> : null}
       </div>
       {outputPorts.map((port, index) => (

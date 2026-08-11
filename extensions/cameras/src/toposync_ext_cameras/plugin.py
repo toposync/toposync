@@ -5220,7 +5220,7 @@ class CamerasExtension(BaseExtension):
             try:
                 notification_priority = (
                     body.notification_priority
-                    if preset == "person_vehicle_stopped"
+                    if preset == "person_vehicle_interaction"
                     else body.notification_priority
                     or ("high" if preset == "vehicle_stopped" else "medium")
                 )

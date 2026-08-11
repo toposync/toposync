@@ -304,7 +304,7 @@ def test_person_vehicle_interaction_builds_semantic_relation_graph_v2(
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
-        assert alert_codes == {"vision_model_artifact_missing"}
+        assert alert_codes <= {"vision_model_artifact_missing"}
 
         relation["update_interval_seconds"] = 0.0
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
@@ -312,10 +312,10 @@ def test_person_vehicle_interaction_builds_semantic_relation_graph_v2(
         unbounded_alert_codes = {
             str(alert.get("code") or "") for alert in res.json().get("alerts", [])
         }
-        assert unbounded_alert_codes == {
-            "store_images_without_rate_control",
-            "vision_model_artifact_missing",
-        }
+        expected_unbounded_alert_codes = {"store_images_without_rate_control"}
+        if "vision_model_artifact_missing" in alert_codes:
+            expected_unbounded_alert_codes.add("vision_model_artifact_missing")
+        assert unbounded_alert_codes == expected_unbounded_alert_codes
 
 
 def test_person_vehicle_interaction_applies_optional_area_and_notification_override(

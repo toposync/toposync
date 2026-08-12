@@ -394,7 +394,14 @@ function ptzSettleTargetIsConfirmed(
   status: PanTiltZoomState | null,
   expectation?: PtzSettleExpectation,
 ): boolean {
-  return Boolean(expectation?.targetPose && poseHasAbsoluteTarget(expectation.targetPose) && ptzStatusMatchesPose(status, expectation.targetPose));
+  const targetPose = expectation?.targetPose;
+  if (!targetPose) return false;
+
+  const targetPresetToken = String(targetPose.preset_token ?? "").trim();
+  const currentPresetToken = String(status?.preset_token ?? "").trim();
+  if (targetPresetToken && currentPresetToken === targetPresetToken) return true;
+
+  return poseHasAbsoluteTarget(targetPose) && ptzStatusMatchesPose(status, targetPose);
 }
 
 function ptzSettleRequiresVisualConfirmation(expectation?: PtzSettleExpectation): boolean {
@@ -2656,7 +2663,8 @@ function CameraCalibrationModal({
               sourceId,
               signal,
               expectation?.baselineVisualFingerprint,
-              expectation?.requireVisualTransition === true,
+              expectation?.requireVisualTransition === true &&
+                !ptzSettleTargetIsConfirmed(latestStatus, expectation),
             );
             if (!visuallyStable) return null;
           }
@@ -3088,6 +3096,8 @@ function CameraCalibrationModal({
               pan: poseReference?.pan ?? null,
               tilt: poseReference?.tilt ?? null,
               zoom: poseReference?.zoom ?? null,
+              preset_token: presetToken,
+              preset_name: poseReference?.preset_name ?? null,
             }
           : poseReference;
         const baseline = await capturePtzMovementBaseline(
@@ -4523,7 +4533,8 @@ function CameraPoseModal({
               sourceId,
               signal,
               expectation?.baselineVisualFingerprint,
-              expectation?.requireVisualTransition === true,
+              expectation?.requireVisualTransition === true &&
+                !ptzSettleTargetIsConfirmed(nextStatus, expectation),
             );
             if (!visuallyStable) return null;
           }
@@ -5020,6 +5031,8 @@ function CameraPoseModal({
         pan: preset.pan ?? null,
         tilt: preset.tilt ?? null,
         zoom: preset.zoom ?? null,
+        preset_token: token,
+        preset_name: preset.name ?? null,
       };
       const baseline = await capturePtzMovementBaseline(
         cameraId,

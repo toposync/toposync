@@ -801,6 +801,25 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
         async def exercise_tracking() -> dict[str, object]:
             services = client.app.state.services
             common = {"camera_id": "cam1", "camera_source_id": "zoom"}
+            lease = await services.call(
+                "cameras.control.acquire",
+                **common,
+                owner_kind="manual",
+                owner_id="test:ptz-source-health",
+                ttl_s=30.0,
+            )
+            command_sequence = 0
+
+            async def submit_control(command: dict[str, object]) -> dict[str, object]:
+                nonlocal command_sequence
+                command_sequence += 1
+                return await services.call(
+                    "cameras.control.submit",
+                    lease_id=lease["lease_id"],
+                    fence=lease["fence"],
+                    command_id=f"source-health-{command_sequence}",
+                    command=command,
+                )
 
             cold_start = await services.call("cameras.ptz.get_status", **common)
             device_state["move_status"] = "MOVING"
@@ -813,7 +832,7 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
 
             device_state["move_status"] = "IDLE"
             active = await services.call("cameras.ptz.get_status", **common)
-            await services.call("cameras.ptz.stop", **common)
+            await submit_control({"kind": "stop", "pan_tilt": True, "zoom": True})
             after_stop = await services.call("cameras.ptz.get_status", **common)
 
             device_state["move_status"] = "MOVING"
@@ -827,31 +846,35 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
                 **common,
             )
             await services.call("cameras.ptz.get_status", **common)
-            await services.call(
-                "cameras.ptz.absolute_move",
-                pan=0.1,
-                tilt=0.2,
-                zoom=0.3,
-                **common,
+            await submit_control(
+                {
+                    "kind": "absolute_move",
+                    "pan": 0.1,
+                    "tilt": 0.2,
+                    "zoom": 0.3,
+                }
             )
             after_absolute = await services.call("cameras.ptz.get_status", **common)
 
             await services.call("cameras.ptz.list_presets", **common)
             device_state["move_status"] = "MOVING"
-            await services.call("cameras.ptz.goto_preset", preset_token="home", **common)
+            await submit_control({"kind": "goto_preset", "preset_token": "home"})
             goto_pending = await services.call("cameras.ptz.get_status", **common)
             device_state["move_status"] = "IDLE"
             goto_active = await services.call("cameras.ptz.get_status", **common)
 
             device_state["continuous_unsupported"] = True
-            await services.call(
-                "cameras.ptz.continuous_move",
-                pan=0.5,
-                tilt=0.0,
-                zoom=0.0,
-                **common,
+            await submit_control(
+                {
+                    "kind": "continuous_move",
+                    "pan": 0.5,
+                    "tilt": 0.0,
+                    "zoom": 0.0,
+                    "timeout_s": 10.0,
+                }
             )
             after_relative_fallback = await services.call("cameras.ptz.get_status", **common)
+            await submit_control({"kind": "stop", "pan_tilt": True, "zoom": True})
 
             await services.call(
                 "cameras.ptz.set_preset",
@@ -865,6 +888,11 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
                 **common,
             )
             after_remove = await services.call("cameras.ptz.get_status", **common)
+            await services.call(
+                "cameras.control.release",
+                lease_id=lease["lease_id"],
+                fence=lease["fence"],
+            )
 
             return {
                 "cold_start": cold_start,
@@ -905,6 +933,8 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
         "goto",
         "continuous",
         "relative",
+        "stop",
         "set",
         "remove",
+        "stop",
     ]

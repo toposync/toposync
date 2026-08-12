@@ -1450,6 +1450,14 @@ class CamerasExtension(BaseExtension):
                     str(command.get("kind") or ""),
                     exc_info=True,
                 )
+                if raw_error.startswith("409:"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "camera_ptz_unavailable: Camera PTZ configuration cannot execute "
+                            "this command."
+                        ),
+                    ) from exc
                 if "fault" in raw_error or "emergency_stop" in raw_error:
                     raise HTTPException(
                         status_code=409,
@@ -1725,6 +1733,25 @@ class CamerasExtension(BaseExtension):
             media_xaddr: str
             profile_token: str
             created_ts: float
+            move_mode: str = "continuous"
+
+        @dataclass(slots=True, repr=False)
+        class _BoundOnvifPtzTransportContext:
+            """One lease's immutable ONVIF transport configuration.
+
+            The PTZ controller holds this only in memory.  It deliberately keeps
+            credentials and the discovered service endpoints out of its persisted
+            state while ensuring a stop can still use the same transport after a
+            settings change.
+            """
+
+            client: OnvifClient
+            ptz_xaddr: str
+            media_xaddr: str
+            profile_token: str
+            source_id: str
+            cache_key: str
+            resolution_lock: asyncio.Lock
             move_mode: str = "continuous"
 
         @dataclass(slots=True)
@@ -2130,6 +2157,98 @@ class CamerasExtension(BaseExtension):
                 )
 
                 return client, ptz_xaddr, profile_token, source_id
+
+        async def _ensure_bound_ptz_transport_context(
+            context: _BoundOnvifPtzTransportContext,
+            *,
+            camera_id: str,
+        ) -> None:
+            if context.ptz_xaddr and context.profile_token:
+                return
+            async with context.resolution_lock:
+                if context.ptz_xaddr and context.profile_token:
+                    return
+                if not context.ptz_xaddr or not context.media_xaddr:
+                    try:
+                        media_xaddr, ptz_xaddr = await context.client.get_capabilities()
+                    except OnvifError as exc:
+                        raise _ptz_transport_error(
+                            exc,
+                            operation="get_capabilities",
+                            camera_id=camera_id,
+                        ) from exc
+                    if not context.media_xaddr:
+                        context.media_xaddr = str(media_xaddr or "").strip()
+                    if not context.ptz_xaddr:
+                        context.ptz_xaddr = str(ptz_xaddr or "").strip()
+                if not context.ptz_xaddr:
+                    raise HTTPException(
+                        status_code=502,
+                        detail="ONVIF did not report a PTZ service address (ptz_xaddr)",
+                    )
+                if context.profile_token:
+                    return
+                if not context.media_xaddr:
+                    raise HTTPException(
+                        status_code=502,
+                        detail="ONVIF did not report a Media service address (media_xaddr)",
+                    )
+                try:
+                    profiles = await context.client.get_profiles(context.media_xaddr)
+                except OnvifError as exc:
+                    raise _ptz_transport_error(
+                        exc,
+                        operation="get_profiles",
+                        camera_id=camera_id,
+                    ) from exc
+                candidates = [
+                    item
+                    for item in profiles
+                    if bool(item.has_ptz) and str(item.token or "").strip()
+                ]
+                if len(candidates) != 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Camera source has no explicit ONVIF profile binding and discovery "
+                            f"found {len(candidates)} PTZ candidates; PTZ control is unavailable"
+                        ),
+                    )
+                context.profile_token = str(candidates[0].token or "").strip()
+
+        async def _resolve_ptz_operation_context(
+            *,
+            camera_id: str,
+            camera_source_id: str | None,
+            transport_context: Any | None,
+            allow_disabled_for_stop: bool = False,
+        ) -> tuple[
+            OnvifClient,
+            str,
+            str,
+            str,
+            _BoundOnvifPtzTransportContext | None,
+        ]:
+            if transport_context is not None:
+                if not isinstance(transport_context, _BoundOnvifPtzTransportContext):
+                    raise PtzControlError("Invalid bound ONVIF PTZ transport context")
+                await _ensure_bound_ptz_transport_context(
+                    transport_context,
+                    camera_id=camera_id,
+                )
+                return (
+                    transport_context.client,
+                    transport_context.ptz_xaddr,
+                    transport_context.profile_token,
+                    transport_context.source_id,
+                    transport_context,
+                )
+            client, ptz_xaddr, profile_token, source_id = await _resolve_onvif_ptz_context(
+                camera_id=camera_id,
+                camera_source_id=camera_source_id,
+                allow_disabled_for_stop=allow_disabled_for_stop,
+            )
+            return client, ptz_xaddr, profile_token, source_id, None
 
         def _clamp(value: float, minimum: float, maximum: float) -> float:
             return max(minimum, min(maximum, float(value)))
@@ -2588,7 +2707,13 @@ class CamerasExtension(BaseExtension):
             token = str(preset_token or "").strip()
             if not token:
                 raise HTTPException(status_code=400, detail="preset_token is required")
-            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+            (
+                client,
+                ptz_xaddr,
+                profile_token,
+                resolved_source_id,
+                _bound_context,
+            ) = await _resolve_ptz_operation_context(
                 camera_id=cid,
                 camera_source_id=camera_source_id,
                 transport_context=transport_context,
@@ -2617,7 +2742,13 @@ class CamerasExtension(BaseExtension):
             transport_context: Any | None = None,
         ) -> dict[str, Any]:
             cid = str(camera_id or "").strip()
-            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+            (
+                client,
+                ptz_xaddr,
+                profile_token,
+                resolved_source_id,
+                _bound_context,
+            ) = await _resolve_ptz_operation_context(
                 camera_id=cid,
                 camera_source_id=camera_source_id,
                 transport_context=transport_context,
@@ -2680,7 +2811,13 @@ class CamerasExtension(BaseExtension):
                 )
 
             cid = str(camera_id or "").strip()
-            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+            (
+                client,
+                ptz_xaddr,
+                profile_token,
+                resolved_source_id,
+                _bound_context,
+            ) = await _resolve_ptz_operation_context(
                 camera_id=cid,
                 camera_source_id=camera_source_id,
                 transport_context=transport_context,
@@ -2737,7 +2874,7 @@ class CamerasExtension(BaseExtension):
             safe_zoom = _clamp(float(zoom), -1.0, 1.0)
 
             key = _ptz_tracking_key(cid, resolved_source_id)
-            entry = onvif_ptz_cache.get(key)
+            entry = None if bound_context is not None else onvif_ptz_cache.get(key)
 
             async def _do_relative_move() -> None:
                 step = 0.08
@@ -2751,7 +2888,10 @@ class CamerasExtension(BaseExtension):
 
             async with _get_onvif_ptz_lock(key):
                 _clear_ptz_preset_tracking(key)
-                move_mode = str(getattr(entry, "move_mode", "") or "").strip() or "continuous"
+                move_mode = (
+                    str(getattr(bound_context or entry, "move_mode", "") or "").strip()
+                    or "continuous"
+                )
                 if move_mode == "relative":
                     try:
                         await _do_relative_move()
@@ -2772,7 +2912,9 @@ class CamerasExtension(BaseExtension):
                     # Some devices reject ContinuousMove (HTTP 400) but support RelativeMove.
                     message = str(exc)
                     if "HTTP error (400)" in message:
-                        if entry is not None:
+                        if bound_context is not None:
+                            bound_context.move_mode = "relative"
+                        elif entry is not None:
                             entry.move_mode = "relative"
                         try:
                             await _do_relative_move()
@@ -2792,7 +2934,13 @@ class CamerasExtension(BaseExtension):
             transport_context: Any | None = None,
         ) -> dict[str, Any]:
             cid = str(camera_id or "").strip()
-            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+            (
+                client,
+                ptz_xaddr,
+                profile_token,
+                resolved_source_id,
+                _bound_context,
+            ) = await _resolve_ptz_operation_context(
                 camera_id=cid,
                 camera_source_id=camera_source_id,
                 transport_context=transport_context,
@@ -2927,6 +3075,16 @@ class CamerasExtension(BaseExtension):
             )
             cache_key = f"{camera_id}:{source_id or 'default'}"
             entry = onvif_ptz_cache.get(cache_key)
+            if (
+                entry is not None
+                and entry.signature == revision
+                and entry.ptz_xaddr
+                and entry.profile_token
+                and (time.time() - float(entry.created_ts)) <= onvif_ptz_cache_ttl_s
+            ):
+                ptz_xaddr = entry.ptz_xaddr
+                media_xaddr = entry.media_xaddr
+                profile_token = entry.profile_token
             move_mode = str(getattr(entry, "move_mode", "") or "").strip() or "continuous"
             return PtzTransportBinding(
                 revision=revision,
@@ -3067,7 +3225,6 @@ class CamerasExtension(BaseExtension):
         services.register("cameras.ptz.list_presets", _svc_ptz_list_presets)
         services.register("cameras.ptz.set_preset", _svc_ptz_set_preset)
         services.register("cameras.ptz.remove_preset", _svc_ptz_remove_preset)
-        services.register("cameras.ptz.goto_preset", _svc_ptz_goto_preset)
         services.register("cameras.ptz.get_status", _svc_ptz_get_status)
         services.register("cameras.control.acquire", ptz_controller.acquire)
         services.register("cameras.control.renew", ptz_controller.renew)

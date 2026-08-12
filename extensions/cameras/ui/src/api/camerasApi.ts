@@ -252,35 +252,6 @@ export async function fetchCameraPtzStatus(
   );
 }
 
-export async function createCameraPtzPreset(
-  cameraId: string,
-  body: { source_id?: string; name?: string },
-  signal?: AbortSignal,
-): Promise<CameraPtzPreset> {
-  return requestJson<CameraPtzPreset>(
-    `/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/presets`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal,
-    },
-  );
-}
-
-export async function removeCameraPtzPreset(
-  cameraId: string,
-  presetToken: string,
-  sourceId = "",
-  signal?: AbortSignal,
-): Promise<void> {
-  const query = sourceId ? `?source_id=${encodeURIComponent(sourceId)}` : "";
-  await requestVoid(
-    `/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/presets/${encodeURIComponent(presetToken)}${query}`,
-    { method: "DELETE", signal },
-  );
-}
-
 export async function gotoCameraPtzPreset(
   cameraId: string,
   presetToken: string,

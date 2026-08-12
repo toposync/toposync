@@ -95,6 +95,23 @@ def _settings() -> dict[str, object]:
     }
 
 
+def test_view_resolver_uses_first_calibrated_view_as_home() -> None:
+    selected = resolve_ptz_target_view(
+        config=_config([_view("first", "1"), _view("second", "2")]),
+        cameras_settings=_settings(),
+        camera_id="cam1",
+        source_id="main",
+        ptz_device_id="cam1",
+        composition_id="front",
+        target={"home": True},
+    )
+
+    assert selected["view_id"] == "first"
+    assert selected["preset_token"] == "1"
+    assert selected["reason"] == "first_eligible_calibrated_view"
+    assert selected["eligible_view_ids"] == ["first", "second"]
+
+
 def test_view_resolver_selects_world_covering_preset_and_honors_allowlist() -> None:
     config = _config([_view("home", "1"), _view("street", "2", left=10.0, right=20.0)])
     selected = resolve_ptz_target_view(

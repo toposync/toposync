@@ -17,7 +17,6 @@ import type {
 } from "@toposync/plugin-api";
 
 import {
-  createCameraPtzPreset,
   fetchCameraPtzPresets,
   fetchCameraPtzStatus,
   fetchCameraSnapshot,
@@ -471,42 +470,6 @@ function absoluteMovePayloadForPose(
 
 function formatPtzTelemetryValue(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "—";
-}
-
-function safeCameraPresetName(
-  viewLabel: string,
-  fallbackLabel: string,
-  presets: CameraPtzPreset[],
-): string {
-  const sanitize = (value: string) =>
-    Array.from(
-      value
-        .normalize("NFKC")
-        .replace(/[\u0000-\u001f\u007f]/g, " ")
-        .replace(/[\\/:*?"<>|]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim(),
-    )
-      .slice(0, 48)
-      .join("")
-      .trim();
-
-  const baseName = sanitize(viewLabel) || sanitize(fallbackLabel) || "Camera view";
-  const existingNames = new Set(
-    presets
-      .map((preset) => String(preset.name ?? "").trim().toLocaleLowerCase())
-      .filter(Boolean),
-  );
-  if (!existingNames.has(baseName.toLocaleLowerCase())) return baseName;
-
-  for (let index = 2; index < 1000; index += 1) {
-    const suffix = ` ${index}`;
-    const availableLength = Math.max(1, 48 - Array.from(suffix).length);
-    const candidate = `${Array.from(baseName).slice(0, availableLength).join("").trim()}${suffix}`;
-    if (!existingNames.has(candidate.toLocaleLowerCase())) return candidate;
-  }
-
-  return `${Array.from(baseName).slice(0, 41).join("").trim()} ${Date.now().toString().slice(-6)}`;
 }
 
 function cameraBounds(element: CompositionElement): BoundsXZ {
@@ -4155,7 +4118,6 @@ function CameraPoseModal({
   const [status, setStatus] = useState<PanTiltZoomState | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [creatingPreset, setCreatingPreset] = useState(false);
   const [activeMoveId, setActiveMoveId] = useState<string | null>(null);
   const [selectedPresetToken, setSelectedPresetToken] = useState("");
   type ContinuousMoveRegistration = {
@@ -4564,7 +4526,6 @@ function CameraPoseModal({
       requiresStop: false,
       requiresVisualTransition: false,
     });
-    setCreatingPreset(false);
     // Opening the modal never implies that the camera is already at the view's saved preset.
     // Keep the current position selected until the user explicitly chooses a preset to move to.
     setSelectedPresetToken("");
@@ -4690,89 +4651,6 @@ function CameraPoseModal({
       preset_token: preset?.token ?? null,
       preset_name: preset?.name ?? null,
     };
-  }
-
-  async function createPresetAtCurrentPosition() {
-    if (!cameraId || busy || activeMoveId || !freshSnapshotReady) return;
-    const operation = beginPoseOperation();
-    if (!operation) return;
-    const presetName = safeCameraPresetName(
-      selectedView?.label ?? "",
-      t("ext.cameras.calibration.default_view"),
-      presets,
-    );
-    setBusy(true);
-    setCreatingPreset(true);
-    setErrorMessage(null);
-    let createdPresetToken = "";
-    let presetCaptureCompleted = false;
-    try {
-      const response = await createCameraPtzPreset(cameraId, {
-        source_id: operation.ptzSourceId,
-        name: presetName,
-      }, operation.controller.signal);
-      if (!poseOperationIsCurrent(operation)) return;
-      const token = String(response.token ?? "").trim();
-      if (!token) {
-        throw new Error(t("ext.cameras.visual_calibration.preset_creation_failed"));
-      }
-      const createdPreset: CameraPtzPreset = {
-        ...response,
-        token,
-        name: String(response.name ?? "").trim() || presetName,
-      };
-      createdPresetToken = token;
-      setPresets((currentPresets) => {
-        const existingIndex = currentPresets.findIndex((preset) => preset.token === token);
-        if (existingIndex < 0) return [...currentPresets, createdPreset];
-        return currentPresets.map((preset, index) => (index === existingIndex ? createdPreset : preset));
-      });
-      setSelectedPresetToken(token);
-
-      const nextStatus = await waitForPtzSettle(operation.ptzSourceId, operation.controller.signal);
-      if (!poseOperationIsCurrent(operation)) return;
-      if (!nextStatus) {
-        throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
-      }
-      const pose = poseFromStatus(nextStatus, createdPreset);
-      if (!pose) {
-        throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
-      }
-      onCapture(pose, selectedView?.label ?? null, operation.viewId);
-      presetCaptureCompleted = true;
-      if (!poseOperationIsCurrent(operation)) return;
-      onSnapshotRefreshRequested();
-      cancelPoseOperation();
-      onClose();
-    } catch (error) {
-      if (poseOperationIsCurrent(operation) && !isAbortError(error)) {
-        if (createdPresetToken) {
-          blockFreshSnapshot(error, operation.freshnessGeneration, true);
-        }
-        setErrorMessage(
-          calibrationSnapshotErrorMessage(
-            error,
-            t("ext.cameras.visual_calibration.freshness_unverifiable"),
-          ),
-        );
-      }
-    } finally {
-      if (
-        createdPresetToken &&
-        !presetCaptureCompleted &&
-        openRef.current &&
-        freshnessGenerationRef.current === operation.freshnessGeneration
-      ) {
-        setSelectedPresetToken((current) =>
-          current === createdPresetToken ? "" : current,
-        );
-      }
-      if (operationGenerationRef.current === operation.generation) {
-        operationAbortRef.current = null;
-        setCreatingPreset(false);
-        setBusy(false);
-      }
-    }
   }
 
   async function stopMove(force?: boolean, options?: { refresh?: boolean }) {
@@ -5166,7 +5044,6 @@ function CameraPoseModal({
   function requestClose(): void {
     cancelPoseOperation();
     setBusy(false);
-    setCreatingPreset(false);
     if (moveVectorRef.current) void stopMove(false, { refresh: false });
     onClose();
   }
@@ -5204,25 +5081,6 @@ function CameraPoseModal({
               </option>
             ))}
           </select>
-          <button
-            className="chipButton"
-            type="button"
-            disabled={
-              busy ||
-              !freshSnapshotReady ||
-              Boolean(activeMoveId) ||
-              !preferredPtzSourceId ||
-              !preferredSnapshotSourceId
-            }
-            onClick={() => void createPresetAtCurrentPosition()}
-          >
-            <i className="fa-solid fa-bookmark" aria-hidden="true" />
-            <span>
-              {creatingPreset
-                ? t("ext.cameras.calibration.creating_preset")
-                : t("ext.cameras.calibration.create_preset_current_position")}
-            </span>
-          </button>
           <button
             className="primaryButton"
             type="button"

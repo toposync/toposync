@@ -2,7 +2,6 @@ import { requestForm, requestJson, requestVoid, resolveToposyncUrl } from "@topo
 
 import type {
   CameraCalibratedView,
-  CameraControlPointSet,
   CameraContextsResponse,
   CameraPipelinePresetRequest,
   CameraPipelinePresetResponse,
@@ -22,14 +21,7 @@ import type {
   RtspProbeResponse,
   StreamPublication,
 } from "../types";
-import { calibratedViewsFromControlPointSets, readRecord } from "../parsing";
-
-type ControlPointMapQuery = { kind: "image"; x: number; y: number } | { kind: "world"; x: number; z: number };
-type ControlPointMapResponse = {
-  world?: { x: number; z: number } | null;
-  image?: { x: number; y: number } | null;
-  quality?: Record<string, unknown> | null;
-};
+import { readRecord } from "../parsing";
 
 async function readErrorDetail(response: Response, fallback: string): Promise<string> {
   const text = await response.text().catch(() => "");
@@ -226,16 +218,19 @@ export async function fetchCameraSnapshot(
   );
 }
 
-export async function fetchCameraPtzPresets(
+export async function captureCameraPtzViewAnchor(
   cameraId: string,
-  sourceIdOrSignal: string | AbortSignal = "",
+  body: { source_id: string; name: string; idempotency_key: string },
   signal?: AbortSignal,
-): Promise<{ camera_id: string; presets: CameraPtzPreset[] }> {
-  const resolved = splitSourceAndSignal(sourceIdOrSignal, signal);
-  const query = resolved.sourceId ? `?source_id=${encodeURIComponent(resolved.sourceId)}` : "";
-  return requestJson<{ camera_id: string; presets: CameraPtzPreset[] }>(
-    `/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/presets${query}`,
-    { signal: resolved.signal },
+): Promise<CameraPtzPreset> {
+  return requestJson<CameraPtzPreset>(
+    `/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/presets`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    },
   );
 }
 
@@ -301,31 +296,6 @@ export async function stopCameraPtz(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
-    signal,
-  });
-}
-
-export async function mapControlPoint(
-  controlPointSet: CameraControlPointSet,
-  query: ControlPointMapQuery,
-  signal?: AbortSignal,
-): Promise<ControlPointMapResponse> {
-  const [calibratedView] = calibratedViewsFromControlPointSets([controlPointSet]);
-  if (!calibratedView) {
-    throw new Error("Mapping requires at least four complete calibration points");
-  }
-  return mapCameraProjection(calibratedView, query, signal);
-}
-
-export async function mapCameraProjection(
-  calibratedView: CameraCalibratedView,
-  query: ControlPointMapQuery,
-  signal?: AbortSignal,
-): Promise<ControlPointMapResponse> {
-  return requestJson<ControlPointMapResponse>("/api/cameras/projection/map", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ calibrated_view: calibratedView, query }),
     signal,
   });
 }

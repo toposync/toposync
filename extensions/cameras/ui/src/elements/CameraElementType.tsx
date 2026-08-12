@@ -17,13 +17,12 @@ import type {
 } from "@toposync/plugin-api";
 
 import {
-  fetchCameraPtzPresets,
+  captureCameraPtzViewAnchor,
   fetchCameraPtzStatus,
   fetchCameraSnapshot,
   fetchCamerasIndex,
   gotoCameraPtzPreset,
   isCameraSnapshotFreshnessUnverifiableError,
-  mapControlPoint,
   moveCameraPtz,
   moveCameraPtzAbsolute,
   propagateCameraProjection,
@@ -31,30 +30,22 @@ import {
 } from "../api/camerasApi";
 import { CAMERA_ELEMENT_TYPE_ID, CONTROL_POINT_COLORS } from "../constants";
 import {
-  controlPointSetFromCalibratedView,
   createDefaultCalibratedView,
-  createDefaultControlPointSet,
   createUniqueId,
-  duplicateControlPointSetForNewView,
-  labelForIndex,
   readCalibratedViews,
   readRecord,
   readString,
   summarizeCalibratedViewQuality,
-  summarizeControlPointSetQuality,
 } from "../parsing";
 import type {
   CameraCalibratedView,
   CameraConnectionType,
-  CameraControlPoint,
-  CameraControlPointSet,
   CameraProjectionBoundaryEdge,
   CameraProjectionBoundaryPoint,
   CameraProjectionCornerKey,
   CameraProjectionRefinementPoint,
   CameraProjectionWorldQuad,
   CameraPoseReference,
-  CameraPtzPreset,
   CameraSourceConfig,
   CameraSourceRole,
   CameraVisualCalibrationResult,
@@ -96,8 +87,6 @@ const PTZ_MOVE_TIMEOUT_S = 0.8;
 const PTZ_PAN_SPEED = 0.55;
 const PTZ_TILT_SPEED = 0.55;
 const PTZ_ZOOM_SPEED = 0.65;
-const PTZ_STATUS_REFRESH_MS = 2200;
-const SNAPSHOT_REFRESH_MS = 8000;
 
 type CameraAreaClipOption = {
   value: string;
@@ -2252,7 +2241,6 @@ function CameraCalibrationModal({
   const [snapshotErrorMessage, setSnapshotErrorMessage] = useState<string | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [importingPresets, setImportingPresets] = useState(false);
   const [movingToViewId, setMovingToViewId] = useState<string | null>(null);
   const [visualReference, setVisualReference] = useState<VisualCalibrationReference | null>(null);
   const [visualReferenceLoading, setVisualReferenceLoading] = useState(false);
@@ -3165,50 +3153,6 @@ function CameraCalibrationModal({
     });
   }
 
-  async function importPresetViews() {
-    if (!cameraId || !isPtzCamera || movingToViewIdRef.current) return;
-    setImportingPresets(true);
-    setSnapshotErrorMessage(null);
-    try {
-      const sourceId = resolvePreferredCalibrationPtzSourceId(selectedView, cameraSources);
-      if (!sourceId) throw new Error(t("ext.cameras.visual_calibration.source_unavailable"));
-      const response = await fetchCameraPtzPresets(cameraId, sourceId);
-      const presets = Array.isArray(response.presets) ? response.presets : [];
-      setViews((previous) => {
-        const existingTokens = new Set(previous.map((view) => String(view.pose_reference?.preset_token ?? "").trim()).filter(Boolean));
-        const source = selectedView ?? previous[0] ?? null;
-        const additions: CameraCalibratedView[] = [];
-        for (const preset of presets) {
-          const token = String(preset.token || "").trim();
-          if (!token || existingTokens.has(token)) continue;
-          const nextView = createDefaultCalibratedView(previous.length + additions.length, element.position, {
-            label: String(preset.name || "").trim() || token,
-            poseReference: {
-              pan: typeof preset.pan === "number" && Number.isFinite(preset.pan) ? preset.pan : null,
-              tilt: typeof preset.tilt === "number" && Number.isFinite(preset.tilt) ? preset.tilt : null,
-              zoom: typeof preset.zoom === "number" && Number.isFinite(preset.zoom) ? preset.zoom : null,
-              preset_token: token,
-              preset_name: String(preset.name || "").trim() || token,
-            },
-          });
-          if (source?.stream_scope) {
-            nextView.stream_scope = {
-              compatible_roles: source.stream_scope.compatible_roles?.length ? [...source.stream_scope.compatible_roles] : ["main", "sub"],
-              compatible_source_ids: [...(source.stream_scope.compatible_source_ids ?? [])],
-            };
-          }
-          additions.push(nextView);
-        }
-        if (additions.length > 0) setSelectedViewId(additions[0].id);
-        return [...previous, ...additions];
-      });
-    } catch (error) {
-      setSnapshotErrorMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setImportingPresets(false);
-    }
-  }
-
   function setCompatibleRole(role: string, enabled: boolean) {
     updateSelectedView((view) => {
       const current = view.stream_scope?.compatible_roles?.length ? view.stream_scope.compatible_roles : ["main", "sub"];
@@ -3762,15 +3706,10 @@ function CameraCalibrationModal({
               );
             })}
             {isPtzCamera ? (
-              <>
-                <button className="chipButton" type="button" onClick={() => addView()} disabled={calibrationInteractionLocked}>
-                  <i className="fa-solid fa-plus" aria-hidden="true" />
-                  <span>{t("ext.cameras.calibration.add_view")}</span>
-                </button>
-                <button className="chipButton" type="button" onClick={() => void importPresetViews()} disabled={importingPresets || calibrationInteractionLocked}>
-                  {importingPresets ? t("ext.cameras.control.loading") : t("ext.cameras.calibration.import_presets")}
-                </button>
-              </>
+              <button className="chipButton" type="button" onClick={() => addView()} disabled={calibrationInteractionLocked}>
+                <i className="fa-solid fa-plus" aria-hidden="true" />
+                <span>{t("ext.cameras.calibration.add_view")}</span>
+              </button>
             ) : null}
             <button
               className="iconButton"
@@ -3824,7 +3763,7 @@ function CameraCalibrationModal({
                 onChange={(event) => updateSelectedView((view) => ({ ...view, label: event.target.value }))}
               />
             </div>
-            {isPtzCamera ? (
+            {isPtzCamera && !String(selectedView.pose_reference?.preset_token ?? "").trim() && !poseHasAbsoluteTarget(selectedView.pose_reference) ? (
               <button
                 className="chipButton"
                 type="button"
@@ -4114,12 +4053,10 @@ function CameraPoseModal({
 }): React.ReactElement | null {
   const { t } = i18n.useI18n();
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
-  const [presets, setPresets] = useState<CameraPtzPreset[]>([]);
   const [status, setStatus] = useState<PanTiltZoomState | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [activeMoveId, setActiveMoveId] = useState<string | null>(null);
-  const [selectedPresetToken, setSelectedPresetToken] = useState("");
   type ContinuousMoveRegistration = {
     cameraId: string;
     sourceId: string;
@@ -4516,7 +4453,6 @@ function CameraPoseModal({
     cancelPoseOperation();
     snapshotRefreshAbortRef.current?.abort();
     snapshotRefreshAbortRef.current = null;
-    setPresets([]);
     setStatus(null);
     freshSnapshotFingerprintRef.current = null;
     setFreshSnapshotGate({
@@ -4526,9 +4462,6 @@ function CameraPoseModal({
       requiresStop: false,
       requiresVisualTransition: false,
     });
-    // Opening the modal never implies that the camera is already at the view's saved preset.
-    // Keep the current position selected until the user explicitly chooses a preset to move to.
-    setSelectedPresetToken("");
     if (!open) {
       setBusy(false);
       return;
@@ -4550,13 +4483,10 @@ function CameraPoseModal({
         if (pendingMoveStop) await pendingMoveStop;
         await waitForPendingCameraPtzStops(cameraId);
         if (cancelled || controller.signal.aborted) return;
-        const [items, settledStatus] = await Promise.all([
-          fetchCameraPtzPresets(cameraId, preferredPtzSourceId, controller.signal),
-          waitForPtzSettle(preferredPtzSourceId, controller.signal, {
-            requireTargetEvidence: true,
-            requireVisualTransition: false,
-          }),
-        ]);
+        const settledStatus = await waitForPtzSettle(preferredPtzSourceId, controller.signal, {
+          requireTargetEvidence: true,
+          requireVisualTransition: false,
+        });
         if (cancelled || controller.signal.aborted) return;
         if (!settledStatus) {
           const error = new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
@@ -4564,8 +4494,6 @@ function CameraPoseModal({
           throw error;
         }
         await refreshSnapshot(preferredSnapshotSourceId, controller.signal);
-        if (cancelled || controller.signal.aborted) return;
-        setPresets(Array.isArray(items.presets) ? items.presets : []);
       } catch (error) {
         if (!cancelled && !controller.signal.aborted && !isAbortError(error)) {
           setErrorMessage(
@@ -4642,14 +4570,14 @@ function CameraPoseModal({
     };
   }, []);
 
-  function poseFromStatus(nextStatus: PanTiltZoomState | null, preset?: CameraPtzPreset | null): CameraPoseReference | null {
-    if (!nextStatus && !preset) return null;
+  function poseFromStatus(nextStatus: PanTiltZoomState | null): CameraPoseReference | null {
+    if (!nextStatus) return null;
     return {
-      pan: typeof nextStatus?.pan === "number" && Number.isFinite(nextStatus.pan) ? nextStatus.pan : preset?.pan ?? null,
-      tilt: typeof nextStatus?.tilt === "number" && Number.isFinite(nextStatus.tilt) ? nextStatus.tilt : preset?.tilt ?? null,
-      zoom: typeof nextStatus?.zoom === "number" && Number.isFinite(nextStatus.zoom) ? nextStatus.zoom : preset?.zoom ?? null,
-      preset_token: preset?.token ?? null,
-      preset_name: preset?.name ?? null,
+      pan: typeof nextStatus.pan === "number" && Number.isFinite(nextStatus.pan) ? nextStatus.pan : null,
+      tilt: typeof nextStatus.tilt === "number" && Number.isFinite(nextStatus.tilt) ? nextStatus.tilt : null,
+      zoom: typeof nextStatus.zoom === "number" && Number.isFinite(nextStatus.zoom) ? nextStatus.zoom : null,
+      preset_token: null,
+      preset_name: null,
     };
   }
 
@@ -4842,7 +4770,6 @@ function CameraPoseModal({
       requiresVisualTransition: false,
     });
     setErrorMessage(null);
-    setSelectedPresetToken("");
     setActiveMoveId(moveId);
     const send = () => {
       if (
@@ -4893,94 +4820,51 @@ function CameraPoseModal({
     }, PTZ_MOVE_REPEAT_MS);
   }
 
-  async function gotoPreset(token: string) {
-    if (!freshSnapshotReady) return;
-    const preset = presets.find((item) => item.token === token) ?? null;
-    if (!preset) return;
+  async function useCurrentFraming() {
+    if (!cameraId || busy || activeMoveId || !freshSnapshotReady) return;
     const operation = beginPoseOperation();
     if (!operation) return;
-    setSelectedPresetToken(token);
     setBusy(true);
     setErrorMessage(null);
-    let presetPositionConfirmed = false;
-    let gotoMovementIssued = false;
     try {
-      const presetPose: CameraPoseReference = {
-        pan: preset.pan ?? null,
-        tilt: preset.tilt ?? null,
-        zoom: preset.zoom ?? null,
-        preset_token: token,
-        preset_name: preset.name ?? null,
-      };
-      const baseline = await capturePtzMovementBaseline(
-        cameraId,
-        operation.ptzSourceId,
-        operation.snapshotSourceId,
-        presetPose,
-        operation.controller.signal,
-        t("ext.cameras.visual_calibration.snapshot_failed"),
-        true,
-      );
-      if (!poseOperationIsCurrent(operation)) return;
-      if (!baseline.targetAlreadyConfirmed) {
-        registerPoseMovement(operation, baseline.visualFingerprint);
-        const mutationPromise = runPtzMutationWithFence(() =>
-          gotoCameraPtzPreset(cameraId, token, operation.ptzSourceId),
+      let pose = poseFromStatus(status);
+      if (!pose || !poseHasAbsoluteTarget(pose)) {
+        const compactViewId = operation.viewId.replace(/[^a-zA-Z0-9]/g, "");
+        const anchor = await captureCameraPtzViewAnchor(
+          cameraId,
+          {
+            source_id: operation.ptzSourceId,
+            name: `TSV-${compactViewId.slice(-20) || "view"}`,
+            idempotency_key: `camera-view-anchor:${operation.viewId}`,
+          },
+          operation.controller.signal,
         );
-        markPoseMovementIssued(operation, mutationPromise);
-        gotoMovementIssued = true;
-        await mutationPromise;
+        if (!poseOperationIsCurrent(operation)) return;
+        const token = String(anchor.token ?? "").trim();
+        if (!token) throw new Error(t("ext.cameras.visual_calibration.view_capture_failed"));
+        pose = {
+          pan: typeof status?.pan === "number" && Number.isFinite(status.pan) ? status.pan : null,
+          tilt: typeof status?.tilt === "number" && Number.isFinite(status.tilt) ? status.tilt : null,
+          zoom: typeof status?.zoom === "number" && Number.isFinite(status.zoom) ? status.zoom : null,
+          preset_token: token,
+          preset_name: null,
+        };
       }
       if (!poseOperationIsCurrent(operation)) return;
-      const nextStatus = await waitForPtzSettle(operation.ptzSourceId, operation.controller.signal, {
-        baselineVisualFingerprint: baseline.visualFingerprint,
-        targetPose: presetPose,
-        requireTargetEvidence: true,
-        requireVisualTransition: !baseline.targetAlreadyConfirmed,
-      });
-      if (!poseOperationIsCurrent(operation)) return;
-      if (!nextStatus) {
-        throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
-      }
-      if (
-        poseHasAbsoluteTarget(presetPose) &&
-        ptzStatusContradictsPose(nextStatus, presetPose)
-      ) {
-        throw new Error(t("ext.cameras.visual_calibration.camera_status_unavailable"));
-      }
-      releasePoseMovement(operation);
-      await refreshSnapshot(operation.snapshotSourceId, operation.controller.signal);
-      if (!poseOperationIsCurrent(operation)) return;
-      presetPositionConfirmed = true;
-      const pose = poseFromStatus(nextStatus, preset);
-      if (pose) onCapture(pose, null, operation.viewId);
-      if (!poseOperationIsCurrent(operation)) return;
+      onCapture(pose, null, operation.viewId);
       onSnapshotRefreshRequested();
+      operationAbortRef.current = null;
+      onClose();
     } catch (error) {
       if (poseOperationIsCurrent(operation) && !isAbortError(error)) {
-        blockFreshSnapshot(
-          error,
-          operation.freshnessGeneration,
-          true,
-          gotoMovementIssued,
-        );
         setErrorMessage(
           calibrationSnapshotErrorMessage(
             error,
-            t("ext.cameras.visual_calibration.freshness_unverifiable"),
+            t("ext.cameras.visual_calibration.view_capture_failed"),
           ),
         );
       }
     } finally {
-      if (
-        !presetPositionConfirmed &&
-        openRef.current &&
-        freshnessGenerationRef.current === operation.freshnessGeneration &&
-        selectedViewIdRef.current === operation.viewId
-      ) {
-        setSelectedPresetToken((current) => (current === token ? "" : current));
-      }
-      if (poseMovementRef.current?.generation === operation.generation) cancelRegisteredPoseMovement(true);
       if (operationGenerationRef.current === operation.generation) {
         operationAbortRef.current = null;
         setBusy(false);
@@ -5062,43 +4946,12 @@ function CameraPoseModal({
             )}
           </div>
         </div>
-        <div className="rowWrap" style={{ gap: 8 }}>
-          <select
-            className="input"
-            style={{ minWidth: 0, maxWidth: 320, flex: "1 1 220px" }}
-            value={selectedPresetToken}
-            onChange={(event) => {
-              const token = event.target.value;
-              setSelectedPresetToken(token);
-              if (token) void gotoPreset(token);
-            }}
-            disabled={busy || !freshSnapshotReady || Boolean(activeMoveId) || !preferredPtzSourceId}
-          >
-            <option value="">{t("ext.cameras.control.preset_optional")}</option>
-            {presets.map((preset) => (
-              <option key={preset.token} value={preset.token}>
-                {preset.name || preset.token}
-              </option>
-            ))}
-          </select>
+        <div className="rowWrap" style={{ justifyContent: "flex-end" }}>
           <button
             className="primaryButton"
             type="button"
             disabled={busy || !freshSnapshotReady || Boolean(activeMoveId) || !preferredPtzSourceId}
-            onClick={() => {
-              const selectedPreset = presets.find((preset) => preset.token === selectedPresetToken) ?? null;
-              const pose = poseFromStatus(status, selectedPreset);
-              if (!pose || (!poseHasAbsoluteTarget(pose) && !pose.preset_token)) {
-                setErrorMessage(t("ext.cameras.visual_calibration.camera_status_unavailable"));
-                return;
-              }
-              const viewId = selectedViewIdRef.current;
-              if (!viewId) return;
-              cancelPoseOperation();
-              onCapture(pose, selectedView?.label ?? null, viewId);
-              onSnapshotRefreshRequested();
-              onClose();
-            }}
+            onClick={() => void useCurrentFraming()}
           >
             {t("ext.cameras.calibration.capture_pose")}
           </button>
@@ -5164,1368 +5017,6 @@ function CameraPoseModal({
       </div>
     </SubModal>
   );
-}
-
-function ControlPointsModal({
-  open,
-  onClose,
-  host,
-  i18n,
-  cameraId,
-  cameraConnectionType,
-  initialSets,
-  onSave,
-}: {
-  open: boolean;
-  onClose: () => void;
-  host: ToposyncHost;
-  i18n: HostI18n;
-  cameraId: string;
-  cameraConnectionType: CameraConnectionType | null;
-  initialSets: CameraControlPointSet[];
-  onSave: (controlPointSets: CameraControlPointSet[]) => void;
-}): React.ReactElement | null {
-  const { t } = i18n.useI18n();
-
-  const [sets, setSets] = useState<CameraControlPointSet[]>([]);
-  const [selectedSetId, setSelectedSetId] = useState<string | null>(null);
-  const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
-  const [hoverImagePoint, setHoverImagePoint] = useState<{ x: number; y: number } | null>(null);
-  const [hoverWorldPoint, setHoverWorldPoint] = useState<{ x: number; z: number } | null>(null);
-  const [ghostWorldPoint, setGhostWorldPoint] = useState<{ x: number; z: number } | null>(null);
-  const [ghostImagePoint, setGhostImagePoint] = useState<{ x: number; y: number } | null>(null);
-
-  const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
-  const [snapshotErrorMessage, setSnapshotErrorMessage] = useState<string | null>(null);
-  const [snapshotLoading, setSnapshotLoading] = useState(false);
-  const [ptzPresets, setPtzPresets] = useState<CameraPtzPreset[]>([]);
-  const [ptzStatus, setPtzStatus] = useState<PanTiltZoomState | null>(null);
-  const [ptzLoading, setPtzLoading] = useState(false);
-  const [ptzErrorMessage, setPtzErrorMessage] = useState<string | null>(null);
-  const [ptzCommandBusy, setPtzCommandBusy] = useState(false);
-  const [selectedPresetToken, setSelectedPresetToken] = useState("");
-  const [activeMoveId, setActiveMoveId] = useState<string | null>(null);
-
-  const selectedSet = useMemo(
-    () => sets.find((item) => item.id === selectedSetId) ?? sets[0] ?? null,
-    [selectedSetId, sets],
-  );
-  const selectedPoints = selectedSet?.control_points ?? [];
-  const completePairs = useMemo(
-    () => selectedPoints.filter((point) => Boolean(point.image) && Boolean(point.world)).length,
-    [selectedPoints],
-  );
-  const selectedSetQuality = useMemo(
-    () => (selectedSet ? summarizeControlPointSetQuality(selectedSet) : null),
-    [selectedSet],
-  );
-  const mappingControlPointSet = useMemo<CameraControlPointSet | null>(() => {
-    if (!selectedSet) return null;
-    return {
-      ...selectedSet,
-      pose_reference: selectedSet.pose_reference ? { ...selectedSet.pose_reference } : null,
-      control_points: selectedSet.control_points.map((point) => ({
-        ...point,
-        image: point.image ? { ...point.image } : null,
-        world: point.world ? { ...point.world } : null,
-      })),
-    };
-  }, [selectedSet]);
-  const isPtzCamera = cameraConnectionType === "onvif";
-  const selectedPreset = useMemo(
-    () => ptzPresets.find((preset) => String(preset.token || "").trim() === selectedPresetToken) ?? null,
-    [ptzPresets, selectedPresetToken],
-  );
-  const normalizedMoveStatus = normalizePtzMoveStatus(ptzStatus?.move_status);
-  const selectedSetIdRef = useRef<string | null>(null);
-  const ptzStatusRef = useRef<PanTiltZoomState | null>(null);
-  const moveVectorRef = useRef<{ pan: number; tilt: number; zoom: number } | null>(null);
-  const moveHeldRef = useRef(false);
-  const moveTimerRef = useRef<number | null>(null);
-  const moveRequestInFlightRef = useRef(false);
-  const stopRequestInFlightRef = useRef(false);
-  const snapshotAbortRef = useRef<AbortController | null>(null);
-  const snapshotTimerRef = useRef<number | null>(null);
-  const snapshotIntervalRef = useRef<number | null>(null);
-  const snapshotUrlRef = useRef<string | null>(null);
-  const ptzPresetsAbortRef = useRef<AbortController | null>(null);
-  const ptzStatusAbortRef = useRef<AbortController | null>(null);
-  const ptzStatusIntervalRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    selectedSetIdRef.current = selectedSetId;
-  }, [selectedSetId]);
-
-  useEffect(() => {
-    ptzStatusRef.current = ptzStatus;
-  }, [ptzStatus]);
-
-  useEffect(() => {
-    snapshotUrlRef.current = snapshotUrl;
-  }, [snapshotUrl]);
-
-  useEffect(() => {
-    if (!open) return;
-    const baseSets = initialSets.length
-      ? initialSets.map((item) => ({
-          ...item,
-          pose_reference: item.pose_reference ? { ...item.pose_reference } : null,
-          control_points: padControlPoints(
-            item.control_points.map((point) => ({
-              ...point,
-              image: point.image ?? null,
-              world: point.world ?? null,
-            })),
-          ),
-        }))
-      : [createDefaultControlPointSet(0, { label: t("ext.cameras.control.set_default") })];
-    setSets(baseSets);
-    setSelectedSetId(baseSets[0]?.id ?? null);
-    setSelectedPointId(baseSets[0]?.control_points[0]?.id ?? null);
-  }, [initialSets, open, t]);
-
-  useEffect(() => {
-    if (open) return;
-    setHoverImagePoint(null);
-    setHoverWorldPoint(null);
-    setGhostWorldPoint(null);
-    setGhostImagePoint(null);
-  }, [open]);
-
-  useEffect(() => {
-    if (!selectedSet) {
-      setSelectedPointId(null);
-      return;
-    }
-    if (!selectedSet.control_points.some((point) => point.id === selectedPointId)) {
-      setSelectedPointId(selectedSet.control_points[0]?.id ?? null);
-    }
-  }, [selectedPointId, selectedSet]);
-
-  useEffect(() => {
-    setSelectedPresetToken(String(selectedSet?.pose_reference?.preset_token ?? "").trim());
-  }, [selectedSet?.id, selectedSet?.pose_reference?.preset_token]);
-
-  const captureCurrentPoseIntoSelectedSet = useCallback(
-    (
-      nextStatus: PanTiltZoomState | null,
-      options?: {
-        presetToken?: string | null;
-        presetName?: string | null;
-        renameFromPreset?: boolean;
-      },
-    ) => {
-      if (!nextStatus) return;
-      const setId = selectedSetIdRef.current;
-      if (!setId) return;
-      const pan = typeof nextStatus.pan === "number" && Number.isFinite(nextStatus.pan) ? nextStatus.pan : null;
-      const tilt = typeof nextStatus.tilt === "number" && Number.isFinite(nextStatus.tilt) ? nextStatus.tilt : null;
-      const zoom = typeof nextStatus.zoom === "number" && Number.isFinite(nextStatus.zoom) ? nextStatus.zoom : null;
-      const presetToken = options?.presetToken ?? null;
-      const presetName = options?.presetName ?? null;
-      if (pan === null && tilt === null && zoom === null && !presetToken && !presetName) return;
-      setSets((previous) =>
-        previous.map((item) =>
-          item.id !== setId
-            ? item
-            : {
-                ...item,
-                label: options?.renameFromPreset && presetName ? presetName : item.label,
-                pose_reference: {
-                  pan,
-                  tilt,
-                  zoom,
-                  preset_token: presetToken,
-                  preset_name: presetName,
-                },
-              },
-        ),
-      );
-    },
-    [],
-  );
-
-  const loadSnapshot = useCallback(
-    async (options?: { silent?: boolean }) => {
-      if (!cameraId) return;
-      snapshotAbortRef.current?.abort();
-      const controller = new AbortController();
-      snapshotAbortRef.current = controller;
-      if (!options?.silent) {
-        setSnapshotLoading(true);
-        setSnapshotErrorMessage(null);
-      }
-      try {
-        const blob = await fetchCameraSnapshot(cameraId, controller.signal);
-        const nextUrl = URL.createObjectURL(blob);
-        setSnapshotUrl((previous) => {
-          if (previous) URL.revokeObjectURL(previous);
-          return nextUrl;
-        });
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setSnapshotErrorMessage(error instanceof Error ? error.message : String(error));
-        setSnapshotUrl((previous) => {
-          if (previous) URL.revokeObjectURL(previous);
-          return null;
-        });
-      } finally {
-        if (!options?.silent) setSnapshotLoading(false);
-      }
-    },
-    [cameraId],
-  );
-
-  const scheduleSnapshotRefresh = useCallback(
-    (delayMs: number) => {
-      if (snapshotTimerRef.current !== null) {
-        window.clearTimeout(snapshotTimerRef.current);
-        snapshotTimerRef.current = null;
-      }
-      snapshotTimerRef.current = window.setTimeout(() => {
-        snapshotTimerRef.current = null;
-        void loadSnapshot({ silent: false });
-      }, Math.max(0, delayMs));
-    },
-    [loadSnapshot],
-  );
-
-  const refreshPtzStatus = useCallback(
-    async (options?: { silent?: boolean }) => {
-      if (!cameraId || !isPtzCamera) return null;
-      ptzStatusAbortRef.current?.abort();
-      const controller = new AbortController();
-      ptzStatusAbortRef.current = controller;
-      if (!options?.silent) {
-        setPtzLoading(true);
-        setPtzErrorMessage(null);
-      }
-      try {
-        const response = await fetchCameraPtzStatus(cameraId, controller.signal);
-        const nextStatus = response.status ?? null;
-        setPtzStatus(nextStatus);
-        return nextStatus;
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") return null;
-        setPtzErrorMessage(error instanceof Error ? error.message : String(error));
-        setPtzStatus(null);
-        return null;
-      } finally {
-        if (!options?.silent) setPtzLoading(false);
-      }
-    },
-    [cameraId, isPtzCamera],
-  );
-
-  const loadPtzPresets = useCallback(async () => {
-    if (!cameraId || !isPtzCamera) return;
-    ptzPresetsAbortRef.current?.abort();
-    const controller = new AbortController();
-    ptzPresetsAbortRef.current = controller;
-    try {
-      const response = await fetchCameraPtzPresets(cameraId, controller.signal);
-      setPtzPresets(Array.isArray(response.presets) ? response.presets : []);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setPtzErrorMessage(error instanceof Error ? error.message : String(error));
-      setPtzPresets([]);
-    }
-  }, [cameraId, isPtzCamera]);
-
-  const settlePtzAndRefresh = useCallback(
-    async (options?: { presetToken?: string | null; presetName?: string | null; renameFromPreset?: boolean }) => {
-      if (!cameraId || !isPtzCamera) {
-        scheduleSnapshotRefresh(400);
-        return;
-      }
-      let finalStatus = ptzStatusRef.current;
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        const nextStatus = await refreshPtzStatus({ silent: attempt > 0 });
-        if (nextStatus) finalStatus = nextStatus;
-        if (normalizePtzMoveStatus(nextStatus?.move_status) !== "moving") break;
-        await sleep(420);
-      }
-      captureCurrentPoseIntoSelectedSet(finalStatus, options);
-      scheduleSnapshotRefresh(550);
-    },
-    [cameraId, captureCurrentPoseIntoSelectedSet, isPtzCamera, refreshPtzStatus, scheduleSnapshotRefresh],
-  );
-
-  useEffect(() => {
-    return () => {
-      snapshotAbortRef.current?.abort();
-      ptzPresetsAbortRef.current?.abort();
-      ptzStatusAbortRef.current?.abort();
-      if (snapshotTimerRef.current !== null) window.clearTimeout(snapshotTimerRef.current);
-      if (snapshotIntervalRef.current !== null) window.clearInterval(snapshotIntervalRef.current);
-      if (ptzStatusIntervalRef.current !== null) window.clearInterval(ptzStatusIntervalRef.current);
-      if (snapshotUrlRef.current) URL.revokeObjectURL(snapshotUrlRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!open) {
-      setSnapshotErrorMessage(null);
-      setSnapshotLoading(false);
-      setSnapshotUrl((previous) => {
-        if (previous) URL.revokeObjectURL(previous);
-        return null;
-      });
-      setPtzErrorMessage(null);
-      setPtzLoading(false);
-      setPtzPresets([]);
-      setPtzStatus(null);
-      setSelectedPresetToken("");
-      setActiveMoveId(null);
-      moveHeldRef.current = false;
-      moveVectorRef.current = null;
-      if (moveTimerRef.current !== null) {
-        window.clearInterval(moveTimerRef.current);
-        moveTimerRef.current = null;
-      }
-      if (snapshotTimerRef.current !== null) {
-        window.clearTimeout(snapshotTimerRef.current);
-        snapshotTimerRef.current = null;
-      }
-      if (snapshotIntervalRef.current !== null) {
-        window.clearInterval(snapshotIntervalRef.current);
-        snapshotIntervalRef.current = null;
-      }
-      if (ptzStatusIntervalRef.current !== null) {
-        window.clearInterval(ptzStatusIntervalRef.current);
-        ptzStatusIntervalRef.current = null;
-      }
-      snapshotAbortRef.current?.abort();
-      ptzPresetsAbortRef.current?.abort();
-      ptzStatusAbortRef.current?.abort();
-      return;
-    }
-
-    if (cameraId) {
-      void loadSnapshot();
-      if (snapshotIntervalRef.current !== null) window.clearInterval(snapshotIntervalRef.current);
-      snapshotIntervalRef.current = window.setInterval(() => {
-        void loadSnapshot({ silent: true });
-      }, SNAPSHOT_REFRESH_MS);
-    }
-
-    if (cameraId && isPtzCamera) {
-      void loadPtzPresets();
-      void refreshPtzStatus();
-      if (ptzStatusIntervalRef.current !== null) window.clearInterval(ptzStatusIntervalRef.current);
-      ptzStatusIntervalRef.current = window.setInterval(() => {
-        void refreshPtzStatus({ silent: true });
-      }, PTZ_STATUS_REFRESH_MS);
-    } else {
-      setPtzPresets([]);
-      setPtzStatus(null);
-      setPtzErrorMessage(null);
-    }
-
-    return () => {
-      snapshotAbortRef.current?.abort();
-      ptzPresetsAbortRef.current?.abort();
-      ptzStatusAbortRef.current?.abort();
-      if (snapshotTimerRef.current !== null) {
-        window.clearTimeout(snapshotTimerRef.current);
-        snapshotTimerRef.current = null;
-      }
-      if (snapshotIntervalRef.current !== null) {
-        window.clearInterval(snapshotIntervalRef.current);
-        snapshotIntervalRef.current = null;
-      }
-      if (ptzStatusIntervalRef.current !== null) {
-        window.clearInterval(ptzStatusIntervalRef.current);
-        ptzStatusIntervalRef.current = null;
-      }
-      if (moveTimerRef.current !== null) {
-        window.clearInterval(moveTimerRef.current);
-        moveTimerRef.current = null;
-      }
-      moveHeldRef.current = false;
-      moveVectorRef.current = null;
-      setActiveMoveId(null);
-    };
-  }, [cameraId, isPtzCamera, loadPtzPresets, loadSnapshot, open, refreshPtzStatus]);
-
-  const imageToWorldAbortRef = React.useRef<AbortController | null>(null);
-  const worldToImageAbortRef = React.useRef<AbortController | null>(null);
-  const imageToWorldTimerRef = React.useRef<number | null>(null);
-  const worldToImageTimerRef = React.useRef<number | null>(null);
-  const mapDebounceMs = 80;
-
-  useEffect(() => {
-    if (!open) return;
-    if (!hoverImagePoint || completePairs < 4 || !mappingControlPointSet) {
-      if (imageToWorldTimerRef.current) {
-        window.clearTimeout(imageToWorldTimerRef.current);
-        imageToWorldTimerRef.current = null;
-      }
-      imageToWorldAbortRef.current?.abort();
-      setGhostWorldPoint(null);
-      return;
-    }
-
-    imageToWorldAbortRef.current?.abort();
-    if (imageToWorldTimerRef.current) window.clearTimeout(imageToWorldTimerRef.current);
-    imageToWorldTimerRef.current = window.setTimeout(() => {
-      imageToWorldTimerRef.current = null;
-      const controller = new AbortController();
-      imageToWorldAbortRef.current = controller;
-      void mapControlPoint(mappingControlPointSet, { kind: "image", x: hoverImagePoint.x, y: hoverImagePoint.y }, controller.signal)
-        .then((result) => {
-          setGhostWorldPoint(result.world ?? null);
-        })
-        .catch((error) => {
-          if (error instanceof DOMException && error.name === "AbortError") return;
-          console.warn("[cameras] hover map image->world failed", error);
-          setGhostWorldPoint(null);
-        });
-    }, mapDebounceMs);
-
-    return () => {
-      if (imageToWorldTimerRef.current) {
-        window.clearTimeout(imageToWorldTimerRef.current);
-        imageToWorldTimerRef.current = null;
-      }
-      imageToWorldAbortRef.current?.abort();
-    };
-  }, [completePairs, hoverImagePoint, mappingControlPointSet, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    if (!hoverWorldPoint || completePairs < 4 || !mappingControlPointSet) {
-      if (worldToImageTimerRef.current) {
-        window.clearTimeout(worldToImageTimerRef.current);
-        worldToImageTimerRef.current = null;
-      }
-      worldToImageAbortRef.current?.abort();
-      setGhostImagePoint(null);
-      return;
-    }
-
-    worldToImageAbortRef.current?.abort();
-    if (worldToImageTimerRef.current) window.clearTimeout(worldToImageTimerRef.current);
-    worldToImageTimerRef.current = window.setTimeout(() => {
-      worldToImageTimerRef.current = null;
-      const controller = new AbortController();
-      worldToImageAbortRef.current = controller;
-      void mapControlPoint(mappingControlPointSet, { kind: "world", x: hoverWorldPoint.x, z: hoverWorldPoint.z }, controller.signal)
-        .then((result) => {
-          setGhostImagePoint(result.image ?? null);
-        })
-        .catch((error) => {
-          if (error instanceof DOMException && error.name === "AbortError") return;
-          console.warn("[cameras] hover map world->image failed", error);
-          setGhostImagePoint(null);
-        });
-    }, mapDebounceMs);
-
-    return () => {
-      if (worldToImageTimerRef.current) {
-        window.clearTimeout(worldToImageTimerRef.current);
-        worldToImageTimerRef.current = null;
-      }
-      worldToImageAbortRef.current?.abort();
-    };
-  }, [completePairs, hoverWorldPoint, mappingControlPointSet, open]);
-
-  const toolSession = useMemo<EditorToolSession>(() => {
-    return {
-      onPointerEvent: (event: EditorToolPointerEvent) => {
-        if (event.kind === "cancel") {
-          setHoverWorldPoint(null);
-          setGhostImagePoint(null);
-          return;
-        }
-        if (event.kind === "move") {
-          if (completePairs >= 4) {
-            setHoverWorldPoint({ x: event.world.x, z: event.world.z });
-            setHoverImagePoint(null);
-            setGhostWorldPoint(null);
-          }
-          return;
-        }
-        if (event.kind !== "down" || !selectedSetId || !selectedPointId) return;
-        setSets((previous) =>
-          previous.map((controlPointSet) =>
-            controlPointSet.id !== selectedSetId
-              ? controlPointSet
-              : {
-                  ...controlPointSet,
-                  control_points: controlPointSet.control_points.map((point) =>
-                    point.id === selectedPointId ? { ...point, world: { x: event.world.x, z: event.world.z } } : point,
-                  ),
-                },
-          ),
-        );
-      },
-      renderOverlay2D: ({
-        ctx: canvasContext,
-        viewport,
-      }: {
-        ctx: CanvasRenderingContext2D;
-        viewport: Viewport2DContext;
-      }) => {
-        canvasContext.save();
-        canvasContext.font = "700 12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-        canvasContext.textAlign = "center";
-        canvasContext.textBaseline = "middle";
-
-        for (let index = 0; index < selectedPoints.length; index += 1) {
-          const point = selectedPoints[index];
-          if (!point.world) continue;
-          const color = CONTROL_POINT_COLORS[index % CONTROL_POINT_COLORS.length];
-          const screen = viewport.worldToScreen(point.world);
-          const isSelected = selectedPointId === point.id;
-
-          canvasContext.beginPath();
-          canvasContext.arc(screen.x, screen.y, isSelected ? 10 : 8, 0, Math.PI * 2);
-          canvasContext.fillStyle = color;
-          canvasContext.fill();
-          canvasContext.lineWidth = 2;
-          canvasContext.strokeStyle = isSelected ? "rgba(255,255,255,0.92)" : "rgba(0,0,0,0.65)";
-          canvasContext.stroke();
-
-          canvasContext.fillStyle = "rgba(0,0,0,0.82)";
-          canvasContext.fillText(point.label || labelForIndex(index), screen.x, screen.y + 0.5);
-        }
-
-        if (ghostWorldPoint && completePairs >= 4) {
-          const screen = viewport.worldToScreen(ghostWorldPoint);
-          canvasContext.beginPath();
-          canvasContext.arc(screen.x, screen.y, 9, 0, Math.PI * 2);
-          canvasContext.fillStyle = "rgba(251,191,36,0.10)";
-          canvasContext.fill();
-          canvasContext.lineWidth = 2;
-          canvasContext.strokeStyle = "rgba(251,191,36,0.88)";
-          canvasContext.setLineDash([6, 4]);
-          canvasContext.stroke();
-          canvasContext.setLineDash([]);
-
-          canvasContext.beginPath();
-          canvasContext.arc(screen.x, screen.y, 2.6, 0, Math.PI * 2);
-          canvasContext.fillStyle = "rgba(251,191,36,0.95)";
-          canvasContext.fill();
-        }
-
-        canvasContext.restore();
-      },
-      getCursor: () => "crosshair",
-    };
-  }, [completePairs, ghostWorldPoint, selectedPointId, selectedPoints, selectedSetId]);
-
-  function updateSelectedSet(patch: Partial<CameraControlPointSet>) {
-    if (!selectedSetId) return;
-    setSets((previous) =>
-      previous.map((item) =>
-        item.id === selectedSetId
-          ? {
-              ...item,
-              ...patch,
-              control_points: patch.control_points ?? item.control_points,
-              pose_reference: patch.pose_reference === undefined ? item.pose_reference ?? null : patch.pose_reference,
-            }
-          : item,
-      ),
-    );
-  }
-
-  function addPoint() {
-    if (!selectedSetId) return;
-    const id = createUniqueId();
-    setSets((previous) =>
-      previous.map((controlPointSet) =>
-        controlPointSet.id !== selectedSetId
-          ? controlPointSet
-          : {
-              ...controlPointSet,
-              control_points: [
-                ...controlPointSet.control_points,
-                { id, label: labelForIndex(controlPointSet.control_points.length), image: null, world: null },
-              ],
-            },
-      ),
-    );
-    setSelectedPointId(id);
-  }
-
-  function addPosition() {
-    setSets((previous) => {
-      const nextIndex = previous.length;
-      const nextSet = selectedSet
-        ? {
-            ...duplicateControlPointSetForNewView(selectedSet, nextIndex),
-            label: t("ext.cameras.control.set_label", { index: nextIndex + 1 }),
-          }
-        : createDefaultControlPointSet(nextIndex, { label: t("ext.cameras.control.set_label", { index: nextIndex + 1 }) });
-      const paddedSet = { ...nextSet, control_points: padControlPoints(nextSet.control_points) };
-      setSelectedSetId(paddedSet.id);
-      setSelectedPointId(paddedSet.control_points[0]?.id ?? null);
-      return [...previous, paddedSet];
-    });
-  }
-
-  function removeSelectedPosition() {
-    if (!selectedSetId || sets.length <= 1) return;
-    setSets((previous) => {
-      const filtered = previous.filter((item) => item.id !== selectedSetId);
-      const fallback = filtered[0] ?? null;
-      setSelectedSetId(fallback?.id ?? null);
-      setSelectedPointId(fallback?.control_points[0]?.id ?? null);
-      return filtered;
-    });
-  }
-
-  function getImagePointFromEvent(event: React.MouseEvent<HTMLImageElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const normalizedX = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
-    const normalizedY = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
-    return { x: normalizedX, y: normalizedY };
-  }
-
-  function setImagePointFromEvent(event: React.MouseEvent<HTMLImageElement>) {
-    const imgPoint = getImagePointFromEvent(event);
-    if (!imgPoint || !selectedSetId || !selectedPointId) return;
-    setSets((previous) =>
-      previous.map((controlPointSet) =>
-        controlPointSet.id !== selectedSetId
-          ? controlPointSet
-          : {
-              ...controlPointSet,
-              control_points: controlPointSet.control_points.map((point) =>
-                point.id === selectedPointId ? { ...point, image: imgPoint } : point,
-              ),
-            },
-      ),
-    );
-  }
-
-  function readPoseAxis(value: unknown): number | null {
-    return typeof value === "number" && Number.isFinite(value) ? value : null;
-  }
-
-  async function moveCameraToPresetToken(
-    nextPresetToken: string,
-    options?: { fallbackPresetName?: string | null; bindSelectedSet?: boolean; renameFromPreset?: boolean },
-  ) {
-    const token = String(nextPresetToken || "").trim();
-    if (!token || !cameraId || !isPtzCamera) return;
-    const preset = ptzPresets.find((item) => String(item.token || "").trim() === token) ?? null;
-    const presetName = String(preset?.name || options?.fallbackPresetName || "").trim() || token;
-    const presetPose = {
-      pan: typeof preset?.pan === "number" && Number.isFinite(preset.pan) ? preset.pan : null,
-      tilt: typeof preset?.tilt === "number" && Number.isFinite(preset.tilt) ? preset.tilt : null,
-      zoom: typeof preset?.zoom === "number" && Number.isFinite(preset.zoom) ? preset.zoom : null,
-      preset_token: token,
-      preset_name: presetName,
-    };
-    setSelectedPresetToken(token);
-    if (options?.bindSelectedSet) updateSelectedSet({ label: presetName, pose_reference: presetPose });
-    setPtzCommandBusy(true);
-    setPtzErrorMessage(null);
-    try {
-      await gotoCameraPtzPreset(cameraId, token);
-      await settlePtzAndRefresh({
-        presetToken: token,
-        presetName,
-        renameFromPreset: options?.renameFromPreset === true,
-      });
-    } catch (error) {
-      setPtzErrorMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPtzCommandBusy(false);
-    }
-  }
-
-  async function moveCameraToPoseReference(poseReference: CameraPoseReference | null | undefined) {
-    if (!poseReference || !cameraId || !isPtzCamera) return;
-    const presetToken = String(poseReference.preset_token ?? "").trim();
-    const presetName = String(poseReference.preset_name ?? "").trim() || presetToken || null;
-    const pan = readPoseAxis(poseReference.pan);
-    const tilt = readPoseAxis(poseReference.tilt);
-    const zoom = readPoseAxis(poseReference.zoom);
-    const hasPanTilt = pan !== null && tilt !== null;
-    const hasAbsolutePosition = hasPanTilt || zoom !== null;
-    if (!hasAbsolutePosition) {
-      if (presetToken) {
-        await moveCameraToPresetToken(presetToken, {
-          fallbackPresetName: presetName,
-          bindSelectedSet: false,
-        });
-      }
-      return;
-    }
-
-    setPtzCommandBusy(true);
-    setPtzErrorMessage(null);
-    try {
-      await moveCameraPtzAbsolute(cameraId, {
-        pan: hasPanTilt ? pan : null,
-        tilt: hasPanTilt ? tilt : null,
-        zoom,
-      });
-      await settlePtzAndRefresh({
-        presetToken: presetToken || null,
-        presetName,
-      });
-    } catch (error) {
-      setPtzErrorMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPtzCommandBusy(false);
-    }
-  }
-
-  async function handlePresetSelection(nextPresetToken: string) {
-    const token = String(nextPresetToken || "").trim();
-    setSelectedPresetToken(token);
-    if (!token) {
-      captureCurrentPoseIntoSelectedSet(ptzStatusRef.current, { presetToken: null, presetName: null });
-      return;
-    }
-    await moveCameraToPresetToken(token, { bindSelectedSet: true, renameFromPreset: true });
-  }
-
-  async function handleControlPointSetSelection(controlPointSet: CameraControlPointSet) {
-    const nextPresetToken = String(controlPointSet.pose_reference?.preset_token ?? "").trim();
-    if (moveHeldRef.current || moveVectorRef.current) {
-      await stopActivePtzMove({ force: true });
-    }
-    selectedSetIdRef.current = controlPointSet.id;
-    setSelectedSetId(controlPointSet.id);
-    setSelectedPointId(controlPointSet.control_points[0]?.id ?? null);
-    setSelectedPresetToken(nextPresetToken);
-    await moveCameraToPoseReference(controlPointSet.pose_reference);
-  }
-
-  async function stopActivePtzMove(options?: { force?: boolean }) {
-    const force = options?.force === true;
-    const currentMove = moveVectorRef.current;
-    const shouldStop = force || moveHeldRef.current || currentMove !== null || activeMoveId !== null;
-
-    moveHeldRef.current = false;
-    moveVectorRef.current = null;
-    setActiveMoveId(null);
-    if (moveTimerRef.current !== null) {
-      window.clearInterval(moveTimerRef.current);
-      moveTimerRef.current = null;
-    }
-
-    if (!cameraId || !shouldStop || stopRequestInFlightRef.current) return;
-    stopRequestInFlightRef.current = true;
-    setPtzCommandBusy(true);
-    try {
-      await stopCameraPtz(cameraId, {
-        pan_tilt: force || Boolean(currentMove && (Math.abs(currentMove.pan) > 1e-6 || Math.abs(currentMove.tilt) > 1e-6)),
-        zoom: force || Boolean(currentMove && Math.abs(currentMove.zoom) > 1e-6),
-      });
-      setSelectedPresetToken("");
-      setPtzErrorMessage(null);
-      await settlePtzAndRefresh({ presetToken: null, presetName: null });
-    } catch (error) {
-      if (force) setPtzErrorMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      stopRequestInFlightRef.current = false;
-      setPtzCommandBusy(false);
-    }
-  }
-
-  function beginPtzMove(moveId: string, vector: { pan: number; tilt: number; zoom: number }) {
-    if (!cameraId || !isPtzCamera || ptzCommandBusy) return;
-    const clampedVector = {
-      pan: clamp(vector.pan, -1, 1),
-      tilt: clamp(vector.tilt, -1, 1),
-      zoom: clamp(vector.zoom, -1, 1),
-    };
-    moveVectorRef.current = clampedVector;
-    moveHeldRef.current = true;
-    setSelectedPresetToken("");
-    setActiveMoveId(moveId);
-
-    const sendMove = async () => {
-      if (!cameraId || !moveHeldRef.current || !moveVectorRef.current || moveRequestInFlightRef.current) return;
-      moveRequestInFlightRef.current = true;
-      try {
-        await moveCameraPtz(cameraId, { ...moveVectorRef.current, timeout_s: PTZ_MOVE_TIMEOUT_S });
-        setPtzErrorMessage(null);
-      } catch (error) {
-        setPtzErrorMessage(error instanceof Error ? error.message : String(error));
-        await stopActivePtzMove({ force: true });
-      } finally {
-        moveRequestInFlightRef.current = false;
-      }
-    };
-
-    void sendMove();
-    if (moveTimerRef.current !== null) window.clearInterval(moveTimerRef.current);
-    moveTimerRef.current = window.setInterval(() => {
-      void sendMove();
-    }, PTZ_MOVE_REPEAT_MS);
-  }
-
-  return (
-    <SubModal
-      open={open}
-      onClose={() => {
-        void stopActivePtzMove({ force: true });
-        onClose();
-      }}
-      title={t("ext.cameras.control.title")}
-      panelStyle={{
-        width: "min(1440px, calc(100vw - 28px))",
-        height: "calc(100vh - 28px)",
-        maxHeight: "calc(100vh - 28px)",
-      }}
-      bodyStyle={{
-        padding: 0,
-        overflow: "hidden",
-        display: "flex",
-        flexDirection: "column",
-        flex: 1,
-        minHeight: 0,
-      }}
-    >
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 12, flex: 1, minHeight: 0 }}>
-        <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-          <div className="rowWrap" style={{ gap: 8, flexWrap: "wrap" }}>
-            {sets.map((controlPointSet, index) => {
-              const quality = summarizeControlPointSetQuality(controlPointSet);
-              const isSelected = selectedSet?.id === controlPointSet.id;
-              const statusColor =
-                quality.status === "good"
-                  ? "rgba(34,197,94,0.92)"
-                  : quality.status === "review"
-                    ? "rgba(251,191,36,0.92)"
-                    : "rgba(148,163,184,0.88)";
-              return (
-                <button
-                  key={controlPointSet.id}
-                  type="button"
-                  className="chipButton"
-                  onClick={() => {
-                    void handleControlPointSetSelection(controlPointSet);
-                  }}
-                  disabled={isPtzCamera && ptzCommandBusy}
-                  style={{
-                    minWidth: 190,
-                    justifyContent: "space-between",
-                    borderColor: isSelected ? "rgba(56,189,248,0.55)" : "rgba(255,255,255,0.14)",
-                    background: isSelected ? "rgba(56,189,248,0.10)" : undefined,
-                  }}
-                >
-                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
-                    <span>{controlPointSet.label || t("ext.cameras.control.set_label", { index: index + 1 })}</span>
-                    <span className="cardMeta">
-                      {quality.status === "good"
-                        ? t("ext.cameras.control.quality_good")
-                        : quality.status === "review"
-                          ? t("ext.cameras.control.quality_review")
-                          : t("ext.cameras.control.quality_incomplete")}
-                    </span>
-                  </span>
-                  <span
-                    aria-hidden="true"
-                    style={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: 999,
-                      background: statusColor,
-                      boxShadow: "0 0 0 2px rgba(0,0,0,0.25)",
-                    }}
-                  />
-                </button>
-              );
-            })}
-
-            <button className="chipButton" type="button" onClick={addPosition}>
-              <i className="fa-solid fa-plus" aria-hidden="true" />
-              <span>{t("ext.cameras.control.add_position")}</span>
-            </button>
-
-            <button
-              className="iconButton"
-              type="button"
-              onClick={removeSelectedPosition}
-              aria-label={t("core.actions.delete")}
-              disabled={sets.length <= 1}
-            >
-              <i className="fa-solid fa-trash" aria-hidden="true" />
-            </button>
-          </div>
-
-          <div className="cardMeta" style={{ textAlign: "right" }}>
-            {t("ext.cameras.control.help_sets")}
-            {completePairs > 0 && completePairs < 4 ? ` ${t("ext.cameras.control.min_points")}` : ""}
-          </div>
-        </div>
-
-        {selectedSet ? (
-          <>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: isPtzCamera
-                  ? "minmax(220px, 1.2fr) minmax(220px, 1.6fr) minmax(180px, 1fr)"
-                  : "minmax(220px, 1fr) minmax(320px, 1.8fr)",
-                gap: 10,
-                alignItems: "end",
-              }}
-            >
-              {isPtzCamera ? (
-                <div className="field" style={{ marginBottom: 0 }}>
-                  <label className="label">{t("ext.cameras.control.preset_label")}</label>
-                  <select
-                    className="input"
-                    value={selectedPresetToken}
-                    disabled={ptzLoading || ptzCommandBusy}
-                    onChange={(event) => {
-                      void handlePresetSelection(event.target.value);
-                    }}
-                  >
-                    <option value="">{t("ext.cameras.control.preset_optional")}</option>
-                    {ptzPresets.map((preset) => {
-                      const token = String(preset.token || "").trim();
-                      if (!token) return null;
-                      const name = String(preset.name || "").trim() || token;
-                      return (
-                        <option key={token} value={token}>
-                          {name}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-              ) : null}
-
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label className="label">{t("ext.cameras.control.position_name")}</label>
-                <input
-                  className="input"
-                  value={selectedSet.label}
-                  onChange={(event) => updateSelectedSet({ label: event.target.value })}
-                />
-              </div>
-
-              <div
-                className="card"
-                style={{ marginBottom: 0, minHeight: 44, display: "flex", alignItems: "center" }}
-              >
-                <div className="cardBody" style={{ padding: "10px 12px" }}>
-                  <div className="cardMeta">
-                    {isPtzCamera ? t("ext.cameras.control.ptz_help_auto") : t("ext.cameras.control.pose_unbound")}
-                  </div>
-                  <div style={{ fontWeight: 600 }}>
-                    {selectedPreset ? String(selectedPreset.name || "").trim() || selectedPreset.token : t("ext.cameras.control.preset_current")}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {isPtzCamera ? (
-              <div className="card" style={{ marginBottom: 0 }}>
-                <div
-                  className="cardBody"
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "minmax(240px, 260px) minmax(220px, 1fr)",
-                    gap: 16,
-                    alignItems: "center",
-                  }}
-                >
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, alignItems: "stretch" }}>
-                    <button
-                      type="button"
-                      className="iconButton"
-                      onMouseDown={() => beginPtzMove("up-left", { pan: -PTZ_PAN_SPEED, tilt: PTZ_TILT_SPEED, zoom: 0 })}
-                      onMouseUp={() => void stopActivePtzMove()}
-                      onMouseLeave={() => void stopActivePtzMove()}
-                      disabled={ptzCommandBusy}
-                      style={{ background: activeMoveId === "up-left" ? "rgba(56,189,248,0.14)" : undefined }}
-                    >
-                      <i className="fa-solid fa-arrow-up-left" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="iconButton"
-                      onMouseDown={() => beginPtzMove("up", { pan: 0, tilt: PTZ_TILT_SPEED, zoom: 0 })}
-                      onMouseUp={() => void stopActivePtzMove()}
-                      onMouseLeave={() => void stopActivePtzMove()}
-                      disabled={ptzCommandBusy}
-                      style={{ background: activeMoveId === "up" ? "rgba(56,189,248,0.14)" : undefined }}
-                    >
-                      <i className="fa-solid fa-arrow-up" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="iconButton"
-                      onMouseDown={() => beginPtzMove("up-right", { pan: PTZ_PAN_SPEED, tilt: PTZ_TILT_SPEED, zoom: 0 })}
-                      onMouseUp={() => void stopActivePtzMove()}
-                      onMouseLeave={() => void stopActivePtzMove()}
-                      disabled={ptzCommandBusy}
-                      style={{ background: activeMoveId === "up-right" ? "rgba(56,189,248,0.14)" : undefined }}
-                    >
-                      <i className="fa-solid fa-arrow-up-right" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="iconButton"
-                      onMouseDown={() => beginPtzMove("left", { pan: -PTZ_PAN_SPEED, tilt: 0, zoom: 0 })}
-                      onMouseUp={() => void stopActivePtzMove()}
-                      onMouseLeave={() => void stopActivePtzMove()}
-                      disabled={ptzCommandBusy}
-                      style={{ background: activeMoveId === "left" ? "rgba(56,189,248,0.14)" : undefined }}
-                    >
-                      <i className="fa-solid fa-arrow-left" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="iconButton"
-                      onClick={() => void stopActivePtzMove({ force: true })}
-                      disabled={ptzCommandBusy && !activeMoveId}
-                    >
-                      <i className="fa-solid fa-stop" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="iconButton"
-                      onMouseDown={() => beginPtzMove("right", { pan: PTZ_PAN_SPEED, tilt: 0, zoom: 0 })}
-                      onMouseUp={() => void stopActivePtzMove()}
-                      onMouseLeave={() => void stopActivePtzMove()}
-                      disabled={ptzCommandBusy}
-                      style={{ background: activeMoveId === "right" ? "rgba(56,189,248,0.14)" : undefined }}
-                    >
-                      <i className="fa-solid fa-arrow-right" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="iconButton"
-                      onMouseDown={() => beginPtzMove("down-left", { pan: -PTZ_PAN_SPEED, tilt: -PTZ_TILT_SPEED, zoom: 0 })}
-                      onMouseUp={() => void stopActivePtzMove()}
-                      onMouseLeave={() => void stopActivePtzMove()}
-                      disabled={ptzCommandBusy}
-                      style={{ background: activeMoveId === "down-left" ? "rgba(56,189,248,0.14)" : undefined }}
-                    >
-                      <i className="fa-solid fa-arrow-down-left" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="iconButton"
-                      onMouseDown={() => beginPtzMove("down", { pan: 0, tilt: -PTZ_TILT_SPEED, zoom: 0 })}
-                      onMouseUp={() => void stopActivePtzMove()}
-                      onMouseLeave={() => void stopActivePtzMove()}
-                      disabled={ptzCommandBusy}
-                      style={{ background: activeMoveId === "down" ? "rgba(56,189,248,0.14)" : undefined }}
-                    >
-                      <i className="fa-solid fa-arrow-down" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="iconButton"
-                      onMouseDown={() => beginPtzMove("down-right", { pan: PTZ_PAN_SPEED, tilt: -PTZ_TILT_SPEED, zoom: 0 })}
-                      onMouseUp={() => void stopActivePtzMove()}
-                      onMouseLeave={() => void stopActivePtzMove()}
-                      disabled={ptzCommandBusy}
-                      style={{ background: activeMoveId === "down-right" ? "rgba(56,189,248,0.14)" : undefined }}
-                    >
-                      <i className="fa-solid fa-arrow-down-right" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="chipButton"
-                      onMouseDown={() => beginPtzMove("zoom-in", { pan: 0, tilt: 0, zoom: PTZ_ZOOM_SPEED })}
-                      onMouseUp={() => void stopActivePtzMove()}
-                      onMouseLeave={() => void stopActivePtzMove()}
-                      disabled={ptzCommandBusy}
-                      style={{ justifyContent: "center", background: activeMoveId === "zoom-in" ? "rgba(56,189,248,0.14)" : undefined }}
-                    >
-                      {t("ext.cameras.control.zoom_in")}
-                    </button>
-                    <button
-                      type="button"
-                      className="chipButton"
-                      onMouseDown={() => beginPtzMove("zoom-out", { pan: 0, tilt: 0, zoom: -PTZ_ZOOM_SPEED })}
-                      onMouseUp={() => void stopActivePtzMove()}
-                      onMouseLeave={() => void stopActivePtzMove()}
-                      disabled={ptzCommandBusy}
-                      style={{ justifyContent: "center", background: activeMoveId === "zoom-out" ? "rgba(56,189,248,0.14)" : undefined }}
-                    >
-                      {t("ext.cameras.control.zoom_out")}
-                    </button>
-                    <button type="button" className="chipButton" onClick={() => void loadSnapshot()} disabled={snapshotLoading}>
-                      {t("ext.cameras.control.refresh_snapshot")}
-                    </button>
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
-                    {[
-                      { label: t("ext.cameras.control.pose_pan"), value: formatPtzTelemetryValue(ptzStatus?.pan) },
-                      { label: t("ext.cameras.control.pose_tilt"), value: formatPtzTelemetryValue(ptzStatus?.tilt) },
-                      { label: t("ext.cameras.control.pose_zoom"), value: formatPtzTelemetryValue(ptzStatus?.zoom) },
-                      {
-                        label: t("ext.cameras.control.ptz_status_label"),
-                        value:
-                          normalizedMoveStatus === "moving"
-                            ? t("ext.cameras.control.ptz_status_moving")
-                            : normalizedMoveStatus === "idle"
-                              ? t("ext.cameras.control.ptz_status_idle")
-                              : t("ext.cameras.control.ptz_status_unknown"),
-                      },
-                    ].map((item) => (
-                      <div
-                        key={item.label}
-                        className="card"
-                        style={{ marginBottom: 0, minHeight: 64, display: "flex", alignItems: "center" }}
-                      >
-                        <div className="cardBody" style={{ padding: "10px 12px" }}>
-                          <div className="cardMeta">{item.label}</div>
-                          <div style={{ fontWeight: 700 }}>{item.value}</div>
-                        </div>
-                      </div>
-                    ))}
-                    {(ptzErrorMessage || ptzLoading) && (
-                      <div className="card" style={{ gridColumn: "1 / -1", marginBottom: 0 }}>
-                        <div className="cardBody" style={{ padding: "10px 12px" }}>
-                          {ptzLoading ? t("ext.cameras.control.loading") : ptzErrorMessage}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-              <div className="cardMeta">{isPtzCamera ? t("ext.cameras.control.ptz_help_auto") : t("ext.cameras.control.pose_help")}</div>
-              <div className="cardMeta">
-                {selectedSetQuality?.status === "good"
-                  ? t("ext.cameras.control.quality_good")
-                  : selectedSetQuality?.status === "review"
-                    ? t("ext.cameras.control.quality_review")
-                    : t("ext.cameras.control.quality_incomplete")}
-              </div>
-            </div>
-
-            <div className="rowWrap" style={{ gap: 8, flexWrap: "wrap" }}>
-              {selectedPoints.map((point, index) => {
-                const isSelected = selectedPointId === point.id;
-                const color = CONTROL_POINT_COLORS[index % CONTROL_POINT_COLORS.length];
-                const ready = Boolean(point.image && point.world);
-                return (
-                  <button
-                    key={point.id}
-                    type="button"
-                    className="chipButton"
-                    onClick={() => setSelectedPointId(point.id)}
-                    style={{
-                      minWidth: 52,
-                      justifyContent: "center",
-                      borderColor: isSelected ? "rgba(56,189,248,0.55)" : "rgba(255,255,255,0.14)",
-                      background: isSelected ? "rgba(56,189,248,0.10)" : undefined,
-                    }}
-                  >
-                    <span
-                      aria-hidden="true"
-                      style={{
-                        width: 10,
-                        height: 10,
-                        borderRadius: 999,
-                        background: color,
-                        boxShadow: "0 0 0 2px rgba(0,0,0,0.25)",
-                        opacity: ready ? 1 : 0.4,
-                      }}
-                    />
-                    <span>{point.label || labelForIndex(index)}</span>
-                  </button>
-                );
-              })}
-
-              <button className="iconButton" type="button" onClick={addPoint} aria-label={t("core.actions.add")}>
-                <i className="fa-solid fa-plus" aria-hidden="true" />
-              </button>
-            </div>
-          </>
-        ) : null}
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, flex: 1, minHeight: 0 }}>
-          <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-            <div className="label">{t("ext.cameras.control.image")}</div>
-            <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                borderRadius: 16,
-                border: "1px solid rgba(255,255,255,0.14)",
-                background: "rgba(0,0,0,0.30)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: 10,
-                overflow: "hidden",
-              }}
-            >
-              {snapshotErrorMessage ? (
-                <div className="card">
-                  <div className="cardBody">{snapshotErrorMessage}</div>
-                </div>
-              ) : snapshotUrl ? (
-                <div style={{ position: "relative", display: "inline-block", maxWidth: "100%", maxHeight: "100%" }}>
-                  <img
-                    src={snapshotUrl}
-                    alt={t("ext.cameras.control.image")}
-                    style={{
-                      display: "block",
-                      maxWidth: "100%",
-                      maxHeight: "100%",
-                      borderRadius: 14,
-                      border: "1px solid rgba(255,255,255,0.10)",
-                    }}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      setImagePointFromEvent(event);
-                    }}
-                    onMouseMove={(event) => {
-                      const p = getImagePointFromEvent(event);
-                      if (!p || completePairs < 4) return;
-                      setHoverImagePoint(p);
-                      setHoverWorldPoint(null);
-                      setGhostImagePoint(null);
-                    }}
-                    onMouseLeave={() => {
-                      setHoverImagePoint(null);
-                      setGhostWorldPoint(null);
-                    }}
-                  />
-
-                  {selectedPoints.map((point, index) => {
-                    if (!point.image) return null;
-                    const isSelected = selectedPointId === point.id;
-                    const color = CONTROL_POINT_COLORS[index % CONTROL_POINT_COLORS.length];
-                    return (
-                      <div
-                        key={point.id}
-                        style={{
-                          position: "absolute",
-                          left: `${point.image.x * 100}%`,
-                          top: `${point.image.y * 100}%`,
-                          transform: "translate(-50%,-50%)",
-                          width: isSelected ? 22 : 20,
-                          height: isSelected ? 22 : 20,
-                          borderRadius: 999,
-                          background: color,
-                          border: isSelected ? "2px solid rgba(255,255,255,0.92)" : "2px solid rgba(0,0,0,0.65)",
-                          boxShadow: "0 8px 18px rgba(0,0,0,0.28)",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: 12,
-                          fontWeight: 800,
-                          color: "rgba(0,0,0,0.82)",
-                          pointerEvents: "none",
-                        }}
-                      >
-                        {point.label || labelForIndex(index)}
-                      </div>
-                    );
-                  })}
-
-                  {ghostImagePoint && completePairs >= 4 ? (
-                    <div
-                      aria-hidden="true"
-                      style={{
-                        position: "absolute",
-                        left: `${ghostImagePoint.x * 100}%`,
-                        top: `${ghostImagePoint.y * 100}%`,
-                        transform: "translate(-50%,-50%)",
-                        width: 18,
-                        height: 18,
-                        borderRadius: 999,
-                        background: "rgba(251,191,36,0.10)",
-                        border: "2px dashed rgba(251,191,36,0.88)",
-                        boxShadow: "0 8px 18px rgba(0,0,0,0.22)",
-                        pointerEvents: "none",
-                      }}
-                    />
-                  ) : null}
-                </div>
-              ) : (
-                <div className="card">
-                  <div className="cardBody">
-                    {snapshotLoading ? t("ext.cameras.control.loading") : t("ext.cameras.control.image")}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-            <div className="label">{t("ext.cameras.control.canvas")}</div>
-            <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                borderRadius: 16,
-                border: "1px solid rgba(255,255,255,0.14)",
-                background: "rgba(0,0,0,0.30)",
-                overflow: "hidden",
-              }}
-            >
-              <host.ui.Viewport2DReplica interactionMode="select" session={toolSession} style={{ width: "100%", height: "100%" }} />
-            </div>
-          </div>
-        </div>
-
-        <div className="rowWrap" style={{ justifyContent: "space-between" }}>
-          <button
-            className="chipButton"
-            type="button"
-            onClick={() => {
-              void stopActivePtzMove({ force: true });
-              onClose();
-            }}
-          >
-            {t("core.actions.cancel")}
-          </button>
-          <button
-            className="primaryButton"
-            type="button"
-            onClick={() => {
-              onSave(
-                sets.map((controlPointSet, index) => ({
-                  ...controlPointSet,
-                  label:
-                    controlPointSet.label.trim() ||
-                    (index === 0 ? t("ext.cameras.control.set_default") : t("ext.cameras.control.set_label", { index: index + 1 })),
-                  pose_reference: normalizePoseReference(controlPointSet.pose_reference),
-                  control_points: controlPointSet.control_points.map((point, pointIndex) => ({
-                    ...point,
-                    label: point.label || labelForIndex(pointIndex),
-                    image: point.image ?? null,
-                    world: point.world ?? null,
-                  })),
-                })),
-              );
-              onClose();
-            }}
-          >
-            {t("core.actions.save")}
-          </button>
-        </div>
-      </div>
-    </SubModal>
-  );
-}
-
-function padControlPoints(controlPoints: CameraControlPoint[]): CameraControlPoint[] {
-  const padded = controlPoints.map((point, index) => ({
-    ...point,
-    label: point.label || labelForIndex(index),
-    image: point.image ?? null,
-    world: point.world ?? null,
-  }));
-  while (padded.length < 4) {
-    padded.push({ id: createUniqueId(), label: labelForIndex(padded.length), image: null, world: null });
-  }
-  return padded;
 }
 
 function normalizePoseReference(poseReference: CameraPoseReference | null | undefined): CameraPoseReference | null {

@@ -533,6 +533,8 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
       enabled: typeof device.enabled === "boolean" ? device.enabled : true,
       control: {
         type: controlType,
+        automation_exclusive_control_confirmed:
+          controlType === "onvif" && controlRecord.automation_exclusive_control_confirmed === true,
       },
       onvif: controlType === "onvif" ? readOnvifConfig(device.onvif) ?? { xaddr: "", username: "", password: "" } : null,
       sources,
@@ -554,6 +556,8 @@ export function serializeCameras(settings: CameraConfig[]): Record<string, unkno
         clock_domain: `device:${camera.id}`,
         control: {
           type: camera.control?.type === "onvif" ? "onvif" : "none",
+          automation_exclusive_control_confirmed:
+            camera.control?.type === "onvif" && camera.control.automation_exclusive_control_confirmed === true,
         },
         onvif: camera.control?.type === "onvif" ? camera.onvif ?? { xaddr: "", username: "", password: "" } : null,
         sources: normalizeCameraSourcesForSave(camera.sources),

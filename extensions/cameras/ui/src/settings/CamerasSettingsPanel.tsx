@@ -1255,6 +1255,38 @@ function CamerasSettingsPanelContent({
                       </div>
                       {inspectError ? <div className="errorText">{inspectError}</div> : null}
                       {inspectResult?.warnings?.length ? <div className="settingsStatusMuted">{inspectResult.warnings.join(" ")}</div> : null}
+                      <div className="field" style={{ marginTop: 12 }}>
+                        <label className="chipButton" style={{ width: "fit-content" }}>
+                          <input
+                            type="checkbox"
+                            checked={activeCamera.control.automation_exclusive_control_confirmed === true}
+                            onChange={(event) => updateCamera(activeCamera.id, (camera) => ({
+                              ...camera,
+                              control: {
+                                ...camera.control,
+                                automation_exclusive_control_confirmed: event.target.checked,
+                              },
+                            }))}
+                          />
+                          {t("ext.cameras.settings.automation_exclusive_control", {}, "Controle PTZ exclusivo confirmado")}
+                        </label>
+                        <div className="settingsDescription">
+                          {t(
+                            "ext.cameras.settings.automation_exclusive_control_help",
+                            {},
+                            "Confirmo que rastreamento nativo, movimento para o ponto de monitoramento e retorno automático estão desativados.",
+                          )}
+                        </div>
+                        {activeCamera.control.automation_exclusive_control_confirmed === true ? null : (
+                          <div className="settingsStatusMuted">
+                            {t(
+                              "ext.cameras.settings.automation_exclusive_control_warning",
+                              {},
+                              "Mantenha desmarcado enquanto a câmera puder se mover sozinha.",
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ) : null}
                 </div>

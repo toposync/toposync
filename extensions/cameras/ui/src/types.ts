@@ -26,6 +26,7 @@ export type CameraOnvifConfig = {
 
 export type CameraControlConfig = {
   type: CameraControlType;
+  automation_exclusive_control_confirmed?: boolean;
 };
 
 export type CameraSourceOriginConfig = {

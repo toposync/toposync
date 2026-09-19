@@ -4,13 +4,17 @@ import asyncio
 import base64
 import datetime as dt
 import hashlib
+import math
+import re
 import secrets
+import time
 import urllib.error
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from typing import Literal
+from decimal import Decimal
+from typing import Callable, Literal
 
 
 SOAP12_NS = "http://www.w3.org/2003/05/soap-envelope"
@@ -24,6 +28,23 @@ TT_NS = "http://www.onvif.org/ver10/schema"
 PTZ_NS = "http://www.onvif.org/ver20/ptz/wsdl"
 
 ONVIF_ALTERNATE_DEVICE_SERVICE_PORTS = (2020, 8000, 8080, 8899)
+NORMALIZED_PAN_TILT_POSITION_SPACE = (
+    "http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace"
+)
+NORMALIZED_PAN_TILT_TRANSLATION_SPACE = (
+    "http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace"
+)
+NORMALIZED_PAN_TILT_VELOCITY_SPACE = (
+    "http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"
+)
+NORMALIZED_PAN_TILT_SPACES = frozenset(
+    {
+        NORMALIZED_PAN_TILT_POSITION_SPACE,
+        NORMALIZED_PAN_TILT_TRANSLATION_SPACE,
+        NORMALIZED_PAN_TILT_VELOCITY_SPACE,
+    }
+)
+NORMALIZED_ZOOM_POSITION_SPACE = "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"
 
 
 class OnvifError(RuntimeError):
@@ -43,6 +64,7 @@ class OnvifProfile:
     height: int | None = None
     fps: int | None = None
     has_ptz: bool = False
+    ptz_configuration_token: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +84,8 @@ class OnvifPtzStatus:
     move_status: str = ""
     error: str = ""
     utc_time: str = ""
+    pan_tilt_space: str = ""
+    zoom_space: str = ""
 
 
 def normalize_onvif_xaddr(raw: str) -> str:
@@ -378,6 +402,203 @@ def _findtext(root: ET.Element, path: str, *, default: str = "") -> str:
     return str(value).strip()
 
 
+def _response_body(payload: bytes, *, soap_ns: str) -> ET.Element:
+    root = _parse_xml(payload)
+    body = root.find(f"{{{soap_ns}}}Body")
+    if body is None:
+        raise OnvifError("Missing ONVIF SOAP Body")
+    _raise_if_fault(body, soap_ns=soap_ns)
+    return body
+
+
+def _published_range(element: ET.Element | None) -> dict[str, float] | None:
+    if element is None:
+        return None
+    try:
+        minimum = float(_findtext(element, f"{{{TT_NS}}}Min"))
+        maximum = float(_findtext(element, f"{{{TT_NS}}}Max"))
+    except ValueError:
+        return None
+    if not math.isfinite(minimum) or not math.isfinite(maximum) or minimum > maximum:
+        return None
+    return {"min": minimum, "max": maximum}
+
+
+def _published_pan_tilt_space(
+    element: ET.Element, *, expected_uri: str
+) -> dict | None:
+    uri = _findtext(element, f"{{{TT_NS}}}URI")
+    x_range = _published_range(element.find(f"{{{TT_NS}}}XRange"))
+    y_range = _published_range(element.find(f"{{{TT_NS}}}YRange"))
+    if (
+        (uri in NORMALIZED_PAN_TILT_SPACES and uri != expected_uri)
+        or x_range is None
+        or y_range is None
+    ):
+        return None
+    normalized = uri == expected_uri and all(
+        -1.0 <= axis["min"] <= axis["max"] <= 1.0 for axis in (x_range, y_range)
+    )
+    return {"uri": uri, "x": x_range, "y": y_range, "normalized": normalized}
+
+
+def _published_zoom_space(element: ET.Element) -> dict | None:
+    uri = _findtext(element, f"{{{TT_NS}}}URI")
+    x_range = _published_range(element.find(f"{{{TT_NS}}}XRange"))
+    if not uri or x_range is None:
+        return None
+    normalized = (
+        uri == NORMALIZED_ZOOM_POSITION_SPACE
+        and 0.0 <= x_range["min"] <= x_range["max"] <= 1.0
+    )
+    return {"uri": uri, "x": x_range, "normalized": normalized}
+
+
+def _populate_absolute_zoom_capabilities(
+    result: dict, configuration: ET.Element, spaces: ET.Element,
+) -> None:
+    advertised = spaces.findall(f"{{{TT_NS}}}AbsoluteZoomPositionSpace")
+    parsed = [_published_zoom_space(space) for space in advertised]
+    valid = [space for space in parsed if space is not None]
+    result["spaces"]["absolute_zoom"] = valid
+    result["absolute_zoom"] = bool(valid) if len(valid) == len(parsed) else None
+    default_uri = _findtext(configuration, f"{{{TT_NS}}}DefaultAbsoluteZoomPositionSpace") or None
+    result["defaults"]["absolute_zoom"] = default_uri
+    if len(valid) != len(parsed):
+        result["reasons"].append("invalid_absolute_zoom_space")
+    if result["absolute_zoom"] is not True:
+        return
+    candidates = [space for space in valid if space["uri"] == default_uri]
+    if len(candidates) != 1:
+        result["reasons"].append("absolute_zoom_default_space_not_unique")
+        return
+    effective = candidates[0]
+    limit_element = configuration.find(f"{{{TT_NS}}}ZoomLimits")
+    if limit_element is not None:
+        range_element = limit_element.find(f"{{{TT_NS}}}Range")
+        limits = _published_zoom_space(range_element) if range_element is not None else None
+        if limits is None or limits["uri"] != default_uri:
+            result["reasons"].append("invalid_configuration_zoom_limits")
+            return
+        bounds = {
+            "min": max(effective["x"]["min"], limits["x"]["min"]),
+            "max": min(effective["x"]["max"], limits["x"]["max"]),
+        }
+        if bounds["min"] > bounds["max"]:
+            result["reasons"].append("configuration_zoom_limits_outside_space")
+            return
+        effective = {**effective, "x": bounds}
+    result["limits"]["zoom"] = {
+        **effective["x"], "space": default_uri, "normalized": effective["normalized"],
+    }
+
+
+def _duration_seconds(value: str) -> float | None:
+    # Calendar years/months have no fixed duration; never guess their seconds.
+    match = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?", value)
+    if match is None or not any(match.groups()):
+        return None
+    seconds = sum(float(part or 0) * unit for part, unit in zip(match.groups(), (86400, 3600, 60, 1)))
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
+def _published_ptz_timeout(options: ET.Element) -> dict | None:
+    elements = options.findall(f"{{{TT_NS}}}PTZTimeout")
+    if len(elements) != 1:
+        return None
+    minimum = _duration_seconds(_findtext(elements[0], f"{{{TT_NS}}}Min"))
+    maximum = _duration_seconds(_findtext(elements[0], f"{{{TT_NS}}}Max"))
+    if minimum is None or maximum is None or not 0 <= minimum <= maximum or maximum <= 0:
+        return None
+    return {"min": minimum, "max": maximum}
+
+
+def _populate_pan_tilt_capabilities(
+    result: dict, configuration: ET.Element, options_response: ET.Element,
+) -> None:
+    options = options_response.findall(f"{{{PTZ_NS}}}PTZConfigurationOptions")
+    if len(options) != 1:
+        result["reasons"].append("configuration_options_not_unique")
+        return
+    result["continuous_timeout_s"] = _published_ptz_timeout(options[0])
+    spaces = options[0].find(f"{{{TT_NS}}}Spaces")
+    if spaces is None:
+        result["reasons"].append("missing_configuration_spaces")
+        return
+    _populate_absolute_zoom_capabilities(result, configuration, spaces)
+    for mode, space_tag, default_tag, expected_uri in (
+        (
+            "absolute",
+            "AbsolutePanTiltPositionSpace",
+            "DefaultAbsolutePantTiltPositionSpace",
+            NORMALIZED_PAN_TILT_POSITION_SPACE,
+        ),
+        (
+            "continuous",
+            "ContinuousPanTiltVelocitySpace",
+            "DefaultContinuousPanTiltVelocitySpace",
+            NORMALIZED_PAN_TILT_VELOCITY_SPACE,
+        ),
+        (
+            "relative",
+            "RelativePanTiltTranslationSpace",
+            "DefaultRelativePanTiltTranslationSpace",
+            NORMALIZED_PAN_TILT_TRANSLATION_SPACE,
+        ),
+    ):
+        advertised = spaces.findall(f"{{{TT_NS}}}{space_tag}")
+        parsed = [
+            _published_pan_tilt_space(space, expected_uri=expected_uri) for space in advertised
+        ]
+        valid = [space for space in parsed if space is not None]
+        result["spaces"][mode] = valid
+        result[mode] = bool(valid) if len(valid) == len(parsed) else None
+        result["defaults"][mode] = _findtext(configuration, f"{{{TT_NS}}}{default_tag}") or None
+        if len(valid) != len(parsed):
+            result["reasons"].append(f"invalid_{mode}_space")
+    if result["absolute"] is not True:
+        return
+    default_uri = result["defaults"]["absolute"]
+    candidates = [space for space in result["spaces"]["absolute"] if space["uri"] == default_uri]
+    if len(candidates) != 1:
+        result["reasons"].append("absolute_default_space_not_unique")
+        return
+    effective = candidates[0]
+    limit_element = configuration.find(f"{{{TT_NS}}}PanTiltLimits")
+    if limit_element is not None:
+        range_element = limit_element.find(f"{{{TT_NS}}}Range")
+        limits = (
+            _published_pan_tilt_space(
+                range_element, expected_uri=NORMALIZED_PAN_TILT_POSITION_SPACE
+            )
+            if range_element is not None
+            else None
+        )
+        if limits is None or limits["uri"] != default_uri:
+            result["reasons"].append("invalid_configuration_limits")
+            return
+        effective = {
+            **effective,
+            **{
+                axis: {
+                    "min": max(effective[axis]["min"], limits[axis]["min"]),
+                    "max": min(effective[axis]["max"], limits[axis]["max"]),
+                }
+                for axis in ("x", "y")
+            },
+        }
+        if any(effective[axis]["min"] > effective[axis]["max"] for axis in ("x", "y")):
+            result["reasons"].append("configuration_limits_outside_space")
+            return
+        result["limits_kind"] = "configuration"
+    else:
+        result["limits_kind"] = "space"
+    result["limits"].update({
+        axis: {**effective[coordinate], "space": default_uri, "normalized": effective["normalized"]}
+        for axis, coordinate in (("pan", "x"), ("tilt", "y"))
+    })
+
+
 def _parse_capabilities(payload: bytes, *, soap_ns: str) -> tuple[str | None, str | None]:
     root = _parse_xml(payload)
     _raise_if_fault(root, soap_ns=soap_ns)
@@ -387,8 +608,7 @@ def _parse_capabilities(payload: bytes, *, soap_ns: str) -> tuple[str | None, st
 
 
 def _parse_profiles(payload: bytes, *, soap_ns: str) -> list[OnvifProfile]:
-    root = _parse_xml(payload)
-    _raise_if_fault(root, soap_ns=soap_ns)
+    root = _response_body(payload, soap_ns=soap_ns)
     out: list[OnvifProfile] = []
     for el in root.findall(f".//{{{TRT_NS}}}Profiles"):
         token = str(el.attrib.get("token") or "").strip()
@@ -414,7 +634,8 @@ def _parse_profiles(payload: bytes, *, soap_ns: str) -> list[OnvifProfile]:
         width = int(width_raw) if width_raw.isdigit() else None
         height = int(height_raw) if height_raw.isdigit() else None
         fps = int(fps_raw) if fps_raw.isdigit() else None
-        has_ptz = el.find(f".//{{{TT_NS}}}PTZConfiguration") is not None
+        ptz_configuration = el.find(f"{{{TT_NS}}}PTZConfiguration")
+        has_ptz = ptz_configuration is not None
         out.append(
             OnvifProfile(
                 token=token,
@@ -424,6 +645,10 @@ def _parse_profiles(payload: bytes, *, soap_ns: str) -> list[OnvifProfile]:
                 height=height,
                 fps=fps,
                 has_ptz=has_ptz,
+                ptz_configuration_token=(
+                    str(ptz_configuration.get("token") or "").strip()
+                    if ptz_configuration is not None else ""
+                ),
             )
         )
     return out
@@ -533,6 +758,8 @@ def _parse_ptz_status(payload: bytes, *, soap_ns: str) -> OnvifPtzStatus:
         move_status=str(move_status or "").strip(),
         error=str(error or "").strip(),
         utc_time=str(utc_time or "").strip(),
+        pan_tilt_space=str(pan_tilt.get("space") or "").strip() if pan_tilt is not None else "",
+        zoom_space=str(zoom_el.get("space") or "").strip() if zoom_el is not None else "",
     )
 
 
@@ -662,9 +889,19 @@ def _tptz_continuous_move_body(
 ) -> str:
     token = _xml_escape(profile_token)
     timeout_xml = ""
-    if timeout_s is not None and timeout_s > 0.0:
+    if timeout_s is not None:
         # PTZ ContinuousMove expects an xs:duration; use PT{seconds}S.
-        seconds = f"{float(timeout_s):.3f}".rstrip("0").rstrip(".")
+        try:
+            numeric_timeout = float(timeout_s)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise OnvifError("Invalid continuous movement timeout") from exc
+        if not math.isfinite(numeric_timeout) or numeric_timeout <= 0.0:
+            raise OnvifError("Invalid continuous movement timeout")
+        # Decimal(str(float)) retains the finite float's meaningful decimal
+        # digits, while fixed-point formatting avoids scientific notation.
+        seconds = format(Decimal(str(numeric_timeout)), "f")
+        if "." in seconds:
+            seconds = seconds.rstrip("0").rstrip(".")
         timeout_xml = f"<tptz:Timeout>PT{seconds}S</tptz:Timeout>"
 
     velocity_parts: list[str] = []
@@ -741,6 +978,28 @@ class OnvifClient:
         tuple[str, str],
         tuple[Literal["1.1", "1.2"], str, Literal["none", "digest", "text"]],
     ] = field(default_factory=dict, init=False, repr=False)
+    _profile_ptz_configuration_tokens: dict[str, str] = field(
+        default_factory=dict, init=False, repr=False,
+    )
+    _continuous_timeout_ranges: dict[tuple[str, str], dict | None] = field(
+        default_factory=dict, init=False, repr=False,
+    )
+
+    async def get_device_information(self) -> dict[str, str]:
+        """Read the device family without returning serial numbers or hardware IDs."""
+        response = await self._call_read_only_response(
+            url=normalize_onvif_xaddr(self.xaddr),
+            namespace=TDS_NS,
+            method="GetDeviceInformation",
+        )
+        return {
+            key: _findtext(response, f"{{{TDS_NS}}}{tag}")
+            for key, tag in (
+                ("manufacturer", "Manufacturer"),
+                ("model", "Model"),
+                ("firmware_version", "FirmwareVersion"),
+            )
+        }
 
     async def get_capabilities(self) -> tuple[str | None, str | None]:
         xaddr = normalize_onvif_xaddr(self.xaddr)
@@ -762,11 +1021,163 @@ class OnvifClient:
 
         body_xml = _trt_get_profiles_body()
         soap_action = _action(TRT_NS, "GetProfiles")
-        return await self._call_and_parse_profiles(
+        profiles = await self._call_and_parse_profiles(
             url=url,
             body_xml=body_xml,
             soap_action=soap_action,
         )
+        self._profile_ptz_configuration_tokens.clear()
+        for profile in profiles:
+            if sum(candidate.token == profile.token for candidate in profiles) == 1:
+                self._profile_ptz_configuration_tokens[profile.token] = profile.ptz_configuration_token
+        return profiles
+
+    async def get_ptz_capabilities(
+        self,
+        ptz_xaddr: str,
+        *,
+        profile_token: str,
+        configuration_token: str = "",
+    ) -> dict:
+        """Read published PanTilt capabilities for an exactly bound media profile.
+
+        ``configuration_token`` must come from that profile's GetProfiles result.
+        When omitted, the binding from this client's last GetProfiles is used.
+        Missing/ambiguous information remains unknown; coordinates are never degrees.
+        The limits describe accepted coordinates, not independently verified travel.
+        """
+        url = str(ptz_xaddr or "").strip()
+        profile = str(profile_token or "").strip()
+        if not url or not profile:
+            raise OnvifError("Missing ONVIF PTZ service URL or profile token")
+        supplied = str(configuration_token or "").strip()
+        known = self._profile_ptz_configuration_tokens.get(profile)
+        configuration = supplied or known or ""
+        result: dict = {
+            "status": "unknown",
+            "profile_token": profile,
+            "configuration_token": configuration or None,
+            "node_token": None,
+            "absolute": None, "continuous": None, "relative": None,
+            "absolute_zoom": None,
+            "spaces": {"absolute": [], "continuous": [], "relative": [], "absolute_zoom": []},
+            "defaults": {"absolute": None, "continuous": None, "relative": None, "absolute_zoom": None},
+            "limits": {"pan": None, "tilt": None, "zoom": None},
+            "limits_kind": None,
+            "continuous_timeout_s": None,
+            "presets": {"maximum_count": None, "home_supported": None},
+            "reasons": [],
+        }
+        if known is not None and supplied and known != supplied:
+            result["reasons"].append("profile_configuration_mismatch")
+            return result
+        if not configuration:
+            result["reasons"].append("missing_profile_configuration")
+            return result
+        try:
+            response = await self._call_read_only_response(
+                url=url, namespace=PTZ_NS, method="GetConfigurations",
+            )
+        except OnvifError:
+            result["reasons"].append("configurations_unavailable")
+            return result
+        matches = [
+            element for element in response.findall(f"{{{PTZ_NS}}}PTZConfiguration")
+            if element.get("token") == configuration
+        ]
+        if len(matches) != 1:
+            result["reasons"].append("configuration_not_unique")
+            return result
+        selected = matches[0]
+        node_token = _findtext(selected, f"{{{TT_NS}}}NodeToken")
+        result["node_token"] = node_token or None
+        options, nodes = await asyncio.gather(
+            self._call_read_only_response(
+                url=url, namespace=PTZ_NS, method="GetConfigurationOptions",
+                arguments_xml=(
+                    f"<service:ConfigurationToken>{_xml_escape(configuration)}"
+                    "</service:ConfigurationToken>"
+                ),
+            ),
+            self._call_read_only_response(url=url, namespace=PTZ_NS, method="GetNodes"),
+            return_exceptions=True,
+        )
+        if isinstance(options, BaseException):
+            if not isinstance(options, OnvifError):
+                raise options
+            result["reasons"].append("configuration_options_unavailable")
+        else:
+            _populate_pan_tilt_capabilities(result, selected, options)
+        if isinstance(nodes, BaseException):
+            if not isinstance(nodes, OnvifError):
+                raise nodes
+            result["reasons"].append("nodes_unavailable")
+        else:
+            matching_nodes = [
+                element for element in nodes.findall(f"{{{PTZ_NS}}}PTZNode")
+                if node_token and element.get("token") == node_token
+            ]
+            if len(matching_nodes) != 1:
+                result["reasons"].append("node_not_unique")
+            else:
+                node = matching_nodes[0]
+                maximum = _findtext(node, f"{{{TT_NS}}}MaximumNumberOfPresets")
+                home = _findtext(node, f"{{{TT_NS}}}HomeSupported")
+                result["presets"] = {
+                    "maximum_count": int(maximum) if maximum.isdigit() else None,
+                    "home_supported": {"true": True, "1": True, "false": False, "0": False}.get(home),
+                }
+        if any(result[mode] is not None for mode in ("absolute", "continuous", "relative", "absolute_zoom")):
+            result["status"] = "partial" if result["reasons"] else "verified"
+        self._continuous_timeout_ranges[(url, profile)] = result["continuous_timeout_s"]
+        return result
+
+    async def continuous_move_timeout(
+        self, ptz_xaddr: str, *, profile_token: str, requested_s: float,
+    ) -> float | None:
+        """Device failsafe timeout, independent of the controller's earlier Stop.
+
+        Unknown bounds omit the optional value and use the device default. Only
+        the fenced controller, which supplies its own finite Stop, uses this.
+        """
+        if not math.isfinite(requested_s) or requested_s <= 0:
+            raise OnvifError("Invalid continuous movement duration")
+        key = (ptz_xaddr, profile_token)
+        if key not in self._continuous_timeout_ranges:
+            bounds = None
+            try:
+                if profile_token not in self._profile_ptz_configuration_tokens:
+                    media, _ = await self.get_capabilities()
+                    if media:
+                        await self.get_profiles(media)
+                configuration = self._profile_ptz_configuration_tokens.get(profile_token)
+                if configuration:
+                    response = await self._call_read_only_response(
+                        url=ptz_xaddr, namespace=PTZ_NS, method="GetConfigurationOptions",
+                        arguments_xml=(f"<service:ConfigurationToken>{_xml_escape(configuration)}"
+                                       "</service:ConfigurationToken>"),
+                    )
+                    options = response.findall(f"{{{PTZ_NS}}}PTZConfigurationOptions")
+                    if len(options) == 1:
+                        bounds = _published_ptz_timeout(options[0])
+            except OnvifError:
+                pass
+            self._continuous_timeout_ranges[key] = bounds
+        bounds = self._continuous_timeout_ranges[key]
+        if bounds is None:
+            return None
+        if bounds["min"] > 30:
+            raise OnvifError("Device minimum movement timeout exceeds the safety budget")
+        clamped_timeout = min(max(requested_s, bounds["min"]), bounds["max"], 30.0)
+
+        # Although xs:duration permits fractional seconds, some ONVIF firmware
+        # rejects them. Prefer a whole-second device failsafe when rounding up
+        # remains inside the advertised range and safety budget. The controller
+        # still owns the exact pulse duration and sends Stop independently.
+        whole_second_timeout = float(math.ceil(clamped_timeout))
+        if whole_second_timeout <= bounds["max"] and whole_second_timeout <= 30.0:
+            return whole_second_timeout
+        return clamped_timeout
 
     async def get_stream_uri(self, media_xaddr: str, *, profile_token: str) -> str:
         url = str(media_xaddr or "").strip()
@@ -940,7 +1351,7 @@ class OnvifClient:
         tilt: float,
         zoom: float,
         timeout_s: float | None = None,
-    ) -> None:
+    ) -> dict[str, float]:
         url = str(ptz_xaddr or "").strip()
         token = str(profile_token or "").strip()
         if not url:
@@ -950,14 +1361,25 @@ class OnvifClient:
 
         body_xml = _tptz_continuous_move_body(token, pan=pan, tilt=tilt, zoom=zoom, timeout_s=timeout_s)
         soap_action = _action(PTZ_NS, "ContinuousMove")
+        dispatched_at: float | None = None
+
+        def dispatched() -> None:
+            nonlocal dispatched_at
+            dispatched_at = time.monotonic()
+
         payload, soap_ns = await self._call_ptz_mutation_once(
             url=url,
             profile_token=token,
             body_xml=body_xml,
             soap_action=soap_action,
             operation="ContinuousMove",
+            on_dispatch=dispatched,
         )
         _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
+        return (
+            {"transport_elapsed_seconds": max(0.0, time.monotonic() - dispatched_at)}
+            if dispatched_at is not None else {}
+        )
 
     async def relative_move(
         self,
@@ -1016,6 +1438,33 @@ class OnvifClient:
 
         # auto: try digest first, then plain text, then no header.
         return ["digest", "text", "none"]
+
+    async def _call_read_only_response(
+        self, *, url: str, namespace: str, method: str, arguments_xml: str = "",
+    ) -> ET.Element:
+        """Use the existing read retry policy; inspect only the expected SOAP Body."""
+        if not url:
+            raise OnvifError("Missing ONVIF service URL")
+        body_xml = (
+            f'<service:{method} xmlns:service="{namespace}">'
+            f"{arguments_xml}</service:{method}>"
+        )
+        last_error: Exception | None = None
+        for version, namespace_soap in (("1.2", SOAP12_NS), ("1.1", SOAP11_NS)):
+            for auth in self._auth_attempts():
+                try:
+                    payload = await self._call(
+                        url=url, body_xml=body_xml, soap_action=_action(namespace, method),
+                        soap_ns=namespace_soap, soap_version=version, auth=auth,  # type: ignore[arg-type]
+                    )
+                    body = _response_body(payload, soap_ns=namespace_soap)
+                    responses = body.findall(f"{{{namespace}}}{method}Response")
+                    if len(responses) != 1:
+                        raise OnvifError("Missing or ambiguous ONVIF response body")
+                    return responses[0]
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+        raise OnvifError(str(last_error) if last_error else f"ONVIF {method} failed")
 
     async def _call_and_parse_capabilities(
         self,
@@ -1132,6 +1581,7 @@ class OnvifClient:
         soap_action: str,
         operation: str,
         preflight: Literal["presets", "status"] = "status",
+        on_dispatch: Callable[[], None] | None = None,
     ) -> tuple[bytes, str]:
         soap_version, soap_ns, auth = await self._resolve_ptz_transport(
             url=url,
@@ -1139,6 +1589,8 @@ class OnvifClient:
             preflight=preflight,
         )
         try:
+            if on_dispatch is not None:
+                on_dispatch()
             payload = await self._call(
                 url=url,
                 body_xml=body_xml,

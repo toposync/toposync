@@ -17,6 +17,7 @@ from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_ptz_attention.api import (
     _binding_is_visible,
+    _calibrated_views_by_camera,
     _event_is_visible,
     create_router,
 )
@@ -1849,6 +1850,7 @@ def test_catalog_bootstraps_safe_cameras_views_and_graph_bindings() -> None:
         "quality": "ready",
         "compatible_source_ids": ["wide"],
         "compatible_roles": ["main"],
+        "physical_view_id": "",
         "preset_name": "Driveway preset",
     }
     assert payload["bindings"] == [
@@ -1867,6 +1869,57 @@ def test_catalog_bootstraps_safe_cameras_views_and_graph_bindings() -> None:
     assert "secret-vendor-token" not in serialized
     assert "rtsp://secret" not in serialized
     store.close()
+
+
+def test_catalog_excludes_v2_ptz_view_without_numeric_pose_from_selection() -> None:
+    views = _calibrated_views_by_camera(
+        [
+            SimpleNamespace(
+                id="yard",
+                name="Yard",
+                elements=[
+                    SimpleNamespace(
+                        id="camera-element",
+                        props={
+                            "camera_id": "front",
+                            "calibrated_views": [
+                                {
+                                    "id": "driveway",
+                                    "label": "Driveway",
+                                    "requires_pose_evidence": True,
+                                    "pose_reference": {
+                                        "preset_token": "secret-vendor-token",
+                                        "preset_name": "Driveway preset",
+                                    },
+                                    "stream_scope": {
+                                        "physical_view_id": "zoom-optics",
+                                        "compatible_source_ids": ["zoom"],
+                                    },
+                                    "projection_quality": {"status": "ready"},
+                                }
+                            ],
+                        },
+                    )
+                ],
+            )
+        ]
+    )
+
+    assert views["front"] == [
+        {
+            "id": "driveway",
+            "label": "Driveway",
+            "composition_id": "yard",
+            "composition_name": "Yard",
+            "camera_element_id": "camera-element",
+            "pose_bound": False,
+            "quality": "ready",
+            "compatible_source_ids": ["zoom"],
+            "compatible_roles": [],
+            "physical_view_id": "zoom-optics",
+            "preset_name": "Driveway preset",
+        }
+    ]
 
 
 def test_catalog_never_invents_an_actuator_for_non_ptz_or_mismatched_control() -> None:

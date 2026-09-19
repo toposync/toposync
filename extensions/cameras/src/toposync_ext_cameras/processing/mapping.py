@@ -31,6 +31,64 @@ class ControlPointPair:
     world_z: float
 
 
+GroundLensType = Literal["identity_rectilinear_v1", "rectilinear_brown_v1", "fisheye_kb4_v1"]
+GroundPointRole = Literal["fit", "check"]
+
+
+@dataclass(frozen=True, slots=True)
+class GroundLens:
+    """Small, self-contained lens profile for a ground-plane calibration."""
+
+    type: GroundLensType
+    fx: float = 1.0
+    fy: float = 1.0
+    cx: float = 0.5
+    cy: float = 0.5
+    coefficients: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class GroundCalibrationPoint:
+    id: str
+    role: GroundPointRole
+    image_u: float
+    image_v: float
+    world_x: float
+    world_z: float
+
+
+@dataclass(frozen=True, slots=True)
+class GroundProjectionSpec:
+    lens: GroundLens
+    points: tuple[GroundCalibrationPoint, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GroundPlaneMappingQuality:
+    status: Literal["ready", "review", "incomplete"]
+    number_of_fit_points: int
+    number_of_inliers: int
+    inlier_ratio: float
+    image_hull_area_ratio_uv: float
+    check_errors_meters: tuple[float, ...]
+    median_reprojection_error_uv: float | None
+    p95_reprojection_error_uv: float | None
+    is_numerically_unstable: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "number_of_fit_points": self.number_of_fit_points,
+            "number_of_inliers": self.number_of_inliers,
+            "inlier_ratio": self.inlier_ratio,
+            "image_hull_area_ratio_uv": self.image_hull_area_ratio_uv,
+            "check_errors_meters": list(self.check_errors_meters),
+            "median_reprojection_error_uv": self.median_reprojection_error_uv,
+            "p95_reprojection_error_uv": self.p95_reprojection_error_uv,
+            "is_numerically_unstable": self.is_numerically_unstable,
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class ControlPointRefinementPoint:
     id: str
@@ -99,7 +157,11 @@ class ControlPointSet:
     boundary_refinement_points: tuple[ControlPointBoundaryRefinementPoint, ...] = ()
     compatible_source_ids: tuple[str, ...] = ()
     compatible_roles: tuple[str, ...] = ()
+    compatible_view_ids: tuple[str, ...] = ()
+    physical_view_id: str | None = None
     visual_pose_signature: VisualPoseSignature | None = None
+    ground_projection: GroundProjectionSpec | None = None
+    requires_pose_evidence: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1133,6 +1195,241 @@ class ControlPointMapper:
         ):
             return base
         return _invert_refined_image_point(self, float(x), float(z), base)
+
+
+class GroundPlaneMapper:
+    """Map only the ground evidence actually supplied by the operator.
+
+    V2 deliberately has no local deformation. The valid polygons make a
+    homography useful without pretending that the whole frame is the ground.
+    """
+
+    def __init__(
+        self,
+        projection: GroundProjectionSpec,
+        config: HomographyEstimationConfig | None = None,
+    ) -> None:
+        self._lens = projection.lens
+        fit_points = tuple(point for point in projection.points if point.role == "fit")
+        check_points = tuple(point for point in projection.points if point.role == "check")
+        if len(fit_points) < 4:
+            raise ValueError("At least 4 fit points are required")
+
+        ideal_pairs: list[ControlPointPair] = []
+        original_points: list[GroundCalibrationPoint] = []
+        for point in fit_points:
+            ideal = _ground_lens_image_to_ideal(self._lens, point.image_u, point.image_v)
+            if ideal is None:
+                raise ValueError("Invalid lens profile or image point")
+            ideal_pairs.append(
+                ControlPointPair(
+                    image_u=ideal[0],
+                    image_v=ideal[1],
+                    world_x=float(point.world_x),
+                    world_z=float(point.world_z),
+                )
+            )
+            original_points.append(point)
+
+        estimate = estimate_homography_world_to_image(ideal_pairs, config=config)
+        self._H_world_to_ideal = estimate.H_world_to_image
+        self._H_ideal_to_world = estimate.H_image_to_world
+        self.inlier_mask = estimate.inlier_mask
+        self.method_used = estimate.method_used
+        inlier_points = [
+            point for index, point in enumerate(original_points) if estimate.inlier_mask[index]
+        ]
+        if len(inlier_points) < 4:
+            raise ValueError("Insufficient inliers")
+        self._image_polygon = tuple(
+            _convex_hull([(point.image_u, point.image_v) for point in inlier_points])
+        )
+        self._world_polygon = tuple(
+            _convex_hull([(point.world_x, point.world_z) for point in inlier_points])
+        )
+        if len(self._image_polygon) < 3 or len(self._world_polygon) < 3:
+            raise ValueError("Calibration points are collinear")
+
+        check_errors: list[float] = []
+        for point in check_points:
+            mapped = self._map_unbounded(point.image_u, point.image_v)
+            if mapped is None:
+                check_errors.append(float("inf"))
+                continue
+            check_errors.append(math.dist(mapped, (point.world_x, point.world_z)))
+
+        homography_quality = estimate.quality
+        ready = (
+            len(fit_points) >= 6
+            and len(inlier_points) >= 6
+            and homography_quality.inlier_ratio >= 0.8
+            and homography_quality.convex_hull_area_ratio_uv >= 0.05
+            and not homography_quality.is_near_collinear
+            and not homography_quality.is_numerically_unstable
+            and len(check_errors) >= 2
+            and all(math.isfinite(error) and error <= 0.5 for error in check_errors)
+        )
+        self.quality = GroundPlaneMappingQuality(
+            status="ready" if ready else "review" if len(fit_points) >= 4 else "incomplete",
+            number_of_fit_points=len(fit_points),
+            number_of_inliers=len(inlier_points),
+            inlier_ratio=homography_quality.inlier_ratio,
+            image_hull_area_ratio_uv=_convex_hull_area_ratio(
+                [(point.image_u, point.image_v) for point in inlier_points]
+            ),
+            check_errors_meters=tuple(check_errors),
+            median_reprojection_error_uv=homography_quality.median_reprojection_error_uv,
+            p95_reprojection_error_uv=homography_quality.p95_reprojection_error_uv,
+            is_numerically_unstable=homography_quality.is_numerically_unstable,
+        )
+
+    @property
+    def image_polygon(self) -> tuple[tuple[float, float], ...]:
+        return self._image_polygon
+
+    @property
+    def world_polygon(self) -> tuple[tuple[float, float], ...]:
+        return self._world_polygon
+
+    def _map_unbounded(self, u: float, v: float) -> tuple[float, float] | None:
+        ideal = _ground_lens_image_to_ideal(self._lens, u, v)
+        if ideal is None:
+            return None
+        return apply_homography(self._H_ideal_to_world, *ideal)
+
+    def map(self, u: float, v: float) -> tuple[float, float] | None:
+        if not _point_in_convex_polygon((u, v), self._image_polygon):
+            return None
+        mapped = self._map_unbounded(u, v)
+        if mapped is None or not _point_in_convex_polygon(mapped, self._world_polygon):
+            return None
+        return mapped
+
+    def map_image_to_world(self, u: float, v: float) -> tuple[float, float] | None:
+        return self.map(u, v)
+
+    def map_world_to_image(self, x: float, z: float) -> tuple[float, float] | None:
+        if not _point_in_convex_polygon((x, z), self._world_polygon):
+            return None
+        ideal = apply_homography(self._H_world_to_ideal, x, z)
+        if ideal is None:
+            return None
+        image = _ground_lens_ideal_to_image(self._lens, *ideal)
+        if image is None or not _point_in_convex_polygon(image, self._image_polygon):
+            return None
+        return image
+
+
+def _ground_lens_image_to_ideal(
+    lens: GroundLens, u: float, v: float
+) -> tuple[float, float] | None:
+    if not all(math.isfinite(value) for value in (u, v)) or not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+        return None
+    if lens.type == "identity_rectilinear_v1":
+        return float(u), float(v)
+    if np is None or lens.fx <= 0.0 or lens.fy <= 0.0:
+        return None
+    try:
+        import cv2  # type: ignore
+
+        points = np.asarray([[[float(u), float(v)]]], dtype=np.float64)
+        matrix = np.asarray(
+            [[lens.fx, 0.0, lens.cx], [0.0, lens.fy, lens.cy], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+        coefficients = np.asarray(lens.coefficients, dtype=np.float64)
+        if lens.type == "fisheye_kb4_v1":
+            if coefficients.shape != (4,):
+                return None
+            ideal = cv2.fisheye.undistortPoints(points, matrix, coefficients)
+        else:
+            if coefficients.shape not in {(4,), (5,), (8,)}:
+                return None
+            ideal = cv2.undistortPoints(points, matrix, coefficients)
+        x, y = (float(value) for value in ideal.reshape(-1, 2)[0])
+        return (x, y) if math.isfinite(x) and math.isfinite(y) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ground_lens_ideal_to_image(
+    lens: GroundLens, x: float, y: float
+) -> tuple[float, float] | None:
+    if not all(math.isfinite(value) for value in (x, y)):
+        return None
+    if lens.type == "identity_rectilinear_v1":
+        return float(x), float(y)
+    if lens.fx <= 0.0 or lens.fy <= 0.0:
+        return None
+    if lens.type == "rectilinear_brown_v1":
+        if len(lens.coefficients) not in {4, 5, 8}:
+            return None
+        k1, k2, p1, p2, *rest = lens.coefficients
+        k3 = rest[0] if rest else 0.0
+        radius2 = x * x + y * y
+        numerator = 1.0 + k1 * radius2 + k2 * radius2 * radius2 + k3 * radius2**3
+        if len(rest) == 4:
+            k4, k5, k6 = rest[1:]
+            denominator = 1.0 + k4 * radius2 + k5 * radius2 * radius2 + k6 * radius2**3
+            if abs(denominator) <= 1e-12:
+                return None
+            radial = numerator / denominator
+        else:
+            radial = numerator
+        distorted_x = x * radial + 2.0 * p1 * x * y + p2 * (radius2 + 2.0 * x * x)
+        distorted_y = y * radial + p1 * (radius2 + 2.0 * y * y) + 2.0 * p2 * x * y
+    elif lens.type == "fisheye_kb4_v1":
+        if len(lens.coefficients) != 4:
+            return None
+        radius = math.hypot(x, y)
+        if radius <= 1e-12:
+            distorted_x = distorted_y = 0.0
+        else:
+            theta = math.atan(radius)
+            k1, k2, k3, k4 = lens.coefficients
+            theta_d = theta * (
+                1.0 + k1 * theta * theta + k2 * theta**4 + k3 * theta**6 + k4 * theta**8
+            )
+            scale = theta_d / radius
+            distorted_x, distorted_y = x * scale, y * scale
+    else:
+        return None
+    u = lens.fx * distorted_x + lens.cx
+    v = lens.fy * distorted_y + lens.cy
+    return (u, v) if math.isfinite(u) and math.isfinite(v) else None
+
+
+def _point_in_convex_polygon(
+    point: tuple[float, float], polygon: tuple[tuple[float, float], ...]
+) -> bool:
+    if len(polygon) < 3:
+        return False
+    x, y = point
+    sign = 0
+    for index, start in enumerate(polygon):
+        end = polygon[(index + 1) % len(polygon)]
+        cross = (end[0] - start[0]) * (y - start[1]) - (end[1] - start[1]) * (x - start[0])
+        if abs(cross) <= 1e-9:
+            continue
+        current = 1 if cross > 0.0 else -1
+        if sign and current != sign:
+            return False
+        sign = current
+    return True
+
+
+def build_calibration_mapper(
+    control_point_set: ControlPointSet,
+    config: HomographyEstimationConfig | None = None,
+) -> ControlPointMapper | GroundPlaneMapper:
+    if control_point_set.ground_projection is not None:
+        return GroundPlaneMapper(control_point_set.ground_projection, config=config)
+    return ControlPointMapper(
+        list(control_point_set.control_points),
+        config=config,
+        refinement_points=control_point_set.refinement_points,
+        boundary_refinement_points=control_point_set.boundary_refinement_points,
+    )
 
 
 def _local_refinement_displacements(

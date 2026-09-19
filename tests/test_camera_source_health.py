@@ -630,9 +630,14 @@ def test_onvif_ptz_control_rejects_ambiguous_source_profile_binding(
         assert goto_tokens == []
 
 
+@pytest.mark.parametrize(
+    "movement_mode",
+    ["continuous_move", "relative_move", "strict_continuous", "strict_missing_timeout"],
+)
 def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    movement_mode: str,
 ) -> None:
     from toposync_ext_cameras.onvif import OnvifError, OnvifPtzPreset, OnvifPtzStatus
 
@@ -712,6 +717,10 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
             assert (pan, tilt, zoom) == (0.1, 0.2, 0.3)
             calls.append("absolute")
 
+        async def continuous_move_timeout(self, ptz_xaddr, *, profile_token, requested_s):
+            assert profile_token == "ptz-token"
+            return None if movement_mode == "strict_missing_timeout" else 1.0
+
         async def continuous_move(
             self,
             ptz_xaddr: str,
@@ -722,7 +731,8 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
             zoom: float,
             timeout_s: float | None,
         ) -> None:
-            _ = ptz_xaddr, profile_token, pan, tilt, zoom, timeout_s
+            _ = ptz_xaddr, profile_token, pan, tilt, zoom
+            assert timeout_s == 1.0
             calls.append("continuous")
             if bool(device_state["continuous_unsupported"]):
                 raise OnvifError("ONVIF HTTP error (400)")
@@ -864,15 +874,37 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
             goto_active = await services.call("cameras.ptz.get_status", **common)
 
             device_state["continuous_unsupported"] = True
-            await submit_control(
-                {
-                    "kind": "continuous_move",
-                    "pan": 0.5,
-                    "tilt": 0.0,
-                    "zoom": 0.0,
-                    "timeout_s": 10.0,
-                }
+            from contextlib import nullcontext
+            from toposync_ext_cameras.ptz_controller import PtzControlError
+            strict_error = (
+                "400"
+                if movement_mode == "strict_continuous"
+                else "timeout"
+                if movement_mode == "strict_missing_timeout"
+                else None
             )
+            with (
+                pytest.raises(PtzControlError, match=strict_error)
+                if strict_error is not None
+                else nullcontext()
+            ):
+                movement_result = await submit_control(
+                    {
+                        "kind": "relative_move" if movement_mode == "relative_move" else "continuous_move",
+                        "pan": 0.5,
+                        "tilt": 0.0,
+                        "zoom": 0.0,
+                        **({"timeout_s": 10.0} if movement_mode != "relative_move" else {}),
+                        **(
+                            {"allow_relative_fallback": False}
+                            if movement_mode in {"strict_continuous", "strict_missing_timeout"}
+                            else {}
+                        ),
+                    }
+                )
+                assert movement_result["accepted"] is True
+            if movement_mode in {"strict_continuous", "strict_missing_timeout"}:
+                return {"strict_rejected": True}
             after_relative_fallback = await services.call("cameras.ptz.get_status", **common)
             await submit_control({"kind": "stop", "pan_tilt": True, "zoom": True})
 
@@ -911,6 +943,12 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
 
         result = client.portal.call(exercise_tracking)
 
+    if movement_mode in {"strict_continuous", "strict_missing_timeout"}:
+        assert result == {"strict_rejected": True}
+        assert "relative" not in calls
+        assert ("continuous" in calls) is (movement_mode == "strict_continuous")
+        return
+
     assert result["cold_start"]["preset_token"] == ""
     assert result["created"] == {"token": "temporary-42", "name": "Temporary restore"}
     assert result["pending"]["preset_token"] == ""
@@ -931,8 +969,8 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
         "set",
         "absolute",
         "goto",
-        "continuous",
-        "relative",
+        *(["relative"] if movement_mode == "relative_move" else
+          ["continuous"] if movement_mode == "strict_continuous" else ["continuous", "relative"]),
         "stop",
         "set",
         "remove",

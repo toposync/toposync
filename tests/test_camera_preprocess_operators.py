@@ -292,3 +292,30 @@ def test_camera_lens_undistort_operator_is_noop_with_zero_distortion() -> None:
 
     asyncio.run(scenario())
 
+
+
+def test_camera_geometry_survives_crop_resize_and_yolo_footpoint():
+    import numpy as np
+    import pytest
+    from toposync.runtime.pipelines.runtime import Artifact, Packet
+    from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+    from toposync.runtime.pipelines.image_geometry import image_geometry, source_pixels, geometry_matrix
+    from toposync_ext_cameras.pipelines.postprocess import ImageCropRuntime, _resize_packet_artifacts_opencv
+    from toposync_ext_cameras.pipelines.operators import ObjectDetectionYOLORuntime, YoloObject
+    evidence = {'capture_instance': 'camera', 'generation': 1, 'sequence': 8}
+    packet = Packet.create(stream_id='one', payload={'capture_evidence': evidence}, artifacts={
+        'main': Artifact(name='main', data=np.zeros((540, 960, 3), np.uint8), metadata={
+            'image_geometry': image_geometry(960, 540, evidence)})})
+    crop = ImageCropRuntime({'units': 'pixels', 'left': 100, 'top': 50, 'right': 900, 'bottom': 500}, PipelineRuntimeDependencies())
+    packet = asyncio.run(crop.process_packet(packet, None))[0]
+    packet = _resize_packet_artifacts_opencv(packet, artifact_name='main', max_edge_px=400, allow_upscale=False)
+    artifact = packet.artifacts['main']
+    assert artifact.data.shape[:2] == (225, 400)
+    matrix = geometry_matrix(artifact.metadata['image_geometry'], 400, 225)
+    assert source_pixels([[0, 0]], matrix)[0] == pytest.approx([100.5, 50.5])
+    detector = ObjectDetectionYOLORuntime({}, PipelineRuntimeDependencies())
+    observed = detector._normalize_objects([YoloObject(None, 'person', .9, (.25, .25, .75, .75))], packet=packet)[0]
+    # Independent crop + OpenCV half-pixel resize inverse, not bbox envelope.
+    expected = [(2 * (.5 * 399) + 100.5) / 959, (2 * (.75 * 224) + 50.5) / 539]
+    assert observed.source_anchor['uv'] == pytest.approx(expected)
+    assert observed.source_anchor['capture_evidence'] == evidence

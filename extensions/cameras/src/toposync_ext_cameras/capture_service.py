@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import math
 import time
@@ -75,6 +76,7 @@ class CameraCaptureFrame:
     metrics: dict[str, Any] = field(default_factory=dict)
     source_health: dict[str, Any] = field(default_factory=dict)
     resolved: dict[str, Any] = field(default_factory=dict)
+    capture_evidence: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -270,7 +272,15 @@ class CameraCaptureService:
         if lease is None:
             return CameraCaptureFrame(lease_id=str(lease_id or "").strip())
 
-        frame, frame_ts = lease.grabber.get_latest()
+        read_sample = getattr(lease.grabber, "get_latest_sample", None)
+        capture_evidence: dict[str, Any] = {}
+        if callable(read_sample):
+            sample = read_sample()
+            frame, frame_ts = sample.frame, sample.published_at
+            capture_evidence = sample.evidence()
+        else:
+            # Older custom backends remain usable without invented frame identity.
+            frame, frame_ts = lease.grabber.get_latest()
         metrics = self._metrics_snapshot(lease.grabber)
         if frame_ts and not metrics.get("last_frame_ts"):
             metrics = {**metrics, "last_frame_ts": float(frame_ts)}
@@ -306,6 +316,7 @@ class CameraCaptureService:
             width=width,
             height=height,
             fresh=fresh,
+            capture_evidence=capture_evidence,
             metrics=metrics,
             source_health=source_health,
             resolved=camera_capture_resolved_as_dict(lease.resolved),
@@ -346,6 +357,96 @@ class CameraCaptureService:
         lease_ids = [lease_id for lease_id, lease in self._leases.items() if lease.owner_id == owner]
         for lease_id in lease_ids:
             await self.release(lease_id)
+
+    async def observe(
+        self,
+        request: CameraCaptureRequest,
+        dependencies: PipelineRuntimeDependencies,
+        *,
+        duration_s: float,
+        sample_interval_s: float = 0.05,
+    ) -> dict[str, Any]:
+        """Observe one shared capture lease without retaining camera frames.
+
+        The returned sequence evidence identifies decoder output only; it never
+        claims a physical exposure time and never includes image bytes.
+        """
+        try:
+            bounded_duration = float(duration_s)
+            bounded_interval = float(sample_interval_s)
+        except (TypeError, ValueError):
+            raise ValueError("Capture observation duration and interval must be numeric") from None
+        if not math.isfinite(bounded_duration) or not 0.5 <= bounded_duration <= 30.0:
+            raise ValueError("Capture observation duration must be between 0.5 and 30 seconds")
+        if not math.isfinite(bounded_interval) or not 0.02 <= bounded_interval <= 1.0:
+            raise ValueError("Capture observation interval must be between 0.02 and 1 second")
+
+        lease = await self.open(request, dependencies)
+        started_monotonic = time.monotonic()
+        started_at = time.time()
+        deadline = started_monotonic + bounded_duration
+        last_frame_ts = 0.0
+        last_identity: tuple[str, int, int] | None = None
+        observed: list[dict[str, Any]] = []
+        released = False
+        terminal_metrics: dict[str, Any] = {}
+        terminal_health: dict[str, Any] = {}
+        try:
+            while time.monotonic() < deadline:
+                frame = await self.get_latest(lease.lease_id, min_frame_ts=last_frame_ts)
+                terminal_metrics = dict(frame.metrics)
+                terminal_health = dict(frame.source_health)
+                released = bool(frame.released)
+                evidence = frame.capture_evidence if isinstance(frame.capture_evidence, dict) else {}
+                identity = (
+                    str(evidence.get("capture_instance") or ""),
+                    int(evidence.get("generation") or 0),
+                    int(evidence.get("sequence") or 0),
+                )
+                if (
+                    not released
+                    and frame.frame is not None
+                    and identity[0]
+                    and identity[2] > 0
+                    and identity != last_identity
+                ):
+                    observed.append(
+                        {
+                            "offset_seconds": round(max(0.0, time.monotonic() - started_monotonic), 4),
+                            "published_at": round(float(frame.frame_ts or 0.0), 6),
+                            "generation": identity[1],
+                            "sequence": identity[2],
+                            "width": int(frame.width or 0),
+                            "height": int(frame.height or 0),
+                            "physical_timestamp_verified": bool(
+                                evidence.get("physical_timestamp_verified", False)
+                            ),
+                        }
+                    )
+                    last_identity = identity
+                    last_frame_ts = max(last_frame_ts, float(frame.frame_ts or 0.0))
+                if released:
+                    break
+                await asyncio.sleep(bounded_interval)
+        finally:
+            await self.release(lease.lease_id)
+
+        offsets = [float(item["offset_seconds"]) for item in observed]
+        gaps = [later - earlier for earlier, later in zip(offsets, offsets[1:])]
+        return {
+            "started_at_unix": round(started_at, 6),
+            "duration_seconds": round(max(0.0, time.monotonic() - started_monotonic), 4),
+            "requested_duration_seconds": bounded_duration,
+            "sample_interval_seconds": bounded_interval,
+            "released_while_observing": released,
+            "distinct_frame_count": len(observed),
+            "maximum_observed_gap_seconds": round(max(gaps), 4) if gaps else None,
+            "samples": observed,
+            "images_persisted": False,
+            "terminal_metrics": terminal_metrics,
+            "terminal_source_health": terminal_health,
+            "resolved": camera_capture_resolved_as_dict(lease.resolved),
+        }
 
     def _lease_key(self, request: CameraCaptureRequest) -> str:
         return "\n".join(

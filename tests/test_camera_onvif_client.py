@@ -5,6 +5,30 @@ import asyncio
 import pytest
 
 
+def test_continuous_receipt_excludes_read_only_transport_preflight(monkeypatch):
+    from types import SimpleNamespace
+    import toposync_ext_cameras.onvif.client as module
+
+    clock = SimpleNamespace(now=100.0)
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock.now))
+
+    async def resolve(self, **kwargs):
+        clock.now += 2.0
+        return "1.2", module.SOAP12_NS, "none"
+
+    async def call(self, **kwargs):
+        clock.now += 0.04
+        return b'<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><ContinuousMoveResponse xmlns="http://www.onvif.org/ver20/ptz/wsdl"/></s:Body></s:Envelope>'
+
+    monkeypatch.setattr(module.OnvifClient, "_resolve_ptz_transport", resolve)
+    monkeypatch.setattr(module.OnvifClient, "_call", call)
+    client = module.OnvifClient(xaddr="http://camera.test/onvif", username="", password="")
+    receipt = asyncio.run(client.continuous_move("http://camera.test/ptz", profile_token="main",
+                                               pan=0.1, tilt=0, zoom=0, timeout_s=1))
+    assert clock.now == pytest.approx(102.04)
+    assert receipt["transport_elapsed_seconds"] == pytest.approx(0.04)
+
+
 def test_normalize_onvif_xaddr_accepts_plain_host() -> None:
     from toposync_ext_cameras.onvif import normalize_onvif_xaddr
 
@@ -144,4 +168,3 @@ def test_onvif_client_parses_capabilities_profiles_and_stream_uri(monkeypatch: p
     assert ptz_xaddr == "http://192.168.0.10/onvif/ptz_service"
     assert token == "profile-main"
     assert uri == "rtsp://192.168.0.10/stream1"
-

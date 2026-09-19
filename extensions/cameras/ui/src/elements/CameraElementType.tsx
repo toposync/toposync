@@ -3,6 +3,7 @@ import Select, { type SingleValue, type StylesConfig } from "react-select";
 import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 
 import cameraSvg from "@fortawesome/fontawesome-free/svgs/solid/camera.svg";
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 
 import type {
   BoundsXZ,
@@ -19,6 +20,7 @@ import type {
 import {
   captureCameraPtzViewAnchor,
   fetchCameraPtzStatus,
+  fetchCameraPanoramaContext,
   fetchCameraSnapshot,
   fetchCamerasIndex,
   gotoCameraPtzPreset,
@@ -46,6 +48,7 @@ import type {
   CameraProjectionRefinementPoint,
   CameraProjectionWorldQuad,
   CameraPoseReference,
+  CameraPanoramaContext,
   CameraSourceConfig,
   CameraSourceRole,
   CameraVisualCalibrationResult,
@@ -53,6 +56,7 @@ import type {
   PanTiltZoomState,
 } from "../types";
 import { SubModal } from "../ui/SubModal";
+import { CameraPanoramaMappingModal } from "./CameraPanoramaMappingModal";
 
 function roundRectPath(
   canvasContext: CanvasRenderingContext2D,
@@ -474,7 +478,10 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-type CameraSnapshotSourceOption = Pick<CameraSourceConfig, "id" | "name" | "enabled" | "is_default" | "kind" | "role"> & {
+type CameraSnapshotSourceOption = Pick<
+  CameraSourceConfig,
+  "id" | "name" | "enabled" | "is_default" | "kind" | "role" | "view_id" | "origin" | "video" | "ingest" | "metadata"
+> & {
   has_ptz?: boolean;
 };
 
@@ -1028,10 +1035,21 @@ function CameraEditor({
   );
   const totalSets = existingCalibratedViews.length;
   const spatialClipAreaId = readSpatialVideoClipAreaId(props);
-  const [isCalibrationOpen, setIsCalibrationOpen] = useState(false);
+  const [isPanoramaMappingOpen, setIsPanoramaMappingOpen] = useState(false);
+  const [legacyPanoramaContext, setLegacyPanoramaContext] = useState<CameraPanoramaContext | null>(null);
 
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndex | null>(null);
   const [indexErrorMessage, setIndexErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLegacyPanoramaContext(null);
+    if (!selectedCameraId) return;
+    const controller = new AbortController();
+    void fetchCameraPanoramaContext(selectedCameraId, element.id, controller.signal)
+      .then((context) => { if (!controller.signal.aborted) setLegacyPanoramaContext(context); })
+      .catch(() => { /* A saved mapping reference remains available if context cannot load. */ });
+    return () => controller.abort();
+  }, [selectedCameraId, element.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1061,7 +1079,27 @@ function CameraEditor({
                 is_default: source?.is_default === true,
                 kind: (readString(source?.kind).trim() || "video") as CameraSourceConfig["kind"],
                 role: (readString(source?.role).trim() || "custom") as CameraSourceRole,
-                has_ptz: source?.origin?.has_ptz === true,
+                view_id: readString(source?.view_id).trim() || readString(source?.id).trim(),
+                has_ptz: source?.has_ptz === true || source?.origin?.has_ptz === true,
+                origin: {
+                  type: source?.origin?.type === "onvif_profile" ? "onvif_profile" : "rtsp",
+                  rtsp_url: "",
+                  profile_token: null,
+                  profile_name: readString(source?.origin?.profile_name).trim() || null,
+                  has_ptz: source?.has_ptz === true || source?.origin?.has_ptz === true,
+                  metadata: {},
+                },
+                video: {
+                  width: typeof source?.video?.width === "number" ? source.video.width : null,
+                  height: typeof source?.video?.height === "number" ? source.video.height : null,
+                  fps: typeof source?.video?.fps === "number" ? source.video.fps : null,
+                  codec: readString(source?.video?.codec).trim() || null,
+                },
+                ingest: {
+                  mode: "direct",
+                  host_server_id: "",
+                },
+                metadata: {},
               }))
               .filter((source) => Boolean(source.id)) as CameraSnapshotSourceOption[]
           : [];
@@ -1078,6 +1116,22 @@ function CameraEditor({
     () => cameraOptions.find((camera) => camera.id === selectedCameraId) ?? null,
     [cameraOptions, selectedCameraId],
   );
+
+  function openPanoramaSettings(requestedSourceId?: string): void {
+    if (!selectedCameraId) return;
+    const sourceId = requestedSourceId
+      || readString(readRecord(props.panorama_mapping).source_id)
+      || legacyPanoramaContext?.job?.source_id
+      || readString(props.source_id)
+      || selectedCamera?.sources.find((source) => source.enabled && source.is_default)?.id
+      || selectedCamera?.sources.find((source) => source.enabled)?.id;
+    const parameters = new URLSearchParams({ panel: "com.toposync.cameras", camera_id: selectedCameraId });
+    if (sourceId) parameters.set("source_id", sourceId);
+    setIsPanoramaMappingOpen(false);
+    close();
+    window.history.pushState({}, "", resolveToposyncUrl(`/settings?${parameters.toString()}`));
+    window.dispatchEvent(new Event("popstate"));
+  }
   const areaClipOptions = useMemo<CameraAreaClipOption[]>(() => {
     if (readyCalibratedViews.length === 0) return [];
     const footprints = readyCalibratedViews.map(calibratedViewFootprint).filter((footprint) => footprint.length >= 3);
@@ -1155,25 +1209,23 @@ function CameraEditor({
         <label className="label">{t("ext.cameras.editor.calibration")}</label>
         <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div className="cardMeta">
-            {totalSets > 0
+            {readRecord(props.panorama_mapping).status === "ready"
+              ? t("ext.cameras.panorama.active_title")
+              : totalSets > 0
               ? t("ext.cameras.editor.control_sets_some", { ready: readySets, total: totalSets })
               : t("ext.cameras.editor.calibration_none")}
           </div>
 
           <button
-            className="chipButton"
+            className="primaryButton"
             type="button"
             disabled={!selectedCameraId}
-            onClick={() => setIsCalibrationOpen(true)}
+            onClick={() => setIsPanoramaMappingOpen(true)}
           >
-            {t("ext.cameras.editor.calibration_open")}
+            {t("ext.cameras.panorama.calibrate_camera")}
           </button>
         </div>
-        {totalSets > 0 && readySets === 0 ? (
-          <div className="cardMeta" style={{ marginTop: 6 }}>
-            {t("ext.cameras.editor.calibration_hint")}
-          </div>
-        ) : null}
+
       </div>
 
       <div className="field">
@@ -1189,7 +1241,7 @@ function CameraEditor({
         />
         <div className="cardMeta" style={{ marginTop: 6 }}>
           {readyCalibratedViews.length === 0
-            ? t("ext.cameras.editor.spatial_clip_disabled_no_calibration")
+            ? t(readRecord(props.panorama_mapping).status === "ready" ? "ext.cameras.panorama.spatial_clip_unavailable" : "ext.cameras.editor.spatial_clip_disabled_no_calibration")
             : areaClipOptions.length === 0
               ? t("ext.cameras.editor.spatial_clip_none")
               : t("ext.cameras.editor.spatial_clip_hint")}
@@ -1220,18 +1272,20 @@ function CameraEditor({
         </button>
       </div>
 
-      <CameraCalibrationModal
-        open={isCalibrationOpen}
-        onClose={() => setIsCalibrationOpen(false)}
+      <CameraPanoramaMappingModal
+        open={isPanoramaMappingOpen}
+        onClose={() => setIsPanoramaMappingOpen(false)}
+        onOpenSettings={openPanoramaSettings}
         host={host}
         i18n={i18n}
         element={element}
         cameraId={selectedCameraId}
-        cameraConnectionType={selectedCamera?.connectionType || null}
-        cameraSources={selectedCamera?.sources ?? []}
-        initialViews={existingCalibratedViews}
-        onSave={(calibratedViews) => update({ props: { calibrated_views: calibratedViews, control_point_sets: undefined } })}
+        onActivate={(job) => update({ props: {
+          panorama_mapping: { job_id: job.id, revision: job.revision, source_id: job.source_id, status: "ready" },
+          previous_panorama_mapping: props.panorama_mapping,
+        } })}
       />
+
     </div>
   );
 }

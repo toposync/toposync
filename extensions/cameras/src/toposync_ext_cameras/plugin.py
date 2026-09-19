@@ -16,6 +16,7 @@ import unicodedata
 import urllib.parse
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
@@ -43,6 +44,7 @@ from toposync.runtime.services import ServiceRegistry
 
 from .capture_service import (
     CameraCaptureRequest,
+    CameraCaptureTransientError,
     camera_capture_lease_as_dict,
     camera_capture_resolved_as_dict,
 )
@@ -64,15 +66,21 @@ from .pipeline_templates import (
     build_person_vehicle_interaction_graph,
 )
 from .processing.camera_hub import get_global_camera_hub
-from .processing.mapping import ControlPointMapper
+from .processing.mapping import build_calibration_mapper
 from .ptz_controller import PtzControlError, PtzController, PtzTransportBinding
 from .pipelines.postprocess import (  # noqa: PLC2701
     CameraMappingCalibratedView,
     CameraMappingProjectionModel,
+    _control_point_set_from_calibrated_view_record,
     _parse_calibrated_views_as_control_point_sets,
     _parse_mapping_control_point_sets_from_props,
 )
 from .processing.visual_calibration import propagate_visual_calibration
+from .panorama import register_panorama_routes
+from .panorama_capture import PanoramaCamera
+from .panorama_reference import PanoramaReferenceCoordinator
+from .source_panorama import register_source_panorama_routes
+from .panorama_region import COVERAGE_REGION_POLICY as REGION_POLICY
 from .source_health import get_global_source_health_store
 from .view_resolver import resolve_ptz_target_view
 from .settings import (
@@ -92,7 +100,6 @@ from .settings import (
 from .onvif import (
     OnvifAmbiguousMutationError,
     OnvifCameraEventContext,
-    OnvifAmbiguousMutationError,
     OnvifClient,
     OnvifDiscoveredDevice,
     OnvifEventStateManager,
@@ -104,6 +111,7 @@ from .onvif import (
     onvif_xaddr_candidates,
     resolve_onvif_discovery_targets,
 )
+from .onvif.reolink_cgi import ReolinkCgiClient, ReolinkCgiError
 
 
 NotificationPriority = Literal["low", "medium", "high"]
@@ -398,6 +406,11 @@ class OnvifDiscoverResponse(BaseModel):
     devices: list[OnvifDiscoveredDeviceInfo] = Field(default_factory=list)
 
 
+class CameraCaptureObservationRequest(BaseModel):
+    duration_s: float = Field(default=5.0, ge=0.5, le=30.0)
+    sample_interval_s: float = Field(default=0.05, ge=0.02, le=1.0)
+
+
 class ControlPointMapQuery(BaseModel):
     kind: Literal["image", "world"]
     x: float
@@ -408,6 +421,10 @@ class ControlPointMapQuery(BaseModel):
 class ProjectionMapRequest(BaseModel):
     calibrated_view: dict[str, Any]
     query: ControlPointMapQuery
+
+
+class ProjectionSolveRequest(BaseModel):
+    calibrated_view: dict[str, Any]
 
 
 class CameraVisualCalibrationQuality(BaseModel):
@@ -513,6 +530,40 @@ class CameraPtzStatus(BaseModel):
     preset_name: str = ""
 
 
+class CameraPtzControlState(BaseModel):
+    """Safe controller-side state for an explicitly requested PTZ observation.
+
+    This is deliberately distinct from the device's ONVIF ``GetStatus`` payload.
+    The former describes the lease-bound command/Stop lifecycle; the latter is
+    useful as a device-reported physical hint.  Neither is an optical proof of
+    the final image position.
+    """
+
+    state: str = ""
+    move_status: str = ""
+    motion_state: str = ""
+    motion_epoch: int | None = Field(default=None, ge=0)
+    last_command_kind: str = ""
+    geometry_safe: bool = False
+
+
+class CameraPtzCommandTelemetry(BaseModel):
+    """Non-sensitive command timing exposed for PTZ diagnostics.
+
+    It excludes lease identifiers, command identifiers, preset tokens and
+    transport addresses.  Times mark local command boundaries and do not claim
+    camera exposure timestamps.
+    """
+
+    command_kind: str = ""
+    command_elapsed_seconds: float | None = Field(default=None, ge=0.0)
+    transport_elapsed_seconds: float | None = Field(default=None, ge=0.0)
+    pulse_remaining_seconds: float | None = Field(default=None, ge=0.0)
+    device_timeout_seconds: float | None = Field(default=None, ge=0.0)
+    motion_epoch: int | None = Field(default=None, ge=0)
+    stale_after_execution: bool | None = None
+
+
 class CameraPtzPresetsResponse(BaseModel):
     camera_id: str
     camera_source_id: str | None = None
@@ -523,10 +574,59 @@ class CameraPtzStatusResponse(BaseModel):
     camera_id: str
     camera_source_id: str | None = None
     status: CameraPtzStatus = Field(default_factory=CameraPtzStatus)
+    control: CameraPtzControlState | None = None
+
+
+class CameraPtzControlStateResponse(BaseModel):
+    camera_id: str
+    camera_source_id: str | None = None
+    control: CameraPtzControlState = Field(default_factory=CameraPtzControlState)
 
 
 class CameraPtzActionResponse(BaseModel):
     ok: bool = True
+    telemetry: CameraPtzCommandTelemetry | None = None
+
+
+def _finite_nonnegative_optional(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) and numeric >= 0.0 else None
+
+
+def _camera_ptz_action_response(receipt: Any) -> CameraPtzActionResponse:
+    """Project a controller receipt into the stable public diagnostic surface."""
+    if not isinstance(receipt, dict):
+        return CameraPtzActionResponse(ok=True)
+    telemetry = CameraPtzCommandTelemetry(
+        command_kind=str(receipt.get("command_kind") or ""),
+        command_elapsed_seconds=_finite_nonnegative_optional(
+            receipt.get("command_elapsed_seconds")
+        ),
+        transport_elapsed_seconds=_finite_nonnegative_optional(
+            receipt.get("transport_elapsed_seconds")
+        ),
+        pulse_remaining_seconds=_finite_nonnegative_optional(
+            receipt.get("pulse_remaining_seconds")
+        ),
+        device_timeout_seconds=_finite_nonnegative_optional(receipt.get("device_timeout_s")),
+        motion_epoch=(
+            int(receipt["motion_epoch"])
+            if isinstance(receipt.get("motion_epoch"), int)
+            and not isinstance(receipt.get("motion_epoch"), bool)
+            and int(receipt["motion_epoch"]) >= 0
+            else None
+        ),
+        stale_after_execution=(
+            bool(receipt["stale_after_execution"])
+            if isinstance(receipt.get("stale_after_execution"), bool)
+            else None
+        ),
+    )
+    if not telemetry.model_dump(exclude={"command_kind"}, exclude_none=True):
+        return CameraPtzActionResponse(ok=bool(receipt.get("ok", True)))
+    return CameraPtzActionResponse(ok=bool(receipt.get("ok", True)), telemetry=telemetry)
 
 
 class CameraPtzSetPresetRequest(BaseModel):
@@ -2326,6 +2426,36 @@ class CamerasExtension(BaseExtension):
             ]
             return candidates[0] if len(candidates) == 1 else None
 
+        async def _reconcile_ptz_set_preset_after_ambiguous_mutation(
+            client: OnvifClient,
+            *,
+            ptz_xaddr: str,
+            profile_token: str,
+            operation: _OnvifPtzSetPresetOperation,
+        ) -> OnvifPtzPreset | None:
+            """Read a bounded catalog horizon without ever repeating SetPreset.
+
+            Some devices acknowledge the HTTP/SOAP mutation ambiguously before
+            their preset catalog reflects it.  A second mutation could create a
+            duplicate; bounded read-only reconciliation instead either finds
+            the unique preset or retains the explicit uncertain outcome.
+            """
+            for attempt in range(3):
+                try:
+                    presets = await client.get_ptz_presets(
+                        ptz_xaddr,
+                        profile_token=profile_token,
+                    )
+                except OnvifError:
+                    presets = []
+                else:
+                    reconciled = _reconcile_ptz_set_preset(presets, operation)
+                    if reconciled is not None:
+                        return reconciled
+                if attempt < 2:
+                    await asyncio.sleep(0.2)
+            return None
+
         def _clear_removed_ptz_preset(key: str, token: str) -> None:
             tracking = _get_ptz_preset_tracking(key)
             if tracking.pending is not None and tracking.pending[0] == token:
@@ -2529,18 +2659,12 @@ class CamerasExtension(BaseExtension):
                     mutation_response_confirmed = True
                 except OnvifAmbiguousMutationError as exc:
                     operation.updated_ts = time.time()
-                    try:
-                        presets_after = await client.get_ptz_presets(
-                            ptz_xaddr,
-                            profile_token=profile_token,
-                        )
-                    except OnvifError as reconciliation_exc:
-                        raise HTTPException(
-                            status_code=503,
-                            detail="SetPreset outcome is still being reconciled",
-                            headers={"Retry-After": "1"},
-                        ) from reconciliation_exc
-                    reconciled = _reconcile_ptz_set_preset(presets_after, operation)
+                    reconciled = await _reconcile_ptz_set_preset_after_ambiguous_mutation(
+                        client,
+                        ptz_xaddr=ptz_xaddr,
+                        profile_token=profile_token,
+                        operation=operation,
+                    )
                     if reconciled is None:
                         raise HTTPException(
                             status_code=503,
@@ -2564,7 +2688,11 @@ class CamerasExtension(BaseExtension):
             return {"token": token, "name": name}
 
         async def _svc_ptz_remove_preset(
-            *, camera_id: str, preset_token: str, camera_source_id: str | None = None
+            *,
+            camera_id: str,
+            preset_token: str,
+            camera_source_id: str | None = None,
+            expected_preset_name: str | None = None,
         ) -> dict[str, Any]:
             cid = str(camera_id or "").strip()
             token = str(preset_token or "").strip()
@@ -2592,10 +2720,18 @@ class CamerasExtension(BaseExtension):
                         ) from exc
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-                if not any(str(preset.token or "").strip() == token for preset in presets_before):
+                matching = [
+                    preset
+                    for preset in presets_before
+                    if str(preset.token or "").strip() == token
+                ]
+                if not matching:
                     onvif_ptz_remove_preset_ambiguous.pop(operation_key, None)
                     _clear_removed_ptz_preset(key, token)
                     return {"ok": True}
+                expected_name = str(expected_preset_name or "").strip()
+                if expected_name and str(matching[0].name or "").strip() != expected_name:
+                    raise HTTPException(status_code=409, detail="Preset identity changed")
                 if operation_key in onvif_ptz_remove_preset_ambiguous:
                     onvif_ptz_remove_preset_ambiguous[operation_key] = time.time()
                     raise HTTPException(
@@ -2837,6 +2973,24 @@ class CamerasExtension(BaseExtension):
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
             return {"ok": True}
 
+        async def _svc_ptz_relative_move(
+            *, camera_id: str, camera_source_id: str | None = None,
+            pan: float = 0.0, tilt: float = 0.0, zoom: float = 0.0,
+            transport_context: Any | None = None,
+        ) -> dict[str, Any]:
+            client, endpoint, token, source_id, _ = await _resolve_ptz_operation_context(
+                camera_id=camera_id, camera_source_id=camera_source_id,
+                transport_context=transport_context,
+            )
+            key = _ptz_tracking_key(camera_id, source_id)
+            async with _get_onvif_ptz_lock(key):
+                _clear_ptz_preset_tracking(key)
+                try:
+                    await client.relative_move(endpoint, profile_token=token, pan=pan, tilt=tilt, zoom=zoom)
+                except OnvifError as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return {"ok": True}
+
         async def _svc_ptz_continuous_move(
             *,
             camera_id: str,
@@ -2846,6 +3000,7 @@ class CamerasExtension(BaseExtension):
             zoom: float = 0.0,
             timeout_s: float | None = None,
             transport_context: Any | None = None,
+            allow_relative_fallback: bool = True,
         ) -> dict[str, Any]:
             cid = str(camera_id or "").strip()
             (
@@ -2892,26 +3047,47 @@ class CamerasExtension(BaseExtension):
                     str(getattr(bound_context or entry, "move_mode", "") or "").strip()
                     or "continuous"
                 )
-                if move_mode == "relative":
+                if move_mode == "relative" and allow_relative_fallback:
                     try:
                         await _do_relative_move()
                     except OnvifError as exc:
                         raise HTTPException(status_code=502, detail=str(exc)) from exc
                     return {"ok": True}
 
+                movement_receipt = None
                 try:
-                    await client.continuous_move(
+                    # The controller still sends Stop after safe_timeout. ONVIF's
+                    # independent failsafe must respect this profile's range.
+                    device_timeout = await client.continuous_move_timeout(
+                        ptz_xaddr, profile_token=profile_token,
+                        requested_s=safe_timeout or 0.5,
+                    )
+                    if not allow_relative_fallback and (
+                        isinstance(device_timeout, bool)
+                        or not isinstance(device_timeout, (int, float))
+                        or not math.isfinite(float(device_timeout))
+                        or float(device_timeout) <= 0
+                    ):
+                        # Autonomous panorama motion was qualified only with an
+                        # independent ONVIF device timeout. The lease-bound client
+                        # must rediscover that failsafe before any motor command;
+                        # a transport Stop alone cannot replace it.
+                        raise HTTPException(
+                            status_code=502,
+                            detail="ONVIF continuous movement timeout is unavailable",
+                        )
+                    movement_receipt = await client.continuous_move(
                         ptz_xaddr,
                         profile_token=profile_token,
                         pan=safe_pan,
                         tilt=safe_tilt,
                         zoom=safe_zoom,
-                        timeout_s=safe_timeout,
+                        timeout_s=device_timeout,
                     )
                 except OnvifError as exc:
                     # Some devices reject ContinuousMove (HTTP 400) but support RelativeMove.
                     message = str(exc)
-                    if "HTTP error (400)" in message:
+                    if "HTTP error (400)" in message and allow_relative_fallback:
                         if bound_context is not None:
                             bound_context.move_mode = "relative"
                         elif entry is not None:
@@ -2922,7 +3098,8 @@ class CamerasExtension(BaseExtension):
                             raise HTTPException(status_code=502, detail=str(exc2)) from exc2
                     else:
                         raise HTTPException(status_code=502, detail=message) from exc
-            return {"ok": True}
+            return {"ok": True, "device_timeout_s": device_timeout,
+                    **(movement_receipt if isinstance(movement_receipt, dict) else {})}
 
         async def _svc_ptz_stop(
             *,
@@ -3192,6 +3369,15 @@ class CamerasExtension(BaseExtension):
                     tilt=float(command.get("tilt") or 0.0),
                     zoom=float(command.get("zoom") or 0.0),
                     timeout_s=float(command.get("timeout_s") or 0.5),
+                    transport_context=transport_context,
+                    allow_relative_fallback=command.get("allow_relative_fallback", True),
+                )
+            if kind == "relative_move":
+                return await _svc_ptz_relative_move(
+                    camera_id=camera_id, camera_source_id=camera_source_id,
+                    pan=float(command.get("pan") or 0.0),
+                    tilt=float(command.get("tilt") or 0.0),
+                    zoom=float(command.get("zoom") or 0.0),
                     transport_context=transport_context,
                 )
             if kind == "stop":
@@ -3570,6 +3756,37 @@ class CamerasExtension(BaseExtension):
                 get_global_source_health_store().snapshot()
             )
 
+        @app.post("/api/cameras/cameras/{camera_id}/sources/{source_id}/capture-observation")
+        async def camera_capture_observation(
+            request: Request,
+            camera_id: str,
+            source_id: str,
+            body: CameraCaptureObservationRequest,
+        ) -> dict[str, Any]:
+            _require_auth(request, action="core:settings:read")
+            cid, sid = str(camera_id or "").strip(), str(source_id or "").strip()
+            ext = await _read_ext_settings(request)
+            camera = get_camera_device(ext, camera_id=cid)
+            source = get_camera_source(camera, source_id=sid, kind="video", enabled_only=True)
+            if camera is None or not isinstance(source, dict):
+                raise HTTPException(status_code=404, detail="Unknown enabled camera source")
+            try:
+                return await capture_service.observe(
+                    _capture_request(
+                        owner_id=f"observation:{uuid.uuid4().hex}",
+                        camera_id=cid,
+                        source_id=sid,
+                    ),
+                    _capture_dependencies(),
+                    duration_s=body.duration_s,
+                    sample_interval_s=body.sample_interval_s,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except CameraCaptureTransientError as exc:
+                _LOGGER.info("Camera capture observation unavailable for %s/%s: %s", cid, sid, exc)
+                raise HTTPException(status_code=503, detail="Camera capture stream is temporarily unavailable") from None
+
         @app.post("/api/cameras/rtsp/probe", response_model=RtspProbeResponse)
         async def rtsp_probe(request: Request, body: RtspProbeRequest) -> RtspProbeResponse:
             _require_auth(request, action="core:settings:read")
@@ -3884,11 +4101,7 @@ class CamerasExtension(BaseExtension):
                 return {"world": None} if query.kind == "image" else {"image": None}
 
             try:
-                mapper = ControlPointMapper(
-                    list(control_point_set.control_points),
-                    refinement_points=control_point_set.refinement_points,
-                    boundary_refinement_points=control_point_set.boundary_refinement_points,
-                )
+                mapper = build_calibration_mapper(control_point_set)
             except RuntimeError as exc:
                 raise HTTPException(status_code=501, detail=str(exc)) from exc
             except Exception:
@@ -3926,6 +4139,53 @@ class CamerasExtension(BaseExtension):
             )
             control_point_set = control_point_sets[0] if control_point_sets else None
             return _map_control_point_set(control_point_set, body.query)
+
+        @app.post("/api/cameras/projection/solve")
+        async def solve_camera_projection(
+            request: Request, body: ProjectionSolveRequest
+        ) -> dict[str, Any]:
+            _require_auth(request, action="core:settings:write")
+            try:
+                calibrated_view = CameraMappingCalibratedView.model_validate(body.calibrated_view)
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            calibrated_view_record = calibrated_view.model_dump(mode="json")
+            control_point_set = _control_point_set_from_calibrated_view_record(
+                calibrated_view_record,
+                require_ready=False,
+            )
+            if control_point_set is None or control_point_set.ground_projection is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="A camera_ray_ground_v2 calibration with a physical view is required",
+                )
+            try:
+                mapper = build_calibration_mapper(control_point_set)
+            except RuntimeError as exc:
+                raise HTTPException(status_code=501, detail=str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            quality = mapper.quality.as_dict()
+            digest = hashlib.sha256(
+                json.dumps(
+                    calibrated_view_record.get("projection_model"),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            accepted = quality.get("status") == "ready"
+            return {
+                "accepted": accepted,
+                "status": quality.get("status"),
+                "quality": quality,
+                "calibration_digest": digest,
+                "valid_image_polygon": [
+                    {"x": x, "y": y} for x, y in getattr(mapper, "image_polygon", ())
+                ],
+                "valid_world_polygon": [
+                    {"x": x, "z": z} for x, z in getattr(mapper, "world_polygon", ())
+                ],
+            }
 
         @app.post(
             "/api/cameras/projection/propagate",
@@ -4197,6 +4457,7 @@ class CamerasExtension(BaseExtension):
         @app.delete(
             "/api/cameras/cameras/{camera_id}/ptz/presets/{preset_token}",
             response_model=CameraPtzActionResponse,
+            response_model_exclude_none=True,
         )
         async def camera_ptz_remove_preset(
             request: Request,
@@ -4230,6 +4491,7 @@ class CamerasExtension(BaseExtension):
         @app.post(
             "/api/cameras/cameras/{camera_id}/ptz/goto-preset",
             response_model=CameraPtzActionResponse,
+            response_model_exclude_none=True,
         )
         async def camera_ptz_goto_preset(
             request: Request,
@@ -4246,20 +4508,23 @@ class CamerasExtension(BaseExtension):
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
 
-            await _submit_manual_ptz_command(
+            receipt = await _submit_manual_ptz_command(
                 request,
                 camera_id=cid,
                 source_id=str(getattr(body, "source_id", "") or "").strip(),
                 command={"kind": "goto_preset", "preset_token": body.preset_token},
             )
 
-            return CameraPtzActionResponse(ok=True)
+            return _camera_ptz_action_response(receipt)
 
         @app.get(
             "/api/cameras/cameras/{camera_id}/ptz/status", response_model=CameraPtzStatusResponse
         )
         async def camera_ptz_status(
-            request: Request, camera_id: str, source_id: str = ""
+            request: Request,
+            camera_id: str,
+            source_id: str = "",
+            include_control: bool = False,
         ) -> CameraPtzStatusResponse:
             _require_auth(
                 request,
@@ -4283,17 +4548,107 @@ class CamerasExtension(BaseExtension):
                     status_code=503, detail="Camera PTZ controls are not available"
                 ) from None
 
+            control: CameraPtzControlState | None = None
+            if include_control:
+                try:
+                    raw_control = await services.call(
+                        "cameras.control.snapshot",
+                        camera_id=cid,
+                        source_id=str(source_id or "").strip() or None,
+                        refresh_physical=True,
+                    )
+                except KeyError:
+                    raw_control = None
+                if isinstance(raw_control, dict):
+                    control = CameraPtzControlState.model_validate(
+                        {
+                            "state": str(raw_control.get("state") or ""),
+                            "move_status": str(raw_control.get("move_status") or ""),
+                            "motion_state": str(raw_control.get("motion_state") or ""),
+                            "motion_epoch": raw_control.get("motion_epoch"),
+                            "last_command_kind": str(
+                                raw_control.get("last_command_kind") or ""
+                            ),
+                            "geometry_safe": bool(raw_control.get("geometry_safe")),
+                        }
+                    )
+
             return CameraPtzStatusResponse(
                 camera_id=cid,
                 camera_source_id=str(source_id or "").strip() or None,
                 status=CameraPtzStatus.model_validate(
                     raw_status if isinstance(raw_status, dict) else {}
                 ),
+                control=control,
+            )
+
+        @app.get(
+            "/api/cameras/cameras/{camera_id}/ptz/control-status",
+            response_model=CameraPtzControlStateResponse,
+        )
+        async def camera_ptz_control_status(
+            request: Request,
+            camera_id: str,
+            source_id: str = "",
+        ) -> CameraPtzControlStateResponse:
+            """Read the local command/Stop lifecycle without polling the camera.
+
+            This endpoint intentionally avoids ``GetStatus``.  A slow or
+            unsupported physical status request must not perturb the timing
+            evidence of the controller state it is meant to diagnose.
+            """
+            _require_auth(
+                request,
+                action="core:camera:read",
+                resource_type="core:camera",
+                resource_selector=str(camera_id or "").strip(),
+            )
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+            services = _services(request)
+            try:
+                raw_control = await services.call(
+                    "cameras.control.snapshot",
+                    camera_id=cid,
+                    source_id=str(source_id or "").strip() or None,
+                    refresh_physical=False,
+                )
+            except KeyError:
+                raise HTTPException(
+                    status_code=503, detail="Camera PTZ controls are not available"
+                ) from None
+            return CameraPtzControlStateResponse(
+                camera_id=cid,
+                camera_source_id=str(source_id or "").strip() or None,
+                control=CameraPtzControlState.model_validate(
+                    {
+                        "state": str(raw_control.get("state") or "")
+                        if isinstance(raw_control, dict)
+                        else "",
+                        "move_status": str(raw_control.get("move_status") or "")
+                        if isinstance(raw_control, dict)
+                        else "",
+                        "motion_state": str(raw_control.get("motion_state") or "")
+                        if isinstance(raw_control, dict)
+                        else "",
+                        "motion_epoch": raw_control.get("motion_epoch")
+                        if isinstance(raw_control, dict)
+                        else None,
+                        "last_command_kind": str(raw_control.get("last_command_kind") or "")
+                        if isinstance(raw_control, dict)
+                        else "",
+                        "geometry_safe": bool(raw_control.get("geometry_safe"))
+                        if isinstance(raw_control, dict)
+                        else False,
+                    }
+                ),
             )
 
         @app.post(
             "/api/cameras/cameras/{camera_id}/ptz/absolute-move",
             response_model=CameraPtzActionResponse,
+            response_model_exclude_none=True,
         )
         async def camera_ptz_absolute_move(
             request: Request,
@@ -4310,7 +4665,7 @@ class CamerasExtension(BaseExtension):
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
 
-            await _submit_manual_ptz_command(
+            receipt = await _submit_manual_ptz_command(
                 request,
                 camera_id=cid,
                 source_id=str(getattr(body, "source_id", "") or "").strip(),
@@ -4322,10 +4677,12 @@ class CamerasExtension(BaseExtension):
                 },
             )
 
-            return CameraPtzActionResponse(ok=True)
+            return _camera_ptz_action_response(receipt)
 
         @app.post(
-            "/api/cameras/cameras/{camera_id}/ptz/move", response_model=CameraPtzActionResponse
+            "/api/cameras/cameras/{camera_id}/ptz/move",
+            response_model=CameraPtzActionResponse,
+            response_model_exclude_none=True,
         )
         async def camera_ptz_move(
             request: Request,
@@ -4342,7 +4699,7 @@ class CamerasExtension(BaseExtension):
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
 
-            await _submit_manual_ptz_command(
+            receipt = await _submit_manual_ptz_command(
                 request,
                 camera_id=cid,
                 source_id=str(getattr(body, "source_id", "") or "").strip(),
@@ -4355,10 +4712,12 @@ class CamerasExtension(BaseExtension):
                 },
             )
 
-            return CameraPtzActionResponse(ok=True)
+            return _camera_ptz_action_response(receipt)
 
         @app.post(
-            "/api/cameras/cameras/{camera_id}/ptz/stop", response_model=CameraPtzActionResponse
+            "/api/cameras/cameras/{camera_id}/ptz/stop",
+            response_model=CameraPtzActionResponse,
+            response_model_exclude_none=True,
         )
         async def camera_ptz_stop(
             request: Request,
@@ -4375,7 +4734,7 @@ class CamerasExtension(BaseExtension):
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
 
-            await _submit_manual_ptz_command(
+            receipt = await _submit_manual_ptz_command(
                 request,
                 camera_id=cid,
                 source_id=str(getattr(body, "source_id", "") or "").strip(),
@@ -4386,7 +4745,7 @@ class CamerasExtension(BaseExtension):
                 },
             )
 
-            return CameraPtzActionResponse(ok=True)
+            return _camera_ptz_action_response(receipt)
 
         @app.post("/api/cameras/rtsp/snapshot")
         async def rtsp_snapshot(body: RtspSnapshotRequest) -> Response:
@@ -4583,6 +4942,48 @@ class CamerasExtension(BaseExtension):
                     headers=headers,
                 )
                 return Response(content=result.blob, media_type="image/jpeg", headers=headers)
+
+        panorama_reference_coordinator = PanoramaReferenceCoordinator()
+        panorama_service = register_panorama_routes(
+            app,
+            services=services,
+            authorize=_require_auth,
+            read_settings=_read_ext_settings,
+            capture_snapshot=camera_snapshot,
+            reference_coordinator=panorama_reference_coordinator,
+        )
+        register_extension_shutdown_callback(app, panorama_service.shutdown)
+
+        def _source_panorama_camera_factory(
+            *,
+            services: Any,
+            camera_id: str,
+            source_id: str,
+            settings: dict[str, Any],
+            job_id: str,
+            output_dir: Path,
+        ) -> PanoramaCamera:
+            return PanoramaCamera(
+                camera_id=camera_id,
+                source_id=source_id,
+                owner_id=job_id,
+                services=services,
+                capture_service=capture_service,
+                dependencies=_capture_dependencies(),
+                resolve_onvif=_resolve_ptz_operation_context,
+            )
+
+        source_panorama_service = register_source_panorama_routes(
+            app,
+            services=services,
+            authorize=_require_auth,
+            read_settings=_read_ext_settings,
+            camera_factory=_source_panorama_camera_factory,
+            reference_coordinator=panorama_reference_coordinator,
+            acquisition_policy=REGION_POLICY,
+        )
+        panorama_service.camera_factory = _source_panorama_camera_factory
+        register_extension_shutdown_callback(app, source_panorama_service.shutdown)
 
         @app.get("/api/cameras/cameras/{camera_id}/contexts")
         async def camera_contexts(request: Request, camera_id: str) -> dict[str, Any]:

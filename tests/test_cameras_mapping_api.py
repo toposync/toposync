@@ -74,6 +74,38 @@ def _valid_calibrated_views() -> list[dict[str, object]]:
     ]
 
 
+def _valid_ray_ground_view() -> dict[str, object]:
+    points = [(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9), (0.5, 0.1), (0.5, 0.9)]
+    return {
+        "id": "wide",
+        "label": "Wide",
+        "stream_scope": {
+            "physical_view_id": "wide",
+            "compatible_source_ids": ["wide_main"],
+            "compatible_roles": ["main"],
+        },
+        "projection_model": {
+            "type": "camera_ray_ground_v2",
+            "source_geometry": {"width": 1920, "height": 1080},
+            "lens": {"type": "identity_rectilinear_v1"},
+            "correspondences": [
+                {
+                    "id": f"p{index}",
+                    "role": "fit",
+                    "image": {"x": u, "y": v},
+                    "world": {"x": u * 10.0, "z": v * 10.0},
+                }
+                for index, (u, v) in enumerate(points, start=1)
+            ]
+            + [
+                {"id": "c1", "role": "check", "image": {"x": 0.3, "y": 0.3}, "world": {"x": 3.0, "z": 3.0}},
+                {"id": "c2", "role": "check", "image": {"x": 0.7, "y": 0.7}, "world": {"x": 7.0, "z": 7.0}},
+            ],
+        },
+        "projection_quality": {"status": "incomplete", "estimated": False},
+    }
+
+
 def _camera_composition(
     *,
     camera_id: str = "cam1",
@@ -181,6 +213,51 @@ def test_projection_map_accepts_calibrated_view_payload(
         assert body["world"]["x"] == pytest.approx(5.0, abs=1e-6)
         assert body["world"]["z"] == pytest.approx(5.0, abs=1e-6)
         assert body["quality"]["number_of_points"] == 4
+
+
+def test_projection_solve_accepts_only_the_bounded_ground_plane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        ready = client.post(
+            "/api/cameras/projection/solve",
+            json={"calibrated_view": _valid_ray_ground_view()},
+        )
+        incomplete = _valid_ray_ground_view()
+        projection = incomplete["projection_model"]
+        assert isinstance(projection, dict)
+        projection["correspondences"] = projection["correspondences"][:-1]
+        rejected = client.post(
+            "/api/cameras/projection/solve",
+            json={"calibrated_view": incomplete},
+        )
+
+    assert ready.status_code == 200, ready.text
+    assert ready.json()["accepted"] is True
+    assert len(ready.json()["valid_image_polygon"]) >= 3
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["accepted"] is False
+
+
+def test_projection_solve_accepts_only_quarter_turn_presentation_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        rotated = _valid_ray_ground_view()
+        rotated["editor_view_rotation_degrees"] = 90
+        accepted = client.post(
+            "/api/cameras/projection/solve",
+            json={"calibrated_view": rotated},
+        )
+        rotated["editor_view_rotation_degrees"] = 45
+        rejected = client.post(
+            "/api/cameras/projection/solve",
+            json={"calibrated_view": rotated},
+        )
+
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["accepted"] is True
+    assert rejected.status_code == 422, rejected.text
 
 
 def test_projection_map_applies_calibrated_view_refinement(
@@ -551,7 +628,36 @@ def test_camera_ptz_routes_forward_to_services(
             assert kwargs["fence"] == 7
             command = dict(kwargs["command"])
             submitted.append(command)
-            return {"ok": True}
+            receipt = {
+                "ok": True,
+                "command_kind": command["kind"],
+                "command_elapsed_seconds": 0.12,
+                "motion_epoch": 9,
+                "stale_after_execution": False,
+            }
+            if command["kind"] == "continuous_move":
+                receipt.update(
+                    {
+                        "transport_elapsed_seconds": 0.07,
+                        "pulse_remaining_seconds": 0.73,
+                        "device_timeout_s": 1.0,
+                    }
+                )
+            return receipt
+
+        async def control_snapshot(**kwargs):
+            assert kwargs["camera_id"] == "cam1"
+            assert kwargs["source_id"] is None
+            assert kwargs["refresh_physical"] in {True, False}
+            return {
+                "state": "manual_override",
+                "move_status": "IDLE",
+                "motion_state": "stable",
+                "motion_epoch": 9,
+                "last_command_kind": "continuous_move",
+                "geometry_safe": True,
+                "lease": {"owner_id": "must-not-be-exposed"},
+            }
 
         def assert_submitted_commands() -> None:
             assert submitted[0] == {"kind": "goto_preset", "preset_token": "home"}
@@ -575,6 +681,7 @@ def test_camera_ptz_routes_forward_to_services(
         services.register("cameras.ptz.get_status", get_status)
         services.register("cameras.control.acquire", acquire)
         services.register("cameras.control.submit", submit)
+        services.register("cameras.control.snapshot", control_snapshot)
 
         presets = client.get("/api/cameras/cameras/cam1/ptz/presets")
         assert presets.status_code == 200, presets.text
@@ -622,6 +729,35 @@ def test_camera_ptz_routes_forward_to_services(
         assert status.json()["status"]["move_status"] == "IDLE"
         assert status.json()["status"]["preset_token"] == "home"
         assert status.json()["status"]["preset_name"] == "Home"
+        assert status.json().get("control") is None
+
+        diagnostic_status = client.get(
+            "/api/cameras/cameras/cam1/ptz/status?include_control=true"
+        )
+        assert diagnostic_status.status_code == 200, diagnostic_status.text
+        assert diagnostic_status.json()["control"] == {
+            "state": "manual_override",
+            "move_status": "IDLE",
+            "motion_state": "stable",
+            "motion_epoch": 9,
+            "last_command_kind": "continuous_move",
+            "geometry_safe": True,
+        }
+
+        control_status = client.get("/api/cameras/cameras/cam1/ptz/control-status")
+        assert control_status.status_code == 200, control_status.text
+        assert control_status.json() == {
+            "camera_id": "cam1",
+            "camera_source_id": None,
+            "control": {
+                "state": "manual_override",
+                "move_status": "IDLE",
+                "motion_state": "stable",
+                "motion_epoch": 9,
+                "last_command_kind": "continuous_move",
+                "geometry_safe": True,
+            },
+        }
 
         absolute_move_res = client.post(
             "/api/cameras/cameras/cam1/ptz/absolute-move",
@@ -636,6 +772,15 @@ def test_camera_ptz_routes_forward_to_services(
         )
         assert move_res.status_code == 200, move_res.text
         assert move_res.json()["ok"] is True
+        assert move_res.json()["telemetry"] == {
+            "command_kind": "continuous_move",
+            "command_elapsed_seconds": 0.12,
+            "transport_elapsed_seconds": 0.07,
+            "pulse_remaining_seconds": 0.73,
+            "device_timeout_seconds": 1.0,
+            "motion_epoch": 9,
+            "stale_after_execution": False,
+        }
 
         stop_res = client.post(
             "/api/cameras/cameras/cam1/ptz/stop", json={"pan_tilt": True, "zoom": False}

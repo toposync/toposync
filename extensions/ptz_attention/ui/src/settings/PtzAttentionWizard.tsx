@@ -964,6 +964,7 @@ function viewSupportsSource(
 ): boolean {
   const source = camera?.sources.find((item) => item.id === sourceId) ?? null;
   if (!source || !source.enabled || source.kind !== "video" || !source.has_ptz) return false;
+  if (view.physical_view_id && view.physical_view_id !== source.view_id) return false;
   if (view.compatible_source_ids.length > 0 && !view.compatible_source_ids.includes(source.id)) return false;
   if (view.compatible_roles.length > 0 && !view.compatible_roles.includes(source.role)) return false;
   if (view.compatible_source_ids.length === 0 && view.compatible_roles.length === 0) {

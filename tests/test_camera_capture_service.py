@@ -128,8 +128,93 @@ def _service(*, hub: _Hub | None = None, health: _HealthStore | None = None) -> 
     )
 
 
+def test_capture_identity_is_atomic_and_distinguishes_decoder_instances(monkeypatch) -> None:
+    from toposync_ext_cameras.processing.frame_grabber import _LatestFrameBuffer
+
+    monkeypatch.setattr(time, "time", lambda: 100.5)
+
+    first, second = _LatestFrameBuffer(), _LatestFrameBuffer()
+    first.set(_Frame(), 100.0, source_received_at=99.9, source_received_monotonic=12.0)
+    second.set(_Frame(), 100.0, source_received_at=99.9, source_received_monotonic=12.0)
+    sample = first.get_sample()
+    assert sample.evidence()["capture_instance"] != second.get_sample().evidence()["capture_instance"]
+    first.clear()
+    first.set(_Frame(), 101.0, source_received_at=100.9, source_received_monotonic=13.0)
+    assert first.get_sample().capture_instance == sample.capture_instance
+    assert first.get_sample().generation != sample.generation
+
+    async def run():
+        grabber = _Grabber(frame_ts=100.0)
+        grabber.get_latest_sample = lambda: sample
+        grabber.get_latest = lambda: pytest.fail("Atomic frames must not be read separately")
+        service = _service(hub=_Hub(grabber=grabber))
+        lease = await service.open(CameraCaptureRequest(owner_id="test", camera_id="front", source_id="main"), PipelineRuntimeDependencies())
+        result = await service.get_latest(lease.lease_id)
+        assert result.frame is sample.frame
+        assert result.capture_evidence == sample.evidence()
+        assert not result.capture_evidence["physical_timestamp_verified"]
+        assert result.capture_evidence["captured_monotonic"] is None
+        await service.release(lease.lease_id)
+
+    asyncio.run(run())
+
+
 def test_camera_capture_service_reuses_owner_lease_and_releases_hub() -> None:
     asyncio.run(_run_reuses_owner_lease_and_releases_hub())
+
+
+def test_direct_transport_does_not_reuse_another_owners_relay_reader() -> None:
+    from toposync_ext_cameras.pipelines.operators import _camera_hub_key
+    from toposync_ext_cameras.processing.camera_hub import CameraHub
+
+    class Reader(_Grabber):
+        def __init__(self, url: str, **kwargs: Any) -> None:
+            super().__init__()
+            self.url = url
+            self.stopped = False
+
+        def start(self):
+            return self
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    async def run() -> None:
+        async def resolve(request: CameraCaptureRequest, _dependencies: Any) -> _Resolved:
+            return _Resolved(rtsp_url=request.rtsp_url)
+
+        hub = CameraHub(frame_grabber_factory=Reader)
+        service = CameraCaptureService(
+            config_factory=lambda request: request,
+            resolve_source=resolve,
+            hub=hub,
+            hub_key_builder=_camera_hub_key,
+            health_store=_HealthStore(),
+            source_health_id_factory=lambda **kwargs: kwargs["camera_source_id"],
+            exception_detail=str,
+        )
+        dependencies = PipelineRuntimeDependencies()
+        relay_url = "rtsp://relay-user:relay-secret@relay/main"
+        direct_url = "rtsp://camera-user:camera-secret@camera/main"
+        leases = []
+        try:
+            for owner, url in (("preview", relay_url), ("panorama", direct_url), ("another-preview", relay_url)):
+                leases.append(await service.open(CameraCaptureRequest(
+                    owner_id=owner, camera_id="front", source_id="main", rtsp_url=url,
+                ), dependencies))
+            relay, direct, shared = leases
+            assert direct.grabber is not relay.grabber
+            assert direct.grabber.url == direct_url
+            assert shared.grabber is relay.grabber
+            assert all("secret" not in lease.hub_key and "@" not in lease.hub_key for lease in leases)
+            await service.release(direct.lease_id)
+            assert direct.grabber.stopped
+            assert not relay.grabber.stopped
+        finally:
+            for lease in leases:
+                await service.release(lease.lease_id)
+
+    asyncio.run(run())
 
 
 async def _run_reuses_owner_lease_and_releases_hub() -> None:
@@ -235,3 +320,42 @@ async def _run_keeps_recent_cached_frame_during_polling() -> None:
     assert frame.fresh is False
     assert frame.frame is grabber.frame
     assert hub.release_calls == []
+
+
+def test_camera_capture_service_observe_reports_sequence_without_frames() -> None:
+    from toposync_ext_cameras.processing.frame_grabber import CaptureFrameSample
+
+    class AdvancingGrabber(_Grabber):
+        def __init__(self) -> None:
+            super().__init__()
+            self.sequence = 0
+
+        def get_latest_sample(self) -> CaptureFrameSample:
+            self.sequence += 1
+            now = time.time()
+            self.frame_ts = now
+            return CaptureFrameSample(
+                frame=_Frame(),
+                published_at=now,
+                source_received_at=now,
+                source_received_monotonic=time.monotonic(),
+                generation=1,
+                sequence=self.sequence,
+                capture_instance="continuous-test",
+            )
+
+    async def run() -> None:
+        hub = _Hub(grabber=AdvancingGrabber())
+        service = _service(hub=hub)
+        observed = await service.observe(
+            CameraCaptureRequest(owner_id="observer", camera_id="front", source_id="main"),
+            PipelineRuntimeDependencies(),
+            duration_s=0.5,
+            sample_interval_s=0.02,
+        )
+        assert observed["images_persisted"] is False
+        assert observed["distinct_frame_count"] >= 2
+        assert all("frame" not in sample for sample in observed["samples"])
+        assert hub.release_calls == ["front:main:auto"]
+
+    asyncio.run(run())

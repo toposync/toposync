@@ -7,6 +7,8 @@ import type {
   CameraPipelinePresetResponse,
   CameraPipelinesResponse,
   CameraPtzPreset,
+  CameraProjectionSolveResult,
+  CameraRayGroundCalibratedView,
   CameraSourceHealthResponse,
   CameraVisualCalibrationResult,
   CamerasIndex,
@@ -218,6 +220,18 @@ export async function fetchCameraSnapshot(
   );
 }
 
+export async function solveCameraProjection(
+  calibratedView: CameraRayGroundCalibratedView,
+  signal?: AbortSignal,
+): Promise<CameraProjectionSolveResult> {
+  return requestJson<CameraProjectionSolveResult>("/api/cameras/projection/solve", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ calibrated_view: calibratedView }),
+    signal,
+  });
+}
+
 export async function captureCameraPtzViewAnchor(
   cameraId: string,
   body: { source_id: string; name: string; idempotency_key: string },
@@ -392,4 +406,113 @@ export async function discoverOnvifDevices(
     }),
     signal,
   });
+}
+
+export async function fetchCameraPanoramaContext(cameraId: string, elementId: string, signal?: AbortSignal): Promise<import("../types").CameraPanoramaContext> {
+  return requestPanorama(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/panorama?element_id=${encodeURIComponent(elementId)}`, { signal });
+}
+
+export async function fetchCameraPanoramaJob(cameraId: string, jobId: string, signal?: AbortSignal): Promise<import("../types").CameraPanoramaJob> {
+  return requestPanorama(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/panorama/${encodeURIComponent(jobId)}`, { signal });
+}
+
+export async function createCameraPanorama(cameraId: string, body: { element_id: string; source_id: string; reuse_draft?: boolean; review_job_id?: string; review_revision?: number } & ({ profile: import("../types").CameraPanoramaProfile; scan: import("../types").CameraPanoramaScan } | { source_artifact_id: string; source_artifact_revision: number })): Promise<import("../types").CameraPanoramaJob> {
+  return requestPanorama(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/panorama`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+}
+
+export async function updateCameraPanorama(cameraId: string, jobId: string, action: "capture" | "cancel" | "points" | "check" | "check-result" | "activate" | "return-framing", body: { revision: number; points?: import("../types").CameraPanoramaPoint[]; point_id?: string; check_id?: string; result?: "correct" | "offset" | "unverifiable"; observed_image?: { x: number; y: number } }): Promise<import("../types").CameraPanoramaJob> {
+  return requestPanorama(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/panorama/${encodeURIComponent(jobId)}/${action}`, {
+    method: action === "points" ? "PUT" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+}
+
+export async function aimCameraPanorama(cameraId: string, elementId: string, world: { x: number; z: number }): Promise<import("../types").CameraPanoramaJob> {
+  return requestPanorama(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/panorama/aim`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ element_id: elementId, world }),
+  });
+}
+
+export async function restoreCameraPanorama(cameraId: string, elementId: string, expectedJobId: string, expectedRevision: number): Promise<import("../types").CameraPanoramaJob> {
+  return requestPanorama(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/panorama/restore`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ element_id: elementId, expected_job_id: expectedJobId, expected_revision: expectedRevision }),
+  });
+}
+
+export async function deleteCameraPanorama(cameraId: string, jobId: string, revision: number): Promise<{ deleted: boolean; id: string }> {
+  return requestPanorama(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/panorama/${encodeURIComponent(jobId)}?revision=${revision}`, { method: "DELETE" });
+}
+
+export class CameraPanoramaRequestError extends Error {
+  constructor(readonly code: string, message: string, readonly status: number) {
+    super(message);
+    this.name = "CameraPanoramaRequestError";
+  }
+}
+
+function requestSourcePanorama<T>(path: string, init?: RequestInit): Promise<T> {
+  return requestPanorama(path, init, 20_000);
+}
+
+async function requestPanorama<T>(path: string, init?: RequestInit, timeoutMilliseconds = 0): Promise<T> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  init?.signal?.addEventListener("abort", abort, { once: true });
+  if (init?.signal?.aborted) controller.abort();
+  const timeout = timeoutMilliseconds ? setTimeout(abort, timeoutMilliseconds) : undefined;
+  try {
+    const response = await fetch(resolveToposyncUrl(path), { ...init, signal: controller.signal });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { detail?: { code?: string; message?: string } | string } | null;
+      const detail = payload?.detail;
+      throw new CameraPanoramaRequestError(
+        typeof detail === "object" && detail?.code ? detail.code : "panorama_request_failed",
+        typeof detail === "object" && detail?.message ? detail.message : typeof detail === "string" ? detail : "",
+        response.status,
+      );
+    }
+    return await response.json() as T;
+  } finally {
+    clearTimeout(timeout);
+    init?.signal?.removeEventListener("abort", abort);
+  }
+}
+
+function sourcePanoramaPath(cameraId: string, sourceId: string): string {
+  return `/api/cameras/cameras/${encodeURIComponent(cameraId)}/sources/${encodeURIComponent(sourceId)}/panorama`;
+}
+
+export function fetchCameraSourcePanorama(cameraId: string, sourceId: string, signal?: AbortSignal): Promise<import("../types").CameraSourcePanorama> {
+  return requestSourcePanorama(sourcePanoramaPath(cameraId, sourceId), { signal });
+}
+
+export function finalizeCameraSourcePanoramaReplacement(cameraId: string, sourceId: string, signal?: AbortSignal): Promise<import("../types").CameraSourcePanorama> {
+  return requestSourcePanorama(`${sourcePanoramaPath(cameraId, sourceId)}/finalize`, { method: "POST", signal });
+}
+
+export async function createCameraSourcePanorama(cameraId: string, sourceId: string, idempotencyKey: string): Promise<import("../types").CameraSourcePanoramaJob> {
+  const result = await requestSourcePanorama<{ job: import("../types").CameraSourcePanoramaJob }>(`${sourcePanoramaPath(cameraId, sourceId)}/jobs`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotency_key: idempotencyKey }),
+  });
+  return result.job;
+}
+
+export async function fetchCameraSourcePanoramaJob(jobId: string, signal?: AbortSignal): Promise<import("../types").CameraSourcePanoramaJob> {
+  const result = await requestSourcePanorama<{ job: import("../types").CameraSourcePanoramaJob }>(`/api/cameras/panorama-jobs/${encodeURIComponent(jobId)}`, { signal });
+  return result.job;
+}
+
+export async function operateCameraSourcePanorama(jobId: string, action: "stop" | "resume" | "return" | "reconstruct" | "cleanup"): Promise<import("../types").CameraSourcePanoramaJob> {
+  const result = await requestSourcePanorama<{ job: import("../types").CameraSourcePanoramaJob }>(`/api/cameras/panorama-jobs/${encodeURIComponent(jobId)}/${action}`, { method: "POST" });
+  return result.job;
+}
+
+export async function saveCameraSourcePanoramaCrop(cameraId: string, sourceId: string, artifactId: string, expectedRevision: number, crop: import("../types").CameraSourcePanoramaCrop): Promise<import("../types").CameraSourcePanoramaArtifact> {
+  const result = await requestSourcePanorama<{ artifact: import("../types").CameraSourcePanoramaArtifact }>(`${sourcePanoramaPath(cameraId, sourceId)}/crop`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ artifact_id: artifactId, expected_revision: expectedRevision, crop }),
+  });
+  return result.artifact;
 }

@@ -227,6 +227,13 @@ def project_detection_bbox_to_stream_space(
     selected_artifact_name: str | None = None,
 ) -> tuple[float, float, float, float] | None:
     bbox = tuple(float(v) for v in bbox01)
+    artifact = packet.artifacts.get(selected_artifact_name or MAIN_ARTIFACT_NAME)
+    if artifact and artifact.metadata.get("image_geometry") is not None:
+        x1, y1, x2, y2 = bbox
+        corners = project_keypoints_to_stream_space([(x1, y1, 1), (x2, y1, 1), (x2, y2, 1), (x1, y2, 1)], packet, selected_artifact_name=selected_artifact_name)
+        if not corners:
+            return None
+        return normalize_bbox01((min(p[0] for p in corners), min(p[1] for p in corners), max(p[0] for p in corners), max(p[1] for p in corners)))
     warp = read_frame_warp(packet, selected_artifact_name=selected_artifact_name)
     if warp is not None:
         unwarped = unwarp_bbox01(bbox, warp)
@@ -248,6 +255,19 @@ def project_keypoints_to_stream_space(
     if not keypoints:
         return None
     out = [(float(x), float(y), float(score)) for x, y, score in keypoints]
+    artifact = packet.artifacts.get(selected_artifact_name or MAIN_ARTIFACT_NAME)
+    geometry = artifact.metadata.get("image_geometry") if artifact else None
+    if geometry is not None:
+        import numpy as np
+        from toposync.runtime.pipelines.image_geometry import geometry_matrix, source_pixels
+        try:
+            height, width = artifact.data.shape[:2]
+            matrix = geometry_matrix(geometry, width, height)
+            points = source_pixels(np.asarray(out)[:, :2] * [width - 1, height - 1], matrix)
+            points /= np.asarray(geometry["source_size"]) - 1
+            return [(clamp01(x), clamp01(y), out[index][2]) for index, (x, y) in enumerate(points)]
+        except (ValueError, TypeError, AttributeError, np.linalg.LinAlgError):
+            return None
     warp = read_frame_warp(packet, selected_artifact_name=selected_artifact_name)
     if warp is not None:
         unwarped = unwarp_keypoints_to_stream_space(out, warp)

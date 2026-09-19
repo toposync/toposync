@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 import urllib.parse
+import uuid
 from collections import deque
 from typing import Any
 from typing import Protocol
@@ -181,6 +182,21 @@ class CaptureFrameSample:
     captured_at: float = 0.0
     captured_monotonic: float = 0.0
     physical_capture_verified: bool = False
+    capture_instance: str = ""
+
+    def evidence(self) -> dict[str, Any]:
+        """Identify this decoded sample without claiming a physical exposure time."""
+        if not self.capture_instance or self.sequence <= 0:
+            return {}
+        return {
+            "capture_instance": self.capture_instance,
+            "generation": self.generation,
+            "sequence": self.sequence,
+            "published_at": self.published_at,
+            "received_monotonic": self.source_received_monotonic,
+            "physical_timestamp_verified": self.physical_capture_verified,
+            "captured_monotonic": self.captured_monotonic if self.physical_capture_verified else None,
+        }
 
 
 class CaptureBackend(Protocol):
@@ -207,6 +223,7 @@ class CaptureBackend(Protocol):
 class _LatestFrameBuffer:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._capture_instance = uuid.uuid4().hex
         self._generation = 1
         self._sequence = 0
         self._sample = CaptureFrameSample(frame=None, generation=self._generation)
@@ -234,6 +251,7 @@ class _LatestFrameBuffer:
                 captured_at=float(captured_at),
                 captured_monotonic=float(captured_monotonic),
                 physical_capture_verified=bool(physical_capture_verified),
+                capture_instance=self._capture_instance,
             )
 
     def clear(self) -> None:

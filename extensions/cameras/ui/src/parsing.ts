@@ -292,6 +292,9 @@ function readVisualPoseSignature(value: unknown): CameraVisualPoseSignature | nu
 
 export function readProjectionModel(value: unknown, fallbackCenter?: { x: number; z: number }): CameraProjectionModel {
   const record = readRecord(value);
+  if (readString(record.type).trim() && readString(record.type).trim() !== "image_quad_on_world") {
+    throw new Error("Unsupported camera projection model");
+  }
   return {
     type: "image_quad_on_world",
     image_region: readImageRegion(record.image_region),
@@ -341,6 +344,10 @@ export function readCalibratedViews(value: unknown, fallbackCenter?: { x: number
     const record = readRecord(value[index]);
     const id = readString(record.id).trim();
     if (!id) continue;
+    const rawProjection = readRecord(record.projection_model);
+    if (readString(rawProjection.type).trim() && readString(rawProjection.type).trim() !== "image_quad_on_world") {
+      continue;
+    }
     const streamScope = readRecord(record.stream_scope);
     const projectionQuality = readRecord(record.projection_quality);
     const status = readString(projectionQuality.status).trim();

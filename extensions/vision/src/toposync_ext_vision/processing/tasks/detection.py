@@ -122,10 +122,20 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                 packet,
                 selected_artifact_name=selected_artifact_name,
             )
+            metadata = dict(detection.metadata or {})
+            artifact = packet.artifacts.get(selected_artifact_name)
+            geometry = artifact.metadata.get("image_geometry") if artifact else None
+            if geometry is not None:
+                left, _, right, bottom = detection.bbox01
+                anchor = project_keypoints_to_stream_space([((left + right) / 2, bottom, 1)], packet, selected_artifact_name=selected_artifact_name)
+                if not anchor:
+                    continue
+                metadata["source_anchor"] = {"uv": list(anchor[0][:2]), "capture_evidence": geometry.get("capture_evidence")}
             detections.append(
                 replace(
                     detection,
                     bbox01=bbox01,
+                    metadata=metadata,
                     keypoints=keypoints,
                     model_id=str(detection.model_id or "").strip() or manifest.model_id,
                 )

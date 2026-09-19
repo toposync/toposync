@@ -89,10 +89,13 @@ def test_ptz_preset_http_retries_only_reconcile_ambiguous_mutations(
     set_calls = {
         "Automatic restore": 0,
         "Cancelled create": 0,
+        "Late observed": 0,
         "Temporary restore": 0,
         "Never appeared": 0,
     }
     remove_calls = {"stuck": 0}
+    delayed_catalog_reads = 0
+    delayed_preset_pending = False
 
     class FakeOnvifClient:
         def __init__(
@@ -112,7 +115,13 @@ def test_ptz_preset_http_retries_only_reconcile_ambiguous_mutations(
             *,
             profile_token: str,
         ) -> list[OnvifPtzPreset]:
+            nonlocal delayed_catalog_reads, delayed_preset_pending
             _ = ptz_xaddr, profile_token
+            if delayed_preset_pending:
+                delayed_catalog_reads += 1
+                if delayed_catalog_reads == 2:
+                    presets["device-late-observed"] = "Late observed"
+                    delayed_preset_pending = False
             return [OnvifPtzPreset(token=token, name=name) for token, name in presets.items()]
 
         async def set_preset(
@@ -123,11 +132,15 @@ def test_ptz_preset_http_retries_only_reconcile_ambiguous_mutations(
             preset_name: str = "",
             preset_token: str = "",
         ) -> str:
+            nonlocal delayed_preset_pending
             _ = ptz_xaddr, profile_token
             assert preset_token == ""
             set_calls[preset_name] += 1
             if preset_name == "Cancelled create":
                 raise asyncio.CancelledError
+            if preset_name == "Late observed":
+                delayed_preset_pending = True
+                raise OnvifAmbiguousMutationError("SetPreset response timed out after send")
             if preset_name in {"Automatic restore", "Temporary restore"}:
                 device_token = f"device-{preset_name.lower().replace(' ', '-')}"
                 presets[device_token] = preset_name
@@ -180,6 +193,16 @@ def test_ptz_preset_http_retries_only_reconcile_ambiguous_mutations(
         assert recreated_automatic.status_code == 200, recreated_automatic.text
         assert recreated_automatic.json()["token"] == automatic_token
         assert set_calls["Automatic restore"] == 2
+
+        late_observed = client.post(
+            endpoint,
+            json={"source_id": "zoom", "name": "Late observed"},
+            headers={"Idempotency-Key": "late-observed"},
+        )
+        assert late_observed.status_code == 200, late_observed.text
+        assert late_observed.json()["token"] == "device-late-observed"
+        assert set_calls["Late observed"] == 1
+        assert delayed_catalog_reads == 2
 
         headers = {"Idempotency-Key": "restore-before-validation"}
         created = client.post(
@@ -241,6 +264,16 @@ def test_ptz_preset_http_retries_only_reconcile_ambiguous_mutations(
         async def exercise_cancellation_windows() -> None:
             services = client.app.state.services
             common = {"camera_id": "cam1", "camera_source_id": "zoom"}
+
+            with pytest.raises(HTTPException) as identity_changed:
+                await services.call(
+                    "cameras.ptz.remove_preset",
+                    preset_token="cancelled-remove",
+                    expected_preset_name="Another preset",
+                    **common,
+                )
+            assert identity_changed.value.status_code == 409
+            assert remove_calls.get("cancelled-remove", 0) == 0
 
             try:
                 await services.call(

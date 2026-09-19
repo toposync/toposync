@@ -275,12 +275,10 @@ def test_graph_v2_mapping_fails_closed_and_selects_only_matching_lens() -> None:
     schema_version, packets = asyncio.run(scenario())
     assert schema_version == 2
     assert len(packets) == 5
-    assert "mapping" not in packets[0].payload
-    assert packets[1].payload["mapping"]["calibrated_view_id"] == "wide-door"
-    assert packets[1].payload["world"] == pytest.approx({"x": 5.0, "z": 5.0})
-    assert packets[2].payload["mapping"]["calibrated_view_id"] == "zoom-door"
-    assert packets[2].payload["world"] == pytest.approx({"x": 105.0, "z": 105.0})
-    assert "mapping" not in packets[3].payload
+    # A PTZ preset is a command hint, not geometry evidence. Mapping needs
+    # numeric pose or a signed visual match; otherwise a stale preset could
+    # attach an anchor to the wrong physical view.
+    assert all("mapping" not in packets[index].payload for index in range(4))
     assert packets[4].payload["mapping"]["calibrated_view_id"] == "fixed-door"
     assert packets[4].payload["world"] == pytest.approx({"x": 205.0, "z": 205.0})
 
@@ -380,15 +378,10 @@ def test_graph_v2_mapping_resolves_device_once_then_uses_local_snapshot() -> Non
 
     calls, packets = asyncio.run(scenario())
     assert len(packets) == 2
-    assert all(packet.payload["mapping"]["calibrated_view_id"] == "zoom-door" for packet in packets)
-    assert len(calls) == 2
-    assert calls[0]["camera_id"] == "front"
-    assert calls[0]["source_id"] == "zoom_main"
-    assert "ptz_device_id" not in calls[0]
-    assert calls[1]["ptz_device_id"] == "shared-head"
-    assert "camera_id" not in calls[1] and "source_id" not in calls[1]
-    assert all(call["include_readiness"] is False for call in calls)
-    assert all(call["refresh_physical"] is False for call in calls)
+    # A fresh controller snapshot without numeric pose or a visual signature
+    # remains insufficient proof that the lens is on the calibrated view.
+    assert all("mapping" not in packet.payload for packet in packets)
+    assert calls == []
 
 
 @pytest.mark.parametrize(

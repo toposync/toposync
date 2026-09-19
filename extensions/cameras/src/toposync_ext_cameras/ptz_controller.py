@@ -10,6 +10,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Coroutine, Literal
 
@@ -27,14 +28,112 @@ PtzControllerState = Literal[
 PtzMotionState = Literal["unknown", "moving", "settling", "stable"]
 
 _OWNER_PRIORITY: dict[PtzOwnerKind, int] = {"automation": 10, "manual": 100}
-_ALLOWED_COMMANDS = {"goto_preset", "absolute_move", "continuous_move", "stop"}
+_ALLOWED_COMMANDS = {"goto_preset", "absolute_move", "relative_move", "continuous_move", "stop"}
 _COMMAND_RESULT_LIMIT = 256
 _PERSISTED_COMMAND_ID_LIMIT = 4096
 _COMMAND_ID_MAX_LENGTH = 128
 
 
+class PtzFailureCode(StrEnum):
+    TRANSPORT_TIMEOUT = "transport_timeout"
+    HTTP_ERROR = "http_error"
+    ONVIF_FAULT = "onvif_fault"
+    TRANSPORT_ERROR = "transport_error"
+    DEVICE_REJECTED = "device_rejected"
+    CONTROLLER_ERROR = "controller_error"
+    UNKNOWN = "unknown"
+
+
+class PtzFailureStage(StrEnum):
+    CONTROLLER_VALIDATION = "controller_validation"
+    COMMAND_DISPATCH = "command_dispatch"
+    DEVICE_RESPONSE = "device_response"
+    SERVICE_BOUNDARY = "service_boundary"
+    RECEIPT_VALIDATION = "receipt_validation"
+
+
 class PtzControlError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_code: PtzFailureCode | str = PtzFailureCode.CONTROLLER_ERROR,
+        failure_stage: PtzFailureStage | str = PtzFailureStage.CONTROLLER_VALIDATION,
+    ) -> None:
+        super().__init__(message)
+        try:
+            self.failure_code = PtzFailureCode(failure_code).value
+        except (TypeError, ValueError):
+            self.failure_code = PtzFailureCode.UNKNOWN.value
+        try:
+            self.failure_stage = PtzFailureStage(failure_stage).value
+        except (TypeError, ValueError):
+            self.failure_stage = PtzFailureStage.CONTROLLER_VALIDATION.value
+
+
+def _exception_chain(error: Exception) -> list[Exception]:
+    chain: list[Exception] = []
+    seen: set[int] = set()
+    current: Exception | None = error
+    while current is not None and id(current) not in seen:
+        chain.append(current)
+        seen.add(id(current))
+        nested = current.__cause__ or current.__context__
+        if nested is None:
+            reason = getattr(current, "reason", None)
+            nested = reason if isinstance(reason, Exception) else None
+        current = nested if isinstance(nested, Exception) else None
+    return chain
+
+
+def _classify_execution_failure(error: Exception) -> tuple[PtzFailureCode, PtzFailureStage]:
+    chain = _exception_chain(error)
+    for item in chain:
+        if isinstance(item, PtzControlError):
+            return PtzFailureCode(item.failure_code), PtzFailureStage(item.failure_stage)
+
+    if any(
+        isinstance(item, TimeoutError) or "timeout" in type(item).__name__.lower()
+        for item in chain
+    ):
+        return PtzFailureCode.TRANSPORT_TIMEOUT, PtzFailureStage.COMMAND_DISPATCH
+
+    onvif_errors = [item for item in chain if "onvif" in type(item).__name__.lower()]
+    if onvif_errors:
+        fault_markers = (
+            "soap",
+            "fault",
+            "ter:",
+            "env:",
+            "invalidargval",
+            "actionnotsupported",
+        )
+        if any(
+            any(marker in str(item).lower() for marker in fault_markers)
+            for item in onvif_errors
+        ):
+            return PtzFailureCode.ONVIF_FAULT, PtzFailureStage.DEVICE_RESPONSE
+
+    http_statuses: list[int] = []
+    for item in reversed(chain):
+        if "http" not in type(item).__name__.lower():
+            continue
+        raw_status = getattr(item, "status_code", getattr(item, "code", None))
+        if isinstance(raw_status, int) and not isinstance(raw_status, bool):
+            http_statuses.append(raw_status)
+    if http_statuses:
+        status = http_statuses[0]
+        if status in {408, 504}:
+            return PtzFailureCode.TRANSPORT_TIMEOUT, PtzFailureStage.COMMAND_DISPATCH
+        if 400 <= status < 500:
+            return PtzFailureCode.DEVICE_REJECTED, PtzFailureStage.DEVICE_RESPONSE
+        return PtzFailureCode.HTTP_ERROR, PtzFailureStage.DEVICE_RESPONSE
+
+    if any(isinstance(item, (ConnectionError, OSError)) for item in chain):
+        return PtzFailureCode.TRANSPORT_ERROR, PtzFailureStage.COMMAND_DISPATCH
+    if onvif_errors:
+        return PtzFailureCode.ONVIF_FAULT, PtzFailureStage.DEVICE_RESPONSE
+    return PtzFailureCode.UNKNOWN, PtzFailureStage.COMMAND_DISPATCH
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,10 +507,11 @@ class PtzController:
         async with self._lock:
             self._ensure_accepting_commands()
             device, lease = self._lease_locked(lid, fence, now_monotonic=now_monotonic)
-            if device.state == "stopping":
-                raise PtzControlError(
-                    f"PTZ device '{device.ptz_device_id}' is stopping; the lease cannot be renewed"
-                )
+            # A finite continuous-move watchdog stops the head while preserving
+            # the current lease. Renewal only extends that same fenced ownership;
+            # it does not issue movement and commands remain serialized behind
+            # the in-flight Stop. Rejecting renewal here can falsely turn a slow
+            # Stop into ownership loss in a long-running panorama.
             if device.state == "fault":
                 raise PtzControlError(
                     f"PTZ device '{device.ptz_device_id}' is faulted; use emergency_stop"
@@ -450,6 +550,11 @@ class PtzController:
         if len(command_key) > _COMMAND_ID_MAX_LENGTH:
             raise PtzControlError(f"command_id must be at most {_COMMAND_ID_MAX_LENGTH} characters")
         normalized_command = _normalize_command(command)
+        full_stop = bool(
+            normalized_command["kind"] == "stop"
+            and normalized_command.get("pan_tilt") is True
+            and normalized_command.get("zoom") is True
+        )
         now_monotonic = self._monotonic()
 
         async with self._lock:
@@ -468,13 +573,13 @@ class PtzController:
             )
             if cached is not None:
                 return cached
-            if device.state == "stopping":
+            if device.state == "stopping" and normalized_command["kind"] != "stop":
                 raise PtzControlError(
                     f"PTZ device '{device.ptz_device_id}' is stopping; commands are blocked"
                 )
-            if device.state == "fault":
+            if device.state == "fault" and not full_stop:
                 raise PtzControlError(
-                    f"PTZ device '{device.ptz_device_id}' is faulted; use emergency_stop"
+                    f"PTZ device '{device.ptz_device_id}' is faulted; use a full stop or emergency_stop"
                 )
 
         async with device.command_lock:
@@ -493,13 +598,13 @@ class PtzController:
                 )
                 if cached is not None:
                     return cached
-                if device.state == "stopping":
+                if device.state == "stopping" and normalized_command["kind"] != "stop":
                     raise PtzControlError(
                         f"PTZ device '{device.ptz_device_id}' is stopping; commands are blocked"
                     )
-                if device.state == "fault":
+                if device.state == "fault" and not full_stop:
                     raise PtzControlError(
-                        f"PTZ device '{device.ptz_device_id}' is faulted; use emergency_stop"
+                        f"PTZ device '{device.ptz_device_id}' is faulted; use a full stop or emergency_stop"
                     )
             if normalized_command["kind"] != "stop":
                 binding_current, binding_reason = await self._transport_binding_current(lease)
@@ -534,13 +639,13 @@ class PtzController:
                 )
                 if cached is not None:
                     return cached
-                if device.state == "stopping":
+                if device.state == "stopping" and normalized_command["kind"] != "stop":
                     raise PtzControlError(
                         f"PTZ device '{device.ptz_device_id}' is stopping; commands are blocked"
                     )
-                if device.state == "fault":
+                if device.state == "fault" and not full_stop:
                     raise PtzControlError(
-                        f"PTZ device '{device.ptz_device_id}' is faulted; use emergency_stop"
+                        f"PTZ device '{device.ptz_device_id}' is faulted; use a full stop or emergency_stop"
                     )
                 self._record_command_intent_locked(
                     device,
@@ -568,6 +673,9 @@ class PtzController:
 
             failed = False
             error_text = ""
+            failure_code: PtzFailureCode | None = None
+            failure_stage: PtzFailureStage | None = None
+            command_started = self._monotonic()
             try:
                 execute_kwargs: dict[str, Any] = {
                     "camera_id": lease.camera_id,
@@ -585,6 +693,14 @@ class PtzController:
                 if not bool(command_payload.get("ok")):
                     failed = True
                     error_text = str(command_payload.get("error") or "PTZ command failed")
+                    try:
+                        failure_code = PtzFailureCode(command_payload.get("failure_code"))
+                    except (TypeError, ValueError):
+                        failure_code = PtzFailureCode.DEVICE_REJECTED
+                    try:
+                        failure_stage = PtzFailureStage(command_payload.get("failure_stage"))
+                    except (TypeError, ValueError):
+                        failure_stage = PtzFailureStage.DEVICE_RESPONSE
             except asyncio.CancelledError:
                 async with self._lock:
                     current = device.lease
@@ -600,9 +716,21 @@ class PtzController:
             except Exception as exc:  # noqa: BLE001
                 failed = True
                 error_text = str(exc).strip() or exc.__class__.__name__
+                failure_code, failure_stage = _classify_execution_failure(exc)
                 command_payload = {"ok": False, "error": error_text}
 
             async with self._lock:
+                command_elapsed = max(0.0, self._monotonic() - command_started)
+                transport_elapsed = command_payload.get("transport_elapsed_seconds")
+                if (
+                    not isinstance(transport_elapsed, (int, float))
+                    or not math.isfinite(transport_elapsed)
+                    or not 0 <= transport_elapsed <= command_elapsed
+                ):
+                    transport_elapsed = command_elapsed
+                pulse_remaining = max(
+                    0.0, float(normalized_command.get("timeout_s") or 0.5) - transport_elapsed
+                )
                 current = device.lease
                 still_current = bool(
                     current is not None
@@ -624,7 +752,17 @@ class PtzController:
                     "accepted": not failed,
                     "stale_after_execution": not still_current,
                     "idempotent": False,
+                    "command_elapsed_seconds": command_elapsed,
                 }
+                if normalized_command["kind"] == "continuous_move":
+                    payload["pulse_remaining_seconds"] = pulse_remaining
+                if failed:
+                    payload["failure_code"] = (
+                        failure_code or PtzFailureCode.UNKNOWN
+                    ).value
+                    payload["failure_stage"] = (
+                        failure_stage or PtzFailureStage.COMMAND_DISPATCH
+                    ).value
                 self._remember_result_locked(
                     device,
                     command_key,
@@ -640,6 +778,8 @@ class PtzController:
                     device,
                     command_id=command_key,
                     failed=failed,
+                    failure_code=failure_code,
+                    failure_stage=failure_stage,
                 )
                 if still_current:
                     if failed:
@@ -659,11 +799,15 @@ class PtzController:
                             lease=lease,
                             command_id=command_key,
                             motion_epoch=command_motion_epoch,
-                            timeout_s=float(normalized_command.get("timeout_s") or 0.5),
+                            timeout_s=pulse_remaining,
                         )
 
             if failed:
-                raise PtzControlError(error_text)
+                raise PtzControlError(
+                    error_text,
+                    failure_code=failure_code or PtzFailureCode.UNKNOWN,
+                    failure_stage=failure_stage or PtzFailureStage.COMMAND_DISPATCH,
+                )
             return payload
 
     async def release(self, *, lease_id: str, fence: int) -> dict[str, Any]:
@@ -1361,7 +1505,8 @@ class PtzController:
             or device.motion_state in {"moving", "settling"}
             or (
                 not device.geometry_safe
-                and device.last_command_kind in {"goto_preset", "absolute_move", "continuous_move"}
+                and device.last_command_kind
+                in {"goto_preset", "absolute_move", "relative_move", "continuous_move"}
             )
         )
 
@@ -1511,7 +1656,9 @@ class PtzController:
     ) -> None:
         current_task = asyncio.current_task()
         try:
-            await asyncio.sleep(max(0.05, min(2.0, float(timeout_s))))
+            # The dispatch-to-response interval has already consumed the pulse
+            # budget. Keep Stop serialized, but never restart an exhausted pulse.
+            await asyncio.sleep(max(0.0, min(2.0, float(timeout_s))))
             async with device.command_lock:
                 async with self._lock:
                     if device.continuous_watchdog_task is not current_task:
@@ -1729,7 +1876,13 @@ class PtzController:
         if cached.command != command:
             raise PtzControlError("command_id was already used with a different PTZ command")
         if cached.failed:
-            raise PtzControlError(str(cached.payload.get("error") or "PTZ command failed"))
+            raise PtzControlError(
+                str(cached.payload.get("error") or "PTZ command failed"),
+                failure_code=cached.payload.get("failure_code", PtzFailureCode.UNKNOWN),
+                failure_stage=cached.payload.get(
+                    "failure_stage", PtzFailureStage.COMMAND_DISPATCH
+                ),
+            )
         if bool(cached.payload.get("pending")):
             if pending_as_none:
                 return None
@@ -1779,11 +1932,20 @@ class PtzController:
         *,
         command_id: str,
         failed: bool,
+        failure_code: PtzFailureCode | None = None,
+        failure_stage: PtzFailureStage | None = None,
     ) -> None:
         receipt = self._persisted_command_ids.get(device.ptz_device_id, {}).get(command_id)
         if isinstance(receipt, dict):
             receipt["status"] = "failed" if failed else "succeeded"
             receipt["completed_at"] = self._wall_time()
+            if failed:
+                receipt["failure_code"] = (
+                    failure_code or PtzFailureCode.UNKNOWN
+                ).value
+                receipt["failure_stage"] = (
+                    failure_stage or PtzFailureStage.COMMAND_DISPATCH
+                ).value
         self._persist_state_locked()
 
     def _snapshot_locked(self, device: _DeviceRuntime) -> dict[str, Any]:
@@ -2125,12 +2287,13 @@ def _normalize_command(value: Any) -> dict[str, Any]:
     kind = str(raw_command.get("kind") or "").strip().lower()
     if kind not in _ALLOWED_COMMANDS:
         raise PtzControlError(
-            "command.kind must be goto_preset, absolute_move, continuous_move, or stop"
+            "command.kind must be goto_preset, absolute_move, relative_move, continuous_move, or stop"
         )
     allowed_fields = {
         "goto_preset": {"kind", "preset_token"},
         "absolute_move": {"kind", "pan", "tilt", "zoom"},
-        "continuous_move": {"kind", "pan", "tilt", "zoom", "timeout_s"},
+        "relative_move": {"kind", "pan", "tilt", "zoom"},
+        "continuous_move": {"kind", "pan", "tilt", "zoom", "timeout_s", "allow_relative_fallback"},
         "stop": {"kind", "pan_tilt", "zoom"},
     }[kind]
     unexpected = sorted(set(raw_command) - allowed_fields)
@@ -2151,7 +2314,19 @@ def _normalize_command(value: Any) -> dict[str, Any]:
             raise PtzControlError("absolute_move requires at least one axis")
         return {"kind": kind, "pan": pan, "tilt": tilt, "zoom": zoom}
 
+    if kind == "relative_move":
+        return {
+            "kind": kind,
+            **{
+                axis: _normalized_axis(raw_command.get(axis), f"command.{axis}") or 0.0
+                for axis in ("pan", "tilt", "zoom")
+            },
+        }
+
     if kind == "continuous_move":
+        fallback = raw_command.get("allow_relative_fallback", True)
+        if not isinstance(fallback, bool):
+            raise PtzControlError("command.allow_relative_fallback must be boolean")
         timeout = raw_command.get("timeout_s")
         try:
             parsed_timeout = float(timeout) if timeout is not None else 0.5
@@ -2165,6 +2340,7 @@ def _normalize_command(value: Any) -> dict[str, Any]:
             "tilt": _normalized_velocity(raw_command.get("tilt"), "command.tilt"),
             "zoom": _normalized_velocity(raw_command.get("zoom"), "command.zoom"),
             "timeout_s": max(0.05, min(2.0, parsed_timeout)),
+            **({"allow_relative_fallback": fallback} if "allow_relative_fallback" in raw_command else {}),
         }
 
     pan_tilt = raw_command.get("pan_tilt", True)

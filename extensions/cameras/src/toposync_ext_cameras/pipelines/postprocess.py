@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from toposync.runtime.pipelines.image_geometry import transformed_geometry
+
 import asyncio
 import base64
 import hashlib
@@ -9,7 +11,7 @@ import struct
 import time
 from collections import deque
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -45,6 +47,10 @@ from ..processing.mapping import (
     ControlPointRefinementPoint,
     ControlPointSet,
     ControlPointSetSelection,
+    GroundCalibrationPoint,
+    GroundLens,
+    GroundProjectionSpec,
+    GroundPlaneMapper,
     HomographyEstimationConfig,
     PanTiltZoomState,
     PoseReference,
@@ -52,6 +58,7 @@ from ..processing.mapping import (
     VisualPoseMatch,
     VisualPoseSignature,
     align_image_point_to_visual_pose_reference,
+    build_calibration_mapper,
     compute_boundary_refinement_points_signature,
     compute_control_points_signature,
     compute_refinement_points_signature,
@@ -373,6 +380,21 @@ def _camera_mapping_composition_status(*, composition: Any, camera_id: str) -> d
         if str(props.get("camera_id") or "").strip() != camera_id:
             continue
         found = True
+        panorama = props.get("panorama_mapping")
+        if (
+            isinstance(panorama, dict)
+            and panorama.get("status") == "ready"
+            and isinstance(panorama.get("job_id"), str)
+            and bool(panorama["job_id"].strip())
+            and isinstance(panorama.get("source_id"), str)
+            and bool(panorama["source_id"].strip())
+            and type(panorama.get("revision")) is int
+            and panorama["revision"] > 0
+        ):
+            # Compilation sees only the reference. Runtime revalidates the
+            # private calibration and the current camera/source configuration.
+            has_mapping = True
+            break
         control_point_sets = _parse_mapping_control_point_sets_from_props(props)
         if any(len(item.control_points) >= 4 for item in control_point_sets):
             has_mapping = True
@@ -1029,12 +1051,104 @@ class CameraMappingProjectionModel(BaseModel):
     visual_pose_signature: CameraMappingVisualPoseSignature | None = None
 
 
+class CameraMappingIdentityRectilinearLens(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["identity_rectilinear_v1"] = "identity_rectilinear_v1"
+
+
+class CameraMappingRectilinearBrownLens(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["rectilinear_brown_v1"] = "rectilinear_brown_v1"
+    fx: float = Field(gt=0.02, le=20.0)
+    fy: float = Field(gt=0.02, le=20.0)
+    cx: float = Field(ge=-0.25, le=1.25)
+    cy: float = Field(ge=-0.25, le=1.25)
+    coefficients: list[float] = Field(min_length=4, max_length=8)
+
+    @field_validator("coefficients")
+    @classmethod
+    def _finite_coefficients(cls, value: list[float]) -> list[float]:
+        if not all(math.isfinite(float(item)) for item in value):
+            raise ValueError("lens coefficients must be finite")
+        return value
+
+
+class CameraMappingFisheyeKb4Lens(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["fisheye_kb4_v1"] = "fisheye_kb4_v1"
+    fx: float = Field(gt=0.02, le=20.0)
+    fy: float = Field(gt=0.02, le=20.0)
+    cx: float = Field(ge=-0.25, le=1.25)
+    cy: float = Field(ge=-0.25, le=1.25)
+    coefficients: list[float] = Field(min_length=4, max_length=4)
+
+    @field_validator("coefficients")
+    @classmethod
+    def _finite_coefficients(cls, value: list[float]) -> list[float]:
+        if not all(math.isfinite(float(item)) for item in value):
+            raise ValueError("lens coefficients must be finite")
+        return value
+
+
+CameraMappingGroundLens = Annotated[
+    CameraMappingIdentityRectilinearLens
+    | CameraMappingRectilinearBrownLens
+    | CameraMappingFisheyeKb4Lens,
+    Field(discriminator="type"),
+]
+
+
+class CameraMappingGroundCorrespondence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    role: Literal["fit", "check"] = "fit"
+    origin: Literal["manual", "automatic"] = "manual"
+    image: CameraMappingControlPointImage
+    world: CameraMappingControlPointWorld
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _validate_id(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("id is required")
+        return normalized
+
+
+class CameraMappingSourceGeometry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    width: int = Field(ge=2, le=50000)
+    height: int = Field(ge=2, le=50000)
+    content_rect: CameraMappingImageRegion = Field(default_factory=CameraMappingImageRegion)
+    rotation_degrees: Literal[0, 90, 180, 270] = 0
+    mirror_x: bool = False
+    mirror_y: bool = False
+
+
+class CameraMappingRayGroundProjectionModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["camera_ray_ground_v2"] = "camera_ray_ground_v2"
+    solver_version: Literal[1] = 1
+    source_geometry: CameraMappingSourceGeometry
+    lens: CameraMappingGroundLens
+    correspondences: list[CameraMappingGroundCorrespondence] = Field(min_length=4, max_length=24)
+    visual_pose_signature: CameraMappingVisualPoseSignature | None = None
+
+
+CameraMappingProjection = Annotated[
+    CameraMappingProjectionModel | CameraMappingRayGroundProjectionModel,
+    Field(discriminator="type"),
+]
+
+
 class CameraMappingStreamScope(BaseModel):
     model_config = ConfigDict(extra="forbid")
     compatible_roles: list[str] = Field(default_factory=lambda: ["main", "sub"])
     compatible_source_ids: list[str] = Field(default_factory=list)
+    compatible_view_ids: list[str] = Field(default_factory=list)
+    physical_view_id: str = ""
 
-    @field_validator("compatible_roles", "compatible_source_ids", mode="before")
+    @field_validator("compatible_roles", "compatible_source_ids", "compatible_view_ids", mode="before")
     @classmethod
     def _normalize_string_list(cls, value: Any) -> list[str]:
         if not isinstance(value, list):
@@ -1052,15 +1166,24 @@ class CameraMappingProjectionQuality(BaseModel):
     status: Literal["ready", "estimated", "incomplete"] | None = None
     estimated: bool = False
     note: str | None = None
+    calibration_digest: str | None = None
+    fit_points: int | None = None
+    fit_inliers: int | None = None
+    check_points: int | None = None
+    check_errors_meters: list[float] = Field(default_factory=list)
+    image_coverage_ratio: float | None = None
+    solver: str | None = None
 
 
 class CameraMappingCalibratedView(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     label: str = ""
+    editor_view_rotation_degrees: Literal[0, 90, 180, 270] = 0
     pose_reference: CameraMappingPoseReference | None = None
+    requires_pose_evidence: bool = False
     stream_scope: CameraMappingStreamScope = Field(default_factory=CameraMappingStreamScope)
-    projection_model: CameraMappingProjectionModel
+    projection_model: CameraMappingProjection
     projection_quality: CameraMappingProjectionQuality = Field(
         default_factory=CameraMappingProjectionQuality
     )
@@ -1350,6 +1473,13 @@ class ImageCropRuntime(TransformOperatorRuntime):
             "bottom": float(self._config.bottom),
         }
 
+        from toposync.runtime.pipelines.image_geometry import transformed_geometry
+
+        left_pixel, top_pixel, _, _ = _bbox01_to_px(bbox01_current, width=width, height=height)
+        artifact_meta.update(transformed_geometry(
+            packet.artifacts.get(selected_name),
+            [[1, 0, -left_pixel], [0, 1, -top_pixel], [0, 0, 1]], crop.shape[1], crop.shape[0]))
+
         artifact_meta["bbox_px_total"] = list(
             _bbox01_to_px(bbox01_total, width=width, height=height)
         )
@@ -1519,6 +1649,7 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
                 data=redacted,
                 mime_type="image/raw",
                 metadata={
+                    **transformed_geometry(packet.artifacts.get(selected_name), [[1, 0, 0], [0, 1, 0], [0, 0, 1]], redacted.shape[1], redacted.shape[0]),
                     "source": "camera.image_privacy",
                     "source_artifact_name": selected_name,
                     "bbox01": list(bbox01),
@@ -1739,6 +1870,8 @@ class ImagePerspectiveCropRuntime(TransformOperatorRuntime):
                 border_value=int(self._config.border_value),
             )
 
+        from toposync.runtime.pipelines.image_geometry import transformed_geometry
+
         warped = result.get("image")
         if warped is None:
             return [packet]
@@ -1750,6 +1883,7 @@ class ImagePerspectiveCropRuntime(TransformOperatorRuntime):
                 mime_type="image/raw",
                 metadata={
                     "source": "camera.image_perspective_crop",
+                    **transformed_geometry(packet.artifacts.get(selected_name), result["homography"], dst_w, dst_h),
                     "source_artifact_name": selected_name,
                     "units": str(self._config.units),
                     "points": [list(p) for p in self._config.points],
@@ -1824,6 +1958,8 @@ class ImageAdjustRuntime(TransformOperatorRuntime):
         if isinstance(image, (bytes, bytearray, memoryview)):
             return [packet]
 
+        from toposync.runtime.pipelines.image_geometry import transformed_geometry
+
         saturation = float(self._config.saturation)
         brightness = float(self._config.brightness)
         contrast = float(self._config.contrast)
@@ -1860,6 +1996,7 @@ class ImageAdjustRuntime(TransformOperatorRuntime):
                 mime_type="image/raw",
                 metadata={
                     "source_artifact_name": selected_name,
+                    **transformed_geometry(packet.artifacts.get(selected_name), [[1, 0, 0], [0, 1, 0], [0, 0, 1]], bgr.shape[1], bgr.shape[0]),
                     "saturation": float(saturation),
                     "brightness": float(brightness),
                     "contrast": float(contrast),
@@ -2076,6 +2213,7 @@ class LocalContrastCLAHERuntime(TransformOperatorRuntime):
                 data=out_image,
                 mime_type="image/raw",
                 metadata={
+                    **transformed_geometry(packet.artifacts.get(selected_name), [[1, 0, 0], [0, 1, 0], [0, 0, 1]], out_image.shape[1], out_image.shape[0]),
                     "source_artifact_name": selected_name,
                     "clip_limit": float(clip_limit),
                     "tile_grid_size": [int(tile_grid_size[0]), int(tile_grid_size[1])],
@@ -2228,6 +2366,7 @@ class UnsharpMaskRuntime(TransformOperatorRuntime):
                 data=out_image,
                 mime_type="image/raw",
                 metadata={
+                    **transformed_geometry(packet.artifacts.get(selected_name), [[1, 0, 0], [0, 1, 0], [0, 0, 1]], out_image.shape[1], out_image.shape[0]),
                     "source_artifact_name": selected_name,
                     "amount": float(amount),
                     "sigma": float(sigma),
@@ -2398,6 +2537,7 @@ class DenoiseLumaRuntime(TransformOperatorRuntime):
                 data=out_image,
                 mime_type="image/raw",
                 metadata={
+                    **transformed_geometry(packet.artifacts.get(selected_name), [[1, 0, 0], [0, 1, 0], [0, 0, 1]], out_image.shape[1], out_image.shape[0]),
                     "source_artifact_name": selected_name,
                     "method": str(method),
                     "bilateral_diameter": int(self._config.bilateral_diameter),
@@ -2584,6 +2724,7 @@ class AutoGammaRuntime(TransformOperatorRuntime):
                 data=out_image,
                 mime_type="image/raw",
                 metadata={
+                    **transformed_geometry(packet.artifacts.get(selected_name), [[1, 0, 0], [0, 1, 0], [0, 0, 1]], out_image.shape[1], out_image.shape[0]),
                     "source_artifact_name": selected_name,
                     "measurement": str(self._config.measurement),
                     "target_luma": float(self._config.target_luma),
@@ -2796,6 +2937,7 @@ class GlobalStabilizeRuntime(TransformOperatorRuntime):
                 data=out_image,
                 mime_type="image/raw",
                 metadata={
+                    **transformed_geometry(packet.artifacts.get(selected_name), [[1, 0, -float(result.get("dx") or 0)], [0, 1, -float(result.get("dy") or 0)], [0, 0, 1]], out_image.shape[1], out_image.shape[0]),
                     "source_artifact_name": selected_name,
                     "dx": float(result.get("dx") or 0.0),
                     "dy": float(result.get("dy") or 0.0),
@@ -3375,6 +3517,11 @@ def _resize_packet_artifacts_opencv(
     resized = cv2.resize(arr, (new_width, new_height), interpolation=interpolation)
 
     metadata = dict(artifact.metadata)
+    from toposync.runtime.pipelines.image_geometry import transformed_geometry
+
+    scale_x, scale_y = new_width / width, new_height / height
+    metadata.update(transformed_geometry(artifact,
+        [[scale_x, 0, (scale_x - 1) / 2], [0, scale_y, (scale_y - 1) / 2], [0, 0, 1]], new_width, new_height))
     metadata["resized_from"] = {"width": width, "height": height}
     metadata["resized_to"] = {"width": new_width, "height": new_height}
     out = out.with_artifact(
@@ -3421,12 +3568,14 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         self._resolved_sets_cache: dict[
             str, tuple[Any, str | None, tuple[ControlPointSet, ...]]
         ] = {}
-        self._mapper_cache: dict[str, ControlPointMapper | None] = {}
+        self._mapper_cache: dict[str, ControlPointMapper | GroundPlaneMapper | None] = {}
         self._ptz_state_cache: dict[str, _CameraMappingPtzStateCacheEntry] = {}
         self._ptz_state_tasks: dict[str, asyncio.Task[PanTiltZoomState | None]] = {}
         self._ptz_device_by_camera_source: dict[str, str] = {}
 
-    def _mapping_confidence(self, *, selection: Any, mapper: ControlPointMapper) -> float:
+    def _mapping_confidence(
+        self, *, selection: Any, mapper: ControlPointMapper | GroundPlaneMapper
+    ) -> float:
         confidence = 0.85
         quality = getattr(mapper, "quality", None)
         quality_payload: dict[str, Any] = {}
@@ -3463,7 +3612,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
 
     def _world_for_point(
         self,
-        mapper: ControlPointMapper,
+        mapper: ControlPointMapper | GroundPlaneMapper,
         *,
         point: tuple[float, float],
         confidence: float,
@@ -3491,7 +3640,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         self,
         payload: dict[str, Any],
         *,
-        mapper: ControlPointMapper,
+        mapper: ControlPointMapper | GroundPlaneMapper,
         confidence: float,
         visual_pose_match: VisualPoseMatch | None,
     ) -> None:
@@ -3508,6 +3657,9 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                         annotations.append(raw_item)
                         continue
                     annotation = dict(raw_item)
+                    # A packet can be replayed through this operator after a camera moves.
+                    # Do not leave an anchor from an older, now-invalid projection behind.
+                    annotation.pop("world_anchor", None)
                     point = _image_point_from_bbox01(annotation.get("bbox01"))
                     if point is not None:
                         point = self._reference_image_point(
@@ -3526,7 +3678,44 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 vision[key] = annotations
             payload["vision"] = vision
 
+    def _unmapped_packet(
+        self,
+        packet: Packet,
+        *,
+        payload: dict[str, Any],
+        composition_id: str | None,
+        reason: str,
+        applies: bool,
+    ) -> Packet:
+        """Fail closed for the bounded ground-plane model without changing legacy output."""
+        if not applies:
+            return replace(packet, payload=payload) if payload is not packet.payload else packet
+        payload.pop(self._config.world_field, None)
+        payload.pop("world_anchor", None)
+        vision_raw = payload.get("vision")
+        if isinstance(vision_raw, dict):
+            vision = dict(vision_raw)
+            for key in ("tracks", "detections", "segmentations"):
+                raw_items = vision_raw.get(key)
+                if isinstance(raw_items, list):
+                    vision[key] = [
+                        {k: v for k, v in item.items() if k != "world_anchor"}
+                        if isinstance(item, dict)
+                        else item
+                        for item in raw_items
+                    ]
+            payload["vision"] = vision
+        payload["mapping"] = {
+            "status": "unmapped",
+            "reason": reason,
+            "composition_id": composition_id,
+        }
+        return replace(packet, payload=payload)
+
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        panorama_packet = await self._process_panorama_packet(packet)
+        if panorama_packet is not None:
+            return [panorama_packet]
         point = _resolve_image_point(
             packet,
             bbox_field=self._config.bbox_field,
@@ -3545,16 +3734,48 @@ class CameraMappingRuntime(TransformOperatorRuntime):
 
         camera_id = _resolve_camera_id(packet, camera_id_override=self._config.camera_id)
         composition_id, control_point_sets = await self._resolve_control_point_sets(camera_id=camera_id)
-        source_id, source_role = _resolve_camera_source_scope(packet)
-        control_point_sets = tuple(
-            item
-            for item in control_point_sets
-            if _control_point_set_matches_source_scope(
-                item, source_id=source_id, source_role=source_role
-            )
+        has_ground_projection = any(
+            item.ground_projection is not None for item in control_point_sets
         )
+        source_id, source_role, source_view_id = _resolve_camera_source_scope(packet)
+        # The old inline node has no camera identity field at all. Keep it
+        # backward compatible while making every calibrated view explicit.
+        inline_legacy_without_scope = self._inline_control_point_sets and all(
+            item.ground_projection is None
+            and not item.compatible_source_ids
+            and not item.compatible_roles
+            and not item.compatible_view_ids
+            and item.physical_view_id is None
+            for item in control_point_sets
+        )
+        if not inline_legacy_without_scope:
+            control_point_sets = tuple(
+                item
+                for item in control_point_sets
+                if _control_point_set_matches_source_scope(
+                    item,
+                    source_id=source_id,
+                    source_role=source_role,
+                    source_view_id=source_view_id,
+                )
+            )
+        # A ready v2 ground projection becomes canonical for its exact physical
+        # source. Keep legacy records for rollback/migration, but never let an
+        # unscoped quad silently win over the new bounded calibration.
+        if any(item.ground_projection is not None for item in control_point_sets):
+            control_point_sets = tuple(
+                item for item in control_point_sets if item.ground_projection is not None
+            )
         if not control_point_sets:
-            return [packet]
+            return [
+                self._unmapped_packet(
+                    packet,
+                    payload=dict(packet.payload),
+                    composition_id=composition_id,
+                    reason="no_matching_calibrated_view",
+                    applies=has_ground_projection,
+                )
+            ]
 
         pose_state = _read_pan_tilt_zoom_state(packet.payload.get(self._config.pose_state_field))
         pose_state_fetched = False
@@ -3579,6 +3800,52 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 preset_token=None,
                 preset_name=None,
             )
+        has_pose_bound_sets = any(
+            item.pose_reference is not None or item.requires_pose_evidence
+            for item in control_point_sets
+        )
+        missing_required_numeric_pose = any(
+            item.requires_pose_evidence
+            and (
+                item.pose_reference is None
+                or not any(
+                    getattr(item.pose_reference, axis) is not None
+                    for axis in ("pan", "tilt", "zoom")
+                )
+            )
+            for item in control_point_sets
+        )
+        if missing_required_numeric_pose:
+            return [
+                self._unmapped_packet(
+                    packet,
+                    payload=payload,
+                    composition_id=composition_id,
+                    reason="calibration_requires_numeric_pose",
+                    applies=has_ground_projection,
+                )
+            ]
+        # v2 is introduced fail-closed. Legacy calibrated views keep their
+        # compatibility behaviour during migration, including visual recovery.
+        requires_strict_pose_safety = any(
+            item.ground_projection is not None
+            and (item.pose_reference is not None or item.requires_pose_evidence)
+            for item in control_point_sets
+        )
+        if requires_strict_pose_safety and (
+            pose_state is None
+            or pose_state.geometry_safe is not True
+            or normalize_move_status(pose_state.move_status) == "moving"
+        ):
+            return [
+                self._unmapped_packet(
+                    packet,
+                    payload=payload,
+                    composition_id=composition_id,
+                    reason="pose_not_safe",
+                    applies=has_ground_projection,
+                )
+            ]
         selection = select_control_point_set(
             list(control_point_sets),
             pose_state_for_selection,
@@ -3594,15 +3861,18 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         numeric_pose_evidence = numeric_selection is not None
         if numeric_selection is not None:
             selection = numeric_selection
-        has_pose_bound_sets = any(
-            item.pose_reference is not None for item in control_point_sets
-        )
         visual_pose_match = None
         if has_pose_bound_sets and not numeric_pose_evidence:
             if normalize_move_status(pose_state.move_status if pose_state is not None else None) == "moving":
-                if pose_state_fetched:
-                    return [replace(packet, payload=payload)]
-                return [packet]
+                return [
+                    self._unmapped_packet(
+                        packet,
+                        payload=payload,
+                        composition_id=composition_id,
+                        reason="camera_moving",
+                        applies=has_ground_projection,
+                    )
+                ]
             _artifact_name, frame = resolve_image_artifact_for_data(
                 packet,
                 input_artifact_name=None,
@@ -3612,9 +3882,15 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 frame,
             )
             if visual_result is None:
-                if pose_state_fetched:
-                    return [replace(packet, payload=payload)]
-                return [packet]
+                return [
+                    self._unmapped_packet(
+                        packet,
+                        payload=payload,
+                        composition_id=composition_id,
+                        reason="no_pose_evidence",
+                        applies=has_ground_projection,
+                    )
+                ]
             visual_control_point_set, visual_pose_match = visual_result
             selection = ControlPointSetSelection(
                 control_point_set=visual_control_point_set,
@@ -3627,9 +3903,15 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             )
 
         if selection is None:
-            if pose_state_fetched:
-                return [replace(packet, payload=payload)]
-            return [packet]
+            return [
+                self._unmapped_packet(
+                    packet,
+                    payload=payload,
+                    composition_id=composition_id,
+                    reason="no_matching_calibrated_view",
+                    applies=has_ground_projection,
+                )
+            ]
 
         pose_evidence = (
             "visual_signature"
@@ -3645,9 +3927,15 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             control_point_set=selection.control_point_set,
         )
         if mapper is None:
-            if pose_state_fetched:
-                return [replace(packet, payload=payload)]
-            return [packet]
+            return [
+                self._unmapped_packet(
+                    packet,
+                    payload=payload,
+                    composition_id=composition_id,
+                    reason="invalid_calibration",
+                    applies=has_ground_projection,
+                )
+            ]
 
         confidence = self._mapping_confidence(selection=selection, mapper=mapper)
         self._annotate_detection_world_anchors(
@@ -3662,24 +3950,37 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 visual_pose_match=visual_pose_match,
             )
             if reference_point is None:
-                if pose_state_fetched:
-                    return [replace(packet, payload=payload)]
-                return [packet]
+                return [
+                    self._unmapped_packet(
+                        packet,
+                        payload=payload,
+                        composition_id=composition_id,
+                        reason="reference_point_unavailable",
+                        applies=has_ground_projection,
+                    )
+                ]
             world_anchor = self._world_for_point(
                 mapper,
                 point=reference_point,
                 confidence=confidence,
             )
             if world_anchor is None:
-                if pose_state_fetched:
-                    return [replace(packet, payload=payload)]
-                return [packet]
+                return [
+                    self._unmapped_packet(
+                        packet,
+                        payload=payload,
+                        composition_id=composition_id,
+                        reason="outside_calibrated_ground",
+                        applies=has_ground_projection,
+                    )
+                ]
             payload[self._config.world_field] = {
                 "x": float(world_anchor["x"]),
                 "z": float(world_anchor["z"]),
             }
             payload["world_anchor"] = dict(world_anchor)
             mapping_payload: dict[str, Any] = {
+                "status": "mapped",
                 "u": float(point[0]),
                 "v": float(point[1]),
                 "composition_id": composition_id,
@@ -3716,6 +4017,276 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             metadata["calibrated_view_id"] = selection.control_point_set.id
             metadata["pose_evidence"] = pose_evidence
         return [replace(packet, payload=payload, metadata=metadata)]
+
+    async def _process_panorama_packet(self, packet: Packet) -> Packet | None:
+        """Use the active, source-scoped panorama before any legacy projection."""
+        services = self._dependencies.services
+        camera_id = _resolve_camera_id(packet, camera_id_override=self._config.camera_id)
+        if not camera_id or not isinstance(services, ServiceRegistry):
+            return None
+        source_id, _source_role, _source_view = _resolve_camera_source_scope(packet)
+        composition_id = self._config.composition_id or str(
+            packet.metadata.get("composition_id") or ""
+        ).strip()
+        try:
+            active = await services.call(
+                "cameras.panorama.get_active",
+                camera_id=camera_id,
+                source_id=source_id or "",
+                composition_id=composition_id,
+            )
+        except KeyError as error:
+            if error.args == ("Unknown service: cameras.panorama.get_active",):
+                return None
+            active = {"applies": True, "reason": "panorama_unavailable"}
+        except Exception:
+            active = {"applies": True, "reason": "panorama_unavailable"}
+        if isinstance(active, dict) and active.get("applies") is False:
+            return None
+
+        def unmapped(reason: str) -> Packet:
+            result = self._unmapped_packet(
+                packet,
+                payload=dict(packet.payload),
+                composition_id=composition_id or None,
+                reason=reason,
+                applies=True,
+            )
+            metadata = dict(result.metadata)
+            for key in ("control_point_set_id", "calibrated_view_id", "pose_evidence", "panorama_revision"):
+                metadata.pop(key, None)
+            if self._config.attach_mapping_metadata:
+                metadata["composition_id"] = composition_id or None
+            return replace(result, metadata=metadata)
+
+        if not isinstance(active, dict) or active.get("applies") is not True:
+            return unmapped("panorama_unavailable")
+        if active.get("reason"):
+            return unmapped(str(active["reason"]))
+        job = active.get("job")
+        if not isinstance(job, dict):
+            return unmapped("panorama_unavailable")
+        if (
+            not isinstance(job.get("id"), str)
+            or not job["id"].strip()
+            or type(job.get("revision")) is not int
+            or job["revision"] < 1
+        ):
+            return unmapped("panorama_invalid_calibration")
+        job_composition = str(job.get("composition_id") or "").strip()
+        if not job_composition or (composition_id and composition_id != job_composition):
+            return unmapped("panorama_composition_mismatch")
+        composition_id = job_composition
+        actual_camera_id = resolve_source_device_id(packet)
+        if (
+            not source_id
+            or source_id != job.get("source_id")
+            or (actual_camera_id and actual_camera_id != camera_id)
+            or (job.get("camera_id") and job["camera_id"] != camera_id)
+        ):
+            return unmapped("panorama_source_mismatch")
+
+        visual = bool(job.get("source_panorama"))
+        localization = None
+        pose = None
+        profile, solution = job.get("profile"), job.get("solution")
+        _artifact_name, frame = resolve_image_artifact_for_data(packet, input_artifact_name=None)
+        artifact = packet.artifacts.get(_artifact_name)
+        geometry = artifact.metadata.get("image_geometry") if artifact else None
+        transformed = bool(packet.payload.get("frame_crop") or packet.payload.get("frame_warp")
+                           or (artifact and artifact.metadata.get("resized_from")))
+        if transformed and (not visual or geometry is None):
+            return unmapped("panorama_source_geometry_changed")
+        if visual:
+            from ..processing.panorama_localization import frame_identity
+
+            evidence = packet.payload.get("capture_evidence")
+            if frame_identity(evidence) is None:
+                return unmapped("panorama_frame_identity_missing")
+            _artifact_name, frame = resolve_image_artifact_for_data(packet, input_artifact_name=None)
+            if frame is None:
+                return unmapped("panorama_frame_unavailable")
+            if geometry is None:
+                return unmapped("panorama_source_geometry_changed")
+            transformed = transformed or geometry.get("to_source") != [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+            try:
+                localization = await services.call(
+                    "cameras.panorama.localize_frame", camera_id=camera_id, source_id=source_id,
+                    job_id=job["id"], revision=job["revision"], image=frame, capture_evidence=evidence,
+                    **({"image_geometry": geometry} if geometry is not None else {}),
+                )
+            except Exception:
+                return unmapped("panorama_visual_localization_failed")
+            if not isinstance(localization, dict) or localization.get("status") != "localized":
+                return unmapped((localization or {}).get("reason", "panorama_visual_localization_failed") if isinstance(localization, dict) else "panorama_visual_localization_failed")
+            binding = job["source_panorama"]
+            if (localization.get("capture_evidence") != evidence
+                or localization.get("source_artifact_id") != binding.get("id")
+                or localization.get("geometry_digest") != binding.get("geometry", {}).get("model_digest")
+                or localization.get("source_id") != source_id
+                or localization.get("revision") != job["revision"]):
+                return unmapped("panorama_frame_binding_mismatch")
+            profile = {"lens": localization.get("lens")}
+        else:
+            # Legacy numeric mode uses only the pose gate attached to this frame.
+            raw_pose = packet.payload.get(self._config.pose_state_field)
+            pose = _read_pan_tilt_zoom_state(raw_pose)
+            if (
+                pose is None or pose.geometry_safe is not True
+                or normalize_move_status(pose.move_status) != "idle" or pose.error
+                or any(getattr(pose, axis) is None for axis in ("pan", "tilt", "zoom"))
+                or any(isinstance(raw_pose.get(axis), bool) for axis in ("pan", "tilt", "zoom"))
+                or packet.metadata.get("ptz_geometry_safe") is False
+                or ("ptz_motion_epoch" in packet.metadata
+                    and packet.metadata["ptz_motion_epoch"] != pose.motion_epoch)
+            ):
+                return unmapped("panorama_pose_not_safe")
+        if not isinstance(profile, dict) or not isinstance(solution, dict):
+            return unmapped("panorama_invalid_calibration")
+        quality = solution.get("quality")
+        if not isinstance(quality, dict) or quality.get("status") != "ready":
+            return unmapped("panorama_calibration_not_ready")
+
+        try:
+            from ..processing.panorama_mapping import image_pixel_to_ray, map_ray_to_world, ray_to_panorama_pixel
+
+            lens = profile["lens"]
+            width, height = int(lens["width"]), int(lens["height"])
+            media = packet.payload.get("media")
+            media = media if isinstance(media, dict) else {}
+            dimensions = [
+                (media.get("width"), media.get("height")),
+                (packet.payload.get("frame_width"), packet.payload.get("frame_height")),
+            ]
+            _artifact_name, frame = resolve_image_artifact_for_data(packet, input_artifact_name=None)
+            shape = getattr(frame, "shape", None)
+            if shape is not None and len(shape) >= 2:
+                dimensions.append((shape[1], shape[0]))
+            if visual and geometry is not None:
+                from toposync.runtime.pipelines.image_geometry import geometry_matrix
+                geometry_matrix(geometry, shape[1], shape[0])
+                if geometry.get("capture_evidence") != evidence:
+                    return unmapped("panorama_frame_binding_mismatch")
+                dimensions = [tuple(geometry["source_size"])]
+            known_dimensions = [(w, h) for w, h in dimensions if w is not None or h is not None]
+            if not known_dimensions or any((w, h) != (width, height) for w, h in known_dimensions):
+                return unmapped("panorama_source_geometry_changed")
+            angles: list[float] = []
+            if not visual:
+                tolerance = float(profile["position_tolerance"])
+                fixed_zoom = float(profile["zoom"])
+                if not math.isfinite(tolerance) or not 0 < tolerance <= 0.2 or not math.isfinite(fixed_zoom):
+                    return unmapped("panorama_invalid_calibration")
+                if abs(float(pose.zoom) - fixed_zoom) > tolerance:
+                    return unmapped("panorama_zoom_changed")
+                for axis_name in ("pan", "tilt"):
+                    axis = profile[f"{axis_name}_axis"]
+                    low, high, angle_low, angle_high = (
+                        float(axis[key])
+                        for key in ("position_min", "position_max", "angle_min_radians", "angle_max_radians")
+                    )
+                    position = float(getattr(pose, axis_name))
+                    if not all(math.isfinite(value) for value in (low, high, angle_low, angle_high)) or low >= high:
+                        return unmapped("panorama_invalid_calibration")
+                    if not low <= position <= high:
+                        return unmapped("panorama_pose_outside_profile")
+                    angles.append(angle_low + (position - low) / (high - low) * (angle_high - angle_low))
+
+            def world_for_point(point: tuple[float, float] | None) -> dict[str, float] | None:
+                if point is None:
+                    return None
+                ray = image_pixel_to_ray(
+                    point[0] * (width - 1), point[1] * (height - 1), lens, *angles,
+                    rotation_matrix=localization["rotation_matrix"] if visual else None,
+                )
+                if visual:
+                    coverage = localization.get("_coverage_mask")
+                    if getattr(coverage, "ndim", None) != 2 or not coverage.size:
+                        return None
+                    u, v = ray_to_panorama_pixel(ray)
+                    row = min(coverage.shape[0] - 1, int(v * coverage.shape[0]))
+                    column = min(coverage.shape[1] - 1, int(u * coverage.shape[1]))
+                    if not coverage[row, column]:
+                        return None
+                world = map_ray_to_world(solution, ray)
+                return {"x": float(world[0]), "z": float(world[1])} if world is not None else None
+
+            result = unmapped("outside_calibrated_ground")
+            payload = result.payload
+            point = _resolve_image_point(
+                packet,
+                bbox_field=self._config.bbox_field,
+                image_uv_field=self._config.image_uv_field,
+            )
+            def observation_point(item: Any, fallback: tuple | None) -> tuple | None:
+                recorded = (item.get("source_anchor") or (item.get("metadata") or {}).get("source_anchor")) if isinstance(item, dict) else None
+                if recorded is not None:
+                    if not isinstance(recorded, dict) or recorded.get("capture_evidence") != packet.payload.get("capture_evidence"):
+                        return None
+                    value = recorded.get("uv")
+                    if not isinstance(value, (tuple, list)) or len(value) != 2 or not all(isinstance(v, (float, int)) and math.isfinite(v) and 0 <= v <= 1 for v in value):
+                        return None
+                    return tuple(value)
+                # Transformed detections must explicitly identify their source
+                # anchor; a bounding envelope is not the original foot point.
+                return None if visual and transformed else fallback
+
+            subject = packet.payload.get("subject")
+            if isinstance(subject, dict) and not subject.get("source_anchor"):
+                annotations = packet.payload.get("vision") or {}
+                matching = [item for key in ("tracks", "detections") for item in annotations.get(key, [])
+                            if isinstance(item, dict) and item.get("bbox01") == subject.get("bbox01")]
+                if len(matching) == 1:
+                    subject = matching[0]
+            point = observation_point(subject, point)
+            anchor = world_for_point(point)
+            mapped_points = int(anchor is not None)
+            if anchor is not None:
+                payload[self._config.world_field] = dict(anchor)
+                payload["world_anchor"] = dict(anchor)
+            vision = payload.get("vision")
+            if isinstance(vision, dict):
+                for key in ("tracks", "detections", "segmentations"):
+                    items = vision.get(key)
+                    if not isinstance(items, list):
+                        continue
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        anchor = world_for_point(observation_point(item, _image_point_from_bbox01(item.get("bbox01"))))
+                        if anchor is not None:
+                            item["world_anchor"] = anchor
+                            mapped_points += 1
+            if not mapped_points:
+                return result
+        except Exception:
+            return unmapped("panorama_invalid_calibration")
+
+        payload["mapping"] = {
+            "status": "mapped",
+            "composition_id": composition_id,
+            "calibrated_view_id": job.get("id"),
+            "panorama_revision": job.get("revision"),
+            "pose_evidence": "visual_frame_rotation" if visual else "numeric_pose",
+            "motion_epoch": pose.motion_epoch if pose is not None else None,
+            "projection_model": "panorama_ray_ground_v1",
+            # Geometric acceptance is not a statistically calibrated confidence.
+            "quality": {"status": "ready"},
+        }
+        if visual:
+            payload["mapping"]["visual_localization"] = {
+                key: localization[key] for key in ("source_artifact_id", "geometry_digest", "capture_evidence",
+                    "reference_id", "validation_matches", "validation_p95_pixels", "analysis_width")
+                if key in localization
+            }
+        metadata = dict(result.metadata)
+        if self._config.attach_mapping_metadata:
+            metadata.update(
+                calibrated_view_id=job.get("id"),
+                panorama_revision=job.get("revision"),
+                pose_evidence="visual_frame_rotation" if visual else "numeric_pose",
+            )
+        return replace(result, payload=payload, metadata=metadata)
 
     async def _resolve_control_point_sets(
         self, *, camera_id: str
@@ -3760,7 +4331,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         camera_id: str,
         composition_id: str | None,
         control_point_set: ControlPointSet,
-    ) -> ControlPointMapper | None:
+    ) -> ControlPointMapper | GroundPlaneMapper | None:
         points_signature = compute_control_points_signature(control_point_set.control_points)
         refinement_signature = compute_refinement_points_signature(
             control_point_set.refinement_points
@@ -3768,6 +4339,12 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         boundary_signature = compute_boundary_refinement_points_signature(
             control_point_set.boundary_refinement_points
         )
+        ground_signature = ""
+        if control_point_set.ground_projection is not None:
+            ground = control_point_set.ground_projection
+            ground_signature = hashlib.sha256(
+                repr((ground.lens, ground.points)).encode("utf-8")
+            ).hexdigest()
         cache_key = "|".join(
             [
                 str(camera_id or "<inline>").strip() or "<inline>",
@@ -3776,6 +4353,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 points_signature,
                 refinement_signature,
                 boundary_signature,
+                ground_signature,
                 self._homography_config_signature,
             ]
         )
@@ -3783,12 +4361,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             return self._mapper_cache[cache_key]
 
         try:
-            mapper = ControlPointMapper(
-                list(control_point_set.control_points),
-                config=self._homography_config,
-                refinement_points=control_point_set.refinement_points,
-                boundary_refinement_points=control_point_set.boundary_refinement_points,
-            )
+            mapper = build_calibration_mapper(control_point_set, config=self._homography_config)
         except Exception:
             mapper = None
         self._mapper_cache[cache_key] = mapper
@@ -5113,13 +5686,14 @@ def _resolve_camera_id(packet: Packet, *, camera_id_override: str) -> str:
     return resolve_source_device_id(packet)
 
 
-def _resolve_camera_source_scope(packet: Packet) -> tuple[str | None, str | None]:
+def _resolve_camera_source_scope(packet: Packet) -> tuple[str | None, str | None, str | None]:
     source = get_source_descriptor(packet)
     source_id = (
         resolve_source_id(packet) or str(packet.payload.get("camera_source_id") or "").strip()
     )
     source_role = str(source.get("role") or "").strip()
-    return source_id or None, source_role or None
+    source_view_id = str(source.get("view_id") or "").strip()
+    return source_id or None, source_role or None, source_view_id or None
 
 
 def _control_point_set_matches_source_scope(
@@ -5127,7 +5701,14 @@ def _control_point_set_matches_source_scope(
     *,
     source_id: str | None,
     source_role: str | None,
+    source_view_id: str | None = None,
 ) -> bool:
+    if control_point_set.physical_view_id:
+        if source_view_id != control_point_set.physical_view_id:
+            return False
+    if control_point_set.compatible_view_ids:
+        if source_view_id is None or source_view_id not in control_point_set.compatible_view_ids:
+            return False
     if control_point_set.compatible_source_ids:
         if source_id is None or source_id not in control_point_set.compatible_source_ids:
             return False
@@ -5137,6 +5718,8 @@ def _control_point_set_matches_source_scope(
     elif control_point_set.compatible_roles:
         if source_role is None or source_role not in control_point_set.compatible_roles:
             return False
+    else:
+        return source_role in {"main", "sub"}
     return True
 
 
@@ -5184,36 +5767,19 @@ def _normalize_stream_scope_values(value: Any) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-def _parse_calibrated_view_stream_scope(value: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _parse_calibrated_view_stream_scope(
+    value: Any,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], str | None]:
     if not isinstance(value, dict):
-        return (), ()
-    return (
-        _normalize_stream_scope_values(value.get("compatible_source_ids")),
-        tuple(
-            item.lower() for item in _normalize_stream_scope_values(value.get("compatible_roles"))
-        ),
-    )
-
-
-def _normalize_stream_scope_values(value: Any) -> tuple[str, ...]:
-    raw = value if isinstance(value, list) else []
-    normalized: list[str] = []
-    for item in raw:
-        text = str(item or "").strip()
-        if text and text not in normalized:
-            normalized.append(text)
-    return tuple(normalized)
-
-
-def _parse_calibrated_view_stream_scope(value: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    if not isinstance(value, dict):
-        return (), ()
+        return (), (), (), None
     compatible_source_ids = _normalize_stream_scope_values(value.get("compatible_source_ids"))
     compatible_roles = _normalize_stream_scope_values(value.get("compatible_roles")) or (
         "main",
         "sub",
     )
-    return compatible_source_ids, compatible_roles
+    compatible_view_ids = _normalize_stream_scope_values(value.get("compatible_view_ids"))
+    physical_view_id = str(value.get("physical_view_id") or "").strip() or None
+    return compatible_source_ids, compatible_roles, compatible_view_ids, physical_view_id
 
 
 def _parse_visual_pose_signature(value: Any) -> VisualPoseSignature | None:
@@ -5355,7 +5921,7 @@ def _parse_boundary_refinement_points(
 
 
 def _control_point_set_from_calibrated_view_record(
-    value: Any, *, index: int = 0
+    value: Any, *, index: int = 0, require_ready: bool = True
 ) -> ControlPointSet | None:
     rec = value if isinstance(value, dict) else {}
     view_id = str(rec.get("id") or "").strip()
@@ -5365,6 +5931,70 @@ def _control_point_set_from_calibrated_view_record(
     projection_model = (
         rec.get("projection_model") if isinstance(rec.get("projection_model"), dict) else {}
     )
+    compatible_source_ids, compatible_roles, compatible_view_ids, physical_view_id = (
+        _parse_calibrated_view_stream_scope(rec.get("stream_scope"))
+    )
+    if str(projection_model.get("type") or "").strip() == "camera_ray_ground_v2":
+        try:
+            parsed = CameraMappingRayGroundProjectionModel.model_validate(projection_model)
+        except Exception:
+            return None
+        quality_record = (
+            rec.get("projection_quality") if isinstance(rec.get("projection_quality"), dict) else {}
+        )
+        if require_ready and str(quality_record.get("status") or "").strip() != "ready":
+            return None
+        if not physical_view_id:
+            return None
+        lens_raw = parsed.lens
+        lens = GroundLens(
+            type=lens_raw.type,
+            fx=float(getattr(lens_raw, "fx", 1.0)),
+            fy=float(getattr(lens_raw, "fy", 1.0)),
+            cx=float(getattr(lens_raw, "cx", 0.5)),
+            cy=float(getattr(lens_raw, "cy", 0.5)),
+            coefficients=tuple(float(value) for value in getattr(lens_raw, "coefficients", [])),
+        )
+        points = tuple(
+            GroundCalibrationPoint(
+                id=point.id,
+                role=point.role,
+                image_u=float(point.image.x),
+                image_v=float(point.image.y),
+                world_x=float(point.world.x),
+                world_z=float(point.world.z),
+            )
+            for point in parsed.correspondences
+        )
+        fit_points = tuple(
+            ControlPointPair(
+                image_u=point.image_u,
+                image_v=point.image_v,
+                world_x=point.world_x,
+                world_z=point.world_z,
+            )
+            for point in points
+            if point.role == "fit"
+        )
+        if len(fit_points) < 4:
+            return None
+        return ControlPointSet(
+            id=view_id,
+            label=label,
+            pose_reference=_parse_pose_reference(rec.get("pose_reference")),
+            control_points=fit_points,
+            compatible_source_ids=compatible_source_ids,
+            compatible_roles=compatible_roles,
+            compatible_view_ids=compatible_view_ids,
+            physical_view_id=physical_view_id,
+            visual_pose_signature=_parse_visual_pose_signature(
+                projection_model.get("visual_pose_signature")
+            ),
+            ground_projection=GroundProjectionSpec(lens=lens, points=points),
+            requires_pose_evidence=bool(rec.get("requires_pose_evidence")),
+        )
+    if str(projection_model.get("type") or "image_quad_on_world") != "image_quad_on_world":
+        return None
     image_region = (
         projection_model.get("image_region")
         if isinstance(projection_model.get("image_region"), dict)
@@ -5420,10 +6050,6 @@ def _control_point_set_from_calibrated_view_record(
     if not top_left_world or not top_right_world or not bottom_right_world or not bottom_left_world:
         return None
 
-    compatible_source_ids, compatible_roles = _parse_calibrated_view_stream_scope(
-        rec.get("stream_scope")
-    )
-
     control_points = (
         ControlPointPair(
             image_u=image_left,
@@ -5459,6 +6085,8 @@ def _control_point_set_from_calibrated_view_record(
         boundary_refinement_points=_parse_boundary_refinement_points(projection_model.get("boundary_refinement")),
         compatible_source_ids=compatible_source_ids,
         compatible_roles=compatible_roles,
+        compatible_view_ids=compatible_view_ids,
+        physical_view_id=physical_view_id,
         visual_pose_signature=_parse_visual_pose_signature(
             projection_model.get("visual_pose_signature")
         ),

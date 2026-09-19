@@ -2589,6 +2589,7 @@ dependencies = [
     { name = "numpy" },
     { name = "opencv-python-headless" },
     { name = "pillow" },
+    { name = "scipy" },
     { name = "toposync-core" },
 ]
 
@@ -2597,6 +2598,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python-headless", specifier = ">=4.10" },
     { name = "pillow", specifier = ">=10,<13" },
+    { name = "scipy", specifier = ">=1.13,<2" },
     { name = "toposync-core", specifier = ">=0.3.0" },
 ]
 

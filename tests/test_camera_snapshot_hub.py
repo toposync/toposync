@@ -453,7 +453,7 @@ def test_camera_snapshot_uses_warm_hub_reuses_lease_and_expires(
         deadline = time.time() + 1.0
         while not fake_hub.release_calls and time.time() < deadline:
             time.sleep(0.02)
-        assert fake_hub.release_calls == ["camera:lab_rtsp_camera:source:main:auto"]
+        assert fake_hub.release_calls == [fake_hub.acquire_calls[0]["key"]]
 
         third = client.get("/api/cameras/cameras/lab_rtsp_camera/snapshot?source_id=main")
         assert third.status_code == 200

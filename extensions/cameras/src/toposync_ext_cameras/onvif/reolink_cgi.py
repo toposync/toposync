@@ -1,9 +1,9 @@
-"""Small, opt-in Reolink CGI adapter for PTZ presets.
+"""Small, opt-in Reolink CGI adapter for PTZ presets and position telemetry.
 
 The Cameras extension keeps ONVIF as its generic PTZ transport.  A few Reolink
 firmwares expose their preset inventory and recall only through the local CGI
 endpoint even while advertising ONVIF PTZ.  This module is deliberately scoped
-to named preset slots; it does not provide arbitrary pan/tilt motion.
+to named preset slots and read-only telemetry; arbitrary motion remains ONVIF.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,6 +24,15 @@ REOLINK_PRESET_TOKEN_PREFIX = "reolink:"
 
 class ReolinkCgiError(RuntimeError):
     """The local Reolink CGI endpoint could not confirm a PTZ operation."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReolinkPtzPosition:
+    """Native motor readings; absent axes are unknown, and units are not degrees."""
+
+    pan: float | None = None
+    tilt: float | None = None
+    channel: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +106,66 @@ class ReolinkCgiClient:
     username: str = ""
     password: str = ""
     timeout_s: float = 3.0
+
+    async def get_current_position(self, *, channel: int = 0) -> ReolinkPtzPosition:
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 0:
+            raise ReolinkCgiError("Reolink channel is invalid")
+
+        async def _read(token: str) -> ReolinkPtzPosition:
+            entry = await self._command(
+                token,
+                command="GetPtzCurPos",
+                action=1,
+                param={"PtzCurPos": {"channel": channel}},
+            )
+            value = (entry.get("value") or {}).get("PtzCurPos")
+            if not isinstance(value, dict) or value.get("channel") != channel:
+                raise ReolinkCgiError("Reolink position channel could not be verified")
+
+            def axis(name: str) -> float | None:
+                raw = value.get(name)
+                if raw is None:
+                    return None
+                if isinstance(raw, bool):
+                    raise ReolinkCgiError("Reolink motor position is invalid")
+                try:
+                    result = float(raw)
+                except (TypeError, ValueError):
+                    raise ReolinkCgiError("Reolink motor position is invalid") from None
+                if not math.isfinite(result):
+                    raise ReolinkCgiError("Reolink motor position is invalid")
+                return result
+
+            return ReolinkPtzPosition(pan=axis("Ppos"), tilt=axis("Tpos"), channel=channel)
+
+        return await self._with_session(_read)
+
+    async def get_motion_automation(self, *, channel: int = 0) -> dict[str, bool | None]:
+        """Read tracking/guard independently; unavailable fields remain unknown."""
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 0:
+            raise ReolinkCgiError("Reolink channel is invalid")
+
+        async def _read(token: str) -> dict[str, bool | None]:
+            result: dict[str, bool | None] = {"auto_tracking": None, "automatic_return": None}
+            for command, container, field, output in (
+                ("GetAiCfg", "AiCfg", "bSmartTrack", "auto_tracking"),
+                ("GetPtzGuard", "PtzGuard", "benable", "automatic_return"),
+            ):
+                try:
+                    entry = await self._command(
+                        token, command=command, action=0, param={"channel": channel}
+                    )
+                    value = (entry.get("value") or {}).get(container)
+                    if not isinstance(value, dict) or value.get("channel", channel) != channel:
+                        continue
+                    raw = value.get(field)
+                    if type(raw) in {int, bool} and raw in (0, 1):
+                        result[output] = bool(raw)
+                except ReolinkCgiError:
+                    continue
+            return result
+
+        return await self._with_session(_read)
 
     async def list_presets(self, *, include_disabled: bool = False) -> list[ReolinkCgiPreset]:
         async def _read(token: str) -> list[ReolinkCgiPreset]:

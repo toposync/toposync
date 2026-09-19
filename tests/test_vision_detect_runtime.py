@@ -679,3 +679,23 @@ def test_core_notify_normalizes_default_group_presence_description_by_lifecycle(
         assert payload.get("lifecycle") == "close"
 
     asyncio.run(scenario())
+
+
+def test_detection_projects_footpoint_and_retains_its_capture_identity():
+    import numpy as np
+    import pytest
+    from toposync.runtime.pipelines.image_geometry import image_geometry
+    evidence = {'capture_instance': 'camera', 'generation': 1, 'sequence': 4}
+    geometry = image_geometry(801, 451, evidence)
+    # Known same-sized mirror cannot be guessed from dimensions.
+    geometry['to_source'] = [[-1, 0, 800], [0, 1, 0], [0, 0, 1]]
+    packet = Packet.create(stream_id='camera', payload={'capture_evidence': evidence}, artifacts={
+        'main': Artifact(name='main', data=np.zeros((451, 801, 3), np.uint8), metadata={'image_geometry': geometry})})
+    registry = _build_registry()
+    runtime = VisionDetectRuntime({'model_id': 'fake.detector'}, PipelineRuntimeDependencies(vision_model_registry=registry))
+    detected = runtime._normalize_detections([DetectionObject(label='person', label_id=0, model_id='fake.detector', score=.95, bbox01=(.1, .2, .3, .8))], packet=packet,
+        manifest=registry.resolve_detector_manifest('fake.detector'), selected_artifact_name='main')[0]
+    assert detected.bbox01 == pytest.approx((.7, .2, .9, .8))
+    assert detected.metadata['source_anchor']['uv'] == pytest.approx([.8, .8])
+    assert detected.metadata['source_anchor']['capture_evidence'] == evidence
+    assert runtime._serialize_contract_detection(detected)['metadata']['source_anchor'] == detected.metadata['source_anchor']

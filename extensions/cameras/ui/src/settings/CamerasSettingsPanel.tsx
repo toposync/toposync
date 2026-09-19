@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { HostI18n, SettingsPanel } from "@toposync/plugin-api";
+import type { HostI18n, HostUi, SettingsPanel } from "@toposync/plugin-api";
 
 import {
   discoverOnvifDevices,
@@ -60,17 +60,18 @@ import {
   type DetectionModelCatalogItem,
 } from "./visionModelCatalog";
 import { SubModal } from "../ui/SubModal";
+import { CameraSourcePanoramaSection } from "./CameraSourcePanoramaSection";
 
 type TranslateFn = ReturnType<HostI18n["useI18n"]>["t"];
 
-export function createCamerasSettingsPanel(): SettingsPanel {
+export function createCamerasSettingsPanel(ui: HostUi): SettingsPanel {
   return {
     id: CAMERAS_EXTENSION_ID,
     icon: "video",
     name: { key: "ext.cameras.settings.name", fallback: "Cameras" },
     description: { key: "ext.cameras.settings.desc" },
     render: ({ i18n, settings, updateSettings }) => (
-      <CamerasSettingsPanelContent i18n={i18n} settings={settings} updateSettings={updateSettings} />
+      <CamerasSettingsPanelContent ui={ui} i18n={i18n} settings={settings} updateSettings={updateSettings} />
     ),
   };
 }
@@ -409,18 +410,30 @@ function mergeOnvifSources(existing: CameraSourceConfig[], profiles: OnvifProfil
 }
 
 function CamerasSettingsPanelContent({
+  ui,
   i18n,
   settings,
   updateSettings,
 }: {
+  ui: HostUi;
   i18n: HostI18n;
   settings: Record<string, unknown>;
   updateSettings: (patch: Record<string, unknown>) => void;
 }): React.ReactElement {
   const { t } = i18n.useI18n();
   const cameras = useMemo(() => parseCameras(settings), [settings]);
-  const [activeCameraId, setActiveCameraId] = useState<string>("");
-  const [activeSourceByCamera, setActiveSourceByCamera] = useState<Record<string, string>>({});
+  const readLocation = () => {
+    const parameters = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
+    return { cameraId: parameters.get("camera_id") || "", sourceId: parameters.get("source_id") || "" };
+  };
+  const [requestedLocation, setRequestedLocation] = useState(readLocation);
+  const appliedLocation = useRef<typeof requestedLocation | null>(null);
+  const panoramaSection = useRef<HTMLDivElement>(null);
+  const [scrollToPanorama, setScrollToPanorama] = useState(false);
+  const [activeCameraId, setActiveCameraId] = useState<string>(() => requestedLocation.cameraId);
+  const [activeSourceByCamera, setActiveSourceByCamera] = useState<Record<string, string>>(() => requestedLocation.cameraId && requestedLocation.sourceId
+    ? { [requestedLocation.cameraId]: requestedLocation.sourceId }
+    : {});
   const [query, setQuery] = useState("");
   const [sourceHealth, setSourceHealth] = useState<CameraSourceHealthResponse | null>(null);
   const [savedCameraIds, setSavedCameraIds] = useState<Set<string> | null>(null);
@@ -478,9 +491,37 @@ function CamerasSettingsPanelContent({
   );
 
   useEffect(() => {
+    if (!cameras.length) return;
     if (activeCameraId && cameras.some((camera) => camera.id === activeCameraId)) return;
     setActiveCameraId(cameras[0]?.id ?? "");
   }, [activeCameraId, cameras]);
+
+  useEffect(() => {
+    const onLocation = () => setRequestedLocation(readLocation());
+    window.addEventListener("popstate", onLocation);
+    return () => window.removeEventListener("popstate", onLocation);
+  }, []);
+
+  useEffect(() => {
+    if (!requestedLocation.cameraId || !cameras.length || appliedLocation.current === requestedLocation) return;
+    const camera = cameras.find((item) => item.id === requestedLocation.cameraId);
+    if (!camera) return;
+    appliedLocation.current = requestedLocation;
+    setActiveCameraId(camera.id);
+    if (camera.sources.some((source) => source.id === requestedLocation.sourceId)) {
+      setActiveSourceByCamera((previous) => ({ ...previous, [camera.id]: requestedLocation.sourceId }));
+    }
+    setScrollToPanorama(true);
+  }, [cameras, requestedLocation]);
+
+  useEffect(() => {
+    if (!scrollToPanorama || activeCameraId !== requestedLocation.cameraId) return;
+    const frame = window.requestAnimationFrame(() => {
+      panoramaSection.current?.scrollIntoView({ block: "start", behavior: "auto" });
+      setScrollToPanorama(false);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [scrollToPanorama, activeCameraId, requestedLocation]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -548,6 +589,15 @@ function CamerasSettingsPanelContent({
     activeCamera?.sources[0]?.id ||
     "";
   const activeSource = activeCamera?.sources.find((source) => source.id === activeSourceId) ?? activeCamera?.sources[0] ?? null;
+  useEffect(() => {
+    if (!activeCamera || !activeSource) return;
+    // A draft toggle can change the default source. Keep the operator's selected
+    // source and its running job in view until they deliberately select another.
+    setActiveSourceByCamera((previous) => {
+      if (activeCamera.sources.some((source) => source.id === previous[activeCamera.id])) return previous;
+      return { ...previous, [activeCamera.id]: activeSource.id };
+    });
+  }, [activeCamera?.id, activeSource?.id]);
   const activeHealth = activeCamera && activeSource ? sourceHealthFor(sourceHealth, activeCamera.id, activeSource.id) : null;
   const activeCameraPersisted = Boolean(activeCamera && savedCameraIds?.has(activeCamera.id));
   const mappedCompositions = useMemo(
@@ -1512,6 +1562,18 @@ function CamerasSettingsPanelContent({
                   ) : null}
                 </div>
               )}
+
+              {activeSource ? <div ref={panoramaSection}><CameraSourcePanoramaSection
+                ui={ui}
+                key={`${activeCamera.id}:${activeSource.id}`}
+                cameraId={activeCamera.id}
+                sourceId={activeSource.id}
+                cameraName={activeCamera.name || activeCamera.id}
+                sourceName={activeSource.name || activeSource.id}
+                enabled={activeCameraPersisted && activeSource.enabled && activeSource.kind === "video"}
+                persisted={activeCameraPersisted}
+                i18n={i18n}
+              /></div> : null}
 
               <div className="settingsSectionHeader">
                 <div>

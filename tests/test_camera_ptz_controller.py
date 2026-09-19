@@ -8,9 +8,12 @@ from typing import Any
 
 import pytest
 
+from toposync_ext_cameras.onvif.client import OnvifError
 from toposync_ext_cameras.ptz_controller import (
     PtzControlError,
     PtzController,
+    PtzFailureCode,
+    PtzFailureStage,
     PtzTransportBinding,
 )
 
@@ -143,8 +146,10 @@ def test_ptz_controller_manual_preempts_shared_device_automation_and_fences_old_
     asyncio.run(scenario())
 
 
-def test_ptz_controller_manual_preemption_stops_continuous_move_before_grant(
+@pytest.mark.parametrize("command_kind", ["continuous_move", "relative_move"])
+def test_ptz_controller_manual_preemption_stops_movement_before_grant(
     tmp_path: Path,
+    command_kind: str,
 ) -> None:
     async def scenario() -> None:
         controller, transport, _clock = _controller(tmp_path)
@@ -157,8 +162,12 @@ def test_ptz_controller_manual_preemption_stops_continuous_move_before_grant(
         await controller.submit(
             lease_id=automation["lease_id"],
             fence=automation["fence"],
-            command_id="automation-continuous",
-            command={"kind": "continuous_move", "pan": 0.5, "timeout_s": 2.0},
+            command_id="automation-movement",
+            command={
+                "kind": command_kind,
+                "pan": 0.5,
+                **({"timeout_s": 2.0} if command_kind == "continuous_move" else {}),
+            },
         )
 
         transport.block = True
@@ -192,7 +201,7 @@ def test_ptz_controller_manual_preemption_stops_continuous_move_before_grant(
         transport.release.set()
         manual = await manual_acquire
         assert [call["command"]["kind"] for call in transport.calls] == [
-            "continuous_move",
+            command_kind,
             "stop",
         ]
         assert int(manual["fence"]) > int(automation["fence"])
@@ -206,8 +215,10 @@ def test_ptz_controller_manual_preemption_stops_continuous_move_before_grant(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("command_kind", ["continuous_move", "relative_move"])
 def test_ptz_controller_manual_preemption_stop_failure_faults_without_grant(
     tmp_path: Path,
+    command_kind: str,
 ) -> None:
     async def scenario() -> None:
         controller, transport, _clock = _controller(tmp_path)
@@ -220,8 +231,12 @@ def test_ptz_controller_manual_preemption_stop_failure_faults_without_grant(
         await controller.submit(
             lease_id=automation["lease_id"],
             fence=automation["fence"],
-            command_id="automation-continuous",
-            command={"kind": "continuous_move", "pan": 0.5, "timeout_s": 2.0},
+            command_id="automation-movement",
+            command={
+                "kind": command_kind,
+                "pan": 0.5,
+                **({"timeout_s": 2.0} if command_kind == "continuous_move" else {}),
+            },
         )
         transport.fail = True
 
@@ -243,7 +258,19 @@ def test_ptz_controller_manual_preemption_stop_failure_faults_without_grant(
     asyncio.run(scenario())
 
 
-def test_ptz_controller_serializes_commands_and_deduplicates_command_id(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "command, conflicting_command",
+    [
+        (
+            {"kind": "goto_preset", "preset_token": "home"},
+            {"kind": "goto_preset", "preset_token": "door"},
+        ),
+        ({"kind": "relative_move", "pan": 0.1}, {"kind": "relative_move", "pan": 0.2}),
+    ],
+)
+def test_ptz_controller_serializes_commands_and_deduplicates_command_id(
+    tmp_path: Path, command: dict[str, Any], conflicting_command: dict[str, Any]
+) -> None:
     async def scenario() -> None:
         controller, transport, _clock = _controller(tmp_path)
         lease = await controller.acquire(
@@ -258,7 +285,7 @@ def test_ptz_controller_serializes_commands_and_deduplicates_command_id(tmp_path
                 lease_id=lease["lease_id"],
                 fence=lease["fence"],
                 command_id="same",
-                command={"kind": "goto_preset", "preset_token": "home"},
+                command=command,
             )
         )
         second = asyncio.create_task(
@@ -266,7 +293,7 @@ def test_ptz_controller_serializes_commands_and_deduplicates_command_id(tmp_path
                 lease_id=lease["lease_id"],
                 fence=lease["fence"],
                 command_id="same",
-                command={"kind": "goto_preset", "preset_token": "home"},
+                command=command,
             )
         )
         await asyncio.sleep(0)
@@ -281,7 +308,7 @@ def test_ptz_controller_serializes_commands_and_deduplicates_command_id(tmp_path
                 lease_id=lease["lease_id"],
                 fence=lease["fence"],
                 command_id="same",
-                command={"kind": "goto_preset", "preset_token": "door"},
+                command=conflicting_command,
             )
         assert len(transport.calls) == 1
 
@@ -406,6 +433,105 @@ def test_ptz_controller_faults_closed_and_emergency_stop_recovers(tmp_path: Path
         assert recovered["state"] == "idle"
         assert recovered["active_lease"] is None
         assert recovered["fault"] is None
+
+    asyncio.run(scenario())
+
+
+class _HttpFailure(RuntimeError):
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+@pytest.mark.parametrize(
+    ("failure_factory", "expected_code", "expected_stage"),
+    [
+        (
+            lambda: TimeoutError("http://admin:secret@camera/timeout"),
+            PtzFailureCode.TRANSPORT_TIMEOUT,
+            PtzFailureStage.COMMAND_DISPATCH,
+        ),
+        (
+            lambda: _HttpFailure(503, "http://admin:secret@camera/http"),
+            PtzFailureCode.HTTP_ERROR,
+            PtzFailureStage.DEVICE_RESPONSE,
+        ),
+        (
+            lambda: OnvifError("ter:InvalidArgVal http://admin:secret@camera/onvif"),
+            PtzFailureCode.ONVIF_FAULT,
+            PtzFailureStage.DEVICE_RESPONSE,
+        ),
+        (
+            lambda: ConnectionError("http://admin:secret@camera/transport"),
+            PtzFailureCode.TRANSPORT_ERROR,
+            PtzFailureStage.COMMAND_DISPATCH,
+        ),
+        (
+            lambda: _HttpFailure(400, "http://admin:secret@camera/rejected"),
+            PtzFailureCode.DEVICE_REJECTED,
+            PtzFailureStage.DEVICE_RESPONSE,
+        ),
+        (
+            lambda: PtzControlError("http://admin:secret@camera/controller"),
+            PtzFailureCode.CONTROLLER_ERROR,
+            PtzFailureStage.CONTROLLER_VALIDATION,
+        ),
+        (
+            lambda: ValueError("http://admin:secret@camera/unknown"),
+            PtzFailureCode.UNKNOWN,
+            PtzFailureStage.COMMAND_DISPATCH,
+        ),
+    ],
+)
+def test_ptz_controller_persists_only_sanitized_execution_failure_diagnostics(
+    tmp_path: Path,
+    failure_factory,
+    expected_code: PtzFailureCode,
+    expected_stage: PtzFailureStage,
+) -> None:
+    async def scenario() -> None:
+        class FailingTransport(_Transport):
+            async def execute(self, **kwargs: Any) -> dict[str, Any]:
+                self.calls.append(dict(kwargs))
+                raise failure_factory()
+
+        transport = FailingTransport()
+        controller, _transport, _clock = _controller(tmp_path, transport=transport)
+        lease = await controller.acquire(
+            camera_id="wide",
+            owner_kind="automation",
+            owner_id="panorama:test",
+            ttl_s=30,
+        )
+        command = {"kind": "goto_preset", "preset_token": "door"}
+        with pytest.raises(PtzControlError) as raised:
+            await controller.submit(
+                lease_id=lease["lease_id"],
+                fence=lease["fence"],
+                command_id="classified-failure",
+                command=command,
+            )
+        assert raised.value.failure_code == expected_code.value
+        assert raised.value.failure_stage == expected_stage.value
+
+        persisted = json.loads((tmp_path / "ptz-control.json").read_text(encoding="utf-8"))
+        receipt = persisted["command_ids"]["shared-head"]["classified-failure"]
+        assert receipt["failure_code"] == expected_code.value
+        assert receipt["failure_stage"] == expected_stage.value
+        serialized = json.dumps(persisted)
+        assert "admin" not in serialized
+        assert "secret" not in serialized
+        assert "http://" not in serialized
+
+        with pytest.raises(PtzControlError) as repeated:
+            await controller.submit(
+                lease_id=lease["lease_id"],
+                fence=lease["fence"],
+                command_id="classified-failure",
+                command=command,
+            )
+        assert repeated.value.failure_code == expected_code.value
+        assert repeated.value.failure_stage == expected_stage.value
 
     asyncio.run(scenario())
 
@@ -1142,7 +1268,68 @@ def test_ptz_controller_emergency_stop_blocks_acquire_and_fences_inflight_publis
     asyncio.run(scenario())
 
 
-def test_ptz_controller_continuous_move_watchdog_sends_stop(tmp_path: Path) -> None:
+def test_ptz_controller_relative_move_preserves_fence_receipt_and_has_no_timed_stop(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        controller, transport, _clock = _controller(tmp_path)
+        lease = await controller.acquire(
+            camera_id="wide", owner_kind="manual", owner_id="manual:user", ttl_s=30
+        )
+        command = {"kind": "relative_move", "pan": -1.0, "zoom": 1.0}
+        for lease_id, fence in (
+            ("unknown", lease["fence"]),
+            (lease["lease_id"], lease["fence"] + 1),
+        ):
+            with pytest.raises(PtzControlError, match="Unknown or expired|Stale"):
+                await controller.submit(
+                    lease_id=lease_id, fence=fence, command_id="rejected", command=command
+                )
+        assert transport.calls == []
+        result = await controller.submit(
+            lease_id=lease["lease_id"], fence=lease["fence"],
+            command_id="relative", command=command,
+        )
+        assert result["accepted"] is True and result["stale_after_execution"] is False
+        assert result["lease_id"] == lease["lease_id"] and result["fence"] == lease["fence"]
+        assert result["command_id"] == "relative" and result["command_kind"] == "relative_move"
+        assert transport.calls[0]["command"] == {**command, "tilt": 0.0}
+        # Exceed the continuous command's default watchdog interval.
+        await asyncio.sleep(0.6)
+        assert len(transport.calls) == 1
+        await controller.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("axis", ["pan", "tilt", "zoom"])
+@pytest.mark.parametrize("value", [-1.01, 1.01, float("nan"), float("inf"), "invalid"])
+def test_ptz_controller_relative_move_rejects_invalid_axes_before_transport(
+    tmp_path: Path, axis: str, value: Any,
+) -> None:
+    async def scenario() -> None:
+        controller, transport, _clock = _controller(tmp_path)
+        lease = await controller.acquire(
+            camera_id="wide", owner_kind="manual", owner_id="manual:user", ttl_s=30
+        )
+        for command in (
+            {"kind": "relative_move", axis: value},
+            {"kind": "relative_move", "pan": 0.1, "timeout_s": 0.5},
+        ):
+            with pytest.raises(PtzControlError):
+                await controller.submit(
+                    lease_id=lease["lease_id"], fence=lease["fence"],
+                    command_id="invalid-relative", command=command,
+                )
+        assert transport.calls == []
+        await controller.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_ptz_controller_continuous_move_watchdog_preserves_finite_pulse_then_sends_stop(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         controller, transport, _clock = _controller(tmp_path)
         lease = await controller.acquire(
@@ -1155,8 +1342,13 @@ def test_ptz_controller_continuous_move_watchdog_sends_stop(tmp_path: Path) -> N
             lease_id=lease["lease_id"],
             fence=lease["fence"],
             command_id="continuous",
-            command={"kind": "continuous_move", "pan": 0.5, "timeout_s": 0.05},
+            command={"kind": "continuous_move", "pan": 0.5, "timeout_s": 0.2},
         )
+        # A client-side Stop immediately after the acknowledgement would cancel
+        # this watchdog.  The controller itself must preserve the requested
+        # finite pulse until its deadline before it submits the safety Stop.
+        await asyncio.sleep(0.05)
+        assert [call["command"]["kind"] for call in transport.calls] == ["continuous_move"]
         for _ in range(100):
             if len(transport.calls) >= 2:
                 break
@@ -1170,6 +1362,176 @@ def test_ptz_controller_continuous_move_watchdog_sends_stop(tmp_path: Path) -> N
         assert snapshot["state"] == "manual_override"
         assert snapshot["motion_epoch"] == 2
         assert snapshot["geometry_safe"] is False
+
+    asyncio.run(scenario())
+
+
+def test_ptz_controller_renews_lease_and_serializes_redundant_stop_behind_watchdog(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        class BlockingStopTransport(_Transport):
+            def __init__(self) -> None:
+                super().__init__()
+                self.stop_started = asyncio.Event()
+                self.stop_release = asyncio.Event()
+
+            async def execute(self, **kwargs: Any) -> dict[str, Any]:
+                command = kwargs["command"]
+                if command["kind"] == "stop" and not self.stop_started.is_set():
+                    self.calls.append(dict(kwargs))
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                    self.stop_started.set()
+                    try:
+                        await self.stop_release.wait()
+                        return {"ok": True}
+                    finally:
+                        self.active -= 1
+                return await super().execute(**kwargs)
+
+        transport = BlockingStopTransport()
+        controller, _, _clock = _controller(tmp_path, transport=transport)
+        lease = await controller.acquire(
+            camera_id="wide", owner_kind="manual", owner_id="manual:user", ttl_s=15,
+        )
+        await controller.submit(
+            lease_id=lease["lease_id"], fence=lease["fence"], command_id="finite-pulse",
+            command={"kind": "continuous_move", "pan": 0.1, "timeout_s": 0.05},
+        )
+        await asyncio.wait_for(transport.stop_started.wait(), timeout=1)
+
+        renewed = await controller.renew(
+            lease_id=lease["lease_id"], fence=lease["fence"], ttl_s=15,
+        )
+        assert renewed["lease_id"] == lease["lease_id"]
+        during = await controller.snapshot(camera_id="wide", include_readiness=False)
+        assert during["state"] == "stopping"
+        assert during["active_lease"]["lease_id"] == lease["lease_id"]
+
+        redundant = asyncio.create_task(
+            controller.submit(
+                lease_id=lease["lease_id"], fence=lease["fence"],
+                command_id="scanner-stop", command={"kind": "stop"},
+            )
+        )
+        await asyncio.sleep(0)
+        assert redundant.done() is False
+        transport.stop_release.set()
+        receipt = await asyncio.wait_for(redundant, timeout=1)
+
+        assert receipt["accepted"] is True
+        assert [call["command"]["kind"] for call in transport.calls] == [
+            "continuous_move", "stop", "stop",
+        ]
+        assert transport.max_active == 1
+        after = await controller.snapshot(camera_id="wide", include_readiness=False)
+        assert after["state"] == "manual_override"
+        assert after["active_lease"]["lease_id"] == lease["lease_id"]
+        assert after["fault"] is None
+        await controller.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_ptz_controller_same_owner_stop_recovers_transient_watchdog_fault(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        class FailFirstStopTransport(_Transport):
+            def __init__(self) -> None:
+                super().__init__()
+                self.stop_calls = 0
+
+            async def execute(self, **kwargs: Any) -> dict[str, Any]:
+                self.calls.append(dict(kwargs))
+                if kwargs["command"]["kind"] == "stop":
+                    self.stop_calls += 1
+                    if self.stop_calls == 1:
+                        raise RuntimeError("transient stop failure")
+                return {"ok": True}
+
+        transport = FailFirstStopTransport()
+        controller, _, _clock = _controller(tmp_path, transport=transport)
+        lease = await controller.acquire(
+            camera_id="wide", owner_kind="manual", owner_id="manual:user", ttl_s=15,
+        )
+        await controller.submit(
+            lease_id=lease["lease_id"], fence=lease["fence"], command_id="finite-pulse",
+            command={"kind": "continuous_move", "pan": 0.1, "timeout_s": 0.05},
+        )
+        for _ in range(100):
+            state = await controller.snapshot(camera_id="wide", include_readiness=False)
+            if state["state"] == "fault":
+                break
+            await asyncio.sleep(0.01)
+        assert state["state"] == "fault"
+        assert state["active_lease"]["lease_id"] == lease["lease_id"]
+
+        with pytest.raises(PtzControlError, match="full stop"):
+            await controller.submit(
+                lease_id=lease["lease_id"], fence=lease["fence"],
+                command_id="partial-stop-retry",
+                command={"kind": "stop", "pan_tilt": False, "zoom": True},
+            )
+        assert [call["command"]["kind"] for call in transport.calls] == [
+            "continuous_move", "stop",
+        ]
+
+        receipt = await controller.submit(
+            lease_id=lease["lease_id"], fence=lease["fence"],
+            command_id="scanner-stop-retry", command={"kind": "stop"},
+        )
+
+        assert receipt["accepted"] is True
+        assert [call["command"]["kind"] for call in transport.calls] == [
+            "continuous_move", "stop", "stop",
+        ]
+        recovered = await controller.snapshot(camera_id="wide", include_readiness=False)
+        assert recovered["state"] == "manual_override"
+        assert recovered["active_lease"]["lease_id"] == lease["lease_id"]
+        assert recovered["fault"] is None
+        await controller.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("transport_elapsed", [None, 0.1, 0.4, float("nan"), -1, 10])
+def test_ptz_controller_slow_move_response_does_not_restart_pulse_budget(tmp_path: Path, transport_elapsed) -> None:
+    async def scenario() -> None:
+        clock = _Clock()
+
+        class SlowResponse(_Transport):
+            async def execute(self, **kwargs: Any) -> dict[str, Any]:
+                value = await super().execute(**kwargs)
+                if kwargs["command"]["kind"] == "continuous_move":
+                    # Motor can already be moving while its response is delayed.
+                    clock.now += 0.4
+                    if transport_elapsed is not None:
+                        value["transport_elapsed_seconds"] = transport_elapsed
+                return value
+
+        transport = SlowResponse()
+        controller, _, _ = _controller(tmp_path, transport=transport, clock=clock)
+        lease = await controller.acquire(
+            camera_id="wide", owner_kind="manual", owner_id="manual:user", ttl_s=30,
+        )
+        try:
+            receipt = await controller.submit(
+                lease_id=lease["lease_id"], fence=lease["fence"], command_id="slow-pulse",
+                command={"kind": "continuous_move", "pan": 0.1, "timeout_s": 0.25},
+            )
+            # An exhausted budget must schedule Stop on the next event-loop turns,
+            # not wait another full pulse after the command acknowledgement.
+            for _ in range(12):
+                await asyncio.sleep(0)
+            expected = ["continuous_move"] if transport_elapsed == 0.1 else ["continuous_move", "stop"]
+            assert [call["command"]["kind"] for call in transport.calls] == expected
+            assert receipt["command_elapsed_seconds"] == pytest.approx(0.4)
+            assert receipt["pulse_remaining_seconds"] == pytest.approx(0.15 if transport_elapsed == 0.1 else 0)
+            assert transport.max_active == 1
+        finally:
+            await controller.shutdown()
 
     asyncio.run(scenario())
 
@@ -1451,3 +1813,12 @@ def test_ptz_controller_cleans_temporary_state_after_replace_failure(
 
     asyncio.run(scenario())
     assert list(tmp_path.glob(".ptz-control.json.*.tmp")) == []
+
+
+def test_continuous_fallback_policy_is_explicit_and_typed():
+    from toposync_ext_cameras.ptz_controller import _normalize_command, PtzControlError
+    strict = _normalize_command({'kind': 'continuous_move', 'pan': 0.1, 'allow_relative_fallback': False})
+    assert strict['allow_relative_fallback'] is False
+    assert 'allow_relative_fallback' not in _normalize_command({'kind': 'continuous_move', 'pan': 0.1})
+    with pytest.raises(PtzControlError, match='boolean'):
+        _normalize_command({'kind': 'continuous_move', 'allow_relative_fallback': 'false'})

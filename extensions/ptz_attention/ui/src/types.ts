@@ -37,6 +37,7 @@ export type AttentionViewCatalogItem = {
   pose_bound: boolean;
   compatible_source_ids: string[];
   compatible_roles: string[];
+  physical_view_id: string;
 };
 
 export type AttentionCameraCatalogItem = {

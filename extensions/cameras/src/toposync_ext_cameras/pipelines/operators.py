@@ -78,12 +78,15 @@ def _camera_hub_key(*, camera_id: str, source_id: str, rtsp_url: str, backend: s
     cid = str(camera_id or "").strip()
     sid = str(source_id or "").strip()
     backend_key = str(backend or "").strip().lower() or "auto"
-    if cid and sid:
-        return f"camera:{cid}:source:{sid}:{backend_key}"
-    if cid:
-        return f"camera:{cid}:source:default:{backend_key}"
+    # The same optical source can be reached through a relay or directly.
+    # Sharing by camera/source alone silently reuses the relay during failover.
+    # Hash the authenticated transport identity to avoid exposing credentials.
     raw = str(rtsp_url or "").strip().encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()[:16]
+    if cid and sid:
+        return f"camera:{cid}:source:{sid}:{digest}:{backend_key}"
+    if cid:
+        return f"camera:{cid}:source:default:{digest}:{backend_key}"
     return f"camera:adhoc:{digest}:{backend_key}"
 
 
@@ -933,6 +936,7 @@ class YoloObject:
     category: str
     confidence: float
     bbox01: tuple[float, float, float, float]
+    source_anchor: dict[str, Any] | None = None
 
 
 class YoloBackend(Protocol):
@@ -1897,6 +1901,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             ":".join(item for item in (self._camera_id, self._source_id) if item) or "adhoc"
         )
         capture_metrics = dict(capture_frame.metrics)
+        from toposync.runtime.pipelines.image_geometry import image_geometry
+
         frame_artifacts = {
             MAIN_ARTIFACT_NAME: Artifact(
                 name=MAIN_ARTIFACT_NAME,
@@ -1904,6 +1910,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 mime_type="image/raw",
                 metadata={
                     "source": "camera.source",
+                    "image_geometry": image_geometry(width, height, capture_frame.capture_evidence),
                     "width": width,
                     "height": height,
                 },
@@ -1940,6 +1947,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "frame_width": width,
                 "frame_height": height,
                 "capture": capture_metrics,
+                "capture_evidence": dict(capture_frame.capture_evidence),
                 **({"pan_tilt_zoom_state": ptz_state} if ptz_state is not None else {}),
             },
             artifacts=frame_artifacts,
@@ -2559,6 +2567,7 @@ class _TrackingState:
     category: str
     confidence: float
     bbox01: tuple[float, float, float, float]
+    source_anchor: dict[str, Any] | None = None
     opened: bool = False
     last_seen_monotonic: float = 0.0
     last_seen_pause_total: float = 0.0
@@ -2617,6 +2626,10 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
     ) -> list[YoloObject]:
         crop_bbox01 = _read_frame_crop_bbox01(packet, selected_artifact_name=MAIN_ARTIFACT_NAME)
         warp = _read_frame_warp(packet, selected_artifact_name=MAIN_ARTIFACT_NAME)
+        import numpy as np
+        from toposync.runtime.pipelines.image_geometry import geometry_matrix, source_pixels
+        artifact = packet.artifacts.get(MAIN_ARTIFACT_NAME)
+        geometry = artifact.metadata.get("image_geometry") if artifact else None
         objects: list[YoloObject] = []
         for raw in raw_objects:
             category = str(raw.category or "").strip().lower()
@@ -2625,12 +2638,26 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
             if self._categories_set and category not in self._categories_set:
                 continue
             bbox = raw.bbox01
-            if warp is not None:
+            anchor = None
+            if geometry is not None:
+                try:
+                    height, width = artifact.data.shape[:2]
+                    matrix = geometry_matrix(geometry, width, height)
+                    x1, y1, x2, y2 = bbox
+                    points = source_pixels([[x1 * (width - 1), y1 * (height - 1)],
+                        [x2 * (width - 1), y1 * (height - 1)], [x2 * (width - 1), y2 * (height - 1)],
+                        [x1 * (width - 1), y2 * (height - 1)], [((x1 + x2) / 2) * (width - 1), y2 * (height - 1)]], matrix)
+                    points /= np.asarray(geometry["source_size"]) - 1
+                    bbox = (*points[:4].min(axis=0), *points[:4].max(axis=0))
+                    anchor = {"uv": points[4].tolist(), "capture_evidence": geometry.get("capture_evidence")}
+                except (ValueError, TypeError, AttributeError, np.linalg.LinAlgError):
+                    continue
+            elif warp is not None:
                 unwarped = _unwarp_bbox01(bbox, warp)
                 if unwarped is None:
                     continue
                 bbox = unwarped
-            if crop_bbox01 is not None:
+            if geometry is None and crop_bbox01 is not None:
                 bbox = _uncrop_bbox01(bbox, crop_bbox01)
             bbox = _normalize_bbox01(bbox)
             confidence = max(0.0, min(1.0, float(raw.confidence)))
@@ -2641,6 +2668,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
                     category=category,
                     confidence=confidence,
                     bbox01=bbox,
+                    source_anchor=anchor,
                 ),
             )
         objects.sort(key=lambda item: item.confidence, reverse=True)
@@ -2771,6 +2799,8 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
             "score": max(0.0, min(1.0, score)),
             "bbox01": bbox01,
         }
+        if object_data.get("source_anchor") is not None:
+            item["source_anchor"] = object_data["source_anchor"]
         for key in ("tracking_id", "tracker_track_id", "correlation_id", "source_stream_id"):
             value = object_data.get(key)
             if value is not None:
@@ -2792,6 +2822,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
             "category": annotation.get("label"),
             "confidence": annotation.get("score"),
             "bbox01": annotation.get("bbox01"),
+            "source_anchor": annotation.get("source_anchor"),
         }
         payload = dict(packet.payload)
         vision = dict(payload.get("vision")) if isinstance(payload.get("vision"), dict) else {}
@@ -3102,6 +3133,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
             state.category = detection.category
             state.confidence = detection.confidence
             state.bbox01 = detection.bbox01
+            state.source_anchor = detection.source_anchor
             state.last_seen_monotonic = now_monotonic
             state.last_seen_pause_total = pause_total_now
 
@@ -3210,6 +3242,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
             state.category = detection.category
             state.confidence = detection.confidence
             state.bbox01 = detection.bbox01
+            state.source_anchor = detection.source_anchor
             state.last_seen_monotonic = now_monotonic
             state.last_seen_pause_total = pause_total_now
 
@@ -3222,6 +3255,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
                     "label": state.category,
                     "score": float(state.confidence),
                     "bbox01": tuple(state.bbox01),
+                    "source_anchor": state.source_anchor,
                 },
             )
 
@@ -3263,6 +3297,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
             "label": state.category,
             "score": float(state.confidence),
             "bbox01": tuple(state.bbox01),
+                    "source_anchor": state.source_anchor,
         }
         payload = self._copy_payload_with_object(
             source_packet,
@@ -3315,6 +3350,7 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
                     "label": detection.category,
                     "score": float(detection.confidence),
                     "bbox01": tuple(detection.bbox01),
+                    "source_anchor": detection.source_anchor,
                 }
                 for detection in detections
             ]
@@ -3345,6 +3381,7 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
                 "label": detection.category,
                 "score": float(detection.confidence),
                 "bbox01": tuple(detection.bbox01),
+                    "source_anchor": detection.source_anchor,
             }
             payload = self._copy_payload_with_object(
                 packet,

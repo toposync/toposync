@@ -7,7 +7,7 @@ import { camerasTranslations } from "./translations";
 
 export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(camerasTranslations);
-  host.registerSettingsPanel(createCamerasSettingsPanel());
+  host.registerSettingsPanel(createCamerasSettingsPanel(host.ui));
   host.registerElementType(createCameraElementType(host));
   host.registerEditorTool(createAddCameraTool(host.i18n));
 }

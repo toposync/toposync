@@ -245,6 +245,96 @@ export type CameraProjectionModel = {
   visual_pose_signature?: CameraVisualPoseSignature | null;
 };
 
+export type CameraGroundLens =
+  | { type: "identity_rectilinear_v1" }
+  | {
+      type: "rectilinear_brown_v1";
+      fx: number;
+      fy: number;
+      cx: number;
+      cy: number;
+      coefficients: number[];
+    }
+  | {
+      type: "fisheye_kb4_v1";
+      fx: number;
+      fy: number;
+      cx: number;
+      cy: number;
+      coefficients: number[];
+    };
+
+export type CameraGroundCorrespondence = {
+  id: string;
+  role: "fit" | "check";
+  origin: "manual" | "automatic";
+  image: { x: number; y: number };
+  world: { x: number; z: number };
+};
+
+export type CameraRayGroundProjectionModel = {
+  type: "camera_ray_ground_v2";
+  solver_version: 1;
+  source_geometry: {
+    width: number;
+    height: number;
+    content_rect?: CameraImageRegion;
+    rotation_degrees?: 0 | 90 | 180 | 270;
+    mirror_x?: boolean;
+    mirror_y?: boolean;
+  };
+  lens: CameraGroundLens;
+  correspondences: CameraGroundCorrespondence[];
+  visual_pose_signature?: CameraVisualPoseSignature | null;
+};
+
+export type CameraRayGroundCalibratedView = {
+  id: string;
+  label: string;
+  /** Presentation-only rotation of the floor-plan canvas for this calibration view. */
+  editor_view_rotation_degrees?: 0 | 90 | 180 | 270;
+  pose_reference?: CameraPoseReference | null;
+  requires_pose_evidence?: boolean;
+  stream_scope: {
+    physical_view_id: string;
+    compatible_roles: string[];
+    compatible_source_ids: string[];
+    compatible_view_ids?: string[];
+  };
+  projection_model: CameraRayGroundProjectionModel;
+  projection_quality?: {
+    status?: "ready" | "estimated" | "incomplete";
+    estimated?: boolean;
+    note?: string | null;
+    calibration_digest?: string | null;
+    fit_points?: number | null;
+    fit_inliers?: number | null;
+    check_points?: number | null;
+    check_errors_meters?: number[];
+    image_coverage_ratio?: number | null;
+    solver?: string | null;
+  };
+};
+
+export type CameraProjectionSolveResult = {
+  accepted: boolean;
+  status: "ready" | "review" | "incomplete";
+  quality: {
+    status: "ready" | "review" | "incomplete";
+    number_of_fit_points: number;
+    number_of_inliers: number;
+    inlier_ratio: number;
+    image_hull_area_ratio_uv: number;
+    check_errors_meters: number[];
+    median_reprojection_error_uv: number | null;
+    p95_reprojection_error_uv: number | null;
+    is_numerically_unstable: boolean;
+  };
+  calibration_digest: string;
+  valid_image_polygon: Array<{ x: number; y: number }>;
+  valid_world_polygon: Array<{ x: number; z: number }>;
+};
+
 export type CameraVisualCalibrationProjectionModel = CameraProjectionModel & {
   visual_pose_signature: CameraVisualPoseSignature;
 };
@@ -310,6 +400,9 @@ export type PanTiltZoomState = {
   confidence?: number | null;
   preset_token?: string | null;
   preset_name?: string | null;
+  geometry_safe?: boolean | null;
+  motion_epoch?: number | null;
+  motion_state?: string | null;
 };
 
 export type CameraPtzPreset = {
@@ -457,4 +550,239 @@ export type OnvifDiscoverResponse = {
   targets?: string[];
   warnings?: string[];
   devices: OnvifDiscoveredDeviceInfo[];
+};
+
+export type CameraPanoramaProfile = {
+  lens: { width: number; height: number; fx: number; fy: number; cx: number; cy: number; distortion: number[] };
+  pan_axis: { position_min: number; position_max: number; angle_min_radians: number; angle_max_radians: number };
+  tilt_axis: { position_min: number; position_max: number; angle_min_radians: number; angle_max_radians: number };
+  zoom: number;
+  position_tolerance: number;
+  settle_timeout_seconds: number;
+};
+
+export type CameraPanoramaScan = {
+  pan_min: number;
+  pan_max: number;
+  tilt_min: number;
+  tilt_max: number;
+  overlap: number;
+};
+
+export type CameraPanoramaPoint = {
+  id: string;
+  role: "fit" | "check";
+  panorama: { x: number; y: number };
+  world: { x: number; z: number };
+};
+
+export type CameraPanoramaCheck = {
+  id: string;
+  point_id: string;
+  revision: number;
+  image_url: string;
+  result: "correct" | "offset" | "unverifiable" | null;
+  observed_image?: { x: number; y: number };
+  evidence?: { kind?: string; verified?: boolean; lens?: { width: number; height: number; cx: number; cy: number } };
+};
+
+export type CameraPanoramaJob = {
+  id: string;
+  revision: number;
+  camera_id: string;
+  source_id: string;
+  element_id: string;
+  composition_id: string;
+  state: "draft" | "capturing" | "processing" | "ready" | "failed" | "cancelled" | "interrupted";
+  profile: CameraPanoramaProfile | null;
+  scan: CameraPanoramaScan | null;
+  progress: { captured: number; total: number; stage: string };
+  panorama_url: string | null;
+  coverage_url: string | null;
+  coverage_bounds?: { min_x: number; min_y: number; max_x: number; max_y: number } | null;
+  stop_confirmed?: boolean;
+  points: CameraPanoramaPoint[];
+  solution: import("./elements/panoramaProjection").PanoramaProjectionSolution | null;
+  physical_blockers?: string[];
+  permissions?: { map_validated: boolean; can_activate: boolean; can_verify_aim: boolean; aim_enabled: boolean };
+  navigation?: { phase: string; physical_state: string; can_return?: boolean; error_code?: string | null };
+  source_panorama?: CameraPanoramaSourceArtifact | null;
+  checks: CameraPanoramaCheck[];
+  active: boolean;
+  error: { code: string; message: string } | null;
+  updated_at: string | number;
+  aim_image_url?: string;
+};
+
+export type CameraPanoramaSourceArtifact = { id: string; compatible: false; blockers: string[] } | {
+  id: string;
+  revision: number;
+  compatible: true;
+  blockers: string[];
+  image_url: string;
+  coverage_url: string;
+  width: number;
+  height: number;
+  crop: CameraSourcePanoramaCrop | null;
+  crop_revision: number;
+};
+
+export type CameraPanoramaContext = {
+  camera_id: string;
+  element_id: string;
+  composition_id: string;
+  sources: Array<{ id: string; label: string; profile?: CameraPanoramaProfile | null; panorama?: CameraPanoramaSourceArtifact | null }>;
+  profile: CameraPanoramaProfile | null;
+  job: CameraPanoramaJob | null;
+  active: { job_id: string; revision: number } | null;
+  previous?: { job_id: string; revision: number } | null;
+  blockers: string[];
+};
+
+/** A non-destructive selection in the canonical, periodic panorama image. */
+export type CameraSourcePanoramaCrop = {
+  u_start: number;
+  u_width: number;
+  v_start: number;
+  v_height: number;
+};
+
+export type CameraSourcePanoramaOutcomes = {
+  acquisition: "pending" | "running" | "completed" | "sufficient" | "incomplete";
+  reconstruction: "pending" | "running" | "ready" | "review" | "failed" | "interrupted";
+  return: "pending" | "running" | "verified" | "unverified";
+};
+
+export type CameraSourcePanoramaArtifact = {
+  outcomes?: CameraSourcePanoramaOutcomes;
+  capture_goal?: "initial_region" | "reachable_domain";
+  region_status?: "ready" | "incomplete" | "review";
+  id: string;
+  revision: number;
+  camera_id: string;
+  source_id: string;
+  status: "ready" | "partial";
+  created_at: string | number;
+  width: number;
+  height: number;
+  image_url: string;
+  coverage_url?: string | null;
+  crop: CameraSourcePanoramaCrop | null;
+  crop_revision: number;
+  coverage_ratio: number;
+  coverage?: {
+    bounds_pixels?: { left: number; top: number; right: number; bottom: number } | null;
+    acquisition_complete?: boolean;
+    acquisition?: { bands?: Record<string, { complete?: boolean }>; progress?: { bands_completed?: number; regions_pending?: number } };
+  } | null;
+  quality: Record<string, unknown>;
+  quality_approved?: boolean;
+  presentation?: {
+    status?: "verified" | "unverified";
+    method?: string;
+    horizontal_motion_pairs?: number;
+    horizontal_rotation_degrees?: number;
+    axis_divergence_degrees_p95?: number | null;
+  } | null;
+  positioning_status: "not_validated";
+  stale?: boolean;
+  stale_reason?: "source_changed" | "source_unavailable" | null;
+};
+
+export type CameraSourcePanoramaTelemetrySample = {
+  elapsed_seconds: number;
+  motion_pixels: number | null;
+  speed_px_s: number | null;
+  media_time: number | null;
+  drift_pixels: number | null;
+  confidence: number | null;
+  state: string;
+  pose?: { pan?: number; tilt?: number; native_pan?: number; native_tilt?: number } | null;
+};
+
+export type CameraSourcePanoramaTelemetry = {
+  kind: "movement";
+  outcome: "accepted" | "timeout" | "inconclusive";
+  timing_basis: "media" | "local_observation";
+  analysis_width: number;
+  samples: CameraSourcePanoramaTelemetrySample[];
+  command_accepted_seconds?: number | null;
+  first_target_readback_seconds?: number | null;
+  first_motion_transition_seconds?: number | null;
+  stop_requested_seconds?: number | null;
+  stop_accepted_seconds?: number | null;
+};
+
+export type CameraSourcePanoramaJob = {
+  outcomes?: CameraSourcePanoramaOutcomes;
+  capture_goal?: "initial_region" | "reachable_domain";
+  operation?: "capture" | "verify_control";
+  control_checks_passed?: number;
+  coverage_progress?: {
+    primary_complete: boolean;
+    bands_completed: number;
+    current_band: number | null;
+    stage?: "reference" | "pan" | "step" | "return_reference" | "done";
+    regions_pending?: number;
+    continued_after_recovery?: boolean;
+    goal?: "initial_region";
+    qualified_views?: number;
+    required_views?: number;
+    region_complete?: boolean;
+    policy_version?: number;
+    region_rows_completed?: number;
+    region_phase?: "prepare" | "first_row" | "height_change" | "second_row" | "done" | "reference" | "lower" | "side_seed" | "opposite" | "side_extension";
+    decision?: {
+      experimental: boolean;
+      targets: Record<string, number>;
+      observed: {
+        row_views: Record<string, number>;
+        horizontal_extents: Record<string, number>;
+        vertical_extent: number;
+        transverse_links: number;
+        independent_transverse_anchors: number;
+      };
+      criteria: Record<string, boolean>;
+      sufficient: boolean;
+      pending: string[];
+    } | {
+      sufficient: false;
+      route_complete: boolean;
+      coverage_approval: "pending_visual_acceptance";
+      criteria: Record<string, boolean>;
+      observed: { extents: Record<string, number>; connected_captures: string[] };
+    };
+  } | null;
+  id: string;
+  camera_id: string;
+  source_id: string;
+  status: "queued" | "preparing" | "exploring" | "capturing" | "returning" | "processing" | "ready" | "verified" | "partial" | "interrupted" | "failed" | "stopping";
+  phase: string;
+  captures_accepted: number;
+  planned_captures?: number | null;
+  estimated_remaining_seconds?: number | null;
+  error?: { code: string; message: string } | null;
+  physical_state: "unknown" | "stopped" | "restored" | "returning" | "stop_unconfirmed" | "ownership_lost";
+  artifact_id?: string | null;
+  preview_url?: string | null;
+  can_resume: boolean;
+  resume_unavailable_code?: string | null;
+  can_return?: boolean;
+  can_reconstruct?: boolean;
+  can_cleanup?: boolean;
+  created_at: string | number;
+  updated_at: string | number;
+  issues?: string[];
+  issue_codes?: string[];
+  telemetry?: CameraSourcePanoramaTelemetry | null;
+};
+
+export type CameraSourcePanorama = {
+  camera_id: string;
+  source_id: string;
+  active: CameraSourcePanoramaArtifact | null;
+  previous: CameraSourcePanoramaArtifact | null;
+  candidate?: CameraSourcePanoramaArtifact | null;
+  replacement_pending?: boolean;
+  job: CameraSourcePanoramaJob | null;
 };

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from typing import Any
 
@@ -844,6 +845,14 @@ def _calibrated_views_by_camera(compositions: list[Any]) -> dict[str, list[dict[
                 scope = scope if isinstance(scope, dict) else {}
                 quality = raw_view.get("projection_quality")
                 quality = quality if isinstance(quality, dict) else {}
+                has_preset = bool(str(pose.get("preset_token") or "").strip())
+                requires_pose_evidence = bool(raw_view.get("requires_pose_evidence"))
+                has_numeric_pose = any(
+                    isinstance(pose.get(axis), (int, float))
+                    and not isinstance(pose.get(axis), bool)
+                    and math.isfinite(float(pose[axis]))
+                    for axis in ("pan", "tilt", "zoom")
+                )
                 result.setdefault(camera_id, []).append(
                     {
                         "id": view_id,
@@ -851,13 +860,15 @@ def _calibrated_views_by_camera(compositions: list[Any]) -> dict[str, list[dict[
                         "composition_id": composition_id,
                         "composition_name": composition_name,
                         "camera_element_id": str(getattr(element, "id", "") or "").strip(),
-                        "pose_bound": bool(str(pose.get("preset_token") or "").strip()),
+                        "pose_bound": has_preset
+                        and (not requires_pose_evidence or has_numeric_pose),
                         "quality": str(quality.get("status") or "incomplete").strip()
                         or "incomplete",
                         "compatible_source_ids": _safe_text_list(
                             scope.get("compatible_source_ids")
                         ),
                         "compatible_roles": _safe_text_list(scope.get("compatible_roles")),
+                        "physical_view_id": str(scope.get("physical_view_id") or "").strip(),
                         "preset_name": str(pose.get("preset_name") or "").strip(),
                     }
                 )

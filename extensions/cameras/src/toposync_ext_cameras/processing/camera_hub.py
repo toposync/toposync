@@ -8,9 +8,24 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
+class _HubGrabberProxy:
+    """Stable reader handle that follows an atomically upgraded hub reader."""
+
+    def __init__(self, entry: "_HubEntry") -> None:
+        self._entry = entry
+
+    @property
+    def target_fps(self) -> float:
+        return float(self._entry.target_fps)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._entry.grabber, name)
+
+
 @dataclass(slots=True)
 class _HubEntry:
     grabber: Any
+    proxy: _HubGrabberProxy
     refcount: int
     rtsp_url: str
     backend: str
@@ -32,6 +47,7 @@ class CameraHub:
         self._lock = asyncio.Lock()
         self._entries: dict[str, _HubEntry] = {}
         self._starting: dict[str, asyncio.Event] = {}
+        self._upgrading: dict[str, asyncio.Event] = {}
 
     def set_frame_grabber_factory(self, frame_grabber_factory: Callable[..., Any]) -> None:
         self._frame_grabber_factory = frame_grabber_factory
@@ -47,30 +63,42 @@ class CameraHub:
         hub_key = str(key or "").strip()
         if not hub_key:
             raise ValueError("CameraHub.acquire requires a non-empty key")
+        requested_fps = max(1.0, float(target_fps))
 
         while True:
             start_event: asyncio.Event | None = None
             should_start = False
+            should_upgrade = False
 
             async with self._lock:
                 entry = self._entries.get(hub_key)
                 if entry is not None:
-                    entry.refcount += 1
-                    return entry.grabber
+                    if requested_fps <= entry.target_fps:
+                        entry.refcount += 1
+                        return entry.proxy
+                    start_event = self._upgrading.get(hub_key)
+                    if start_event is None:
+                        start_event = asyncio.Event()
+                        self._upgrading[hub_key] = start_event
+                        should_upgrade = True
 
-                start_event = self._starting.get(hub_key)
-                if start_event is None:
-                    start_event = asyncio.Event()
-                    self._starting[hub_key] = start_event
-                    should_start = True
+                if entry is None:
+                    start_event = self._starting.get(hub_key)
+                    if start_event is None:
+                        start_event = asyncio.Event()
+                        self._starting[hub_key] = start_event
+                        should_start = True
 
-            if not should_start:
+            if not should_start and not should_upgrade:
                 await start_event.wait()
                 continue
 
+            grabber: Any | None = None
             try:
                 # One hub per camera avoids multiple RTSP connections when multiple pipelines are running.
-                grabber = self._frame_grabber_factory(rtsp_url, target_fps=float(target_fps), backend=str(backend))
+                grabber = self._frame_grabber_factory(
+                    rtsp_url, target_fps=requested_fps, backend=str(backend)
+                )
                 # Starting a grabber may block on network/camera open. Keep the event loop responsive and avoid
                 # holding the hub lock while this runs.
                 started_task = asyncio.to_thread(grabber.start)
@@ -84,35 +112,71 @@ class CameraHub:
                 else:
                     started = await started_task
             except Exception:
-                try:
-                    await asyncio.to_thread(grabber.stop)
-                except Exception:
-                    pass
+                if grabber is not None:
+                    try:
+                        await asyncio.to_thread(grabber.stop)
+                    except Exception:
+                        pass
+                old_grabber: Any | None = None
                 async with self._lock:
-                    event = self._starting.pop(hub_key, None)
+                    event = (
+                        self._upgrading.pop(hub_key, None)
+                        if should_upgrade
+                        else self._starting.pop(hub_key, None)
+                    )
+                    entry = self._entries.get(hub_key)
+                    if should_upgrade and entry is not None and entry.refcount == 0:
+                        old_grabber = entry.grabber
+                        self._entries.pop(hub_key, None)
                     if event is not None:
                         event.set()
+                if old_grabber is not None:
+                    try:
+                        await asyncio.to_thread(old_grabber.stop)
+                    except Exception:
+                        pass
                 raise
 
+            old_grabber: Any | None = None
             async with self._lock:
-                event = self._starting.pop(hub_key, None)
+                event = (
+                    self._upgrading.pop(hub_key, None)
+                    if should_upgrade
+                    else self._starting.pop(hub_key, None)
+                )
                 if event is not None:
                     event.set()
                 entry = self._entries.get(hub_key)
                 if entry is None:
                     entry = _HubEntry(
                         grabber=started,
+                        proxy=None,  # type: ignore[arg-type]
                         refcount=1,
                         rtsp_url=str(rtsp_url),
                         backend=str(backend),
-                        target_fps=float(target_fps),
+                        target_fps=requested_fps,
                         created_at=time.time(),
                     )
+                    entry.proxy = _HubGrabberProxy(entry)
                     self._entries[hub_key] = entry
-                    return entry.grabber
-
-                entry.refcount += 1
-                return entry.grabber
+                    return entry.proxy
+                if should_upgrade and requested_fps > entry.target_fps:
+                    old_grabber = entry.grabber
+                    entry.grabber = started
+                    entry.target_fps = requested_fps
+                    entry.rtsp_url = str(rtsp_url)
+                    entry.backend = str(backend)
+                    entry.refcount += 1
+                    result = entry.proxy
+                else:
+                    entry.refcount += 1
+                    result = entry.proxy
+            if old_grabber is not None:
+                try:
+                    await asyncio.to_thread(old_grabber.stop)
+                except Exception:
+                    pass
+            return result
 
     async def release(self, *, key: str) -> None:
         hub_key = str(key or "").strip()
@@ -126,6 +190,8 @@ class CameraHub:
                 return
             entry.refcount = max(0, int(entry.refcount) - 1)
             if entry.refcount > 0:
+                return
+            if hub_key in self._upgrading:
                 return
             grabber = entry.grabber
             self._entries.pop(hub_key, None)

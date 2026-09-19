@@ -4,7 +4,7 @@ import math
 from typing import Any
 
 from .pipelines.postprocess import _parse_calibrated_views_as_control_point_sets  # noqa: PLC2701
-from .processing.mapping import ControlPointMapper
+from .processing.mapping import ControlPointMapper, GroundPlaneMapper, build_calibration_mapper
 from .settings import (
     camera_source_has_ptz,
     get_camera_device,
@@ -68,6 +68,7 @@ def resolve_ptz_target_view(
         return _failure("camera_source_not_ptz_capable")
     resolved_source_id = str(source.get("id") or "").strip()
     source_role = str(source.get("role") or "custom").strip().lower() or "custom"
+    source_view_id = str(source.get("view_id") or "").strip() or None
 
     compositions = list(getattr(config, "compositions", []) or [])
     composition = next(
@@ -115,6 +116,7 @@ def resolve_ptz_target_view(
                 view,
                 source_id=resolved_source_id,
                 source_role=source_role,
+                source_view_id=source_view_id,
             ):
                 continue
             if not _projection_is_ready(view):
@@ -202,7 +204,9 @@ def resolve_ptz_target_view(
     )
 
 
-def _source_matches_view(view: dict[str, Any], *, source_id: str, source_role: str) -> bool:
+def _source_matches_view(
+    view: dict[str, Any], *, source_id: str, source_role: str, source_view_id: str | None
+) -> bool:
     scope = view.get("stream_scope") if isinstance(view.get("stream_scope"), dict) else {}
     compatible_source_ids = {
         str(item or "").strip()
@@ -214,6 +218,16 @@ def _source_matches_view(view: dict[str, Any], *, source_id: str, source_role: s
         for item in (scope.get("compatible_roles") or [])
         if str(item or "").strip()
     }
+    physical_view_id = str(scope.get("physical_view_id") or "").strip()
+    compatible_view_ids = {
+        str(item or "").strip()
+        for item in (scope.get("compatible_view_ids") or [])
+        if str(item or "").strip()
+    }
+    if physical_view_id and source_view_id != physical_view_id:
+        return False
+    if compatible_view_ids and source_view_id not in compatible_view_ids:
+        return False
     if compatible_source_ids and source_id not in compatible_source_ids:
         return False
     if compatible_roles and source_role not in compatible_roles:
@@ -233,17 +247,15 @@ def _projection_is_ready(view: dict[str, Any]) -> bool:
     return not bool(quality.get("estimated", False))
 
 
-def _safe_mapper(control_point_set: Any) -> ControlPointMapper | None:
+def _safe_mapper(control_point_set: Any) -> ControlPointMapper | GroundPlaneMapper | None:
     try:
-        mapper = ControlPointMapper(
-            list(control_point_set.control_points),
-            refinement_points=control_point_set.refinement_points,
-            boundary_refinement_points=control_point_set.boundary_refinement_points,
-        )
+        mapper = build_calibration_mapper(control_point_set)
     except Exception:
         return None
 
     quality = mapper.quality
+    if isinstance(mapper, GroundPlaneMapper):
+        return mapper if quality.status == "ready" else None
     numeric_values = (
         float(quality.inlier_ratio),
         float(quality.convex_hull_area_ratio_uv),
@@ -325,7 +337,7 @@ def _bbox01(target: dict[str, Any]) -> tuple[float, float, float, float] | None:
 
 
 def _coverage_score(
-    mapper: ControlPointMapper,
+    mapper: ControlPointMapper | GroundPlaneMapper,
     *,
     world_x: float,
     world_z: float,

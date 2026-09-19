@@ -627,6 +627,20 @@ def test_reolink_motion_automation_is_read_only_and_preserves_unknown(monkeypatc
     assert [call.kwargs["command"] for call in command.await_args_list] == ["GetAiCfg", "GetPtzGuard"]
 
 
+def test_reolink_motion_automation_accepts_direct_firmware_payload(monkeypatch):
+    async def session(self, callback):
+        return await callback("session")
+
+    command = AsyncMock(side_effect=[
+        {"value": {"channel": 0, "bSmartTrack": 0, "aiTrack": 2}},
+        {"value": {"channel": 0, "benable": 0}},
+    ])
+    monkeypatch.setattr(ReolinkCgiClient, "_with_session", session)
+    monkeypatch.setattr(ReolinkCgiClient, "_command", command)
+    status = asyncio.run(ReolinkCgiClient("http://camera").get_motion_automation())
+    assert status == {"auto_tracking": False, "automatic_return": False}
+
+
 def test_native_position_provenance_does_not_invent_tilt_or_degrees():
     async def run():
         camera, _, _, _, _ = environment()

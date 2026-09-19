@@ -155,7 +155,13 @@ class ReolinkCgiClient:
                     entry = await self._command(
                         token, command=command, action=0, param={"channel": channel}
                     )
-                    value = (entry.get("value") or {}).get(container)
+                    payload = entry.get("value") or {}
+                    value = payload.get(container) if isinstance(payload, dict) else None
+                    # Reolink firmware families differ here: some wrap the
+                    # result in AiCfg/PtzGuard, while others return those same
+                    # fields directly in `value`.
+                    if not isinstance(value, dict) and isinstance(payload, dict) and field in payload:
+                        value = payload
                     if not isinstance(value, dict) or value.get("channel", channel) != channel:
                         continue
                     raw = value.get(field)

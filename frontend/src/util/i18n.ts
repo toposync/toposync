@@ -1364,6 +1364,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.thumbnail_hint":
       "Registers notifications only (never stores images). To include images, add Save images before this step.",
     "core.ui.pipelines.panels.notify.notification_type": "Notification type",
+    "core.ui.pipelines.panels.notify.dedupe_by_occurrence": "Keep one notification per visit",
+    "core.ui.pipelines.panels.notify.dedupe_by_occurrence_hint": "Prevents duplicates after reconnection. Use with tracking events; other inputs keep their current behavior.",
     "core.ui.pipelines.panels.notify.dedupe_key_template": "Dedupe key template",
     "core.ui.pipelines.panels.notify.dedupe_key_placeholder": "Leave empty for default",
     "core.ui.pipelines.panels.notify.dedupe_key_hint_prefix": "Use templates like",
@@ -3807,6 +3809,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.thumbnail_hint":
       "Apenas registra notificações (nunca armazena imagens). Para incluir imagens, adicione Salvar imagens antes desta etapa.",
     "core.ui.pipelines.panels.notify.notification_type": "Tipo de notificação",
+    "core.ui.pipelines.panels.notify.dedupe_by_occurrence": "Manter uma notificação por visita",
+    "core.ui.pipelines.panels.notify.dedupe_by_occurrence_hint": "Evita duplicatas após reconexões. Use com eventos de rastreamento; outras entradas mantêm o comportamento atual.",
     "core.ui.pipelines.panels.notify.dedupe_key_template": "Template da chave de dedupe",
     "core.ui.pipelines.panels.notify.dedupe_key_placeholder": "Deixe vazio para o padrão",
     "core.ui.pipelines.panels.notify.dedupe_key_hint_prefix": "Use templates como",

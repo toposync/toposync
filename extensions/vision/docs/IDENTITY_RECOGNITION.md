@@ -24,7 +24,10 @@ Keep spatial mapping and the original frame available before extraction. The cur
 1. Add **Extract identity evidence**. Its model panel shows the selected processing server and installed or missing models. Review each source and usage terms before downloading.
 2. Add **Recognize people and pets**. This operator owns gallery resolution at the origin when the graph runs remotely.
 3. Enable both operators explicitly. Leave the streaming branch outside this path.
-4. Identify visits in notifications or review them in **People and pets**.
+4. In each associated notification step, enable **Keep one notification per visit** under advanced settings (`dedupe_by_occurrence=true`). This opt-in preserves the previous behavior of existing pipelines.
+5. Identify visits in notifications or review them in **People and pets**.
+
+Occurrence deduplication requires an event or group event with a subject identifier and a correlation renewed for each visit, as provided by the tracking/grouping operators. Its key includes the logical pipeline/node, source, camera, subject, correlation and configured dedupe template. Keep that template stable throughout the visit; the default uses the tracking subject identifier, never a recognized name. Missing occurrence fields fall back to the legacy behavior. Replays of a stored closed occurrence preserve its record, including trail/images and shutdown closure, even after restart. The UI broadcaster may still emit an update containing that unchanged closed record; this does not provide exactly-once delivery for other sinks or external actions. A custom producer that reuses all occurrence fields across visits cannot distinguish a new visit from replay.
 
 Without a calibrated policy, useful photos remain available for curation and the automatic decision reports `calibration_required`. The default configuration does not supply guessed thresholds. Policies belong in the resolver's advanced configuration, must identify the exact embedding space and species, and must be calibrated on independent sessions before enabling automatic decisions. Similarity is not a probability. Infrared or other unvalidated conditions require their own evaluation.
 
@@ -94,7 +97,7 @@ Use the command with `--data-dir`, `--species` and an installed `--model-id`, fo
 
 ## Reproducible checks
 
-Focused software tests cover private transport, access, transactional curation, clustering, paging, restart and fault recovery. `scripts/identity/real_pipeline_smoke.py` additionally accepts three hash-pinned, public test photos and installed models, then runs the actual scheduler, both recognition operators and notification persistence in a new directory. It checks lifecycle, deduplication, retained evidence and reopen consistency. It intentionally repeats one photo per species and therefore **does not evaluate recognition accuracy or independent visits**.
+Focused software tests cover private transport, access, transactional curation, clustering, paging, restart and fault recovery. `scripts/identity/real_pipeline_smoke.py` additionally accepts three hash-pinned, public test photos and installed models, then runs the actual scheduler, both recognition operators and notification persistence in a new directory. It checks lifecycle, deduplication, retained evidence and reopen consistency. It intentionally repeats one photo per species and therefore **does not evaluate recognition accuracy or independent visits**. `scripts/identity/real_distributed_smoke.py` exercises a separate authenticated processing server with the actual models, resolution/notifications at the origin and partial replay after closure. It prepares these same photos at a maximum of 1024×1024 pixels and explicitly enables occurrence deduplication; it does not evaluate transport saturation or biometric accuracy.
 
 Release acceptance additionally requires independent enrollment/development/holdout sessions, unknown identities and similar pets, frozen coverage/eligibility criteria, false-identification bounds, equivalent-load latency measurements, and rendered user journeys. Those conclusions cannot be obtained from the smoke check.
 

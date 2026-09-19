@@ -2213,6 +2213,16 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
           </label>
 
           <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.notify.dedupe_by_occurrence")}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(config.dedupe_by_occurrence)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, dedupe_by_occurrence: event.target.checked }))}
+            />
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.notify.dedupe_by_occurrence_hint")}</div>
+
+          <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.notify.dedupe_key_template")}</span>
             <input
               className="pipelinesInput"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import keyword
 import json
 import os
@@ -11,7 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -406,6 +407,30 @@ class ConfigStore:
         self._lock = asyncio.Lock()
         self._config: AppConfig | None = None
         self._config_stamp: _FileStamp | None = None
+        self._extension_patch_filters: dict[
+            str, Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
+        ] = {}
+
+    def register_extension_settings_patch_filter(
+        self,
+        extension_id: str,
+        callback: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    ) -> None:
+        """Let an extension protect runtime-managed settings from stale UI drafts.
+
+        The synchronous callback runs under the settings lock. Internal atomic
+        updates intentionally bypass it; domain rules remain in the extension.
+        """
+        self._extension_patch_filters[extension_id] = callback
+
+    def _filter_extension_patch(
+        self, extension_id: str, current: dict[str, Any], proposed: dict[str, Any]
+    ) -> dict[str, Any]:
+        callback = self._extension_patch_filters.get(extension_id)
+        result = callback(copy.deepcopy(current), copy.deepcopy(proposed)) if callback else proposed
+        if not isinstance(result, dict):
+            raise ValueError("extension_settings_must_be_an_object")
+        return json.loads(json.dumps(result, allow_nan=False))
 
     @property
     def paths(self) -> UserDataPaths:
@@ -489,6 +514,13 @@ class ConfigStore:
         await self.load()
         async with self._lock:
             cfg = self._config or _default_config()
+            extensions = {
+                extension_id: self._filter_extension_patch(
+                    extension_id, cfg.settings.extensions.get(extension_id, {}), proposed
+                )
+                for extension_id, proposed in settings.extensions.items()
+            }
+            settings = AppSettings(core=dict(settings.core), extensions=extensions)
             cfg2 = _build_config(cfg, settings=settings)
             cfg2 = _normalize_config(cfg2)
             await self._persist_locked(cfg2)
@@ -500,15 +532,42 @@ class ConfigStore:
         await self.load()
         async with self._lock:
             cfg = self._config or _default_config()
-            current = dict(cfg.settings.extensions.get(extension_id, {}))
-            current.update(patch)
+            previous = cfg.settings.extensions.get(extension_id, {})
+            current = self._filter_extension_patch(extension_id, previous, {**previous, **patch})
             extensions = dict(cfg.settings.extensions)
             extensions[extension_id] = current
             settings = AppSettings(core=dict(cfg.settings.core), extensions=extensions)
             cfg2 = _build_config(cfg, settings=settings)
             cfg2 = _normalize_config(cfg2)
             await self._persist_locked(cfg2)
-            return current
+            return copy.deepcopy(current)
+
+    async def update_extension_settings(
+        self,
+        extension_id: str,
+        updater: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Atomically transform an extension's settings from its current value.
+
+        The synchronous callback can compare revisions and update a nested value
+        without replacing unrelated concurrent edits. It receives an isolated
+        copy; raising leaves both the cached configuration and disk untouched.
+        """
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            current = copy.deepcopy(cfg.settings.extensions.get(extension_id, {}))
+            updated = updater(current)
+            if not isinstance(updated, dict):
+                raise ValueError("extension_settings_must_be_an_object")
+            # Validate before persistence and detach any references held by the caller.
+            updated = json.loads(json.dumps(updated, allow_nan=False))
+            extensions = dict(cfg.settings.extensions)
+            extensions[extension_id] = updated
+            settings = AppSettings(core=dict(cfg.settings.core), extensions=extensions)
+            cfg2 = _normalize_config(_build_config(cfg, settings=settings))
+            await self._persist_locked(cfg2)
+            return copy.deepcopy(cfg2.settings.extensions[extension_id])
 
     async def set_active_composition(self, composition: Composition) -> Composition:
         await self.load()
@@ -534,6 +593,51 @@ class ConfigStore:
     async def list_compositions(self) -> tuple[str, list[Composition]]:
         cfg = await self.get_config()
         return cfg.active_composition_id, list(cfg.compositions)
+
+    async def patch_element_props(
+        self,
+        *,
+        composition_id: str,
+        element_id: str,
+        changes: dict[str, Any],
+        expected: dict[str, Any] | None = None,
+    ) -> CompositionElement:
+        """Update selected properties without replacing concurrent composition edits.
+
+        Expected values are compared under the same lock as persistence. A missing
+        property compares as None. The selected composition is never changed.
+        """
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            composition = next(
+                (item for item in cfg.compositions if item.id == composition_id), None
+            )
+            if composition is None:
+                raise KeyError(composition_id)
+            element = next((item for item in composition.elements if item.id == element_id), None)
+            if element is None:
+                raise KeyError(element_id)
+            if any(element.props.get(key) != value for key, value in (expected or {}).items()):
+                raise ValueError("element_properties_changed")
+            updated = element.model_copy(update={"props": {**element.props, **changes}})
+            updated_composition = composition.model_copy(
+                update={
+                    "elements": [
+                        updated if item.id == element_id else item for item in composition.elements
+                    ]
+                }
+            )
+            await self._persist_locked(
+                _build_config(
+                    cfg,
+                    compositions=[
+                        updated_composition if item.id == composition_id else item
+                        for item in cfg.compositions
+                    ],
+                )
+            )
+            return updated
 
     async def activate_composition(self, composition_id: str) -> Composition:
         await self.load()

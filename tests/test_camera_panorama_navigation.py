@@ -94,7 +94,7 @@ def test_localized_axis_measurement_keeps_pixels_angles_and_motor_units_separate
         "reference_id": "reference",
     }
     assert localized_axis_measurement(
-        [1, 0, 0], lens, {**located, "validation_p95_pixels": 3.1}
+        [1, 0, 0], lens, {**located, "validation_p95_pixels": 8.1}
     ) is None
 
 
@@ -145,6 +145,84 @@ def test_navigation_accepts_qualified_localized_optical_axis_without_a_motor_com
     assert result["verified"] is True
     assert result["commands"] == 0
     assert result["measurement"]["method"] == "localized_optical_axis"
+
+
+def test_navigation_checks_fresh_image_arrival_before_rejecting_a_small_response():
+    import time
+
+    lens = {"width": 960, "height": 540, "fx": 650, "fy": 650, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+
+    class Scanner:
+        capabilities = {
+            "relative_supported": True,
+            "axes": {"pan": True, "tilt": True},
+        }
+        checkpoint = {}
+        last_pose = {}
+        pulses = 0
+        last_frame = {
+            "image": np.zeros((540, 960), np.uint8),
+            "received_monotonic": time.monotonic(),
+            "capture_evidence": {"capture_instance": "test", "generation": 1, "sequence": 1},
+        }
+
+        def _check(self):
+            pass
+
+        async def _persist(self):
+            pass
+
+        async def _pulse(self, *_args, **_kwargs):
+            self.pulses += 1
+            self.last_frame = {
+                **self.last_frame,
+                "received_monotonic": time.monotonic(),
+                "capture_evidence": {
+                    "capture_instance": "test",
+                    "generation": 1,
+                    "sequence": self.pulses + 1,
+                },
+            }
+            return {"frame": self.last_frame, "pose": {}}
+
+    scanner = Scanner()
+
+    class Localizer:
+        references = [reference]
+        model = {"overlap_links": []}
+
+        def __init__(self):
+            self.lens = lens
+
+        def target_reference(self, _ray):
+            return reference
+
+        def locate(self, *_args):
+            return {
+                "status": "localized",
+                "rotation_matrix": np.eye(3).tolist(),
+                "reference_id": "reference",
+                "analysis_width": 960,
+                "validation_matches": 24,
+                "validation_p95_pixels": 1.5,
+                "inlier_fraction": 0.8,
+            }
+
+        def measure_target(self, *_args):
+            if scanner.pulses == 0:
+                return None
+            return {
+                "method": "target_patch_correlation",
+                "error_pixels": [0.0, 0.0],
+                "center_error_pixels": 0.0,
+                "analysis_width": 960,
+            }
+
+    result = asyncio.run(VisualNavigator(scanner, Localizer()).aim([1, 0.02, 0]))
+    assert result["verified"] is True
+    assert result["commands"] == 1
+    assert result["measurement"]["method"] == "target_patch_correlation"
 
 
 def test_navigation_without_frame_identity_does_not_probe_a_motor():

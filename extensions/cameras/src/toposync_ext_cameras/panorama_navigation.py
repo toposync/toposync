@@ -25,6 +25,9 @@ from .panorama_scan import (
     _return_correction_commands,
 )
 from .processing.panorama_mapping import _rotation_basis, ray_to_image_pixel
+from .processing.panorama_localization import (
+    MAXIMUM_ERROR_PIXELS as MAXIMUM_LOCALIZATION_ERROR_PIXELS,
+)
 
 MAXIMUM_NAVIGATION_COMMANDS = 64
 MAXIMUM_FINE_CORRECTIONS = MAXIMUM_RETURN_CORRECTIONS
@@ -79,7 +82,7 @@ def localized_axis_measurement(
         or width <= 0
         or not 0.55 <= inlier_fraction <= 1
         or validation_matches < 12
-        or not 0 <= validation_p95 <= MAXIMUM_CENTER_ERROR_PIXELS
+        or not 0 <= validation_p95 <= MAXIMUM_LOCALIZATION_ERROR_PIXELS
     ):
         return None
     scale = analysis_width / width
@@ -464,6 +467,12 @@ class VisualNavigator:
         self.trace[-1]["state"] = "observed"
         await self.scanner._persist()
 
+    async def _target_measurement(self, target: np.ndarray, located: dict[str, Any]) -> dict[str, Any] | None:
+        measured = await asyncio.to_thread(
+            self.localizer.measure_target, self.scanner.last_frame["image"], located, target
+        )
+        return measured or localized_axis_measurement(target, self.localizer.lens, located)
+
     async def aim(self, ray: Any) -> dict[str, Any]:
         located = await self.locate()
         reference = self.localizer.target_reference(ray)
@@ -520,15 +529,7 @@ class VisualNavigator:
             )
             if pixel is None:
                 raise PanoramaCaptureError("visual_route_unavailable")
-            measured = (
-                await asyncio.to_thread(
-                    self.localizer.measure_target, self.scanner.last_frame["image"], located, target
-                )
-                if final
-                else None
-            )
-            if final and measured is None:
-                measured = localized_axis_measurement(target, self.localizer.lens, located)
+            measured = await self._target_measurement(target, located) if final else None
             if final:
                 observations.append({
                     "commands": self.commands,
@@ -585,6 +586,19 @@ class VisualNavigator:
             updated = self._error(target, after)
             response = (updated - before) / amount
             if np.linalg.norm(response) < 0.01:
+                if final:
+                    measured = await self._target_measurement(target, after)
+                    observations.append({
+                        "commands": self.commands,
+                        "capture_evidence": self.scanner.last_frame.get("capture_evidence", {}),
+                        "measurement": measured,
+                    })
+                    if (
+                        measured
+                        and measured["center_error_pixels"] <= MAXIMUM_CENTER_ERROR_PIXELS
+                    ):
+                        final_measurement = measured
+                        break
                 raise PanoramaCaptureError("visual_response_unavailable")
             self.response[axis] = response
             self.response_rotations[axis] = np.asarray(after["rotation_matrix"])

@@ -163,7 +163,8 @@ function LiveSession({ host, choice, refreshReferences }: {
     choice: Choice;
     refreshReferences: () => void;
 }): React.ReactElement {
-    const [state, setState] = useState<State | null>(null), [error, setError] = useState(''), [aligned, setAligned] = useState(false), [connected, setConnected] = useState(false), [externalMoving, setExternalMoving] = useState(false);
+    const initialVisibility = typeof document === 'undefined' || document.visibilityState === 'visible';
+    const [state, setState] = useState<State | null>(null), [error, setError] = useState(''), [aligned, setAligned] = useState(false), [connected, setConnected] = useState(false), [externalMoving, setExternalMoving] = useState(false), [visible, setVisible] = useState(initialVisibility), [telephotoMinimized, setTelephotoMinimized] = useState(false);
     const [marker, setMarker] = useState<{
         x: number;
         y: number;
@@ -183,7 +184,7 @@ function LiveSession({ host, choice, refreshReferences }: {
         marker: { x: number; y: number };
         queuedAt: number;
     } | null>(null);
-    const estimator = useRef(false), lastEstimate = useRef(0), lastFrame = useRef(0), epoch = useRef(''), externalMovingRef = useRef(false);
+    const estimator = useRef(false), lastEstimate = useRef(0), lastFrame = useRef(0), epoch = useRef(''), externalMovingRef = useRef(false), visibleRef = useRef(initialVisibility), hiddenAt = useRef(0);
     const analysis = useRef(document.createElement('canvas')), probe = useRef(document.createElement('canvas'));
     const [bounds] = useState(() => savedBounds());
     const { width, height } = choice.artifact;
@@ -212,6 +213,8 @@ function LiveSession({ host, choice, refreshReferences }: {
         }).catch(e => { if (!disposed)
             setError(e.message); });
         const interval = setInterval(() => {
+            if (!visibleRef.current)
+                return;
             if (identifier)
                 void api(`/sessions/${identifier}`, 'GET', undefined, controller.signal).then(accept).catch(e => { if (alive.current && !controller.signal.aborted) {
                     clear();
@@ -233,6 +236,32 @@ function LiveSession({ host, choice, refreshReferences }: {
             void api(`/sessions/${identifier}`, 'DELETE').catch(() => { }); };
     }, [restart]);
     useEffect(() => {
+        const change = () => {
+            const next = document.visibilityState === 'visible';
+            visibleRef.current = next;
+            setVisible(next);
+            if (!next) {
+                hiddenAt.current = performance.now();
+                pendingTarget.current = null;
+                setMarker(null);
+                setConnected(false);
+                clear();
+                if (stateRef.current?.moving && stateRef.current.phase !== 'stopping')
+                    stop();
+                return;
+            }
+            if (hiddenAt.current && performance.now() - hiddenAt.current > 12000) {
+                setError('Retomando a sessão após pausa em segundo plano.');
+                setRestart(value => value + 1);
+            }
+            hiddenAt.current = 0;
+        };
+        document.addEventListener('visibilitychange', change);
+        return () => document.removeEventListener('visibilitychange', change);
+    }, []);
+    useEffect(() => {
+        if (!visible)
+            return;
         const controller = new AbortController();
         let disposed = false;
         const inspect = () => {
@@ -259,7 +288,7 @@ function LiveSession({ host, choice, refreshReferences }: {
         inspect();
         const interval = window.setInterval(inspect, 1500);
         return () => { disposed = true; controller.abort(); window.clearInterval(interval); externalMovingRef.current = false; };
-    }, [choice.camera_id, choice.source_id, restart]);
+    }, [choice.camera_id, choice.source_id, restart, visible]);
     useEffect(() => {
         let cancelled = false;
         const image = new Image();
@@ -286,6 +315,11 @@ function LiveSession({ host, choice, refreshReferences }: {
     const onFrame = useCallback((value: LiveViewFrame | null) => {
         if (!alive.current)
             return;
+        if (!visibleRef.current) {
+            frame.current = null;
+            clear();
+            return;
+        }
         if (!value || value.sourceId !== choice.source_id || value.cameraId !== choice.camera_id) {
             frame.current = null;
             clear();
@@ -346,7 +380,7 @@ function LiveSession({ host, choice, refreshReferences }: {
         sample.getContext('2d')!.drawImage(value.image, rect.x * value.width, rect.y * value.height, rect.width * value.width, rect.height * value.height, 0, 0, sample.width, sample.height);
         const started = performance.now();
         void api(`/sessions/${identifier}/observe`, 'POST', { sequence: value.sequence, epoch: value.epoch, media_time: value.mediaTime, width: sourceSize.width, height: sourceSize.height, image: sample.toDataURL('image/jpeg', .86).split(',')[1] }).then(result => {
-            if (!alive.current || session.current !== identifier || sequence.current !== intentionSequence || epoch.current !== submitted.epoch)
+            if (!alive.current || !visibleRef.current || session.current !== identifier || sequence.current !== intentionSequence || epoch.current !== submitted.epoch)
                 return;
             if (result.status === 'localized' && result.geometry && performance.now() - started < 1500 && !stateRef.current?.moving) {
                 registration.current = { geometry: { ...result.geometry, content_rect: rect }, signature: currentSignature, epoch: submitted.epoch, verifiedAt: performance.now() };
@@ -439,11 +473,11 @@ function LiveSession({ host, choice, refreshReferences }: {
       <button className="iconButton" type="button" onClick={() => navigation.current?.zoomBy(1 / 1.4)} aria-label="Reduzir visualização" title="Reduzir visualização"><i className="fa-solid fa-minus" aria-hidden="true" /></button>
       {state?.moving ? <button className="iconButton iconButtonDanger livePanoramaStop" type="button" onClick={stop} aria-label="Parar movimento" title="Parar movimento"><i className="fa-solid fa-stop" aria-hidden="true" /></button> : null}
     </div>
-    <FloatingVideoPanel title={`Vídeo atual · ${label}`} hidden={aligned} initialLeft={16}>
-      {host.ui.LiveViewPlayer && <host.ui.LiveViewPlayer cameraId={choice.camera_id} sourceId={choice.source_id} controls={false} context="large" onFrame={onFrame} style={{ height: '100%' }}/>}
+    <FloatingVideoPanel title={`Vídeo atual · ${label}`} hidden={aligned} initialLeft={16} initialWidth={360}>
+      {host.ui.LiveViewPlayer ? <host.ui.LiveViewPlayer cameraId={choice.camera_id} sourceId={choice.source_id} active={visible} controls={false} context="large" onFrame={onFrame} style={{ height: '100%' }}/> : null}
     </FloatingVideoPanel>
-    {choice.secondary_sources?.length && host.ui.LiveViewPlayer ? <FloatingVideoPanel title={`Teleobjetiva · ${choice.secondary_sources[0].name}`} initialLeft={380} minimizable>
-      <host.ui.LiveViewPlayer cameraId={choice.camera_id} sourceId={choice.secondary_sources[0].id} controls={false} context="pip" style={{ height: '100%' }}/>
+    {choice.secondary_sources?.length && host.ui.LiveViewPlayer ? <FloatingVideoPanel title={`Teleobjetiva · ${choice.secondary_sources[0].name}`} initialLeft={396} minimizable onMinimizedChange={setTelephotoMinimized}>
+      <host.ui.LiveViewPlayer cameraId={choice.camera_id} sourceId={choice.secondary_sources[0].id} active={visible && !telephotoMinimized} controls={false} context="pip" style={{ height: '100%' }}/>
     </FloatingVideoPanel> : null}
     <div className="livePanoramaFooter">
       <span>Panorama capturado{choice.artifact.created_at ? ' em ' + captureDate(choice.artifact.created_at) : ''} · {choice.kind === 'candidate' ? 'Candidato selecionado' : 'Referência ativa'} · revisão {choice.artifact.revision}</span>

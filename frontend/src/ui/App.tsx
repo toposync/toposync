@@ -725,7 +725,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             </div>
           );
         },
-        LiveViewPlayer: ({ cameraId, liveViewId, sourceId, controls, onFrame, context, className, style }) => {
+        LiveViewPlayer: ({ cameraId, liveViewId, sourceId, active, controls, onFrame, context, className, style }) => {
           const normalizedContext: StreamsDashboardContext =
             context === "thumbnail" ||
             context === "large" ||
@@ -738,7 +738,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             <div className={className} style={{ position: "relative", minHeight: 0, ...style }}>
               <StreamsDashboard
                 uiVisible={true}
-                isActive={true}
+                isActive={active !== false}
                 embedded={true}
                 cameraId={cameraId}
                 liveViewId={liveViewId}

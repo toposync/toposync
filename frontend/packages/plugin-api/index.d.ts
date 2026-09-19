@@ -397,6 +397,8 @@ export type LiveViewFrame = {
 
 export type LiveViewPlayerProps = {
   sourceId?: string;
+  /** Whether transport, decode and presented-frame delivery should be active. */
+  active?: boolean;
   controls?: boolean;
   onFrame?: (frame: LiveViewFrame | null) => void;
   cameraId?: string;

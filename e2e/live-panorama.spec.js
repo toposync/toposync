@@ -30,7 +30,9 @@ test('shared navigation and floating panel gestures do not issue PT or optical z
  const handle=page.getByLabel(/Mover Teleobjetiva/);await handle.focus();await page.keyboard.press('ArrowRight');
  const resize=page.getByRole('slider',{name:/Redimensionar Teleobjetiva/});await resize.focus();await page.keyboard.press('ArrowRight');await expect(resize).toHaveAttribute('aria-valuenow','340');
  await page.getByRole('button',{name:'Minimizar teleobjetiva'}).click();await expect(page.getByRole('button',{name:'Restaurar teleobjetiva'})).toBeVisible();
+ await expect(page.locator('video[data-source="tele"]')).toHaveAttribute('data-active','false');
  await page.getByRole('button',{name:'Restaurar teleobjetiva'}).click();
+ await expect(page.locator('video[data-source="tele"]')).toHaveAttribute('data-active','true');
  await expect(page.getByRole('button',{name:'Área útil',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Integral',exact:true})).toHaveCount(0);
  expect(controls).toEqual([]);expect(observation).toBeGreaterThan(0);
@@ -85,6 +87,19 @@ test('external PTZ motion drops projection and relocalizes without issuing a com
  physicalMode='IDLE';
  await expect(page.getByRole('status')).toHaveText('Vídeo alinhado');
  expect(controls).toEqual([]);
+});
+
+test('hidden document suspends players, localization and PTZ work, then resumes',async({page})=>{
+ const before=observation;
+ await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});document.dispatchEvent(new Event('visibilitychange'));});
+ await expect(page.locator('video[data-source="wide"]')).toHaveAttribute('data-active','false');
+ await expect(page.locator('video[data-source="tele"]')).toHaveAttribute('data-active','false');
+ await page.waitForTimeout(1800);
+ expect(observation).toBe(before);
+ expect(controls).toEqual([]);
+ await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});document.dispatchEvent(new Event('visibilitychange'));});
+ await expect(page.locator('video[data-source="wide"]')).toHaveAttribute('data-active','true');
+ await expect(page.getByRole('status')).toHaveText('Vídeo alinhado');
 });
 
 test('existing photograph uses the real spherical model and coverage in the renderer',async({page})=>{

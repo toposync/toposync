@@ -2,9 +2,9 @@ const {test,expect}=require('@playwright/test');
 const root='/api/cameras/live-panorama';
 const artifact={id:'a'.repeat(32),revision:1,width:1600,height:800,image_url:'/fixture-panorama.svg',coverage_url:'/fixture-coverage.svg',crop:{u_start:.3,u_width:.4,v_start:.3,v_height:.4},crop_revision:2,created_at:"2026-09-19T01:35:49Z"};
 const geometry={lens:{width:640,height:360,fx:400,fy:400,cx:319.5,cy:179.5,distortion:[]},panorama_to_camera:[[0,1,0],[0,0,-1],[1,0,0]]};
-let controls,sessions,observation,mode,sequence,identifier,currentArtifact,currentGeometry;
+let controls,sessions,observation,mode,sequence,identifier,currentArtifact,currentGeometry,physicalMode;
 test.beforeEach(async({page})=>{
- currentArtifact=artifact;currentGeometry=geometry;controls=[];sessions=0;observation=0;mode='aligned';sequence=0;identifier='';
+ currentArtifact=artifact;currentGeometry=geometry;controls=[];sessions=0;observation=0;mode='aligned';physicalMode='IDLE';sequence=0;identifier='';
  await page.route('**/fixture-*.svg',route=>route.fulfill({contentType:'image/svg+xml',body:`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800"><rect width="1600" height="800" fill="${route.request().url().includes('coverage')?'white':'#adbccc'}"/><path d="M800 0V800M0 400H1600" stroke="#fff" stroke-width="2"/></svg>`}));
  const state=()=>({session_id:identifier,can_control:true,sequence,phase:mode,moving:mode==='moving',blocked:false,commands:0,error:null});
  await page.route('**/api/cameras/live-panorama**',async route=>{
@@ -16,6 +16,7 @@ test.beforeEach(async({page})=>{
   if(path.endsWith('/stop')){controls.push({stop:body.sequence});sequence=body.sequence;mode='localizing';return route.fulfill({json:state()});}
   return route.fulfill({json:state()});
  });
+ await page.route('**/api/cameras/cameras/**/ptz/status**',route=>route.fulfill({json:{status:{move_status:physicalMode},control:{motion_state:physicalMode==='MOVING'?'moving':'stable',geometry_safe:physicalMode==='IDLE'}}}));
  await page.goto('/');await expect(page.getByRole('status')).toHaveText('Vídeo alinhado');
 });
 async function point(page,x=.5,y=.6){const box=await page.getByLabel('Panorama navegável',{exact:true}).boundingBox();return {x:box.x+box.width*x,y:box.y+box.height*y};}
@@ -74,6 +75,16 @@ test('latest click waits for a fresh registration and is then sent once',async({
  expect(controls[0].sequence).toBe(1);
  expect(controls[0].x).toBeGreaterThan(.5);
  await expect(page.getByRole('status')).toHaveText('Movendo');
+});
+
+test('external PTZ motion drops projection and relocalizes without issuing a command',async({page})=>{
+ physicalMode='MOVING';
+ await expect(page.getByRole('status')).toHaveText('Câmera em movimento externo');
+ await expect(page.getByLabel('Vídeo atual · Câmera em movimento externo',{exact:true})).toHaveCSS('opacity','1');
+ expect(controls).toEqual([]);
+ physicalMode='IDLE';
+ await expect(page.getByRole('status')).toHaveText('Vídeo alinhado');
+ expect(controls).toEqual([]);
 });
 
 test('existing photograph uses the real spherical model and coverage in the renderer',async({page})=>{

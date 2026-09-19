@@ -7,12 +7,15 @@ import { validPanoramaCrop } from '../settings/panoramaCrop';
 import type { CameraSourcePanoramaArtifact } from '../types';
 import { livePanoramaStyles } from './livePanorama';
 const root = '/api/cameras/live-panorama';
-async function api(path: string, method = 'GET', body?: unknown, signal?: AbortSignal) {
-    const response = await fetch(resolveToposyncUrl(root + path), { method, credentials: 'same-origin', headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined, signal, keepalive: method === 'DELETE' });
+async function request(path: string, method = 'GET', body?: unknown, signal?: AbortSignal) {
+    const response = await fetch(resolveToposyncUrl(path), { method, credentials: 'same-origin', headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined, signal, keepalive: method === 'DELETE' });
     const result = await response.json();
     if (!response.ok)
         throw new Error(result?.detail?.message ?? result?.detail?.code ?? `Falha de conexão (${response.status})`);
     return result;
+}
+function api(path: string, method = 'GET', body?: unknown, signal?: AbortSignal) {
+    return request(root + path, method, body, signal);
 }
 type Choice = {
     camera_id: string;
@@ -160,7 +163,7 @@ function LiveSession({ host, choice, refreshReferences }: {
     choice: Choice;
     refreshReferences: () => void;
 }): React.ReactElement {
-    const [state, setState] = useState<State | null>(null), [error, setError] = useState(''), [aligned, setAligned] = useState(false), [connected, setConnected] = useState(false);
+    const [state, setState] = useState<State | null>(null), [error, setError] = useState(''), [aligned, setAligned] = useState(false), [connected, setConnected] = useState(false), [externalMoving, setExternalMoving] = useState(false);
     const [marker, setMarker] = useState<{
         x: number;
         y: number;
@@ -180,7 +183,7 @@ function LiveSession({ host, choice, refreshReferences }: {
         marker: { x: number; y: number };
         queuedAt: number;
     } | null>(null);
-    const estimator = useRef(false), lastEstimate = useRef(0), lastFrame = useRef(0), epoch = useRef('');
+    const estimator = useRef(false), lastEstimate = useRef(0), lastFrame = useRef(0), epoch = useRef(''), externalMovingRef = useRef(false);
     const analysis = useRef(document.createElement('canvas')), probe = useRef(document.createElement('canvas'));
     const [bounds] = useState(() => savedBounds());
     const { width, height } = choice.artifact;
@@ -230,6 +233,34 @@ function LiveSession({ host, choice, refreshReferences }: {
             void api(`/sessions/${identifier}`, 'DELETE').catch(() => { }); };
     }, [restart]);
     useEffect(() => {
+        const controller = new AbortController();
+        let disposed = false;
+        const inspect = () => {
+            const query = new URLSearchParams({ source_id: choice.source_id, include_control: 'true' });
+            void request(`/api/cameras/cameras/${encodeURIComponent(choice.camera_id)}/ptz/status?${query}`, 'GET', undefined, controller.signal).then(result => {
+                if (disposed)
+                    return;
+                const physical = String(result?.status?.move_status ?? '').toUpperCase();
+                const controlled = String(result?.control?.motion_state ?? '').toLowerCase();
+                const moving = physical.includes('MOVING') || controlled === 'moving';
+                const external = moving && !stateRef.current?.moving;
+                if (external !== externalMovingRef.current) {
+                    externalMovingRef.current = external;
+                    setExternalMoving(external);
+                    clear();
+                    if (external) {
+                        pendingTarget.current = null;
+                        setMarker(null);
+                        setError('Movimento externo detectado. Aguardando estabilização para relocalizar.');
+                    }
+                }
+            }).catch(() => { /* Visual localization remains the fallback when PTZ status is unavailable. */ });
+        };
+        inspect();
+        const interval = window.setInterval(inspect, 1500);
+        return () => { disposed = true; controller.abort(); window.clearInterval(interval); externalMovingRef.current = false; };
+    }, [choice.camera_id, choice.source_id, restart]);
+    useEffect(() => {
         let cancelled = false;
         const image = new Image();
         image.src = resolveToposyncUrl(choice.artifact.coverage_url ?? "");
@@ -265,6 +296,10 @@ function LiveSession({ host, choice, refreshReferences }: {
         frame.current = value;
         lastFrame.current = performance.now();
         setConnected(true);
+        if (externalMovingRef.current) {
+            clear();
+            return;
+        }
         if (epoch.current !== value.epoch) {
             epoch.current = value.epoch;
             clear();
@@ -390,7 +425,7 @@ function LiveSession({ host, choice, refreshReferences }: {
         stateRef.current = { ...stateRef.current, phase: 'stopping' };
         setState(stateRef.current);
     } const next = ++sequence.current; void api(`/sessions/${session.current}/stop`, 'POST', { sequence: next }).then(accept).catch(e => setError(e.message)); }
-    const label = !connected ? 'Aguardando vídeo atual' : aligned ? 'Vídeo alinhado' : phaseLabel[state?.phase ?? 'localizing'] ?? 'Alinhamento não confirmado';
+    const label = !connected ? 'Aguardando vídeo atual' : externalMoving ? 'Câmera em movimento externo' : aligned ? 'Vídeo alinhado' : phaseLabel[state?.phase ?? 'localizing'] ?? 'Alinhamento não confirmado';
     return <div style={{ position: 'relative', flex: 1, minHeight: 360, overflow: 'hidden' }}>
     <host.ui.NavigableViewport label="Panorama navegável" contentKey={choice.artifact.id} contentSize={{ width: width * 2, height }} initialBounds={bounds} controllerRef={navigation} onContentClick={click} style={{ width: '100%', height: '100%', minHeight: 360, background: '#151920' }}>
       <img draggable={false} src={resolveToposyncUrl(choice.artifact.image_url)} alt="Panorama capturado — referência histórica" style={{ position: 'absolute', width, height, filter: 'grayscale(1) brightness(.65)', pointerEvents: 'none' }}/>

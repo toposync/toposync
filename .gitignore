@@ -17,6 +17,8 @@ build/
 .parcel-cache/
 
 .toposync-data/
+.toposync-validation-*/
+.toposync-physical-validation-*/
 .toposync-processor-data
 toposync-data/
 

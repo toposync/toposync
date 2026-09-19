@@ -560,3 +560,44 @@ def test_private_spatial_context_api_requires_access_and_exposes_no_embedding(cl
     store.close()
     client.cookies.clear()
     assert client.get(path).status_code == 401
+
+
+def test_retention_policy_requires_explicit_boolean_current_revision_and_auth(client):
+    url = "/api/vision/identities/retention"
+    preview = client.get(url + "-preview").json()
+    assert not preview["enabled"]
+    assert client.put(url, json={"enabled": "true", "expected_revision": 0}).status_code == 422
+    assert client.put(url, json={"enabled": True, "expected_revision": 0}).status_code == 200
+    assert client.get(url + "-preview").json()["enabled"] is True
+    assert client.put(url, json={"enabled": False, "expected_revision": 0}).status_code == 409
+    assert client.put(url, json={"enabled": False, "expected_revision": 1}).status_code == 200
+    client.cookies.clear()
+    assert client.put(url, json={"enabled": True, "expected_revision": 2}).status_code == 401
+
+
+def test_retention_cannot_erase_unauthorized_visit_after_its_photo_expired(client):
+    import time
+    from toposync_ext_vision.identity.store import IdentityStore
+    from test_identity_store import evidence, policy
+    gallery = IdentityStore(client.app.state.config_store.paths.data_dir / "identities", scope="installation")
+    try:
+        gallery.observe(evidence("private").model_copy(update={"camera_id": "secret"}), policy())
+        gallery.configure_retention(enabled=True, expected_revision=gallery.revision)
+        gallery.apply_retention(now=time.time() + 8 * 86400)
+        gallery.configure_retention(enabled=False, expected_revision=gallery.revision)
+        revision = gallery.revision
+    finally:
+        gallery.close()
+    member = client.post("/api/access/users", json={"username": "curator", "display_name": "Curator", "role": "member", "password": "password123"})
+    assert member.status_code == 200
+    for action, resource, include in [
+        ("core:extension:use", "core:extension", ["com.toposync.vision"]),
+        ("vision:identities:read", "core:extension", ["com.toposync.vision"]),
+        ("vision:identities:write", "core:extension", ["com.toposync.vision"]),
+        ("core:camera:read", "core:camera", ["public"]),
+    ]:
+        assert client.post(f"/api/access/users/{member.json()['id']}/grants", json={"action": action, "resource_type": resource, "include": include, "exclude": []}).status_code == 200
+    assert client.post("/api/auth/login", json={"username": "curator", "password": "password123", "device_label": "test"}).status_code == 200
+    assert client.get("/api/vision/identities/occurrences/private").status_code == 403
+    assert client.get("/api/vision/identities/retention-preview").status_code == 403
+    assert client.put("/api/vision/identities/retention", json={"enabled": True, "expected_revision": revision}).status_code == 403

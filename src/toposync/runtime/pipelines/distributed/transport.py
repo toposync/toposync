@@ -6,11 +6,28 @@ from urllib.parse import urlsplit
 from typing import Any, AsyncIterator
 
 
+from .stream_contract import (
+    PRIVATE_EVENT_MAX_BYTES, PRIVATE_STREAM_CAPABILITY,
+    ProcessingTransportError, ProcessingContinuityError,
+)
+
 logger = logging.getLogger("toposync.pipelines.transport")
 
 
-class ProcessingTransportError(RuntimeError):
-    pass
+async def _bounded_private_lines(response):
+    buffer = bytearray()
+    async for chunk in response.aiter_bytes():
+        buffer.extend(chunk)
+        while b"\n" in buffer:
+            line, _, remainder = buffer.partition(b"\n")
+            if len(line) > PRIVATE_EVENT_MAX_BYTES + 32:
+                raise ProcessingContinuityError("private_event_size_limit_exceeded")
+            buffer = bytearray(remainder)
+            yield line.decode("utf-8")
+        if len(buffer) > PRIVATE_EVENT_MAX_BYTES + 32:
+            raise ProcessingContinuityError("private_event_size_limit_exceeded")
+    if buffer:
+        raise ProcessingContinuityError("incomplete_private_event")
 
 
 class HttpProcessingTransport:
@@ -30,6 +47,8 @@ class HttpProcessingTransport:
         self._username = str(username or "").strip()
         self._password = str(password or "").strip()
         self._client = None
+        self._private_stream = False
+        self._stream_instance_id: str | None = None
 
     async def _ensure_client(self):
         if self._client is not None:
@@ -87,7 +106,10 @@ class HttpProcessingTransport:
 
     async def push_config(self, payload: dict[str, Any]) -> None:
         required = set(payload.get("required_capabilities") or [])
-        if "private_artifacts_v1" in required:
+        private = "private_artifacts_v1" in required
+        if private:
+            required.add(PRIVATE_STREAM_CAPABILITY)
+            payload = {**payload, "required_capabilities": sorted(required)}
             location = urlsplit(self._base)
             loopback = location.hostname in {"127.0.0.1", "::1", "localhost"}
             if (
@@ -99,29 +121,43 @@ class HttpProcessingTransport:
                     "Private artifacts require authenticated HTTPS (HTTP is allowed only on loopback)"
                 )
             status = await self.status()
+            if self._stream_instance_id is not None and status.get("stream_instance_id") != self._stream_instance_id:
+                raise ProcessingContinuityError("processing_stream_restarted")
             if not required.issubset(set(status.get("transport_capabilities") or [])):
                 raise ProcessingTransportError(
                     "Processing server does not support the required private artifact protocol"
                 )
-        await self._post_json(
-            "/api/processing/config",
-            payload,
-            error_prefix="Processing config push failed",
+        result = await self._post_json(
+            "/api/processing/config", payload, error_prefix="Processing config push failed",
         )
+        if private:
+            instance = result.get("stream_instance_id")
+            if not isinstance(instance, str) or not instance:
+                raise ProcessingContinuityError("missing_processing_stream_instance")
+            if self._stream_instance_id is not None and instance != self._stream_instance_id:
+                raise ProcessingContinuityError("processing_stream_restarted")
+            self._stream_instance_id = instance
+        else:
+            self._stream_instance_id = None
+        self._private_stream = private
 
     async def stream_events(self, *, last_event_id: int = 0) -> AsyncIterator[dict[str, Any]]:
         client = await self._ensure_client()
         url = f"{self._base}/api/processing/events/stream"
         headers: dict[str, str] = {}
+        if self._private_stream:
+            headers["X-Toposync-Private-Stream"] = PRIVATE_STREAM_CAPABILITY
         if int(last_event_id) > 0:
             headers["Last-Event-ID"] = str(int(last_event_id))
 
         async with client.stream("GET", url, headers=headers) as res:
             if res.status_code >= 300:
-                raise ProcessingTransportError(
-                    f"Processing event stream failed: {res.status_code} {res.text}"
-                )
-            async for line in res.aiter_lines():
+                raise ProcessingTransportError(f"Processing event stream failed: {res.status_code}")
+            if self._private_stream and res.headers.get("X-Toposync-Stream-Instance") != self._stream_instance_id:
+                raise ProcessingContinuityError("processing_stream_restarted")
+            cursor = int(last_event_id)
+            lines = _bounded_private_lines(res) if self._private_stream else res.aiter_lines()
+            async for line in lines:
                 if not line or not line.startswith("data:"):
                     continue
                 raw = line[5:].strip()
@@ -129,17 +165,33 @@ class HttpProcessingTransport:
                     continue
                 try:
                     event = json.loads(raw)
-                except Exception:
+                except Exception as exc:
+                    if self._private_stream:
+                        raise ProcessingContinuityError("invalid_private_event") from exc
                     continue
+                if self._private_stream:
+                    if not isinstance(event, dict):
+                        raise ProcessingContinuityError("invalid_private_event")
+                    if event.get("event_type") == "continuity_error":
+                        raise ProcessingContinuityError(str(event.get("reason") or "replay_gap"))
+                    event_id = event.get("event_id")
+                    if type(event_id) is not int or event_id != cursor + 1:
+                        raise ProcessingContinuityError("private_event_sequence_gap")
+                    cursor = event_id
                 if isinstance(event, dict):
                     yield event
 
     async def ack(self, last_event_id: int) -> None:
         client = await self._ensure_client()
         url = f"{self._base}/api/processing/events/ack"
-        res = await client.post(
-            url, json={"last_event_id": int(last_event_id)}, timeout=self._timeout_s
-        )
+        payload = {"last_event_id": int(last_event_id)}
+        if self._private_stream:
+            payload["stream_instance_id"] = self._stream_instance_id
+        res = await client.post(url, json=payload, timeout=self._timeout_s)
+        if self._private_stream and res.status_code == 409:
+            raise ProcessingContinuityError("private_ack_rejected")
+        if self._private_stream and res.status_code >= 300:
+            raise ProcessingTransportError(f"Private processing ack failed: {res.status_code}")
         if res.status_code >= 300:
             logger.debug("processing ack failed status=%s body=%s", res.status_code, res.text)
 

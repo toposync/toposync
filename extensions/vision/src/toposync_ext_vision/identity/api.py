@@ -100,6 +100,10 @@ class RevisionRequest(BaseModel):
     expected_revision: int = Field(ge=0)
 
 
+class RetentionRequest(RevisionRequest):
+    enabled: StrictBool
+
+
 def _authorize(request: Request, *, write: bool = False, cameras: set[str] | None = None) -> str:
     auth = getattr(request.app.state, "auth", None)
     context = getattr(request.state, "auth_context", None)
@@ -330,6 +334,17 @@ def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
         gallery = store()
         _authorize(request, write=True, cameras=gallery.camera_ids())
         return gallery.retention_preview()
+
+    @router.put("/retention")
+    def retention(request: Request, body: RetentionRequest):
+        _authorize(request, write=True)
+        try:
+            return store().configure_retention(
+                enabled=body.enabled, expected_revision=body.expected_revision,
+                authorize_cameras=lambda cameras: _authorize(request, write=True, cameras=cameras),
+            )
+        except IdentityConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/history")
     def history(request: Request):

@@ -80,6 +80,26 @@ CREATE TRIGGER IF NOT EXISTS identity_camera_update AFTER UPDATE OF identity_id 
  INSERT OR IGNORE INTO identity_camera SELECT NEW.identity_id,camera_id FROM occurrence WHERE id=NEW.occurrence_id;
 END;
 
+CREATE TABLE IF NOT EXISTS retention_policy (
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1), enabled INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO retention_policy VALUES(1,0);
+-- Only opaque observation keys survive erasure, to reject delayed duplicate packets.
+CREATE TABLE IF NOT EXISTS erased_observation (id TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS occurrence_retention (
+ id TEXT PRIMARY KEY REFERENCES occurrence(id) ON DELETE CASCADE, received_at REAL NOT NULL
+);
+-- Older databases have no trustworthy local receipt clock. Start their history window now.
+INSERT OR IGNORE INTO occurrence_retention SELECT id,CAST(strftime('%s','now') AS REAL) FROM occurrence;
+CREATE TRIGGER IF NOT EXISTS occurrence_retention_insert AFTER INSERT ON occurrence BEGIN
+ INSERT INTO occurrence_retention VALUES(NEW.id,CAST(strftime('%s','now') AS REAL));
+END;
+CREATE TRIGGER IF NOT EXISTS occurrence_retention_update AFTER UPDATE OF latest_at ON occurrence BEGIN
+ UPDATE occurrence_retention SET received_at=CAST(strftime('%s','now') AS REAL) WHERE id=NEW.id;
+END;
+CREATE INDEX IF NOT EXISTS observation_retention ON observation(reference,created_at);
+CREATE INDEX IF NOT EXISTS occurrence_retention_age ON occurrence_retention(received_at);
+
 CREATE TABLE IF NOT EXISTS rejection (
  occurrence_id TEXT NOT NULL REFERENCES occurrence(id), identity_id TEXT NOT NULL REFERENCES identity(id),
  PRIMARY KEY (occurrence_id, identity_id)
@@ -546,7 +566,7 @@ class IdentityStore:
                 cameras.update(
                     row[0]
                     for row in self._connection.execute(
-                        "SELECT DISTINCT camera_id FROM identity_camera"
+                        "SELECT camera_id FROM identity_camera UNION SELECT camera_id FROM occurrence"
                     )
                 )
             return cameras
@@ -722,7 +742,7 @@ class IdentityStore:
         return {"profiles": len(policies), "processed": processed}
 
     def retention_preview(self, *, now: float | None = None) -> dict:
-        """Read-only proposal. No retention deletion is enabled without approval."""
+        """Preview the fixed policy without deleting data."""
         now = time.time() if now is None else now
         with self._lock:
             transient = self._connection.execute(
@@ -737,14 +757,97 @@ class IdentityStore:
                 "SELECT count(*) FROM feedback WHERE created_at<?", (now - 90 * 86400,)
             ).fetchone()[0]
             return {
-                "enabled": False,
+                "enabled": bool(self._connection.execute("SELECT enabled FROM retention_policy").fetchone()[0]),
+                "revision": self.revision,
+                "batch_limit": 128,
                 "proposed_days": {"transient": 7, "references": 365, "history": 90},
                 "eligible_observations": transient[0],
                 "eligible_references": references[0],
                 "eligible_history": history,
+                "eligible_occurrences": self._connection.execute(
+                    "SELECT count(*) FROM occurrence_retention r WHERE received_at<? "
+                    "AND NOT EXISTS(SELECT 1 FROM observation o WHERE o.occurrence_id=r.id)",
+                    (now - 90 * 86400,),
+                ).fetchone()[0],
                 "encrypted_bytes": transient[1] + references[1],
                 "maintenance_error": self.maintenance_error,
             }
+
+    def configure_retention(
+        self, *, enabled: bool, expected_revision: int,
+        authorize_cameras: Callable[[set[str]], None] | None = None,
+    ) -> dict:
+        with self._transaction() as connection:
+            if authorize_cameras is not None:
+                authorize_cameras(self.camera_ids())
+            if self.revision != expected_revision:
+                raise IdentityConflict("gallery revision changed; review retention again")
+            current = bool(connection.execute("SELECT enabled FROM retention_policy").fetchone()[0])
+            if current != enabled:
+                connection.execute("UPDATE retention_policy SET enabled=?", (int(enabled),))
+                connection.execute("UPDATE gallery SET revision=revision+1")
+            return self.retention_preview()
+
+    def maintain(self) -> dict:
+        # Expire first: clustering must not keep evidence past an enabled policy.
+        retention = self.apply_retention()
+        clustering = self.cluster_pending()
+        return {"retention": retention, "clustering": clustering}
+
+    def apply_retention(self, *, now: float | None = None) -> dict:
+        """Bound each category to 128 records per maintenance cycle (once a minute)."""
+        now = time.time() if now is None else now
+        counts = {"observations": 0, "history": 0, "occurrences": 0}
+        with self._transaction() as connection:
+            if not connection.execute("SELECT enabled FROM retention_policy").fetchone()[0]:
+                return {"enabled": False, **counts, "revision": self.revision}
+            rows = connection.execute(
+                "SELECT id,occurrence_id FROM observation "
+                "WHERE (reference=0 AND created_at<?) OR (reference=1 AND created_at<?) "
+                "ORDER BY created_at,id LIMIT 128", (now - 7 * 86400, now - 365 * 86400),
+            ).fetchall()
+            for row in rows:
+                connection.execute("INSERT OR IGNORE INTO erased_observation VALUES(?)", (row["id"],))
+                connection.execute("DELETE FROM observation WHERE id=?", (row["id"],))
+            counts["observations"] = len(rows)
+            # Retain a minimal historical decision, but never point at a deleted photo.
+            for occurrence_id in {row["occurrence_id"] for row in rows}:
+                current = self.decision(occurrence_id)
+                if current and current.observation_id and not connection.execute(
+                    "SELECT 1 FROM observation WHERE id=?", (current.observation_id,),
+                ).fetchone():
+                    updated = current.model_copy(update={
+                        "observation_id": None, "candidate_ids": (),
+                        "revision": current.revision + 1, "gallery_revision": self.revision + 1,
+                        **({} if current.provenance == "human" else {
+                            "identity_id": None, "status": "unobservable", "provenance": "none",
+                            "reason": "evidence_expired",
+                        }),
+                    })
+                    connection.execute("UPDATE occurrence SET decision=? WHERE id=?",
+                                       (self._seal(updated.model_dump()), occurrence_id))
+            counts["history"] = connection.execute(
+                "DELETE FROM feedback WHERE id IN (SELECT id FROM feedback WHERE created_at<? "
+                "ORDER BY created_at,id LIMIT 128)", (now - 90 * 86400,),
+            ).rowcount
+            occurrences = connection.execute(
+                "SELECT id FROM occurrence_retention r WHERE received_at<? "
+                "AND NOT EXISTS(SELECT 1 FROM observation o WHERE o.occurrence_id=r.id) "
+                "ORDER BY received_at,id LIMIT 128", (now - 90 * 86400,),
+            ).fetchall()
+            for row in occurrences:
+                # Keep lifecycle tombstones: old OPEN packets cannot recreate erased history.
+                connection.execute("INSERT OR IGNORE INTO closed_occurrence VALUES(?,?)", (row["id"], now))
+                connection.execute("DELETE FROM rejection WHERE occurrence_id=?", (row["id"],))
+                connection.execute("DELETE FROM occurrence WHERE id=?", (row["id"],))
+            counts["occurrences"] = len(occurrences)
+            if any(counts.values()):
+                connection.execute("UPDATE gallery SET revision=revision+1")
+            revision = self.revision
+        if any(counts.values()):
+            with self._lock:
+                self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return {"enabled": True, **counts, "revision": revision}
 
     def _rank(self, connection, evidence: IdentityEvidence) -> list[tuple[str, float]]:
         rows = connection.execute(
@@ -841,6 +944,11 @@ class IdentityStore:
                     occurrence_id=evidence.occurrence_id,
                     reason="occurrence_closed",
                     gallery_revision=gallery_revision,
+                )
+            if connection.execute("SELECT 1 FROM erased_observation WHERE id=?", (observation_id,)).fetchone():
+                return current or RecognitionDecision(
+                    status="unobservable", occurrence_id=evidence.occurrence_id,
+                    reason="evidence_expired", gallery_revision=gallery_revision,
                 )
             if connection.execute(
                 "SELECT 1 FROM observation WHERE id=?", (observation_id,)
@@ -1479,6 +1587,9 @@ class IdentityStore:
                     for row in connection.execute(
                         "SELECT occurrence_id FROM observation WHERE identity_id=?", (value,)
                     )
+                )
+                connection.execute(
+                    "INSERT OR IGNORE INTO erased_observation SELECT id FROM observation WHERE identity_id=?", (value,),
                 )
                 connection.execute("DELETE FROM observation WHERE identity_id=?", (value,))
                 connection.execute("DELETE FROM rejection WHERE identity_id=?", (value,))

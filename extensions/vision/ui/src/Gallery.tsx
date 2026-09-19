@@ -111,6 +111,28 @@ function useMutation() {
 function ErrorMessage({ t, message = "error", onRetry = changed }: { t: Translate; message?: string; onRetry?: () => void }) {
   return <div className="identityError" role="alert"><p>{t(message)}</p><button type="button" className="chipButton" onClick={onRetry}>{t("retry")}</button></div>;
 }
+type RetentionPreview = { enabled: boolean; revision: number; eligible_observations: number; eligible_references: number; eligible_history: number; eligible_occurrences: number; maintenance_error: string | null };
+function Retention({ t }: { t: Translate }) {
+  const heading = useRef<HTMLElement>(null);
+  const [open, setOpen] = useState(false);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const preview = useLoad<RetentionPreview>(open ? "/retention-preview" : null);
+  const { busy, error, run } = useMutation();
+  const data = preview.data;
+  useEffect(() => { setAcknowledged(false); }, [data?.revision, open]);
+  return <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary ref={heading}>{t("retention")}</summary>
+    {open && (preview.error ? <ErrorMessage t={t} /> : !data ? <p role="status">{t("loading")}</p> : <div className="identityForm">
+      <p role="status">{t(data.enabled ? "retentionActive" : "retentionInactive")}</p>
+      <p>{t("retentionPeriods")}</p><p className="identityMuted">{t("retentionEffect")}</p>
+      <p>{t("retentionImpact", { photos: data.eligible_observations, references: data.eligible_references, history: data.eligible_history, visits: data.eligible_occurrences })}</p>
+      {data.maintenance_error && <p role="alert">{t("retentionFailure")}</p>}
+      {!data.enabled && <label><input type="checkbox" checked={acknowledged} disabled={busy || preview.loading} onChange={(event) => setAcknowledged(event.target.checked)} />{t("retentionConsent")}</label>}
+      {error && <ErrorMessage t={t} message={error} />}
+      <div className="identityActions"><button type="button" className="chipButton" disabled={busy || preview.loading || (!data.enabled && !acknowledged)} onClick={() => { void run("/retention", { enabled: !data.enabled, expected_revision: data.revision }, "PUT").then((saved) => { if (saved) heading.current?.focus(); }); }}>{t(busy ? "saving" : data.enabled ? "retentionDisable" : "retentionEnable")}</button></div>
+    </div>)}
+  </details>;
+}
 function Photo({ observation, portrait = false, full = false, t }: { observation: Pick<Observation,"id">; portrait?: boolean; full?: boolean; t: Translate }) {
   const [failedId, setFailedId] = useState<string | null>(null);
   return failedId === observation.id ? <span className="identityMuted">{t("missing")}</span> : <img className={full ? "identityFullPhoto" : portrait ? "identityPortrait" : "identityPhoto"} src={photoUrl(observation.id)} alt={t("photo")} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailedId(observation.id)} />;
@@ -320,6 +342,7 @@ export function Gallery({ i18n }: { i18n: HostI18n }) {
       {writable && chosen.every((item) => item.editable) && chosen.length > 0 && !editing && <div className="identityActions"><button type="button" className="chipButton" disabled={busy} onClick={() => { void run("/curation", { action: "unassign", expected_revision: gallery.data!.revision, values: { observation_ids: chosen.map((item) => item.id) } }).then((saved) => { if (saved) resetAfterSave(); }); }}>{t("removeAssociation")}</button><button type="button" className="chipButton" disabled={!selectedSpecies || chosen.some((item) => item.species !== selectedSpecies)} onClick={() => { setEditing(true); setAction(""); }}>{t("move")}</button></div>}
       {editing && writable && chosen.every((item) => item.editable) && selectedSpecies && <Editor species={selectedSpecies} observations={chosen} identities={gallery.data!.identities} revision={gallery.data!.revision} t={t} onClose={resetAfterSave} />}</>}
     </>}
+    {gallery.data?.permissions.history && <Retention t={t} />}
     {gallery.data?.permissions.history && <details open={showHistory} onToggle={(event) => setShowHistory(event.currentTarget.open)}><summary ref={historyHeading}>{t("history")}</summary>{showHistory && (history.error ? <ErrorMessage t={t} /> : history.loading ? <p>{t("loading")}</p> : history.data?.operations.length ? history.data.operations.map((item) => <div className="identityHistory" key={item.id}><span>{t(({ assign: "identify", unassign: "removeAssociation", reference: "referenceBadge", reject: "reject" } as Record<string, string>)[item.action] || item.action)} · {new Date(item.created_at * 1000).toLocaleString(i18n.getLocale())}</span><button className="chipButton" type="button" disabled={busy || Boolean(item.undone) || item.id !== history.data?.operations.find((operation) => !operation.undone)?.id} onClick={() => { void run(`/history/${item.id}/undo`, { expected_revision: history.data!.revision }).then((saved) => { if (saved) historyHeading.current?.focus(); }); }}>{t(item.undone ? "undone" : "undo")}</button></div>) : <p>{t("noHistory")}</p>)}</details>}
   </section>;
 }

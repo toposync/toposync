@@ -297,6 +297,19 @@ def test_private_evidence_crosses_authenticated_process_boundary_and_replays(tmp
                     ]
                     assert len(store.observations()) == 2
                     await transport.ack(events[-1]["event_id"])
+                    from toposync.runtime.pipelines.distributed.stream_contract import ProcessingContinuityError
+                    # An unavailable cursor over real HTTP must fail, never skip to current events.
+                    stale = transport.stream_events(last_event_id=0)
+                    try:
+                        with pytest.raises(ProcessingContinuityError, match="cursor_unavailable"):
+                            await asyncio.wait_for(anext(stale), 5)
+                    finally:
+                        await stale.aclose()
+                    # Reconfigure the remote runtime independently while the origin retains its generation.
+                    response = await transport._client.post(base_url + "/api/processing/config", json={"pipelines": []})
+                    assert response.status_code == 200
+                    with pytest.raises(ProcessingContinuityError, match="restarted"):
+                        await transport.push_config(payload)
                     await transport.push_config({"pipelines": []})
                 finally:
                     store.close()

@@ -31,6 +31,14 @@ Occurrence deduplication requires an event or group event with a subject identif
 
 Without a calibrated policy, useful photos remain available for curation and the automatic decision reports `calibration_required`. The default configuration does not supply guessed thresholds. Policies belong in the resolver's advanced configuration, must identify the exact embedding space and species, and must be calibrated on independent sessions before enabling automatic decisions. Similarity is not a probability. Infrared or other unvalidated conditions require their own evaluation.
 
+## Private remote stream
+
+Recognition graphs negotiate both `private_artifacts_v1` and `private_stream_v1` with an authenticated processing server. Non-loopback transport requires HTTPS. Existing graphs without private artifacts retain their original protocol.
+
+The private stream retains at most 64 MiB of serialized replay bodies, accepts an envelope up to 8 MiB, and permits four simultaneous stream connections. Subscriber queues contain only sequence markers. Each origin inbox in a server group carrying private data uses eight blocking slots; acknowledgement follows inbox acceptance, not downstream completion. These are transport bounds, not total process memory bounds: serialized and decoded packets, model weights and consumer work also use memory.
+
+Reconnect within the same processing instance resumes the last contiguous sequence. Oversized events, an evicted replay range, an unexpected sequence or a changed processing instance suspend delivery with an explicit continuity error. The origin does not retry across an unknown gap or silently discard a lifecycle boundary. Inspect the processing diagnostics and retained visit history, then explicitly restart the affected origin pipeline after restoring the processing server. This starts a new stream; it cannot reconstruct events already lost at the remote server and is not exactly-once delivery for external actions. Notification occurrence deduplication remains a separate opt-in.
+
 ## Spatial inspection
 
 The extractor retains a bounded private snapshot of the individual world anchor and available mapping/capture provenance. It distinguishes decoder generations, rejects conflicting current projections or capture evidence, and degrades malformed optional data without discarding visual inference. The authorized observation context endpoint exposes this snapshot without embeddings; reference reconstruction preserves the original snapshot.
@@ -87,7 +95,11 @@ The backup includes the encryption key. Keep the entire backup private. The SQLi
 
 This is a **gallery backup**, not a complete application backup. Recovery does not switch the application's data directory, restore notifications/configuration, download weights, or promise compatibility with older binaries. Validate the recovered gallery in an isolated application before any authorized operational switch. Backups can contain identities deleted after the snapshot; their lifecycle must follow the installation's data policy.
 
-Automatic retention deletion is currently disabled. The curator-only retention preview reports proposed categories without deleting anything. A full gallery abstains safely instead of silently discarding references. A deployment needs an explicitly accepted retention policy before unattended use at capacity.
+Automatic retention is off by default, including migrated installations. In **People and pets → Photo retention**, a curator with access to every gallery source can review the impact and explicitly enable expiration. The fixed policy keeps non-reference observations for seven days, references for 365 days, and undo history for 90 days. Observation age uses local storage time; promoting an old photo to a reference does not reset its age. Visit decisions expire after 90 days without new locally received evidence once no photos remain. Old galleries begin that visit-history clock at migration because previous local receipt times cannot be established safely.
+
+Maintenance runs once a minute and deletes at most 128 observations, 128 history operations and 128 empty visit records per cycle. Backlogs drain over multiple cycles; these periods are eligibility thresholds, not hard deletion deadlines. Erasure removes encrypted crops, original vectors and all derived representations transactionally, and advances the gallery revision so in-flight inference, staged reconstruction and old page cursors cannot commit against erased data. Human names and historical camera authorization remain. An undo whose photos have expired is rejected rather than recreating them. Removing references can reduce future recognition coverage; enroll new authorized photos when needed.
+
+Minimal opaque observation identifiers and lifecycle tombstones remain to reject delayed replay; they contain no photos or vectors and are not pruned automatically. They accumulate over installation lifetime and are outside the 10,000 live-observation budget. This is a deliberate integrity tradeoff, not total erasure of every identifier. Backup snapshots are unaffected: a snapshot taken before deletion may restore older data, so protect and expire backups separately. Disabling the policy stops future maintenance deletions but cannot undo past expiration. A full gallery still abstains safely if maintenance cannot keep up.
 
 ## Disable and rollback
 

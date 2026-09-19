@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import logging
 
 from typing import Any
 from pathlib import Path
@@ -46,13 +48,17 @@ class VisionExtension(BaseExtension):
         configured_data_dir = getattr(getattr(config_store, "paths", None), "data_dir", None)
         get_default_model_install_manager(data_dir=configured_data_dir)
 
-        def identity_store():
+        def identity_store(*, create: bool = True):
             from .identity.store import IdentityStore
 
             if configured_data_dir is None:
                 raise RuntimeError("identity gallery requires an explicit data directory")
             with self._identity_lock:
                 if self._identity_store is None:
+                    if not create:
+                        scope_directory = hashlib.sha256(b"installation").hexdigest()[:32]
+                        if not (Path(configured_data_dir) / "identities" / scope_directory / "gallery.sqlite3").is_file():
+                            return None
                     self._identity_store = IdentityStore(
                         Path(configured_data_dir) / "identities",
                         scope="installation",
@@ -64,24 +70,30 @@ class VisionExtension(BaseExtension):
         app.include_router(create_identity_router(identity_store))
         services.register("vision.identity.store", identity_store)
 
+        def maintain_existing_gallery():
+            # Reopen existing galleries after restart without creating one for unused installations.
+            store = identity_store(create=False)
+            if store is not None:
+                store.maintain()
+
         async def maintain_identities():
             while True:
                 await asyncio.sleep(60)
-                store = self._identity_store
-                if store is not None:
-                    worker = asyncio.create_task(asyncio.to_thread(store.cluster_pending))
-                    try:
-                        await asyncio.shield(worker)
-                    except asyncio.CancelledError:
-                        # A thread continua mesmo após cancelar a coroutine: aguardar antes de fechar SQLite.
-                        with contextlib.suppress(Exception):
-                            await worker
-                        raise
-                    except Exception:
-                        store.maintenance_error = "clustering_unavailable"
+                worker = asyncio.create_task(asyncio.to_thread(maintain_existing_gallery))
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    # A thread continua mesmo após cancelar a coroutine: aguardar antes de fechar SQLite.
+                    with contextlib.suppress(Exception):
+                        await worker
+                    raise
+                except Exception:
+                    if self._identity_store is not None:
+                        self._identity_store.maintenance_error = "identity_maintenance_unavailable"
+                    logging.getLogger(__name__).warning("Identity gallery maintenance unavailable")
 
         self._identity_maintenance_task = asyncio.create_task(
-            maintain_identities(), name="vision-identity-clustering"
+            maintain_identities(), name="vision-identity-maintenance"
         )
         register_extension_shutdown_callback(app, self.shutdown)
 

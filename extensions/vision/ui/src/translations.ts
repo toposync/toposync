@@ -1,5 +1,15 @@
 import type { TranslationBundle } from "@toposync/plugin-api";
 const messages: Record<string, [string, string]> = {
+  retention: ["Photo retention", "Retenção de fotos"],
+  retentionActive: ["Automatic expiration is active.", "A expiração automática está ativa."],
+  retentionInactive: ["Automatic expiration is off.", "A expiração automática está desativada."],
+  retentionPeriods: ["Keep other photos for 7 days, reference photos for 365 days, and change history for 90 days. Visit records expire after 90 days without new evidence, once their photos expire.", "Guardar outras fotos por 7 dias, fotos de referência por 365 dias e histórico de alterações por 90 dias. Registros de visitas expiram após 90 dias sem novas evidências, quando suas fotos já expiraram."],
+  retentionEffect: ["Expiration removes photos and their recognition data in small batches. Names remain. Expired references may require new photos. Backups are separate; minimal duplicate-prevention records remain. Turning this off does not restore deleted data.", "A expiração remove fotos e seus dados de reconhecimento em pequenos lotes. Os nomes permanecem. Referências expiradas podem exigir novas fotos. Backups são separados; registros mínimos contra duplicação permanecem. Desativar não recupera dados excluídos."],
+  retentionImpact: ["Eligible now: {{photos}} other photos, {{references}} references, {{history}} changes and {{visits}} visits without photos.", "Elegíveis agora: {{photos}} outras fotos, {{references}} referências, {{history}} alterações e {{visits}} visitas sem fotos."],
+  retentionConsent: ["I understand that expired photos and history will be permanently deleted.", "Entendo que fotos e histórico expirados serão excluídos permanentemente."],
+  retentionEnable: ["Enable automatic expiration", "Ativar expiração automática"],
+  retentionDisable: ["Turn off automatic expiration", "Desativar expiração automática"],
+  retentionFailure: ["Gallery maintenance failed. Review server diagnostics before relying on expiration.", "A manutenção da galeria falhou. Revise o diagnóstico do servidor antes de depender da expiração."],
   title: ["People and pets", "Pessoas e pets"], description: ["Identify visits and care for the photos used for recognition.", "Identifique visitas e cuide das fotos usadas no reconhecimento."],
   person: ["Person", "Pessoa"], cat: ["Cat", "Gato"], dog: ["Dog", "Cão"], all: ["All", "Todos"], review: ["To review", "Para revisar"], search: ["Search by name", "Buscar por nome"],
   readOnly: ["You can view these photos. Editing requires permission for all associated sources.", "Você pode consultar estas fotos. A edição exige permissão para todas as fontes associadas."],

@@ -36,6 +36,7 @@ from ..runtime import BoundedChannel, DropPolicy
 from ..shared_runtime import PipelineBundleRuntime, SharedRuntimeBuildError
 from .plan import build_distributed_graphs, required_transport_capabilities
 from .transport import HttpProcessingTransport
+from .stream_contract import PRIVATE_INBOX_MAX_ITEMS, ProcessingContinuityError
 
 
 logger = logging.getLogger("toposync.pipelines.orchestrator")
@@ -63,6 +64,7 @@ class _ServerHandle:
     pump_task: asyncio.Task[None]
     config_payload: dict[str, Any] = field(default_factory=dict)
     last_event_id: int = 0
+    continuity_error: str | None = None
     started_at: float = field(default_factory=time.time)
     observability_applied_records: int = 0
     observability_skipped_records: int = 0
@@ -188,6 +190,7 @@ class PipelinesOrchestrator:
                 "url": handle.server.url,
                 "started_at": handle.started_at,
                 "last_event_id": handle.last_event_id,
+                "continuity_error": handle.continuity_error,
                 "observability_applied_records": handle.observability_applied_records,
                 "observability_skipped_records": handle.observability_skipped_records,
             }
@@ -316,8 +319,9 @@ class PipelinesOrchestrator:
                     [p.name for p in group],
                 )
                 continue
+            private_stream = "private_artifacts_v1" in required_transport_capabilities(group, self._registry)
             for p in group:
-                await self._start_origin_pipeline_for_remote(p)
+                await self._start_origin_pipeline_for_remote(p, private_stream=private_stream)
             await self._start_remote_server(server, group, settings_payload=settings_payload)
 
     async def _sync_remote_settings(
@@ -329,7 +333,7 @@ class PipelinesOrchestrator:
         ok = True
         for sid, group in remote_groups.items():
             handle = self._servers.get(sid)
-            if handle is None:
+            if handle is None or handle.continuity_error:
                 ok = False
                 logger.warning("processing server %s is not connected; settings sync deferred", sid)
                 continue
@@ -352,7 +356,7 @@ class PipelinesOrchestrator:
     ) -> None:
         for sid, group in remote_groups.items():
             handle = self._servers.get(sid)
-            if handle is None:
+            if handle is None or handle.continuity_error:
                 continue
             expected_names = {p.name for p in group}
             try:
@@ -521,16 +525,17 @@ class PipelinesOrchestrator:
             pipeline=pipeline, runtime=runtime, started_at=time.time(), mode="local"
         )
 
-    async def _start_origin_pipeline_for_remote(self, pipeline: Pipeline) -> None:
+    async def _start_origin_pipeline_for_remote(self, pipeline: Pipeline, *, private_stream: bool | None = None) -> None:
         graphs = build_distributed_graphs(pipeline, self._registry)
         if graphs.origin_graph is None:
             logger.warning("pipeline has no origin graph name=%s (skipping)", pipeline.name)
             return
 
+        private = private_stream if private_stream is not None else "private_artifacts_v1" in required_transport_capabilities([pipeline], self._registry)
         inbox = BoundedChannel[dict[str, Any]](
             name=f"origin_inbox[{pipeline.name}]",
-            maxsize=64,
-            drop_policy=DropPolicy.DROP_OLDEST,
+            maxsize=PRIVATE_INBOX_MAX_ITEMS if private else 64,
+            drop_policy=DropPolicy.BLOCK if private else DropPolicy.DROP_OLDEST,
         )
         self._inboxes[pipeline.name] = inbox
         origin_pipeline = Pipeline(name=pipeline.name, graph=graphs.origin_graph)
@@ -583,6 +588,7 @@ class PipelinesOrchestrator:
                         await transport.push_config(config_payload)
                         async for event in transport.stream_events(last_event_id=last_event_id):
                             backoff_s = 0.5
+                            private = "private_artifacts_v1" in config_payload.get("required_capabilities", [])
                             try:
                                 eid = int(event.get("event_id") or 0)
                             except Exception:
@@ -595,6 +601,8 @@ class PipelinesOrchestrator:
                                     await transport.ack(last_event_id)
                                 continue
                             if event_type and event_type != PROJECTED_PACKET_EVENT_TYPE:
+                                if private:
+                                    raise ProcessingContinuityError("unsupported_private_event_type")
                                 if eid:
                                     last_event_id = max(last_event_id, eid)
                                     await transport.ack(last_event_id)
@@ -602,16 +610,29 @@ class PipelinesOrchestrator:
                             name = str(event.get("pipeline_name") or "").strip()
                             inbox = self._inboxes.get(name)
                             if inbox is None:
+                                if private:
+                                    raise ProcessingContinuityError("private_origin_inbox_missing")
                                 if eid:
                                     last_event_id = max(last_event_id, eid)
                                     await transport.ack(last_event_id)
                                 continue
-                            put_result = await inbox.put(event, timeout_s=0.05, cancel_event=None)
+                            put_result = await inbox.put(
+                                event, timeout_s=None if private else 0.05, cancel_event=self._stop,
+                            )
+                            if private and not put_result.accepted:
+                                raise ProcessingContinuityError("private_origin_inbox_rejected")
                             if eid and put_result.accepted:
                                 last_event_id = max(last_event_id, eid)
                                 await transport.ack(last_event_id)
                     except asyncio.CancelledError:
                         raise
+                    except ProcessingContinuityError as exc:
+                        handle = self._servers.get(server.id)
+                        if handle is not None:
+                            handle.continuity_error = str(exc)
+                        self._last_error = f"Processing server {server.id}: {exc}; delivery suspended"
+                        logger.error("processing continuity lost server=%s reason=%s", server.id, exc)
+                        return
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("processing pump failed server=%s: %s", server.id, exc)
                         await asyncio.sleep(backoff_s)

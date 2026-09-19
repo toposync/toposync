@@ -28,6 +28,7 @@ from .processing.panorama_mapping import _rotation_basis, ray_to_image_pixel
 
 MAXIMUM_NAVIGATION_COMMANDS = 64
 MAXIMUM_FINE_CORRECTIONS = MAXIMUM_RETURN_CORRECTIONS
+MAXIMUM_LIVE_FINE_CORRECTIONS = 6
 MAXIMUM_CENTER_ERROR_PIXELS = 3.0
 MAXIMUM_NAVIGATION_PULSE_SECONDS = 0.6
 FINE_CONTINUOUS_SPEEDS = (0.025, 0.05, DEFAULT_CONTINUOUS_PULSE_SPEED)
@@ -46,6 +47,54 @@ def _visual_measurement(value: dict) -> tuple[float, float, float, float] | None
     except (KeyError, TypeError, ValueError):
         return None
     return measurements if np.isfinite(measurements).all() else None
+
+
+def localized_axis_measurement(
+    ray: Any, lens: dict[str, Any], located: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Measure optical-axis error from a qualified fresh-frame localization.
+
+    This fallback remains in image space: the target ray is projected with the
+    panorama model and compared with the calibrated optical centre.  It never
+    treats a reconstructed angle as a motor unit.  Held-out, distributed image
+    correspondences must independently qualify the frame before it can confirm
+    arrival.
+    """
+    try:
+        analysis_width = float(located["analysis_width"])
+        validation_p95 = float(located["validation_p95_pixels"])
+        validation_matches = int(located["validation_matches"])
+        inlier_fraction = float(located["inlier_fraction"])
+        width = float(lens["width"])
+        centre = np.asarray([lens["cx"], lens["cy"]], dtype=np.float64)
+        pixel = ray_to_image_pixel(ray, lens, rotation_matrix=located["rotation_matrix"])
+    except (KeyError, TypeError, ValueError, np.linalg.LinAlgError):
+        return None
+    if (
+        pixel is None
+        or not np.isfinite(
+            [analysis_width, validation_p95, inlier_fraction, width, *centre, *pixel]
+        ).all()
+        or analysis_width <= 0
+        or width <= 0
+        or not 0.55 <= inlier_fraction <= 1
+        or validation_matches < 12
+        or not 0 <= validation_p95 <= MAXIMUM_CENTER_ERROR_PIXELS
+    ):
+        return None
+    scale = analysis_width / width
+    error = (np.asarray(pixel, dtype=np.float64) - centre) * scale
+    return {
+        "method": "localized_optical_axis",
+        "evidence": "held_out_feature_localization",
+        "error_pixels": error.tolist(),
+        "center_error_pixels": float(np.linalg.norm(error)),
+        "analysis_width": analysis_width,
+        "validation_matches": validation_matches,
+        "validation_p95_pixels": validation_p95,
+        "inlier_fraction": inlier_fraction,
+        "reference_id": located.get("reference_id"),
+    }
 
 
 def _persisted_return_responses(
@@ -478,6 +527,8 @@ class VisualNavigator:
                 if final
                 else None
             )
+            if final and measured is None:
+                measured = localized_axis_measurement(target, self.localizer.lens, located)
             if final:
                 observations.append({
                     "commands": self.commands,
@@ -496,7 +547,7 @@ class VisualNavigator:
                 last_error = None
                 continue
             near = final and np.linalg.norm(error) < 0.04
-            if near and fine >= MAXIMUM_FINE_CORRECTIONS:
+            if near and fine >= MAXIMUM_LIVE_FINE_CORRECTIONS:
                 raise PanoramaCaptureError("visual_arrival_unconfirmed")
             if near and measured is not None:
                 # The image measurement corrects the pose prediction locally.

@@ -8,3 +8,5 @@
 - For frontend routes, links, API calls, event streams, WebSockets, and extension asset/file URLs, preserve Home Assistant ingress paths with Toposync base path helpers.
 - Keep the core generic. Domain-specific behavior belongs in extensions; avoid core hacks for extension-specific cases.
 - Prefer targeted verification: run the smallest relevant pytest, typecheck, build, docs build, or distribution smoke test for the files changed.
+
+- Panorama delivery: follow `docs/panorama/contrato-de-entrega.md` and keep `docs/panorama/checkpoint-entrega.md` current; reconstruction readiness does not certify coverage.

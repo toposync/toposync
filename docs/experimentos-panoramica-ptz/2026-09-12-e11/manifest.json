@@ -1,0 +1,36 @@
+{
+  "experiment": "E11",
+  "experiment_id": "E11",
+  "title": "Preservação de cobertura entre os ensaios 8, 9 e 10",
+  "status": "completed_mitigation_applied",
+  "hypothesis": "Métricas globais de área não bastam para promover uma panorâmica quando as regiões preservadas, adicionadas e perdidas não foram alinhadas no mesmo referencial visual.",
+  "input": {
+    "camera": "Garagem",
+    "runs": [8, 9, 10],
+    "physical_camera_access": false
+  },
+  "execution": {
+    "entrypoint": "coverage_promotion.py",
+    "command": "PYTHONPATH=extensions/cameras/src .venv/bin/python docs/experimentos-panoramica-ptz/2026-09-12-e11/coverage_promotion.py",
+    "network": false,
+    "camera_motion": false,
+    "writes": ["report.json"]
+  },
+  "acceptance": {
+    "positive": [
+      "A comparação diferencia área total, observações visualmente correspondentes e alinhamento espacial global.",
+      "O simulador conserva a panorâmica ativa quando não há mapa espacial alinhado que prove preservação bilateral."
+    ],
+    "negative_controls": [
+      "cobertura numérica menor",
+      "proveniência geométrica incompatível",
+      "evidência de cobertura ausente"
+    ]
+  },
+  "decision": "Promover automaticamente somente após comparação de máscaras de cobertura em referencial visual durável; até lá, guardar candidatas e preservar a ativa.",
+  "implementation": {
+    "status": "applied",
+    "guard": "coverage_alignment_unverified",
+    "validation": "220 passed in tests/test_camera_source_panorama_api.py; replay offline of runs 8, 9 and 10 preserved the active artifact in every unaligned comparison."
+  }
+}

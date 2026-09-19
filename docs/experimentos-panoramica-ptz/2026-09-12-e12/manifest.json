@@ -1,0 +1,50 @@
+{
+  "experiment": "E12",
+  "experiment_id": "E12",
+  "title": "Interrupções, perda de controle e retomada",
+  "status": "completed",
+  "hypothesis": "Cada falha de aquisição, comando, persistência ou cancelamento termina em estado persistido e finito, sem repetir intenção incerta ou movimentar a câmera para retornar sem pedido explícito.",
+  "execution": {
+    "kind": "backend_simulation_tests",
+    "network": false,
+    "camera_motion": false,
+    "commands": [
+      "PYTHONPATH=extensions/cameras/src .venv/bin/python -m pytest tests/test_camera_panorama_scan.py -q -k '<matriz E12 de scanner>'",
+      "PYTHONPATH=extensions/cameras/src .venv/bin/python -m pytest tests/test_camera_panorama_capture.py tests/test_camera_capture_service.py -q -k '<matriz E12 de captura>'",
+      "PYTHONPATH=extensions/cameras/src .venv/bin/python -m pytest tests/test_camera_source_panorama_api.py -q -k '<matriz E12 de serviço>'"
+    ]
+  },
+  "fault_matrix": [
+    {
+      "fault": "comando incerto ou perda de concessão",
+      "required_outcome": "Stop de limpeza, intenção durável e nenhuma repetição automática"
+    },
+    {
+      "fault": "vídeo congelado, atrasado ou indisponível",
+      "required_outcome": "tempo limitado, sem falsa estabilidade e sem movimento adicional"
+    },
+    {
+      "fault": "mudança de geração ou identidade óptica",
+      "required_outcome": "captura ou retomada bloqueada antes de novo movimento"
+    },
+    {
+      "fault": "cancelamento ou reinício",
+      "required_outcome": "estado interrompido persistido; retorno somente por ação explícita"
+    },
+    {
+      "fault": "falha de persistência ou armazenamento",
+      "required_outcome": "erro tipado; Stop e liberação ainda acontecem"
+    },
+    {
+      "fault": "alta resolução indisponível",
+      "required_outcome": "janela terminal e orçamento preservados; não se publica quadro substituto sem associação"
+    }
+  ],
+  "invariants": [
+    "Uma intenção incerta nunca é repetida automaticamente.",
+    "O orçamento não é renovado por reinício.",
+    "Fotografias válidas sobrevivem à interrupção.",
+    "Perda de controle bloqueia novos movimentos.",
+    "Cancelar não retorna a câmera escondidamente."
+  ]
+}

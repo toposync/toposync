@@ -1,0 +1,67 @@
+{
+  "camera": {
+    "control_source_id": "profile_1",
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "observed_source_id": "profile_2"
+  },
+  "data_handling": {
+    "persist_images": false,
+    "private_destination": "Token e âncora somente se o retorno não for visualmente exato.",
+    "public_report": "Somente sequência, tempos, dimensões, métricas e correspondência escalar."
+  },
+  "experiment_id": "E5R",
+  "forbidden": [
+    "PTZ AbsoluteMove",
+    "PTZ RelativeMove",
+    "tilt",
+    "zoom",
+    "fine correction",
+    "a second GotoPreset",
+    "panorama capture or continuation"
+  ],
+  "hypothesis": "A lease contínua de profile_2 do CameraCaptureService permanece produzindo sequência distinta, sem grande lacuna, antes, durante e depois de um pan limitado que retorna visualmente ao início.",
+  "outcomes": {
+    "fail_safe": "Qualquer dúvida preserva o retorno e encerra sem nova ação automática.",
+    "pass": "Substream contínuo através do pan e retorno visual exato com limpeza do preset."
+  },
+  "preconditions": {
+    "baseline": "A fonte principal precisa estar quieta e gerar uma âncora visual antes de qualquer ato PTZ.",
+    "return": "E2R confirmou os dois streams em duas vistas horizontais e retornou em 0,095 px com um único preset. Nenhuma correção fina é permitida.",
+    "stream": "A observação é a mesma CameraCaptureService e o mesmo CameraHub usados pela panorâmica. Um snapshot decoder-fresh de profile_2 deve aquecer e confirmar o stream antes de criar o preset."
+  },
+  "result": {
+    "decision": "O profile_2 produziu sequência contínua pelo CameraCaptureService durante esse percurso limitado de pan e retorno. O resultado qualifica esta câmera, fonte e condição de rede; não transforma redução offline em prova para outras câmeras, lentes ou eixos.",
+    "private_destination_absent_after_success": true,
+    "substream": {
+      "distinct_frames": 86,
+      "frames_before_move": 8,
+      "frames_during_move_and_settle": 35,
+      "frames_during_return": 43,
+      "maximum_observed_gap_seconds": 0.2579,
+      "released_while_observing": false
+    },
+    "temporary_preset_removed": true,
+    "visual_return": {
+      "displacement_analysis_pixels": 0.2264,
+      "inliers": 448,
+      "overlap": 0.9965
+    }
+  },
+  "single_trial": {
+    "acceptance": "Pelo menos um frame antes do movimento, dois entre despacho e fim da estabilização, um durante o retorno, nenhuma liberação da lease e lacuna máxima <= 1 s; retorno óptico >= 0,85 de sobreposição e <= 3 px.",
+    "failure": "Preservar preset e destino privado 0600; não usar correção, Stop, segundo retorno ou movimento adicional.",
+    "maximum_elapsed_seconds": 120,
+    "maximum_motor_actions": 2,
+    "observer": "POST capture-observation no Toposync por 8 s, com sequência, tempos e métricas agregadas; sem bytes de imagem.",
+    "outbound": {
+      "axis": "pan",
+      "direction": 1,
+      "duration_seconds": 0.35,
+      "velocity": 0.1
+    },
+    "recovery": "Um único GotoPreset após a segunda janela quieta."
+  },
+  "status": "completed_continuous_native_substream_return_verified",
+  "title": "Substream nativo contínuo durante um pan limitado"
+}

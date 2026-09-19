@@ -1,0 +1,25 @@
+{
+  "acceptance": {
+    "failure": "If the frame is not quiet or does not visually match the anchor with overlap at least 0.85 and displacement at most 3 px, retain the preset and its private recovery destination; issue no second recall.",
+    "success": "One GotoPreset returns to the E7R6 visual anchor within 3 px and the temporary preset plus private destination are removed."
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E7R6R",
+  "limits": {
+    "goto_preset_maximum": 1,
+    "ptz_commands_maximum": 1
+  },
+  "purpose": "Restore the deliberate E7R6 outbound test by an isolated, visually verified preset recall.",
+  "observed": {
+    "after_visual_displacement_pixels": 15.218182945251465,
+    "after_visual_overlap": 0.9808195891203704,
+    "before_visual_displacement_pixels": 14.977348136901854,
+    "ptz_commands_issued": 1
+  },
+  "outcome": "The single preset recall reached a quiet view but did not reduce the visual residual below the strict 3 px gate. The preset and private recovery destination remain preserved; no retry was sent.",
+  "status": "completed_return_unverified"
+}

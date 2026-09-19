@@ -1,0 +1,22 @@
+{
+  "experiment_id": "E6",
+  "attempt": "one_pulse_horizon_12_seconds",
+  "status": "completed_with_visual_return",
+  "camera": {"id": "camera_3_177980", "label": "Garagem", "source_id": "profile_1"},
+  "ptz_commands_issued": 0,
+  "preconditions": [
+    "A five-frame visual quiet baseline must be observed before creating a temporary preset.",
+    "The active configured source must deliver decoder-fresh frames through Toposync.",
+    "No PTZ status readback is used as exact-return proof."
+  ],
+  "budget": {
+    "continuous_pan_velocity": 0.12,
+    "continuous_duration_seconds": 0.35,
+    "maximum_motor_commands": 3,
+    "settle_timeout_seconds_per_stage": 12,
+    "no_automatic_retry": true
+  },
+  "recovery": "Create one named temporary preset before movement. Issue Stop once, GoToPreset once, and preserve the preset if a quiet visual return differs from the baseline by more than 15 analysis pixels.",
+  "outcome": "The five-frame quiet baseline and return windows passed. Return correspondence was verified with 591 inliers, 0.9969 overlap, and 0.0806 analysis-pixel displacement; the temporary preset was removed. The intentionally tiny pulse displaced only 0.189 analysis pixels and does not characterize local actuator response.",
+  "forbidden": ["PTZ AbsoluteMove", "PTZ RelativeMove", "zoom commands", "configuration writes", "image persistence"]
+}

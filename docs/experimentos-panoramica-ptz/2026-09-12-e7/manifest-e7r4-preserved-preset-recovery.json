@@ -1,0 +1,50 @@
+{
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "data_handling": {
+    "persist_images": false,
+    "private_destination": "Token opaco em arquivo 0600, removido apenas depois de retorno visual exato.",
+    "public_report": "Somente métricas escalares e estado do preset."
+  },
+  "experiment_id": "E7R5",
+  "forbidden": [
+    "PTZ ContinuousMove",
+    "PTZ AbsoluteMove",
+    "PTZ RelativeMove",
+    "zoom",
+    "fine correction",
+    "a second GotoPreset",
+    "panorama capture or continuation"
+  ],
+  "hypothesis": "O preset recém-criado antes do pulso de E7R4 pode recuperar a âncora visual compacta de E7R4 com uma única chamada GotoPreset, sem usar a direção de correção que acabou de piorar a referência.",
+  "outcomes": {
+    "fail_safe": "Retorno não confirmado e preset preservado, sem outra ação automática.",
+    "pass": "Retorno visual exato e remoção do preset temporário e destino privado."
+  },
+  "preconditions": {
+    "destination": "Antes de qualquer comando, uma leitura dos presets deve encontrar exatamente um nome iniciado por 'TopoSync E7R4 '. O token opaco será escrito somente em arquivo 0600.",
+    "reference": "A âncora compacta que E7R4 gerou antes de movimentar a câmera.",
+    "state": "E7R4 terminou quieto, mas a 64,567 px da referência após rejeitar seu único pulso fino por regressão visual."
+  },
+  "result": {
+    "before_return_displacement_analysis_pixels": 60.0667,
+    "before_return_overlap": 0.9349,
+    "decision": "Uma única chamada GotoPreset recuperou visualmente a referência nova de E7R4. Ela comprova esse percurso de pan positivo e não transforma o pulso fino regressivo em correção qualificada.",
+    "private_destination_removed": true,
+    "temporary_preset_removed": true,
+    "visual_return_displacement_analysis_pixels": 0.2436,
+    "visual_return_overlap": 0.9966
+  },
+  "single_trial": {
+    "acceptance": "janela quieta; correspondência distribuída; sobreposição >= 0,85; deslocamento <= 3 px de análise.",
+    "command": "Um único GotoPreset para o token localizado.",
+    "failure": "Preservar preset e destino privado; não emitir Stop, correção fina, segunda chamada ou nova captura.",
+    "maximum_elapsed_seconds": 30,
+    "maximum_motor_actions": 1
+  },
+  "status": "completed_visual_return_verified",
+  "title": "Recuperação única do preset preservado após a regressão do corretor E7R4"
+}

@@ -1,0 +1,15 @@
+{
+  "acceptance": {
+    "offline": "Quantify observed pan/tilt bands and graph continuity.",
+    "physical": "Deferred: two bands with three views and one vertical connection require a working verified video acquisition path."
+  },
+  "experiment_id": "E9",
+  "outcome": "E9P3 used visual-arrival gates and proved baseline-to-pan, baseline-to-tilt and tilt-to-pan in one execution, with both AbsoluteMove returns optically within 3 px. E9P1/P2 remain retained as evidence that fixed post-command quiet windows are insufficient for delayed tilt video.",
+  "scope": {
+    "camera_network_access": true,
+    "input": "E9P1, E9P2 and E9P3 scalar reports from Garagem/profile_1",
+    "ptz_commands": 5
+  },
+  "status": "completed_physical_two_band_coverage_verified",
+  "title": "Cobertura bidimensional: verificacao offline e gate fisico"
+}

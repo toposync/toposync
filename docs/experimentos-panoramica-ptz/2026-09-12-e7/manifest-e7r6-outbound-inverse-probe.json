@@ -1,0 +1,39 @@
+{
+  "acceptance": {
+    "failure": "Any unverified, unstable, low-overlap, out-of-envelope or worsening result terminates the correction. The temporary preset is preserved with its token only in a private 0600 destination unless a visual return is confirmed.",
+    "success": "After one pan-positive outbound pulse and a direct, same-epoch inverse probe chosen by the production controller, a fresh quiet frame matches the baseline with overlap at least 0.85 and displacement at most 3 px."
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E7R6",
+  "hypothesis": "The first fine return pulse should use the inverse of a verified same-epoch outbound visual displacement as a direction probe, then still require a fresh visual confirmation before it is learned or followed by another command.",
+  "limits": {
+    "fine_corrections_maximum": 4,
+    "initial_return_error_maximum_pixels": 35,
+    "outbound": {
+      "axis": "pan",
+      "direction": 1,
+      "duration_seconds": 0.35,
+      "speed": 0.1
+    },
+    "physical_commands_maximum": 5
+  },
+  "recovery": {
+    "path": "direct_fine",
+    "temporary_preset": "created before outbound; removed only after a strict visual return; otherwise retained privately"
+  },
+  "observed": {
+    "fine_probe_direction": "pan_negative",
+    "canonical_controller_initial_displacement_pixels": 26.174222564697263,
+    "canonical_controller_after_first_probe_displacement_pixels": 22.55453758239746,
+    "canonical_controller_final_displacement_pixels": 15.028341484069824,
+    "legacy_adapter_after_first_probe_displacement_pixels": 3.8303681373596192,
+    "legacy_adapter_measurement_status": "not_controller_comparable_after_E15",
+    "physical_commands_issued": 3
+  },
+  "outcome": "The canonical controller measurement improved from 26.174 to 22.555 px after the first inverse probe, but the subsequent response was inconsistent and the controller rejected the return. The separate 3.830 px adapter observation used a legacy color pre-resize and became non-comparable after E15. The preset was preserved for isolated recovery.",
+  "status": "completed_return_unverified"
+}

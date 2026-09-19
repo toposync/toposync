@@ -1,0 +1,49 @@
+{
+  "attempt": "post_return_ptz_status_observation",
+  "experiment_id": "E6",
+  "interpretation": "A readable PTZ position is auxiliary until repeatable correspondence to the camera image is independently demonstrated. This run did not establish that correspondence.",
+  "ptz_commands_issued": 0,
+  "reported_position_available": true,
+  "samples": [
+    {
+      "elapsed_ms": 21.1,
+      "ok": true,
+      "status": {
+        "error": "0",
+        "move_status": "UNKNOWN",
+        "pan": -0.301587,
+        "pan_tilt_space": null,
+        "tilt": -0.4375,
+        "zoom": null,
+        "zoom_space": null
+      }
+    },
+    {
+      "elapsed_ms": 16.8,
+      "ok": true,
+      "status": {
+        "error": "0",
+        "move_status": "UNKNOWN",
+        "pan": -0.301587,
+        "pan_tilt_space": null,
+        "tilt": -0.4375,
+        "zoom": null,
+        "zoom_space": null
+      }
+    },
+    {
+      "elapsed_ms": 9.6,
+      "ok": true,
+      "status": {
+        "error": "0",
+        "move_status": "UNKNOWN",
+        "pan": -0.301587,
+        "pan_tilt_space": null,
+        "tilt": -0.4375,
+        "zoom": null,
+        "zoom_space": null
+      }
+    }
+  ],
+  "usable_as_exact_return_evidence": false
+}

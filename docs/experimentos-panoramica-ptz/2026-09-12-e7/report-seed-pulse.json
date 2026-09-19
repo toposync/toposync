@@ -1,0 +1,526 @@
+{
+  "attempt": "positive_pan_observable_seed",
+  "baseline_to_post_stop": {
+    "accepted_as_visual_return": true,
+    "code": null,
+    "displacement": 0.06483822017908096,
+    "inliers": 833,
+    "model_candidates": [
+      {
+        "hull_fraction": 0.8245578849305929,
+        "inliers": 833,
+        "occupied_cells": 12
+      }
+    ],
+    "overlap": 0.9970744719328704,
+    "shift_x": -0.048583984375,
+    "shift_y": -0.027099609375,
+    "verified": true
+  },
+  "baseline_window": {
+    "consecutive_matches": [
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.02501847259700298,
+        "inliers": 1507,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8960520017656146,
+            "inliers": 1507,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970196759259259,
+        "shift_x": -0.0071258544921875,
+        "shift_y": 0.006134033203125,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.011643094010651112,
+        "inliers": 1521,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8913976564281426,
+            "inliers": 1521,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9971015986689815,
+        "shift_x": -6.103515625e-05,
+        "shift_y": 0.0015869140625,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.06753229945898055,
+        "inliers": 1011,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8857837334360935,
+            "inliers": 1011,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9969578269675926,
+        "shift_x": 0.007537841796875,
+        "shift_y": 0.01644134521484375,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.016456111147999764,
+        "inliers": 1616,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8935121404960146,
+            "inliers": 1616,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970646460262346,
+        "shift_x": -0.0087890625,
+        "shift_y": -0.005615234375,
+        "verified": true
+      }
+    ],
+    "elapsed_ms": 3297.1,
+    "frames": [
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "15",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 1898.4,
+        "ok": true,
+        "sequence": 15
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "32",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 2156.5,
+        "ok": true,
+        "sequence": 32
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "44",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 2579.5,
+        "ok": true,
+        "sequence": 44
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "51",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 2904.4,
+        "ok": true,
+        "sequence": 51
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "59",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 3231.9,
+        "ok": true,
+        "sequence": 59
+      }
+    ],
+    "quiet": true
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E7",
+  "images_persisted": false,
+  "limits": {
+    "continuous_duration_seconds": 1.0,
+    "continuous_pan_velocity": 0.5,
+    "maximum_motor_commands": 3,
+    "quiet_pair_limit_analysis_pixels": 0.15,
+    "quiet_window_frame_count": 5,
+    "return_limit_analysis_pixels": 15.0,
+    "settle_timeout_seconds": 12.0
+  },
+  "move": {
+    "elapsed_ms": 257.5,
+    "ok": true,
+    "status_code": 200
+  },
+  "outcome": "completed_with_visual_return",
+  "post_return_window": {
+    "consecutive_matches": [
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.018475631251931187,
+        "inliers": 1503,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8952181065924363,
+            "inliers": 1503,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970734471450617,
+        "shift_x": -0.0010986328125,
+        "shift_y": -0.00262451171875,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.020648617297410965,
+        "inliers": 1414,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8831305450245919,
+            "inliers": 1414,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.997095329378858,
+        "shift_x": -0.00799560546875,
+        "shift_y": -0.009674072265625,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.009713664278388021,
+        "inliers": 1423,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8815852458615725,
+            "inliers": 1423,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970959924768519,
+        "shift_x": 0.00286865234375,
+        "shift_y": -0.002288818359375,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.04374115914106368,
+        "inliers": 1345,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8919068308173874,
+            "inliers": 1345,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970871310763889,
+        "shift_x": 0.0201416015625,
+        "shift_y": -0.000213623046875,
+        "verified": true
+      }
+    ],
+    "elapsed_ms": 1425.8,
+    "frames": [
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "113",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 128.9,
+        "ok": true,
+        "sequence": 113
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "118",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 388.2,
+        "ok": true,
+        "sequence": 118
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "126",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 715.8,
+        "ok": true,
+        "sequence": 126
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "134",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 1036.1,
+        "ok": true,
+        "sequence": 134
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "142",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 1364.3,
+        "ok": true,
+        "sequence": 142
+      }
+    ],
+    "quiet": true
+  },
+  "post_stop_window": {
+    "consecutive_matches": [
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.012304661981761455,
+        "inliers": 1640,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8958435550024295,
+            "inliers": 1640,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970875530478395,
+        "shift_x": -0.00115966796875,
+        "shift_y": -0.008148193359375,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.012959938310086726,
+        "inliers": 1629,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8964906742759218,
+            "inliers": 1629,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970795958719135,
+        "shift_x": -0.005859375,
+        "shift_y": -0.002105712890625,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.038283631950616834,
+        "inliers": 1352,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8849857031947291,
+            "inliers": 1352,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970772448881173,
+        "shift_x": -0.022918701171875,
+        "shift_y": -0.00769805908203125,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.03347557857632637,
+        "inliers": 957,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8681255336998484,
+            "inliers": 957,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.997104793595679,
+        "shift_x": 0.00909423828125,
+        "shift_y": -0.0078125,
+        "verified": true
+      }
+    ],
+    "elapsed_ms": 1519.7,
+    "frames": [
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "72",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 136.5,
+        "ok": true,
+        "sequence": 72
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "79",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 398.5,
+        "ok": true,
+        "sequence": 79
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "86",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 730.9,
+        "ok": true,
+        "sequence": 86
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "96",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 1070.4,
+        "ok": true,
+        "sequence": 96
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "105",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 1456.6,
+        "ok": true,
+        "sequence": 105
+      }
+    ],
+    "quiet": true
+  },
+  "ptz_commands_issued": 3,
+  "return_command": {
+    "elapsed_ms": 19.3,
+    "ok": true,
+    "status_code": 200
+  },
+  "stop": {
+    "elapsed_ms": 24.7,
+    "ok": true,
+    "status_code": 200
+  },
+  "temporary_preset": {
+    "create_response": {
+      "elapsed_ms": 31.2,
+      "ok": true,
+      "status_code": 200
+    },
+    "created": true,
+    "preserved_for_manual_recovery": false,
+    "remove_response": {
+      "body": {
+        "ok": true
+      },
+      "elapsed_ms": 26.3,
+      "ok": true,
+      "status_code": 200
+    },
+    "removed": true
+  },
+  "visual_return": {
+    "accepted_as_visual_return": true,
+    "code": null,
+    "displacement": 0.0776062935590744,
+    "inliers": 808,
+    "model_candidates": [
+      {
+        "hull_fraction": 0.873464373129566,
+        "inliers": 808,
+        "occupied_cells": 12
+      }
+    ],
+    "overlap": 0.9970288990162037,
+    "shift_x": -0.058380126953125,
+    "shift_y": -0.039398193359375,
+    "verified": true
+  }
+}

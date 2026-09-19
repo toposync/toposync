@@ -1,0 +1,67 @@
+{
+  "experiment_id": "E7R2",
+  "title": "Qualificação direta do corretor visual em deslocamento observável",
+  "status": "completed_outside_fine_envelope",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "hypothesis": "Depois de um deslocamento visualmente observado na velocidade que o corretor usa, correct_reference pode recuperar a referência atual em malha fechada sem usar uma coordenada PTZ ou repetir um resultado incerto.",
+  "basis": {
+    "previous_trial": "E7R used 0.1 speed for 0.08 seconds. It moved 2.392 px and returned to 0.607 px by preset, so fine correction was correctly not entered.",
+    "changed_variable": "Only outbound duration changes to 1.0 second. The velocity remains 0.1, the maximum allowed by the production continuous correction policy.",
+    "scope_limit": "This qualifies direct visual correction from a known observed displacement. It does not yet qualify recovery after a large residual created by a preset recall."
+  },
+  "single_trial": {
+    "outbound": {
+      "axis": "pan",
+      "direction": 1,
+      "velocity": 0.1,
+      "duration_seconds": 1.0
+    },
+    "recovery": {
+      "method": "correct_reference from the Toposync production module, with no GotoPreset before correction.",
+      "entry_envelope_analysis_pixels": {
+        "minimum_exclusive": 3.0,
+        "maximum_inclusive": 35.0
+      },
+      "maximum_fine_pulses": 4,
+      "acceptance": "quiet terminal frame, verified distributed correspondence, overlap >= 0.85 and displacement <= 3 px.",
+      "failure": "Any unobserved, divergent, inconsistent, low-overlap or budget-exhausted result preserves the new preset and stops without retry."
+    },
+    "maximum_motor_actions": 5,
+    "contingency_motor_actions": 2,
+    "maximum_elapsed_seconds": 120
+  },
+  "forbidden": [
+    "GotoPreset before direct correction",
+    "recall or deletion of presets preserved by E7",
+    "PTZ AbsoluteMove",
+    "PTZ RelativeMove",
+    "zoom",
+    "panorama capture or continuation",
+    "automatic retry after a rejected correction"
+  ],
+  "data_handling": {
+    "persist_images": false,
+    "persist_only": [
+      "sanitized frame evidence",
+      "visual correspondence summaries",
+      "correction command ledger without rasters",
+      "temporary preset state",
+      "visual-anchor descriptor only when the recovery is unconfirmed"
+    ]
+  },
+  "outcomes": {
+    "pass": "A direct visual correction reaches <= 3 px and removes the temporary preset after confirmation.",
+    "inconclusive": "The outbound move remains at <= 3 px, so the corrector does not run.",
+    "fail_safe": "The new preset and descriptor are preserved and the camera is not moved again automatically."
+  },
+  "result": {
+    "outbound_displacement_analysis_pixels": 93.8409,
+    "outbound_overlap": 0.9009,
+    "fine_correction_commands": 0,
+    "decision": "The 1.0-second pulse at speed 0.1 exceeded the 35-pixel entry envelope. The fine corrector did not run; the temporary preset and descriptor were preserved for a separately designed recovery."
+  }
+}

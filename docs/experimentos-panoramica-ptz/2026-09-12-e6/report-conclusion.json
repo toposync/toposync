@@ -1,0 +1,47 @@
+{
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "command_acceptance": {
+    "continuous_move": true,
+    "goto_temporary_preset": true,
+    "stop": true
+  },
+  "decision": "Do not begin E7 or E9 physical movement batches until recovery uses a later, visually settled endpoint and its return accuracy is re-characterized without relying on PTZ readback.",
+  "evidence_limits": [
+    "Decoder-freshness is not a physical exposure timestamp.",
+    "The camera PTZ status did not provide a usable final pose after the attempt.",
+    "One bounded pulse does not characterize the actuator response curve.",
+    "The post-return status endpoint reports a nominal pan and tilt, but E6 has not established a repeatable correspondence from that readback to the optical view."
+  ],
+  "experiment_id": "E6",
+  "images_persisted": false,
+  "post_return_later_observation": {
+    "first_to_last_displacement_analysis_pixels": 0.09960272759199142,
+    "max_consecutive_displacement_analysis_pixels": 0.02394464984536171,
+    "result": "visually_quiet_without_physical_timestamp_claim"
+  },
+  "post_return_ptz_status": {
+    "reported_position_available": true,
+    "usable_as_exact_return_evidence": false
+  },
+  "post_return_early_observation": {
+    "result": "not_stable_after_five_frames",
+    "terminal_motion_pixels": 1.702897369332893
+  },
+  "ptz_commands_issued": 3,
+  "return_comparison": {
+    "accepted": false,
+    "analysis_pixel_limit": 15.0,
+    "displacement": 27.843539428710937,
+    "inliers": 502,
+    "overlap": 0.9678780261381172,
+    "verified": true
+  },
+  "temporary_preset": {
+    "preserved_for_manual_recovery": true,
+    "removed": false
+  }
+}

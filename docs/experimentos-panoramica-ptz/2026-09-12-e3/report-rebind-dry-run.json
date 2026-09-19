@@ -1,0 +1,32 @@
+{
+  "applied": false,
+  "mode": "dry_run",
+  "operation": "garagem_onvif_source_rebind",
+  "ptz_commands_issued": 0,
+  "rolled_back_after_failed_readback": false,
+  "source_identity_before": "8d60e2678ca973ca1cf53a396eaff933e537e3323ab46cc100aa9cb034d89464",
+  "source_identity_proposed": "9a0ccd1697408d9c8e2922cd22e950afbd17fe9e414766ffb6517165ab02f4d6",
+  "sources": {
+    "profile_1": {
+      "canonical_uri_received": true,
+      "dimensions": [
+        2880,
+        1620
+      ],
+      "fps": 25,
+      "profile_name": "mainStream",
+      "profile_token": "profile_1"
+    },
+    "profile_2": {
+      "canonical_uri_received": true,
+      "dimensions": [
+        640,
+        360
+      ],
+      "fps": 25,
+      "profile_name": "minorStream",
+      "profile_token": "profile_2"
+    }
+  },
+  "uris_or_credentials_persisted": false
+}

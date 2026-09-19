@@ -1,0 +1,35 @@
+{
+  "acceptance": {
+    "failure": "Any unavailable view, visual route edge without verified distributed correspondence, or anchor return above 3 px ends the run. Each anchor return is sent at most once; no preset, fine correction, retry or unplanned movement is allowed.",
+    "success": "Four quiet views demonstrate baseline-to-pan, baseline-to-tilt and tilt-to-pan visual connections, each with overlap at least 0.25 and displacement at least 2 px. Both absolute returns match the baseline within 3 px."
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E9P1",
+  "hypothesis": "A two-band, three-edge local coverage route can be observed from the main stream while AbsoluteMove returns to the anchor are visually verified, without creating a preset.",
+  "limits": {
+    "absolute_anchor_returns_maximum": 2,
+    "continuous_moves_maximum": 3,
+    "ptz_commands_maximum": 5,
+    "pulse": {
+      "speed": 0.1,
+      "timeout_seconds": 0.35
+    }
+  },
+  "result": {
+    "anchor_returns_issued": 2,
+    "connections": {
+      "baseline_to_pan_displacement_px": 26.612,
+      "baseline_to_tilt_displacement_px": 15.166,
+      "tilt_to_pan_displacement_px": 27.331
+    },
+    "final_anchor_return_displacement_px": 10.734,
+    "first_anchor_return_displacement_px": 0.363,
+    "outcome": "final_anchor_return_unverified",
+    "ptz_commands_issued": 5
+  },
+  "status": "completed_coverage_links_verified_final_return_unverified"
+}

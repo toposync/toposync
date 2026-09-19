@@ -1,0 +1,3118 @@
+{
+  "attempt": "one_tilt_pulse_with_sent_to_visual_timeline",
+  "baseline_to_final": {
+    "accepted_as_visual_return": true,
+    "code": null,
+    "displacement": 0.6886132478713989,
+    "inliers": 270,
+    "overlap": 0.9961528260030864,
+    "shift_x": -0.073760986328125,
+    "shift_y": 0.5694580078125,
+    "verified": true
+  },
+  "baseline_window": {
+    "consecutive_matches": [
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.016891779378056523,
+        "inliers": 1775,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.854506034451846,
+            "inliers": 1775,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970707344714507,
+        "shift_x": -0.00146484375,
+        "shift_y": 0.00246429443359375,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.009780668653547762,
+        "inliers": 1780,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8546221240954394,
+            "inliers": 1780,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970856843171296,
+        "shift_x": -0.00274658203125,
+        "shift_y": -0.0023040771484375,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.009512793645262717,
+        "inliers": 1743,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8480287679999938,
+            "inliers": 1743,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970888792438272,
+        "shift_x": -0.00311279296875,
+        "shift_y": 0.00048828125,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.018886323645710943,
+        "inliers": 1750,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.851431968512308,
+            "inliers": 1750,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970630787037037,
+        "shift_x": 0.00537109375,
+        "shift_y": -0.0042724609375,
+        "verified": true
+      }
+    ],
+    "elapsed_ms": 4237.5,
+    "frames": [
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "53",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 2886.6,
+        "ok": true,
+        "sequence": 53
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "61",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 3201.9,
+        "ok": true,
+        "sequence": 61
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "67",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 3515.9,
+        "ok": true,
+        "sequence": 67
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "76",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 3844.5,
+        "ok": true,
+        "sequence": 76
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "82",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 4170.2,
+        "ok": true,
+        "sequence": 82
+      }
+    ],
+    "quiet": true
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E6T",
+  "final_window": {
+    "consecutive_matches": [
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.07954626530408859,
+        "inliers": 784,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.7576948712190892,
+            "inliers": 784,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9969070095486111,
+        "shift_x": 0.0108642578125,
+        "shift_y": -0.032989501953125,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.00981153268367052,
+        "inliers": 1793,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8403064511321124,
+            "inliers": 1793,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970821879822531,
+        "shift_x": -0.0018310546875,
+        "shift_y": 0.00046539306640625,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.008206182532012463,
+        "inliers": 1736,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.840389826802331,
+            "inliers": 1736,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970755570023148,
+        "shift_x": -0.000946044921875,
+        "shift_y": -0.00029754638671875,
+        "verified": true
+      },
+      {
+        "accepted_as_visual_return": true,
+        "code": null,
+        "displacement": 0.014628692343831061,
+        "inliers": 1718,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8368172938646584,
+            "inliers": 1718,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9970859254436728,
+        "shift_x": 0.00238037109375,
+        "shift_y": 0.00244140625,
+        "verified": true
+      }
+    ],
+    "elapsed_ms": 1407.0,
+    "frames": [
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "596",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 129.1,
+        "ok": true,
+        "sequence": 596
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "603",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 384.4,
+        "ok": true,
+        "sequence": 603
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "610",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 700.2,
+        "ok": true,
+        "sequence": 610
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "619",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 1024.1,
+        "ok": true,
+        "sequence": 619
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "627",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "observation_elapsed_ms": 1346.3,
+        "ok": true,
+        "sequence": 627
+      }
+    ],
+    "quiet": true
+  },
+  "images_persisted": false,
+  "initial_position": {
+    "pan": -0.369048,
+    "tilt": -0.5,
+    "zoom": null
+  },
+  "initial_status_observation": {
+    "ok": true,
+    "reported_move_status": "UNKNOWN",
+    "status_code": 200
+  },
+  "limits": {
+    "absolute_anchor_returns_maximum": 1,
+    "continuous_moves_maximum": 1,
+    "presets_created": 0,
+    "pulse": {
+      "axis": "tilt",
+      "direction": 1,
+      "duration_seconds": 0.35,
+      "speed": 0.1
+    },
+    "timeline_seconds": 10.0,
+    "visual_corrections_maximum": 0
+  },
+  "outcome": "timed_tilt_response_and_visual_return_verified",
+  "outgoing_command": {
+    "elapsed_ms": 52.1,
+    "ok": true,
+    "status_code": 200
+  },
+  "outgoing_command_ack_offset_ms": 10224.6,
+  "outgoing_command_sent": true,
+  "outgoing_may_have_reached_camera": true,
+  "outgoing_timeline": {
+    "action_result_available": true,
+    "action_thread_finished": true,
+    "duration_seconds": 10.2244,
+    "first_controller_stopping_offset_ms": null,
+    "first_quiet_pair_offset_ms": 288.9,
+    "first_visual_motion_offset_ms": 3645.4,
+    "last_visual_motion_offset_ms": 9882.2,
+    "sample_count": 30,
+    "samples": [
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 1,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "88",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 88
+        },
+        "offset_ms": 0.0,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.010038858838379381,
+          "inliers": 1755,
+          "overlap": 0.9970938826195987,
+          "shift_x": -0.000640869140625,
+          "shift_y": -0.00152587890625,
+          "verified": true
+        },
+        "to_previous": null
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "96",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 96
+        },
+        "offset_ms": 288.9,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.024615688621997832,
+          "inliers": 1450,
+          "overlap": 0.9970468629436728,
+          "shift_x": 0.005828857421875,
+          "shift_y": -0.005340576171875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.02108473591506481,
+          "inliers": 1570,
+          "overlap": 0.9970502989969136,
+          "shift_x": 0.0054931640625,
+          "shift_y": 3.0517578125e-05,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "105",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 105
+        },
+        "offset_ms": 635.4,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.062327185273170466,
+          "inliers": 795,
+          "overlap": 0.9969020664544753,
+          "shift_x": -0.008575439453125,
+          "shift_y": 0.01678466796875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.08120256960391997,
+          "inliers": 806,
+          "overlap": 0.9970498167438272,
+          "shift_x": -0.020721435546875,
+          "shift_y": -0.007232666015625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "113",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 113
+        },
+        "offset_ms": 965.3,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.07633011043071747,
+          "inliers": 740,
+          "overlap": 0.9968891661844136,
+          "shift_x": -0.019927978515625,
+          "shift_y": -0.001007080078125,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.015654432028532027,
+          "inliers": 1517,
+          "overlap": 0.9970830319251544,
+          "shift_x": -0.00750732421875,
+          "shift_y": -0.00115966796875,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "122",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 122
+        },
+        "offset_ms": 1305.1,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.07511551678180695,
+          "inliers": 767,
+          "overlap": 0.9969291931905864,
+          "shift_x": -0.009002685546875,
+          "shift_y": 0.00927734375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.016728360578417777,
+          "inliers": 1487,
+          "overlap": 0.9971049141589506,
+          "shift_x": -0.006591796875,
+          "shift_y": -0.00567626953125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "130",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 130
+        },
+        "offset_ms": 1640.0,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.1121315687894821,
+          "inliers": 718,
+          "overlap": 0.9969495683834877,
+          "shift_x": -0.010467529296875,
+          "shift_y": -0.00711822509765625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.021788535267114637,
+          "inliers": 1453,
+          "overlap": 0.9970902054398149,
+          "shift_x": -0.01312255859375,
+          "shift_y": -0.003692626953125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "138",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 138
+        },
+        "offset_ms": 1975.3,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.15634959936141968,
+          "inliers": 636,
+          "overlap": 0.9967796344521604,
+          "shift_x": 0.02142333984375,
+          "shift_y": -0.03118896484375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.02534513510763645,
+          "inliers": 1445,
+          "overlap": 0.997086769386574,
+          "shift_x": -0.0127410888671875,
+          "shift_y": -0.00592041015625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "147",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 147
+        },
+        "offset_ms": 2303.9,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.1869911640882492,
+          "inliers": 613,
+          "overlap": 0.996856372974537,
+          "shift_x": 0.01165771484375,
+          "shift_y": -0.0342254638671875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.032552306354045865,
+          "inliers": 1311,
+          "overlap": 0.9970354094328704,
+          "shift_x": -0.0091400146484375,
+          "shift_y": -0.0035400390625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "155",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 155
+        },
+        "offset_ms": 2640.2,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.11579868793487548,
+          "inliers": 586,
+          "overlap": 0.9969552951388889,
+          "shift_x": -0.077850341796875,
+          "shift_y": -0.0426025390625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.05355552807450294,
+          "inliers": 765,
+          "overlap": 0.9969378134645062,
+          "shift_x": -0.00262451171875,
+          "shift_y": -0.028076171875,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "163",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 163
+        },
+        "offset_ms": 2976.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.18833457529544828,
+          "inliers": 618,
+          "overlap": 0.9968179735725309,
+          "shift_x": -0.0609130859375,
+          "shift_y": -0.035247802734375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.02214443124830722,
+          "inliers": 1704,
+          "overlap": 0.9970741705246914,
+          "shift_x": -0.009063720703125,
+          "shift_y": -0.001739501953125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "173",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 173
+        },
+        "offset_ms": 3317.3,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.861756956577301,
+          "inliers": 342,
+          "overlap": 0.9943892264660494,
+          "shift_x": 0.09197998046875,
+          "shift_y": 0.04840087890625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.23722725510597228,
+          "inliers": 442,
+          "overlap": 0.9967248384452161,
+          "shift_x": 0.11358642578125,
+          "shift_y": 0.1503448486328125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "181",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 181
+        },
+        "offset_ms": 3645.4,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 3.0695260047912596,
+          "inliers": 323,
+          "overlap": 0.9931934196566358,
+          "shift_x": 0.0440673828125,
+          "shift_y": 2.130096435546875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 2.3677086353302,
+          "inliers": 484,
+          "overlap": 0.9938307171103395,
+          "shift_x": 0.0134735107421875,
+          "shift_y": 2.031158447265625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "188",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 188
+        },
+        "offset_ms": 3975.4,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 3.942836809158325,
+          "inliers": 308,
+          "overlap": 0.9926106168016975,
+          "shift_x": 0.04498291015625,
+          "shift_y": 3.613372802734375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.6019109964370728,
+          "inliers": 397,
+          "overlap": 0.9956715977044753,
+          "shift_x": 0.10870361328125,
+          "shift_y": 1.3023681640625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "198",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 198
+        },
+        "offset_ms": 4306.7,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.780088138580322,
+          "inliers": 232,
+          "overlap": 0.9855266203703704,
+          "shift_x": -0.2257537841796875,
+          "shift_y": 5.338287353515625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 2.191132068634033,
+          "inliers": 461,
+          "overlap": 0.9941769748263889,
+          "shift_x": -0.0282440185546875,
+          "shift_y": 1.848663330078125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "206",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 206
+        },
+        "offset_ms": 4674.3,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.669440841674804,
+          "inliers": 289,
+          "overlap": 0.9862463831018519,
+          "shift_x": -0.159912109375,
+          "shift_y": 5.3442230224609375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.2053046077489853,
+          "inliers": 546,
+          "overlap": 0.9970203390239197,
+          "shift_x": 0.0330810546875,
+          "shift_y": 0.03460693359375,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "216",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 216
+        },
+        "offset_ms": 5017.2,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 6.520972633361816,
+          "inliers": 297,
+          "overlap": 0.988536964699074,
+          "shift_x": -0.155303955078125,
+          "shift_y": 5.870147705078125,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.07757468521595001,
+          "inliers": 901,
+          "overlap": 0.9970621141975309,
+          "shift_x": 0.04425048828125,
+          "shift_y": 0.014068603515625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "226",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 226
+        },
+        "offset_ms": 5464.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 6.304892349243164,
+          "inliers": 279,
+          "overlap": 0.9854817105516975,
+          "shift_x": -0.14794921875,
+          "shift_y": 5.77227783203125,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.03770328536629677,
+          "inliers": 1072,
+          "overlap": 0.9969724754050926,
+          "shift_x": 0.01263427734375,
+          "shift_y": 0.015716552734375,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "232",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 232
+        },
+        "offset_ms": 5797.6,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.856261444091797,
+          "inliers": 304,
+          "overlap": 0.9868318383487654,
+          "shift_x": -0.098388671875,
+          "shift_y": 5.5460968017578125,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.024521164223551748,
+          "inliers": 1339,
+          "overlap": 0.9970455970293209,
+          "shift_x": 0.001678466796875,
+          "shift_y": 0.004669189453125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "242",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 242
+        },
+        "offset_ms": 6149.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.7806707382202145,
+          "inliers": 308,
+          "overlap": 0.9868452208719136,
+          "shift_x": -0.199493408203125,
+          "shift_y": 5.6034393310546875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.03261146694421768,
+          "inliers": 1263,
+          "overlap": 0.9970613908179012,
+          "shift_x": 0.02069091796875,
+          "shift_y": -0.002349853515625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "251",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 251
+        },
+        "offset_ms": 6483.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 7.6514129638671875,
+          "inliers": 304,
+          "overlap": 0.9884879557291667,
+          "shift_x": -0.1861572265625,
+          "shift_y": 5.746978759765625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.09806754142045973,
+          "inliers": 692,
+          "overlap": 0.9968522738233024,
+          "shift_x": 0.01068115234375,
+          "shift_y": 0.027618408203125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "260",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 260
+        },
+        "offset_ms": 6824.0,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 6.209577560424805,
+          "inliers": 282,
+          "overlap": 0.9847480830439815,
+          "shift_x": -0.3710784912109375,
+          "shift_y": 5.724578857421875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.015225329622626302,
+          "inliers": 1701,
+          "overlap": 0.9970704330632716,
+          "shift_x": 0.00262451171875,
+          "shift_y": -0.00048828125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "268",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 268
+        },
+        "offset_ms": 7166.4,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.937085437774658,
+          "inliers": 301,
+          "overlap": 0.9873760006751543,
+          "shift_x": -0.292572021484375,
+          "shift_y": 5.63348388671875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.015570488199591635,
+          "inliers": 1744,
+          "overlap": 0.9970826099537037,
+          "shift_x": -0.0010986328125,
+          "shift_y": -0.00333404541015625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "277",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 277
+        },
+        "offset_ms": 7505.3,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.738410568237304,
+          "inliers": 296,
+          "overlap": 0.9869537880979938,
+          "shift_x": -0.192626953125,
+          "shift_y": 5.66595458984375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.018668821826577184,
+          "inliers": 1670,
+          "overlap": 0.9970622950424383,
+          "shift_x": -0.00555419921875,
+          "shift_y": 0.0018310546875,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "283",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 283
+        },
+        "offset_ms": 7835.4,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.881344032287598,
+          "inliers": 293,
+          "overlap": 0.9870698302469135,
+          "shift_x": -0.38153076171875,
+          "shift_y": 5.6444091796875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.011147476732730864,
+          "inliers": 1756,
+          "overlap": 0.997084659529321,
+          "shift_x": 9.1552734375e-05,
+          "shift_y": 0.00116729736328125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "293",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 293
+        },
+        "offset_ms": 8178.5,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.981476211547852,
+          "inliers": 282,
+          "overlap": 0.9870589795524691,
+          "shift_x": -0.2352752685546875,
+          "shift_y": 5.6397705078125,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.015010596811771392,
+          "inliers": 1728,
+          "overlap": 0.997085563753858,
+          "shift_x": -0.001373291015625,
+          "shift_y": -0.00323486328125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "303",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 303
+        },
+        "offset_ms": 8523.1,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 6.3058604240417475,
+          "inliers": 300,
+          "overlap": 0.9857711226851852,
+          "shift_x": -0.078033447265625,
+          "shift_y": 5.787605285644531,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.13272567987442016,
+          "inliers": 765,
+          "overlap": 0.9967822265625,
+          "shift_x": 0.004302978515625,
+          "shift_y": -0.005096435546875,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "311",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 311
+        },
+        "offset_ms": 8859.1,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.994031620025635,
+          "inliers": 272,
+          "overlap": 0.9852064646026235,
+          "shift_x": -0.0522918701171875,
+          "shift_y": 5.660247802734375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.0067928249016404145,
+          "inliers": 1787,
+          "overlap": 0.9970813440393519,
+          "shift_x": 0.00079345703125,
+          "shift_y": 3.0517578125e-05,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "318",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 318
+        },
+        "offset_ms": 9203.5,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.803927230834961,
+          "inliers": 320,
+          "overlap": 0.9862971402391976,
+          "shift_x": -0.0953216552734375,
+          "shift_y": 5.674476623535156,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.011316538788378235,
+          "inliers": 1799,
+          "overlap": 0.9970644048996914,
+          "shift_x": -0.003448486328125,
+          "shift_y": -0.00128173828125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "328",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 328
+        },
+        "offset_ms": 9544.3,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.714351749420166,
+          "inliers": 329,
+          "overlap": 0.9864852189429012,
+          "shift_x": -0.174957275390625,
+          "shift_y": 5.5746307373046875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.009388210251927374,
+          "inliers": 1755,
+          "overlap": 0.9970931592399691,
+          "shift_x": -0.000335693359375,
+          "shift_y": -0.000640869140625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 2,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "336",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 336
+        },
+        "offset_ms": 9882.2,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.865687847137451,
+          "inliers": 312,
+          "overlap": 0.986430061246142,
+          "shift_x": -0.1884918212890625,
+          "shift_y": 5.709442138671875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.013153162784874438,
+          "inliers": 1801,
+          "overlap": 0.9970912905092593,
+          "shift_x": -0.00537109375,
+          "shift_y": -0.002197265625,
+          "verified": true
+        }
+      }
+    ]
+  },
+  "ptz_commands_issued": 2,
+  "return_command": {
+    "elapsed_ms": 25.6,
+    "ok": true,
+    "status_code": 200
+  },
+  "return_command_ack_offset_ms": 10061.1,
+  "return_command_sent": true,
+  "return_timeline": {
+    "action_result_available": true,
+    "action_thread_finished": true,
+    "duration_seconds": 10.0608,
+    "first_controller_stopping_offset_ms": null,
+    "first_quiet_pair_offset_ms": 270.8,
+    "first_visual_motion_offset_ms": 0.0,
+    "last_visual_motion_offset_ms": 610.7,
+    "sample_count": 30,
+    "samples": [
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "344",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 344
+        },
+        "offset_ms": 0.0,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 6.346159267425537,
+          "inliers": 293,
+          "overlap": 0.9839435040509259,
+          "shift_x": -0.30157470703125,
+          "shift_y": 5.641632080078125,
+          "verified": true
+        },
+        "to_previous": null
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "351",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 351
+        },
+        "offset_ms": 270.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 5.820183849334716,
+          "inliers": 301,
+          "overlap": 0.9861352237654321,
+          "shift_x": -0.14990234375,
+          "shift_y": 5.61431884765625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.11812271773815153,
+          "inliers": 841,
+          "overlap": 0.9966859567901235,
+          "shift_x": 0.020416259765625,
+          "shift_y": -0.000885009765625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "359",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 359
+        },
+        "offset_ms": 610.7,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 6.245425033569336,
+          "inliers": 258,
+          "overlap": 0.9840917365933642,
+          "shift_x": -0.105072021484375,
+          "shift_y": 5.820526123046875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.012695678696036338,
+          "inliers": 1795,
+          "overlap": 0.9970666956018519,
+          "shift_x": -0.004302978515625,
+          "shift_y": 0.001800537109375,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "369",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 369
+        },
+        "offset_ms": 950.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.502341389656067,
+          "inliers": 279,
+          "overlap": 0.9949684124228395,
+          "shift_x": 0.0320892333984375,
+          "shift_y": 1.30706787109375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 7.155391025543212,
+          "inliers": 304,
+          "overlap": 0.9872650824652778,
+          "shift_x": -0.1160125732421875,
+          "shift_y": -5.026123046875,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "377",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 377
+        },
+        "offset_ms": 1285.4,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.2143024682998658,
+          "inliers": 403,
+          "overlap": 0.9958239293981481,
+          "shift_x": -0.02923583984375,
+          "shift_y": 1.064239501953125,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.18222035765647887,
+          "inliers": 596,
+          "overlap": 0.996813633294753,
+          "shift_x": -0.1055450439453125,
+          "shift_y": -0.1102752685546875,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "385",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 385
+        },
+        "offset_ms": 1620.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.536589694023132,
+          "inliers": 379,
+          "overlap": 0.9951979648919753,
+          "shift_x": -0.12432861328125,
+          "shift_y": 0.7950515747070312,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.4218119263648986,
+          "inliers": 631,
+          "overlap": 0.9968611352237654,
+          "shift_x": -0.0904541015625,
+          "shift_y": -0.05438995361328125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "393",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 393
+        },
+        "offset_ms": 1946.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.0237443447113037,
+          "inliers": 404,
+          "overlap": 0.9956723813657408,
+          "shift_x": -0.1097412109375,
+          "shift_y": 0.946929931640625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.08535781651735305,
+          "inliers": 879,
+          "overlap": 0.9969914038387345,
+          "shift_x": -0.008209228515625,
+          "shift_y": -0.030059814453125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "402",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 402
+        },
+        "offset_ms": 2281.6,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.8920448899269104,
+          "inliers": 393,
+          "overlap": 0.9957817925347222,
+          "shift_x": -0.04815673828125,
+          "shift_y": 0.820556640625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.15440306067466736,
+          "inliers": 503,
+          "overlap": 0.9966892722800926,
+          "shift_x": 0.01458740234375,
+          "shift_y": -0.032928466796875,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "410",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 410
+        },
+        "offset_ms": 2616.7,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.8955707788467407,
+          "inliers": 375,
+          "overlap": 0.9958134403935185,
+          "shift_x": -0.1092529296875,
+          "shift_y": 0.810028076171875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.062427410483360285,
+          "inliers": 1048,
+          "overlap": 0.9970348668981481,
+          "shift_x": -0.0318756103515625,
+          "shift_y": -0.003387451171875,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "419",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 419
+        },
+        "offset_ms": 2991.2,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.89241828918457,
+          "inliers": 302,
+          "overlap": 0.9962517481674382,
+          "shift_x": -0.008544921875,
+          "shift_y": 0.7454986572265625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.05328954830765724,
+          "inliers": 1074,
+          "overlap": 0.9969965277777778,
+          "shift_x": -0.0023956298828125,
+          "shift_y": -0.01865386962890625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "428",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 428
+        },
+        "offset_ms": 3320.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.0024364709854126,
+          "inliers": 302,
+          "overlap": 0.9953507185570988,
+          "shift_x": -0.18438720703125,
+          "shift_y": 0.79730224609375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.02891477234661579,
+          "inliers": 1150,
+          "overlap": 0.9970967158564815,
+          "shift_x": -0.00927734375,
+          "shift_y": -0.00970458984375,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "436",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 436
+        },
+        "offset_ms": 3656.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.1156763315200806,
+          "inliers": 280,
+          "overlap": 0.9948243995949074,
+          "shift_x": -0.1191864013671875,
+          "shift_y": 0.846343994140625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.03731662258505821,
+          "inliers": 1231,
+          "overlap": 0.9970379412615741,
+          "shift_x": 0.0089111328125,
+          "shift_y": -0.013458251953125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "445",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 445
+        },
+        "offset_ms": 3997.4,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.8020205736160279,
+          "inliers": 340,
+          "overlap": 0.9959912712191358,
+          "shift_x": -0.205078125,
+          "shift_y": 0.6944580078125,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.037541183829307545,
+          "inliers": 1266,
+          "overlap": 0.9970354697145062,
+          "shift_x": 0.0003204345703125,
+          "shift_y": -0.014404296875,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "453",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 453
+        },
+        "offset_ms": 4333.6,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.9718235254287719,
+          "inliers": 292,
+          "overlap": 0.9963242066936728,
+          "shift_x": -0.18701171875,
+          "shift_y": 0.680328369140625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.16057721376419068,
+          "inliers": 589,
+          "overlap": 0.9966855951003086,
+          "shift_x": -0.018035888671875,
+          "shift_y": -0.0391845703125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "462",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 462
+        },
+        "offset_ms": 4674.3,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.1107543230056762,
+          "inliers": 281,
+          "overlap": 0.9964155936535494,
+          "shift_x": -0.105743408203125,
+          "shift_y": 0.798248291015625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.018721890449523923,
+          "inliers": 1534,
+          "overlap": 0.9970786916473765,
+          "shift_x": -0.00439453125,
+          "shift_y": -0.0038909912109375,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "470",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 470
+        },
+        "offset_ms": 5014.7,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.9049055933952331,
+          "inliers": 330,
+          "overlap": 0.9963985942322531,
+          "shift_x": -0.1083221435546875,
+          "shift_y": 0.6973876953125,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.023957822471857067,
+          "inliers": 1524,
+          "overlap": 0.9970633198302469,
+          "shift_x": -0.006561279296875,
+          "shift_y": -0.00295257568359375,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "478",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 478
+        },
+        "offset_ms": 5348.9,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.0709795236587525,
+          "inliers": 300,
+          "overlap": 0.9961583719135803,
+          "shift_x": -0.087738037109375,
+          "shift_y": 0.78009033203125,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.02599066980183124,
+          "inliers": 1450,
+          "overlap": 0.9970390263310185,
+          "shift_x": 0.00274658203125,
+          "shift_y": -0.01039886474609375,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "487",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 487
+        },
+        "offset_ms": 5686.6,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.9850241899490356,
+          "inliers": 289,
+          "overlap": 0.9961516203703704,
+          "shift_x": -0.1664581298828125,
+          "shift_y": 0.705230712890625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.027866743877530097,
+          "inliers": 1472,
+          "overlap": 0.9970881558641975,
+          "shift_x": -0.02081298828125,
+          "shift_y": -0.007080078125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "495",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 495
+        },
+        "offset_ms": 6026.7,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.8266153693199157,
+          "inliers": 302,
+          "overlap": 0.9958482228973765,
+          "shift_x": -0.084716796875,
+          "shift_y": 0.63006591796875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.03737482354044914,
+          "inliers": 1477,
+          "overlap": 0.9970690465856481,
+          "shift_x": -0.000396728515625,
+          "shift_y": -0.004974365234375,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "504",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 504
+        },
+        "offset_ms": 6365.3,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.74903324842453,
+          "inliers": 297,
+          "overlap": 0.9962235363618828,
+          "shift_x": -0.1632080078125,
+          "shift_y": 0.623260498046875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.09883090555667877,
+          "inliers": 734,
+          "overlap": 0.9969872444058642,
+          "shift_x": -0.0261383056640625,
+          "shift_y": -0.00469970703125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "512",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 512
+        },
+        "offset_ms": 6703.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.7591253042221069,
+          "inliers": 293,
+          "overlap": 0.9961920693479939,
+          "shift_x": -0.1046142578125,
+          "shift_y": 0.60980224609375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.014251204207539558,
+          "inliers": 1696,
+          "overlap": 0.9970920138888889,
+          "shift_x": -0.001708984375,
+          "shift_y": -0.004241943359375,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "521",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 521
+        },
+        "offset_ms": 7045.6,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.7817949295043946,
+          "inliers": 278,
+          "overlap": 0.9959077208719136,
+          "shift_x": -0.127288818359375,
+          "shift_y": 0.628021240234375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.014098603650927542,
+          "inliers": 1802,
+          "overlap": 0.9970765215084877,
+          "shift_x": -0.0037841796875,
+          "shift_y": 0.00146484375,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "529",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 529
+        },
+        "offset_ms": 7382.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.8685635566711425,
+          "inliers": 287,
+          "overlap": 0.9960304542824074,
+          "shift_x": -0.099517822265625,
+          "shift_y": 0.63232421875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.009976426884531974,
+          "inliers": 1731,
+          "overlap": 0.9971066020447531,
+          "shift_x": 0.00128173828125,
+          "shift_y": 0.00128173828125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "537",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 537
+        },
+        "offset_ms": 7712.9,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.8384418368339538,
+          "inliers": 287,
+          "overlap": 0.9962043668016975,
+          "shift_x": -0.075714111328125,
+          "shift_y": 0.631500244140625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.009093070961534975,
+          "inliers": 1692,
+          "overlap": 0.9971009958526235,
+          "shift_x": -0.002777099609375,
+          "shift_y": -0.001220703125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "546",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 546
+        },
+        "offset_ms": 8048.2,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.7757837057113647,
+          "inliers": 291,
+          "overlap": 0.9960871190200618,
+          "shift_x": -0.12091064453125,
+          "shift_y": 0.641510009765625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.023840412870049475,
+          "inliers": 1565,
+          "overlap": 0.9970311897183642,
+          "shift_x": 0.000640869140625,
+          "shift_y": -0.001434326171875,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "554",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 554
+        },
+        "offset_ms": 8389.2,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.000941801071167,
+          "inliers": 229,
+          "overlap": 0.995888370466821,
+          "shift_x": -0.16717529296875,
+          "shift_y": 0.730438232421875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.10819926559925079,
+          "inliers": 708,
+          "overlap": 0.9969065875771604,
+          "shift_x": -0.025360107421875,
+          "shift_y": -0.020416259765625,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "563",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 563
+        },
+        "offset_ms": 8723.4,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.8022853255271911,
+          "inliers": 265,
+          "overlap": 0.9961308232060185,
+          "shift_x": -0.13372802734375,
+          "shift_y": 0.627655029296875,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.008476844243705272,
+          "inliers": 1693,
+          "overlap": 0.9970677806712963,
+          "shift_x": -0.00042724609375,
+          "shift_y": -3.0517578125e-05,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "571",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 571
+        },
+        "offset_ms": 9060.8,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.8211589932441712,
+          "inliers": 244,
+          "overlap": 0.996668414834105,
+          "shift_x": -0.1849365234375,
+          "shift_y": 0.5736083984375,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.02023191601037979,
+          "inliers": 1720,
+          "overlap": 0.9970710961612654,
+          "shift_x": 0.003631591796875,
+          "shift_y": 0.0018310546875,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "579",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 579
+        },
+        "offset_ms": 9392.3,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.8585281133651733,
+          "inliers": 276,
+          "overlap": 0.996142578125,
+          "shift_x": -0.0587005615234375,
+          "shift_y": 0.705963134765625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.015757692232728004,
+          "inliers": 1675,
+          "overlap": 0.9970580753279321,
+          "shift_x": -0.003387451171875,
+          "shift_y": 0.001007080078125,
+          "verified": true
+        }
+      },
+      {
+        "controller": {
+          "available": true,
+          "geometry_safe": false,
+          "last_command_kind": "",
+          "motion_epoch": 3,
+          "motion_state": "moving",
+          "move_status": "UNKNOWN",
+          "ok": true,
+          "state": "manual_override"
+        },
+        "frame": {
+          "generation": 1,
+          "headers": {
+            "x-toposync-snapshot-backend": "camera-hub",
+            "x-toposync-snapshot-capture-evidence": "unverified",
+            "x-toposync-snapshot-frame-generation": "1",
+            "x-toposync-snapshot-frame-sequence": "588",
+            "x-toposync-snapshot-freshness": "decoder",
+            "x-toposync-snapshot-transport": "shared"
+          },
+          "ok": true,
+          "sequence": 588
+        },
+        "offset_ms": 9726.1,
+        "to_baseline": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 1.4692943572998045,
+          "inliers": 243,
+          "overlap": 0.9956428433641975,
+          "shift_x": -0.109161376953125,
+          "shift_y": 0.911041259765625,
+          "verified": true
+        },
+        "to_previous": {
+          "accepted_as_visual_return": true,
+          "code": null,
+          "displacement": 0.011864933185279368,
+          "inliers": 1704,
+          "overlap": 0.9970932798032407,
+          "shift_x": 0.0009765625,
+          "shift_y": 0.0002593994140625,
+          "verified": true
+        }
+      }
+    ]
+  }
+}

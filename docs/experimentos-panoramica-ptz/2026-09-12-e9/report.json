@@ -1,0 +1,38 @@
+{
+  "camera_network_access": false,
+  "capture_count": 17,
+  "coverage_decision": {
+    "planner_selection_allowed": false,
+    "reason": "The preserved run observed only one tilt band. Its largest pan discontinuity is the single rejected direct visual link; it cannot prove a two-dimensional route.",
+    "two_band_proof_obtained": false,
+    "vertical_connection_obtained": false
+  },
+  "experiment_id": "E9",
+  "observed_pan_range": [
+    -0.722222,
+    0.130952
+  ],
+  "observed_tilt_band_count": 1,
+  "observed_tilt_bands": [
+    -0.390625
+  ],
+  "physical_confirmation": {
+    "precondition": "Repair video acquisition and demonstrate a verified source frame before commanding the two-band, three-view bounded physical trial.",
+    "status": "deferred"
+  },
+  "ptz_commands_issued": 0,
+  "recorded_route": {
+    "accepted_visual_links": 15,
+    "adjacent_transitions": 16,
+    "maximum_pan_step": 0.45238100000000003,
+    "maximum_step_over_median": 6.333296000224002,
+    "maximum_step_pair": [
+      "capture-0009",
+      "capture-0010"
+    ],
+    "median_pan_step": 0.07142899999999996,
+    "rejected_visual_links": {
+      "capture-0009->capture-0010": "correspondences_not_distributed"
+    }
+  }
+}

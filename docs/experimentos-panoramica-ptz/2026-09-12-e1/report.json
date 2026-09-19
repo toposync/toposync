@@ -1,0 +1,229 @@
+{
+  "decision": {
+    "limits": [
+      "No PTS or physical exposure timestamp was present in the recording.",
+      "No camera command was sent; this cannot prove a new physical trajectory.",
+      "Lens identity is held by PanoramaCamera configuration and source-geometry guards, outside this replay adapter."
+    ],
+    "pass": true,
+    "scope": "Replay-only proof of the current late-endpoint decision path."
+  },
+  "detector_negative_controls": {
+    "concentrated_correspondence": {
+      "code": "endpoint_transition_unverified",
+      "evidence": "insufficient",
+      "has_motion_transition": false,
+      "recovery_code": null,
+      "recovery_metrics": null,
+      "stable": false,
+      "window_frames": null,
+      "window_observation_seconds": null
+    },
+    "decoder_generation_changed": {
+      "armed": {
+        "code": "motion_reacquired",
+        "evidence": "insufficient",
+        "has_motion_transition": true,
+        "recovery_code": "verified_endpoint_transition",
+        "recovery_metrics": {
+          "inliers": 42,
+          "motion_pixels": 176.76226806640625,
+          "overlap": 0.7853820047260802
+        },
+        "stable": false,
+        "window_frames": null,
+        "window_observation_seconds": null
+      },
+      "terminal": {
+        "code": "motion_transition_unobserved",
+        "evidence": "insufficient",
+        "has_motion_transition": false,
+        "recovery_code": null,
+        "recovery_metrics": null,
+        "stable": false,
+        "window_frames": null,
+        "window_observation_seconds": null
+      }
+    },
+    "frozen_terminal": {
+      "armed": {
+        "code": "motion_reacquired",
+        "evidence": "insufficient",
+        "has_motion_transition": true,
+        "recovery_code": "verified_endpoint_transition",
+        "recovery_metrics": {
+          "inliers": 42,
+          "motion_pixels": 176.76226806640625,
+          "overlap": 0.7853820047260802
+        },
+        "stable": false,
+        "window_frames": null,
+        "window_observation_seconds": null
+      },
+      "terminal": {
+        "code": "repeated_image",
+        "evidence": "insufficient",
+        "has_motion_transition": true,
+        "recovery_code": "verified_endpoint_transition",
+        "recovery_metrics": {
+          "inliers": 42,
+          "motion_pixels": 176.76226806640625,
+          "overlap": 0.7853820047260802
+        },
+        "stable": false,
+        "window_frames": null,
+        "window_observation_seconds": null
+      }
+    },
+    "missing_homography": {
+      "code": "endpoint_transition_unverified",
+      "evidence": "insufficient",
+      "has_motion_transition": false,
+      "recovery_code": null,
+      "recovery_metrics": null,
+      "stable": false,
+      "window_frames": null,
+      "window_observation_seconds": null
+    }
+  },
+  "endpoint_match": {
+    "displacement": 176.76226806640625,
+    "inliers": 42,
+    "model_candidates": [
+      {
+        "hull_fraction": 0.19961782696260696,
+        "inliers": 42,
+        "occupied_cells": 7
+      }
+    ],
+    "overlap": 0.7853820047260802,
+    "verified": true
+  },
+  "experiment": "E1",
+  "inputs": {
+    "frame_count": 144,
+    "frames_sha256": "34b27f08b8a8bb544a290b0bd7f86efbbfb8e16178819f8458a38253346efb29",
+    "metadata_sha256": "f6fb0b4c8313d920f31e536409f7b18329df33fbda04236f0998a908982a5b78",
+    "physical_camera_access": false,
+    "timing_basis": "local_observation"
+  },
+  "late_endpoint_positive": {
+    "accepted": true,
+    "diagnostic": {
+      "last_comparison": {
+        "displacement": 185.3006866455078,
+        "inliers": 37,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.16175598486140919,
+            "inliers": 37,
+            "occupied_cells": 7
+          }
+        ],
+        "overlap": 0.7621367428626543,
+        "verified": true
+      },
+      "late_endpoint_rejection": null,
+      "late_endpoint_transition": true,
+      "terminal_scene": {
+        "age_seconds": 0.10000000000582077,
+        "classification": "scene_texture_available",
+        "distinct_frames": 14,
+        "evidence": "observation_only",
+        "generation": 1,
+        "image_height": 540,
+        "image_representation": "analysis",
+        "image_width": 960,
+        "observed_window_seconds": 1.1200365419790614,
+        "qualified_capture": false,
+        "sequence": 1153,
+        "source_height": 1620,
+        "source_width": 2880,
+        "texture_support": {
+          "distributed": true,
+          "features": 824,
+          "hull_fraction": 0.9007854551015324,
+          "occupied_cells": 12
+        },
+        "timing_basis": "local_observation"
+      }
+    },
+    "result": {
+      "code": "stable",
+      "evidence": "visual_transition_verified",
+      "has_motion_transition": true,
+      "recovery_code": "verified_endpoint_transition",
+      "recovery_metrics": {
+        "inliers": 37,
+        "motion_pixels": 185.3006866455078,
+        "overlap": 0.7621367428626543
+      },
+      "stable": true,
+      "window_frames": 11,
+      "window_observation_seconds": 0.8399471250013448
+    }
+  },
+  "normal_replay": {
+    "accepted_any_frame": false,
+    "code_counts": {
+      "before_stop": 1,
+      "first_frame": 1,
+      "insufficient_visual_support": 15,
+      "motion_transition_unobserved": 127
+    },
+    "last": {
+      "code": "motion_transition_unobserved",
+      "evidence": "insufficient",
+      "has_motion_transition": false,
+      "recovery_code": "model_unverified",
+      "recovery_metrics": {
+        "tracks": 70
+      },
+      "stable": false,
+      "window_frames": null,
+      "window_observation_seconds": null
+    },
+    "matches_recorded_code_counts": true
+  },
+  "scanner_negative_controls": {
+    "capture_instance_changed": {
+      "accepted": false,
+      "diagnostic": {
+        "last_comparison": null,
+        "late_endpoint_rejection": "terminal_window_unverified",
+        "late_endpoint_transition": null,
+        "terminal_scene": null
+      }
+    },
+    "decoder_generation_changed": {
+      "accepted": false,
+      "diagnostic": {
+        "last_comparison": null,
+        "late_endpoint_rejection": "terminal_window_unverified",
+        "late_endpoint_transition": null,
+        "terminal_scene": null
+      }
+    },
+    "frozen_terminal": {
+      "accepted": false,
+      "diagnostic": {
+        "last_comparison": null,
+        "late_endpoint_rejection": "terminal_window_unverified",
+        "late_endpoint_transition": null,
+        "terminal_scene": null
+      }
+    },
+    "unmatched_durable_anchor": {
+      "accepted": false,
+      "diagnostic": {
+        "last_comparison": {
+          "code": "insufficient_texture",
+          "verified": false
+        },
+        "late_endpoint_rejection": "endpoint_transition_unverified",
+        "late_endpoint_transition": null,
+        "terminal_scene": null
+      }
+    }
+  }
+}

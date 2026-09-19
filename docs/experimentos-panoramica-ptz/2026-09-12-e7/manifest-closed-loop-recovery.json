@@ -1,0 +1,66 @@
+{
+  "experiment_id": "E7R",
+  "title": "Qualificação isolada de retorno visual em malha fechada",
+  "status": "completed_inconclusive_coarse_return_exact",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "hypothesis": "Uma referência visual recém-observada pode ser recuperada após um pulso curto por um único retorno ao preset e, quando necessário, pela correção visual limitada já usada pelo Toposync.",
+  "preconditions": {
+    "baseline": "Cinco quadros decoder-fresh consecutivos, com deslocamento entre pares de no máximo 0,15 px de análise.",
+    "reference": "A referência é a vista quieta atual. A âncora anterior está 30,499 px distante e não será usada como destino nem como prova de retorno.",
+    "optical_state": "Sem zoom e sem alteração de fonte.",
+    "exclusive_control": "Cada movimento é enviado pelo endpoint PTZ do Toposync, que mantém lease, fence e watchdog de pulso finito."
+  },
+  "single_trial": {
+    "outbound": {
+      "axis": "pan",
+      "direction": 1,
+      "velocity": 0.1,
+      "duration_seconds": 0.08
+    },
+    "recovery": {
+      "coarse_return": "Um unico GotoPreset para o preset criado neste ensaio.",
+      "fine_return": "corretor correct_reference do Toposync, no máximo quatro micropulsos; cada intenção é persistida antes do envio e cada resultado precisa reduzir o erro visual.",
+      "acceptance": "sobreposição >= 0,85, suporte distribuído e deslocamento <= 3 px de análise.",
+      "refusal": "correspondência ausente, sobreposição insuficiente, resposta sem movimento, erro crescente, resposta inconsistente, orçamento esgotado ou timeout encerram sem nova tentativa."
+    },
+    "maximum_motor_actions": 6,
+    "contingency_motor_actions": 2,
+    "maximum_elapsed_seconds": 120
+  },
+  "forbidden": [
+    "recall or deletion of presets preserved by E7",
+    "PTZ AbsoluteMove",
+    "PTZ RelativeMove",
+    "zoom",
+    "automatic retry after a rejected fine correction",
+    "continuation of a panorama scan"
+  ],
+  "data_handling": {
+    "persist_images": false,
+    "persist_only": [
+      "sanitized frame evidence",
+      "visual correspondence summaries",
+      "persisted correction ledger without rasters",
+      "temporary preset state",
+      "bounded visual-anchor descriptor only if recovery is unconfirmed"
+    ]
+  },
+  "outcomes": {
+    "pass": "A referência nova é recuperada visualmente até 3 px e o preset temporário é removido depois da confirmação.",
+    "inconclusive": "O retorno único já é exato, portanto o ensaio não precisou qualificar micropulsos.",
+    "fail_safe": "O preset e o descritor são preservados; nenhuma varredura, repetição ou nova recuperação é disparada automaticamente."
+  },
+  "result": {
+    "outbound_displacement_analysis_pixels": 2.3924,
+    "outbound_overlap": 0.9935,
+    "coarse_return_displacement_analysis_pixels": 0.6067,
+    "coarse_return_overlap": 0.9959,
+    "fine_correction_commands": 0,
+    "temporary_preset_removed": true,
+    "decision": "The bounded coarse return is exact for this 0.08-second, 0.1-speed pan pulse. Fine correction remains unqualified because its entry threshold was not reached."
+  }
+}

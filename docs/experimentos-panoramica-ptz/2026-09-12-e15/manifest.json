@@ -1,0 +1,23 @@
+{
+  "acceptance": {
+    "control": "An identical retained frame must agree with and without the legacy color pre-resize.",
+    "decision": "A mismatch of verification, motion direction or normalized displacement rejects the legacy pre-resize. The controller-owned transform becomes the only admissible comparison path."
+  },
+  "experiment_id": "E15",
+  "hypothesis": "The controller and the experimental quiet-window observer must use the same controller-owned visual transform before a physical result can qualify a return policy.",
+  "scope": {
+    "camera_network_access": false,
+    "images_persisted": false,
+    "input": "retained Garagem source-panorama capture set",
+    "ptz_commands": 0
+  },
+  "observed": {
+    "adjacent_pairs_compared": 16,
+    "control_identical_frame_consistent": true,
+    "legacy_color_preresize_inconsistent_pairs": 15,
+    "production_and_adapter_match_after_repair": true
+  },
+  "outcome": "The legacy color pre-resize selected different feature correspondences on fifteen real adjacent pairs. The experimental adapter now passes original frames to the production matcher, which owns the canonical grayscale normalization.",
+  "status": "completed_root_cause_and_repair_verified",
+  "title": "Consistência do comparador entre escala de captura e escala de controle"
+}

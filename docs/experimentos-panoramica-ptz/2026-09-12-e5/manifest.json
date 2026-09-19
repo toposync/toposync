@@ -1,0 +1,34 @@
+{
+  "acceptance": {
+    "native_substream": "E5R confirmou profile_2 no CameraCaptureService contínuo usado pela panorâmica: 86 frames distintos em 8 s, 35 entre o despacho do pan e a janela quieta, 43 durante o retorno, maior lacuna 0,2579 s e nenhuma liberação da lease. Retorno visual 0,2264 px / sobreposição 0,9965.",
+    "offline": "Every adjacent pair is classified at both resolutions with the production correspondence gates."
+  },
+  "data_handling": {
+    "persist_images": false,
+    "persist_only": [
+      "aggregate correspondence metrics",
+      "accepted and rejected pair identifiers",
+      "native-substream deferral reason"
+    ]
+  },
+  "experiment_id": "E5",
+  "hypothesis": "A reducao para 640 por 360 preserva suporte geometrico suficiente para os mesmos gates de correspondencia em uma sequencia real da Garagem.",
+  "outcome": "All 15 high-resolution accepted adjacent links remained accepted after offline reduction to 640x360. E2 confirmed native compatibility in two quiet horizontal views, and E5R confirmed continuous profile_2 output through one bounded pan and visually verified return. This evidence is limited to Garagem/profile_2 and this pan path.",
+  "scope": {
+    "analysis_sizes": [
+      [
+        960,
+        540
+      ],
+      [
+        640,
+        360
+      ]
+    ],
+    "camera_network_access": false,
+    "input": "saved Garagem capture sequence from job 097e9f406287495f8582423f5f70806c",
+    "ptz_commands": 0
+  },
+  "status": "completed_bounded_native_continuity_verified",
+  "title": "Observabilidade apos reducao de resolucao"
+}

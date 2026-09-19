@@ -1,0 +1,77 @@
+{
+  "basis": {
+    "observed_points": [
+      {
+        "displacement_analysis_pixels": 2.3924,
+        "duration_seconds": 0.08
+      },
+      {
+        "displacement_analysis_pixels": 93.8409,
+        "duration_seconds": 1.0
+      }
+    ],
+    "selection": "A duração 0,35 s é o ponto intermediário escolhido para testar a faixa 3–35 px; não pressupõe resposta linear do atuador."
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "data_handling": {
+    "persist_images": false,
+    "persist_only": [
+      "visual metrics",
+      "command ledger",
+      "preset state",
+      "descriptor on unconfirmed recovery"
+    ]
+  },
+  "experiment_id": "E7R4",
+  "forbidden": [
+    "GotoPreset before direct correction",
+    "PTZ AbsoluteMove",
+    "PTZ RelativeMove",
+    "zoom",
+    "panorama capture or continuation",
+    "automatic retry after a rejected correction"
+  ],
+  "hypothesis": "Um pulso de pan de 0,35 s a velocidade 0,1 produz um deslocamento dentro do envelope do corretor visual e pode ser recuperado por correct_reference usando no máximo quatro pulsos observados.",
+  "result": {
+    "decision": "O único micropulso piorou a referência visual. correct_reference rejeitou a observação e não enviou nova correção; o preset foi preservado para uma recuperação declarada separadamente.",
+    "final_displacement_analysis_pixels": 64.567,
+    "final_overlap": 0.938,
+    "fine_pulse": {
+      "axis": "pan",
+      "direction": 1,
+      "duration_seconds": 0.08,
+      "velocity": 0.1
+    },
+    "outbound_displacement_analysis_pixels": 26.6985,
+    "outbound_overlap": 0.9706,
+    "post_fine_displacement_analysis_pixels": 59.7146,
+    "pre_fine_displacement_analysis_pixels": 25.9856
+  },
+  "single_trial": {
+    "contingency_motor_actions": 2,
+    "maximum_elapsed_seconds": 120,
+    "maximum_motor_actions": 5,
+    "outbound": {
+      "axis": "pan",
+      "direction": 1,
+      "duration_seconds": 0.35,
+      "velocity": 0.1
+    },
+    "recovery": {
+      "acceptance": "janela quieta, correspondência distribuída, sobreposição >= 0,85 e deslocamento <= 3 px.",
+      "entry_envelope_analysis_pixels": {
+        "maximum_inclusive": 35.0,
+        "minimum_exclusive": 3.0
+      },
+      "failure": "Preservar o preset novo e encerrar; uma recuperação posterior exige manifesto próprio.",
+      "maximum_fine_pulses": 4,
+      "method": "correct_reference do módulo de produção, sem GotoPreset antes da correção."
+    }
+  },
+  "status": "completed_regression_detected_preset_preserved",
+  "title": "Qualificação direta do corretor visual no pulso intermediário"
+}

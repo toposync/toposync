@@ -1,0 +1,51 @@
+{
+  "experiment_id": "E7R3",
+  "title": "Recuperação única do preset preservado após E7R2",
+  "status": "completed_visual_return_verified",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "hypothesis": "O preset novo guardado antes do deslocamento direto de E7R2 pode recuperar a vista atual até a âncora visual compacta, sem depender da telemetria PTZ.",
+  "preconditions": {
+    "destination": "Um único preset E7R foi localizado por leitura e seu token está apenas no arquivo privado 0600 preserved-preset-destination.json.",
+    "reference": "A âncora compacta de E7R2, produzida da vista quieta antes do pulso de 1,0 s.",
+    "current_state": "A vista após o pulso está quieta e 93,841 px distante da referência; nenhuma correção fina foi enviada."
+  },
+  "single_trial": {
+    "command": "Um único GotoPreset pelo endpoint PTZ do Toposync.",
+    "acceptance": "janela quieta, correspondência distribuída, sobreposição >= 0,85 e deslocamento <= 3 px de análise.",
+    "failure": "Preservar o preset e o destino privado; não enviar Stop, correção ou segunda chamada de retorno automaticamente.",
+    "maximum_motor_actions": 1,
+    "maximum_elapsed_seconds": 30
+  },
+  "forbidden": [
+    "PTZ ContinuousMove",
+    "PTZ AbsoluteMove",
+    "PTZ RelativeMove",
+    "zoom",
+    "fine correction",
+    "a second GotoPreset",
+    "recall or deletion of presets preserved before E7R2",
+    "panorama capture or continuation"
+  ],
+  "data_handling": {
+    "persist_images": false,
+    "public_report": "Only scalar correspondence evidence and preset state.",
+    "private_destination": "The opaque preset token remains in the 0600 destination file until an exact visual return is confirmed."
+  },
+  "outcomes": {
+    "pass": "The return is visually exact and the temporary preset plus private destination are removed.",
+    "fail_safe": "The return is not visually exact and the preset remains available, without another automatic action."
+  },
+  "result": {
+    "before_return_displacement_analysis_pixels": 93.6709,
+    "before_return_overlap": 0.9089,
+    "visual_return_displacement_analysis_pixels": 0.7733,
+    "visual_return_overlap": 0.9963,
+    "temporary_preset_removed": true,
+    "private_destination_removed": true,
+    "decision": "One newly-created preset return recovered the E7R2 reference visually. This is evidence for this fresh pan-positive path only and does not invalidate the earlier direction-dependent E7 limitation."
+  }
+}

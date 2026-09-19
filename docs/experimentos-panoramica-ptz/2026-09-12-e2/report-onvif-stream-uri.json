@@ -1,0 +1,33 @@
+{
+  "attempt": "onvif_get_stream_uri_metadata",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem"
+  },
+  "experiment_id": "E2",
+  "onvif_media": {
+    "get_profiles_completed": true,
+    "profiles": [
+      {
+        "has_authority": true,
+        "profile_token": "profile_1",
+        "scheme": "rtsp",
+        "stream_uri_received": true
+      },
+      {
+        "has_authority": true,
+        "profile_token": "profile_2",
+        "scheme": "rtsp",
+        "stream_uri_received": true
+      },
+      {
+        "has_authority": true,
+        "profile_token": "profile_3",
+        "scheme": "rtsp",
+        "stream_uri_received": true
+      }
+    ]
+  },
+  "persisted_uri_values": false,
+  "ptz_commands_issued": 0
+}

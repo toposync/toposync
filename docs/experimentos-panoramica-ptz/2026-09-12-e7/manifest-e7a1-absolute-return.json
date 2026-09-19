@@ -1,0 +1,31 @@
+{
+  "acceptance": {
+    "failure": "If any observation or absolute return cannot be confirmed, stop after the one planned absolute command. Do not send fine correction, a second absolute command, a preset command or a stop fallback.",
+    "success": "One AbsoluteMove to the read initial pan/tilt position produces a fresh quiet frame with overlap at least 0.85 and canonical visual displacement at most 3 px."
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E7A1",
+  "hypothesis": "Published absolute pan/tilt coordinates can provide a safer coarse return primitive than a preset on a camera whose preset inventory is full, while visual evidence remains the only success criterion.",
+  "limits": {
+    "absolute_return_maximum": 1,
+    "outbound": {
+      "axis": "pan",
+      "direction": 1,
+      "duration_seconds": 0.35,
+      "speed": 0.1
+    },
+    "ptz_commands_maximum": 2
+  },
+  "result": {
+    "absolute_return_displacement_px": 14.761,
+    "absolute_return_overlap": 0.9823,
+    "outbound_displacement_px": 41.939,
+    "outcome": "absolute_return_unverified",
+    "ptz_commands_issued": 2
+  },
+  "status": "completed_absolute_return_visually_unverified"
+}

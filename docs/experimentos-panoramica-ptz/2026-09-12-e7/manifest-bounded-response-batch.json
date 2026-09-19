@@ -1,0 +1,58 @@
+{
+  "experiment_id": "E7",
+  "title": "Resposta observável por eixo e sentido, pulso nativo",
+  "status": "paused_after_negative_pan_return_unverified",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "scope": {
+    "mode": "ONVIF ContinuousMove com watchdog nativo do Toposync",
+    "velocity": 0.5,
+    "duration_seconds": 1.0,
+    "one_trial_per_remaining_axis_direction_before_any_repeat": true,
+    "unqualified_operations": ["AbsoluteMove", "RelativeMove", "zoom"]
+  },
+  "completed_trials": [
+    {
+      "axis": "pan",
+      "direction": 1,
+      "report": "report-seed-pulse-native-watchdog.json",
+      "result": "response_observed_and_visual_return_verified",
+      "analysis_displacement_pixels": 349.3952,
+      "visual_return_displacement_pixels": 0.1665
+    },
+    {
+      "axis": "pan",
+      "direction": -1,
+      "report": "report-negative-pan-native-watchdog.json",
+      "result": "response_observed_visual_return_unverified_preset_preserved",
+      "analysis_displacement_pixels": 389.9123,
+      "visual_return_displacement_pixels": 30.8128
+    }
+  ],
+  "remaining_trials": [
+    {"axis": "tilt", "direction": 1},
+    {"axis": "tilt", "direction": -1}
+  ],
+  "safety": {
+    "maximum_motor_commands_per_trial": 3,
+    "normal_path": ["set_preset", "continuous_move", "native_watchdog_stop", "goto_preset", "remove_preset_after_visual_return"],
+    "manual_stop": "Only the finally backstop after an interruption before return.",
+    "preset_policy": "Preserve the temporary preset whenever quiet visual return is not verified.",
+    "images_persisted": false,
+    "no_automatic_retry": true
+  },
+  "gate": {
+    "response": "verified visual displacement at least 2 analysis pixels",
+    "recovery": "five-frame quiet visual return with overlap at least 0.85 and displacement at most 15 analysis pixels",
+    "interpretation": "These seeds establish bounded observability only. Repeatability and correction precision require a later, separately declared batch."
+  },
+  "pause": {
+    "reason": "The negative-pan trial showed an observable response but its quiet post-return view differed from baseline by 30.8128 analysis pixels, beyond the 15-pixel gate.",
+    "preserved_reference": "A named temporary preset remains on the camera for deliberate recovery.",
+    "no_automatic_retry": true,
+    "required_before_remaining_trials": "Resolve and visually confirm the recovery reference, then create a new manifest with a distinct recovery hypothesis."
+  }
+}

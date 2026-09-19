@@ -1,0 +1,244 @@
+{
+  "baseline": {
+    "generation": 1,
+    "headers": {
+      "x-toposync-snapshot-backend": "camera-hub",
+      "x-toposync-snapshot-capture-evidence": "unverified",
+      "x-toposync-snapshot-frame-generation": "1",
+      "x-toposync-snapshot-frame-sequence": "15",
+      "x-toposync-snapshot-freshness": "decoder",
+      "x-toposync-snapshot-transport": "shared"
+    },
+    "ok": true,
+    "sequence": 15
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E6",
+  "images_persisted": false,
+  "move": {
+    "elapsed_ms": 266.0,
+    "ok": true,
+    "status_code": 200
+  },
+  "outcome": "visual_return_unverified_preset_preserved",
+  "post_return_observation": {
+    "frames": [
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "78",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "ok": true,
+        "sequence": 78
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "82",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "ok": true,
+        "sequence": 82
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "91",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "ok": true,
+        "sequence": 91
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "99",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "ok": true,
+        "sequence": 99
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "104",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "ok": true,
+        "sequence": 104
+      }
+    ],
+    "stability": {
+      "best_sequence": null,
+      "code": "moving",
+      "confidence": 1.0,
+      "drift_pixels": null,
+      "evidence": "insufficient",
+      "generation": 1,
+      "has_motion_transition": true,
+      "inlier_fraction": 0.8013468013468014,
+      "inliers": 476,
+      "motion_pixels": 1.702897369332893,
+      "occupied_cells": 12,
+      "sequence": 104,
+      "sharpness": 10298.80483205536,
+      "speed_px_s": null,
+      "stable": false,
+      "state": "observing",
+      "timing_basis": "local_observation",
+      "tracks": 594
+    },
+    "visual_return": {
+      "accepted_as_visual_return": false,
+      "code": null,
+      "displacement": 27.843539428710937,
+      "inliers": 502,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.779820237031026,
+          "inliers": 502,
+          "occupied_cells": 12
+        }
+      ],
+      "overlap": 0.9678780261381172,
+      "shift_x": -23.838134765625,
+      "shift_y": 0.799407958984375,
+      "verified": true
+    }
+  },
+  "post_stop_observation": {
+    "frames": [
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "35",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "ok": true,
+        "sequence": 35
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "48",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "ok": true,
+        "sequence": 48
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "54",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "ok": true,
+        "sequence": 54
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "63",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "ok": true,
+        "sequence": 63
+      },
+      {
+        "generation": 1,
+        "headers": {
+          "x-toposync-snapshot-backend": "camera-hub",
+          "x-toposync-snapshot-capture-evidence": "unverified",
+          "x-toposync-snapshot-frame-generation": "1",
+          "x-toposync-snapshot-frame-sequence": "70",
+          "x-toposync-snapshot-freshness": "decoder",
+          "x-toposync-snapshot-transport": "shared"
+        },
+        "ok": true,
+        "sequence": 70
+      }
+    ],
+    "stability": {
+      "best_sequence": null,
+      "code": "moving",
+      "confidence": 0.8747083108957099,
+      "drift_pixels": null,
+      "evidence": "insufficient",
+      "generation": 1,
+      "has_motion_transition": true,
+      "inlier_fraction": 0.715670436187399,
+      "inliers": 443,
+      "motion_pixels": 0.20416924895250996,
+      "occupied_cells": 11,
+      "sequence": 70,
+      "sharpness": 11594.642635872482,
+      "speed_px_s": null,
+      "stable": false,
+      "state": "observing",
+      "timing_basis": "local_observation",
+      "tracks": 619
+    }
+  },
+  "ptz_commands_issued": 3,
+  "return_command": {
+    "elapsed_ms": 31.9,
+    "ok": true,
+    "status_code": 200
+  },
+  "stop": {
+    "elapsed_ms": 50.2,
+    "ok": true,
+    "status_code": 200
+  },
+  "temporary_preset": {
+    "create_response": {
+      "elapsed_ms": 39.0,
+      "ok": true,
+      "status_code": 200
+    },
+    "created": true,
+    "preserved_for_manual_recovery": true,
+    "removed": false
+  }
+}

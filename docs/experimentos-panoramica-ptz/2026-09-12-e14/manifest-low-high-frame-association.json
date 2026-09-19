@@ -1,0 +1,56 @@
+{
+  "camera": {
+    "high_source_id": "profile_1",
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "low_source_id": "profile_2"
+  },
+  "data_handling": {
+    "persist_images": false,
+    "report": "Hashes, dimensões, headers de sequência/publicação e métricas escalares de correspondência."
+  },
+  "experiment_id": "E14R",
+  "forbidden": [
+    "PTZ",
+    "zoom",
+    "preset",
+    "panorama capture",
+    "image persistence"
+  ],
+  "hypothesis": "Quadros decoder-fresh solicitados em paralelo podem formar uma associação de refinamento somente quando a correspondência visual distribuída e a diferença de publicação menor ou igual a 1 s concordam.",
+  "outcomes": {
+    "inconclusive": "Sem pares correlacionados suficientes, nenhuma associação de alta resolução é usada.",
+    "pass": "A associação exige ambas as evidências e recusa a proximidade visual temporalmente desalinhada."
+  },
+  "preconditions": {
+    "E2": "Duas vistas horizontais compatíveis.",
+    "E5": "profile_2 contínuo no CameraCaptureService durante pan e retorno.",
+    "E6": "A política de janelas quietas e retorno visual existe."
+  },
+  "result": {
+    "accepted_parallel_pairs": 3,
+    "decision": "A associação requer correspondência visual distribuída e diferença de publicação <= 1 s. O controle negativo demonstra que visão semelhante sem alinhamento temporal não é selecionada. A integração dessa associação ao percurso real ainda deve manter a mesma regra.",
+    "negative_control": {
+      "reason": "temporal_alignment_unverified",
+      "temporal_delta_seconds": 2.099547,
+      "visual_overlap": 0.9935
+    },
+    "parallel_timestamp_deltas_seconds": [
+      0.017769,
+      0.06904,
+      0.055009
+    ],
+    "parallel_visual_overlaps": [
+      0.9927,
+      0.9935,
+      0.9922
+    ]
+  },
+  "single_trial": {
+    "acceptance": "Ao menos dois pares paralelos aceitos; controle negativo visualmente compatível, porém temporalmente recusado.",
+    "commands": "Três pares de snapshots decoder-fresh em paralelo e um controle negativo em que o alto é solicitado 2 s depois do baixo.",
+    "maximum_elapsed_seconds": 90
+  },
+  "status": "completed_stationary_association_verified",
+  "title": "Associação de quadros baixo e alto por evidência temporal e visual"
+}

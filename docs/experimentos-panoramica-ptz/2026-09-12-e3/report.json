@@ -1,0 +1,191 @@
+{
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem"
+  },
+  "conclusion": {
+    "classification": "configured_origin_healthy_after_rebind",
+    "directly_reachable_sources": [
+      "profile_1",
+      "profile_2"
+    ],
+    "reason": "Both configured-origin probes succeeded after the exact ONVIF-profile rebind. The shared-decoder failures retained below are historical pre-rebind E2 evidence, not current behavior."
+  },
+  "direct_configured_origin_probes": {
+    "profile_1": {
+      "backend": "ffmpeg",
+      "elapsed_ms": 1858.9,
+      "error": null,
+      "ok": true,
+      "probe_latency_ms": 1856,
+      "probe_status": "ok",
+      "source": "configured",
+      "status_code": 200,
+      "transports_tested": [
+        "configured:tcp"
+      ]
+    },
+    "profile_2": {
+      "backend": "ffmpeg",
+      "elapsed_ms": 1748.4,
+      "error": null,
+      "ok": true,
+      "probe_latency_ms": 1744,
+      "probe_status": "ok",
+      "source": "configured",
+      "status_code": 200,
+      "transports_tested": [
+        "configured:tcp"
+      ]
+    }
+  },
+  "experiment_id": "E3",
+  "health_after": {
+    "ok": true,
+    "sources": [
+      {
+        "backend": "auto",
+        "camera_source_id": null,
+        "capture_fps": null,
+        "configured_backend": "auto",
+        "decode_failures": 0,
+        "frames_captured": 0,
+        "ingest_blocking_errors": [],
+        "ingest_mode": "direct",
+        "ingest_warnings": [],
+        "opened": false,
+        "recommended_action": "Waiting for the camera source to produce frames.",
+        "restarts_total": 0,
+        "rtsp_transport": "rtsp",
+        "status": "starting",
+        "target_fps": null,
+        "used_ingest": false
+      },
+      {
+        "backend": "auto",
+        "camera_source_id": null,
+        "capture_fps": null,
+        "configured_backend": "auto",
+        "decode_failures": 0,
+        "frames_captured": 0,
+        "ingest_blocking_errors": [],
+        "ingest_mode": "direct",
+        "ingest_warnings": [],
+        "opened": false,
+        "recommended_action": "Waiting for the camera source to produce frames.",
+        "restarts_total": 0,
+        "rtsp_transport": "rtsp",
+        "status": "starting",
+        "target_fps": null,
+        "used_ingest": false
+      },
+      {
+        "backend": "auto",
+        "camera_source_id": null,
+        "capture_fps": null,
+        "configured_backend": "auto",
+        "decode_failures": 0,
+        "frames_captured": 0,
+        "ingest_blocking_errors": [],
+        "ingest_mode": "direct",
+        "ingest_warnings": [],
+        "opened": false,
+        "recommended_action": "Waiting for the camera source to produce frames.",
+        "restarts_total": 0,
+        "rtsp_transport": "rtsp",
+        "status": "starting",
+        "target_fps": null,
+        "used_ingest": false
+      }
+    ],
+    "status_code": 200
+  },
+  "health_before": {
+    "ok": true,
+    "sources": [
+      {
+        "backend": "auto",
+        "camera_source_id": null,
+        "capture_fps": null,
+        "configured_backend": "auto",
+        "decode_failures": 0,
+        "frames_captured": 0,
+        "ingest_blocking_errors": [],
+        "ingest_mode": "direct",
+        "ingest_warnings": [],
+        "opened": false,
+        "recommended_action": "Waiting for the camera source to produce frames.",
+        "restarts_total": 0,
+        "rtsp_transport": "rtsp",
+        "status": "starting",
+        "target_fps": null,
+        "used_ingest": false
+      },
+      {
+        "backend": "auto",
+        "camera_source_id": null,
+        "capture_fps": null,
+        "configured_backend": "auto",
+        "decode_failures": 0,
+        "frames_captured": 0,
+        "ingest_blocking_errors": [],
+        "ingest_mode": "direct",
+        "ingest_warnings": [],
+        "opened": false,
+        "recommended_action": "Waiting for the camera source to produce frames.",
+        "restarts_total": 0,
+        "rtsp_transport": "rtsp",
+        "status": "starting",
+        "target_fps": null,
+        "used_ingest": false
+      },
+      {
+        "backend": "auto",
+        "camera_source_id": null,
+        "capture_fps": null,
+        "configured_backend": "auto",
+        "decode_failures": 0,
+        "frames_captured": 0,
+        "ingest_blocking_errors": [],
+        "ingest_mode": "direct",
+        "ingest_warnings": [],
+        "opened": false,
+        "recommended_action": "Waiting for the camera source to produce frames.",
+        "restarts_total": 0,
+        "rtsp_transport": "rtsp",
+        "status": "starting",
+        "target_fps": null,
+        "used_ingest": false
+      }
+    ],
+    "status_code": 200
+  },
+  "images_persisted": false,
+  "ptz_commands_issued": 0,
+  "reused_e2": {
+    "centralized_ingest_snapshot_fallback": {
+      "profile_1": {
+        "elapsed_ms": 1990.2,
+        "error": null,
+        "status": 200
+      },
+      "profile_2": {
+        "elapsed_ms": 1858.7,
+        "error": null,
+        "status": 200
+      }
+    },
+    "shared_decoder_fresh": {
+      "profile_1": {
+        "elapsed_ms": 5018.4,
+        "error": "Fresh camera frame is temporarily unavailable",
+        "status": 503
+      },
+      "profile_2": {
+        "elapsed_ms": 5077.9,
+        "error": "Fresh camera frame is temporarily unavailable",
+        "status": 503
+      }
+    }
+  }
+}

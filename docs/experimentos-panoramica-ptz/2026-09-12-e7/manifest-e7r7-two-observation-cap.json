@@ -1,0 +1,35 @@
+{
+  "acceptance": {
+    "failure": "Any unavailable frame, unstable view, failed visual correspondence, response inconsistency or final residual above 3 px stops the controller. The temporary preset is preserved in a private 0600 destination; no preset recall or retry is sent.",
+    "success": "The direct visual return reaches a fresh quiet frame with overlap at least 0.85 and canonical-controller displacement at most 3 px."
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E7R7",
+  "hypothesis": "For an unmeasured direction, two visually qualified 0.08 s pulses are safer than extrapolating the first response into a 0.15 s correction. The adapter and controller use the same canonical matcher.",
+  "limits": {
+    "fine_corrections_maximum": 4,
+    "initial_return_error_maximum_pixels": 35,
+    "outbound": {
+      "axis": "pan",
+      "direction": 1,
+      "duration_seconds": 0.35,
+      "speed": 0.1
+    },
+    "physical_commands_maximum": 5
+  },
+  "recovery": {
+    "path": "direct_fine",
+    "temporary_preset": "created before outbound; retained privately unless direct visual return is strict"
+  },
+  "observed": {
+    "ptz_commands_issued": 0,
+    "preset_count_after_attempt": 8,
+    "toposync_e7r7_preset_count_after_attempt": 0
+  },
+  "outcome": "SetPreset returned 503 before any outbound movement. A read-only catalog check confirmed that no E7R7 preset was created, so this attempt cannot test the two-observation pulse cap.",
+  "status": "aborted_before_physical_command"
+}

@@ -1,0 +1,31 @@
+{
+  "experiment_id": "E6",
+  "title": "Preflight de separacao entre mecanica, transporte e estabilidade",
+  "status": "completed_recovery_validated",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "ptz_commands_issued": 0,
+  "physical_trial": {
+    "axis": "pan only",
+    "maximum_continuous_velocity": 0.12,
+    "maximum_continuous_duration_seconds": 0.35,
+    "maximum_motor_commands": 3,
+    "observation_horizon_seconds": 12,
+    "recovery": "Create a named temporary preset before moving; after explicit Stop, return once through that preset. Keep the preset if visual return cannot be verified."
+  },
+  "preconditions": {
+    "verified_toposync_capture_source": true,
+    "shared_decoder_fresh_frame": true,
+    "configured_origin_after_rebind": "ok",
+    "canonical_onvif_profile_probe": "ok",
+    "ptz_readback": "available_but_move_status_unknown"
+  },
+  "former_blocking_reason": "The configured Toposync acquisition path did not produce a fresh decoder frame before the ONVIF-profile rebind.",
+  "recovery_basis": "PTZ readback remains auxiliary because this camera reports move_status UNKNOWN. A temporary preset and a distributed visual correspondence check provide the recoverable return gate.",
+  "outcome": "The original five-frame attempt returned outside the gate and preserved its preset. A distinct 12-second-horizon trial then established a five-frame quiet baseline, accepted one bounded pulse, and returned to the baseline with 0.0806 analysis-pixel displacement; its temporary preset was removed.",
+  "next_gate": "E7 may begin with one observable but bounded pulse, using the validated quiet-window recovery protocol. A successful return does not itself characterize actuator response.",
+  "return_verification": "Distributed visual correspondence from the pre-move frame to the post-return frame with overlap at least 0.85 and 95th-percentile displacement at most 15 analysis pixels."
+}

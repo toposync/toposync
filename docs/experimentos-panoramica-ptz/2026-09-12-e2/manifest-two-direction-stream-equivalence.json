@@ -1,0 +1,73 @@
+{
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_ids": [
+      "profile_1",
+      "profile_2"
+    ]
+  },
+  "data_handling": {
+    "persist_images": false,
+    "private_destination": "Token e âncora somente se o retorno não for visualmente exato.",
+    "public_report": "Apenas hashes, dimensões, metadados e métricas escalares."
+  },
+  "experiment_id": "E2R",
+  "forbidden": [
+    "PTZ AbsoluteMove",
+    "PTZ RelativeMove",
+    "tilt",
+    "zoom",
+    "fine correction",
+    "a second GotoPreset",
+    "panorama capture or continuation"
+  ],
+  "hypothesis": "Os perfis ONVIF já vinculados correspondem visualmente à mesma lente e enquadramento em uma segunda vista de pan, não apenas na vista atual.",
+  "outcomes": {
+    "fail_safe": "Qualquer recusa encerra e preserva o destino de retorno, sem outra ação automática.",
+    "pass": "Duas vistas compatíveis e retorno visual exato com limpeza do preset."
+  },
+  "preconditions": {
+    "baseline": "A vista inicial precisa estar quieta e ambos os streams precisam corresponder antes de criar o preset.",
+    "both_streams": "Leitura atual sem movimento obteve os dois snapshots decoder-fresh e correspondência distribuída: 0,9928 de sobreposição e 0,836 px.",
+    "return": "E7R5 restaurou uma âncora nova de pan positivo em 0,244 px com um único preset. Essa é a única modalidade de retorno autorizada neste ensaio.",
+    "warmup": "O profile_2 pode iniciar sem dois quadros do decoder dentro de 5 s e responder em uma confirmação posterior, sem PTZ. Antes de qualquer movimento, o roteiro registra no máximo uma tentativa de aquecimento por fonte e uma confirmação fresca; não aceita fallback antigo nem oculta a indisponibilidade."
+  },
+  "result": {
+    "baseline": {
+      "displacement_analysis_pixels": 0.9711,
+      "inliers": 248,
+      "profile_correspondence_overlap": 0.993
+    },
+    "decision": "Os dois perfis são visualmente compatíveis em duas vistas horizontais quietas. A equivalência permanece parcial: tilt, zoom, toda a faixa óptica e observação nativa durante movimento não foram testados.",
+    "private_destination_absent_after_success": true,
+    "profile_2_warmup_during_trial": false,
+    "second_pan_view": {
+      "displacement_analysis_pixels": 0.5884,
+      "inliers": 244,
+      "profile_correspondence_overlap": 0.9945
+    },
+    "temporary_preset_removed": true,
+    "visual_return": {
+      "displacement_analysis_pixels": 0.095,
+      "inliers": 393,
+      "overlap": 0.997
+    }
+  },
+  "single_trial": {
+    "acceptance": "Correspondência verificada e distribuída entre profile_1 e profile_2 nas duas vistas; retorno visual com sobreposição >= 0,85 e deslocamento <= 3 px.",
+    "failure": "Preservar o preset e o destino privado 0600; não aplicar correção fina, Stop, segundo retorno nem qualquer movimento adicional.",
+    "maximum_elapsed_seconds": 90,
+    "maximum_motor_actions": 2,
+    "outbound": {
+      "axis": "pan",
+      "direction": 1,
+      "duration_seconds": 0.35,
+      "velocity": 0.1
+    },
+    "recovery": "Um único GotoPreset apenas depois que a segunda vista estiver quieta.",
+    "sampling": "Para cada vista quieta, cada perfil exige frame decoder-fresh. Quando uma única tentativa receber 503 de aquecimento, a confirmação única após 1 s fica registrada; qualquer outra indisponibilidade encerra antes do movimento ou prossegue apenas à recuperação já declarada."
+  },
+  "status": "completed_two_horizontal_views_return_verified",
+  "title": "Equivalência dos streams em duas vistas horizontais quietas"
+}

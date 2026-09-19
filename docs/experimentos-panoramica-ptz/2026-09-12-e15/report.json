@@ -1,0 +1,776 @@
+{
+  "acceptance": {
+    "control": "The identical-image control must be verified and have zero displacement in both code paths.",
+    "decision": "The legacy color pre-resize is not admissible if it changes verification, shift direction or normalized displacement beyond the stated tolerance. The controller-owned transform is canonical."
+  },
+  "control": {
+    "agreement_with_legacy": {
+      "consistent": true,
+      "normalized_displacement_difference": 0.0,
+      "normalized_displacement_tolerance": 2.0,
+      "same_direction": true,
+      "same_displacement": true,
+      "same_verification": true
+    },
+    "legacy_color_preresized": {
+      "code": null,
+      "displacement": 0.0,
+      "displacement_at_960": 0.0,
+      "inliers": 2002,
+      "overlap": 0.9971084104938271,
+      "shift_at_960": [
+        0.0,
+        0.0
+      ],
+      "shift_x": 0.0,
+      "shift_y": 0.0,
+      "verified": true
+    },
+    "pair": "capture-0000->capture-0000",
+    "production_canonical": {
+      "code": null,
+      "displacement": 0.0,
+      "displacement_at_960": 0.0,
+      "inliers": 2000,
+      "overlap": 0.9971084104938271,
+      "shift_at_960": [
+        0.0,
+        0.0
+      ],
+      "shift_x": 0.0,
+      "shift_y": 0.0,
+      "verified": true
+    },
+    "scale_to_960": 3.0,
+    "source_size": [
+      2880,
+      1620
+    ],
+    "status": "compared"
+  },
+  "experiment_id": "E15",
+  "pairs": [
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 123.32150065104167,
+        "normalized_displacement_tolerance": 62.85603195190429,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 179.58866271972656,
+        "displacement_at_960": 179.58866271972656,
+        "inliers": 195,
+        "overlap": 0.8166948181905864,
+        "shift_at_960": [
+          151.329833984375,
+          14.773651123046875
+        ],
+        "shift_x": 151.329833984375,
+        "shift_y": 14.773651123046875,
+        "verified": true
+      },
+      "pair": "capture-0000->capture-0001",
+      "production_canonical": {
+        "code": null,
+        "displacement": 168.80148620605468,
+        "displacement_at_960": 56.26716206868489,
+        "inliers": 57,
+        "overlap": 0.8117234519675925,
+        "shift_at_960": [
+          50.044718424479164,
+          1.254150390625
+        ],
+        "shift_x": 150.1341552734375,
+        "shift_y": 3.762451171875,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 12.6975700378418,
+        "normalized_displacement_tolerance": 6.574695072174072,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 18.784843063354494,
+        "displacement_at_960": 18.784843063354494,
+        "inliers": 625,
+        "overlap": 0.9764622516396605,
+        "shift_at_960": [
+          -16.4111328125,
+          -1.33587646484375
+        ],
+        "shift_x": -16.4111328125,
+        "shift_y": -1.33587646484375,
+        "verified": true
+      },
+      "pair": "capture-0001->capture-0002",
+      "production_canonical": {
+        "code": null,
+        "displacement": 18.261819076538085,
+        "displacement_at_960": 6.087273025512695,
+        "inliers": 212,
+        "overlap": 0.9778775438850309,
+        "shift_at_960": [
+          -5.168355305989583,
+          -0.4749959309895833
+        ],
+        "shift_x": -15.50506591796875,
+        "shift_y": -1.42498779296875,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 18.206189982096355,
+        "normalized_displacement_tolerance": 9.447150535583495,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 26.991858673095702,
+        "displacement_at_960": 26.991858673095702,
+        "inliers": 631,
+        "overlap": 0.9684751157407407,
+        "shift_at_960": [
+          22.1634521484375,
+          1.9881591796875
+        ],
+        "shift_x": 22.1634521484375,
+        "shift_y": 1.9881591796875,
+        "verified": true
+      },
+      "pair": "capture-0002->capture-0003",
+      "production_canonical": {
+        "code": null,
+        "displacement": 26.357006072998047,
+        "displacement_at_960": 8.78566869099935,
+        "inliers": 175,
+        "overlap": 0.9706221667631173,
+        "shift_at_960": [
+          7.5096689860026045,
+          0.75994873046875
+        ],
+        "shift_x": 22.529006958007812,
+        "shift_y": 2.27984619140625,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 65.62882385253906,
+        "normalized_displacement_tolerance": 33.37971244812012,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 95.3706069946289,
+        "displacement_at_960": 95.3706069946289,
+        "inliers": 329,
+        "overlap": 0.904790641878858,
+        "shift_at_960": [
+          81.88623046875,
+          2.71624755859375
+        ],
+        "shift_x": 81.88623046875,
+        "shift_y": 2.71624755859375,
+        "verified": true
+      },
+      "pair": "capture-0003->capture-0004",
+      "production_canonical": {
+        "code": null,
+        "displacement": 89.22534942626953,
+        "displacement_at_960": 29.741783142089844,
+        "inliers": 104,
+        "overlap": 0.9101813874421296,
+        "shift_at_960": [
+          26.015096028645832,
+          0.6978759765625
+        ],
+        "shift_x": 78.0452880859375,
+        "shift_y": 2.0936279296875,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 98.88375040690104,
+        "normalized_displacement_tolerance": 51.50580581665039,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 147.1594451904297,
+        "displacement_at_960": 147.1594451904297,
+        "inliers": 226,
+        "overlap": 0.8411522231867284,
+        "shift_at_960": [
+          128.64599609375,
+          7.251617431640625
+        ],
+        "shift_x": 128.64599609375,
+        "shift_y": 7.251617431640625,
+        "verified": true
+      },
+      "pair": "capture-0004->capture-0005",
+      "production_canonical": {
+        "code": null,
+        "displacement": 144.82708435058595,
+        "displacement_at_960": 48.27569478352865,
+        "inliers": 82,
+        "overlap": 0.8449294102044753,
+        "shift_at_960": [
+          42.05230712890625,
+          0.4948832194010417
+        ],
+        "shift_x": 126.15692138671875,
+        "shift_y": 1.484649658203125,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 97.98194681803386,
+        "normalized_displacement_tolerance": 51.20066665649414,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 146.2876190185547,
+        "displacement_at_960": 146.2876190185547,
+        "inliers": 256,
+        "overlap": 0.8313107036072531,
+        "shift_at_960": [
+          126.41766357421875,
+          6.854461669921875
+        ],
+        "shift_x": 126.41766357421875,
+        "shift_y": 6.854461669921875,
+        "verified": true
+      },
+      "pair": "capture-0005->capture-0006",
+      "production_canonical": {
+        "code": null,
+        "displacement": 144.9170166015625,
+        "displacement_at_960": 48.30567220052083,
+        "inliers": 111,
+        "overlap": 0.8485843460648148,
+        "shift_at_960": [
+          41.912577311197914,
+          1.4725850423177083
+        ],
+        "shift_x": 125.73773193359375,
+        "shift_y": 4.417755126953125,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 97.8779296875,
+        "normalized_displacement_tolerance": 52.8259471130371,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 150.9312774658203,
+        "displacement_at_960": 150.9312774658203,
+        "inliers": 271,
+        "overlap": 0.8233326099537037,
+        "shift_at_960": [
+          127.52886962890625,
+          7.04742431640625
+        ],
+        "shift_x": 127.52886962890625,
+        "shift_y": 7.04742431640625,
+        "verified": true
+      },
+      "pair": "capture-0006->capture-0007",
+      "production_canonical": {
+        "code": null,
+        "displacement": 159.16004333496093,
+        "displacement_at_960": 53.05334777832031,
+        "inliers": 91,
+        "overlap": 0.8486173804012346,
+        "shift_at_960": [
+          43.798502604166664,
+          2.8112284342447915
+        ],
+        "shift_x": 131.3955078125,
+        "shift_y": 8.433685302734375,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 105.19963785807292,
+        "normalized_displacement_tolerance": 55.32936996459961,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 158.08391418457032,
+        "displacement_at_960": 158.08391418457032,
+        "inliers": 230,
+        "overlap": 0.8089811800733024,
+        "shift_at_960": [
+          129.58734130859375,
+          6.685546875
+        ],
+        "shift_x": 129.58734130859375,
+        "shift_y": 6.685546875,
+        "verified": true
+      },
+      "pair": "capture-0007->capture-0008",
+      "production_canonical": {
+        "code": null,
+        "displacement": 158.65282897949217,
+        "displacement_at_960": 52.88427632649739,
+        "inliers": 131,
+        "overlap": 0.8137303481867284,
+        "shift_at_960": [
+          42.521341959635414,
+          2.1871439615885415
+        ],
+        "shift_x": 127.56402587890625,
+        "shift_y": 6.561431884765625,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 104.30013224283854,
+        "normalized_displacement_tolerance": 55.35843765258788,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 158.16696472167968,
+        "displacement_at_960": 158.16696472167968,
+        "inliers": 231,
+        "overlap": 0.8165077642746914,
+        "shift_at_960": [
+          123.3369140625,
+          4.4849853515625
+        ],
+        "shift_x": 123.3369140625,
+        "shift_y": 4.4849853515625,
+        "verified": true
+      },
+      "pair": "capture-0008->capture-0009",
+      "production_canonical": {
+        "code": null,
+        "displacement": 161.60049743652343,
+        "displacement_at_960": 53.86683247884114,
+        "inliers": 149,
+        "overlap": 0.8089542944637346,
+        "shift_at_960": [
+          43.607828776041664,
+          2.2865575154622397
+        ],
+        "shift_x": 130.823486328125,
+        "shift_y": 6.859672546386719,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": true,
+        "same_direction": null,
+        "same_displacement": null,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": "correspondences_not_distributed",
+        "displacement": null,
+        "inliers": null,
+        "overlap": null,
+        "shift_x": null,
+        "shift_y": null,
+        "verified": false
+      },
+      "pair": "capture-0009->capture-0010",
+      "production_canonical": {
+        "code": "correspondences_not_distributed",
+        "displacement": null,
+        "inliers": null,
+        "overlap": null,
+        "shift_x": null,
+        "shift_y": null,
+        "verified": false
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 59.62415517171223,
+        "normalized_displacement_tolerance": 30.4934952545166,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 87.12427215576172,
+        "displacement_at_960": 87.12427215576172,
+        "inliers": 296,
+        "overlap": 0.9146566960841049,
+        "shift_at_960": [
+          -71.3441162109375,
+          1.767791748046875
+        ],
+        "shift_x": -71.3441162109375,
+        "shift_y": 1.767791748046875,
+        "verified": true
+      },
+      "pair": "capture-0010->capture-0011",
+      "production_canonical": {
+        "code": null,
+        "displacement": 82.50035095214844,
+        "displacement_at_960": 27.50011698404948,
+        "inliers": 129,
+        "overlap": 0.9093863932291667,
+        "shift_at_960": [
+          -24.302042643229168,
+          0.3282979329427083
+        ],
+        "shift_x": -72.9061279296875,
+        "shift_y": 0.984893798828125,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 103.26963704427081,
+        "normalized_displacement_tolerance": 53.933539886474605,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 154.0958282470703,
+        "displacement_at_960": 154.0958282470703,
+        "inliers": 235,
+        "overlap": 0.8561261212384259,
+        "shift_at_960": [
+          -130.38671875,
+          5.024391174316406
+        ],
+        "shift_x": -130.38671875,
+        "shift_y": 5.024391174316406,
+        "verified": true
+      },
+      "pair": "capture-0011->capture-0012",
+      "production_canonical": {
+        "code": null,
+        "displacement": 152.47857360839845,
+        "displacement_at_960": 50.826191202799485,
+        "inliers": 104,
+        "overlap": 0.8542217038001543,
+        "shift_at_960": [
+          -43.058492024739586,
+          1.5882568359375
+        ],
+        "shift_x": -129.17547607421875,
+        "shift_y": 4.7647705078125,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 106.66898498535156,
+        "normalized_displacement_tolerance": 55.94301712036132,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 159.83719177246093,
+        "displacement_at_960": 159.83719177246093,
+        "inliers": 219,
+        "overlap": 0.8519215374228395,
+        "shift_at_960": [
+          -132.96484375,
+          5.763427734375
+        ],
+        "shift_x": -132.96484375,
+        "shift_y": 5.763427734375,
+        "verified": true
+      },
+      "pair": "capture-0012->capture-0013",
+      "production_canonical": {
+        "code": null,
+        "displacement": 159.50462036132814,
+        "displacement_at_960": 53.168206787109376,
+        "inliers": 96,
+        "overlap": 0.8598860677083333,
+        "shift_at_960": [
+          -44.371317545572914,
+          1.2428995768229167
+        ],
+        "shift_x": -133.11395263671875,
+        "shift_y": 3.72869873046875,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 108.05035807291668,
+        "normalized_displacement_tolerance": 56.246069183349604,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 160.70305480957032,
+        "displacement_at_960": 160.70305480957032,
+        "inliers": 169,
+        "overlap": 0.8549772738233025,
+        "shift_at_960": [
+          -133.37371826171875,
+          4.530792236328125
+        ],
+        "shift_x": -133.37371826171875,
+        "shift_y": 4.530792236328125,
+        "verified": true
+      },
+      "pair": "capture-0013->capture-0014",
+      "production_canonical": {
+        "code": null,
+        "displacement": 157.95809020996094,
+        "displacement_at_960": 52.652696736653645,
+        "inliers": 61,
+        "overlap": 0.8593872974537037,
+        "shift_at_960": [
+          -43.30694580078125,
+          2.0748799641927085
+        ],
+        "shift_x": -129.92083740234375,
+        "shift_y": 6.224639892578125,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 112.3886962890625,
+        "normalized_displacement_tolerance": 56.04441223144531,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 160.12689208984375,
+        "displacement_at_960": 160.12689208984375,
+        "inliers": 155,
+        "overlap": 0.8532118055555555,
+        "shift_at_960": [
+          -134.8509521484375,
+          5.562164306640625
+        ],
+        "shift_x": -134.8509521484375,
+        "shift_y": 5.562164306640625,
+        "verified": true
+      },
+      "pair": "capture-0014->capture-0015",
+      "production_canonical": {
+        "code": null,
+        "displacement": 143.21458740234374,
+        "displacement_at_960": 47.73819580078125,
+        "inliers": 45,
+        "overlap": 0.8499616608796297,
+        "shift_at_960": [
+          -41.807759602864586,
+          2.479827880859375
+        ],
+        "shift_x": -125.42327880859375,
+        "shift_y": 7.439483642578125,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    },
+    {
+      "agreement_with_legacy": {
+        "consistent": false,
+        "normalized_displacement_difference": 120.43024190266928,
+        "normalized_displacement_tolerance": 63.67726730346679,
+        "same_direction": true,
+        "same_displacement": false,
+        "same_verification": true
+      },
+      "legacy_color_preresized": {
+        "code": null,
+        "displacement": 181.93504943847657,
+        "displacement_at_960": 181.93504943847657,
+        "inliers": 102,
+        "overlap": 0.8158821011766976,
+        "shift_at_960": [
+          -148.2044677734375,
+          5.93939208984375
+        ],
+        "shift_x": -148.2044677734375,
+        "shift_y": 5.93939208984375,
+        "verified": true
+      },
+      "pair": "capture-0015->capture-0016",
+      "production_canonical": {
+        "code": null,
+        "displacement": 184.51442260742186,
+        "displacement_at_960": 61.50480753580729,
+        "inliers": 49,
+        "overlap": 0.8158154296875,
+        "shift_at_960": [
+          -49.78033447265625,
+          2.27337646484375
+        ],
+        "shift_x": -149.34100341796875,
+        "shift_y": 6.82012939453125,
+        "verified": true
+      },
+      "scale_to_960": 3.0,
+      "source_size": [
+        2880,
+        1620
+      ],
+      "status": "compared"
+    }
+  ],
+  "scope": {
+    "adjacent_pair_count": 16,
+    "camera_network_access": false,
+    "images_persisted": false,
+    "input_capture_count": 17,
+    "ptz_commands_issued": 0
+  },
+  "summary": {
+    "all_compared_pairs_consistent": false,
+    "compared_pairs": 16,
+    "consistent_pairs": 1,
+    "inconsistent_pairs": 15
+  },
+  "title": "Consistency of full and reduced visual correspondence"
+}

@@ -1,0 +1,14 @@
+{
+  "attempt": "read_only_locate_preserved_return_destination",
+  "candidate_count": 1,
+  "experiment_id": "E7R5",
+  "images_persisted": false,
+  "outcome": "preserved_destination_unique",
+  "private_destination_persisted": true,
+  "ptz_commands_issued": 0,
+  "response": {
+    "elapsed_ms": 37.0,
+    "ok": true,
+    "status_code": 200
+  }
+}

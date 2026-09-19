@@ -1,0 +1,71 @@
+{
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem"
+  },
+  "credentials_or_uris_persisted": false,
+  "mutation_scope": {
+    "changed_source_ids": [
+      "profile_1",
+      "profile_2"
+    ],
+    "origin_replacement": "onvif_profile with exact token, canonical URI and credential fallback",
+    "preserved_fields": [
+      "source id",
+      "role",
+      "video metadata",
+      "ingest settings",
+      "camera control settings"
+    ],
+    "preserved_source_ids": [
+      "profile_3"
+    ]
+  },
+  "operation": "proposed_source_rebind_not_applied",
+  "ptz_commands_issued": 0,
+  "ready_to_apply": true,
+  "sources": {
+    "profile_1": {
+      "camera_fallback_credentials_available": true,
+      "canonical_uri_available": true,
+      "configured_video": {
+        "codec": "H264",
+        "fps": 25,
+        "height": 1620,
+        "width": 2880
+      },
+      "dimensions_match": true,
+      "ingest_fallback_credentials_available": true,
+      "profile_name": "mainStream",
+      "profile_token": "profile_1",
+      "profile_video": {
+        "encoding": "H264",
+        "fps": 25,
+        "height": 1620,
+        "width": 2880
+      },
+      "schema_valid": true
+    },
+    "profile_2": {
+      "camera_fallback_credentials_available": true,
+      "canonical_uri_available": true,
+      "configured_video": {
+        "codec": "H264",
+        "fps": 25,
+        "height": 360,
+        "width": 640
+      },
+      "dimensions_match": true,
+      "ingest_fallback_credentials_available": true,
+      "profile_name": "minorStream",
+      "profile_token": "profile_2",
+      "profile_video": {
+        "encoding": "H264",
+        "fps": 25,
+        "height": 360,
+        "width": 640
+      },
+      "schema_valid": true
+    }
+  }
+}

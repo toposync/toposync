@@ -1,0 +1,13 @@
+{
+  "decision": "The stationary association gate is verified: select a high-resolution frame only when distributed visual correspondence and published-frame temporal alignment both pass. The three concurrent pairs passed (18\u201369 ms); the visually similar 2.10 s control was rejected.",
+  "experiment_id": "E14",
+  "implementation_limit": "The integrated moving acquisition still needs to apply this same gate. A stationary pair does not authorize matching high resolution by nearest timestamp alone.",
+  "preconditions": {
+    "e2": "Two quiet horizontal views verified as compatible for the configured profile pair.",
+    "e5": "Native profile_2 continuity was verified for one bounded pan and return.",
+    "e6": "E6T measured the local command-to-visual horizon; physical exposure time remains unavailable."
+  },
+  "ptz_commands_issued": 0,
+  "status": "completed_stationary_association_verified",
+  "title": "Gate para associacao entre baixa e alta resolucao durante aquisicao"
+}

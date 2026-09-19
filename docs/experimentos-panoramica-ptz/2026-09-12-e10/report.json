@@ -1,0 +1,36 @@
+{
+  "camera_network_access": false,
+  "classification": {
+    "not_proven": [
+      "low texture as the universal cause",
+      "ground-near parallax behavior",
+      "vertical-band connectivity",
+      "a reconstruction algorithm defect"
+    ],
+    "reason": "The only rejected direct correspondence is also the route maximum pan discontinuity, while every retained capture reports visual stability and the other fifteen adjacent links pass the unchanged geometric gates.",
+    "recorded_gap": "planning_or_transition_observability"
+  },
+  "e13_external_stitcher_comparison": {
+    "reason": "The input has a single unobserved transition and no vertical coverage. A second stitcher would not answer whether a route should have captured an intermediate bridge.",
+    "required_now": false
+  },
+  "evidence": {
+    "adjacent_links_accepted": 15,
+    "adjacent_links_rejected": {
+      "capture-0009->capture-0010": "correspondences_not_distributed"
+    },
+    "all_saved_captures_stable": true,
+    "largest_commanded_pan_discontinuity": {
+      "median_step": 0.07142899999999996,
+      "multiple_of_median": 6.333296000224002,
+      "pair": "capture-0009->capture-0010",
+      "step": 0.45238100000000003,
+      "visual_result": "correspondences_not_distributed"
+    },
+    "unique_tilt_bands": [
+      -0.390625
+    ]
+  },
+  "experiment_id": "E10",
+  "ptz_commands_issued": 0
+}

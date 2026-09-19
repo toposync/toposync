@@ -1,0 +1,37 @@
+{
+  "acceptance": {
+    "failure": "Missing quiet baseline, missing pre-read absolute anchor, an unconfirmed action, missing fresh frame evidence, or a final visual return above 3 px terminates the run. Neither motion command is retried. No preset or visual correction is allowed.",
+    "success": "A single tilt pulse has a sent-to-visual timeline containing fresh decoder sequence evidence and controller lifecycle states, and one absolute return matches the anchor within 3 px. The result may classify the tilt response as not observed; that is an explicit result, not a successful coverage connection."
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E6T",
+  "hypothesis": "The E9P2 vertical inconsistency can be separated into controller Stop serialization, decoder timing, and absent or delayed visual tilt response when observation starts at command send rather than after a fixed quiet-grace delay.",
+  "limits": {
+    "absolute_anchor_returns_maximum": 1,
+    "continuous_moves_maximum": 1,
+    "continuous_pulse": {
+      "axis": "tilt",
+      "direction": 1,
+      "duration_seconds": 0.35,
+      "speed": 0.1
+    },
+    "presets_created": 0,
+    "ptz_commands_maximum": 2,
+    "visual_corrections_maximum": 0
+  },
+  "result": {
+    "final_return_displacement_px": 0.689,
+    "final_return_overlap": 0.9962,
+    "interpretation": "The data proves a local command/decoder-observation gap. Without a camera exposure timestamp, mechanical delay and upstream video delay remain classified together as inconclusive.",
+    "outcome": "timed_tilt_response_and_visual_return_verified",
+    "outgoing_command_ack_ms": 52.1,
+    "outgoing_first_visual_motion_ms": 3645.4,
+    "outgoing_last_visual_motion_ms": 9882.2,
+    "ptz_commands_issued": 2
+  },
+  "status": "completed_visual_timeline_and_return_verified"
+}

@@ -1,0 +1,200 @@
+{
+  "scope": "Recalculo aritmetico sobre relatorio preservado; sem reexecutar matching ou mover cameras.",
+  "assumption": "Ambos os caminhos de _match usados no ensaio ja retornavam pixels de analise 960, conforme o codigo atual. Versao historica carregada nao certificada.",
+  "source_sha256": {
+    "docs/experimentos-panoramica-ptz/2026-09-12-e15/report.json": "05894788521598d50fb0ae56d2fc3e65d4e205fcd5edb83d5dbba816624ce7bb",
+    "docs/experimentos-panoramica-ptz/2026-09-12-e15/comparator_scale_consistency.py": "d327fccbae42c6d09598c3cd3a61d31d583414200f61ca64b1fbdf8ebb96d657",
+    "docs/experimentos-panoramica-ptz/2026-09-12-e15/manifest.json": "258bde5bbdc0463f28b56bd174e47ec3de9849cec4a091b94c344c9b237c2772",
+    "extensions/cameras/src/toposync_ext_cameras/panorama_scan.py": "88b5c6d4df4278b6199ebc8ca27f9cd93c7459e38b26d2cf78fea6e8fb913f19"
+  },
+  "historical_summary": {
+    "all_compared_pairs_consistent": false,
+    "compared_pairs": 16,
+    "consistent_pairs": 1,
+    "inconsistent_pairs": 15
+  },
+  "conditional_summary": {
+    "pairs": 16,
+    "consistent": 16,
+    "both_verified": 15,
+    "both_rejected": 1
+  },
+  "pairs": [
+    {
+      "pair": "capture-0000->capture-0001",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 168.80148620605468,
+      "legacy_raw_displacement": 179.58866271972656,
+      "difference_same_scale": 10.78717651367188,
+      "original_tolerance_same_scale": 62.85603195190429,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0001->capture-0002",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 18.261819076538085,
+      "legacy_raw_displacement": 18.784843063354494,
+      "difference_same_scale": 0.5230239868164084,
+      "original_tolerance_same_scale": 6.574695072174072,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0002->capture-0003",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 26.357006072998047,
+      "legacy_raw_displacement": 26.991858673095702,
+      "difference_same_scale": 0.6348526000976555,
+      "original_tolerance_same_scale": 9.447150535583495,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0003->capture-0004",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 89.22534942626953,
+      "legacy_raw_displacement": 95.3706069946289,
+      "difference_same_scale": 6.145257568359369,
+      "original_tolerance_same_scale": 33.37971244812012,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0004->capture-0005",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 144.82708435058595,
+      "legacy_raw_displacement": 147.1594451904297,
+      "difference_same_scale": 2.3323608398437443,
+      "original_tolerance_same_scale": 51.50580581665039,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0005->capture-0006",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 144.9170166015625,
+      "legacy_raw_displacement": 146.2876190185547,
+      "difference_same_scale": 1.3706024169921989,
+      "original_tolerance_same_scale": 51.20066665649414,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0006->capture-0007",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 159.16004333496093,
+      "legacy_raw_displacement": 150.9312774658203,
+      "difference_same_scale": 8.22876586914063,
+      "original_tolerance_same_scale": 55.70601516723632,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0007->capture-0008",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 158.65282897949217,
+      "legacy_raw_displacement": 158.08391418457032,
+      "difference_same_scale": 0.5689147949218523,
+      "original_tolerance_same_scale": 55.52849014282226,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0008->capture-0009",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 161.60049743652343,
+      "legacy_raw_displacement": 158.16696472167968,
+      "difference_same_scale": 3.43353271484375,
+      "original_tolerance_same_scale": 56.56017410278319,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0009->capture-0010",
+      "both_verified": false,
+      "historical_consistent": true,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": null,
+      "legacy_raw_displacement": null,
+      "difference_same_scale": null,
+      "original_tolerance_same_scale": null,
+      "same_direction": null
+    },
+    {
+      "pair": "capture-0010->capture-0011",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 82.50035095214844,
+      "legacy_raw_displacement": 87.12427215576172,
+      "difference_same_scale": 4.623921203613278,
+      "original_tolerance_same_scale": 30.4934952545166,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0011->capture-0012",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 152.47857360839845,
+      "legacy_raw_displacement": 154.0958282470703,
+      "difference_same_scale": 1.6172546386718523,
+      "original_tolerance_same_scale": 53.933539886474605,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0012->capture-0013",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 159.50462036132814,
+      "legacy_raw_displacement": 159.83719177246093,
+      "difference_same_scale": 0.33257141113278976,
+      "original_tolerance_same_scale": 55.94301712036132,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0013->capture-0014",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 157.95809020996094,
+      "legacy_raw_displacement": 160.70305480957032,
+      "difference_same_scale": 2.744964599609375,
+      "original_tolerance_same_scale": 56.246069183349604,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0014->capture-0015",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 143.21458740234374,
+      "legacy_raw_displacement": 160.12689208984375,
+      "difference_same_scale": 16.91230468750001,
+      "original_tolerance_same_scale": 56.04441223144531,
+      "same_direction": true
+    },
+    {
+      "pair": "capture-0015->capture-0016",
+      "both_verified": true,
+      "historical_consistent": false,
+      "conditional_same_scale_consistent": true,
+      "canonical_raw_displacement": 184.51442260742186,
+      "legacy_raw_displacement": 181.93504943847657,
+      "difference_same_scale": 2.5793731689452954,
+      "original_tolerance_same_scale": 64.58004791259765,
+      "same_direction": true
+    }
+  ]
+}

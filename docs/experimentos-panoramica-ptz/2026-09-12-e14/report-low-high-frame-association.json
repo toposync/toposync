@@ -1,0 +1,227 @@
+{
+  "accepted_concurrent_pairs": 3,
+  "attempt": "stationary_low_high_frame_association",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "sources": [
+      "profile_1",
+      "profile_2"
+    ]
+  },
+  "concurrent_pairs": [
+    {
+      "association": {
+        "accepted": true,
+        "reason": "visual_and_temporal_verified",
+        "temporal_delta_seconds": 0.017769,
+        "temporal_verified": true,
+        "visual": {
+          "code": null,
+          "displacement": 0.8817143082618712,
+          "inliers": 227,
+          "model_candidates": [
+            {
+              "hull_fraction": 0.4778660820925248,
+              "inliers": 227,
+              "occupied_cells": 11
+            }
+          ],
+          "overlap": 0.9927193648726852,
+          "shift_x": -0.1405029296875,
+          "shift_y": -0.17169189453125,
+          "verified": true
+        }
+      },
+      "main": {
+        "dimensions": [
+          2880,
+          1620
+        ],
+        "frame_generation": "1",
+        "frame_sequence": "11",
+        "freshness": "decoder",
+        "obtained": true,
+        "published_at": 1789227243.486518,
+        "response_seconds": 2.0223,
+        "sha256": "6a49b49100038fb079f1e0f07c67a6d65659e7ede1315407ccb0c7f745ce038a",
+        "status": 200
+      },
+      "sub": {
+        "dimensions": [
+          640,
+          360
+        ],
+        "frame_generation": "1",
+        "frame_sequence": "30",
+        "freshness": "decoder",
+        "obtained": true,
+        "published_at": 1789227243.504287,
+        "response_seconds": 2.0123,
+        "sha256": "9035d969cd4e368887b7f5e6aad37d824967210cc0628db4f1cd0ea394b37e06",
+        "status": 200
+      }
+    },
+    {
+      "association": {
+        "accepted": true,
+        "reason": "visual_and_temporal_verified",
+        "temporal_delta_seconds": 0.06904,
+        "temporal_verified": true,
+        "visual": {
+          "code": null,
+          "displacement": 0.79943288564682,
+          "inliers": 251,
+          "model_candidates": [
+            {
+              "hull_fraction": 0.5307340275633081,
+              "inliers": 251,
+              "occupied_cells": 12
+            }
+          ],
+          "overlap": 0.993461612654321,
+          "shift_x": 0.036224365234375,
+          "shift_y": 0.10687255859375,
+          "verified": true
+        }
+      },
+      "main": {
+        "dimensions": [
+          2880,
+          1620
+        ],
+        "frame_generation": "1",
+        "frame_sequence": "31",
+        "freshness": "decoder",
+        "obtained": true,
+        "published_at": 1789227243.692673,
+        "response_seconds": 0.1326,
+        "sha256": "3b6f5160ad898730b69aca8feb571418a0f1b342b80580eaf5bd5d41ea99af57",
+        "status": 200
+      },
+      "sub": {
+        "dimensions": [
+          640,
+          360
+        ],
+        "frame_generation": "1",
+        "frame_sequence": "32",
+        "freshness": "decoder",
+        "obtained": true,
+        "published_at": 1789227243.623633,
+        "response_seconds": 0.1265,
+        "sha256": "b70b59fe7faad7775456ebf0c77cb22bdfe5b18aadbf89f15b9ded0072ed7808",
+        "status": 200
+      }
+    },
+    {
+      "association": {
+        "accepted": true,
+        "reason": "visual_and_temporal_verified",
+        "temporal_delta_seconds": 0.055009,
+        "temporal_verified": true,
+        "visual": {
+          "code": null,
+          "displacement": 1.2525274276733396,
+          "inliers": 250,
+          "model_candidates": [
+            {
+              "hull_fraction": 0.5255529921625754,
+              "inliers": 250,
+              "occupied_cells": 11
+            }
+          ],
+          "overlap": 0.9921797839506172,
+          "shift_x": -0.202178955078125,
+          "shift_y": -0.02764892578125,
+          "verified": true
+        }
+      },
+      "main": {
+        "dimensions": [
+          2880,
+          1620
+        ],
+        "frame_generation": "1",
+        "frame_sequence": "37",
+        "freshness": "decoder",
+        "obtained": true,
+        "published_at": 1789227243.849424,
+        "response_seconds": 0.1403,
+        "sha256": "bd5ffc933ebee0999282006bc64336537909d1eb4b0ef12a69bfc4b192c100c4",
+        "status": 200
+      },
+      "sub": {
+        "dimensions": [
+          640,
+          360
+        ],
+        "frame_generation": "1",
+        "frame_sequence": "40",
+        "freshness": "decoder",
+        "obtained": true,
+        "published_at": 1789227243.904433,
+        "response_seconds": 0.1347,
+        "sha256": "e028e5fee916606863b1fd7c81d0b7ddaaee30d02f2ddd98c85f073e1a4dca46",
+        "status": 200
+      }
+    }
+  ],
+  "experiment_id": "E14R",
+  "images_persisted": false,
+  "maximum_timestamp_delta_seconds": 1.0,
+  "negative_temporal_control": {
+    "association": {
+      "accepted": false,
+      "reason": "temporal_alignment_unverified",
+      "temporal_delta_seconds": 2.099547,
+      "temporal_verified": false,
+      "visual": {
+        "code": null,
+        "displacement": 0.8190547466278076,
+        "inliers": 236,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.5656827353747809,
+            "inliers": 236,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9934681833526234,
+        "shift_x": 0.089019775390625,
+        "shift_y": -0.030029296875,
+        "verified": true
+      }
+    },
+    "high": {
+      "dimensions": [
+        2880,
+        1620
+      ],
+      "frame_generation": "1",
+      "frame_sequence": "96",
+      "freshness": "decoder",
+      "obtained": true,
+      "published_at": 1789227246.203848,
+      "response_seconds": 0.1427,
+      "sha256": "c86e0dff9620b7734c39f976a6094687e1160da02438cf8ce7293fc954dcaecd",
+      "status": 200
+    },
+    "low": {
+      "dimensions": [
+        640,
+        360
+      ],
+      "frame_generation": "1",
+      "frame_sequence": "45",
+      "freshness": "decoder",
+      "obtained": true,
+      "published_at": 1789227244.104301,
+      "response_seconds": 0.1115,
+      "sha256": "95178fb47d7499581aae66daeeb7cd7588cb2eaed7e985344daf36d1ea66cf93",
+      "status": 200
+    }
+  },
+  "outcome": "low_high_association_verified_with_temporal_negative_control",
+  "ptz_commands_issued": 0
+}

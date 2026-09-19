@@ -1,0 +1,39 @@
+{
+  "applied": false,
+  "before": {
+    "profile_1": {
+      "ingest_mode": "centralized",
+      "origin_type": "onvif_profile",
+      "profile_token": "profile_1",
+      "uri_present": true
+    },
+    "profile_2": {
+      "ingest_mode": "centralized",
+      "origin_type": "onvif_profile",
+      "profile_token": "profile_2",
+      "uri_present": true
+    }
+  },
+  "before_identity": "21a90016a0d880e314027be537324230ec51d2bdf825a9c3e8ccc327f29882f7",
+  "experiment_id": "E3",
+  "mode": "dry_run",
+  "operation": "garagem_direct_ingest_alignment",
+  "proposed": {
+    "profile_1": {
+      "ingest_mode": "direct",
+      "origin_type": "onvif_profile",
+      "profile_token": "profile_1",
+      "uri_present": true
+    },
+    "profile_2": {
+      "ingest_mode": "direct",
+      "origin_type": "onvif_profile",
+      "profile_token": "profile_2",
+      "uri_present": true
+    }
+  },
+  "proposed_identity": "1b9f1a1bebf336df564fd5d94554bb102eda568210d2a6e8c0af8f468caf87dd",
+  "ptz_commands_issued": 0,
+  "rolled_back_after_failed_readback": false,
+  "uris_or_credentials_persisted": false
+}

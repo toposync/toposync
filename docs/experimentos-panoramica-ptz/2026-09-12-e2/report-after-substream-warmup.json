@@ -1,0 +1,163 @@
+{
+  "acceptance": {
+    "both_samples_obtained": true,
+    "no_camera_images_persisted": true,
+    "onvif_inventory_observed": true
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem"
+  },
+  "classification": {
+    "reason": "exact ONVIF bindings and one distributed stationary correspondence establish compatibility, but the E2 protocol still requires held-out directions before equivalence across the optical range",
+    "value": "inconclusive"
+  },
+  "elapsed_seconds": 4.042,
+  "executed_at_utc": "2026-09-12T15:22:39Z",
+  "experiment_id": "E2",
+  "onvif_get_profiles": {
+    "completed": true,
+    "profiles": [
+      {
+        "encoding": "H264",
+        "fps": 25,
+        "has_ptz": true,
+        "has_ptz_configuration": true,
+        "height": 1620,
+        "name": "mainStream",
+        "token": "profile_1",
+        "width": 2880
+      },
+      {
+        "encoding": "H264",
+        "fps": 25,
+        "has_ptz": true,
+        "has_ptz_configuration": true,
+        "height": 360,
+        "name": "minorStream",
+        "token": "profile_2",
+        "width": 640
+      },
+      {
+        "encoding": "JPEG",
+        "fps": 1,
+        "has_ptz": true,
+        "has_ptz_configuration": true,
+        "height": 360,
+        "name": "jpegStream",
+        "token": "profile_3",
+        "width": 640
+      }
+    ]
+  },
+  "ptz_commands_issued": 0,
+  "samples": {
+    "profile_1": {
+      "dimensions": [
+        2880,
+        1620
+      ],
+      "elapsed_ms": 1979.2,
+      "headers": {
+        "content-type": "image/jpeg",
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "14",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-mode": "latest_frame",
+        "x-toposync-snapshot-source": "configured",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "obtained": true,
+      "sha256": "bb24d6c6876eb84c1c75d2ba446d0e3d30a0c9128991434e6379e7833d76bd13",
+      "status": 200
+    },
+    "profile_2": {
+      "dimensions": [
+        640,
+        360
+      ],
+      "elapsed_ms": 1935.8,
+      "headers": {
+        "content-type": "image/jpeg",
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "30",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-mode": "latest_frame",
+        "x-toposync-snapshot-source": "configured",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "obtained": true,
+      "sha256": "9fbbd9bfd5fdbe932dddf39668c2e78c65644e83120562ef47c85cd5277ae9a7",
+      "status": 200
+    }
+  },
+  "snapshot_freshness_mode": "decoder",
+  "source_bindings": {
+    "profile_1": {
+      "profile_token": "profile_1",
+      "status": "exact"
+    },
+    "profile_2": {
+      "profile_token": "profile_2",
+      "status": "exact"
+    }
+  },
+  "sources": {
+    "profile_1": {
+      "enabled": true,
+      "id": "profile_1",
+      "name": "mainStream",
+      "origin_has_ptz": true,
+      "origin_profile_name": "mainStream",
+      "origin_profile_token": "profile_1",
+      "origin_type": "onvif_profile",
+      "role": "main",
+      "video": {
+        "codec": "H264",
+        "fps": 25.0,
+        "height": 1620,
+        "width": 2880
+      }
+    },
+    "profile_2": {
+      "enabled": true,
+      "id": "profile_2",
+      "name": "minorStream",
+      "origin_has_ptz": true,
+      "origin_profile_name": "minorStream",
+      "origin_profile_token": "profile_2",
+      "origin_type": "onvif_profile",
+      "role": "sub",
+      "video": {
+        "codec": "H264",
+        "fps": 25.0,
+        "height": 360,
+        "width": 640
+      }
+    }
+  },
+  "visual_correspondence_normalized_640x360": {
+    "analysis_size": [
+      960,
+      540
+    ],
+    "code": null,
+    "displacement": 0.5514210939407348,
+    "inliers": 229,
+    "model_candidates": [
+      {
+        "hull_fraction": 0.6382574250296131,
+        "inliers": 229,
+        "occupied_cells": 12
+      }
+    ],
+    "overlap": 0.9938755666473765,
+    "shift_x": 0.07366943359375,
+    "shift_y": 0.014923095703125,
+    "verified": true
+  }
+}

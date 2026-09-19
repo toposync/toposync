@@ -1,0 +1,552 @@
+{
+  "accepted_links": [
+    [
+      "capture-0000",
+      "capture-0001"
+    ],
+    [
+      "capture-0001",
+      "capture-0002"
+    ],
+    [
+      "capture-0002",
+      "capture-0003"
+    ],
+    [
+      "capture-0003",
+      "capture-0004"
+    ],
+    [
+      "capture-0004",
+      "capture-0005"
+    ],
+    [
+      "capture-0005",
+      "capture-0006"
+    ],
+    [
+      "capture-0006",
+      "capture-0007"
+    ],
+    [
+      "capture-0007",
+      "capture-0008"
+    ],
+    [
+      "capture-0008",
+      "capture-0009"
+    ],
+    [
+      "capture-0010",
+      "capture-0011"
+    ],
+    [
+      "capture-0011",
+      "capture-0012"
+    ],
+    [
+      "capture-0012",
+      "capture-0013"
+    ],
+    [
+      "capture-0013",
+      "capture-0014"
+    ],
+    [
+      "capture-0014",
+      "capture-0015"
+    ],
+    [
+      "capture-0015",
+      "capture-0016"
+    ]
+  ],
+  "adjacent_links": {
+    "capture-0000_capture-0001": {
+      "accepted": true,
+      "displacement": 168.80148620605468,
+      "inliers": 57,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.1437283628312482,
+          "inliers": 57,
+          "occupied_cells": 5
+        }
+      ],
+      "overlap": 0.8117234519675925,
+      "verified": true
+    },
+    "capture-0001_capture-0002": {
+      "accepted": true,
+      "displacement": 18.261819076538085,
+      "inliers": 212,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.6422054855434655,
+          "inliers": 212,
+          "occupied_cells": 12
+        }
+      ],
+      "overlap": 0.9778775438850309,
+      "verified": true
+    },
+    "capture-0002_capture-0003": {
+      "accepted": true,
+      "displacement": 26.357006072998047,
+      "inliers": 175,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.5809227956878168,
+          "inliers": 175,
+          "occupied_cells": 11
+        }
+      ],
+      "overlap": 0.9706221667631173,
+      "verified": true
+    },
+    "capture-0003_capture-0004": {
+      "accepted": true,
+      "displacement": 89.22534942626953,
+      "inliers": 104,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.3123708965140924,
+          "inliers": 104,
+          "occupied_cells": 8
+        }
+      ],
+      "overlap": 0.9101813874421296,
+      "verified": true
+    },
+    "capture-0004_capture-0005": {
+      "accepted": true,
+      "displacement": 144.82708435058595,
+      "inliers": 82,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.25924540104811244,
+          "inliers": 82,
+          "occupied_cells": 6
+        }
+      ],
+      "overlap": 0.8449294102044753,
+      "verified": true
+    },
+    "capture-0005_capture-0006": {
+      "accepted": true,
+      "displacement": 144.9170166015625,
+      "inliers": 111,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.24311913818863626,
+          "inliers": 111,
+          "occupied_cells": 7
+        }
+      ],
+      "overlap": 0.8485843460648148,
+      "verified": true
+    },
+    "capture-0006_capture-0007": {
+      "accepted": true,
+      "displacement": 159.16004333496093,
+      "inliers": 91,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.1621230920303491,
+          "inliers": 91,
+          "occupied_cells": 5
+        }
+      ],
+      "overlap": 0.8486173804012346,
+      "verified": true
+    },
+    "capture-0007_capture-0008": {
+      "accepted": true,
+      "displacement": 158.65282897949217,
+      "inliers": 131,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.2258643652265851,
+          "inliers": 131,
+          "occupied_cells": 7
+        }
+      ],
+      "overlap": 0.8137303481867284,
+      "verified": true
+    },
+    "capture-0008_capture-0009": {
+      "accepted": true,
+      "displacement": 161.60049743652343,
+      "inliers": 149,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.15566644680937686,
+          "inliers": 149,
+          "occupied_cells": 6
+        }
+      ],
+      "overlap": 0.8089542944637346,
+      "verified": true
+    },
+    "capture-0009_capture-0010": {
+      "accepted": false,
+      "displacement": null,
+      "inliers": null,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.017941767692578135,
+          "inliers": 14,
+          "occupied_cells": 2
+        },
+        {
+          "hull_fraction": 0.0030964814482971953,
+          "inliers": 12,
+          "occupied_cells": 1
+        }
+      ],
+      "overlap": null,
+      "verified": false
+    },
+    "capture-0010_capture-0011": {
+      "accepted": true,
+      "displacement": 82.50035095214844,
+      "inliers": 129,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.4497051936182261,
+          "inliers": 129,
+          "occupied_cells": 8
+        }
+      ],
+      "overlap": 0.9093863932291667,
+      "verified": true
+    },
+    "capture-0011_capture-0012": {
+      "accepted": true,
+      "displacement": 152.47857360839845,
+      "inliers": 104,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.270532783070492,
+          "inliers": 104,
+          "occupied_cells": 8
+        }
+      ],
+      "overlap": 0.8542217038001543,
+      "verified": true
+    },
+    "capture-0012_capture-0013": {
+      "accepted": true,
+      "displacement": 159.50462036132814,
+      "inliers": 96,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.22275515861201925,
+          "inliers": 96,
+          "occupied_cells": 8
+        }
+      ],
+      "overlap": 0.8598860677083333,
+      "verified": true
+    },
+    "capture-0013_capture-0014": {
+      "accepted": true,
+      "displacement": 157.95809020996094,
+      "inliers": 61,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.19376583559783117,
+          "inliers": 61,
+          "occupied_cells": 7
+        }
+      ],
+      "overlap": 0.8593872974537037,
+      "verified": true
+    },
+    "capture-0014_capture-0015": {
+      "accepted": true,
+      "displacement": 143.21458740234374,
+      "inliers": 45,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.25841169403930114,
+          "inliers": 45,
+          "occupied_cells": 8
+        }
+      ],
+      "overlap": 0.8499616608796297,
+      "verified": true
+    },
+    "capture-0015_capture-0016": {
+      "accepted": true,
+      "displacement": 184.51442260742186,
+      "inliers": 49,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.16333573234733373,
+          "inliers": 49,
+          "occupied_cells": 7
+        }
+      ],
+      "overlap": 0.8158154296875,
+      "verified": true
+    }
+  },
+  "decision": {
+    "finding": "capture-0016 is a valid local continuation anchor through capture-0010, but its component has no verified path back to capture-0000.",
+    "pass": true,
+    "required_contract": "Persist an observed-position node, its verified incoming link and local component; keep the return-reference state and return route independently verified."
+  },
+  "experiment": "E8",
+  "inputs": {
+    "camera_motion": false,
+    "capture_sha256": {
+      "capture-0000": "cd6e6a6adc183964b3d53926cf7beabcc9fdae77e3572b809d0c26a6b3751fbe",
+      "capture-0001": "448444a98543da801835baa882f6981afbc9740a31bd8645002893ef76c32937",
+      "capture-0002": "1f8cb5c96c873ddfb4f14ba61924bbfb8b6ed987c12930a43c51b3e64e987f43",
+      "capture-0003": "353f28b86b16bf0896c0c829d0bf0432a7d79bf643aa35a1cbc80df1150ef3e8",
+      "capture-0004": "d9c585c2ad88c37c851e4af46f432459d2f8027b48389ca5411b42a05614af80",
+      "capture-0005": "d80b1f723f61319c40b533993b97331389105f23998230706a449bab321d7761",
+      "capture-0006": "0953a362ee3ec71a7c7e3b12bf095dd4c3bba0386f49f373470fddb8648b844f",
+      "capture-0007": "03e144376ab04d07e3d056e5182dfb11cac83e0c94cd60e62396c4cd6747363c",
+      "capture-0008": "8af513f9b9e621a2c88d937008ac261121de8d74da12cbb76a87b09c020810b3",
+      "capture-0009": "2cabee5a47eabfe7a61dd570060ee44e1feca880ac0876a5a60300c89f4242a0",
+      "capture-0010": "1a1c4791c96c80325452a2998081f0bf169f79c0e9c1421822ad1512a0563387",
+      "capture-0011": "f7edb3fc2756baabcab9aac1a6a73acf593add7ae7ae23e9fb8d74121d39c6ce",
+      "capture-0012": "9c6d644aed8d727c3bd63ad349f8ad244d780f49f77ed0fcf5c1ccb02bbb83a0",
+      "capture-0013": "4493b5a86b592b144215ba6cb50c8732a64b9417a5ce5ff43edb525d5eb2a7e5",
+      "capture-0014": "cc28f230e7e0f22f708837ef6cc3fa5912e82d2241d650192b7f1484297f0720",
+      "capture-0015": "3f7c4c21c6b2072268f8377e1e864344776f25508c715c73d5636a649c92d321",
+      "capture-0016": "62a4fa76aa3a5aa5b69bec4c1b9963d48c0824f693b04e48f975e0e8ca3e751a"
+    },
+    "network": false
+  },
+  "negative_controls": {
+    "different_view": {
+      "accepted_as_observed_position": false,
+      "candidate": "capture-0016",
+      "continuation_permitted": false,
+      "exact_localization": false,
+      "local_route": [
+        "capture-0010",
+        "capture-0011",
+        "capture-0012",
+        "capture-0013",
+        "capture-0014",
+        "capture-0015",
+        "capture-0016"
+      ],
+      "localization": {
+        "displacement": null,
+        "inliers": null,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.041538463331722134,
+            "inliers": 24,
+            "occupied_cells": 4
+          },
+          {
+            "hull_fraction": 0.056272562843310885,
+            "inliers": 13,
+            "occupied_cells": 2
+          },
+          {
+            "hull_fraction": 0.02175804349462938,
+            "inliers": 11,
+            "occupied_cells": 2
+          }
+        ],
+        "overlap": null,
+        "verified": false
+      },
+      "return_permitted": false,
+      "return_reference": "capture-0000",
+      "return_route": null,
+      "supporting_links": [
+        [
+          "capture-0015",
+          "capture-0016"
+        ]
+      ],
+      "working_origin": "capture-0010"
+    },
+    "no_supporting_link": {
+      "accepted_as_observed_position": false,
+      "candidate": "capture-0016",
+      "continuation_permitted": false,
+      "exact_localization": true,
+      "local_route": null,
+      "localization": {
+        "displacement": 0.0,
+        "inliers": 1085,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8114531381418997,
+            "inliers": 1085,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9971084104938271,
+        "verified": true
+      },
+      "return_permitted": false,
+      "return_reference": "capture-0000",
+      "return_route": null,
+      "supporting_links": [],
+      "working_origin": "capture-0010"
+    },
+    "unconnected_component": {
+      "accepted_as_observed_position": false,
+      "candidate": "capture-0016",
+      "continuation_permitted": false,
+      "exact_localization": true,
+      "local_route": null,
+      "localization": {
+        "displacement": 0.0,
+        "inliers": 1085,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8114531381418997,
+            "inliers": 1085,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9971084104938271,
+        "verified": true
+      },
+      "return_permitted": false,
+      "return_reference": "capture-0000",
+      "return_route": null,
+      "supporting_links": [
+        [
+          "capture-0015",
+          "capture-0016"
+        ]
+      ],
+      "working_origin": "capture-0000"
+    }
+  },
+  "observed_position": {
+    "accepted_as_observed_position": true,
+    "candidate": "capture-0016",
+    "continuation_permitted": true,
+    "exact_localization": true,
+    "local_route": [
+      "capture-0010",
+      "capture-0011",
+      "capture-0012",
+      "capture-0013",
+      "capture-0014",
+      "capture-0015",
+      "capture-0016"
+    ],
+    "localization": {
+      "displacement": 0.0,
+      "inliers": 1085,
+      "model_candidates": [
+        {
+          "hull_fraction": 0.8114531381418997,
+          "inliers": 1085,
+          "occupied_cells": 12
+        }
+      ],
+      "overlap": 0.9971084104938271,
+      "verified": true
+    },
+    "return_permitted": false,
+    "return_reference": "capture-0000",
+    "return_route": null,
+    "supporting_links": [
+      [
+        "capture-0015",
+        "capture-0016"
+      ]
+    ],
+    "working_origin": "capture-0010"
+  },
+  "synthetic_geometry": {
+    "cycle_consistent": true,
+    "cycle_residual_pixels": 0.0001100326917367056,
+    "edge_summaries": {
+      "a_b": {
+        "displacement": 48.373619842529294,
+        "inliers": 1870,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.9042705245600734,
+            "inliers": 1870,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9366571421682098,
+        "verified": true
+      },
+      "a_c": {
+        "displacement": 96.74716186523438,
+        "inliers": 1730,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.8440582459431395,
+            "inliers": 1730,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.8773167438271605,
+        "verified": true
+      },
+      "b_c": {
+        "displacement": 48.3735969543457,
+        "inliers": 1848,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.9063021269002132,
+            "inliers": 1848,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9366569613233025,
+        "verified": true
+      }
+    },
+    "incompatible_cycle_rejected": true,
+    "incompatible_cycle_residual_pixels": 80.00006103515625,
+    "observed_position": {
+      "accepted_as_observed_position": true,
+      "candidate": "c",
+      "continuation_permitted": true,
+      "exact_localization": true,
+      "local_route": [
+        "a",
+        "b",
+        "c"
+      ],
+      "localization": {
+        "displacement": 0.0,
+        "inliers": 2000,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.9695289093484624,
+            "inliers": 2000,
+            "occupied_cells": 12
+          }
+        ],
+        "overlap": 0.9971084104938271,
+        "verified": true
+      },
+      "return_permitted": true,
+      "return_reference": "a",
+      "return_route": [
+        "a",
+        "b",
+        "c"
+      ],
+      "supporting_links": [
+        [
+          "b",
+          "c"
+        ]
+      ],
+      "working_origin": "a"
+    }
+  }
+}

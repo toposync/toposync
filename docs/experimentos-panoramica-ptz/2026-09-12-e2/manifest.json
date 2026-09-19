@@ -1,0 +1,67 @@
+{
+  "acceptance": {
+    "classification": [
+      "equivalent",
+      "fixed_transform",
+      "different_view",
+      "inconclusive"
+    ],
+    "evidence": [
+      "sanitized configured source identity",
+      "sanitized ONVIF GetProfiles inventory",
+      "at least one decoder-fresh stationary sample for each source, or a recorded bounded failure",
+      "visual correspondence result with conservative classification"
+    ]
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem"
+  },
+  "continuation": {
+    "e2r": "Two quiet horizontal views passed: profile correspondence was 0.9930 / 0.9711 px at baseline and 0.9945 / 0.5884 px after pan; a single preset return was verified at 0.0950 px.",
+    "remaining": "No tilt, zoom, full range, or native low-resolution observation during PTZ movement has been qualified.",
+    "stream_warmup": "profile_2 once returned a documented decoder-fresh 503 at cold startup then confirmed on a later no-PTZ read. E2R records at most one explicit warmup confirmation per source and accepts no stale fallback."
+  },
+  "data_handling": {
+    "persist_images": false,
+    "persist_only": [
+      "dimensions",
+      "response headers excluding timestamps",
+      "content hash",
+      "visual metrics",
+      "classification"
+    ]
+  },
+  "execution": {
+    "api_calls": [
+      "GET /api/cameras/index",
+      "GET /api/cameras/cameras/camera_3_177980/snapshot?source_id=profile_1&fresh=true&freshness=decoder",
+      "GET /api/cameras/cameras/camera_3_177980/snapshot?source_id=profile_2&fresh=true&freshness=decoder",
+      "bounded fallback only after a documented decoder-fresh failure: GET /api/cameras/cameras/camera_3_177980/snapshot?source_id={profile_1|profile_2}&fresh=false",
+      "one canonical ONVIF GetStreamUri snapshot for each of profile_1 and profile_2 after E3 proves those paths readable"
+    ],
+    "forbidden_operations": [
+      "PTZ AbsoluteMove",
+      "PTZ RelativeMove",
+      "PTZ ContinuousMove",
+      "PTZ Stop",
+      "PTZ preset operations",
+      "writes to camera configuration"
+    ]
+  },
+  "experiment_id": "E2",
+  "hypothesis": "As fontes principal e de baixa resolucao podem ser classificadas somente quando a configuracao ONVIF e a evidencia visual estacionaria sustentam o mesmo enquadramento.",
+  "outcome": "ONVIF profiles and canonical stationary pair are readable. Both configured streams have exact ONVIF-profile bindings and now show distributed visual compatibility in two quiet horizontal pan views. Full equivalence remains unproven for tilt, zoom, and the whole optical range.",
+  "scope": {
+    "maximum_elapsed_seconds": 90,
+    "maximum_source_openings_per_source": 3,
+    "onvif_operation": "GetProfiles read-only",
+    "ptz_commands": 0,
+    "source_ids": [
+      "profile_1",
+      "profile_2"
+    ]
+  },
+  "status": "completed_partial_two_horizontal_views",
+  "title": "Vinculo entre streams principal e secundario em camera estacionaria"
+}

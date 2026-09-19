@@ -1,0 +1,37 @@
+{
+  "acceptance": {
+    "failure": "If preset creation remains unconfirmed after the bounded read-only reconciliation horizon, issue no PTZ movement. If a later visual gate fails after creation, preserve the preset privately and stop without an automatic preset recall.",
+    "success": "The preset is confirmed without repeating SetPreset, and the direct return reaches a fresh quiet frame with overlap at least 0.85 and canonical-controller displacement at most 3 px."
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E7R7B",
+  "hypothesis": "A camera can publish a newly created preset after the ambiguous SetPreset response. Bounded catalog reads can confirm that outcome without repeating the mutation; then two short visual responses gate any longer correction pulse.",
+  "limits": {
+    "preset_reconciliation_reads_maximum": 3,
+    "fine_corrections_maximum": 4,
+    "initial_return_error_maximum_pixels": 35,
+    "outbound": {
+      "axis": "pan",
+      "direction": 1,
+      "duration_seconds": 0.35,
+      "speed": 0.1
+    },
+    "physical_commands_maximum": 5
+  },
+  "recovery": {
+    "path": "direct_fine",
+    "temporary_preset": "created before outbound; retained privately unless direct visual return is strict"
+  },
+  "observed": {
+    "onvif_preset_maximum_count": 8,
+    "preset_count_after_attempt": 8,
+    "ptz_commands_issued": 0,
+    "toposync_e7r7b_preset_count_after_attempt": 0
+  },
+  "outcome": "The bounded read-only reconciliation did not find a new preset because the camera advertises a maximum of eight presets and the inventory already contains eight. No physical command was issued and no existing preset was removed.",
+  "status": "completed_capacity_precondition_blocked"
+}

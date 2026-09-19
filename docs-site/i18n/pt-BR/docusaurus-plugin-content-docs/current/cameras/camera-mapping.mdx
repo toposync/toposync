@@ -19,6 +19,17 @@ vê e como pontos da imagem se relacionam com o mundo.
 Mapeamento também é o que torna a Visão 360 possível: vídeo ao vivo mapeado pode
 ser projetado sobre a composição.
 
+
+## Calibração assistida
+
+Abra o elemento da câmera e escolha **Calibrar câmera**. Uma panorâmica salva compatível abre diretamente no próximo ponto. Sem ela, prepare a panorâmica dentro do assistente; a captura só começa quando solicitada. O assistente continua quando a imagem salva estiver compatível.
+
+Marque os mesmos lugares no chão da panorâmica e da planta: seis pontos de ajuste, seguidos automaticamente por dois de conferência independente. Use a roda do mouse para ampliar e arraste para navegar. **Confirmar ponto** salva cada par. Correções, pontos adicionais e desfazer ficam nos controles de revisão e ajuda.
+
+Escolha **Concluir calibração** quando a validação passar. **Revisar calibração** cria um rascunho editável, mantendo a calibração atual em uso até concluir a substituição. Verificar o apontamento da câmera é uma operação separada e explícita; um mapa visual válido não certifica apontamento físico nem cobertura da panorâmica.
+
+As vistas calibradas existentes continuam compatíveis com o processamento. O editor antigo por snapshot deixa de ser uma entrada da interface; o modelo legado descrito abaixo permanece para configurações existentes. O recorte espacial de vídeo ainda depende de vistas calibradas compatíveis.
+
 ## Smoke de mapeamento com imagem estática {/* #static-image-mapping-smoke */}
 
 Uma imagem RTSP estática é uma boa fonte controlada para mapeamento de câmera.
@@ -41,48 +52,109 @@ Primeiro posicione o elemento de câmera perto da posição real na composição
 posicionamento não precisa resolver a projeção sozinho. Ele deve deixar a câmera
 fácil de encontrar e explicar o que ela enxerga.
 
-Depois do posicionamento, calibre a visão usando um snapshot atual da câmera.
+Depois do posicionamento, escolha **Calibrar câmera** para abrir o assistente.
 
-## Quatro cantos e transformação global {/* #four-corners-and-global-transform */}
+## Modelo legado: correspondências no chão {/* #ground-correspondence-mapping */}
 
-O primeiro passo da calibração usa quatro cantos:
+O modelo legado de vistas não deforma a imagem. Ele mapeia apenas o chão que pode ser
+provado por pontos correspondentes:
 
-1. escolha pontos na imagem da câmera;
-2. associe esses pontos a posições na composição;
-3. ajuste a transformação global movendo, girando e arrastando cantos.
+1. capture um quadro atual;
+2. clique em um marco estável **no chão** da imagem;
+3. clique no mesmo marco na composição;
+4. adicione seis pares de ajuste e depois dois pares independentes de verificação;
+5. salve somente quando as verificações passarem.
 
-Os quatro cantos definem a projeção base. Mantenha esses pontos em referências
-visuais estáveis e significativas sempre que possível: bordas de piso, portões,
-paredes, cantos de garagem ou outros pontos fixos.
+A imagem continua visualmente intacta. Os marcadores numerados têm o mesmo
+significado nos dois lados e o polígono hachurado na composição é a única área
+que produz coordenadas de mundo. Um ponto acima do horizonte, como o céu, não
+tem interseção finita com o plano do chão e fica deliberadamente sem mapeamento.
 
-## Pontos internos de refinamento {/* #internal-refinement-points */}
+Use os dois controles de rotação ao lado de **Planta** quando a orientação dela
+estiver invertida em relação à câmera. Eles giram apenas a apresentação da
+calibração em passos de 90°; os cliques são convertidos de volta para as
+coordenadas reais da composição e a orientação escolhida é salva com a vista.
 
-Algumas lentes e ângulos de câmera não encaixam bem com apenas quatro cantos.
-Use pontos internos de refinamento para corrigir distorções locais.
+Arrastar um marcador altera somente aquele marcador; não há cantos, alças de
+borda ou correções locais por malha neste fluxo.
 
-Pontos de refinamento:
+Uma vista fica pronta somente com ao menos seis pontos de ajuste, 80% de
+inliers, 5% de cobertura da imagem e dois pontos de verificação a no máximo
+0,5 m de sua posição conhecida no mundo. Essas verificações são independentes
+dos pontos usados no ajuste.
 
-- ajustam uma parte local da projeção;
-- mantêm os quatro cantos como transformação global;
-- ajudam em lentes abertas e distorcidas;
-- são salvos como parte da visão calibrada.
+## Lentes e identidade do quadro {/* #lenses-and-frame-identity */}
 
-Use apenas os pontos necessários. Pontos demais podem dificultar o entendimento
-da calibração.
+O mapper primeiro normaliza a lente e depois ajusta o plano do chão. Uma fonte
+pode informar perfil retilíneo, Brown ou olho de peixe KB4. Sem um perfil
+verificado, o fluxo usa o padrão retilíneo e as verificações independentes
+decidem se ele é aceitável.
+
+Cada vista salva fica vinculada ao `view_id` físico, à fonte e à geometria da
+imagem. O mesmo nome de papel não basta: stream principal, zoom, recorte,
+espelhado ou outra lente precisam de calibração própria.
+
+## Preparar uma panorâmica e revisar mapeamentos existentes {/* #panorama-mapping */}
+
+Abra **Configurações → Câmeras**, escolha a câmera e a transmissão e selecione
+**Gerar panorâmica**. Não é necessário preencher lente, ângulos ou limites da
+varredura. O Toposync descobre os controles disponíveis, explora os dois sentidos
+horizontais e as faixas verticais disponíveis, observa quando a imagem estabiliza
+e reúne as fotografias automaticamente. A orientação da apresentação é conferida
+pelos movimentos horizontais confirmados. A câmera se movimenta
+durante a captura e o Toposync tenta recuperar o enquadramento inicial depois.
+O progresso fica salvo no servidor; você pode sair da tela e voltar.
+
+Em **Selecionar área útil**, desenhe um retângulo, marque dois cantos opostos ou
+use o teclado. A imagem completa continua guardada. Editar ou exportar essa
+seleção não move a câmera. **Parar** interrompe a captura sem iniciar um retorno
+inesperado; voltar ao enquadramento depois é uma ação separada.
+
+A cobertura que não puder ser confirmada permanece parcial. A panorâmica é um
+recurso visual reutilizável da transmissão. Ela não ativa o mapeamento na planta
+nem comprova a precisão de apontamento.
+
+Mapeamentos e rascunhos anteriores continuam disponíveis em **Revisar mapeamento
+existente**, no elemento de câmera. Eles conservam seu perfil óptico e suas
+verificações de geometria; posições normalizadas do ONVIF não são graus.
+
+1. Abra a panorâmica salva e revise o rascunho existente.
+2. Identifique seis lugares estáveis no chão, um por vez. Marque cada lugar na
+   panorâmica e depois na planta. Distribua-os pela área que deseja usar;
+   corrija ou desfaça um par quando necessário.
+3. Acrescente dois lugares diferentes para conferir, dentro dessa área. Aponte
+   a câmera para cada um e examine a imagem retornada. Informe quando houver
+   desvio ou não for possível reconhecer o lugar; o assistente preserva o
+   trabalho para correção.
+4. Ative depois que a geometria e as duas conferências com a câmera passarem.
+   Clique em um lugar dentro da área coberta na planta e solicite o apontamento.
+   A imagem retornada permite conferir o resultado.
+
+A região suportada é o polígono coberto pelos lugares de ajuste. Pontos das
+imagens podem ser mapeados nesse plano em diferentes posições seguras de pan e
+tilt, usando a pose vinculada a cada quadro. Movimento, telemetria desconhecida,
+zoom diferente, geometria da fonte alterada ou pontos fora desse polígono
+retornam sem mapeamento. Alterar a geometria da composição invalida a calibração;
+renomear um elemento não.
+
+Esta versão cobre uma região aproximadamente plana em um único zoom óptico.
+Não calibra escadas, terreno irregular, vários pavimentos ou objetos móveis.
+O mapeamento por panorâmica não substitui as vistas calibradas usadas na
+projeção da Visão 360 e na Atenção PTZ semântica.
 
 ## Vistas PTZ {/* #ptz-views */}
 
-Câmeras PTZ podem ter várias vistas calibradas. Cada vista pode armazenar
-referência de preset, pan, tilt e zoom.
+Câmeras PTZ podem ter várias vistas calibradas. Capturar uma vista registra pan,
+tilt e zoom numéricos depois que o cabeçote para e cria um preset nomeado para
+movimentá-la depois. O preset é alvo de movimento; a pose numérica e a
+telemetria segura são a evidência que habilita o mapeamento.
 
 Quando a câmera se move:
 
-- uma pose exata pode usar a calibração correspondente;
-- uma pose entre calibrações pode ser interpolada;
-- uma pose próxima do intervalo calibrado pode ser extrapolada com cuidado;
-- uma pose distante pode usar a vista mais próxima com aviso forte;
-- com apenas uma vista, o Toposync ainda pode mostrar essa vista, mas deve avisar
-  que a pose atual talvez não esteja bem mapeada.
+- o mapeamento fica desligado enquanto o cabeçote move ou a telemetria não é segura;
+- uma pose numérica seleciona somente sua vista correspondente;
+- pose ausente, stream físico diferente ou ponto fora do polígono salvo retornam
+  **sem mapeamento**, em vez de estimar uma posição.
 
 Avisos de qualidade de pose não significam que o stream está quebrado. Eles
 significam que a posição projetada pode estar imprecisa.
@@ -131,12 +203,15 @@ transmissão/publicação ativa antes de ser projetada como vídeo ao vivo.
 
 ## Lista de verificação prática {/* #practical-checklist */}
 
-1. Confirme que o snapshot da câmera está atual.
-2. Confirme que a transmissão ao vivo funciona para a fonte que você quer mapear.
+1. Confirme que o snapshot está atual e vem da fonte física que será mapeada.
+2. Confirme que a transmissão ao vivo funciona para essa fonte.
 3. Posicione o elemento de câmera na composição.
-4. Adicione quatro pares de cantos confiáveis.
-5. Use a transformação global antes de adicionar pontos internos de refinamento.
-6. Adicione vistas PTZ apenas para posições ou presets significativos.
+4. Adicione seis pares bem distribuídos no chão; evite céu, pessoas, sombras e
+   veículos em movimento.
+5. Adicione dois pares de verificação diferentes e corrija os pontos de ajuste
+   até que passem.
+6. Adicione uma vista PTZ por ângulo ou zoom intencional; capture somente depois
+   que o cabeçote parar.
 7. Para atenção PTZ, marque uma vista pronta como inicial e mantenha pequeno o
    conjunto de focos permitidos.
 8. Use recorte de área apenas quando quiser um recorte espacial na Visão 360.

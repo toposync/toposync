@@ -1,0 +1,17 @@
+{
+  "experiment_id": "E7",
+  "attempt": "read_only_state_after_negative_pan_return_unverified",
+  "ptz_commands_issued": 0,
+  "images_persisted": false,
+  "samples": [
+    {"ok": true, "move_status": "UNKNOWN", "raw_error_token": "0", "position_present": true},
+    {"ok": true, "move_status": "UNKNOWN", "raw_error_token": "0", "position_present": true},
+    {"ok": true, "move_status": "UNKNOWN", "raw_error_token": "0", "position_present": true}
+  ],
+  "visual_evidence": {
+    "post_return_window": "five-frame quiet",
+    "return_exact": false,
+    "return_displacement_analysis_pixels": 30.8128
+  },
+  "interpretation": "The video established a quiet view, which is evidence that the head is not visibly moving. The status endpoint did not establish a clean stopped state or exact position: it returned UNKNOWN and a non-empty vendor token 0. ONVIF defines Error as a current error condition, so generic core code must retain this raw token until a device-specific adapter rule is independently evidenced. No motion or automatic recovery retry is authorized by this checkpoint."
+}

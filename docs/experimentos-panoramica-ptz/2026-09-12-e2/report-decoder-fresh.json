@@ -1,0 +1,26 @@
+{
+  "experiment_id": "E2",
+  "attempt": "decoder_fresh",
+  "executed_at_utc": "2026-09-12T13:30:35Z",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem"
+  },
+  "ptz_commands_issued": 0,
+  "onvif_get_profiles_completed": true,
+  "samples": {
+    "profile_1": {
+      "obtained": false,
+      "status": 503,
+      "elapsed_ms": 5018.4,
+      "error": "Fresh camera frame is temporarily unavailable"
+    },
+    "profile_2": {
+      "obtained": false,
+      "status": 503,
+      "elapsed_ms": 5077.9,
+      "error": "Fresh camera frame is temporarily unavailable"
+    }
+  },
+  "outcome": "No fresh decoder frame was available for either configured source within the bounded request window."
+}

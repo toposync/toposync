@@ -1,0 +1,53 @@
+{
+  "attempt": "canonical_stationary_pair",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem"
+  },
+  "classification": {
+    "compatible_stationary_view": true,
+    "reason": "One stationary pair can support visual compatibility, but cannot prove equal field of view through pan, tilt, and zoom. The configured substream still lacks its exact profile binding.",
+    "value": "inconclusive"
+  },
+  "experiment_id": "E2",
+  "images_persisted": false,
+  "profiles": {
+    "profile_1": {
+      "capture_mode": "first_frame",
+      "dimensions": [
+        2880,
+        1620
+      ],
+      "sha256": "525a89ae62bed98f2a18dab7e5d58cc8ca24d1484fdb94acf8800d642d0fc4a6",
+      "source": "configured",
+      "transport": "tcp"
+    },
+    "profile_2": {
+      "capture_mode": "first_frame",
+      "dimensions": [
+        640,
+        360
+      ],
+      "sha256": "a1e111cc93520ba91aea3f10eb39c1d87c65aa8569dbe8191ce3d09c52f4572d",
+      "source": "configured",
+      "transport": "tcp"
+    }
+  },
+  "ptz_commands_issued": 0,
+  "visual_correspondence_normalized_640x360": {
+    "code": null,
+    "displacement": 0.4137724339962005,
+    "inliers": 194,
+    "model_candidates": [
+      {
+        "hull_fraction": 0.6794907665998815,
+        "inliers": 194,
+        "occupied_cells": 11
+      }
+    ],
+    "overlap": 0.9946260127314814,
+    "shift_x": -0.13873291015625,
+    "shift_y": 0.052947998046875,
+    "verified": true
+  }
+}

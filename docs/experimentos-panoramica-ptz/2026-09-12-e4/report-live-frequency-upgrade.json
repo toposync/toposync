@@ -1,0 +1,37 @@
+{
+  "attempt": "production_capture_service_frequency_upgrade",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E4",
+  "images_persisted": false,
+  "ptz_commands_issued": 0,
+  "result": {
+    "high_frame": {
+      "dimensions": [
+        2880,
+        1620
+      ],
+      "fresh": true,
+      "released": false,
+      "waited_ms": 2020.6
+    },
+    "high_target_after_upgrade": 12.0,
+    "low_frame": {
+      "dimensions": [
+        2880,
+        1620
+      ],
+      "fresh": true,
+      "released": false,
+      "waited_ms": 2020.9
+    },
+    "low_hub_key_equals_high": true,
+    "low_target_after_upgrade": 12.0,
+    "low_target_before_upgrade": 5.0,
+    "same_proxy": true
+  },
+  "source_resolution": "direct_in_memory_from_configured_onvif_profile"
+}

@@ -1,0 +1,197 @@
+{
+  "attempt": "shared_decoder_continuity_after_rebind",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "cold_or_reacquire_sample": {
+    "elapsed_ms": 1980.2,
+    "generation": 1,
+    "headers": {
+      "x-toposync-snapshot-backend": "camera-hub",
+      "x-toposync-snapshot-capture-evidence": "unverified",
+      "x-toposync-snapshot-frame-generation": "1",
+      "x-toposync-snapshot-frame-sequence": "18",
+      "x-toposync-snapshot-freshness": "decoder",
+      "x-toposync-snapshot-transport": "shared"
+    },
+    "ok": true,
+    "sequence": 18
+  },
+  "completion_intervals_ms": [
+    254.6,
+    268.2,
+    259.5,
+    277.6,
+    270.7,
+    253.9,
+    256.2,
+    349.5,
+    248.6
+  ],
+  "evidence_limit": "Decoder sequence progression proves fresh decoded frames in this process; it does not prove physical exposure time or compare the cost of a second direct RTSP connection.",
+  "experiment_id": "E3",
+  "images_persisted": false,
+  "ptz_commands_issued": 0,
+  "sequence_steps": [
+    9,
+    5,
+    8,
+    5,
+    7,
+    8,
+    7,
+    8,
+    7
+  ],
+  "summary": {
+    "all_warm_samples_obtained": true,
+    "distinct_sequence_steps": 9,
+    "largest_completion_interval_ms": 349.5,
+    "largest_sequence_step": 9,
+    "sample_count": 10
+  },
+  "warm_samples": [
+    {
+      "elapsed_ms": 125.9,
+      "generation": 1,
+      "headers": {
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "30",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "ok": true,
+      "sequence": 30
+    },
+    {
+      "elapsed_ms": 129.5,
+      "generation": 1,
+      "headers": {
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "39",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "ok": true,
+      "sequence": 39
+    },
+    {
+      "elapsed_ms": 138.1,
+      "generation": 1,
+      "headers": {
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "44",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "ok": true,
+      "sequence": 44
+    },
+    {
+      "elapsed_ms": 129.5,
+      "generation": 1,
+      "headers": {
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "52",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "ok": true,
+      "sequence": 52
+    },
+    {
+      "elapsed_ms": 147.6,
+      "generation": 1,
+      "headers": {
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "57",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "ok": true,
+      "sequence": 57
+    },
+    {
+      "elapsed_ms": 140.7,
+      "generation": 1,
+      "headers": {
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "64",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "ok": true,
+      "sequence": 64
+    },
+    {
+      "elapsed_ms": 126.9,
+      "generation": 1,
+      "headers": {
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "72",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "ok": true,
+      "sequence": 72
+    },
+    {
+      "elapsed_ms": 129.0,
+      "generation": 1,
+      "headers": {
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "79",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "ok": true,
+      "sequence": 79
+    },
+    {
+      "elapsed_ms": 228.9,
+      "generation": 1,
+      "headers": {
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "87",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "ok": true,
+      "sequence": 87
+    },
+    {
+      "elapsed_ms": 127.1,
+      "generation": 1,
+      "headers": {
+        "x-toposync-snapshot-backend": "camera-hub",
+        "x-toposync-snapshot-capture-evidence": "unverified",
+        "x-toposync-snapshot-frame-generation": "1",
+        "x-toposync-snapshot-frame-sequence": "94",
+        "x-toposync-snapshot-freshness": "decoder",
+        "x-toposync-snapshot-transport": "shared"
+      },
+      "ok": true,
+      "sequence": 94
+    }
+  ]
+}

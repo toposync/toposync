@@ -1,0 +1,30 @@
+{
+  "acceptance": {
+    "required": [
+      "highest active frequency is guaranteed or sharing is refused",
+      "leases retain the decoder until every consumer releases it",
+      "different source keys do not share a decoder"
+    ]
+  },
+  "experiment_id": "E4",
+  "hypothesis": "Um decoder compartilhado so e apropriado quando sua frequencia efetiva atende ao maior requisito ativo, ou quando o hub recusa o compartilhamento.",
+  "outcome": "The initial deterministic run exposed a first-requester frequency bug. CameraHub now upgrades its backing decoder while preserving consumer handles; the follow-up deterministic run satisfies low-then-high, high-then-low, release, and different-key contracts.",
+  "scenarios": [
+    "consumer at 5 frames/s then consumer at 12 frames/s on the same key",
+    "consumer at 12 frames/s then consumer at 5 frames/s on the same key",
+    "release both consumers in both-order safety condition",
+    "different keys do not share a decoder"
+  ],
+  "scope": {
+    "camera_network_access": false,
+    "implementation": "CameraHub production class with deterministic fake grabber",
+    "ptz_commands": 0
+  },
+  "status": "completed_contract_fixed_in_simulator",
+  "evidence": {
+    "before": "report.json",
+    "after": "report-after-frequency-upgrade.json",
+    "remaining_live_check": "The runtime API does not expose a controlled target-FPS override, so the exact low-then-high transition is covered by the production-class deterministic reader rather than an extra live RTSP connection."
+  },
+  "title": "Contrato de compartilhamento do decoder e frequencia requerida"
+}

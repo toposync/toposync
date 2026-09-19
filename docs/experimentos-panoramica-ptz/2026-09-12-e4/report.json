@@ -1,0 +1,41 @@
+{
+  "camera_network_access": false,
+  "decision": {
+    "current_contract_passes": false,
+    "failure_mode": "A low-frequency first consumer fixes the shared reader below a later panorama consumer requirement.",
+    "required_design": "Track active requested frequencies per hub key and restart/upgrade safely, or refuse sharing when the current decoder cannot meet the new requirement."
+  },
+  "different_keys": {
+    "factory_starts": 2,
+    "factory_stops": 2,
+    "same_grabber": false
+  },
+  "experiment_id": "E4",
+  "ptz_commands_issued": 0,
+  "same_key_high_then_low": {
+    "entries_after_all_releases": 0,
+    "entries_after_one_release": 1,
+    "entries_during": 1,
+    "factory_starts": 1,
+    "factory_stops": 1,
+    "first_request_fps": 12.0,
+    "highest_requested_fps": 12.0,
+    "highest_requirement_met": true,
+    "same_grabber": true,
+    "second_request_fps": 5.0,
+    "shared_target_fps": 12.0
+  },
+  "same_key_low_then_high": {
+    "entries_after_all_releases": 0,
+    "entries_after_one_release": 1,
+    "entries_during": 1,
+    "factory_starts": 1,
+    "factory_stops": 1,
+    "first_request_fps": 5.0,
+    "highest_requested_fps": 12.0,
+    "highest_requirement_met": false,
+    "same_grabber": true,
+    "second_request_fps": 12.0,
+    "shared_target_fps": 5.0
+  }
+}

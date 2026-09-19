@@ -1,0 +1,34 @@
+{
+  "experiment": "E8",
+  "experiment_id": "E8",
+  "title": "Continuação a partir de uma âncora observada",
+  "status": "completed",
+  "hypothesis": "A continuação de uma varredura pode usar uma vista atual que foi localizada exatamente em uma fotografia já aceita e ligada a uma componente verificada, sem declarar que a referência inicial foi recuperada.",
+  "input": {
+    "job_id": "097e9f406287495f8582423f5f70806c",
+    "camera": "Garagem",
+    "captures": "capture-0000.jpg até capture-0016.jpg",
+    "physical_camera_access": false
+  },
+  "execution": {
+    "entrypoint": "observed_position.py",
+    "command": "PYTHONPATH=extensions/cameras/src .venv/bin/python docs/experimentos-panoramica-ptz/2026-09-12-e8/observed_position.py",
+    "network": false,
+    "camera_motion": false,
+    "writes": ["report.json"]
+  },
+  "acceptance": {
+    "positive": [
+      "Uma vista atual igual a uma captura aceita é localizada com os gates geométricos normais.",
+      "A componente local permite continuação quando possui pelo menos uma ligação verificada.",
+      "O retorno para a referência inicial só é autorizado se houver rota de sobreposições verificadas."
+    ],
+    "negative_controls": [
+      "ligação ausente entre componentes",
+      "vista sem correspondência local",
+      "captura localizada sem ligação de apoio",
+      "ciclo geométrico sintético incompatível"
+    ]
+  },
+  "decision": "Definir um contrato persistido de posição observada e manter retorno exato como operação independente."
+}

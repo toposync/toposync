@@ -1,0 +1,67 @@
+{
+  "acceptance": {
+    "evidence": [
+      "one bounded probe outcome per configured source",
+      "reused E2 shared and ingest outcomes",
+      "sanitized source health before and after the probes",
+      "path-specific conclusion or explicit inconclusiveness"
+    ]
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem"
+  },
+  "data_handling": {
+    "persist_images": false,
+    "persist_only": [
+      "statuses",
+      "latencies",
+      "transport labels",
+      "sanitized errors",
+      "health counters"
+    ]
+  },
+  "execution": {
+    "api_calls": [
+      "POST /api/cameras/cameras/camera_3_177980/rtsp/probe with source_id profile_1",
+      "POST /api/cameras/cameras/camera_3_177980/rtsp/probe with source_id profile_2",
+      "GET /api/cameras/runtime/source-health",
+      "bounded canonical ONVIF GetStreamUri plus internal FFmpeg probe for profile_1 and profile_2"
+    ],
+    "forbidden_operations": [
+      "all PTZ operations",
+      "source configuration writes",
+      "pipeline edits",
+      "image persistence"
+    ]
+  },
+  "experiment_id": "E3",
+  "hypothesis": "A indisponibilidade do caminho compartilhado e do ingest local pode ser separada da disponibilidade da origem RTSP configurada por probes internos do Toposync.",
+  "outcome": "Before remediation, configured relay origins rejected authentication while canonical ONVIF profile URIs probed successfully. The atomic ONVIF-profile rebind was then applied and read back; configured-origin probes and decoder-fresh snapshots now succeed for profile_1 and profile_2.",
+  "acquisition_decision": "Use the shared decoder as the normal observer. In the post-rebind window it needed 1.98 seconds for the first frame and then supplied ten distinct decoder frames at 249 to 350 millisecond request-completion intervals. Keep direct configured-origin probing as a diagnostic fallback, not as a continuous second connection.",
+  "remediation_preflight": {
+    "status": "applied_and_read_back",
+    "changed_sources": ["profile_1", "profile_2"],
+    "preserved_sources": ["profile_3"],
+    "change": "Bind exact ONVIF profiles with their canonical URI and inherited ONVIF credentials.",
+    "dry_run_report": "report-rebind-dry-run.json",
+    "apply_report": "report-rebind-apply.json",
+    "apply_contract": "One atomic extension patch, mandatory readback, automatic restoration of the previous devices list when readback differs."
+  },
+  "scope": {
+    "canonical_onvif_uri_probes_per_profile": 1,
+    "maximum_elapsed_seconds": 35,
+    "new_direct_probes_per_source": 1,
+    "ptz_commands": 0,
+    "reused_e2_evidence": [
+      "decoder_fresh",
+      "ingest_snapshot_fallback"
+    ],
+    "source_ids": [
+      "profile_1",
+      "profile_2"
+    ]
+  },
+  "status": "completed",
+  "title": "Comparacao limitada dos caminhos de aquisicao sem movimento"
+}

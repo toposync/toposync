@@ -1,0 +1,47 @@
+{
+  "experiment_id": "E7",
+  "attempt": "continuation_from_observed_anchor_tilt_positive",
+  "status": "completed_with_return_limitation",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "hypothesis": "A quiet visual anchor may serve as a new experimental reference when the original preset return was not visually confirmed. This does not claim that the new anchor equals the original preset.",
+  "preconditions": {
+    "observed_anchor": "anchor-observed-current.json",
+    "validation": "report-observed-anchor-validation.json",
+    "validation_result": "427 inliers, 0.9968 overlap, 0.1233 analysis-pixel displacement",
+    "old_preset": "preserved and neither recalled nor removed by this trial"
+  },
+  "one_controlled_trial": {
+    "axis": "tilt",
+    "direction": 1,
+    "velocity": 0.5,
+    "duration_seconds": 1.0,
+    "minimum_observable_displacement_analysis_pixels": 2.0,
+    "maximum_motor_commands": 3,
+    "recovery": "Create a new preset at the current visual anchor. The native watchdog stops the finite pulse. One GoToPreset is allowed. A compact no-raster anchor is persisted if return cannot be visually confirmed."
+  },
+  "forbidden": [
+    "recall of the earlier preserved preset",
+    "deletion of the earlier preserved preset",
+    "automatic retry of any return",
+    "AbsoluteMove",
+    "RelativeMove",
+    "zoom"
+  ],
+  "gate": {
+    "pass": "quiet visual baseline, observed displacement at least 2 pixels, quiet return with overlap at least 0.85 and displacement at most 15 pixels",
+    "failure": "preserve the new preset and descriptor; pause before another movement"
+  },
+  "result": {
+    "response_displacement_analysis_pixels": 201.2136,
+    "response_shift": {"x": 0.3323, "y": 187.7354},
+    "return_displacement_analysis_pixels": 53.1525,
+    "return_overlap": 0.9067,
+    "direct_return_match": "verified but outside the 15-pixel gate",
+    "descriptor_revalidation": "rejected: correspondences_not_distributed",
+    "preset_preserved": true
+  }
+}

@@ -18,6 +18,17 @@ and how image points relate to the world.
 Mapping is also what makes 360 View possible: mapped live video can be projected
 over the composition.
 
+
+## Assisted calibration
+
+Open the camera element and choose **Calibrate camera**. A compatible saved panorama opens directly at the next point. Without one, prepare the panorama inside the assistant; capture starts only when requested. The assistant continues once the saved panorama is compatible.
+
+Mark the same floor locations in the panorama and floor plan: six adjustment points followed automatically by two independent check points. Use the mouse wheel to zoom and drag to navigate. **Confirm point** saves each pair. Corrections, extra points and undo are available under the point review and help controls.
+
+Choose **Finish calibration** when validation passes. **Review calibration** creates an editable draft while the current calibration remains in use until its replacement is completed. Camera pointing verification is a separate, explicit operation; a valid visual map does not certify physical pointing or panorama coverage.
+
+Existing calibrated views remain compatible with the runtime. The snapshot-based calibration editor is no longer an entry point; the legacy view model described below is retained for existing configurations. Spatial video clipping still requires compatible calibrated views.
+
 ## Static image mapping smoke {/* #static-image-mapping-smoke */}
 
 A static RTSP image is a good controlled source for camera mapping. It can prove
@@ -42,46 +53,105 @@ easy to find and explain what it sees.
 
 After placement, calibrate the view from a current camera snapshot.
 
-## Four corners and global transform {/* #four-corners-and-global-transform */}
+## Legacy ground correspondence model {/* #ground-correspondence-mapping */}
 
-The first calibration step uses four corners:
+The current mapping workflow does not deform the image. It maps only the ground
+that can be proved from corresponding points:
 
-1. choose points in the camera image;
-2. match those points to positions in the composition;
-3. adjust the global transform by moving, rotating, and dragging corners.
+1. capture a current frame;
+2. click a stable mark on the **ground** in the image;
+3. click that same mark on the composition;
+4. add six fit pairs, then two independent check pairs;
+5. save only after the check pairs pass.
 
-The four corners define the base projection. Keep them on stable, meaningful
-visual references whenever possible: floor edges, gates, walls, driveway
-corners, or other fixed points.
+The image remains visually unchanged. Numbered markers mean the same thing on
+both surfaces, and the shaded polygon on the composition is the only region
+that can produce world coordinates. A point above the horizon, such as sky,
+has no finite intersection with the ground plane and is deliberately unmapped.
 
-## Internal refinement points {/* #internal-refinement-points */}
+Use the two rotation controls beside **Floor plan** when the plan is reversed
+relative to the camera. They turn only the calibration presentation in 90°
+steps; pointer input is converted back to real composition coordinates, and
+the selected orientation is saved with the calibrated view.
 
-Some lenses and camera angles cannot be aligned well with only four corners.
-Use internal refinement points to correct local distortion.
+Dragging a marker changes that marker only; there are no corners, edge handles,
+or local mesh corrections in this workflow.
 
-Refinement points:
+A view is ready only with at least six fit points, 80% fit inliers, 5% image
+coverage, and two check points each no farther than 0.5 m from their known
+world position. These checks are independent of the points used to fit.
 
-- adjust a local part of the projection;
-- keep the four corners as the global transform;
-- are useful for wide-angle and distorted lenses;
-- are saved as part of the calibrated view.
+## Lenses and frame identity {/* #lenses-and-frame-identity */}
 
-Use only as many points as needed. Too many points can make calibration harder to
-reason about.
+The mapper first normalizes the lens and then fits the ground plane. A source
+can provide a rectilinear, Brown distortion, or fisheye KB4 lens profile. When
+no verified profile is available, the workflow uses the rectilinear default and
+the independent checks decide whether it is acceptable.
+
+Every saved view is bound to its physical `view_id`, source, and image geometry.
+The same role name is not enough: a main, zoom, crop, mirrored stream, or a
+different lens needs its own calibration.
+
+## Prepare a panorama and review existing mapping {/* #panorama-mapping */}
+
+Open **Settings → Cameras**, choose the camera and stream, then select
+**Generate panorama**. No lens, angle or scan fields are required. Toposync
+discovers the available controls, explores both horizontal directions and the
+available vertical bands, observes when the image settles, and assembles
+overlapping photographs automatically. It checks presentation orientation from
+confirmed horizontal movements. The camera moves during capture and
+Toposync attempts to restore its initial framing afterward. Progress is saved
+on the server; you can leave the screen and return.
+
+Choose **Select useful area** to draw a rectangle, select two opposite corners
+or use the keyboard. The full photograph remains saved. Editing or exporting
+this selection does not move the camera. **Stop** interrupts capture without
+starting an unexpected return; returning afterward is a separate action.
+
+Coverage that cannot be confirmed stays partial. This panorama is a reusable
+visual resource belonging to the stream. It does not activate floor-plan
+mapping or establish pointing accuracy.
+
+Existing panorama mappings and drafts remain available through **Review
+existing mapping** in the camera element. They retain their original optical
+profile and geometry checks; normalized ONVIF positions are not degrees.
+
+1. Open the saved panorama and review the existing draft.
+2. Identify six stable places on the ground, one at a time. Select each place
+   in the panorama and then in the floor plan. Spread them across the area you
+   want to use; correct or undo a pair if needed.
+3. Add two different check places inside that area. Point the camera at each
+   check and inspect the returned image. Report an offset or an unrecognizable
+   place honestly; the assistant preserves your work for correction.
+4. Activate after the geometry and both camera checks pass. Click a place in
+   the supported floor-plan area and deliberately request the camera to aim
+   there. The returned image lets you inspect the result.
+
+The supported region is the polygon covered by the fit places. Runtime image
+points can map onto this ground plane at different safe pan and tilt positions,
+using the pose attached to each frame. Movement, unknown telemetry, changed
+zoom, changed source geometry, or points outside that polygon return unmapped.
+Changing composition geometry invalidates the calibration; cosmetic renaming
+does not.
+
+This version covers one approximately planar region at one optical zoom. It
+does not calibrate stairs, uneven terrain, multiple floors, or moving objects.
+The panorama mapping does not replace the calibrated views used by 360 View
+projection and Semantic PTZ attention.
 
 ## PTZ views {/* #ptz-views */}
 
-PTZ cameras can have multiple calibrated views. Each view can store a preset,
-pan, tilt, and zoom reference.
+PTZ cameras can have multiple calibrated views. Capturing a view records its
+numeric pan, tilt, and zoom after the head is idle, and creates a named preset
+for later movement. The preset is a movement target; the numeric pose and safe
+telemetry are the evidence that enables a mapping.
 
 When the camera moves:
 
-- an exact pose can use its matching calibration;
-- a pose between calibrations can be interpolated;
-- a pose near the calibrated range can be extrapolated conservatively;
-- a pose far from calibration can use the nearest view with a warning;
-- with only one view, Toposync can still show that view but should warn that the
-  current pose may not be well mapped.
+- mapping is off while the head is moving or telemetry is unsafe;
+- a numeric pose selects only its matching view;
+- a missing pose, a different physical stream, or a point outside the saved
+  ground polygon returns **unmapped**, rather than estimating a location.
 
 Warnings about pose quality do not mean the stream is broken. They mean the
 projected position may be imprecise.
@@ -130,12 +200,14 @@ transmission/publication before it can be projected as live video.
 
 ## Practical checklist {/* #practical-checklist */}
 
-1. Confirm the camera snapshot is current.
-2. Confirm live viewing works for the source you want to map.
+1. Confirm the snapshot is current and comes from the physical source to map.
+2. Confirm live viewing works for that source.
 3. Place the camera element in the composition.
-4. Add four reliable corner pairs.
-5. Use the global transform before adding internal refinement points.
-6. Add PTZ views only for meaningful positions or presets.
+4. Add six well-spread pairs on the ground; avoid sky, people, shadows, and
+   moving vehicles.
+5. Add two different check pairs and correct the fit points until they pass.
+6. Add a separate PTZ view for every intentional angle or zoom; capture it only
+   after the head stops.
 7. For PTZ attention, mark one ready view as home and keep the allowed focus set
    small.
 8. Use area clipping only when you want a spatial crop in 360 View.

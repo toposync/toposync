@@ -1,0 +1,47 @@
+{
+  "experiment": "E12",
+  "result": "pass",
+  "executed_without_camera_or_network": true,
+  "validation": {
+    "scanner_fault_matrix": {
+      "result": "26 passed, 267 deselected",
+      "evidence": [
+        "Comando incerto recebe Stop de limpeza; uma busca incerta não é repetida sem linha causal nova.",
+        "Vídeo congelado, atrasado ou sem textura não é tratado como estabilidade ou limite mecânico.",
+        "Falha de checkpoint e exceção posterior ao comando ainda liberam vídeo e controle depois do Stop.",
+        "Cancelamento durante correspondência não emite comando de motor; recuperação interrompida não repete intenção ambígua.",
+        "A falha de alta resolução preserva janela terminal e orçamento de memória."
+      ]
+    },
+    "capture_and_lease_matrix": {
+      "result": "11 passed, 98 deselected",
+      "evidence": [
+        "Renovação só continua enquanto a mesma concessão com fence permanece atual.",
+        "Stop de watchdog não alcança novo proprietário.",
+        "Mudança de configuração bloqueia movimento e ainda permite Stop já pertencente ao trabalho.",
+        "Identidade de captura distingue instâncias e fallback direto requer vínculo explícito ao perfil."
+      ]
+    },
+    "service_interruption_matrix": {
+      "result": "13 passed, 207 deselected",
+      "evidence": [
+        "Stop não retorna a câmera; retorno exige ação própria.",
+        "Reinício persiste interrupção sem novo movimento.",
+        "Reserva de armazenamento falha antes do movimento.",
+        "Cancelamentos do worker preservam o estado físico e não aguardam ou adquirem câmera indevidamente."
+      ]
+    }
+  },
+  "invariants_verified": {
+    "uncertain_intent_is_not_replayed": true,
+    "restart_does_not_refresh_budget": true,
+    "accepted_photographs_survive_interruption": true,
+    "lost_control_blocks_new_motion": true,
+    "cancellation_does_not_return_hidden": true
+  },
+  "limits": [
+    "A matriz usa simuladores determinísticos e não mede comportamento de uma câmera ou transporte em tempo real.",
+    "A classificação de atraso físico e de stream permanece reservada a E3, E6 e E7."
+  ],
+  "decision": "O contrato de interrupção é suficiente para avançar à investigação de fontes de vídeo; não autoriza repetir uma trajetória física a partir destes testes."
+}

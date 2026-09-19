@@ -1,0 +1,22 @@
+{
+  "attempt": "preflight_after_source_rebind",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "decision": "do_not_send_ptz_command",
+  "experiment_id": "E6",
+  "ptz_commands_issued": 0,
+  "ptz_status": {
+    "error": null,
+    "move_status": null,
+    "pan": null,
+    "pan_tilt_space": null,
+    "tilt": null,
+    "zoom": null,
+    "zoom_space": null
+  },
+  "recoverable_pre_move_state": false,
+  "toposync_video_ready": true
+}

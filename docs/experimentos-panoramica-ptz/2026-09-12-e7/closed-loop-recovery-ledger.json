@@ -1,0 +1,210 @@
+{
+  "checkpoint": {
+    "return_correction_commands": [
+      {
+        "after_code": null,
+        "after_frame_evidence": {},
+        "after_overlap": 0.9738073278356482,
+        "after_pixels": 22.55453758239746,
+        "after_shift": [
+          -19.387847900390625,
+          -0.5567626953125
+        ],
+        "amount": -0.08,
+        "axis": "pan",
+        "before_match_verified": true,
+        "before_overlap": 0.9725254991319444,
+        "before_pixels": 26.174222564697263,
+        "before_shift": [
+          -22.5684814453125,
+          -0.60302734375
+        ],
+        "correction_command_index": 1,
+        "direction_measured": false,
+        "expected_frame_evidence": {},
+        "expected_shift_delta": null,
+        "kind": "outbound_inverse_probe",
+        "match_verified": true,
+        "modality": "visual_continuous",
+        "outbound_seed": {
+          "axis": "pan",
+          "duration_seconds": 0.35,
+          "observed_shift": [
+            -22.92315673828125,
+            -1.29534912109375
+          ],
+          "outbound_direction": 1
+        },
+        "prediction_basis": null,
+        "pulse_seconds": 0.08,
+        "requested_amount": -0.08,
+        "response_direction": -1,
+        "response_qualified": true,
+        "response_vector": [
+          -39.75791931152344,
+          -0.57830810546875
+        ],
+        "response_velocity": 0.1,
+        "return_epoch": "e7r",
+        "state": "observed",
+        "velocity": 0.1,
+        "velocity_measured": false,
+        "verified": true
+      },
+      {
+        "after_code": null,
+        "after_overlap": 0.9815717833719135,
+        "after_pixels": 14.562194442749023,
+        "after_shift": [
+          12.96051025390625,
+          0.24187469482421875
+        ],
+        "amount": -0.15,
+        "axis": "pan",
+        "before_match_verified": true,
+        "before_overlap": 0.9738073278356482,
+        "before_pixels": 22.55453758239746,
+        "before_shift": [
+          -19.387847900390625,
+          -0.5567626953125
+        ],
+        "correction_command_index": 2,
+        "direction_measured": true,
+        "expected_frame_evidence": {},
+        "expected_shift_delta": [
+          5.963687896728516,
+          0.0867462158203125
+        ],
+        "kind": "correction",
+        "match_verified": true,
+        "modality": "visual_continuous",
+        "outbound_seed": null,
+        "prediction_basis": "measured_velocity",
+        "pulse_seconds": 0.15,
+        "reason": "visual_response_inconsistent",
+        "requested_amount": -0.15,
+        "response_qualified": false,
+        "response_ratio": 5.425299453520692,
+        "return_epoch": "e7r",
+        "state": "observed",
+        "velocity": 0.1,
+        "velocity_measured": true,
+        "verified": true
+      }
+    ],
+    "return_correction_resume": {
+      "axes": [],
+      "return_epoch": "e7r",
+      "state": "not_required"
+    },
+    "return_correction_state": "rejected",
+    "return_corrections": [
+      {
+        "after_code": null,
+        "after_frame_evidence": {},
+        "after_overlap": 0.9738073278356482,
+        "after_pixels": 22.55453758239746,
+        "after_shift": [
+          -19.387847900390625,
+          -0.5567626953125
+        ],
+        "amount": -0.08,
+        "axis": "pan",
+        "before_match_verified": true,
+        "before_overlap": 0.9725254991319444,
+        "before_pixels": 26.174222564697263,
+        "before_shift": [
+          -22.5684814453125,
+          -0.60302734375
+        ],
+        "correction_command_index": 1,
+        "direction_measured": false,
+        "expected_frame_evidence": {},
+        "expected_shift_delta": null,
+        "kind": "outbound_inverse_probe",
+        "match_verified": true,
+        "modality": "visual_continuous",
+        "outbound_seed": {
+          "axis": "pan",
+          "duration_seconds": 0.35,
+          "observed_shift": [
+            -22.92315673828125,
+            -1.29534912109375
+          ],
+          "outbound_direction": 1
+        },
+        "prediction_basis": null,
+        "pulse_seconds": 0.08,
+        "requested_amount": -0.08,
+        "response_direction": -1,
+        "response_qualified": true,
+        "response_vector": [
+          -39.75791931152344,
+          -0.57830810546875
+        ],
+        "response_velocity": 0.1,
+        "return_epoch": "e7r",
+        "state": "observed",
+        "velocity": 0.1,
+        "velocity_measured": false,
+        "verified": true
+      },
+      {
+        "after_code": null,
+        "after_overlap": 0.9815717833719135,
+        "after_pixels": 14.562194442749023,
+        "after_shift": [
+          12.96051025390625,
+          0.24187469482421875
+        ],
+        "amount": -0.15,
+        "axis": "pan",
+        "before_match_verified": true,
+        "before_overlap": 0.9738073278356482,
+        "before_pixels": 22.55453758239746,
+        "before_shift": [
+          -19.387847900390625,
+          -0.5567626953125
+        ],
+        "correction_command_index": 2,
+        "direction_measured": true,
+        "expected_frame_evidence": {},
+        "expected_shift_delta": [
+          5.963687896728516,
+          0.0867462158203125
+        ],
+        "kind": "correction",
+        "match_verified": true,
+        "modality": "visual_continuous",
+        "outbound_seed": null,
+        "prediction_basis": "measured_velocity",
+        "pulse_seconds": 0.15,
+        "reason": "visual_response_inconsistent",
+        "requested_amount": -0.15,
+        "response_qualified": false,
+        "response_ratio": 5.425299453520692,
+        "return_epoch": "e7r",
+        "state": "observed",
+        "velocity": 0.1,
+        "velocity_measured": true,
+        "verified": true
+      }
+    ],
+    "return_epoch": "e7r",
+    "return_outbound_seed": {
+      "axis": "pan",
+      "direction": 1,
+      "displacement": 26.5072811126709,
+      "duration_seconds": 0.35,
+      "observed_shift": [
+        -22.92315673828125,
+        -1.29534912109375
+      ],
+      "overlap": 0.9698571325231482,
+      "return_epoch": "e7r",
+      "source": "e7r_direct_outbound"
+    }
+  },
+  "commands": 2,
+  "experiment_id": "E7R6"
+}

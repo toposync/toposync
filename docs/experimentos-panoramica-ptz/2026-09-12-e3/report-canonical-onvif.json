@@ -1,0 +1,32 @@
+{
+  "attempt": "canonical_onvif_stream_probe",
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem"
+  },
+  "experiment_id": "E3",
+  "profiles": {
+    "profile_1": {
+      "backend": "ffmpeg",
+      "error": null,
+      "latency_ms": 1633,
+      "source": "configured",
+      "status": "ok",
+      "transports_tested": [
+        "configured:tcp"
+      ]
+    },
+    "profile_2": {
+      "backend": "ffmpeg",
+      "error": null,
+      "latency_ms": 1504,
+      "source": "configured",
+      "status": "ok",
+      "transports_tested": [
+        "configured:tcp"
+      ]
+    }
+  },
+  "ptz_commands_issued": 0,
+  "uris_persisted": false
+}

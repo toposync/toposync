@@ -1,0 +1,94 @@
+{
+  "camera_network_access": false,
+  "capture_count": 17,
+  "decision": {
+    "native_substream_qualified": false,
+    "native_substream_static_compatible": true,
+    "offline_low_resolution_retains_all_high_resolution_links": true
+  },
+  "experiment_id": "E5",
+  "native_substream": {
+    "reason": "E2 after rebind obtained a decoder-fresh 640x360 profile_2 frame with a distributed stationary correspondence to profile_1. No native profile_2 frame has yet been observed across a bounded PTZ movement because E7 is blocked by the E6 return-accuracy gate.",
+    "status": "static_compatible_dynamic_deferred"
+  },
+  "offline_reduction": {
+    "high": {
+      "accepted_count": 15,
+      "accepted_pairs": [
+        "capture-0000->capture-0001",
+        "capture-0001->capture-0002",
+        "capture-0002->capture-0003",
+        "capture-0003->capture-0004",
+        "capture-0004->capture-0005",
+        "capture-0005->capture-0006",
+        "capture-0006->capture-0007",
+        "capture-0007->capture-0008",
+        "capture-0008->capture-0009",
+        "capture-0010->capture-0011",
+        "capture-0011->capture-0012",
+        "capture-0012->capture-0013",
+        "capture-0013->capture-0014",
+        "capture-0014->capture-0015",
+        "capture-0015->capture-0016"
+      ],
+      "analysis_size": [
+        960,
+        540
+      ],
+      "mean_inliers_on_verified_pairs": 278.0,
+      "minimum_observed_occupied_cells": 7,
+      "pair_count": 16,
+      "rejected_pairs": {
+        "capture-0009->capture-0010": "correspondences_not_distributed"
+      }
+    },
+    "links_retained_at_low": [
+      "capture-0000->capture-0001",
+      "capture-0001->capture-0002",
+      "capture-0002->capture-0003",
+      "capture-0003->capture-0004",
+      "capture-0004->capture-0005",
+      "capture-0005->capture-0006",
+      "capture-0006->capture-0007",
+      "capture-0007->capture-0008",
+      "capture-0008->capture-0009",
+      "capture-0010->capture-0011",
+      "capture-0011->capture-0012",
+      "capture-0012->capture-0013",
+      "capture-0013->capture-0014",
+      "capture-0014->capture-0015",
+      "capture-0015->capture-0016"
+    ],
+    "low": {
+      "accepted_count": 15,
+      "accepted_pairs": [
+        "capture-0000->capture-0001",
+        "capture-0001->capture-0002",
+        "capture-0002->capture-0003",
+        "capture-0003->capture-0004",
+        "capture-0004->capture-0005",
+        "capture-0005->capture-0006",
+        "capture-0006->capture-0007",
+        "capture-0007->capture-0008",
+        "capture-0008->capture-0009",
+        "capture-0010->capture-0011",
+        "capture-0011->capture-0012",
+        "capture-0012->capture-0013",
+        "capture-0013->capture-0014",
+        "capture-0014->capture-0015",
+        "capture-0015->capture-0016"
+      ],
+      "analysis_size": [
+        640,
+        360
+      ],
+      "mean_inliers_on_verified_pairs": 227.8,
+      "minimum_observed_occupied_cells": 4,
+      "pair_count": 16,
+      "rejected_pairs": {
+        "capture-0009->capture-0010": "correspondences_not_distributed"
+      }
+    }
+  },
+  "ptz_commands_issued": 0
+}

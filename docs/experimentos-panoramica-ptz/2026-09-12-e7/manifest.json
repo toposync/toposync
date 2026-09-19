@@ -1,0 +1,108 @@
+{
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "current_state": {
+    "direct_fine_correction": "E7R6_same_epoch_outbound_inverse_probe_used_pan_negative_and_reduced_the_canonical_controller_measurement_from_26.174_to_22.555_pixels; a_following_negative_correction_was_inconsistent_and_rejected. The separately reported 3.830-pixel adapter observation used a legacy color pre-resize and is not controller-comparable.",
+    "ptz_status": "unknown_with_raw_error_token_0_observed_after_the_earlier_negative_pan_return",
+    "safe_to_issue_another_motion_command": false,
+    "visual_post_return_window": "quiet_but_15.218_pixels_from_the_E7R6_reference_after_one_isolated_preset_recall",
+    "visual_return_exact": "true_for_fresh_E7R3_and_E7R5_pan_positive_preset_paths_only; not_true_for_E7R6R"
+  },
+  "declared_limitation": {
+    "finding": "The three finite pulses produced large and stable optical responses. A single GotoPreset did not restore the visual reference after negative pan or positive tilt, even after a quiet window. Fresh pan-positive paths later returned within one analysis pixel, so acknowledgement, preset recall and reported PTZ position remain insufficient as generic return proof.",
+    "not_characterized": [
+      "tilt negative",
+      "repeatability",
+      "other velocities",
+      "AbsoluteMove",
+      "RelativeMove",
+      "encoder precision"
+    ],
+    "product_decision": "No physical coverage scan, automatic control-point move or correction may depend on one preset recall for this camera until a closed-loop visual recovery policy is qualified.",
+    "validity": "Garagem/profile_1; ONVIF ContinuousMove; normalized velocity 0.5; requested duration 1.0 second; tested pan positive, pan negative and tilt positive."
+  },
+  "experiment_id": "E7",
+  "forbidden_without_a_new_recovery_experiment": [
+    "PTZ AbsoluteMove",
+    "PTZ RelativeMove",
+    "PTZ ContinuousMove",
+    "PTZ Stop",
+    "automatic GoToPreset retry",
+    "temporary preset deletion"
+  ],
+  "history": [
+    {
+      "attempt": "positive_pan_observable_seed",
+      "reason": "The script sent Stop immediately after move acknowledgement, cancelling the requested finite pulse.",
+      "report": "report-seed-pulse.json",
+      "validity": "invalid_for_actuator_model"
+    },
+    {
+      "attempt": "positive_pan_native_watchdog_seed",
+      "report": "report-seed-pulse-native-watchdog.json",
+      "response_displacement_analysis_pixels": 349.3952,
+      "validity": "accepted_bounded_observability",
+      "visual_return_displacement_analysis_pixels": 0.1665
+    },
+    {
+      "attempt": "negative_pan_native_watchdog_seed",
+      "preset_preserved": true,
+      "report": "report-negative-pan-native-watchdog.json",
+      "response_displacement_analysis_pixels": 389.9123,
+      "validity": "response_observed_recovery_unverified",
+      "visual_return_displacement_analysis_pixels": 30.8128
+    },
+    {
+      "attempt": "positive_tilt_from_observed_anchor",
+      "preset_preserved": true,
+      "recovery_descriptor_report": "report-positive-tilt-recovery-anchor-validation.json",
+      "report": "report-positive-tilt-observed-anchor.json",
+      "response_displacement_analysis_pixels": 201.2136,
+      "validity": "response_observed_recovery_unverified",
+      "visual_return_displacement_analysis_pixels": 53.1525
+    },
+    {
+      "attempt": "fresh_anchor_coarse_return",
+      "preset_removed": true,
+      "report": "report-closed-loop-recovery.json",
+      "response_displacement_analysis_pixels": 2.3924,
+      "validity": "coarse_return_exact_fine_not_exercised",
+      "visual_return_displacement_analysis_pixels": 0.6067
+    },
+    {
+      "attempt": "direct_visual_correction_entry_envelope",
+      "preset_preserved": true,
+      "report": "report-direct-closed-loop-recovery.json",
+      "response_displacement_analysis_pixels": 93.8409,
+      "validity": "outside_closed_loop_envelope_no_fine_command"
+    },
+    {
+      "attempt": "single_preserved_preset_recovery",
+      "before_return_displacement_analysis_pixels": 93.6709,
+      "preset_removed": true,
+      "report": "report-preserved-preset-recovery.json",
+      "validity": "fresh_pan_positive_path_exact_return",
+      "visual_return_displacement_analysis_pixels": 0.7733
+    },
+    {
+      "experiment_id": "E7R4_E7R5",
+      "summary": "E7R4 encontrou deslocamento direto de 26,699 px, mas um pulso fino de pan positivo de 0,08 s piorou-o para 59,715 px e foi rejeitado sem nova tentativa. E7R5 recuperou a nova referência com um único preset, confirmado em 0,244 px; preset e destino privado foram removidos."
+    },
+    {
+      "experiment_id": "E7R6_E7R6R",
+      "preset_preserved": true,
+      "reports": [
+        "report-e7r6-outbound-inverse-probe.json",
+        "report-e7r6-preserved-preset-recovery.json"
+      ],
+      "summary": "E7R6 confirmou que a sonda inicial pode usar pan negativo a partir da saída pan positiva do mesmo epoch. Pelo comparador canônico do controlador, ela reduziu 26,174 para 22,555 px; o refinamento seguinte foi inconsistente e terminou com 15,028 px. E15 identificou que a observação de 3,830 px do adaptador usava pré-redução colorida e não era comparável. E7R6R fez uma única recuperação por preset; a âncora experimental permaneceu a 15,218 px, então o preset e o destino privado foram preservados.",
+      "validity": "initial_direction_choice_physically_observed_return_unverified"
+    }
+  ],
+  "ptz_commands_issued": 15,
+  "status": "completed_with_declared_return_limitation",
+  "title": "Preflight de resposta local do atuador"
+}

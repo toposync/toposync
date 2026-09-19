@@ -1,0 +1,33 @@
+{
+  "acceptance": {
+    "failure": "The E9P1 route remains bounded to three continuous moves and two single absolute returns. If the final absolute return is outside 3 px but inside the visual envelope, at most two short visual pulses may follow. Any failed frame or correspondence stops the run without preset, retry or another absolute command.",
+    "success": "The same two-band, three-edge coverage evidence is obtained and the final return, after at most two seeded visual pulses, matches the baseline within 3 px."
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E9P2",
+  "hypothesis": "The measured outward tilt displacement selects a safe first tilt-negative correction after a residual AbsoluteMove return, and two short visual pulses are sufficient to close that residual without a preset.",
+  "limits": {
+    "absolute_anchor_returns_maximum": 2,
+    "continuous_moves_maximum": 3,
+    "final_visual_corrections_maximum": 2,
+    "ptz_commands_maximum": 7
+  },
+  "result": {
+    "anchor_returns_issued": 2,
+    "connections": {
+      "baseline_to_pan_displacement_px": 26.615,
+      "baseline_to_tilt_displacement_px": 0.495,
+      "tilt_to_pan_displacement_px": 6.068,
+      "tilt_to_pan_vertical_shift_px": 5.878
+    },
+    "final_anchor_return_displacement_px": 0.504,
+    "first_anchor_return_displacement_px": 0.474,
+    "outcome": "two_band_route_visual_connection_unverified",
+    "ptz_commands_issued": 5
+  },
+  "status": "completed_return_verified_vertical_connection_unverified"
+}

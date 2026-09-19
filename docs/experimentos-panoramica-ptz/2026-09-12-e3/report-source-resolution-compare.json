@@ -1,0 +1,26 @@
+{
+  "attempt": "configured_source_resolution_comparison",
+  "experiment_id": "E3",
+  "images_persisted": false,
+  "local_config": {
+    "found": true,
+    "ingest_host_server_id": "local",
+    "ingest_mode": "direct",
+    "origin_type": "onvif_profile",
+    "profile_token": "profile_1",
+    "uri_present": true
+  },
+  "ptz_commands_issued": 0,
+  "running_api": {
+    "ok": true,
+    "summary": {
+      "found": true,
+      "ingest_host_server_id": "local",
+      "ingest_mode": "direct",
+      "origin_type": "onvif_profile",
+      "profile_token": "profile_1",
+      "uri_present": true
+    }
+  },
+  "same_sanitized_routing": true
+}

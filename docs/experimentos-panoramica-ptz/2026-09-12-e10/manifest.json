@@ -1,0 +1,18 @@
+{
+  "acceptance": {
+    "required": [
+      "classify the recorded failed link using movement and correspondence evidence",
+      "state which scene and geometry classes are not represented",
+      "decide whether E13 is warranted"
+    ]
+  },
+  "experiment_id": "E10",
+  "outcome": "The only failed direct link coincides with a 6.3-times median pan discontinuity; no external stitcher comparison is justified on this input.",
+  "scope": {
+    "camera_network_access": false,
+    "input": "Garagem scan-manifest and E5 high-resolution correspondence report",
+    "ptz_commands": 0
+  },
+  "status": "completed",
+  "title": "Classificacao da lacuna visual no material preservado"
+}

@@ -1,0 +1,32 @@
+{
+  "acceptance": {
+    "failure": "After one outbound and one AbsoluteMove approach, any failed visual gate stops the run. The controller may use at most four visual pulses, beginning with two 0.08 s probes before any larger correction; no preset command, second absolute move or fallback is allowed.",
+    "success": "The final fresh quiet frame reaches overlap at least 0.85 and canonical visual displacement at most 3 px from the baseline."
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E7A2",
+  "hypothesis": "AbsoluteMove can approach the saved coordinates while bounded visual correction removes its observed residual, without creating or relying on a preset. The outbound visual seed selects the first correction direction.",
+  "limits": {
+    "absolute_return_maximum": 1,
+    "fine_corrections_maximum": 4,
+    "outbound": {
+      "axis": "pan",
+      "direction": 1,
+      "duration_seconds": 0.35,
+      "speed": 0.1
+    },
+    "ptz_commands_maximum": 6
+  },
+  "result": {
+    "absolute_return_displacement_px": 0.126,
+    "absolute_return_overlap": 0.997,
+    "outbound_displacement_px": 26.166,
+    "outcome": "absolute_return_verified_without_fine_correction",
+    "ptz_commands_issued": 2
+  },
+  "status": "completed_absolute_return_visually_verified"
+}

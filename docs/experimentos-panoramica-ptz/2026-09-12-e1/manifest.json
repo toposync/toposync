@@ -1,0 +1,39 @@
+{
+  "experiment": "E1",
+  "experiment_id": "E1",
+  "title": "Reprodução da transição perdida do ensaio 10",
+  "status": "completed",
+  "hypothesis": "Uma transição que não foi observada entre quadros adjacentes pode ser qualificada somente por uma correspondência geométrica distribuída, uma âncora durável e uma janela terminal distinta e estável.",
+  "input": {
+    "job_id": "097e9f406287495f8582423f5f70806c",
+    "replay": "replay-rejected-9b279e2fb08a4018af5ca34053faab31",
+    "camera": "Garagem",
+    "physical_camera_access": false
+  },
+  "execution": {
+    "entrypoint": "replay.py",
+    "command": "PYTHONPATH=extensions/cameras/src .venv/bin/python docs/experimentos-panoramica-ptz/2026-09-12-e1/replay.py",
+    "maximum_frames": 144,
+    "writes": ["report.json"],
+    "network": false,
+    "camera_motion": false
+  },
+  "acceptance": {
+    "positive": [
+      "A reprodução sem recuperação mantém a recusa registrada como motion_transition_unobserved.",
+      "O caminho real _late_endpoint_capture aceita a janela terminal somente depois de uma correspondência geométrica distribuída e da janela estável completa."
+    ],
+    "negative_controls": [
+      "evidência geométrica sem distribuição",
+      "imagem terminal congelada",
+      "mudança de geração do decoder",
+      "troca de instância de captura",
+      "âncora sem correspondência geométrica"
+    ]
+  },
+  "limits": [
+    "O replay prova a decisão sobre a sequência registrada; não prova uma nova trajetória física.",
+    "Os quadros não têm PTS nem horário físico de exposição; a base temporal é observação local.",
+    "A identidade óptica é mantida pelo contrato da PanoramaCamera durante um trabalho; E1 não compara lentes entre si."
+  ]
+}

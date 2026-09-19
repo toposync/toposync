@@ -1,0 +1,877 @@
+{
+  "comparisons": {
+    "8_to_10": {
+      "active_coverage": {
+        "acquisition_complete": false,
+        "pixel_ratio": 0.16401946544647217,
+        "progress": {
+          "bands_completed": 0,
+          "continued_after_recovery": true,
+          "current_band": 0,
+          "primary_complete": false,
+          "regions_pending": 2,
+          "stage": "return_reference"
+        },
+        "quality_status": "ready",
+        "solid_angle_ratio": 0.22224435075220947,
+        "status": "partial"
+      },
+      "aligned_global_coverage": false,
+      "candidate_coverage": {
+        "acquisition_complete": false,
+        "pixel_ratio": 0.1652510166168213,
+        "progress": {
+          "bands_completed": 0,
+          "continued_after_recovery": true,
+          "current_band": 0,
+          "primary_complete": false,
+          "regions_pending": 2,
+          "stage": "return_reference"
+        },
+        "quality_status": "ready",
+        "solid_angle_ratio": 0.22618028911934793,
+        "status": "partial"
+      },
+      "capture_level_evidence": {
+        "best_matches_by_left": {
+          "capture-0000": {
+            "code": null,
+            "displacement": 16.065439224243164,
+            "inliers": 68,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.36312879209587506,
+                "inliers": 68,
+                "occupied_cells": 7
+              }
+            ],
+            "overlap": 0.971419089988426,
+            "right": "capture-0000",
+            "verified": true
+          },
+          "capture-0001": {
+            "code": null,
+            "displacement": 13.105841445922852,
+            "inliers": 93,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.4574326896740657,
+                "inliers": 93,
+                "occupied_cells": 9
+              }
+            ],
+            "overlap": 0.9748920958719136,
+            "right": "capture-0002",
+            "verified": true
+          },
+          "capture-0002": {
+            "code": null,
+            "displacement": 25.879639053344725,
+            "inliers": 79,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.27407522385158295,
+                "inliers": 79,
+                "occupied_cells": 6
+              }
+            ],
+            "overlap": 0.9645815248842593,
+            "right": "capture-0002",
+            "verified": true
+          },
+          "capture-0003": {
+            "code": null,
+            "displacement": 13.493068313598632,
+            "inliers": 106,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.4323074991855518,
+                "inliers": 106,
+                "occupied_cells": 8
+              }
+            ],
+            "overlap": 0.976128231095679,
+            "right": "capture-0002",
+            "verified": true
+          },
+          "capture-0004": {
+            "code": null,
+            "displacement": 21.513804626464843,
+            "inliers": 75,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.41516594176281885,
+                "inliers": 75,
+                "occupied_cells": 8
+              }
+            ],
+            "overlap": 0.9651268928433642,
+            "right": "capture-0004",
+            "verified": true
+          },
+          "capture-0005": {
+            "code": null,
+            "displacement": 12.846837425231934,
+            "inliers": 87,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.47531741930368254,
+                "inliers": 87,
+                "occupied_cells": 10
+              }
+            ],
+            "overlap": 0.9724642529899692,
+            "right": "capture-0005",
+            "verified": true
+          },
+          "capture-0006": {
+            "code": null,
+            "displacement": 13.249047470092773,
+            "inliers": 143,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.45610966068723596,
+                "inliers": 143,
+                "occupied_cells": 9
+              }
+            ],
+            "overlap": 0.969841941550926,
+            "right": "capture-0006",
+            "verified": true
+          },
+          "capture-0007": {
+            "code": null,
+            "displacement": 13.52683219909668,
+            "inliers": 104,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.267836157773181,
+                "inliers": 104,
+                "occupied_cells": 8
+              }
+            ],
+            "overlap": 0.9710593291859568,
+            "right": "capture-0007",
+            "verified": true
+          },
+          "capture-0008": {
+            "code": null,
+            "displacement": 12.688315773010254,
+            "inliers": 208,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.31189624278489064,
+                "inliers": 208,
+                "occupied_cells": 6
+              }
+            ],
+            "overlap": 0.974412856867284,
+            "right": "capture-0008",
+            "verified": true
+          },
+          "capture-0009": {
+            "code": null,
+            "displacement": 29.879976654052733,
+            "inliers": 61,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.3827048248375448,
+                "inliers": 61,
+                "occupied_cells": 8
+              }
+            ],
+            "overlap": 0.9580158902391975,
+            "right": "capture-0010",
+            "verified": true
+          },
+          "capture-0010": {
+            "code": null,
+            "displacement": 13.701471900939941,
+            "inliers": 82,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.34119461440789084,
+                "inliers": 82,
+                "occupied_cells": 7
+              }
+            ],
+            "overlap": 0.9775829475308642,
+            "right": "capture-0000",
+            "verified": true
+          },
+          "capture-0011": {
+            "code": null,
+            "displacement": 29.474803924560547,
+            "inliers": 46,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.49357167502899374,
+                "inliers": 46,
+                "occupied_cells": 9
+              }
+            ],
+            "overlap": 0.959354263117284,
+            "right": "capture-0012",
+            "verified": true
+          },
+          "capture-0012": {
+            "code": null,
+            "displacement": 35.215868377685545,
+            "inliers": 26,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.3478764106336892,
+                "inliers": 26,
+                "occupied_cells": 5
+              }
+            ],
+            "overlap": 0.9639419970100309,
+            "right": "capture-0013",
+            "verified": true
+          },
+          "capture-0013": {
+            "code": null,
+            "displacement": 27.974053573608394,
+            "inliers": 29,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.2779996462928587,
+                "inliers": 29,
+                "occupied_cells": 5
+              }
+            ],
+            "overlap": 0.9703579523533951,
+            "right": "capture-0014",
+            "verified": true
+          },
+          "capture-0014": {
+            "code": null,
+            "displacement": 29.107093048095702,
+            "inliers": 25,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.3718166907805953,
+                "inliers": 25,
+                "occupied_cells": 8
+              }
+            ],
+            "overlap": 0.9597583309220679,
+            "right": "capture-0015",
+            "verified": true
+          },
+          "capture-0015": {
+            "code": null,
+            "displacement": 39.87650070190429,
+            "inliers": 32,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.285300385649106,
+                "inliers": 32,
+                "occupied_cells": 8
+              }
+            ],
+            "overlap": 0.98314453125,
+            "right": "capture-0016",
+            "verified": true
+          }
+        },
+        "left_capture_count": 17,
+        "left_covered_count": 16,
+        "left_unmatched": [
+          "capture-0016"
+        ],
+        "right_capture_count": 17,
+        "right_covered_count": 16,
+        "right_unmatched": [
+          "capture-0009"
+        ],
+        "verified_pair_count": 59
+      },
+      "current_structural_promotion_reason": "coverage_alignment_unverified",
+      "panorama_alignment": {
+        "code": "correspondences_not_distributed",
+        "displacement": null,
+        "inliers": null,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.06339620875372677,
+            "inliers": 28,
+            "occupied_cells": 4
+          },
+          {
+            "hull_fraction": 0.06883758279703468,
+            "inliers": 10,
+            "occupied_cells": 5
+          },
+          {
+            "hull_fraction": 0.05839143483030057,
+            "inliers": 8,
+            "occupied_cells": 5
+          }
+        ],
+        "overlap": null,
+        "verified": false
+      },
+      "policy_gap_observed": false,
+      "safe_policy_decision": "preserve_active_store_candidate"
+    },
+    "8_to_9": {
+      "active_coverage": {
+        "acquisition_complete": false,
+        "pixel_ratio": 0.16401946544647217,
+        "progress": {
+          "bands_completed": 0,
+          "continued_after_recovery": true,
+          "current_band": 0,
+          "primary_complete": false,
+          "regions_pending": 2,
+          "stage": "return_reference"
+        },
+        "quality_status": "ready",
+        "solid_angle_ratio": 0.22224435075220947,
+        "status": "partial"
+      },
+      "aligned_global_coverage": false,
+      "candidate_coverage": {
+        "acquisition_complete": false,
+        "pixel_ratio": 0.13577866554260254,
+        "progress": {
+          "bands_completed": 0,
+          "continued_after_recovery": false,
+          "current_band": 0,
+          "primary_complete": false,
+          "regions_pending": 0,
+          "stage": "pan"
+        },
+        "quality_status": "ready",
+        "solid_angle_ratio": 0.1858963254108331,
+        "status": "partial"
+      },
+      "capture_level_evidence": {
+        "best_matches_by_left": {
+          "capture-0000": {
+            "code": null,
+            "displacement": 42.68682174682617,
+            "inliers": 149,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.6476790105239238,
+                "inliers": 149,
+                "occupied_cells": 12
+              }
+            ],
+            "overlap": 0.9474082513503086,
+            "right": "capture-0000",
+            "verified": true
+          },
+          "capture-0001": {
+            "code": null,
+            "displacement": 24.64128303527832,
+            "inliers": 139,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.6033159604783747,
+                "inliers": 139,
+                "occupied_cells": 11
+              }
+            ],
+            "overlap": 0.9647374131944444,
+            "right": "capture-0003",
+            "verified": true
+          },
+          "capture-0002": {
+            "code": null,
+            "displacement": 51.31861572265625,
+            "inliers": 123,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.5195715871704873,
+                "inliers": 123,
+                "occupied_cells": 11
+              }
+            ],
+            "overlap": 0.9385938102816358,
+            "right": "capture-0003",
+            "verified": true
+          },
+          "capture-0003": {
+            "code": null,
+            "displacement": 24.571299743652343,
+            "inliers": 159,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.6141997063066902,
+                "inliers": 159,
+                "occupied_cells": 10
+              }
+            ],
+            "overlap": 0.9648264491705247,
+            "right": "capture-0003",
+            "verified": true
+          },
+          "capture-0004": {
+            "code": null,
+            "displacement": 41.66029510498047,
+            "inliers": 121,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.5545511474370929,
+                "inliers": 121,
+                "occupied_cells": 12
+              }
+            ],
+            "overlap": 0.9472642385223765,
+            "right": "capture-0004",
+            "verified": true
+          },
+          "capture-0005": {
+            "code": null,
+            "displacement": 40.46923675537109,
+            "inliers": 210,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.5879003052157924,
+                "inliers": 210,
+                "occupied_cells": 12
+              }
+            ],
+            "overlap": 0.9476601683063272,
+            "right": "capture-0006",
+            "verified": true
+          },
+          "capture-0006": {
+            "code": null,
+            "displacement": 43.229828643798825,
+            "inliers": 208,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.48164738194259743,
+                "inliers": 208,
+                "occupied_cells": 9
+              }
+            ],
+            "overlap": 0.939623722029321,
+            "right": "capture-0007",
+            "verified": true
+          },
+          "capture-0007": {
+            "code": null,
+            "displacement": 44.5403938293457,
+            "inliers": 173,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.3732894889180253,
+                "inliers": 173,
+                "occupied_cells": 8
+              }
+            ],
+            "overlap": 0.939397002797068,
+            "right": "capture-0008",
+            "verified": true
+          },
+          "capture-0008": {
+            "code": null,
+            "displacement": 47.62705917358398,
+            "inliers": 220,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.26540657363644315,
+                "inliers": 220,
+                "occupied_cells": 6
+              }
+            ],
+            "overlap": 0.9269650607638888,
+            "right": "capture-0009",
+            "verified": true
+          },
+          "capture-0009": {
+            "code": null,
+            "displacement": 51.51664276123047,
+            "inliers": 117,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.45017143282993355,
+                "inliers": 117,
+                "occupied_cells": 9
+              }
+            ],
+            "overlap": 0.9418916377314814,
+            "right": "capture-0000",
+            "verified": true
+          },
+          "capture-0010": {
+            "code": null,
+            "displacement": 34.25001525878906,
+            "inliers": 151,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.604328078208173,
+                "inliers": 151,
+                "occupied_cells": 11
+              }
+            ],
+            "overlap": 0.9556851007908951,
+            "right": "capture-0000",
+            "verified": true
+          },
+          "capture-0011": {
+            "code": null,
+            "displacement": 26.934873580932617,
+            "inliers": 145,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.550941099335765,
+                "inliers": 145,
+                "occupied_cells": 10
+              }
+            ],
+            "overlap": 0.9626425660686728,
+            "right": "capture-0002",
+            "verified": true
+          },
+          "capture-0012": {
+            "code": null,
+            "displacement": 132.60593872070314,
+            "inliers": 63,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.35906268026483323,
+                "inliers": 63,
+                "occupied_cells": 8
+              }
+            ],
+            "overlap": 0.8628988835841049,
+            "right": "capture-0002",
+            "verified": true
+          },
+          "capture-0013": {
+            "code": null,
+            "displacement": 267.666455078125,
+            "inliers": 35,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.15213221158503,
+                "inliers": 35,
+                "occupied_cells": 6
+              }
+            ],
+            "overlap": 0.758041087962963,
+            "right": "capture-0002",
+            "verified": true
+          }
+        },
+        "left_capture_count": 17,
+        "left_covered_count": 14,
+        "left_unmatched": [
+          "capture-0014",
+          "capture-0015",
+          "capture-0016"
+        ],
+        "right_capture_count": 11,
+        "right_covered_count": 10,
+        "right_unmatched": [
+          "capture-0010"
+        ],
+        "verified_pair_count": 67
+      },
+      "current_structural_promotion_reason": "acquisition_topology_regressed",
+      "panorama_alignment": {
+        "code": "correspondences_not_distributed",
+        "displacement": null,
+        "inliers": null,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.04498359862148492,
+            "inliers": 38,
+            "occupied_cells": 4
+          },
+          {
+            "hull_fraction": 0.036034086889111576,
+            "inliers": 12,
+            "occupied_cells": 4
+          },
+          {
+            "hull_fraction": 0.024368158060865425,
+            "inliers": 8,
+            "occupied_cells": 3
+          }
+        ],
+        "overlap": null,
+        "verified": false
+      },
+      "policy_gap_observed": false,
+      "safe_policy_decision": "preserve_active_store_candidate"
+    },
+    "9_to_10": {
+      "active_coverage": {
+        "acquisition_complete": false,
+        "pixel_ratio": 0.13577866554260254,
+        "progress": {
+          "bands_completed": 0,
+          "continued_after_recovery": false,
+          "current_band": 0,
+          "primary_complete": false,
+          "regions_pending": 0,
+          "stage": "pan"
+        },
+        "quality_status": "ready",
+        "solid_angle_ratio": 0.1858963254108331,
+        "status": "partial"
+      },
+      "aligned_global_coverage": false,
+      "candidate_coverage": {
+        "acquisition_complete": false,
+        "pixel_ratio": 0.1652510166168213,
+        "progress": {
+          "bands_completed": 0,
+          "continued_after_recovery": true,
+          "current_band": 0,
+          "primary_complete": false,
+          "regions_pending": 2,
+          "stage": "return_reference"
+        },
+        "quality_status": "ready",
+        "solid_angle_ratio": 0.22618028911934793,
+        "status": "partial"
+      },
+      "capture_level_evidence": {
+        "best_matches_by_left": {
+          "capture-0000": {
+            "code": null,
+            "displacement": 6.713510894775391,
+            "inliers": 98,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.6780107311046573,
+                "inliers": 98,
+                "occupied_cells": 9
+              }
+            ],
+            "overlap": 0.9906596619405864,
+            "right": "capture-0011",
+            "verified": true
+          },
+          "capture-0001": {
+            "code": null,
+            "displacement": 23.975095748901367,
+            "inliers": 93,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.24402620406911898,
+                "inliers": 93,
+                "occupied_cells": 6
+              }
+            ],
+            "overlap": 0.9799256727430555,
+            "right": "capture-0003",
+            "verified": true
+          },
+          "capture-0002": {
+            "code": null,
+            "displacement": 53.63290557861328,
+            "inliers": 37,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.40881206807944936,
+                "inliers": 37,
+                "occupied_cells": 10
+              }
+            ],
+            "overlap": 0.9406784698109568,
+            "right": "capture-0012",
+            "verified": true
+          },
+          "capture-0003": {
+            "code": null,
+            "displacement": 5.192231941223144,
+            "inliers": 83,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.5074229899014117,
+                "inliers": 83,
+                "occupied_cells": 9
+              }
+            ],
+            "overlap": 0.9923842592592592,
+            "right": "capture-0003",
+            "verified": true
+          },
+          "capture-0004": {
+            "code": null,
+            "displacement": 35.88831100463867,
+            "inliers": 64,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.3329848955850221,
+                "inliers": 64,
+                "occupied_cells": 7
+              }
+            ],
+            "overlap": 0.9620288990162037,
+            "right": "capture-0003",
+            "verified": true
+          },
+          "capture-0005": {
+            "code": null,
+            "displacement": 31.29808654785156,
+            "inliers": 91,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.47307938853055087,
+                "inliers": 91,
+                "occupied_cells": 9
+              }
+            ],
+            "overlap": 0.9692176046489197,
+            "right": "capture-0004",
+            "verified": true
+          },
+          "capture-0006": {
+            "code": null,
+            "displacement": 31.038937759399413,
+            "inliers": 138,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.5506110611520086,
+                "inliers": 138,
+                "occupied_cells": 10
+              }
+            ],
+            "overlap": 0.9652080319251544,
+            "right": "capture-0005",
+            "verified": true
+          },
+          "capture-0007": {
+            "code": null,
+            "displacement": 34.28846130371094,
+            "inliers": 144,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.4264645699980183,
+                "inliers": 144,
+                "occupied_cells": 8
+              }
+            ],
+            "overlap": 0.9623324170524692,
+            "right": "capture-0006",
+            "verified": true
+          },
+          "capture-0008": {
+            "code": null,
+            "displacement": 35.96935958862305,
+            "inliers": 161,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.3305449580958826,
+                "inliers": 161,
+                "occupied_cells": 8
+              }
+            ],
+            "overlap": 0.9621555507330247,
+            "right": "capture-0007",
+            "verified": true
+          },
+          "capture-0009": {
+            "code": null,
+            "displacement": 87.22944946289061,
+            "inliers": 154,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.44891307076788745,
+                "inliers": 154,
+                "occupied_cells": 6
+              }
+            ],
+            "overlap": 0.9586322699652777,
+            "right": "capture-0008",
+            "verified": true
+          },
+          "capture-0010": {
+            "code": null,
+            "displacement": 52.053734588623044,
+            "inliers": 162,
+            "model_candidates": [
+              {
+                "hull_fraction": 0.14110044422737567,
+                "inliers": 162,
+                "occupied_cells": 4
+              }
+            ],
+            "overlap": 0.9565108386381173,
+            "right": "capture-0009",
+            "verified": true
+          }
+        },
+        "left_capture_count": 11,
+        "left_covered_count": 11,
+        "left_unmatched": [],
+        "right_capture_count": 17,
+        "right_covered_count": 13,
+        "right_unmatched": [
+          "capture-0013",
+          "capture-0014",
+          "capture-0015",
+          "capture-0016"
+        ],
+        "verified_pair_count": 48
+      },
+      "current_structural_promotion_reason": "coverage_alignment_unverified",
+      "panorama_alignment": {
+        "code": "correspondences_not_distributed",
+        "displacement": null,
+        "inliers": null,
+        "model_candidates": [
+          {
+            "hull_fraction": 0.08080578590662349,
+            "inliers": 28,
+            "occupied_cells": 5
+          },
+          {
+            "hull_fraction": 0.029638221700943178,
+            "inliers": 8,
+            "occupied_cells": 3
+          }
+        ],
+        "overlap": null,
+        "verified": false
+      },
+      "policy_gap_observed": false,
+      "safe_policy_decision": "preserve_active_store_candidate"
+    }
+  },
+  "decision": {
+    "current_implementation_gap": false,
+    "pass": true,
+    "required_change": "Persist an alignable coverage frame or cross-run coverage-mask relation before automatic promotion; scalar area metrics and structural acquisition evidence alone cannot prove bilateral preservation.",
+    "scope_limit": "Cross-run photograph matches demonstrate shared views but not the union or loss of solid angle; the panorama images did not yield a valid global alignment."
+  },
+  "experiment": "E11",
+  "inputs": {
+    "10": {
+      "artifact_id": "2aad02871bc641e8bbaac66ae1172581",
+      "artifact_sha256": "78d3ef376c9eb5bca85f2f4201254e4dbeea9c9cbda9e29ff038eb0e661e0135",
+      "capture_count": 17,
+      "job_id": "097e9f406287495f8582423f5f70806c",
+      "scan_manifest_sha256": "1b4e3727cbc6dc5c94c6863a7dd1811a3110def73cd41cb340831499ae175728"
+    },
+    "8": {
+      "artifact_id": "7dc4c4354b5042e891242ede7151f0d2",
+      "artifact_sha256": "383b25f5d50e82819f01ec40ecf4ad1feebdf72bf582ec402ff8fff91e5d10c3",
+      "capture_count": 17,
+      "job_id": "5f9d75d35b914b22b09d5c8007a59fb0",
+      "scan_manifest_sha256": "ee6333594598bf86c674276b36ad86f9d1ea2d74723af30a0a9f735648ce6ed5"
+    },
+    "9": {
+      "artifact_id": "a6bef107861d43fc9c7ed40f53e27c7d",
+      "artifact_sha256": "3d77fb27a286ebfbb973cdaec58785cb0a13cb534a38b90d2ebf1b05a4636d1c",
+      "capture_count": 11,
+      "job_id": "4ad36fcbd4b8463da825725aca1b739e",
+      "scan_manifest_sha256": "ef8ecf4b596190afeb9518966fe9e5b292353642eb44a92ada67806aff2d958e"
+    }
+  },
+  "negative_controls": {
+    "coverage_evidence_missing": "coverage_evidence_missing",
+    "coverage_reduced": "coverage_regressed",
+    "geometry_incompatible": "comparison_incompatible"
+  }
+}

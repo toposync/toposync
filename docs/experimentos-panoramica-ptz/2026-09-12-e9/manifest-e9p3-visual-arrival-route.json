@@ -1,0 +1,43 @@
+{
+  "acceptance": {
+    "failure": "Any outgoing command without an observed visual terminal view, any connection without verified distributed correspondence, or either visual anchor return above 3 px ends the route. A dispatched action is never retried. If an outgoing command may have reached the camera before a terminal view is observed, one remaining bounded AbsoluteMove is used only as the predeclared safety return.",
+    "success": "The same run records a quiet baseline, verified baseline-to-pan, baseline-to-tilt and tilt-to-pan connections, then ends at the baseline within 3 px after each bounded anchor return. Every terminal view follows observed visual departure rather than only a fixed grace delay."
+  },
+  "camera": {
+    "id": "camera_3_177980",
+    "label": "Garagem",
+    "source_id": "profile_1"
+  },
+  "experiment_id": "E9P3",
+  "hypothesis": "E9P2 accepted a pre-motion quiet window because tilt video motion can appear several seconds after a finite command. Requiring observed visual departure plus a quiet terminal window before each next route action can produce the two-band graph and a visually verified return in one bounded execution.",
+  "limits": {
+    "absolute_anchor_returns_maximum": 2,
+    "continuous_moves_maximum": 3,
+    "continuous_pulse": {
+      "duration_seconds": 0.35,
+      "speed": 0.1
+    },
+    "presets_created": 0,
+    "ptz_commands_maximum": 5,
+    "visual_corrections_maximum": 0
+  },
+  "result": {
+    "anchor_returns_issued": 2,
+    "connections": {
+      "baseline_to_pan_displacement_px": 26.872,
+      "baseline_to_tilt_displacement_px": 5.223,
+      "tilt_to_pan_displacement_px": 27.925
+    },
+    "outcome": "two_band_three_view_coverage_verified",
+    "ptz_commands_issued": 5,
+    "returns": {
+      "after_first_band_displacement_px": 0.501,
+      "after_second_band_displacement_px": 0.685
+    },
+    "tilt_timing": {
+      "first_visual_departure_ms": 3962.5,
+      "visual_terminal_ms": 6297.4
+    }
+  },
+  "status": "completed_two_band_three_view_coverage_verified"
+}

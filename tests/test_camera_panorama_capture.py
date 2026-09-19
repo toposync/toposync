@@ -11,7 +11,11 @@ import pytest
 
 from toposync_ext_cameras.onvif.client import OnvifProfile, OnvifPtzStatus
 from toposync_ext_cameras.onvif.reolink_cgi import ReolinkCgiClient, ReolinkCgiError
-from toposync_ext_cameras.panorama_capture import PanoramaCamera, PanoramaCaptureError
+from toposync_ext_cameras.panorama_capture import (
+    PanoramaCamera,
+    PanoramaCaptureError,
+    _configuration_signature,
+)
 from toposync_ext_cameras.processing.frame_grabber import CaptureFrameSample
 from toposync_ext_cameras.ptz_controller import (
     PtzControlError,
@@ -50,6 +54,26 @@ class Services:
         if name == "cameras.ptz.remove_preset":
             self.presets = [item for item in self.presets if item["token"] != kwargs["preset_token"]]
         return {"ok": True}
+
+
+def test_operational_automation_qualification_does_not_change_capture_binding():
+    camera = {
+        "enabled": True,
+        "control": {"type": "onvif", "automation_exclusive_control_confirmed": False},
+        "onvif": {"xaddr": "http://camera/onvif/device_service"},
+        "metadata": {"panorama_mount_revision": 3},
+    }
+    source = {
+        "id": "main",
+        "enabled": True,
+        "origin": {"type": "onvif", "profile_token": "profile"},
+        "video": {"width": 1920, "height": 1080},
+    }
+    before = _configuration_signature(camera, source)
+    camera["control"]["automation_exclusive_control_confirmed"] = True
+    assert _configuration_signature(camera, source) == before
+    camera["onvif"]["xaddr"] = "http://replacement/onvif/device_service"
+    assert _configuration_signature(camera, source) != before
 
 
 @pytest.mark.parametrize("condition", ["transient_stop", "replacement_owner", "fault", "persistent"])

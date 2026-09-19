@@ -960,12 +960,22 @@ def _public_telemetry(value: Any) -> dict[str, Any] | None:
 
 def _identity(camera: dict[str, Any], source: dict[str, Any]) -> str:
     # Optical fields remain significant; only presentation/asset metadata is ignored.
+    camera_identity = {
+        key: item
+        for key, item in camera.items()
+        if key not in {"sources", "name", "label", "metadata"}
+    }
+    control = camera_identity.get("control")
+    if isinstance(control, dict) and "automation_exclusive_control_confirmed" in control:
+        # This is an operational safety qualification, not a camera, stream,
+        # mount or optical property. Normalizing it to its historical default
+        # preserves existing artifact identities while still fencing motion.
+        camera_identity["control"] = {
+            **control,
+            "automation_exclusive_control_confirmed": False,
+        }
     context = {
-        "camera": {
-            key: item
-            for key, item in camera.items()
-            if key not in {"sources", "name", "label", "metadata"}
-        },
+        "camera": camera_identity,
         "source": {
             key: item for key, item in source.items() if key not in {"name", "label", "metadata"}
         },

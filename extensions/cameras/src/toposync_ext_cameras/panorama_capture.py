@@ -72,9 +72,12 @@ _MANAGED_RETURN_PRESET_NAME = re.compile(
 
 def _configuration_signature(camera: dict[str, Any], source: dict[str, Any]) -> str:
     # Asset/crop metadata and labels deliberately do not affect transport identity.
+    control = camera.get("control")
+    if isinstance(control, dict) and "automation_exclusive_control_confirmed" in control:
+        control = {**control, "automation_exclusive_control_confirmed": False}
     value = {
         "camera_enabled": camera.get("enabled"),
-        "control": camera.get("control"),
+        "control": control,
         "onvif": camera.get("onvif"),
         "source_id": source.get("id"),
         "enabled": source.get("enabled"),

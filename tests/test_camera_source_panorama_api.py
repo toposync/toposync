@@ -17,12 +17,35 @@ import pytest
 from toposync.runtime.config_store import AppConfig, AppSettings, ConfigStore, UserDataPaths
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.source_panorama import (
+    _identity,
     _replacement_candidate_reason,
     register_source_panorama_routes,
 )
 
 BASE = "/api/cameras/cameras/simulated/sources/main/panorama"
 JOBS = "/api/cameras/panorama-jobs"
+
+
+def test_operational_automation_qualification_does_not_stale_visual_artifact():
+    camera = {
+        "id": "camera",
+        "enabled": True,
+        "control": {"type": "onvif", "automation_exclusive_control_confirmed": False},
+        "onvif": {"xaddr": "http://camera/onvif/device_service"},
+        "sources": [],
+        "metadata": {"panorama_mount_revision": 3},
+    }
+    source = {
+        "id": "main",
+        "enabled": True,
+        "origin": {"type": "onvif", "profile_token": "profile"},
+        "video": {"width": 1920, "height": 1080},
+    }
+    before = _identity(camera, source)
+    camera["control"]["automation_exclusive_control_confirmed"] = True
+    assert _identity(camera, source) == before
+    source["origin"]["profile_token"] = "replacement"
+    assert _identity(camera, source) != before
 
 
 class FakeReturnReconciler:

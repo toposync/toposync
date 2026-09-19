@@ -2,16 +2,16 @@ const {test,expect}=require('@playwright/test');
 const root='/api/cameras/live-panorama';
 const artifact={id:'a'.repeat(32),revision:1,width:1600,height:800,image_url:'/fixture-panorama.svg',coverage_url:'/fixture-coverage.svg',crop:{u_start:.3,u_width:.4,v_start:.3,v_height:.4},crop_revision:2,created_at:"2026-09-19T01:35:49Z"};
 const geometry={lens:{width:640,height:360,fx:400,fy:400,cx:319.5,cy:179.5,distortion:[]},panorama_to_camera:[[0,1,0],[0,0,-1],[1,0,0]]};
-let controls,sessions,observation,mode,sequence,identifier,currentArtifact,currentGeometry,physicalMode;
+let controls,sessions,observation,mode,sequence,identifier,currentArtifact,currentGeometry,physicalMode,transientLocalizationMisses;
 test.beforeEach(async({page})=>{
- currentArtifact=artifact;currentGeometry=geometry;controls=[];sessions=0;observation=0;mode='aligned';physicalMode='IDLE';sequence=0;identifier='';
+ currentArtifact=artifact;currentGeometry=geometry;controls=[];sessions=0;observation=0;mode='aligned';physicalMode='IDLE';transientLocalizationMisses=0;sequence=0;identifier='';
  await page.route('**/fixture-*.svg',route=>route.fulfill({contentType:'image/svg+xml',body:`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800"><rect width="1600" height="800" fill="${route.request().url().includes('coverage')?'white':'#adbccc'}"/><path d="M800 0V800M0 400H1600" stroke="#fff" stroke-width="2"/></svg>`}));
  const state=()=>({session_id:identifier,can_control:true,sequence,phase:mode,moving:mode==='moving',blocked:false,commands:0,error:null});
  await page.route('**/api/cameras/live-panorama**',async route=>{
   const request=route.request(),path=new URL(request.url()).pathname,body=request.postDataJSON();
   if(path===root)return route.fulfill({json:{choices:[{camera_id:'synthetic',camera_name:'Câmera sintética',source_id:'wide',source_name:'Grande angular',kind:'active',artifact:currentArtifact,reason:null,secondary_sources:process.env.TOPOSYNC_PHOTOGRAPH_FIXTURE?[]:[{id:'tele',name:'Fonte sintética secundária'}]}]}});
   if(path===root+'/sessions'){identifier=`session-${++sessions}`;sequence=0;return route.fulfill({json:state()});}
-  if(path.endsWith('/observe')){observation++;return route.fulfill({json:{...state(),status:mode==='aligned'?'localized':'unlocalized',reason:mode==='error'?'panorama_visual_localization_failed':undefined,geometry:currentGeometry,epoch:body.epoch,observation_sequence:body.sequence}});}
+  if(path.endsWith('/observe')){observation++;const missed=transientLocalizationMisses>0;if(missed)transientLocalizationMisses--;return route.fulfill({json:{...state(),phase:missed?'unlocalized':mode,status:!missed&&mode==='aligned'?'localized':'unlocalized',reason:mode==='error'?'panorama_visual_localization_failed':undefined,geometry:currentGeometry,epoch:body.epoch,observation_sequence:body.sequence}});}
   if(path.endsWith('/intent')){controls.push(body);sequence=Math.max(sequence,body.sequence);mode='moving';return route.fulfill({json:state()});}
   if(path.endsWith('/stop')){controls.push({stop:body.sequence});sequence=body.sequence;mode='localizing';return route.fulfill({json:state()});}
   return route.fulfill({json:state()});
@@ -64,6 +64,17 @@ test('brief buffering preserves registration while terminal loss stops stale tar
  await page.locator('video[data-source="wide"]').evaluate(video=>video.dispatchEvent(new Event('emptied')));
  await expect.poll(()=>controls.filter(x=>x.stop).length).toBe(1);
  mode='aligned';await page.reload();await expect(page.getByRole('status')).toHaveText('Vídeo alinhado');expect(sessions).toBe(3);
+});
+
+test('one localization miss does not blink a fresh visually compatible registration',async({page})=>{
+ const before=observation;
+ transientLocalizationMisses=1;
+ await expect.poll(()=>observation).toBeGreaterThan(before);
+ await page.waitForTimeout(100);
+ expect(await page.getByRole('status').textContent()).toBe('Vídeo alinhado');
+ expect(controls).toEqual([]);
+ await expect.poll(()=>observation).toBeGreaterThan(before+1);
+ await expect(page.getByRole('status')).toHaveText('Vídeo alinhado');
 });
 
 test('latest click waits for a fresh registration and is then sent once',async({page})=>{

@@ -390,8 +390,18 @@ function LiveSession({ host, choice, refreshReferences }: {
                     dispatchIntent(queued);
             }
             else {
-                clear();
-                if (result.reason)
+                const observed = registration.current;
+                const stillSharesRegisteredView = !!observed
+                    && observed.epoch === submitted.epoch
+                    && performance.now() - observed.verifiedAt < 2500
+                    && frameStillSharesRegisteredView(observed.signature, currentSignature, probe.current.width, probe.current.height);
+                // One missed localization is not evidence that a recently
+                // verified stationary pose changed. Keep drawing only while
+                // the existing freshness and whole-frame motion veto agree;
+                // neither condition renews the pose by itself.
+                if (!stillSharesRegisteredView)
+                    clear();
+                if (result.reason && !stillSharesRegisteredView)
                     setError(result.reason);
             }
             accept(result);

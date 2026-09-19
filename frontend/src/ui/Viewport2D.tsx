@@ -15,6 +15,7 @@ import type {
 import { i18n } from "../util/i18n";
 import { computeMain2DBounds, padBounds } from "./main2d/shared";
 import { DEFAULT_THEME_ID } from "../util/theme";
+import { panNavigation, rotateNavigationDelta, wheelNavigationScale, zoomNavigation } from "./viewportNavigation";
 
 type Props = {
   elements: CompositionElement[];
@@ -37,8 +38,12 @@ type Props = {
   onUndo?: () => void;
   onRedo?: () => void;
   initialFit?: "content";
+  /** Optional camera-centered starting view, used by focused editor replicas. */
+  initialCenter?: PlanePoint;
+  initialScale?: number;
   minScale?: number;
   maxScale?: number;
+  displayRotationDegrees?: 0 | 90 | 180 | 270;
 };
 
 function toVector2(x: number, y: number): Vector2 {
@@ -78,6 +83,19 @@ function readVertices(v: unknown): PlanePoint[] {
 
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
+}
+
+function normalizeDisplayRotationDegrees(value: number | undefined): 0 | 90 | 180 | 270 {
+  return value === 90 || value === 180 || value === 270 ? value : 0;
+}
+
+function worldDeltaToScreen(dx: number, dz: number, rotation: number): Vector2 {
+  return rotateNavigationDelta({ x: dx, y: dz }, rotation);
+}
+
+function screenDeltaToWorld(dx: number, dy: number, rotation: number): PlanePoint {
+  const delta = rotateNavigationDelta({ x: dx, y: dy }, -rotation);
+  return toPlanePoint(delta.x, delta.y);
 }
 
 const SNAP_STEP = 0.1; // meters
@@ -376,8 +394,11 @@ export function Viewport2D({
   onUndo,
   onRedo,
   initialFit,
+  initialCenter,
+  initialScale,
   minScale = 18,
   maxScale = 240,
+  displayRotationDegrees = 0,
 }: Props): React.ReactElement {
   const { locale } = i18n.useI18n();
 
@@ -395,8 +416,13 @@ export function Viewport2D({
   const enableKeyboardShortcutsRef = useRef<boolean>(enableKeyboardShortcuts);
   const toolSnapToGridRef = useRef<boolean>(toolSnapToGrid);
   const initialFitRef = useRef<Props["initialFit"]>(initialFit);
+  const initialCenterRef = useRef<PlanePoint | undefined>(initialCenter);
+  const initialScaleRef = useRef<number | undefined>(initialScale);
   const minScaleRef = useRef(minScale);
   const maxScaleRef = useRef(maxScale);
+  const displayRotationDegreesRef = useRef<0 | 90 | 180 | 270>(
+    normalizeDisplayRotationDegrees(displayRotationDegrees),
+  );
 
   const selectedRef = useRef<string[]>(selectedElementIds ?? []);
   const onSelectRef = useRef<Props["onSelectElements"]>(onSelectElements);
@@ -461,6 +487,13 @@ export function Viewport2D({
   }, [initialFit]);
 
   useEffect(() => {
+    initialCenterRef.current = initialCenter;
+    initialScaleRef.current = initialScale;
+    initialFitAppliedRef.current = false;
+    drawRef.current?.();
+  }, [initialCenter?.x, initialCenter?.z, initialScale]);
+
+  useEffect(() => {
     minScaleRef.current = minScale;
     cameraRef.current.scale = clamp(cameraRef.current.scale, minScaleRef.current, maxScaleRef.current);
     drawRef.current?.();
@@ -471,6 +504,11 @@ export function Viewport2D({
     cameraRef.current.scale = clamp(cameraRef.current.scale, minScaleRef.current, maxScaleRef.current);
     drawRef.current?.();
   }, [maxScale]);
+
+  useEffect(() => {
+    displayRotationDegreesRef.current = normalizeDisplayRotationDegrees(displayRotationDegrees);
+    drawRef.current?.();
+  }, [displayRotationDegrees]);
 
   useEffect(() => {
     hiddenElementIdsRef.current = new Set(hiddenElementIds ?? []);
@@ -676,9 +714,21 @@ export function Viewport2D({
     drawRef.current = requestDraw;
 
     function applyInitialFitIfNeeded(width: number, height: number) {
-      if (initialFitRef.current !== "content") return;
       if (initialFitAppliedRef.current) return;
       if (width <= 0 || height <= 0) return;
+
+      const initialCenter = initialCenterRef.current;
+      if (initialCenter) {
+        cameraRef.current = {
+          cx: initialCenter.x,
+          cz: initialCenter.z,
+          scale: clamp(initialScaleRef.current ?? 32, minScaleRef.current, maxScaleRef.current),
+        };
+        initialFitAppliedRef.current = true;
+        return;
+      }
+
+      if (initialFitRef.current !== "content") return;
       if (elementsRef.current.length === 0) return;
 
       const bounds = padBounds(computeMain2DBounds(elementsRef.current, elementTypesRef.current), 0.08, 0.5);
@@ -686,8 +736,17 @@ export function Viewport2D({
       const spanZ = Math.max(1e-6, bounds.maxZ - bounds.minZ);
       const usableWidth = Math.max(1, width - 32);
       const usableHeight = Math.max(1, height - 32);
+      const rotation = displayRotationDegreesRef.current;
+      const rotatedQuarterTurn = rotation === 90 || rotation === 270;
       const fitMinScale = Math.min(4, minScaleRef.current);
-      const scale = clamp(Math.min(usableWidth / spanX, usableHeight / spanZ), fitMinScale, maxScaleRef.current);
+      const scale = clamp(
+        Math.min(
+          (rotatedQuarterTurn ? usableHeight : usableWidth) / spanX,
+          (rotatedQuarterTurn ? usableWidth : usableHeight) / spanZ,
+        ),
+        fitMinScale,
+        maxScaleRef.current,
+      );
       cameraRef.current = {
         cx: (bounds.minX + bounds.maxX) / 2,
         cz: (bounds.minZ + bounds.maxZ) / 2,
@@ -747,13 +806,16 @@ export function Viewport2D({
       const scale = camera.scale;
       const cx = camera.cx;
       const cz = camera.cz;
+      const rotation = displayRotationDegreesRef.current;
 
       function worldToScreen(p: PlanePoint): Vector2 {
-        return toVector2(originX + (p.x - cx) * scale, originY + (p.z - cz) * scale);
+        const delta = worldDeltaToScreen((p.x - cx) * scale, (p.z - cz) * scale, rotation);
+        return toVector2(originX + delta.x, originY + delta.y);
       }
 
       function screenToWorld(p: Vector2): PlanePoint {
-        return toPlanePoint((p.x - originX) / scale + cx, (p.y - originY) / scale + cz);
+        const delta = screenDeltaToWorld(p.x - originX, p.y - originY, rotation);
+        return toPlanePoint(delta.x / scale + cx, delta.z / scale + cz);
       }
 
       const viewport: Viewport2DContext = {
@@ -766,12 +828,16 @@ export function Viewport2D({
         scale,
       };
 
-      const tl = screenToWorld(toVector2(0, 0));
-      const br = screenToWorld(toVector2(w, h));
-      const minX = Math.min(tl.x, br.x);
-      const maxX = Math.max(tl.x, br.x);
-      const minZ = Math.min(tl.z, br.z);
-      const maxZ = Math.max(tl.z, br.z);
+      const visibleWorld = [
+        screenToWorld(toVector2(0, 0)),
+        screenToWorld(toVector2(w, 0)),
+        screenToWorld(toVector2(w, h)),
+        screenToWorld(toVector2(0, h)),
+      ];
+      const minX = Math.min(...visibleWorld.map((point) => point.x));
+      const maxX = Math.max(...visibleWorld.map((point) => point.x));
+      const minZ = Math.min(...visibleWorld.map((point) => point.z));
+      const maxZ = Math.max(...visibleWorld.map((point) => point.z));
 
       const targetPx = 52;
       const raw = targetPx / Math.max(1e-6, scale);
@@ -793,19 +859,21 @@ export function Viewport2D({
 
         for (let ix = startX; ix <= endX; ix++) {
           const x = ix / inv;
-          const sx = Math.round(worldToScreen(toPlanePoint(x, cz)).x) + 0.5;
+          const start = worldToScreen(toPlanePoint(x, minZ));
+          const end = worldToScreen(toPlanePoint(x, maxZ));
           ctx2d.beginPath();
-          ctx2d.moveTo(sx, 0);
-          ctx2d.lineTo(sx, h);
+          ctx2d.moveTo(start.x, start.y);
+          ctx2d.lineTo(end.x, end.y);
           ctx2d.stroke();
         }
 
         for (let iz = startZ; iz <= endZ; iz++) {
           const z = iz / inv;
-          const sy = Math.round(worldToScreen(toPlanePoint(cx, z)).y) + 0.5;
+          const start = worldToScreen(toPlanePoint(minX, z));
+          const end = worldToScreen(toPlanePoint(maxX, z));
           ctx2d.beginPath();
-          ctx2d.moveTo(0, sy);
-          ctx2d.lineTo(w, sy);
+          ctx2d.moveTo(start.x, start.y);
+          ctx2d.lineTo(end.x, end.y);
           ctx2d.stroke();
         }
       }
@@ -818,15 +886,17 @@ export function Viewport2D({
 
       ctx2d.strokeStyle = accentAxis;
       ctx2d.lineWidth = 1.25;
-      const axisX = Math.round(worldToScreen(toPlanePoint(0, 0)).x) + 0.5;
-      const axisY = Math.round(worldToScreen(toPlanePoint(0, 0)).y) + 0.5;
       ctx2d.beginPath();
-      ctx2d.moveTo(axisX, 0);
-      ctx2d.lineTo(axisX, h);
+      const axisXStart = worldToScreen(toPlanePoint(0, minZ));
+      const axisXEnd = worldToScreen(toPlanePoint(0, maxZ));
+      ctx2d.moveTo(axisXStart.x, axisXStart.y);
+      ctx2d.lineTo(axisXEnd.x, axisXEnd.y);
       ctx2d.stroke();
       ctx2d.beginPath();
-      ctx2d.moveTo(0, axisY);
-      ctx2d.lineTo(w, axisY);
+      const axisZStart = worldToScreen(toPlanePoint(minX, 0));
+      const axisZEnd = worldToScreen(toPlanePoint(maxX, 0));
+      ctx2d.moveTo(axisZStart.x, axisZStart.y);
+      ctx2d.lineTo(axisZEnd.x, axisZEnd.y);
       ctx2d.stroke();
 
       ctx2d.fillStyle = markerFill;
@@ -1277,11 +1347,16 @@ export function Viewport2D({
       const scale = camera.scale;
       const cx = camera.cx;
       const cz = camera.cz;
+      const rotation = displayRotationDegreesRef.current;
 
-      const worldToScreen = (p: PlanePoint): Vector2 =>
-        toVector2(originX + (p.x - cx) * scale, originY + (p.z - cz) * scale);
-      const screenToWorld = (p: Vector2): PlanePoint =>
-        toPlanePoint((p.x - originX) / scale + cx, (p.y - originY) / scale + cz);
+      const worldToScreen = (p: PlanePoint): Vector2 => {
+        const delta = worldDeltaToScreen((p.x - cx) * scale, (p.z - cz) * scale, rotation);
+        return toVector2(originX + delta.x, originY + delta.y);
+      };
+      const screenToWorld = (p: Vector2): PlanePoint => {
+        const delta = screenDeltaToWorld(p.x - originX, p.y - originY, rotation);
+        return toPlanePoint(delta.x / scale + cx, delta.z / scale + cz);
+      };
 
       return {
         canvas: canvasEl,
@@ -1300,7 +1375,12 @@ export function Viewport2D({
       const originX = w / 2;
       const originY = h / 2;
       const { cx, cz, scale } = cameraRef.current;
-      return toPlanePoint((screen.x - originX) / scale + cx, (screen.y - originY) / scale + cz);
+      const delta = screenDeltaToWorld(
+        screen.x - originX,
+        screen.y - originY,
+        displayRotationDegreesRef.current,
+      );
+      return toPlanePoint(delta.x / scale + cx, delta.z / scale + cz);
     }
 
     function buildToolEvent(
@@ -2110,9 +2190,10 @@ export function Viewport2D({
         if (!interaction.moved && dx * dx + dy * dy >= 9) interaction.moved = true;
         if (!interaction.moved) return;
 
-        const { scale } = interaction.startCamera;
-        cameraRef.current.cx = interaction.startCamera.cx - dx / scale;
-        cameraRef.current.cz = interaction.startCamera.cz - dy / scale;
+        const start = interaction.startCamera;
+        const next = panNavigation({ center: { x: start.cx, y: start.cz }, scale: start.scale }, { x: dx, y: dy }, displayRotationDegreesRef.current);
+        cameraRef.current.cx = next.center.x;
+        cameraRef.current.cz = next.center.y;
         requestDraw();
         return;
       }
@@ -2425,18 +2506,12 @@ export function Viewport2D({
 
       const w = canvasEl.clientWidth;
       const h = canvasEl.clientHeight;
-      const originX = w / 2;
-      const originY = h / 2;
-
       const camera = cameraRef.current;
-      const before = toPlanePoint((x - originX) / camera.scale + camera.cx, (y - originY) / camera.scale + camera.cz);
-
-      const zoomFactor = Math.pow(2, -e.deltaY / 420);
-      const nextScale = clamp(camera.scale * zoomFactor, minScaleRef.current, maxScaleRef.current);
-      camera.scale = nextScale;
-
-      camera.cx = before.x - (x - originX) / nextScale;
-      camera.cz = before.z - (y - originY) / nextScale;
+      const nextScale = wheelNavigationScale(camera.scale, e.deltaY, e.deltaMode, h, minScaleRef.current, maxScaleRef.current);
+      const next = zoomNavigation({ center: { x: camera.cx, y: camera.cz }, scale: camera.scale }, nextScale, { x, y }, { width: w, height: h }, displayRotationDegreesRef.current);
+      camera.scale = next.scale;
+      camera.cx = next.center.x;
+      camera.cz = next.center.y;
       requestDraw();
     }
 

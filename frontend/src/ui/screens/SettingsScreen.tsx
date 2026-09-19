@@ -89,6 +89,8 @@ type SettingsEntry =
     };
 
 function loadActivePanelId(defaultId: string): string {
+  const requestedPanelId = new URLSearchParams(window.location.search).get("panel")?.trim();
+  if (requestedPanelId) return requestedPanelId;
   try {
     const raw = localStorage.getItem(ACTIVE_PANEL_STORAGE_KEY);
     if (raw && typeof raw === "string") return raw;
@@ -621,8 +623,17 @@ export function SettingsScreen({
       setActivePanelId(panelId);
     }
 
+    function handlePanelLocation(): void {
+      const panelId = new URLSearchParams(window.location.search).get("panel")?.trim();
+      if (panelId && entries.some((entry) => entry.id === panelId)) setActivePanelId(panelId);
+    }
+
     window.addEventListener("toposync:open-settings-panel", handleOpenSettingsPanel);
-    return () => window.removeEventListener("toposync:open-settings-panel", handleOpenSettingsPanel);
+    window.addEventListener("popstate", handlePanelLocation);
+    return () => {
+      window.removeEventListener("toposync:open-settings-panel", handleOpenSettingsPanel);
+      window.removeEventListener("popstate", handlePanelLocation);
+    };
   }, [entries]);
 
   useEffect(() => {

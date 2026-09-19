@@ -63,6 +63,7 @@ import {
 } from "../util/theme";
 import { getPreviousPathname, navigate, replace, usePathname } from "./router";
 import { Viewport2D } from "./Viewport2D";
+import { NavigableViewport } from "./NavigableViewport";
 import { createMeasurementLineElementType } from "./editor/measurementLineElementType";
 import { builtinNotificationRenderers, notificationPriority } from "./notifications/pipelinesNotifications";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
@@ -681,7 +682,19 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       },
       i18n,
       ui: {
-        Viewport2DReplica: ({ session, className, style, initialFit, interactionMode, minScale, maxScale }) => {
+        NavigableViewport,
+        Viewport2DReplica: ({
+          session,
+          className,
+          style,
+          initialFit,
+          initialCenter,
+          initialScale,
+          interactionMode,
+          minScale,
+          maxScale,
+          displayRotationDegrees,
+        }) => {
           const currentComposition = useSyncExternalStore(
             compositionStore.subscribe,
             compositionStore.getSnapshot,
@@ -703,8 +716,11 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
                 enableKeyboardShortcuts={false}
                 toolSnapToGrid={false}
                 initialFit={initialFit}
+                initialCenter={initialCenter}
+                initialScale={initialScale}
                 minScale={minScale}
                 maxScale={maxScale}
+                displayRotationDegrees={displayRotationDegrees}
               />
             </div>
           );

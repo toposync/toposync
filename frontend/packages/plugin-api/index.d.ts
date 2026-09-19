@@ -368,9 +368,15 @@ export type Viewport2DReplicaProps = {
   style?: import("react").CSSProperties;
   session?: EditorToolSession | null;
   initialFit?: "content";
+  /** Optional starting center in composition coordinates. */
+  initialCenter?: PlanePoint;
+  /** Pixels per meter used with initialCenter. */
+  initialScale?: number;
   interactionMode?: "navigate" | "select";
   minScale?: number;
   maxScale?: number;
+  /** Presentation-only clockwise rotation. It never changes composition coordinates. */
+  displayRotationDegrees?: 0 | 90 | 180 | 270;
 };
 
 export type LiveViewPlayerProps = {
@@ -381,7 +387,43 @@ export type LiveViewPlayerProps = {
   style?: import("react").CSSProperties;
 };
 
+export type NavigableViewportPoint = { x: number; y: number };
+export type NavigableViewportBounds = NavigableViewportPoint & { width: number; height: number };
+export type NavigableViewportState = { center: NavigableViewportPoint; scale: number; zoom: number };
+export type NavigableViewportController = {
+  fit: (bounds?: NavigableViewportBounds) => void;
+  zoomBy: (factor: number) => void;
+  centerOn: (point: NavigableViewportPoint) => void;
+  contentToScreen: (point: NavigableViewportPoint) => NavigableViewportPoint;
+  screenToContent: (point: NavigableViewportPoint) => NavigableViewportPoint;
+};
+/** A content plane in arbitrary units. Navigation never mutates the content. */
+export type NavigableViewportProps = {
+  contentSize: { width: number; height: number };
+  contentKey?: string;
+  initialBounds?: NavigableViewportBounds;
+  minZoom?: number;
+  maxZoom?: number;
+  interactionMode?: "navigate" | "interact";
+  controllerRef?: import("react").MutableRefObject<NavigableViewportController | null>;
+  viewportRef?: import("react").Ref<HTMLDivElement>;
+  className?: string;
+  style?: import("react").CSSProperties;
+  label: string;
+  children: import("react").ReactNode | ((state: NavigableViewportState) => import("react").ReactNode);
+  onViewChange?: (state: NavigableViewportState) => void;
+  /** Cancel any in-progress editing gesture when navigation takes ownership. */
+  onNavigationStart?: () => void;
+  onContentClick?: (point: NavigableViewportPoint, event: import("react").PointerEvent<HTMLDivElement>) => void;
+  onContentPointerMove?: (point: NavigableViewportPoint, event: import("react").PointerEvent<HTMLDivElement>) => void;
+  /** Called first. preventDefault reserves a key for the consumer's tool. */
+  onKeyDown?: (event: import("react").KeyboardEvent<HTMLDivElement>) => void;
+  onPointerLeave?: () => void;
+  onBlur?: () => void;
+};
+
 export type HostUi = {
+  NavigableViewport: (props: NavigableViewportProps) => import("react").ReactNode;
   Viewport2DReplica: (props: Viewport2DReplicaProps) => import("react").ReactNode;
   LiveViewPlayer?: (props: LiveViewPlayerProps) => import("react").ReactNode;
 };

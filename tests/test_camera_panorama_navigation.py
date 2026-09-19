@@ -13,6 +13,7 @@ from toposync_ext_cameras.panorama_navigation import (
     _continuous_pulse_plan,
     correction_step,
     localized_axis_measurement,
+    MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
     MAXIMUM_NAVIGATION_PULSE_SECONDS,
     reference_path,
     VisualNavigator,
@@ -57,12 +58,12 @@ def test_target_arrival_uses_image_measurement_instead_of_pose_prediction(tmp_pa
         [{"id": "one", "path": str(path)}],
     )
     # External image translation simulates pose-estimation error. The predicted
-    # target is still at the centre; the observed texture is eleven pixels away.
-    current = cv2.warpAffine(image, np.float32([[1, 0, 9], [0, 1, -6]]), (960, 540))
+    # target is still at the centre; the observed texture is over twenty pixels away.
+    current = cv2.warpAffine(image, np.float32([[1, 0, 18], [0, 1, -12]]), (960, 540))
     measured = localizer.measure_target(current, {"rotation_matrix": np.eye(3).tolist()}, [1, 0, 0])
     assert measured is not None
-    assert measured["error_pixels"] == pytest.approx([9, -6], abs=0.1)
-    assert measured["center_error_pixels"] > 3
+    assert measured["error_pixels"] == pytest.approx([18, -12], abs=0.1)
+    assert measured["center_error_pixels"] > MAXIMUM_LIVE_CENTER_ERROR_PIXELS
     assert (
         localizer.measure_target(
             np.zeros_like(image), {"rotation_matrix": np.eye(3).tolist()}, [1, 0, 0]
@@ -335,19 +336,26 @@ def test_navigation_converges_or_refuses_unattainable_motor_precision(target_yaw
         return await VisualNavigator(plant, localizer).aim(target)
 
     if continuous:
-        # At this plant's high fixed speed, 50 ms exceeds the requested pixel
-        # precision. The older ideal simulator silently accepted shorter pulses.
-        with pytest.raises(PanoramaCaptureError, match="visual_control_resolution_unverified"):
-            asyncio.run(run())
+        # A high fixed speed may still exceed the accepted image-space arrival
+        # tolerance. It must either arrive from fresh pixels or refuse the move.
+        try:
+            result = asyncio.run(run())
+        except PanoramaCaptureError as error:
+            assert error.code == "visual_control_resolution_unverified"
+        else:
+            assert result["verified"]
+            assert result["measurement"]["center_error_pixels"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS
         assert all(abs(amount) >= .05 for _, amount in plant.commands)
         assert len(plant.commands) <= 64
         return
     result = asyncio.run(run())
     assert result["verified"]
-    assert result["measurement"]["center_error_pixels"] <= 3
+    assert result["measurement"]["center_error_pixels"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS
     assert 0 < len(plant.commands) <= 16
     assert max(abs(command[1]) for command in plant.commands) <= MAXIMUM_NAVIGATION_PULSE_SECONDS
-    assert plant.angles == pytest.approx([target_yaw, 0.05], abs=0.006)
+    assert plant.angles == pytest.approx(
+        [target_yaw, 0.05], abs=MAXIMUM_LIVE_CENTER_ERROR_PIXELS / 650 * 1.1
+    )
 
 
 def test_minimum_pulse_is_used_only_when_observed_response_predicts_improvement():

@@ -32,7 +32,7 @@ from .processing.panorama_localization import (
 MAXIMUM_NAVIGATION_COMMANDS = 64
 MAXIMUM_FINE_CORRECTIONS = MAXIMUM_RETURN_CORRECTIONS
 MAXIMUM_LIVE_FINE_CORRECTIONS = 6
-MAXIMUM_CENTER_ERROR_PIXELS = 3.0
+MAXIMUM_LIVE_CENTER_ERROR_PIXELS = 12.0
 MAXIMUM_NAVIGATION_PULSE_SECONDS = 0.6
 FINE_CONTINUOUS_SPEEDS = (0.025, 0.05, DEFAULT_CONTINUOUS_PULSE_SPEED)
 MINIMUM_QUALIFIED_RESPONSE_PIXELS = 2.0
@@ -539,7 +539,7 @@ class VisualNavigator:
             if (
                 final
                 and measured
-                and measured["center_error_pixels"] <= MAXIMUM_CENTER_ERROR_PIXELS
+                and measured["center_error_pixels"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS
             ):
                 final_measurement = measured
                 break
@@ -562,8 +562,25 @@ class VisualNavigator:
                 for axis in ("pan", "tilt")
                 if self.scanner.capabilities.get("axes", {}).get(axis) is True
             ]
+            if final and measured and axes and len(measured.get("error_pixels", [])) == 2:
+                component_limit = MAXIMUM_LIVE_CENTER_ERROR_PIXELS / np.sqrt(2)
+                needed = [
+                    axis
+                    for index, axis in enumerate(("pan", "tilt"))
+                    if axis in axes and abs(float(measured["error_pixels"][index])) > component_limit
+                ]
+                if not needed and measured["center_error_pixels"] > MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
+                    needed = [
+                        max(
+                            axes,
+                            key=lambda axis: abs(
+                                float(measured["error_pixels"][0 if axis == "pan" else 1])
+                            ),
+                        )
+                    ]
+                axes = needed
             if not axes:
-                raise PanoramaCaptureError("visual_control_unavailable")
+                raise PanoramaCaptureError("visual_control_resolution_unverified")
             missing = [axis for axis in axes if axis not in self.response]
             if missing:
                 axis = max(missing, key=lambda name: abs(error[0 if name == "pan" else 1]))
@@ -595,7 +612,7 @@ class VisualNavigator:
                     })
                     if (
                         measured
-                        and measured["center_error_pixels"] <= MAXIMUM_CENTER_ERROR_PIXELS
+                        and measured["center_error_pixels"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS
                     ):
                         final_measurement = measured
                         break

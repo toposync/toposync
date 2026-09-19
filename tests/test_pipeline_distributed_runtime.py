@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+
 import asyncio
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,16 @@ from toposync.runtime.pipelines import (
 )
 from toposync.runtime.pipelines.distributed import build_distributed_graphs
 
+
+
+def _current_graph(graph: dict) -> dict:
+    # Fixtures anteriores conservam operadores, filas e assertions; somente o envelope vira v2.
+    if graph.get("schema_version") == 2:
+        return graph
+    return build_pipeline_graph_v2(
+        graph_uid="recognition_regression_baseline",
+        **{key: value for key, value in graph.items() if key != "schema_version"},
+    )
 
 def test_distributed_projection_runs_processing_and_origin_with_same_definition(
     tmp_path: Path,
@@ -77,7 +89,10 @@ def test_distributed_projection_runs_processing_and_origin_with_same_definition(
                 },
             ],
         }
-        pipeline = Pipeline(name="stage8_distributed", graph=base_graph)
+        base_graph["edges"][0]["traffic"] = {
+            "modality": "video.frame", "semantic_class": "frame", "continuous": True,
+        }
+        pipeline = Pipeline(name="stage8_distributed", graph=_current_graph(base_graph))
         graphs = build_distributed_graphs(pipeline, registry)
         assert graphs.processing_graph is not None
         assert graphs.origin_graph is not None

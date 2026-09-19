@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+
 import asyncio
 from typing import Any
 
@@ -22,6 +24,16 @@ from toposync.runtime.pipelines import (
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 from toposync_ext_vision.pipelines import DetectionObject, ModelManifest, ModelRegistry
 
+
+
+def _current_graph(graph: dict) -> dict:
+    # Fixtures anteriores conservam operadores, filas e assertions; somente o envelope vira v2.
+    if graph.get("schema_version") == 2:
+        return graph
+    return build_pipeline_graph_v2(
+        graph_uid="recognition_regression_baseline",
+        **{key: value for key, value in graph.items() if key != "schema_version"},
+    )
 
 def _build_registry() -> ModelRegistry:
     return ModelRegistry(
@@ -145,7 +157,7 @@ def _pipeline_runtime(
         share_strategy="never",
         runtime_factory=lambda config, _deps: _CollectSinkRuntime(config, collector),
     )
-    pipeline = Pipeline(name="vision_track_integration", graph=graph)
+    pipeline = Pipeline(name="vision_track_integration", graph=_current_graph(graph))
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
     return PipelineRuntime(
         compiled=compiled,
@@ -299,7 +311,7 @@ def test_velocity_estimation_continues_working_after_vision_track_decoupling() -
 
         collector: dict[str, list[Packet]] = {}
         runtime = _pipeline_runtime(
-            graph=graph,
+            graph=_current_graph(graph),
             source_sequence=source_sequence,
             detection_sequence=detection_sequence,
             collector=collector,
@@ -371,7 +383,7 @@ def test_vision_track_closes_event_when_source_stops_emitting_packets() -> None:
 
         collector: dict[str, list[Packet]] = {}
         runtime = _pipeline_runtime(
-            graph=graph,
+            graph=_current_graph(graph),
             source_sequence=source_sequence,
             detection_sequence=detection_sequence,
             collector=collector,
@@ -449,7 +461,7 @@ def test_tracking_group_closes_when_source_stops_emitting_packets() -> None:
 
         collector: dict[str, list[Packet]] = {}
         runtime = _pipeline_runtime(
-            graph=graph,
+            graph=_current_graph(graph),
             source_sequence=source_sequence,
             detection_sequence=detection_sequence,
             collector=collector,
@@ -559,7 +571,7 @@ def test_vision_track_annotate_mode_fills_future_multicamera_fields_from_packet(
 
         collector: dict[str, list[Packet]] = {}
         runtime = _pipeline_runtime(
-            graph=graph,
+            graph=_current_graph(graph),
             source_sequence=source_sequence,
             detection_sequence=detection_sequence,
             collector=collector,

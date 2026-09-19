@@ -7,6 +7,7 @@ First-party extension focused on public task-oriented vision operators for the P
 - `vision.detect`
 - `vision.track`
 - `vision.group_events`
+- `vision.identity_evidence` and `vision.recognize_identity` (explicit activation; [setup, curation and recovery](docs/IDENTITY_RECOGNITION.md))
 - `vision.crop_objects`
 - `vision.segment_instances`
 - `vision.pose_estimate` (skeleton only; not launched yet)

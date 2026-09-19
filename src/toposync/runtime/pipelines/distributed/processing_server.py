@@ -35,7 +35,7 @@ from ..telemetry import (
     create_default_pipeline_telemetry_disk_checkpoint,
     create_default_pipeline_telemetry_store,
 )
-from .plan import build_distributed_graphs
+from .plan import build_distributed_graphs, required_transport_capabilities
 
 
 logger = logging.getLogger("toposync.processing")
@@ -64,6 +64,7 @@ def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
 
 
 class ProcessingConfig(BaseModel):
+    required_capabilities: list[str] = Field(default_factory=list, max_length=16)
     pipelines: list[Pipeline] = Field(default_factory=list)
     settings: AppSettings | None = None
 
@@ -184,6 +185,7 @@ class ProcessingServerRuntime:
         self._services = services
         self._registry = operator_registry
         self._compiler = compiler
+        self._execution_scheduler = ExecutionScheduler()
         self._pipeline_telemetry_store = pipeline_telemetry_store
         self._snapshot_store = PipelineStepSnapshotStore(files_dir=config_store.paths.files_dir)
         self.broadcaster = EventBroadcaster(max_queue_size=500)
@@ -195,10 +197,13 @@ class ProcessingServerRuntime:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._observability_buffer: deque[dict[str, Any]] = deque()
         self._observability_flush_handle: asyncio.TimerHandle | None = None
-        self._observability_flush_interval_s = _env_float(
-            "TOPOSYNC_PROCESSING_OBSERVABILITY_FLUSH_INTERVAL_MS",
-            1000.0,
-        ) / 1000.0
+        self._observability_flush_interval_s = (
+            _env_float(
+                "TOPOSYNC_PROCESSING_OBSERVABILITY_FLUSH_INTERVAL_MS",
+                1000.0,
+            )
+            / 1000.0
+        )
         self._observability_batch_size = _env_int(
             "TOPOSYNC_PROCESSING_OBSERVABILITY_BATCH_SIZE",
             200,
@@ -220,7 +225,7 @@ class ProcessingServerRuntime:
             return
         self._loop = asyncio.get_running_loop()
 
-    async def stop(self) -> None:
+    async def stop(self, *, shutdown_scheduler: bool = True) -> None:
         active = self._active
         self._active = None
         if active is not None:
@@ -228,6 +233,8 @@ class ProcessingServerRuntime:
                 await active.runtime.stop()
             except Exception:
                 pass
+        if shutdown_scheduler:
+            await self._execution_scheduler.shutdown()
         self._recent_events.clear()
         self._replay_events.clear()
         self._event_seq = 0
@@ -281,7 +288,7 @@ class ProcessingServerRuntime:
         loop.create_task(self._apply(desired), name="toposync.processing.apply_config")
 
     async def _apply(self, desired: list[Pipeline]) -> None:
-        await self.stop()
+        await self.stop(shutdown_scheduler=False)
         if not desired:
             return
 
@@ -334,7 +341,7 @@ class ProcessingServerRuntime:
             processing_emit_projected_event=self._emit_projected_event,
             pipeline_telemetry_store=self._pipeline_telemetry_store,
             pipeline_observability_sink=self._enqueue_observability_record,
-            execution_scheduler=ExecutionScheduler(),
+            execution_scheduler=self._execution_scheduler,
             artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,
             artifact_global_counter=artifact_global_counter,
@@ -570,12 +577,29 @@ def create_processing_app() -> FastAPI:
 
     @app.post("/api/processing/config")
     async def set_processing_config(body: ProcessingConfig) -> dict[str, Any]:
+        required = required_transport_capabilities(body.pipelines, operator_registry)
+        if required:
+            if not all(_processing_basic_auth() or ()) or _processing_basic_auth() is None:
+                raise HTTPException(
+                    status_code=409, detail="Private artifacts require processing authentication"
+                )
+            if not required.issubset(set(body.required_capabilities)):
+                raise HTTPException(
+                    status_code=409, detail="Origin did not negotiate the private artifact protocol"
+                )
+        if set(body.required_capabilities) - {"private_artifacts_v1"}:
+            raise HTTPException(status_code=409, detail="Unsupported transport capability")
         await runtime.apply_config(body.model_dump(mode="json"))
         return {"ok": True}
 
     @app.get("/api/processing/status")
     async def get_processing_status() -> dict[str, Any]:
         status = runtime.status()
+        status["transport_capabilities"] = (
+            ["private_artifacts_v1"]
+            if _processing_basic_auth() and all(_processing_basic_auth())
+            else []
+        )
         timeout_s = _env_float("TOPOSYNC_PROCESSING_STATUS_DIAGNOSTICS_TIMEOUT", 3.5)
         try:
             status.update(

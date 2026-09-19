@@ -200,6 +200,9 @@ OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS: tuple[str, ...] = (
 OFFICIAL_RTMPOSE_MODEL_IDS: tuple[str, ...] = ()
 
 OFFICIAL_VISION_MODEL_IDS: tuple[str, ...] = (
+    "open_noodle_pet_small",
+    "opencv_yunet_2023mar",
+    "opencv_sface_2021dec",
     *OFFICIAL_DETECTION_MODEL_IDS,
     *OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS,
     *OFFICIAL_RTMPOSE_MODEL_IDS,

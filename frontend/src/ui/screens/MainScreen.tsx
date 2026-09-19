@@ -7,6 +7,7 @@ import type {
   HostApi,
   Notification,
   NotificationRenderer,
+  NotificationDetailPanel,
   RenderViewDefinition,
   ViewSettings,
 } from "@toposync/plugin-api";
@@ -48,6 +49,7 @@ type Props = {
   elementTypesById: Record<string, ElementType>;
   viewSettings: ViewSettings;
   notificationRenderers: NotificationRenderer[];
+  notificationDetailPanels?: NotificationDetailPanel[];
   notifications: Notification[];
   notificationsCount: NotificationsCount;
   notificationsHasMore: boolean;
@@ -354,6 +356,7 @@ export function MainScreen({
   elementTypesById,
   viewSettings,
   notificationRenderers,
+  notificationDetailPanels = [],
   notifications,
   notificationsCount,
   notificationsHasMore,
@@ -792,6 +795,10 @@ export function MainScreen({
   useEffect(() => {
     if (!isNotificationDetailsOpen) return;
     function onKeyDown(event: KeyboardEvent): void {
+      const target = event.target;
+      if (event.defaultPrevented || (target instanceof HTMLElement && (
+        target.isContentEditable || target.closest('input, textarea, select, [role="textbox"], [role="combobox"], [role="listbox"], [role="slider"], [role="spinbutton"]')
+      ))) return;
       if (event.key === "ArrowLeft") {
         event.preventDefault();
         showPrevNotificationImage();
@@ -1329,6 +1336,9 @@ export function MainScreen({
                         </div>
 
                         <div className="notificationCardBody">
+                          {notificationDetailPanels.filter((panel) => panel.supports(n)).map((panel) => (
+                            <React.Fragment key={panel.id}>{panel.renderSummary?.(n)}</React.Fragment>
+                          ))}
                           {renderer ? (
                             <div className="notificationCardRenderer">{renderer.render(n)}</div>
                           ) : n.description ? (
@@ -1589,6 +1599,7 @@ export function MainScreen({
       </Modal>
 
       <Modal
+        manageFocus
         open={isNotificationDetailsOpen}
         title={t("core.ui.notifications.details.title", {}, "Notification details")}
         onClose={() => setIsNotificationDetailsOpen(false)}
@@ -1602,6 +1613,10 @@ export function MainScreen({
               {activeNotificationSubtitle ? <div className="notificationDetailsSubtitle">{activeNotificationSubtitle}</div> : null}
               {activeNotification.description ? <div className="notificationDetailsDescription">{activeNotification.description}</div> : null}
             </div>
+
+            {notificationDetailPanels.filter((panel) => panel.supports(activeNotification)).map((panel) => (
+              <React.Fragment key={panel.id}>{panel.render(activeNotification)}</React.Fragment>
+            ))}
 
             {activeNotificationImage ? (
               <div className="notificationGallery">

@@ -8,7 +8,12 @@ from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .execution import PipelineRuntimeDependencies, SinkRuntime, SourceOperatorRuntime, TransformOperatorRuntime
+from .execution import (
+    PipelineRuntimeDependencies,
+    SinkRuntime,
+    SourceOperatorRuntime,
+    TransformOperatorRuntime,
+)
 from .operator_registry import OperatorRegistry
 from .runtime import Artifact, Lifecycle, Packet
 
@@ -107,12 +112,31 @@ def _decode_inline_artifact_data(rec: dict[str, Any]) -> Any:
     return blob
 
 
+_PRIVATE_PACKET_BYTES = 2 * 1024 * 1024
+
+
 def _serialize_packet(packet: Packet) -> dict[str, Any]:
+    private_bytes = 0
+    for artifact in packet.artifacts.values():
+        if artifact.private:
+            if artifact.reference or not isinstance(artifact.data, bytes):
+                raise ValueError("private artifact must contain bounded inline bytes")
+            private_bytes += len(artifact.data)
+    if private_bytes > _PRIVATE_PACKET_BYTES:
+        raise ValueError("private packet exceeds transport budget")
     artifacts: dict[str, Any] = {}
     for name, art in packet.artifacts.items():
+        # Validate before encoding to avoid allocating oversized private payloads.
+        if art.private and (
+            art.reference or not isinstance(art.data, bytes) or len(art.data) > 2 * 1024 * 1024
+        ):
+            raise ValueError("private artifact must contain bounded inline bytes")
         encoded = _encode_artifact_inline(art)
         if encoded is None:
             continue
+        if art.private:
+            encoded["private"] = True
+            encoded["privacy_version"] = 1
         artifacts[name] = encoded
 
     return {
@@ -137,17 +161,49 @@ def _deserialize_packet(data: dict[str, Any]) -> Packet:
 
     artifacts: dict[str, Artifact] = {}
     raw_artifacts = _as_dict(data.get("artifacts"))
+    # Bound the aggregate before decoding: many individually valid crops must not
+    # multiply the private packet budget or allocate an unbounded set of vectors.
+    encoded_bytes = sum(
+        len(_as_str(_as_dict(value).get("inline_b64")))
+        for value in raw_artifacts.values()
+        if _as_dict(value).get("private") is True
+    )
+    if encoded_bytes > 4 * ((_PRIVATE_PACKET_BYTES + 2) // 3):
+        raise ValueError("private packet exceeds transport budget")
+    private_bytes = 0
     for name, value in raw_artifacts.items():
         rec = _as_dict(value)
+        private = rec.get("private", False)
+        if not isinstance(private, bool):
+            raise ValueError("invalid artifact privacy flag")
+        private_data = None
+        if private:
+            if (
+                rec.get("privacy_version") != 1
+                or rec.get("encoding") != "bytes"
+                or rec.get("reference")
+            ):
+                raise ValueError("unsupported private artifact envelope")
+            encoded = rec.get("inline_b64")
+            if not isinstance(encoded, str) or len(encoded) > 4 * ((2 * 1024 * 1024 + 2) // 3):
+                raise ValueError("private artifact exceeds transport budget")
+            try:
+                private_data = base64.b64decode(encoded, validate=True)
+            except Exception as exc:
+                raise ValueError("invalid private artifact encoding") from exc
+            private_bytes += len(private_data)
+            if private_bytes > _PRIVATE_PACKET_BYTES:
+                raise ValueError("private packet exceeds transport budget")
         reference = _as_str(rec.get("reference")).strip() or None
         mime = _as_str(rec.get("mime_type")).strip() or None
         meta = _as_dict(rec.get("metadata"))
         artifacts[str(name)] = Artifact(
             name=str(name),
-            data=_decode_inline_artifact_data(rec),
+            data=private_data if private else _decode_inline_artifact_data(rec),
             reference=reference,
             mime_type=mime,
             metadata=meta,
+            private=private,
         )
 
     packet_id = _as_str(data.get("packet_id")).strip() or None
@@ -196,6 +252,7 @@ class ProjectToOriginConfig(BaseModel):
     def _trim(cls, value: str) -> str:
         return str(value or "").strip()
 
+
 class RemoteSourceRuntime(SourceOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = RemoteSourceConfig.model_validate(config)
@@ -204,7 +261,9 @@ class RemoteSourceRuntime(SourceOperatorRuntime):
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         inbox = getattr(self._dependencies, "origin_inbox", None)
         if inbox is None:
-            raise RuntimeError("dist.remote_source requires PipelineRuntimeDependencies.origin_inbox")
+            raise RuntimeError(
+                "dist.remote_source requires PipelineRuntimeDependencies.origin_inbox"
+            )
         timeout_s = float(self._config.poll_timeout_s)
         result = await inbox.get(timeout_s=timeout_s, cancel_event=context.cancel_event)
         if not result.accepted or result.item is None:
@@ -303,7 +362,9 @@ def register_distributed_operators(registry: OperatorRegistry) -> None:
         inputs=[{"name": "in", "required": True}],
         outputs=[],
         capabilities=["distributed", "processing_only", "sink"],
-        defaults=ProjectToOriginConfig(pipeline_name="pipeline", target_node_id="node").model_dump(),
+        defaults=ProjectToOriginConfig(
+            pipeline_name="pipeline", target_node_id="node"
+        ).model_dump(),
         share_strategy="never",
         owner="core",
         runtime_factory=lambda config, deps: ProjectToOriginRuntime(config, deps),

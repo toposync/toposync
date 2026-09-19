@@ -1,0 +1,13 @@
+import { requestJson, resolveToposyncUrl } from "@toposync/plugin-api";
+export type Species = "person" | "cat" | "dog";
+export type Identity = { id: string; name: string; species: Species; references: number; occurrences: number; representative_id: string | null };
+export type GalleryData = { identities: Identity[]; revision: number; permissions: { curate: boolean; history: boolean } };
+export type Observation = { editable: boolean; id: string; occurrence_id?: string; species?: Species; identity_id: string | null; eligible: boolean; confirmed: boolean; reference: boolean; cluster_id: string | null };
+export type Decision = { status: string; identity_id: string | null; candidate_ids: string[]; reason: string };
+export type Occurrence = { closed: boolean; identities: Identity[]; editable: boolean; id: string; species: Species; decision: Decision; observations: Observation[]; revision: number };
+export type Operation = { id: string; action: string; created_at: number; undone: boolean };
+const base = "/api/vision/identities";
+export const read = <T,>(path = "", signal?: AbortSignal) => requestJson<T>(`${base}${path}`, { signal });
+export const write = <T,>(path: string, body: unknown, method = "POST") => requestJson<T>(`${base}${path}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+export const photoUrl = (id: string) => resolveToposyncUrl(`${base}/observations/${encodeURIComponent(id)}/image`);
+export const changed = () => window.dispatchEvent(new Event("toposync:identity-gallery-changed"));

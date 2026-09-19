@@ -24,17 +24,34 @@ def collect_vision_runtime_backends() -> list[dict[str, Any]]:
         preferred_execution_providers = []
         error = str(exc)
 
+    try:
+        import cv2
+
+        face_available = all(hasattr(cv2, name) for name in ("FaceDetectorYN", "FaceRecognizerSF"))
+        face_version = str(cv2.__version__)
+    except ImportError:
+        face_available, face_version = False, ""
     return [
+        {
+            "id": "opencv_dnn",
+            "available": face_available,
+            "version": face_version,
+            "tasks": ["embedding", "face_detection"],
+            "artifact_formats": ["onnx"],
+            "execution_providers": ["CPU"] if face_available else [],
+            "preferred_execution_providers": ["CPU"] if face_available else [],
+            "error": None if face_available else "opencv_face_runtime_unavailable",
+        },
         {
             "id": "onnxruntime",
             "available": available,
             "version": version,
-            "tasks": ["classification", "detection", "segmentation"],
+            "tasks": ["classification", "detection", "segmentation", "embedding"],
             "artifact_formats": ["onnx"],
             "execution_providers": execution_providers,
             "preferred_execution_providers": preferred_execution_providers,
             "error": error,
-        }
+        },
     ]
 
 

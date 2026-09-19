@@ -2,5 +2,11 @@
   "schema_version": 1,
   "id": "com.toposync.vision",
   "name": "Vision",
-  "version": "0.1.19"
+  "version": "0.1.19",
+  "frontend": {
+    "kind": "module-federation",
+    "remote_entry": "remoteEntry.js",
+    "scope": "vision",
+    "module": "./activate"
+  }
 }

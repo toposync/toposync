@@ -78,7 +78,7 @@ def _resolve_install_source(manifest: ModelManifest) -> tuple[bool, str, str, st
     model_id = manifest.model_id
     redistribution_allowed = bool(getattr(manifest.license, "redistribution_allowed", False))
     acquisition_mode = str(getattr(getattr(manifest, "acquisition", None), "mode", "guided_upload") or "guided_upload").strip().lower()
-    if str(manifest.runtime or "").strip().lower() != "onnxruntime":
+    if str(manifest.runtime or "").strip().lower() not in {"onnxruntime", "opencv_dnn"}:
         return False, "runtime_unsupported", "", ""
     if str(manifest.artifact_format or "").strip().lower() != "onnx":
         return False, "artifact_format_unsupported", "", ""

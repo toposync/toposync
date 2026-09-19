@@ -609,6 +609,8 @@ class StoreImagesRuntime(TransformOperatorRuntime):
 
         artifact_name = normalize_artifact_name(self._config.input_artifact_name)
         artifact = packet.artifacts.get(artifact_name)
+        if artifact is not None and artifact.private:
+            return [packet]
         if artifact is not None:
             rel: str | None = str(artifact.reference) if artifact.reference else None
             mime: str | None = str(artifact.mime_type) if artifact.mime_type else None
@@ -1027,7 +1029,7 @@ class NotifyRuntime(SinkRuntime):
             "event_code": _resolve_string(packet, "event_code") or None,
             "tracking_id": _resolve_string(packet, "tracking_id") or None,
             "artifacts": {
-                name: art.reference for name, art in packet.artifacts.items() if art.reference
+                name: art.reference for name, art in packet.artifacts.items() if art.reference and not art.private
             },
             "trail": list(state.trail),
             "stored_images": state.stored_images,
@@ -1252,6 +1254,7 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "active_member_event_ids",
         "category_summary",
         "identity_id",
+        "recognition",
         "tracklet_id",
         "tracklet_ids",
         "raw_tracking_id",

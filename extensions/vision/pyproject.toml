@@ -10,9 +10,12 @@ dependencies = [
   "toposync-core>=0.3.0",
   "toposync-ext-cameras>=0.1.0",
   "numpy>=1.26,<3",
+  "cryptography>=44,<47",
   "norfair>=2.2,<3",
   "onnx>=1.17,<2",
+  "onnxruntime>=1.20,<2",
   "huggingface_hub>=0.34,<1",
+  "httpx>=0.27,<1",
   "pillow>=10,<13",
 ]
 [project.entry-points."toposync.extensions"]

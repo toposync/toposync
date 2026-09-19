@@ -194,6 +194,7 @@ class _MemberState:
     active: bool = True
     first_seen_packet_ts: float | None = None
     last_seen_packet_ts: float | None = None
+    recognition_occurrence_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -516,6 +517,8 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             }
             if member.world_anchor:
                 item["world_anchor"] = dict(member.world_anchor)
+            if member.recognition_occurrence_id:
+                item["recognition_occurrence_id"] = member.recognition_occurrence_id
             out.append(item)
         return out
 
@@ -553,6 +556,10 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         active_member_event_ids = list(subject["active_member_event_ids"])
         payload = dict(source_packet.payload)
         payload.pop("tracking_id", None)
+        # A group never inherits the triggering member's individual identity.
+        payload.pop("recognition", None)
+        if "identity_id" in payload:
+            payload["identity_id"] = None
         payload.update(
             {
                 "event_id": group.group_event_id,
@@ -611,7 +618,11 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             stream_id=group.stream_id,
             lifecycle=lifecycle,
             payload=payload,
-            artifacts=source_packet.artifacts,
+            artifacts={
+                name: artifact
+                for name, artifact in source_packet.artifacts.items()
+                if not artifact.private
+            },
             metadata=metadata,
             parent_packet_id=source_packet.packet_id,
         )
@@ -631,6 +642,10 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         group.camera_id = member.camera_id or group.camera_id
         existing = group.members.get(member.event_id)
         first_seen = existing.first_seen_packet_ts if existing else packet_ts
+        recognition = member.packet.payload.get("recognition")
+        occurrence = recognition.get("occurrence_id") if isinstance(recognition, dict) else None
+        if not isinstance(occurrence, str) or not 1 <= len(occurrence) <= 512:
+            occurrence = existing.recognition_occurrence_id if existing else None
         group.members[member.event_id] = _MemberState(
             event_id=member.event_id,
             event_code=member.event_code,
@@ -641,6 +656,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             active=member.lifecycle != Lifecycle.CLOSE,
             first_seen_packet_ts=first_seen,
             last_seen_packet_ts=packet_ts,
+            recognition_occurrence_id=occurrence,
         )
         self._group_id_by_member_key[self._member_key(member.source_stream_id, member.event_id)] = (
             group.group_event_id

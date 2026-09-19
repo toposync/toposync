@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from urllib.parse import urlsplit
 from typing import Any, AsyncIterator
 
 
@@ -59,7 +60,11 @@ class HttpProcessingTransport:
         timeout_s: float | None = None,
     ) -> dict[str, Any]:
         client = await self._ensure_client()
-        res = await client.post(f"{self._base}{path}", json=payload, timeout=self._timeout_s if timeout_s is None else timeout_s)
+        res = await client.post(
+            f"{self._base}{path}",
+            json=payload,
+            timeout=self._timeout_s if timeout_s is None else timeout_s,
+        )
         return self._json_response(res, error_prefix)
 
     async def _post_files(
@@ -81,6 +86,23 @@ class HttpProcessingTransport:
         return self._json_response(res, error_prefix)
 
     async def push_config(self, payload: dict[str, Any]) -> None:
+        required = set(payload.get("required_capabilities") or [])
+        if "private_artifacts_v1" in required:
+            location = urlsplit(self._base)
+            loopback = location.hostname in {"127.0.0.1", "::1", "localhost"}
+            if (
+                (location.scheme != "https" and not loopback)
+                or not self._username
+                or not self._password
+            ):
+                raise ProcessingTransportError(
+                    "Private artifacts require authenticated HTTPS (HTTP is allowed only on loopback)"
+                )
+            status = await self.status()
+            if not required.issubset(set(status.get("transport_capabilities") or [])):
+                raise ProcessingTransportError(
+                    "Processing server does not support the required private artifact protocol"
+                )
         await self._post_json(
             "/api/processing/config",
             payload,
@@ -96,7 +118,9 @@ class HttpProcessingTransport:
 
         async with client.stream("GET", url, headers=headers) as res:
             if res.status_code >= 300:
-                raise ProcessingTransportError(f"Processing event stream failed: {res.status_code} {res.text}")
+                raise ProcessingTransportError(
+                    f"Processing event stream failed: {res.status_code} {res.text}"
+                )
             async for line in res.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
@@ -113,7 +137,9 @@ class HttpProcessingTransport:
     async def ack(self, last_event_id: int) -> None:
         client = await self._ensure_client()
         url = f"{self._base}/api/processing/events/ack"
-        res = await client.post(url, json={"last_event_id": int(last_event_id)}, timeout=self._timeout_s)
+        res = await client.post(
+            url, json={"last_event_id": int(last_event_id)}, timeout=self._timeout_s
+        )
         if res.status_code >= 300:
             logger.debug("processing ack failed status=%s body=%s", res.status_code, res.text)
 
@@ -137,7 +163,13 @@ class HttpProcessingTransport:
         content_type: str,
         content: bytes,
     ) -> dict[str, Any]:
-        files = {"file": (filename or "custom-model.onnx", content, content_type or "application/octet-stream")}
+        files = {
+            "file": (
+                filename or "custom-model.onnx",
+                content,
+                content_type or "application/octet-stream",
+            )
+        }
         return await self._post_files(
             "/api/processing/vision/custom-onnx/inspect",
             files=files,
@@ -153,7 +185,13 @@ class HttpProcessingTransport:
         content_type: str,
         content: bytes,
     ) -> dict[str, Any]:
-        files = {"image": (filename or "preview-image.png", content, content_type or "application/octet-stream")}
+        files = {
+            "image": (
+                filename or "preview-image.png",
+                content,
+                content_type or "application/octet-stream",
+            )
+        }
         data = {"config_json": json.dumps(payload)}
         return await self._post_files(
             "/api/processing/vision/custom-onnx/preview",
@@ -203,14 +241,18 @@ class HttpProcessingTransport:
             timeout_s=max(self._timeout_s, 120.0),
         )
 
-    async def install_vision_model(self, *, model_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def install_vision_model(
+        self, *, model_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self._post_json(
             f"/api/processing/vision/models/{model_id}/install",
             payload,
             error_prefix="Processing vision model install failed",
         )
 
-    async def cancel_vision_model(self, *, model_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def cancel_vision_model(
+        self, *, model_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self._post_json(
             f"/api/processing/vision/models/{model_id}/cancel",
             payload,
@@ -232,7 +274,13 @@ class HttpProcessingTransport:
         content_type: str,
         content: bytes,
     ) -> dict[str, Any]:
-        files = {"file": (filename or f"{model_id}.onnx", content, content_type or "application/octet-stream")}
+        files = {
+            "file": (
+                filename or f"{model_id}.onnx",
+                content,
+                content_type or "application/octet-stream",
+            )
+        }
         return await self._post_files(
             f"/api/processing/vision/models/{model_id}/artifact",
             files=files,

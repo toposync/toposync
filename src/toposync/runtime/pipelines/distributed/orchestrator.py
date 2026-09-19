@@ -24,6 +24,7 @@ from ..compiler import (
     PipelineGraphCompiler,
     SharedNodeOccurrence,
 )
+from ..execution_scheduler import ExecutionScheduler
 from ..execution import PipelineRuntime, PipelineRuntimeDependencies
 from ..operator_registry import OperatorRegistry
 from ..observability import (
@@ -33,7 +34,7 @@ from ..observability import (
 )
 from ..runtime import BoundedChannel, DropPolicy
 from ..shared_runtime import PipelineBundleRuntime, SharedRuntimeBuildError
-from .plan import build_distributed_graphs
+from .plan import build_distributed_graphs, required_transport_capabilities
 from .transport import HttpProcessingTransport
 
 
@@ -78,8 +79,12 @@ def _remote_config_payload(
     pipelines: list[Pipeline],
     *,
     settings_payload: dict[str, Any],
+    registry: OperatorRegistry | None = None,
 ) -> dict[str, Any]:
     return {
+        "required_capabilities": sorted(required_transport_capabilities(pipelines, registry))
+        if registry
+        else [],
         "pipelines": [p.model_dump(mode="json") for p in pipelines],
         "settings": settings_payload,
     }
@@ -104,6 +109,8 @@ class PipelinesOrchestrator:
         self._files_dir = files_dir
         self._poll_interval_s = float(poll_interval_s)
         self._runtime_deps_base = runtime_dependencies or PipelineRuntimeDependencies()
+        if self._runtime_deps_base.execution_scheduler is None:
+            self._runtime_deps_base.execution_scheduler = ExecutionScheduler()
 
         self._stop = asyncio.Event()
         self._reload = asyncio.Event()
@@ -132,6 +139,7 @@ class PipelinesOrchestrator:
                 pass
             self._task = None
         await self._stop_all()
+        await self._runtime_deps_base.execution_scheduler.shutdown()
 
     def trigger_reload(self) -> None:
         self._reload.set()
@@ -211,7 +219,9 @@ class PipelinesOrchestrator:
             try:
                 info = handle.runtime.graph_runtime_info(graph_id=name)
                 info["mode"] = handle.mode
-                info["processing_server_id"] = getattr(handle.pipeline, "processing_server_id", "local")
+                info["processing_server_id"] = getattr(
+                    handle.pipeline, "processing_server_id", "local"
+                )
                 info["started_at"] = handle.started_at
                 graphs.append(info)
             except Exception as exc:  # noqa: BLE001
@@ -323,7 +333,9 @@ class PipelinesOrchestrator:
                 ok = False
                 logger.warning("processing server %s is not connected; settings sync deferred", sid)
                 continue
-            payload = _remote_config_payload(group, settings_payload=settings_payload)
+            payload = _remote_config_payload(
+                group, settings_payload=settings_payload, registry=self._registry
+            )
             handle.config_payload = payload
             try:
                 await handle.transport.push_config(payload)
@@ -356,7 +368,9 @@ class PipelinesOrchestrator:
             }
             if bool(status.get("active")) and expected_names.issubset(remote_names):
                 continue
-            payload = _remote_config_payload(group, settings_payload=settings_payload)
+            payload = _remote_config_payload(
+                group, settings_payload=settings_payload, registry=self._registry
+            )
             handle.config_payload = payload
             try:
                 await handle.transport.push_config(payload)
@@ -550,7 +564,9 @@ class PipelinesOrchestrator:
             username=getattr(server, "username", ""),
             password=getattr(server, "password", ""),
         )
-        payload = _remote_config_payload(pipelines, settings_payload=settings_payload)
+        payload = _remote_config_payload(
+            pipelines, settings_payload=settings_payload, registry=self._registry
+        )
 
         async def pump() -> None:
             last_event_id = 0
@@ -622,7 +638,9 @@ class PipelinesOrchestrator:
             await transport.push_config(payload)
         except Exception as exc:  # noqa: BLE001
             self._last_error = str(exc)
-            logger.warning("processing config push failed server=%s; will retry: %s", server.id, exc)
+            logger.warning(
+                "processing config push failed server=%s; will retry: %s", server.id, exc
+            )
 
     def _apply_processing_observability_event(
         self,

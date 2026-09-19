@@ -374,6 +374,8 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
         artifacts: dict[str, Any] = {}
         if self._config.print_artifacts:
             for name, artifact in packet.artifacts.items():
+                if artifact.private:
+                    continue
                 artifacts[name] = {
                     "reference": str(artifact.reference) if artifact.reference else None,
                     "mime_type": artifact.mime_type,
@@ -412,7 +414,7 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
         preferred = (MAIN_ARTIFACT_NAME,)
         for name in preferred:
             artifact = packet.artifacts.get(name)
-            if artifact is None:
+            if artifact is None or artifact.private:
                 continue
             if artifact.reference:
                 continue
@@ -422,6 +424,8 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
                 return artifact.data
 
         for artifact in packet.artifacts.values():
+            if artifact.private:
+                continue
             if artifact.reference:
                 continue
             if artifact.data is None:
@@ -466,6 +470,8 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
         candidates: list[tuple[str, Any]] = []
         candidates.extend(_debug_iter_payload_images(packet.payload, prefix="payload", max_depth=2))
         for name, artifact in packet.artifacts.items():
+            if artifact.private:
+                continue
             if artifact.data is None:
                 continue
             if artifact.reference:
@@ -642,6 +648,8 @@ class StreamStateSnapshotRuntime(TransformOperatorRuntime):
 
         artifacts: dict[str, Artifact] = {}
         for name, artifact in packet.artifacts.items():
+            if artifact.private:
+                continue
             if self._artifact_allowlist and name not in self._artifact_allowlist:
                 continue
             # Never include in-memory blobs: snapshots are for UI/debug and should be lightweight.

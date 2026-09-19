@@ -1,0 +1,52 @@
+{
+  "model_id": "opencv_yunet_2023mar",
+  "display_name": "YuNet Face Detection",
+  "task": "face_detection",
+  "runtime": "opencv_dnn",
+  "artifact_format": "onnx",
+  "artifact_path": "../models/identity/opencv_yunet_2023mar.onnx",
+  "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+  "input": {
+    "width": 320,
+    "height": 320,
+    "color_order": "bgr",
+    "layout": "nchw",
+    "resize_mode": "stretch"
+  },
+  "postprocess": {
+    "type": "yunet_five_landmarks_v1",
+    "output_name": ""
+  },
+  "classes": {
+    "labels": [
+      "person"
+    ]
+  },
+  "license": {
+    "code_license": "Apache-2.0 (OpenCV)",
+    "weights_license": "MIT",
+    "redistribution_allowed": true,
+    "commercial_use_status": "upstream_license_notice_required",
+    "dataset_notes": "Upstream license explicitly covers model directory. Exact training-data provenance remains incomplete; do not claim a complete data audit."
+  },
+  "acquisition": {
+    "mode": "auto_download",
+    "source_url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    "guide_url": "https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_detection_yunet",
+    "explicit_consent_required": true
+  },
+  "provenance": {
+    "origin": "upstream",
+    "source_url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    "source_ref": "47534e27c9851bb1128ccc0102f1145e27f23f98"
+  },
+  "hardware_profiles": {
+    "cpu": true
+  },
+  "capabilities": [
+    "identity.face_detection"
+  ],
+  "notes": [
+    "Explicit opt-in only. Model execution does not certify identification accuracy."
+  ]
+}

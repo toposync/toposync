@@ -26,6 +26,7 @@ class Artifact:
     reference: str | None = None
     mime_type: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    private: bool = False
 
 
 @dataclass(frozen=True, slots=True)

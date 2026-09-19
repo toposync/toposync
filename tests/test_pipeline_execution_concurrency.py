@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines import (
     OperatorRegistry,
@@ -92,8 +93,12 @@ def test_execution_scheduler_respects_max_concurrency_across_pipelines() -> None
             }
 
         compiler = PipelineGraphCompiler(registry)
-        p1 = Pipeline(name="pipeline_one", graph=_graph("one"))
-        p2 = Pipeline(name="pipeline_two", graph=_graph("two"))
+        def current_graph(name):
+            original = _graph(name)
+            return build_pipeline_graph_v2(graph_uid=f"scheduler_{name}", **{key: value for key, value in original.items() if key != "schema_version"})
+
+        p1 = Pipeline(name="pipeline_one", graph=current_graph("one"))
+        p2 = Pipeline(name="pipeline_two", graph=current_graph("two"))
         compiled1 = compiler.compile_pipeline(p1)
         compiled2 = compiler.compile_pipeline(p2)
 

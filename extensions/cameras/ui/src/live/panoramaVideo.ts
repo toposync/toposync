@@ -17,6 +17,48 @@ export type VideoGeometry = {
     };
     panorama_to_camera: number[][];
 };
+
+/**
+ * Rejects a registration only when change is spread through the image. A
+ * person, foliage, compression noise, or a small exposure adjustment must not
+ * look like a PTZ move. This is a veto for an estimator result, never evidence
+ * that a pose is correct by itself.
+ */
+export function frameStillSharesRegisteredView(
+    registered: Uint8ClampedArray,
+    current: Uint8ClampedArray,
+    width: number,
+    height: number,
+): boolean {
+    if (width < 1 || height < 1 || registered.length !== current.length || registered.length !== width * height * 4)
+        return false;
+    const columns = Math.min(10, width), rows = Math.min(6, height);
+    const changedByTile = new Uint32Array(columns * rows);
+    const pixelsByTile = new Uint32Array(columns * rows);
+    let changedPixels = 0;
+    for (let y = 0; y < height; y++) {
+        const tileY = Math.min(rows - 1, Math.floor(y * rows / height));
+        for (let x = 0; x < width; x++) {
+            const pixel = (y * width + x) * 4;
+            const tile = tileY * columns + Math.min(columns - 1, Math.floor(x * columns / width));
+            pixelsByTile[tile]++;
+            const colorDifference = (
+                Math.abs(registered[pixel] - current[pixel])
+                + Math.abs(registered[pixel + 1] - current[pixel + 1])
+                + Math.abs(registered[pixel + 2] - current[pixel + 2])
+            ) / 3;
+            if (colorDifference > 32) {
+                changedPixels++;
+                changedByTile[tile]++;
+            }
+        }
+    }
+    let changedTiles = 0;
+    for (let tile = 0; tile < changedByTile.length; tile++)
+        if (changedByTile[tile] / pixelsByTile[tile] > .55)
+            changedTiles++;
+    return changedPixels / (width * height) < .58 && changedTiles / changedByTile.length < .5;
+}
 export function panoramaVideoPixel(u: number, v: number, geometry: VideoGeometry): [
     number,
     number

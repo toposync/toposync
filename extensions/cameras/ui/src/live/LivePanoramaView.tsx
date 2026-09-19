@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { resolveToposyncUrl } from '@toposync/plugin-api';
 import type { LiveViewFrame, NavigableViewportController, ToposyncHost } from '@toposync/plugin-api';
-import { createPanoramaVideoRenderer, type VideoGeometry } from './panoramaVideo';
+import { createPanoramaVideoRenderer, frameStillSharesRegisteredView, type VideoGeometry } from './panoramaVideo';
 import { FloatingVideoPanel } from './FloatingVideoPanel';
 import { validPanoramaCrop } from '../settings/panoramaCrop';
 import type { CameraSourcePanoramaArtifact } from '../types';
@@ -111,19 +111,11 @@ function captureDate(value: unknown): string {
     const date = new Date(typeof value === 'number' ? value * 1000 : String(value));
     return Number.isFinite(date.getTime()) ? date.toLocaleString() : '';
 }
-/** Cheap per-presented-frame drift veto, independent of the pose estimator.
- * This can reject moving foregrounds; it can never establish a registration. */
+/** Cheap per-presented-frame drift sample, independent of the pose estimator. */
 function signature(image: CanvasImageSource, canvas: HTMLCanvasElement): Uint8ClampedArray {
     const context = canvas.getContext('2d', { willReadFrequently: true })!;
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
     return context.getImageData(0, 0, canvas.width, canvas.height).data;
-}
-function consistent(a: Uint8ClampedArray, b: Uint8ClampedArray): boolean {
-    let changed = 0;
-    for (let index = 0; index < a.length; index += 4)
-        if ((Math.abs(a[index] - b[index]) + Math.abs(a[index + 1] - b[index + 1]) + Math.abs(a[index + 2] - b[index + 2])) / 3 > 18)
-            changed++;
-    return changed / (a.length / 4) < .035;
 }
 export function LivePanoramaView({ host }: {
     host: ToposyncHost;
@@ -180,7 +172,7 @@ function LiveSession({ host, choice, refreshReferences }: {
         geometry: VideoGeometry;
         signature: Uint8ClampedArray;
         epoch: string;
-        time: number;
+        verifiedAt: number;
     } | null>(null);
     const estimator = useRef(false), lastEstimate = useRef(0), lastFrame = useRef(0), epoch = useRef('');
     const analysis = useRef(document.createElement('canvas')), probe = useRef(document.createElement('canvas'));
@@ -278,7 +270,7 @@ function LiveSession({ host, choice, refreshReferences }: {
             return;
         }
         const observed = registration.current;
-        if (observed && observed.epoch === value.epoch && performance.now() - observed.time < 1500 && !stateRef.current?.moving && !stateRef.current?.blocked && consistent(observed.signature, currentSignature)) {
+        if (observed && observed.epoch === value.epoch && performance.now() - observed.verifiedAt < 2500 && !stateRef.current?.moving && !stateRef.current?.blocked && frameStillSharesRegisteredView(observed.signature, currentSignature, probe.current.width, probe.current.height)) {
             try {
                 renderer.current?.draw(value.image, observed.geometry);
                 setAligned(!!renderer.current);
@@ -311,7 +303,7 @@ function LiveSession({ host, choice, refreshReferences }: {
             if (!alive.current || session.current !== identifier || sequence.current !== intentionSequence || epoch.current !== submitted.epoch)
                 return;
             if (result.status === 'localized' && result.geometry && performance.now() - started < 1500 && !stateRef.current?.moving) {
-                registration.current = { geometry: { ...result.geometry, content_rect: rect }, signature: currentSignature, epoch: submitted.epoch, time: started };
+                registration.current = { geometry: { ...result.geometry, content_rect: rect }, signature: currentSignature, epoch: submitted.epoch, verifiedAt: performance.now() };
                 setError('');
             }
             else {

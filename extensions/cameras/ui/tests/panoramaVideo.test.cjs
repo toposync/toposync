@@ -3,7 +3,7 @@ const {test}=require('node:test');
 const fs=require('node:fs'),path=require('node:path'),ts=require('typescript'),vm=require('node:vm');
 const {execFileSync}=require('node:child_process');
 const context={exports:{}};vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/live/panoramaVideo.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
-const {panoramaVideoPixel}=context.exports;
+const {panoramaVideoPixel,frameStillSharesRegisteredView}=context.exports;
 const repository=path.resolve(__dirname,'../../../..');
 const probes=JSON.parse(execFileSync(path.join(repository,'.venv/bin/python'),['-c',`
 import json, numpy as np, cv2
@@ -25,4 +25,32 @@ test('out of panorama and behind-camera rays are rejected',()=>{
  const geometry=probes[0].geometry;
  for(const point of [[-1,.5],[.5,2],[NaN,0]]) assert.equal(panoramaVideoPixel(...point,geometry),null);
  assert.equal(panoramaVideoPixel(0,.5,geometry),null);
+});
+function frame(width,height,pixel){
+ const result=new Uint8ClampedArray(width*height*4);
+ for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+  const offset=(y*width+x)*4,[red,green,blue]=pixel(x,y);
+  result[offset]=red;result[offset+1]=green;result[offset+2]=blue;result[offset+3]=255;
+ }
+ return result;
+}
+test('registration drift veto tolerates local motion, exposure and compression noise',()=>{
+ const width=100,height=60;
+ const reference=frame(width,height,(x,y)=>[(x*37+y*17)%256,(x*11+y*43)%256,(x*29+y*7)%256]);
+ const foreground=new Uint8ClampedArray(reference);
+ for(let y=12;y<48;y++)for(let x=8;x<34;x++){
+  const offset=(y*width+x)*4;foreground[offset]=245;foreground[offset+1]=170;foreground[offset+2]=25;
+ }
+ assert.equal(frameStillSharesRegisteredView(reference,foreground,width,height),true);
+ const exposure=Uint8ClampedArray.from(reference,(value,index)=>index%4===3?255:Math.min(255,value+15));
+ assert.equal(frameStillSharesRegisteredView(reference,exposure,width,height),true);
+ const noise=Uint8ClampedArray.from(reference,(value,index)=>index%4===3?255:Math.max(0,Math.min(255,value+(index%7)-3)));
+ assert.equal(frameStillSharesRegisteredView(reference,noise,width,height),true);
+});
+test('registration drift veto rejects a global camera view change',()=>{
+ const width=100,height=60;
+ const reference=frame(width,height,(x,y)=>[(x*37+y*17)%256,(x*11+y*43)%256,(x*29+y*7)%256]);
+ const shifted=frame(width,height,(x,y)=>[((x+13)*37+y*17)%256,((x+13)*11+y*43)%256,((x+13)*29+y*7)%256]);
+ assert.equal(frameStillSharesRegisteredView(reference,shifted,width,height),false);
+ assert.equal(frameStillSharesRegisteredView(reference,reference,width-1,height),false);
 });

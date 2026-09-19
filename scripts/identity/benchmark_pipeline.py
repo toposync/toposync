@@ -137,7 +137,9 @@ async def trial(
 
     async def upsert(**values):
         nonlocal created_count
+        service_started = time.perf_counter()
         record, created = notifications.upsert(**values)
+        stored_at = time.perf_counter()
         payload = values["payload"]
         key = (payload["subject"]["id"], payload["lifecycle"])
         visit = int(key[0].split("-")[1])
@@ -148,6 +150,9 @@ async def trial(
             latencies.append(
                 {
                     "phase": key[1],
+                    "species": payload["subject"]["category"],
+                    "source_to_upsert_ms": (service_started - sent[key]) * 1000,
+                    "notification_storage_ms": (stored_at - service_started) * 1000,
                     "milliseconds": (time.perf_counter() - sent[key]) * 1000,
                     "planned_milliseconds": (time.perf_counter() - planned[key]) * 1000,
                 }
@@ -317,6 +322,19 @@ async def trial(
         "p50_ms": float(np.percentile(values, 50)),
         "p95_ms": float(np.percentile(values, 95)),
         "max_ms": max(values),
+        "timing_by_species": {
+            species: {
+                "frame_bytes": int(frames[species].nbytes),
+                "source_to_notification_p95_ms": float(np.percentile(
+                    [row["milliseconds"] for row in latencies if row["species"] == species], 95)),
+                "source_to_upsert_p95_ms": float(np.percentile(
+                    [row["source_to_upsert_ms"] for row in latencies if row["species"] == species], 95)),
+                "notification_storage_p95_ms": float(np.percentile(
+                    [row["notification_storage_ms"] for row in latencies if row["species"] == species], 95)),
+            }
+            for species in frames
+        },
+        "per_packet_timings": latencies,
         "by_lifecycle_p95_ms": {
             phase: float(
                 np.percentile(

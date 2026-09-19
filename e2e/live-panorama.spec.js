@@ -63,6 +63,19 @@ test('brief buffering preserves registration while terminal loss stops stale tar
  mode='aligned';await page.reload();await expect(page.getByRole('status')).toHaveText('Vídeo alinhado');expect(sessions).toBe(3);
 });
 
+test('latest click waits for a fresh registration and is then sent once',async({page})=>{
+ mode='localizing';
+ await expect(page.getByRole('status')).toHaveText('Localizando');
+ await click(page,.55,.62);await click(page,.68,.64);
+ await expect(page.getByRole('alert')).toContainText('Destino aguardando');
+ expect(controls).toEqual([]);
+ mode='aligned';
+ await expect.poll(()=>controls.length).toBe(1);
+ expect(controls[0].sequence).toBe(1);
+ expect(controls[0].x).toBeGreaterThan(.5);
+ await expect(page.getByRole('status')).toHaveText('Movendo');
+});
+
 test('existing photograph uses the real spherical model and coverage in the renderer',async({page})=>{
  test.skip(!process.env.TOPOSYNC_PHOTOGRAPH_FIXTURE,'Opt-in local photographs; never required or committed to the repository.');
  const fs=require('fs');const data=JSON.parse(fs.readFileSync(process.env.TOPOSYNC_PHOTOGRAPH_FIXTURE,'utf8'));

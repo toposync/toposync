@@ -174,6 +174,12 @@ function LiveSession({ host, choice, refreshReferences }: {
         epoch: string;
         verifiedAt: number;
     } | null>(null);
+    const pendingTarget = useRef<{
+        x: number;
+        y: number;
+        marker: { x: number; y: number };
+        queuedAt: number;
+    } | null>(null);
     const estimator = useRef(false), lastEstimate = useRef(0), lastFrame = useRef(0), epoch = useRef('');
     const analysis = useRef(document.createElement('canvas')), probe = useRef(document.createElement('canvas'));
     const [bounds] = useState(() => savedBounds());
@@ -214,8 +220,13 @@ function LiveSession({ host, choice, refreshReferences }: {
                 if (stateRef.current?.moving && stateRef.current.phase !== 'stopping')
                     stop();
             }
+            if (pendingTarget.current && performance.now() - pendingTarget.current.queuedAt > 3000) {
+                pendingTarget.current = null;
+                setMarker(null);
+                setError('O destino expirou antes de o vídeo ser localizado. Clique novamente.');
+            }
         }, 750);
-        return () => { disposed = true; alive.current = false; session.current = ''; clearInterval(interval); controller.abort(); registration.current = null; renderer.current?.clear(); if (identifier)
+        return () => { disposed = true; alive.current = false; session.current = ''; pendingTarget.current = null; clearInterval(interval); controller.abort(); registration.current = null; renderer.current?.clear(); if (identifier)
             void api(`/sessions/${identifier}`, 'DELETE').catch(() => { }); };
     }, [restart]);
     useEffect(() => {
@@ -305,6 +316,9 @@ function LiveSession({ host, choice, refreshReferences }: {
             if (result.status === 'localized' && result.geometry && performance.now() - started < 1500 && !stateRef.current?.moving) {
                 registration.current = { geometry: { ...result.geometry, content_rect: rect }, signature: currentSignature, epoch: submitted.epoch, verifiedAt: performance.now() };
                 setError('');
+                const queued = pendingTarget.current;
+                if (queued && performance.now() - queued.queuedAt <= 3000)
+                    dispatchIntent(queued);
             }
             else {
                 clear();
@@ -321,28 +335,58 @@ function LiveSession({ host, choice, refreshReferences }: {
         x: number;
         y: number;
     }) {
-        if (!stateRef.current || stateRef.current.can_control === false || stateRef.current.blocked || !connected || (!aligned && !stateRef.current.moving))
+        const current = stateRef.current;
+        if (!current) {
+            setError('O controle ainda está iniciando.');
             return;
+        }
+        if (current.can_control === false) {
+            setError(reasonLabel.camera_control_permission_required);
+            return;
+        }
+        if (current.blocked) {
+            setError('O estado físico da câmera precisa ser requalificado antes de outro apontamento.');
+            return;
+        }
+        if (!connected) {
+            setError('Aguarde a transmissão atual antes de apontar a câmera.');
+            return;
+        }
         const x = ((point.x / width) % 1 + 1) % 1, y = point.y / height;
-        if (y < 0 || y > 1 || point.x < 0 || point.x > 2 * width)
+        if (y < 0 || y > 1 || point.x < 0 || point.x > 2 * width) {
+            setError('O destino está fora do panorama navegável.');
             return;
+        }
         const coverage = mask.current;
         if (!coverage || coverage.data[(Math.min(height - 1, Math.floor(y * height)) * width + Math.min(width - 1, Math.floor(x * width))) * 4] === 0) {
             setError('Ponto fora da cobertura capturada.');
             return;
         }
-        setMarker({ x: point.x, y: point.y });
+        const target = { x, y, marker: { x: point.x, y: point.y }, queuedAt: performance.now() };
+        setMarker(target.marker);
+        if (!aligned && !current.moving) {
+            pendingTarget.current = target;
+            setError('Destino aguardando uma localização atual do vídeo.');
+            return;
+        }
+        dispatchIntent(target);
+    }
+    function dispatchIntent(target: { x: number; y: number; marker: { x: number; y: number }; queuedAt: number }) {
+        if (!session.current || !stateRef.current)
+            return;
+        pendingTarget.current = null;
+        setMarker(target.marker);
         clear();
         const next = ++sequence.current;
         stateRef.current = { ...stateRef.current, moving: true, sequence: next, phase: 'moving' };
         setState(stateRef.current);
-        void api(`/sessions/${session.current}/intent`, 'POST', { sequence: next, x, y }).then(accept).catch(e => { if (alive.current && sequence.current === next) {
+        void api(`/sessions/${session.current}/intent`, 'POST', { sequence: next, x: target.x, y: target.y }).then(accept).catch(e => { if (alive.current && sequence.current === next) {
             stateRef.current = { ...stateRef.current!, moving: false, phase: 'error' };
             setState(stateRef.current);
             setError(e.message);
         } });
     }
-    function stop() { clear(); setMarker(null); if (stateRef.current) {
+    function stop() { pendingTarget.current = null; clear(); setMarker(null); if (stateRef.current) {
         stateRef.current = { ...stateRef.current, phase: 'stopping' };
         setState(stateRef.current);
     } const next = ++sequence.current; void api(`/sessions/${session.current}/stop`, 'POST', { sequence: next }).then(accept).catch(e => setError(e.message)); }

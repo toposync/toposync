@@ -126,7 +126,7 @@ class AiExtensionSettings(BaseModel):
                 0,
                 AiProfileConfig(
                     id=DEFAULT_PROFILE_ID,
-                    name="Qwen3-VL 30B local",
+                    name="Qwen3.8 27B MLX local",
                     provider_id=DEFAULT_OLLAMA_PROVIDER_ID,
                     model=DEFAULT_OLLAMA_MODEL,
                     fallback_profile_ids=["local_qwen3_vl_lighter"],

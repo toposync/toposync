@@ -197,11 +197,11 @@ def test_ai_result_parsers_accept_common_model_aliases() -> None:
 
 
 def test_ai_model_ref_normalization_matches_ollama_display_names() -> None:
-    expected = normalize_model_ref("qwen3-vl:30b")
+    expected = normalize_model_ref("qwen3.8:27b-mlx")
 
-    assert normalize_model_ref("Qwen3-VL 30B") == expected
-    assert normalize_model_ref(" qwen3 vl:30B ") == expected
-    assert normalize_model_ref("QWEN3_VL_30B") == expected
+    assert normalize_model_ref("Qwen3.8 27B MLX") == expected
+    assert normalize_model_ref(" qwen3.8:27B-mlx ") == expected
+    assert normalize_model_ref("QWEN3.8_27B_MLX") == expected
 
 
 def test_ai_region_result_supports_multiple_detections() -> None:
@@ -242,7 +242,7 @@ def test_ai_smart_crop_uses_ai_bbox_and_updates_frame() -> None:
                 "label": "sofa",
                 "profile_id": "local_qwen3_vl_quality",
                 "provider_id": "ollama_local",
-                "model": "qwen3-vl:30b",
+                "model": "qwen3.8:27b-mlx",
             }
         )
         runtime = AiSmartCropRuntime(
@@ -267,7 +267,7 @@ def test_ai_smart_crop_uses_ai_bbox_and_updates_frame() -> None:
     assert detections[0]["label"] == "sofa"
     assert out.payload["frame_crop"]["bbox01"] == pytest.approx([0.25, 0.2, 0.75, 0.6])
     assert out.payload["ai"]["smart_crop"]["status"] == "found"
-    assert out.payload["ai"]["smart_crop"]["model"] == "qwen3-vl:30b"
+    assert out.payload["ai"]["smart_crop"]["model"] == "qwen3.8:27b-mlx"
     assert len(out.payload["ai"]["smart_crop"]["detections"]) == 1
 
 
@@ -293,7 +293,7 @@ def test_ai_smart_crop_can_union_multiple_detections() -> None:
                 ],
                 "profile_id": "local_qwen3_vl_quality",
                 "provider_id": "ollama_local",
-                "model": "qwen3-vl:30b",
+                "model": "qwen3.8:27b-mlx",
             }
         )
         runtime = AiSmartCropRuntime(
@@ -340,7 +340,7 @@ def test_ai_smart_crop_drops_by_default_when_target_is_missing() -> None:
                 "reason": "not_found",
                 "profile_id": "local_qwen3_vl_quality",
                 "provider_id": "ollama_local",
-                "model": "qwen3-vl:30b",
+                "model": "qwen3.8:27b-mlx",
             }
         )
         runtime = AiSmartCropRuntime(
@@ -374,7 +374,7 @@ def test_ai_condition_filter_emits_only_matching_packets() -> None:
                 "reason": "test",
                 "profile_id": "local_qwen3_vl_quality",
                 "provider_id": "ollama_local",
-                "model": "qwen3-vl:30b",
+                "model": "qwen3.8:27b-mlx",
             }
         )
         runtime = AiConditionFilterRuntime(
@@ -392,7 +392,7 @@ def test_ai_condition_filter_emits_only_matching_packets() -> None:
     passed = asyncio.run(scenario(True))
     assert len(passed) == 1
     assert passed[0].payload["ai"]["condition_filter"]["matches"] is True
-    assert passed[0].payload["ai"]["condition_filter"]["model"] == "qwen3-vl:30b"
+    assert passed[0].payload["ai"]["condition_filter"]["model"] == "qwen3.8:27b-mlx"
 
 
 def test_ai_condition_filter_records_confidence_telemetry() -> None:
@@ -699,7 +699,7 @@ def test_ai_router_blocks_cloud_profiles_without_image_upload_opt_in(monkeypatch
 
 def test_ai_router_detects_installed_ollama_model_alias(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _list_models(_self) -> list[dict[str, Any]]:  # noqa: ANN001
-        return [{"name": "Qwen3-VL 30B"}]
+        return [{"name": "Qwen3.8 27B MLX"}]
 
     monkeypatch.setattr("toposync_ext_ai.router.OllamaProvider.list_models", _list_models)
 
@@ -715,7 +715,7 @@ def test_ai_router_detects_installed_ollama_model_alias(monkeypatch: pytest.Monk
                             "id": "quality",
                             "name": "Quality",
                             "provider_id": "local",
-                            "model": "qwen3-vl:30b",
+                            "model": "qwen3.8:27b-mlx",
                         },
                     ],
                 }

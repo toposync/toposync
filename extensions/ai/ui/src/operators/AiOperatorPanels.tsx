@@ -280,7 +280,7 @@ function ProfileSelect({
 }): React.ReactElement {
   const options = useMemo(() => {
     if (profiles.length) return profiles;
-    return [{ id: DEFAULT_PROFILE_ID, name: "Qwen3-VL 30B local", model: "qwen3-vl:30b" }] as AiProfileConfig[];
+    return [{ id: DEFAULT_PROFILE_ID, name: "Qwen3.8 27B MLX local", model: "qwen3.8:27b-mlx" }] as AiProfileConfig[];
   }, [profiles]);
 
   return (

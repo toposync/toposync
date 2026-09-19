@@ -24,8 +24,12 @@ export function usePresentedFrame(video: React.RefObject<HTMLVideoElement>, enab
             }
             handle = frameCallback ? element.requestVideoFrameCallback(deliver) : requestAnimationFrame(deliver);
         }
+        // `waiting` and `stalled` only mean that playback is temporarily short
+        // of data. The element still owns its last presented frame and keeps the
+        // same decoder identity, so consumers use their own freshness budget.
+        // Null is reserved for terminal media loss, suspension, or replacement.
         const invalid = () => callback.current?.(null);
-        for (const event of ['emptied', 'waiting', 'stalled', 'error', 'ended'])
+        for (const event of ['emptied', 'error', 'ended'])
             element.addEventListener(event, invalid);
         handle = frameCallback ? element.requestVideoFrameCallback(deliver) : requestAnimationFrame(deliver);
         return () => {
@@ -34,7 +38,7 @@ export function usePresentedFrame(video: React.RefObject<HTMLVideoElement>, enab
                 element.cancelVideoFrameCallback(handle);
             else
                 cancelAnimationFrame(handle);
-            for (const event of ['emptied', 'waiting', 'stalled', 'error', 'ended'])
+            for (const event of ['emptied', 'error', 'ended'])
                 element.removeEventListener(event, invalid);
             invalid();
         };

@@ -49,12 +49,16 @@ test('retarget keeps the same decoder alive, drops projection, then requalifies'
  await click(page,.55,.65);await page.getByRole('button',{name:'Parar movimento',exact:true}).click();expect(controls.at(-1)).toEqual({stop:5});
 });
 
-test('registration loss, video failure, reconnect and reopen do not execute stale targets',async({page})=>{
+test('brief buffering preserves registration while terminal loss stops stale targets',async({page})=>{
  mode='error';await expect(page.getByRole('status')).toHaveText('Controle indisponível');
  await click(page,.6,.6);expect(controls).toEqual([]);
  mode='aligned';await page.getByRole('button',{name:'Reconectar',exact:true}).click();await expect.poll(()=>sessions).toBe(2);await expect(page.getByRole('status')).toHaveText('Vídeo alinhado');
+ await page.locator('video[data-source="wide"]').evaluate(video=>{video.dispatchEvent(new Event('waiting'));video.dispatchEvent(new Event('stalled'));});
+ await expect(page.getByRole('status')).toHaveText('Vídeo alinhado');
  await click(page,.6,.65);
  await page.locator('video[data-source="wide"]').evaluate(video=>video.dispatchEvent(new Event('stalled')));
+ await expect.poll(()=>controls.filter(x=>x.stop).length).toBe(0);
+ await page.locator('video[data-source="wide"]').evaluate(video=>video.dispatchEvent(new Event('emptied')));
  await expect.poll(()=>controls.filter(x=>x.stop).length).toBe(1);
  mode='aligned';await page.reload();await expect(page.getByRole('status')).toHaveText('Vídeo alinhado');expect(sessions).toBe(3);
 });

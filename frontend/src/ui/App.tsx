@@ -725,7 +725,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             </div>
           );
         },
-        LiveViewPlayer: ({ cameraId, liveViewId, context, className, style }) => {
+        LiveViewPlayer: ({ cameraId, liveViewId, sourceId, controls, onFrame, context, className, style }) => {
           const normalizedContext: StreamsDashboardContext =
             context === "thumbnail" ||
             context === "large" ||
@@ -743,6 +743,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
                 cameraId={cameraId}
                 liveViewId={liveViewId}
                 defaultContext={normalizedContext}
+                sourceId={sourceId}
+                controls={controls}
+                onFrame={onFrame}
               />
             </div>
           );

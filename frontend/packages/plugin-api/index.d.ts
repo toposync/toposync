@@ -379,7 +379,26 @@ export type Viewport2DReplicaProps = {
   displayRotationDegrees?: 0 | 90 | 180 | 270;
 };
 
+/** A frame presented by the existing player, with local media provenance only. */
+export type LiveViewFrame = {
+  opticalSourceSize?: { width: number; height: number };
+  contentRect?: { x: number; y: number; width: number; height: number };
+  image: HTMLVideoElement | HTMLCanvasElement;
+  width: number;
+  height: number;
+  epoch: string;
+  sequence: number;
+  mediaTime: number;
+  presentedAt: number;
+  timingBasis: "browser_presented_frame";
+  cameraId?: string;
+  sourceId?: string;
+};
+
 export type LiveViewPlayerProps = {
+  sourceId?: string;
+  controls?: boolean;
+  onFrame?: (frame: LiveViewFrame | null) => void;
   cameraId?: string;
   liveViewId?: string;
   context?: "thumbnail" | "large" | "fullscreen" | "pip" | "ptz" | "spatial_map";
@@ -440,12 +459,22 @@ export type RenderViewContext = {
   onOpenImage?: (args: { url: string; title?: string; subtitle?: string }) => void;
 };
 
+export type RenderViewToolbarSelector = {
+  /** Title used by the host-owned selection modal. */
+  title: LocalizedString;
+  /** Compact control rendered in the main toolbar, in place of the composition selector. */
+  renderTrigger: (ctx: { open: () => void }) => import("react").ReactNode;
+  /** Contents rendered inside the host-owned modal. */
+  renderContent: (ctx: { close: () => void }) => import("react").ReactNode;
+};
+
 export type RenderViewDefinition = {
   id: string;
   name: LocalizedString;
   description?: LocalizedString;
   icon?: string;
   order?: number;
+  toolbarSelector?: RenderViewToolbarSelector;
   render: (ctx: RenderViewContext) => import("react").ReactNode;
   renderSettings?: (ctx: {
     i18n: HostI18n;

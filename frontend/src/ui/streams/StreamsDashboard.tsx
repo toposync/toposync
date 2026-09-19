@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type Hls from "hls.js";
+import type { LiveViewFrame } from "@toposync/plugin-api";
+import { usePresentedFrame } from "./usePresentedFrame";
 
 import {
   isAbortError,
@@ -36,6 +38,9 @@ type GridMode = "2x2" | "3x3";
 export type StreamsDashboardContext = StreamingCameraLiveContext;
 
 type Props = {
+  sourceId?: string;
+  controls?: boolean;
+  onFrame?: (frame: LiveViewFrame | null) => void;
   uiVisible: boolean;
   isActive: boolean;
   embedded?: boolean;
@@ -1714,6 +1719,7 @@ function StreamAdvancedSettingsModal({
 }
 
 function StreamTilePlayer({
+  onFrame, controls = true,
   transmissionId,
   outputId,
   mseOutputId,
@@ -1754,6 +1760,8 @@ function StreamTilePlayer({
   onOpenPtz,
   onDisplayContextChange,
 }: {
+  onFrame?: (frame: LiveViewFrame | null) => void;
+  controls?: boolean;
   transmissionId: string;
   outputId: string | null;
   mseOutputId: string | null;
@@ -1813,6 +1821,12 @@ function StreamTilePlayer({
   const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
   const [fullscreenActive, setFullscreenActive] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  usePresentedFrame(videoRef, active && status === "playing" && transport !== "jsmpeg", `${transmissionId}:${transport}:${mseUrl}:${webrtcUrl}:${hlsUrl}`, onFrame ? frame => {
+    const selectedId = transport === "mse" ? mseOutputId : transport === "webrtc" ? webrtcOutputId : hlsOutputId;
+    const output = urls?.outputs.find(output => output.protocol === transport && output.output_id === selectedId);
+    const resolutionMatches = frame && output?.resolution?.width === frame.width && output?.resolution?.height === frame.height;
+    onFrame(frame ? { ...frame, contentRect: resolutionMatches ? output?.content_rect ?? undefined : undefined } : null);
+  } : undefined);
   const [playbackWarmupUntilMs, setPlaybackWarmupUntilMs] = useState(0);
   const runtimeHealthRef = useRef(runtimeHealth);
   const playbackActive = active || pictureInPictureActive;
@@ -3591,7 +3605,7 @@ function StreamTilePlayer({
           ) : null}
         </div>
 
-	        <div className="streamsTileOverlayActions">
+	        {controls && <div className="streamsTileOverlayActions">
           {variantOptions.length > 0 ? (
             <div className="streamsTileVariantControl" title={currentVariantLabel}>
               <select
@@ -3667,10 +3681,10 @@ function StreamTilePlayer({
 	          >
 	            <Icon name="up-right-and-down-left-from-center" />
 	          </button>
-        </div>
+        </div>}
       </div>
 
-      {overlayVisible && (displaySourceHint || displayErrorText) ? (
+      {(overlayVisible || (!controls && (status !== "playing" || displayErrorText || displaySourceHintTone === "error"))) && (displaySourceHint || displayErrorText) ? (
         <div className={["streamsTileOverlayHint", `is-${displayErrorText ? "error" : displaySourceHintTone}`].join(" ")}>
           {displayErrorText || displaySourceHint}
         </div>
@@ -3707,6 +3721,7 @@ function StreamTilePlayer({
 }
 
 export function StreamsDashboard({
+  sourceId, controls = true, onFrame,
   uiVisible,
   isActive,
   embedded = false,
@@ -3733,9 +3748,12 @@ export function StreamsDashboard({
   const [transportPreferenceByTransmissionId, setTransportPreferenceByTransmissionId] = useState<
     Record<string, StreamTransportPreference>
   >(() => readTransportPreferenceByTransmissionId());
-  const [variantOverrideByLiveViewId, setVariantOverrideByLiveViewId] = useState<Record<string, string>>(
+  const [storedVariantOverrides, setVariantOverrideByLiveViewId] = useState<Record<string, string>>(
     () => readLiveVariantOverrideByLiveViewId(),
   );
+  const variantOverrideByLiveViewId = useMemo(() => sourceId ? Object.fromEntries(liveViews.map(view =>
+    [view.id, view.variants.find(variant => variant.enabled !== false && variant.camera_source_id === sourceId)?.id ?? ""])) : storedVariantOverrides,
+    [sourceId, liveViews, storedVariantOverrides]);
   const [savingVariantDefaultByLiveViewId, setSavingVariantDefaultByLiveViewId] = useState<Record<string, boolean>>({});
   const [displayContextByLiveViewId, setDisplayContextByLiveViewId] = useState<Record<string, StreamingCameraLiveContext>>({});
   const mountedRef = useRef(true);
@@ -3847,9 +3865,10 @@ export function StreamsDashboard({
       if (!item || item.enabled === false) return false;
       if (normalizedLiveViewId && String(item.id || "").trim() !== normalizedLiveViewId) return false;
       if (normalizedCameraId && String(item.camera_id || "").trim() !== normalizedCameraId) return false;
+      if (sourceId && !item.variants.some(variant => variant.enabled !== false && variant.camera_source_id === sourceId)) return false;
       return true;
     });
-  }, [cameraId, liveViewId, liveViews]);
+  }, [cameraId, liveViewId, liveViews, sourceId]);
 
   const pageSize = embedded ? 1 : gridMode === "3x3" ? 9 : 4;
   const pageCount = Math.max(1, Math.ceil(enabledLiveViews.length / pageSize));
@@ -4270,6 +4289,8 @@ export function StreamsDashboard({
             return (
               <div key={liveViewId} className="streamsTile">
                 <StreamTilePlayer
+                  controls={controls}
+                  onFrame={onFrame ? frame => onFrame(frame ? { ...frame, cameraId: playback?.camera_id, sourceId: playback?.camera_source_id, opticalSourceSize: playback?.optical_source_resolution ?? undefined } : null) : undefined}
                   transmissionId={transmissionId}
                   outputId={webrtcOutput?.outputId ?? hlsOutput?.outputId ?? null}
                   mseOutputId={mseOutput?.outputId ?? null}
@@ -4280,7 +4301,7 @@ export function StreamsDashboard({
                   label={transmissionName}
                   urls={urls}
                   playbackPlan={playback?.playback_plan ?? null}
-                  overlayVisible={uiVisible}
+                  overlayVisible={uiVisible && controls}
                   sourceHint={sourceHint}
                   sourceHintTone={sourceHintTone}
                   mseUrl={mseUrl}
@@ -4293,7 +4314,7 @@ export function StreamsDashboard({
                   stillUrl={stillUrl}
                   runtimeHealth={runtimeHealth}
                   active={tileActive}
-                  ptzEnabled={ptzEnabled}
+                  ptzEnabled={ptzEnabled && controls}
                   lowLatencyRequested={lowLatencyRequested}
                   qualityPreference={qualityPreference}
                   transportPreference={transportPreference}

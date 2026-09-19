@@ -49,6 +49,18 @@ def _camera_source(
     }
 
 
+def _graph_v2(*, uid: str, nodes: list[dict], edges: list[dict]) -> dict:
+    return {
+        "schema_version": 2,
+        "uid": uid,
+        "nodes": [{"uid": f"{uid}_node_{node['id']}", **node} for node in nodes],
+        "edges": [
+            {"uid": f"{uid}_edge_{index:03d}", **edge}
+            for index, edge in enumerate(edges)
+        ],
+    }
+
+
 def _settings(*, direct_main: bool = False) -> AppSettings:
     main_ingest = {"mode": "direct"} if direct_main else {"mode": "centralized", "host_server_id": "local"}
     return AppSettings(
@@ -316,6 +328,8 @@ def test_camera_live_playback_resolves_context_to_selected_source_and_output(tmp
     assert thumb.json()["selected_output"]["quality_profile_id"] == "quad_grid"
     assert large.json()["camera_source_id"] == "main"
     assert large.json()["selected_output"]["quality_profile_id"] == "fullscreen_quality"
+    assert thumb.json()["optical_source_resolution"] == {"width": 640, "height": 360}
+    assert large.json()["optical_source_resolution"] == {"width": 1920, "height": 1080}
 
 
 def test_playback_plan_keeps_webrtc_contextual_for_web_dashboard(tmp_path: Path) -> None:
@@ -469,17 +483,17 @@ def test_reconcile_prunes_shadowed_legacy_live_view_artifacts_without_deleting_m
                 enabled=True,
                 processing_server_id="local",
                 editor_mode="interactive",
-                graph={
-                    "schema_version": 1,
-                    "nodes": [
+                graph=_graph_v2(
+                    uid="legacy_front_sub_live",
+                    nodes=[
                         {
                             "id": "stream",
                             "operator": "stream.publish_video",
                             "config": {"transmission_id": "legacy-front-sub"},
                         }
                     ],
-                    "edges": [],
-                },
+                    edges=[],
+                ),
             )
         )
 
@@ -507,9 +521,9 @@ def test_pipeline_publish_video_publication_generates_custom_variant(tmp_path: P
                 enabled=True,
                 processing_server_id="local",
                 editor_mode="interactive",
-                graph={
-                    "schema_version": 1,
-                    "nodes": [
+                graph=_graph_v2(
+                    uid="manual_overlay",
+                    nodes=[
                         {
                             "id": "stream",
                             "operator": "stream.publish_video",
@@ -524,8 +538,8 @@ def test_pipeline_publish_video_publication_generates_custom_variant(tmp_path: P
                             },
                         }
                     ],
-                    "edges": [],
-                },
+                    edges=[],
+                ),
             )
         )
 
@@ -570,9 +584,9 @@ def test_pipeline_publish_video_without_camera_generates_generic_live_view(tmp_p
                 enabled=True,
                 processing_server_id="local",
                 editor_mode="interactive",
-                graph={
-                    "schema_version": 1,
-                    "nodes": [
+                graph=_graph_v2(
+                    uid="garagem_people_detection",
+                    nodes=[
                         {
                             "id": "stream",
                             "operator": "stream.publish_video",
@@ -585,8 +599,8 @@ def test_pipeline_publish_video_without_camera_generates_generic_live_view(tmp_p
                             },
                         }
                     ],
-                    "edges": [],
-                },
+                    edges=[],
+                ),
             )
         )
 
@@ -633,9 +647,9 @@ def test_pipeline_publication_syncs_upstream_demand_gate(tmp_path: Path) -> None
                 enabled=True,
                 processing_server_id="local",
                 editor_mode="interactive",
-                graph={
-                    "schema_version": 1,
-                    "nodes": [
+                graph=_graph_v2(
+                    uid="cinematic_real",
+                    nodes=[
                         {
                             "id": "demand",
                             "operator": "stream.demand_gate",
@@ -659,11 +673,11 @@ def test_pipeline_publication_syncs_upstream_demand_gate(tmp_path: Path) -> None
                             },
                         },
                     ],
-                    "edges": [
+                    edges=[
                         {"from": {"node": "demand", "port": "out"}, "to": {"node": "director", "port": "gate"}},
                         {"from": {"node": "director", "port": "out"}, "to": {"node": "publish", "port": "in"}},
                     ],
-                },
+                ),
             )
         )
 
@@ -703,9 +717,9 @@ def test_pipeline_publication_preserves_explicit_upstream_demand_output(tmp_path
                 enabled=True,
                 processing_server_id="local",
                 editor_mode="interactive",
-                graph={
-                    "schema_version": 1,
-                    "nodes": [
+                graph=_graph_v2(
+                    uid="cinematic_specific_output",
+                    nodes=[
                         {
                             "id": "demand",
                             "operator": "stream.demand_gate",
@@ -730,11 +744,11 @@ def test_pipeline_publication_preserves_explicit_upstream_demand_output(tmp_path
                             },
                         },
                     ],
-                    "edges": [
+                    edges=[
                         {"from": {"node": "demand", "port": "out"}, "to": {"node": "director", "port": "gate"}},
                         {"from": {"node": "director", "port": "out"}, "to": {"node": "publish", "port": "in"}},
                     ],
-                },
+                ),
             )
         )
 
@@ -768,9 +782,9 @@ def test_pipeline_publish_video_groups_roles_by_manual_live_view_label(tmp_path:
                     enabled=True,
                     processing_server_id="local",
                     editor_mode="interactive",
-                    graph={
-                        "schema_version": 1,
-                        "nodes": [
+                    graph=_graph_v2(
+                        uid=name,
+                        nodes=[
                             {
                                 "id": "publish",
                                 "operator": "stream.publish_video",
@@ -783,8 +797,8 @@ def test_pipeline_publish_video_groups_roles_by_manual_live_view_label(tmp_path:
                                 },
                             }
                         ],
-                        "edges": [],
-                    },
+                        edges=[],
+                    ),
                 )
             )
 
@@ -1153,3 +1167,25 @@ def test_update_camera_live_view_rejects_invalid_source(tmp_path: Path) -> None:
 
     assert res.status_code == 409
     assert "Camera source" in res.json()["detail"]
+
+
+def test_playback_does_not_claim_optical_geometry_after_publication_graph_is_edited(tmp_path: Path) -> None:
+    client = _create_client(tmp_path)
+    generated = client.post("/api/streams/camera-live-views/generate", json={"camera_id": "front"}).json()
+    identifier = generated["camera_live_views"][0]["id"]
+    before = client.get(f"/api/streams/camera-live-views/{identifier}/playback?context=large").json()
+    assert before["optical_source_resolution"] is not None
+
+    async def edit():
+        store = client.app.state.config_store
+        settings = StreamingExtensionSettings.model_validate((await store.get_settings()).extensions[EXTENSION_ID])
+        publication = next(item for item in settings.publications if item.camera_source_id == "main")
+        pipeline = next(item for item in await store.list_pipelines() if item.name == streaming_routes._publication_pipeline_name(publication))
+        publish = next(node for node in pipeline.graph["nodes"] if node["operator"] == "stream.publish_video")
+        publish["config"]["resize_mode"] = "cover"
+        await store.replace_pipeline(pipeline.name, pipeline)
+
+    asyncio.run(edit())
+    after = client.get(f"/api/streams/camera-live-views/{identifier}/playback?context=large")
+    assert after.status_code == 200
+    assert after.json()["optical_source_resolution"] is None

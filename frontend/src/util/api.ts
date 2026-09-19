@@ -1010,6 +1010,7 @@ export type StreamingTransmissionCameraStatusResponse = {
 };
 
 export type StreamingTransmissionUrlOutput = {
+  content_rect?: { x: number; y: number; width: number; height: number } | null;
   output_id: string;
   protocol: "hls" | "rtsp" | "webrtc" | "mse" | "jsmpeg";
   resolved_engine_path: string;
@@ -1097,6 +1098,7 @@ export type StreamingPlaybackPlanResponse = {
 };
 
 export type StreamingCameraLiveViewPlaybackResponse = {
+  optical_source_resolution?: {width:number;height:number} | null;
   live_view: StreamingCameraLiveView;
   context: StreamingCameraLiveContext;
   variant: StreamingCameraLiveVariant;

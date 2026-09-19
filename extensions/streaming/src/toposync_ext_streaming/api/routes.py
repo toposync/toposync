@@ -6862,6 +6862,29 @@ def create_streaming_router() -> APIRouter:
                 if source_health is not None:
                     source_health_payload = source_health.model_dump(mode="json")
 
+        # A source label alone cannot qualify pixels from an edited pipeline.
+        # Only the unchanged local publication graph establishes this contract.
+        optical_dimensions = None
+        if source is not None and live_view.owner_kind == "camera_source" and transmission_host_server_id == current_server_id:
+            publication = next((item for item in settings.publications
+                if item.owner_kind == "camera_source" and item.enabled
+                and item.camera_id == camera_id and item.camera_source_id == camera_source_id
+                and _publication_transmission_id(item) == transmission.id), None)
+            config_store = getattr(request.app.state, "config_store", None)
+            if publication is not None and isinstance(config_store, ConfigStore):
+                pipeline = next((item for item in await config_store.list_pipelines()
+                    if item.name == _publication_pipeline_name(publication) and item.enabled), None)
+                expected = build_streaming_wizard_graph(
+                    transmission_id=transmission.id, camera_id=camera_id,
+                    camera_source_id=camera_source_id, preset_id="simple_stream",
+                    optional_parameters={"bypass_mode": "auto", "resize_mode": "contain",
+                                         "stream_behavior": "continuous", "demand_gate": True},
+                )
+                if pipeline is not None and isinstance(pipeline.graph, dict) and all(
+                    pipeline.graph.get(key) == expected.get(key) for key in ("schema_version", "nodes", "edges")
+                ):
+                    optical_dimensions = _source_video_dimensions(source)
+
         return CameraLiveViewPlaybackResponse(
             live_view=live_view,
             context=context,
@@ -6871,6 +6894,7 @@ def create_streaming_router() -> APIRouter:
             camera_source_id=camera_source_id,
             camera_source_name=camera_source_name,
             source_role=source_role,
+            optical_source_resolution={"width": optical_dimensions[0], "height": optical_dimensions[1]} if optical_dimensions else None,
             transmission=transmission,
             urls=urls,
             playback_plan=build_playback_plan_response(

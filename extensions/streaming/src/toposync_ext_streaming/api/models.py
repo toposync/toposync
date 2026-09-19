@@ -1257,6 +1257,7 @@ class CameraLiveViewPlaybackResponse(BaseModel):
     camera_source_id: str = ""
     camera_source_name: str = ""
     source_role: str | None = None
+    optical_source_resolution: Resolution | None = None
     transmission: Transmission
     urls: TransmissionUrlsResponse
     playback_plan: StreamingPlaybackPlanResponse | None = None

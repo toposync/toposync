@@ -322,9 +322,10 @@ def reference_path(localizer: Any, start: str, target: str) -> list[str] | None:
 
 
 class VisualNavigator:
-    def __init__(self, scanner: _Scan, localizer: Any):
+    def __init__(self, scanner: _Scan, localizer: Any, *, maximum_commands: int = MAXIMUM_NAVIGATION_COMMANDS):
         self.scanner, self.localizer = scanner, localizer
         self.commands = 0
+        self.maximum_commands = min(MAXIMUM_NAVIGATION_COMMANDS, maximum_commands)
         self.response: dict[str, np.ndarray] = {}
         self.response_rotations: dict[str, np.ndarray] = {}
         self.trace: list[dict[str, Any]] = []
@@ -375,7 +376,7 @@ class VisualNavigator:
         return np.arctan2(local[:2], local[2])
 
     async def _pulse(self, axis: str, amount: float) -> None:
-        if self.commands >= MAXIMUM_NAVIGATION_COMMANDS:
+        if self.commands >= self.maximum_commands:
             raise PanoramaCaptureError("visual_navigation_budget_exhausted")
         self.scanner._check()
         if (

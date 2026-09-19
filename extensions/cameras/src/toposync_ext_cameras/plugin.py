@@ -4983,6 +4983,9 @@ class CamerasExtension(BaseExtension):
             acquisition_policy=REGION_POLICY,
         )
         panorama_service.camera_factory = _source_panorama_camera_factory
+        from .live_panorama import register_live_panorama_routes
+        live_panorama_service = register_live_panorama_routes(app, panorama_service, source_panorama_service)
+        register_extension_shutdown_callback(app, live_panorama_service.shutdown)
         register_extension_shutdown_callback(app, source_panorama_service.shutdown)
 
         @app.get("/api/cameras/cameras/{camera_id}/contexts")

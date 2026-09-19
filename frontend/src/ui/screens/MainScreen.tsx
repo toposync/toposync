@@ -383,6 +383,7 @@ export function MainScreen({
   const routeCameraLiveViewId = liveViewIdFromCameraLivePath(normalizedPathname);
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
+  const [isRenderViewSelectorOpen, setIsRenderViewSelectorOpen] = useState(false);
   const [isCameraLiveModalOpen, setIsCameraLiveModalOpen] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [imageModal, setImageModal] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
@@ -922,6 +923,10 @@ export function MainScreen({
   const activeRenderView = orderedRenderViews.find((view) => view.id === renderMode) ?? null;
 
   useEffect(() => {
+    setIsRenderViewSelectorOpen(false);
+  }, [renderMode]);
+
+  useEffect(() => {
     if (isBuiltinRenderMode(renderMode) || activeRenderView || !allExtensionsLoaded) return;
     setRenderMode("3d");
   }, [activeRenderView, allExtensionsLoaded, renderMode]);
@@ -1083,6 +1088,8 @@ export function MainScreen({
           >
             <span className="mainSelectorButtonText">{cameraLiveButtonLabel}</span>
           </button>
+        ) : activeRenderView?.toolbarSelector ? (
+          activeRenderView.toolbarSelector.renderTrigger({ open: () => setIsRenderViewSelectorOpen(true) })
         ) : renderMode !== "streams" ? (
           <button
             className="chipButton mainSelectorButton"
@@ -1521,6 +1528,16 @@ export function MainScreen({
         onRename={onRenameComposition}
         onDelete={onDeleteComposition}
       />
+
+      {activeRenderView?.toolbarSelector ? (
+        <Modal
+          open={isRenderViewSelectorOpen}
+          title={renderViewText(activeRenderView.toolbarSelector.title, renderButtonLabel)}
+          onClose={() => setIsRenderViewSelectorOpen(false)}
+        >
+          {activeRenderView.toolbarSelector.renderContent({ close: () => setIsRenderViewSelectorOpen(false) })}
+        </Modal>
+      ) : null}
 
       <Modal
         open={isCameraLiveModalOpen}

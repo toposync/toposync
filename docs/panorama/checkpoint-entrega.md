@@ -1,3 +1,11 @@
+# Panorâmica ao vivo — escopo separado, 19/09/2026
+
+Implementação e contratos em [Panorâmica ao vivo](panoramica-ao-vivo.md). Projeção de fotografia, testes determinísticos, navegação real e teleobjetiva foram verificados. Observação diurna de 19/09 às 11:59 UTC confirmou alinhamento vivo intermitente: 47 alternâncias em 25 segundos, associadas a esperas breves do vídeo principal e invalidação imediata do registro. A causa da irregularidade do transporte e a inação dos cliques ainda precisam de validação causal; não há aceite de estabilidade ou apontamento físico. Nenhum deslocamento ou nova aquisição nesta observação.
+
+Pedido vigente: somente diagnóstico e plano. Plano, tarefas, evidências, contadores e critérios adicionais estão na seção 17 do guia externo `/Users/c/Downloads/codex-goals/toposync-panorama-ao-vivo-goal.md`. Nenhum código de produto alterado nesta etapa de planejamento; os estados e limites da aquisição abaixo permanecem históricos.
+
+---
+
 # Checkpoint atual — calibração assistida, 18/09/2026
 
 - Simulação adicional solicitada: oito pontos preenchidos pela interface, conclusão/ativação e três locais independentes projetados nos dois sentidos. Cenário sintético aprovado; erro máximo 1,423 mm no chão idealizado e 0,0109 pixel no sentido inverso. Mais 53 testes de processamento/localização aprovados. Não certifica a Frente real. Relatório: `tasks/calibracao-assistida/simulacao-completa.md`.

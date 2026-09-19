@@ -624,12 +624,8 @@ class PanoramaService:
                 "source_panorama_geometry_incompatible",
                 "This panorama has no compatible pixel-to-ray geometry; generate a compatible automatic panorama",
             ) from None
-        reference = (
-            active_reference
-            if isinstance(active_reference, dict)
-            and active_reference.get("artifact_id") == artifact_id
-            else None
-        )
+        reference = next((value for value in pointer.values()
+                          if isinstance(value, dict) and value.get("artifact_id") == artifact_id), None)
         return {
             "id": artifact_id,
             "revision": artifact["revision"],
@@ -1849,6 +1845,14 @@ class PanoramaService:
         if not binding or job["source_id"] != source_id:
             return {"status": "unlocalized", "reason": "panorama_source_mismatch"}
         await self._current(job)
+        localizer = await self.reference_localizer(camera_id, source_id, binding)
+        located = await asyncio.to_thread(localizer.locate, image, capture_evidence, image_geometry)
+        return {**located, "source_artifact_id": binding["id"],
+                "geometry_digest": binding["geometry"]["model_digest"], "source_id": source_id, "revision": revision,
+                "_coverage_mask": localizer.coverage_mask}
+
+    async def reference_localizer(self, camera_id: str, source_id: str, binding: dict) -> Any:
+        """Share immutable descriptors between calibration and live viewing."""
         key = (binding["id"], binding["geometry"]["model_digest"])
         async with self._localization_lock:
             from .processing.panorama_localization import PanoramaLocalizer
@@ -1887,10 +1891,7 @@ class PanoramaService:
                 while len(self._localizers) > 2:
                     self._localizers.popitem(last=False)
             self._localizers.move_to_end(key)
-            located = await asyncio.to_thread(localizer.locate, image, capture_evidence, image_geometry)
-        return {**located, "source_artifact_id": binding["id"],
-                "geometry_digest": key[1], "source_id": source_id, "revision": revision,
-                "_coverage_mask": localizer.coverage_mask}
+            return localizer
 
     async def aim(self, request: Request, camera_id: str, body: Aim) -> dict[str, Any]:
         self._authorize(request, camera_id, control=True)

@@ -28,6 +28,8 @@ from .panorama_scan import _Scan, _Stopped
 from .processing.panorama_mapping import _rotation_basis, panorama_pixel_to_ray
 from .settings import iter_camera_devices, iter_camera_sources
 
+MAXIMUM_LIVE_NAVIGATION_COMMANDS = 12
+
 
 class OpenSession(BaseModel):
     camera_id: str
@@ -407,7 +409,16 @@ class LivePanoramaService:
                     )
 
             scanner = _Scan(camera, directory, progress, cancelled, {})
-            navigator = VisualNavigator(scanner, session.localizer, maximum_commands=3)
+            # A fresh session must first observe both actuator axes before it
+            # can apply measured corrections. Three commands only paid for the
+            # two probes and one correction, which made valid distant clicks
+            # fail predictably. Keep the operation bounded while leaving room
+            # for convergence and fine visual confirmation.
+            navigator = VisualNavigator(
+                scanner,
+                session.localizer,
+                maximum_commands=MAXIMUM_LIVE_NAVIGATION_COMMANDS,
+            )
             navigator.response = session.response
             navigator.response_rotations = session.response_rotations
             failure = None

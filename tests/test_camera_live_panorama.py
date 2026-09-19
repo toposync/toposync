@@ -273,7 +273,7 @@ async def test_unknown_stop_discards_pending_and_never_reports_verified_current_
         trace = []
 
         def __init__(self, *args, maximum_commands):
-            assert maximum_commands == 3
+            assert maximum_commands == module.MAXIMUM_LIVE_NAVIGATION_COMMANDS == 12
 
         async def aim(self, ray):
             events.append("aim")

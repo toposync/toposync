@@ -12,6 +12,7 @@ from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
 from toposync_ext_cameras.panorama_navigation import (
     _continuous_pulse_plan,
     correction_step,
+    MAXIMUM_NAVIGATION_PULSE_SECONDS,
     reference_path,
     VisualNavigator,
 )
@@ -23,7 +24,7 @@ def test_correction_measures_command_sign_and_reduces_controllable_error(matrix)
     error = matrix @ np.ones(matrix.shape[1]) * 0.1
     step = correction_step(matrix, error)
     assert np.linalg.norm(error + matrix @ step) < np.linalg.norm(error) * 0.25
-    assert max(abs(step)) <= 0.3
+    assert max(abs(step)) <= MAXIMUM_NAVIGATION_PULSE_SECONDS
 
 
 @pytest.mark.parametrize(
@@ -189,8 +190,8 @@ def test_navigation_converges_or_refuses_unattainable_motor_precision(target_yaw
     result = asyncio.run(run())
     assert result["verified"]
     assert result["measurement"]["center_error_pixels"] <= 3
-    assert 0 < len(plant.commands) <= 64
-    assert max(abs(command[1]) for command in plant.commands) <= 0.3
+    assert 0 < len(plant.commands) <= 16
+    assert max(abs(command[1]) for command in plant.commands) <= MAXIMUM_NAVIGATION_PULSE_SECONDS
     assert plant.angles == pytest.approx([target_yaw, 0.05], abs=0.006)
 
 

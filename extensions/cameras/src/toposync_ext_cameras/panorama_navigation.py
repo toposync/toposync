@@ -29,6 +29,7 @@ from .processing.panorama_mapping import _rotation_basis, ray_to_image_pixel
 MAXIMUM_NAVIGATION_COMMANDS = 64
 MAXIMUM_FINE_CORRECTIONS = MAXIMUM_RETURN_CORRECTIONS
 MAXIMUM_CENTER_ERROR_PIXELS = 3.0
+MAXIMUM_NAVIGATION_PULSE_SECONDS = 0.6
 FINE_CONTINUOUS_SPEEDS = (0.025, 0.05, DEFAULT_CONTINUOUS_PULSE_SPEED)
 MINIMUM_QUALIFIED_RESPONSE_PIXELS = 2.0
 MAXIMUM_PROBE_ERROR_GROWTH_RATIO = 1.2
@@ -165,7 +166,11 @@ def _qualified_response_counts(trace: list[dict[str, Any]], *, return_epoch: str
 
 
 def correction_step(
-    jacobian: np.ndarray, error: np.ndarray, *, maximum: float = 0.3, minimum: float = 0.0,
+    jacobian: np.ndarray,
+    error: np.ndarray,
+    *,
+    maximum: float = MAXIMUM_NAVIGATION_PULSE_SECONDS,
+    minimum: float = 0.0,
 ) -> np.ndarray:
     """Damped local error correction, in the measured signed pulse units."""
     if (

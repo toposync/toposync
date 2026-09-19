@@ -28,7 +28,7 @@ from .panorama_scan import _Scan, _Stopped
 from .processing.panorama_mapping import _rotation_basis, panorama_pixel_to_ray
 from .settings import iter_camera_devices, iter_camera_sources
 
-MAXIMUM_LIVE_NAVIGATION_COMMANDS = 12
+MAXIMUM_LIVE_NAVIGATION_COMMANDS = 16
 
 
 class OpenSession(BaseModel):

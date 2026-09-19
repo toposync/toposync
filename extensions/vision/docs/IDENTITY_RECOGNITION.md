@@ -99,3 +99,7 @@ Focused software tests cover private transport, access, transactional curation, 
 Release acceptance additionally requires independent enrollment/development/holdout sessions, unknown identities and similar pets, frozen coverage/eligibility criteria, false-identification bounds, equivalent-load latency measurements, and rendered user journeys. Those conclusions cannot be obtained from the smoke check.
 
 Use the [offline evaluation protocol](IDENTITY_EVALUATION.md) to validate a frozen, authorized dataset and report visit-level results with uncertainty. Synthetic accounting tests of that tool do not establish recognition quality.
+
+## Paired development packages
+
+This development snapshot uses core and vision version `0.9.0.dev0`; it is not a published stable release. Vision requires core `>=0.9.0.dev0` both in wheel metadata and its extension manifest. The existing installer pins the running core during extension resolution, so installing this vision package on an older core is rejected before replacement. The extension manager also rejects an incompatible core before setup. Upgrade the paired core package before enabling this vision version; a wheel built from the older `0.8.0` core does not implement private artifacts or the bounded process executor used here.

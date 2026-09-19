@@ -2667,7 +2667,7 @@ wheels = [
 
 [[package]]
 name = "toposync-core"
-version = "0.8.0"
+version = "0.9.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -2876,7 +2876,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-vision"
-version = "0.8.0"
+version = "0.9.0.dev0"
 source = { editable = "extensions/vision" }
 dependencies = [
     { name = "cryptography" },
@@ -2902,7 +2902,7 @@ requires-dist = [
     { name = "onnx", specifier = ">=1.17,<2" },
     { name = "onnxruntime", specifier = ">=1.20,<2" },
     { name = "pillow", specifier = ">=10,<13" },
-    { name = "toposync-core", specifier = ">=0.3.0" },
+    { name = "toposync-core", specifier = ">=0.9.0.dev0" },
     { name = "toposync-ext-cameras", specifier = ">=0.1.0" },
 ]
 

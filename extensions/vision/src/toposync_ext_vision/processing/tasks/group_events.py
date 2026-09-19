@@ -621,7 +621,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             artifacts={
                 name: artifact
                 for name, artifact in source_packet.artifacts.items()
-                if not artifact.private
+                if not getattr(artifact, "private", False)
             },
             metadata=metadata,
             parent_packet_id=source_packet.packet_id,

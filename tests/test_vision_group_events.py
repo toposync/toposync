@@ -290,3 +290,21 @@ def test_group_preserves_separate_recognition_links_without_inheriting_member_id
         assert closed_member.payload["subject"]["members"][0]["active"] is False
 
     asyncio.run(scenario())
+
+
+def test_group_existing_frame_without_private_field_remains_compatible():
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    async def scenario():
+        runtime = _runtime({"mode": "session", "update_interval_seconds": 0.0})
+        # Contrato anterior de Artifact: reconhecimento ausente, sem o campo private.
+        legacy = SimpleNamespace(name="frame", data=b"fixture", mime_type=None, metadata={})
+        value = replace(_event_packet(1.0, "1"), artifacts={"frame": legacy})
+        result = (await runtime.process_packet(value, None))[0]
+        assert result.lifecycle == Lifecycle.OPEN
+        assert result.artifacts["frame"] is legacy
+        assert "recognition" not in result.payload
+        assert result.payload["subject"]["members"][0]["event_id"] == value.payload["subject"]["id"]
+
+    asyncio.run(scenario())

@@ -373,3 +373,141 @@ def test_sampling_policy_selection_uses_species_and_space_independent_of_order(t
         store.close()
 
     asyncio.run(scenario())
+
+
+def test_gallery_policy_lock_does_not_block_pipeline_event_loop(tmp_path):
+    import threading
+    from toposync.runtime.pipelines.execution_scheduler import ExecutionScheduler
+    from test_identity_store import policy
+
+    entered = threading.Event()
+    release = threading.Event()
+    policy_threads = []
+
+    class BusyGallery(IdentityStore):
+        def register_policy(self, value):
+            policy_threads.append(threading.get_ident())
+            entered.set()
+            if not release.wait(timeout=2):
+                raise TimeoutError("Event loop blocked by gallery policy")
+            super().register_policy(value)
+
+    async def scenario():
+        scheduler = ExecutionScheduler()
+        store = BusyGallery(tmp_path / "gallery", scope="test")
+        services = ServiceRegistry()
+        services.register("vision.identity.store", lambda: store)
+        calibrated = policy("cat").model_copy(update={"embedding_space": "test:synthetic"})
+        resolver = RecognizeIdentityRuntime(
+            {"enabled": True, "policies": [calibrated.model_dump()]},
+            PipelineRuntimeDependencies(services=services),
+        )
+
+        class ScheduledContext:
+            async def run_blocking(self, function, *args, **kwargs):
+                return await scheduler.run_sync(
+                    function,
+                    *args,
+                    mode="thread_pool",
+                    concurrency_key="test.identity",
+                    max_concurrency=1,
+                    **kwargs,
+                )
+
+        loop_thread = threading.get_ident()
+        task = asyncio.create_task(
+            resolver.process_packet(with_evidence(packet()), ScheduledContext())
+        )
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            release.set()
+            output = (await asyncio.wait_for(task, 3))[0]
+            assert len(policy_threads) == 1
+            assert policy_threads[0] != loop_thread
+            assert output.payload["recognition"]["reason"] != "gallery_operation_failed"
+            assert len(store.observations()) == 1
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            await scheduler.shutdown()
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_canceled_resolution_keeps_its_executor_slot_until_persistence_finishes(tmp_path):
+    import threading
+    import pytest
+    from toposync.runtime.pipelines.execution_scheduler import ExecutionScheduler
+
+    entered = threading.Event()
+    release = threading.Event()
+    completed = []
+
+    async def scenario():
+        scheduler = ExecutionScheduler(thread_pool_max_workers=2)
+        store = IdentityStore(tmp_path / "gallery", scope="test")
+        services = ServiceRegistry()
+        services.register("vision.identity.store", lambda: store)
+        resolver = RecognizeIdentityRuntime(
+            {"enabled": True}, PipelineRuntimeDependencies(services=services)
+        )
+        resolve = resolver._resolve
+
+        def delayed_resolve(value, *args):
+            name = value.payload["correlation_id"]
+            if name == "first":
+                entered.set()
+                if not release.wait(timeout=3):
+                    raise TimeoutError("test did not release first resolution")
+            result = resolve(value, *args)
+            completed.append(name)
+            return result
+
+        resolver._resolve = delayed_resolve
+        second_queued = asyncio.Event()
+
+        class ScheduledContext:
+            async def run_blocking(self, function, *args, **kwargs):
+                if args[0].payload["correlation_id"] == "second":
+                    second_queued.set()
+                return await scheduler.run_sync(
+                    function,
+                    *args,
+                    mode="thread_pool",
+                    concurrency_key="test.identity",
+                    max_concurrency=1,
+                    **kwargs,
+                )
+
+        context = ScheduledContext()
+        first = asyncio.create_task(
+            resolver.process_packet(with_evidence(packet(correlation="first")), context)
+        )
+        second = None
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            second = asyncio.create_task(
+                resolver.process_packet(with_evidence(packet(correlation="second")), context)
+            )
+            await asyncio.wait_for(second_queued.wait(), 1)
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(second), 0.05)
+            assert completed == []
+            release.set()
+            output = (await asyncio.wait_for(second, 3))[0]
+            assert completed == ["first", "second"]
+            assert output.payload["recognition"]["reason"] == "calibration_required"
+            assert len(store.observations()) == 2
+        finally:
+            release.set()
+            await asyncio.gather(
+                *(task for task in (first, second) if task), return_exceptions=True
+            )
+            await scheduler.shutdown()
+            store.close()
+
+    asyncio.run(scenario())

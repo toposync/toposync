@@ -308,6 +308,64 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
         self.config = RecognizeIdentityConfig.model_validate(config)
         self.dependencies = dependencies
 
+    def _resolve(self, packet: Packet, store: Any, key: str, artifact: Artifact | None):
+        # Decodificação, locks e SQLite ficam no executor limitado do operador.
+        # Cancelar a espera não interrompe uma transação já iniciada na thread.
+        current = store.decision(key)
+        if packet.lifecycle == Lifecycle.CLOSE:
+            store.close_occurrence(key)
+        elif artifact is not None:
+            if (
+                not artifact.private
+                or not isinstance(artifact.data, bytes)
+                or len(artifact.data) > 2 * 1024 * 1024
+            ):
+                raise ValueError("invalid_evidence_envelope")
+            decoded = json.loads(artifact.data)
+            evidence = IdentityEvidence.model_validate(decoded["evidence"])
+            if evidence.occurrence_id != key or evidence.camera_id != packet.payload.get(
+                "camera_id"
+            ):
+                raise ValueError("evidence_provenance_mismatch")
+            policy = next(
+                (
+                    item
+                    for item in self.config.policies
+                    if item.species == evidence.species
+                    and item.embedding_space == evidence.embedding_space
+                ),
+                None,
+            )
+            if policy is not None:
+                store.register_policy(policy)
+            crop = base64.b64decode(decoded["crop"], validate=True) if decoded.get("crop") else None
+            current = store.observe(
+                evidence,
+                policy,
+                crop=crop,
+                expected_gallery_revision=store.revision,
+            )
+        elif current is not None:
+            incoming = packet.payload.get("recognition", {})
+            policy = next(
+                (
+                    item
+                    for item in self.config.policies
+                    if item.embedding_space == current.embedding_space
+                    and item.species == str(packet.payload["subject"].get("category") or "").lower()
+                ),
+                None,
+            )
+            current = store.no_evidence(
+                key,
+                observed_at=resolve_media_ts(packet),
+                status=str(incoming.get("status", "unobservable")),
+                reason=str(incoming.get("reason", "evidence_missing")),
+                continuity_seconds=policy.continuity_seconds if policy else 0,
+                expected_policy_fingerprint=policy.fingerprint() if policy else "",
+            )
+        return current
+
     async def process_packet(self, packet: Packet, context: Any) -> list[Packet]:
         artifact = packet.artifacts.get(PRIVATE_EVIDENCE_ARTIFACT)
         # O consumidor terminal remove evidência mesmo quando desligado ou indisponível.
@@ -343,66 +401,7 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
             ]
         try:
             store = await self.dependencies.services.call("vision.identity.store")
-            current = await context.run_blocking(store.decision, key)
-            if packet.lifecycle == Lifecycle.CLOSE:
-                await context.run_blocking(store.close_occurrence, key)
-            elif artifact is not None:
-                if (
-                    not artifact.private
-                    or not isinstance(artifact.data, bytes)
-                    or len(artifact.data) > 2 * 1024 * 1024
-                ):
-                    raise ValueError("invalid_evidence_envelope")
-                decoded = json.loads(artifact.data)
-                evidence = IdentityEvidence.model_validate(decoded["evidence"])
-                if evidence.occurrence_id != key or evidence.camera_id != packet.payload.get(
-                    "camera_id"
-                ):
-                    raise ValueError("evidence_provenance_mismatch")
-                policy = next(
-                    (
-                        item
-                        for item in self.config.policies
-                        if item.species == evidence.species
-                        and item.embedding_space == evidence.embedding_space
-                    ),
-                    None,
-                )
-                if policy is not None:
-                    store.register_policy(policy)
-                crop = (
-                    base64.b64decode(decoded["crop"], validate=True)
-                    if decoded.get("crop")
-                    else None
-                )
-                current = await context.run_blocking(
-                    store.observe,
-                    evidence,
-                    policy,
-                    crop=crop,
-                    expected_gallery_revision=store.revision,
-                )
-            elif current is not None:
-                incoming = packet.payload.get("recognition", {})
-                policy = next(
-                    (
-                        item
-                        for item in self.config.policies
-                        if item.embedding_space == current.embedding_space
-                        and item.species
-                        == str(packet.payload["subject"].get("category") or "").lower()
-                    ),
-                    None,
-                )
-                current = await context.run_blocking(
-                    store.no_evidence,
-                    key,
-                    observed_at=resolve_media_ts(packet),
-                    status=str(incoming.get("status", "unobservable")),
-                    reason=str(incoming.get("reason", "evidence_missing")),
-                    continuity_seconds=policy.continuity_seconds if policy else 0,
-                    expected_policy_fingerprint=policy.fingerprint() if policy else "",
-                )
+            current = await context.run_blocking(self._resolve, packet, store, key, artifact)
             if current is not None:
                 payload = dict(clean.payload)
                 payload["recognition"] = current.packet_summary()

@@ -230,3 +230,81 @@ def test_group_events_close_member_does_not_close_group_before_idle() -> None:
         assert close_member == []
 
     asyncio.run(scenario())
+
+
+def test_group_preserves_separate_recognition_links_without_inheriting_member_identity():
+    from dataclasses import replace
+    from toposync.runtime.pipelines import Artifact
+
+    async def scenario():
+        runtime = _runtime(
+            {"mode": "session", "update_interval_seconds": 0.0, "idle_timeout_seconds": 3.0}
+        )
+        first = _event_packet(1.0, "1")
+        first = replace(
+            first,
+            payload={
+                **first.payload,
+                "recognition": {
+                    "schema_version": 1,
+                    "occurrence_id": "first-visit",
+                    "identity_id": "private-person",
+                },
+            },
+            artifacts={
+                "secret": Artifact(name="secret", data=b"private-test-evidence", private=True)
+            },
+        )
+        opened = (await runtime.process_packet(first, None))[0]
+        second = _event_packet(2.0, "2", category="cat")
+        second = replace(
+            second,
+            payload={
+                **second.payload,
+                "recognition": {
+                    "schema_version": 1,
+                    "occurrence_id": "second-visit",
+                    "identity_id": "private-cat",
+                },
+            },
+        )
+        updated = (await runtime.process_packet(second, None))[0]
+        assert (
+            await runtime.process_packet(_event_packet(3.0, "1", lifecycle=Lifecycle.CLOSE), None)
+            == []
+        )
+        closed_member = (await runtime.process_packet(_source_packet(7.0), None))[0]
+        assert closed_member.lifecycle == Lifecycle.CLOSE
+        assert not opened.artifacts and "recognition" not in opened.payload
+        assert opened.payload["subject"]["id"] == updated.payload["subject"]["id"]
+        for packet in (updated, closed_member):
+            assert "recognition" not in packet.payload
+            assert "private-person" not in str(packet.payload) and "private-cat" not in str(
+                packet.payload
+            )
+            assert not packet.artifacts
+            assert [
+                (member["category"], member["recognition_occurrence_id"])
+                for member in packet.payload["subject"]["members"]
+            ] == [("person", "first-visit"), ("cat", "second-visit")]
+        assert closed_member.payload["subject"]["members"][0]["active"] is False
+
+    asyncio.run(scenario())
+
+
+def test_group_existing_frame_without_private_field_remains_compatible():
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    async def scenario():
+        runtime = _runtime({"mode": "session", "update_interval_seconds": 0.0})
+        # Contrato anterior de Artifact: reconhecimento ausente, sem o campo private.
+        legacy = SimpleNamespace(name="frame", data=b"fixture", mime_type=None, metadata={})
+        value = replace(_event_packet(1.0, "1"), artifacts={"frame": legacy})
+        result = (await runtime.process_packet(value, None))[0]
+        assert result.lifecycle == Lifecycle.OPEN
+        assert result.artifacts["frame"] is legacy
+        assert "recognition" not in result.payload
+        assert result.payload["subject"]["members"][0]["event_id"] == value.payload["subject"]["id"]
+
+    asyncio.run(scenario())

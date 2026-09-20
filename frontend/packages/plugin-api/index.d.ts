@@ -174,6 +174,15 @@ export type NotificationRenderer = {
   ) => Notification2DOverlay | null;
 };
 
+/** Adds authorized details without replacing a notification's image or overlays. */
+export type NotificationDetailPanel = {
+  id: string;
+  supports: (notification: Notification) => boolean;
+  render: (notification: Notification) => import("react").ReactNode;
+  /** Passive content only: the host card already owns its button. */
+  renderSummary?: (notification: Notification) => import("react").ReactNode;
+};
+
 export type SettingsPanel = {
   id: string;
   name: LocalizedString;
@@ -195,6 +204,8 @@ export type PipelineOperatorPanel = {
     operatorId: string;
     stepUid: string;
     nodeId: string;
+    /** Execution host chosen by this pipeline; older hosts may omit this field. */
+    processingServerId?: string;
     config: Record<string, unknown>;
     showAdvanced: boolean;
     updateConfig: (patch: Record<string, unknown>) => void;
@@ -546,6 +557,7 @@ export type EditorTool = {
 export type ToposyncHost = {
   registerElementType: (elementType: ElementType) => void;
   registerNotificationRenderer: (renderer: NotificationRenderer) => void;
+  registerNotificationDetailPanel?: (panel: NotificationDetailPanel) => void;
   registerEditorTool: (tool: EditorTool) => void;
   registerFileDropHandler: (handler: FileDropHandler) => void;
   registerSettingsPanel: (panel: SettingsPanel) => void;

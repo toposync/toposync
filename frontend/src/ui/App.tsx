@@ -8,6 +8,7 @@ import type {
   FileDropHandler,
   Notification,
   NotificationRenderer,
+  NotificationDetailPanel,
   PipelineOperatorPanel,
   RenderViewDefinition,
   SettingsPanel,
@@ -370,6 +371,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const pathname = usePathname();
   const [screen, setScreen] = useState<Screen>("main");
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
+  const [notificationDetailPanelsById, setNotificationDetailPanelsById] = useState<Record<string, NotificationDetailPanel>>({});
   const [notificationRenderersById, setNotificationRenderersById] = useState<Record<string, NotificationRenderer>>({});
   const [editorToolsById, setEditorToolsById] = useState<Record<string, EditorTool>>({});
   const [fileDropHandlers, setFileDropHandlers] = useState<FileDropHandler[]>([]);
@@ -657,6 +659,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     () => ({
       registerElementType(elementType) {
         setElementTypesById((prev) => ({ ...prev, [elementType.type]: elementType }));
+      },
+      registerNotificationDetailPanel(panel) {
+        setNotificationDetailPanelsById((prev) => ({ ...prev, [panel.id]: panel }));
       },
       registerNotificationRenderer(renderer) {
         setNotificationRenderersById((prev) => ({ ...prev, [renderer.id]: renderer }));
@@ -1647,6 +1652,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           elementTypesById={elementTypesById}
           viewSettings={viewSettings}
           notificationRenderers={notificationRenderers}
+          notificationDetailPanels={Object.values(notificationDetailPanelsById)}
           notifications={notifications}
           notificationsCount={notificationsCount}
           notificationsHasMore={notificationsHasMore}

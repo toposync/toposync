@@ -34,6 +34,22 @@ class DistributedGraphs:
     cross_edges: tuple[dict[str, Any], ...]
 
 
+def required_transport_capabilities(
+    pipelines: list[Pipeline], registry: OperatorRegistry
+) -> set[str]:
+    required: set[str] = set()
+    for pipeline in pipelines:
+        for node in (pipeline.graph or {}).get("nodes", []):
+            registered = registry.get(str(node.get("operator") or ""))
+            if (
+                registered is not None
+                and "private_data" in registered.definition.capabilities
+                and node.get("config", {}).get("enabled", False)
+            ):
+                required.add("private_artifacts_v1")
+    return required
+
+
 def build_distributed_graphs(
     pipeline: Pipeline,
     registry: OperatorRegistry,
@@ -87,8 +103,28 @@ def build_distributed_graphs(
         return "processing"
 
     placement_by_node = {node_id: _placement(node_id) for node_id in node_by_id}
-    origin_nodes = [node_by_id[nid] for nid, where in placement_by_node.items() if where == "origin"]
-    processing_nodes = [node_by_id[nid] for nid, where in placement_by_node.items() if where == "processing"]
+    # Pure placement flexibility is explicit; no origin-to-processing return edge is invented.
+    changed = True
+    while changed:
+        changed = False
+        for edge in edges:
+            source = edge.get("from", {}).get("node")
+            target = edge.get("to", {}).get("node")
+            if (
+                placement_by_node.get(source) != "origin"
+                or placement_by_node.get(target) != "processing"
+            ):
+                continue
+            registered = registry.get(str(node_by_id[target].get("operator") or ""))
+            if registered and "origin_compatible" in registered.definition.capabilities:
+                placement_by_node[target] = "origin"
+                changed = True
+    origin_nodes = [
+        node_by_id[nid] for nid, where in placement_by_node.items() if where == "origin"
+    ]
+    processing_nodes = [
+        node_by_id[nid] for nid, where in placement_by_node.items() if where == "processing"
+    ]
 
     processing_edges: list[dict[str, Any]] = []
     origin_edges: list[dict[str, Any]] = []
@@ -135,7 +171,9 @@ def build_distributed_graphs(
             tgt_node = str(target.get("node") or "").strip()
             tgt_port = str(target.get("port") or "in").strip() or "in"
 
-            project_node_id = _safe_node_id(f"{src_node}__to__{tgt_node}__{tgt_port}__{i}", prefix="project__")
+            project_node_id = _safe_node_id(
+                f"{src_node}__to__{tgt_node}__{tgt_port}__{i}", prefix="project__"
+            )
             proc_nodes.append(
                 {
                     "id": project_node_id,

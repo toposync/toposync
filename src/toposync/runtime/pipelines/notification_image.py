@@ -177,6 +177,8 @@ def build_ephemeral_notification_image(packet: Packet, input_artifact_name: str 
     artifact = packet.artifacts.get(name)
     if artifact is None:
         return None, "image_artifact_missing"
+    if artifact.private:
+        return None, "image_artifact_private"
     if artifact.data is None:
         return None, "image_pixels_missing"
     try:

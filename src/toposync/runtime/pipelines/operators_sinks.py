@@ -32,6 +32,7 @@ from .packet_contract import (
     resolve_media_ts,
     resolve_source_device_id,
     resolve_source_name,
+    resolve_source_id,
 )
 from .runtime import Artifact, Lifecycle, Packet
 from .storage import (
@@ -609,6 +610,8 @@ class StoreImagesRuntime(TransformOperatorRuntime):
 
         artifact_name = normalize_artifact_name(self._config.input_artifact_name)
         artifact = packet.artifacts.get(artifact_name)
+        if artifact is not None and artifact.private:
+            return [packet]
         if artifact is not None:
             rel: str | None = str(artifact.reference) if artifact.reference else None
             mime: str | None = str(artifact.mime_type) if artifact.mime_type else None
@@ -853,6 +856,7 @@ class NotifyConfig(BaseModel):
             ):
                 raise ValueError("Payload paths must contain simple identifiers separated by dots")
         return list(dict.fromkeys(paths))
+    dedupe_by_occurrence: bool = False
 
     @field_validator(
         "notification_type", "title", "description", "input_artifact_name", "dedupe_key_template"
@@ -1018,6 +1022,7 @@ class _NotifyState:
     clock_scope: tuple[Any, ...]
     store_dedupe_key: str
     duration_valid: bool = True
+    notification_occurrence_id: str | None = None
     last_emit_monotonic: float = 0.0
     last_signature: str = ""
     last_title: str = ""
@@ -1075,7 +1080,9 @@ class NotifyRuntime(SinkRuntime):
                 "core.notify requires PipelineRuntimeDependencies.notifications_upsert"
             )
 
-        dedupe_key = self._dedupe_key(packet, context)
+        logical_dedupe_key = self._dedupe_key(packet, context)
+        occurrence_id = self._occurrence_id(packet, context, logical_dedupe_key)
+        dedupe_key = occurrence_id or logical_dedupe_key
         now_monotonic = time.monotonic()
         ts = _resolve_ts(packet, "frame_ts")
         media_ts = _notify_media_time(packet)
@@ -1090,7 +1097,12 @@ class NotifyRuntime(SinkRuntime):
                 last_ts=sample_ts,
                 time_basis=time_basis,
                 clock_scope=clock_scope,
-                store_dedupe_key=self._store_dedupe_key(dedupe_key, packet),
+                store_dedupe_key=(
+                    f"pipeline:occurrence:{occurrence_id}"
+                    if occurrence_id
+                    else self._store_dedupe_key(dedupe_key, packet)
+                ),
+                notification_occurrence_id=occurrence_id,
                 last_emit_monotonic=0.0,
             )
             self._state[dedupe_key] = state
@@ -1255,6 +1267,10 @@ class NotifyRuntime(SinkRuntime):
         status = "closed" if lifecycle == Lifecycle.CLOSE else "open"
         payload = {
             "source": "pipelines",
+            **(
+                {"notification_occurrence_id": state.notification_occurrence_id}
+                if state.notification_occurrence_id else {}
+            ),
             "pipeline_name": _resolve_logical_pipeline_name(context),
             "node_id": getattr(context, "node_id", None),
             "stream_id": packet.stream_id,
@@ -1272,7 +1288,7 @@ class NotifyRuntime(SinkRuntime):
             "event_code": _resolve_string(packet, "event_code") or None,
             "tracking_id": _resolve_string(packet, "tracking_id") or None,
             "artifacts": {
-                name: art.reference for name, art in packet.artifacts.items() if art.reference
+                name: art.reference for name, art in packet.artifacts.items() if art.reference and not art.private
             },
             "trail": list(state.trail),
             "stored_images": state.stored_images,
@@ -1334,6 +1350,10 @@ class NotifyRuntime(SinkRuntime):
                     ),
                     payload={
                         "source": "pipelines",
+                        **(
+                            {"notification_occurrence_id": state.notification_occurrence_id}
+                            if state.notification_occurrence_id else {}
+                        ),
                         "lifecycle": Lifecycle.CLOSE.value,
                         "status": "closed",
                         "priority": state.last_priority or self._config.priority,
@@ -1368,6 +1388,26 @@ class NotifyRuntime(SinkRuntime):
             return raw
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
         return f"pipeline:{node_id}:camera:{camera_id}:token:{digest}"
+
+    def _occurrence_id(self, packet: Packet, context, logical_key: str) -> str | None:
+        if not self._config.dedupe_by_occurrence:
+            return None
+        subject = _resolve_subject(packet)
+        correlation = packet.payload.get("correlation_id") or packet.metadata.get("correlation_id")
+        if (
+            subject.get("type") not in {"event", "group_event"}
+            or not subject.get("id")
+            or not correlation
+        ):
+            return None
+        # O produtor deve renovar a correlação por visita; nomes não definem ocorrências.
+        parts = [
+            _resolve_logical_pipeline_name(context), _resolve_logical_node_id(context),
+            resolve_source_id(packet) or packet.payload.get("source_stream_id") or packet.stream_id,
+            _resolve_string(packet, "camera_id"), str(subject["type"]), str(subject["id"]),
+            str(correlation), logical_key,
+        ]
+        return hashlib.sha256(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
 
     def _store_dedupe_key(self, logical_dedupe_key: str, packet: Packet) -> str:
         packet_id = str(packet.packet_id or "").strip()
@@ -1507,6 +1547,7 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "active_member_event_ids",
         "category_summary",
         "identity_id",
+        "recognition",
         "tracklet_id",
         "tracklet_ids",
         "raw_tracking_id",

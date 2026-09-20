@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from .builtin_data import OFFICIAL_VISION_MODEL_IDS
 
 
-VisionTask = Literal["detection", "tracking", "segmentation", "pose", "classification"]
+VisionTask = Literal["detection", "tracking", "segmentation", "pose", "classification", "embedding", "face_detection"]
 
 
 class ModelInputNormalization(BaseModel):

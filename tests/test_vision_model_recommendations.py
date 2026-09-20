@@ -72,7 +72,9 @@ def test_builtin_rfdetr_detection_family_uses_assisted_local_build_metadata() ->
         assert manifest.acquisition.guide_url == "https://github.com/roboflow/rf-detr"
         assert manifest.acquisition.export_guide_url == "https://rfdetr.roboflow.com/learn/export/"
         assert manifest.acquisition.source_url == "https://github.com/roboflow/rf-detr"
-        assert manifest.acquisition.checkpoint_url.startswith("https://storage.googleapis.com/rfdetr/")
+        assert manifest.acquisition.checkpoint_url.startswith(
+            "https://storage.googleapis.com/rfdetr/"
+        )
         assert manifest.acquisition.paper_url == "https://arxiv.org/abs/2511.09554"
         assert manifest.acquisition.builder_backend == "host_python"
         assert manifest.acquisition.supported_platforms == ["linux", "darwin", "windows"]
@@ -145,8 +147,12 @@ def test_future_runtime_manifest_is_listed_without_claiming_runtime_support(tmp_
     assert item["acquisition"]["builder_backend"] == "edge_tpu_compiler"
 
 
-def test_builtin_rtmdet_catalog_blocks_remote_install_when_redistribution_is_not_allowed(monkeypatch) -> None:  # noqa: ANN001
-    monkeypatch.setenv("TOPOSYNC_VISION_OFFICIAL_MODEL_BASE_URL", "https://models.example.com/toposync/rtmdet")
+def test_builtin_rtmdet_catalog_blocks_remote_install_when_redistribution_is_not_allowed(
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    monkeypatch.setenv(
+        "TOPOSYNC_VISION_OFFICIAL_MODEL_BASE_URL", "https://models.example.com/toposync/rtmdet"
+    )
     registry = build_default_model_registry()
     catalog = build_task_model_catalog(
         task="detection",
@@ -213,3 +219,37 @@ def test_detection_catalog_prefers_actionable_cross_platform_local_builds_when_n
     assert catalog["items"][0]["model_id"] == "rfdetr_det_medium"
     assert catalog["items"][0]["local_build_supported"] is True
     assert catalog["items"][0]["acquisition_mode"] == "local_build_assisted"
+
+
+def test_identity_models_use_existing_catalog_acquisition_and_runtime_inventory(tmp_path):
+    from toposync_ext_vision.processing.runtime_backends.catalog import (
+        collect_vision_runtime_backends,
+    )
+    from toposync_ext_vision.registry.installer import VisionModelInstallManager
+
+    registry = build_default_model_registry()
+    identifiers = {"opencv_yunet_2023mar", "opencv_sface_2021dec", "open_noodle_pet_small"}
+    for identifier in identifiers:
+        registry.get_manifest(identifier).artifact_path = str(tmp_path / (identifier + ".onnx"))
+    backends = collect_vision_runtime_backends()
+    assert "embedding" in next(item for item in backends if item["id"] == "onnxruntime")["tasks"]
+    assert (
+        "face_detection" in next(item for item in backends if item["id"] == "opencv_dnn")["tasks"]
+    )
+    installer = VisionModelInstallManager(data_dir=tmp_path)
+    items = []
+    for task in ("embedding", "face_detection"):
+        items.extend(
+            build_task_model_catalog(
+                task=task,
+                model_registry=registry,
+                runtime_backends=backends,
+                execution_providers=["CPUExecutionProvider"],
+                install_manager=installer,
+            )["items"]
+        )
+    assert {item["model_id"] for item in items} == identifiers
+    assert all(item["acquisition_supported"] for item in items)
+    assert all(item["acquisition"]["explicit_consent_required"] for item in items)
+    assert all(item["license"]["dataset_notes"] for item in items)
+    assert not any(Path(item["artifact_path"]).exists() for item in items)

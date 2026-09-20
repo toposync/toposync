@@ -260,3 +260,14 @@ def test_direct_source_and_explicit_legacy_media_timestamp_are_supported():
     assert descriptor["sourceStreamId"] == "camera-source"
     assert descriptor["mediaTimestamp"] == 0
     json.dumps(descriptor, allow_nan=False)
+
+
+def test_private_artifact_never_enters_ephemeral_notification_preview(monkeypatch):
+    value = packet()
+    value = value.with_artifact(replace(value.artifacts["main"], private=True))
+
+    def forbidden_decode(_data):
+        raise AssertionError("Private pixels must not be inspected for public preview")
+
+    monkeypatch.setattr(notification_image, "_pixels_and_dimensions", forbidden_decode)
+    assert build(value) == (None, "image_artifact_private")

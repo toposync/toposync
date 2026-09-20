@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+
 import asyncio
 from collections import deque
 from pathlib import Path
@@ -28,6 +30,16 @@ from toposync.runtime.pipelines import (
 from toposync.runtime.pipelines.storage import PipelineStorageManager
 from toposync.runtime.pipelines.telemetry import PipelineTelemetryStore
 
+
+
+def _current_graph(graph: dict) -> dict:
+    # Fixtures anteriores conservam operadores, filas e assertions; somente o envelope vira v2.
+    if graph.get("schema_version") == 2:
+        return graph
+    return build_pipeline_graph_v2(
+        graph_uid="recognition_regression_baseline",
+        **{key: value for key, value in graph.items() if key != "schema_version"},
+    )
 
 class _SequenceSourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -164,7 +176,7 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
             ],
         }
 
-        pipeline = Pipeline(name="stage7_store_images", graph=graph)
+        pipeline = Pipeline(name="stage7_store_images", graph=_current_graph(graph))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.run_for(0.25)
@@ -256,10 +268,16 @@ def test_store_images_defaults_to_webp(tmp_path: Path) -> None:
             ],
         }
 
-        pipeline = Pipeline(name="stage7_store_images_webp_default", graph=graph)
+        pipeline = Pipeline(name="stage7_store_images_webp_default", graph=_current_graph(graph))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
-        await runtime.run_for(0.5)
+        await runtime.start()
+        try:
+            async with asyncio.timeout(5.0):
+                while not collector.get("sink"):
+                    await asyncio.sleep(0.01)
+        finally:
+            await runtime.stop()
 
         packets = collector.get("sink", [])
         assert len(packets) == 1
@@ -370,7 +388,7 @@ def test_store_images_layers_share_pipeline_budget_and_cleanup_telemetry(tmp_pat
         }
 
         try:
-            pipeline = Pipeline(name="stage7_store_images_layers", graph=graph)
+            pipeline = Pipeline(name="stage7_store_images_layers", graph=_current_graph(graph))
             compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
             runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
             await runtime.run_for(0.4)
@@ -475,7 +493,7 @@ def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
             ],
         }
 
-        pipeline = Pipeline(name="stage7_store_images_colors", graph=graph)
+        pipeline = Pipeline(name="stage7_store_images_colors", graph=_current_graph(graph))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.run_for(0.25)
@@ -574,8 +592,8 @@ def test_store_images_in_bundle_uses_logical_pipeline_folder(tmp_path: Path) -> 
             }
 
         compiler = PipelineGraphCompiler(registry)
-        compiled_a = compiler.compile_pipeline(Pipeline(name="final_a", graph=graph_for("sink_a")))
-        compiled_b = compiler.compile_pipeline(Pipeline(name="final_b", graph=graph_for("sink_b")))
+        compiled_a = compiler.compile_pipeline(Pipeline(name="final_a", graph=_current_graph(graph_for("sink_a"))))
+        compiled_b = compiler.compile_pipeline(Pipeline(name="final_b", graph=_current_graph(graph_for("sink_b"))))
 
         report = CompilationReport(pipelines=(compiled_a, compiled_b), shared_signatures={})
         bundle = PipelineBundleRuntime(
@@ -724,7 +742,7 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
             ],
         }
 
-        pipeline = Pipeline(name="stage7_notify", graph=graph)
+        pipeline = Pipeline(name="stage7_notify", graph=_current_graph(graph))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.run_for(0.35)
@@ -855,7 +873,7 @@ def test_throttle_after_store_images_preserves_notification_image_history(tmp_pa
             ],
         }
 
-        pipeline = Pipeline(name="stage7_notify_throttled_images", graph=graph)
+        pipeline = Pipeline(name="stage7_notify_throttled_images", graph=_current_graph(graph))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.run_for(0.35)
@@ -986,7 +1004,7 @@ def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(
             ],
         }
 
-        pipeline = Pipeline(name="stage7_notify_thumb_selection", graph=graph)
+        pipeline = Pipeline(name="stage7_notify_thumb_selection", graph=_current_graph(graph))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.run_for(0.35)
@@ -1141,7 +1159,7 @@ def test_notify_close_prefers_earliest_frame_on_confidence_tie(tmp_path: Path) -
             ],
         }
 
-        pipeline = Pipeline(name="stage7_notify_conf_tie", graph=graph)
+        pipeline = Pipeline(name="stage7_notify_conf_tie", graph=_current_graph(graph))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.run_for(0.30)

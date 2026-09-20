@@ -107,6 +107,7 @@ export function OperatorConfigPanel({
           operatorId,
           stepUid: step.uid,
           nodeId: step.nodeId,
+          processingServerId: processingServerId || "local",
           config,
           showAdvanced,
           updateConfig: (patch) => onUpdateConfig((prev) => ({ ...prev, ...patch })),

@@ -1,0 +1,52 @@
+{
+  "model_id": "opencv_sface_2021dec",
+  "display_name": "SFace Face Identity",
+  "task": "embedding",
+  "runtime": "opencv_dnn",
+  "artifact_format": "onnx",
+  "artifact_path": "../models/identity/opencv_sface_2021dec.onnx",
+  "sha256": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+  "input": {
+    "width": 112,
+    "height": 112,
+    "color_order": "bgr",
+    "layout": "nchw",
+    "resize_mode": "stretch"
+  },
+  "postprocess": {
+    "type": "sface_aligncrop_bgr_v1",
+    "output_name": ""
+  },
+  "classes": {
+    "labels": [
+      "person"
+    ]
+  },
+  "license": {
+    "code_license": "Apache-2.0 (OpenCV)",
+    "weights_license": "Apache-2.0",
+    "redistribution_allowed": true,
+    "commercial_use_status": "upstream_license_notice_required",
+    "dataset_notes": "Upstream license explicitly covers model directory. Exact training-data provenance remains incomplete; do not claim a complete data audit."
+  },
+  "acquisition": {
+    "mode": "auto_download",
+    "source_url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+    "guide_url": "https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface",
+    "explicit_consent_required": true
+  },
+  "provenance": {
+    "origin": "upstream",
+    "source_url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+    "source_ref": "47534e27c9851bb1128ccc0102f1145e27f23f98"
+  },
+  "hardware_profiles": {
+    "cpu": true
+  },
+  "capabilities": [
+    "identity.person"
+  ],
+  "notes": [
+    "Explicit opt-in only. Model execution does not certify identification accuracy."
+  ]
+}

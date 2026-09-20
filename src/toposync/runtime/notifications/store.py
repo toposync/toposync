@@ -417,6 +417,20 @@ class NotificationStore:
                     except Exception:
                         existing_payload = {}
 
+                    occurrence_id = incoming_payload.get("notification_occurrence_id")
+                    if (
+                        isinstance(occurrence_id, str)
+                        and len(occurrence_id) == 64
+                        and all(character in "0123456789abcdef" for character in occurrence_id)
+                        and occurrence_id == existing_payload.get("notification_occurrence_id")
+                        and _payload_is_closed(existing_payload)
+                    ):
+                        # Replay não altera nem reabre uma ocorrência explicitamente identificada.
+                        existing_row = self._get_row_unlocked(self._conn, nid)
+                        if existing_row is None:
+                            raise RuntimeError("Failed to read closed notification")
+                        return self._row_to_record(existing_row), False
+
                     if _payload_is_closed(existing_payload) and not _payload_is_closed(
                         incoming_payload
                     ):

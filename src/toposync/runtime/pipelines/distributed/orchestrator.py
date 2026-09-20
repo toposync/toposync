@@ -24,6 +24,7 @@ from ..compiler import (
     PipelineGraphCompiler,
     SharedNodeOccurrence,
 )
+from ..execution_scheduler import ExecutionScheduler
 from ..execution import PipelineRuntime, PipelineRuntimeDependencies
 from ..operator_registry import OperatorRegistry
 from ..observability import (
@@ -33,8 +34,9 @@ from ..observability import (
 )
 from ..runtime import BoundedChannel, DropPolicy
 from ..shared_runtime import PipelineBundleRuntime, SharedRuntimeBuildError
-from .plan import build_distributed_graphs
+from .plan import build_distributed_graphs, required_transport_capabilities
 from .transport import HttpProcessingTransport, PROCESSING_READY_EVENT_TYPE
+from .stream_contract import PRIVATE_INBOX_MAX_ITEMS, ProcessingContinuityError
 
 
 logger = logging.getLogger("toposync.pipelines.orchestrator")
@@ -63,6 +65,7 @@ class _ServerHandle:
     config_payload: dict[str, Any] = field(default_factory=dict)
     last_event_id: int = 0
     event_epoch: str = ""
+    continuity_error: str | None = None
     started_at: float = field(default_factory=time.time)
     observability_applied_records: int = 0
     observability_skipped_records: int = 0
@@ -79,8 +82,12 @@ def _remote_config_payload(
     pipelines: list[Pipeline],
     *,
     settings_payload: dict[str, Any],
+    registry: OperatorRegistry | None = None,
 ) -> dict[str, Any]:
     return {
+        "required_capabilities": sorted(required_transport_capabilities(pipelines, registry))
+        if registry
+        else [],
         "pipelines": [p.model_dump(mode="json") for p in pipelines],
         "settings": settings_payload,
     }
@@ -105,6 +112,8 @@ class PipelinesOrchestrator:
         self._files_dir = files_dir
         self._poll_interval_s = float(poll_interval_s)
         self._runtime_deps_base = runtime_dependencies or PipelineRuntimeDependencies()
+        if self._runtime_deps_base.execution_scheduler is None:
+            self._runtime_deps_base.execution_scheduler = ExecutionScheduler()
 
         self._stop = asyncio.Event()
         self._reload = asyncio.Event()
@@ -133,6 +142,7 @@ class PipelinesOrchestrator:
                 pass
             self._task = None
         await self._stop_all()
+        await self._runtime_deps_base.execution_scheduler.shutdown()
 
     def trigger_reload(self) -> None:
         self._reload.set()
@@ -182,6 +192,7 @@ class PipelinesOrchestrator:
                 "started_at": handle.started_at,
                 "last_event_id": handle.last_event_id,
                 "event_epoch": handle.event_epoch,
+                "continuity_error": handle.continuity_error,
                 "observability_applied_records": handle.observability_applied_records,
                 "observability_skipped_records": handle.observability_skipped_records,
             }
@@ -213,7 +224,9 @@ class PipelinesOrchestrator:
             try:
                 info = handle.runtime.graph_runtime_info(graph_id=name)
                 info["mode"] = handle.mode
-                info["processing_server_id"] = getattr(handle.pipeline, "processing_server_id", "local")
+                info["processing_server_id"] = getattr(
+                    handle.pipeline, "processing_server_id", "local"
+                )
                 info["started_at"] = handle.started_at
                 graphs.append(info)
             except Exception as exc:  # noqa: BLE001
@@ -308,8 +321,9 @@ class PipelinesOrchestrator:
                     [p.name for p in group],
                 )
                 continue
+            private_stream = "private_artifacts_v1" in required_transport_capabilities(group, self._registry)
             for p in group:
-                await self._start_origin_pipeline_for_remote(p)
+                await self._start_origin_pipeline_for_remote(p, private_stream=private_stream)
             await self._start_remote_server(server, group, settings_payload=settings_payload)
 
     async def _sync_remote_settings(
@@ -321,11 +335,13 @@ class PipelinesOrchestrator:
         ok = True
         for sid, group in remote_groups.items():
             handle = self._servers.get(sid)
-            if handle is None:
+            if handle is None or handle.continuity_error:
                 ok = False
                 logger.warning("processing server %s is not connected; settings sync deferred", sid)
                 continue
-            payload = _remote_config_payload(group, settings_payload=settings_payload)
+            payload = _remote_config_payload(
+                group, settings_payload=settings_payload, registry=self._registry
+            )
             handle.config_payload = payload
             try:
                 await handle.transport.push_config(payload)
@@ -342,7 +358,7 @@ class PipelinesOrchestrator:
     ) -> None:
         for sid, group in remote_groups.items():
             handle = self._servers.get(sid)
-            if handle is None:
+            if handle is None or handle.continuity_error:
                 continue
             expected_names = {p.name for p in group}
             try:
@@ -358,7 +374,9 @@ class PipelinesOrchestrator:
             }
             if bool(status.get("active")) and expected_names.issubset(remote_names):
                 continue
-            payload = _remote_config_payload(group, settings_payload=settings_payload)
+            payload = _remote_config_payload(
+                group, settings_payload=settings_payload, registry=self._registry
+            )
             handle.config_payload = payload
             try:
                 await handle.transport.push_config(payload)
@@ -511,16 +529,17 @@ class PipelinesOrchestrator:
             pipeline=pipeline, runtime=runtime, started_at=time.time(), mode="local"
         )
 
-    async def _start_origin_pipeline_for_remote(self, pipeline: Pipeline) -> None:
+    async def _start_origin_pipeline_for_remote(self, pipeline: Pipeline, *, private_stream: bool | None = None) -> None:
         graphs = build_distributed_graphs(pipeline, self._registry)
         if graphs.origin_graph is None:
             logger.warning("pipeline has no origin graph name=%s (skipping)", pipeline.name)
             return
 
+        private = private_stream if private_stream is not None else "private_artifacts_v1" in required_transport_capabilities([pipeline], self._registry)
         inbox = BoundedChannel[dict[str, Any]](
             name=f"origin_inbox[{pipeline.name}]",
-            maxsize=64,
-            drop_policy=DropPolicy.DROP_OLDEST,
+            maxsize=PRIVATE_INBOX_MAX_ITEMS if private else 64,
+            drop_policy=DropPolicy.BLOCK if private else DropPolicy.DROP_OLDEST,
         )
         self._inboxes[pipeline.name] = inbox
         origin_pipeline = Pipeline(name=pipeline.name, graph=graphs.origin_graph)
@@ -573,12 +592,15 @@ class PipelinesOrchestrator:
             username=getattr(server, "username", ""),
             password=getattr(server, "password", ""),
         )
-        payload = _remote_config_payload(pipelines, settings_payload=settings_payload)
+        payload = _remote_config_payload(
+            pipelines, settings_payload=settings_payload, registry=self._registry
+        )
 
         async def pump() -> None:
             last_event_id = 0
             event_epoch = ""
             backoff_s = 0.5
+            private = "private_artifacts_v1" in payload.get("required_capabilities", [])
 
             async def acknowledge() -> None:
                 handle = self._servers.get(server.id)
@@ -590,6 +612,8 @@ class PipelinesOrchestrator:
                         await transport.ack(last_event_id, event_epoch=event_epoch)
                     else:
                         await transport.ack(last_event_id)
+                except ProcessingContinuityError:
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     # An ACK failure does not prove the data stream failed. Its
                     # accepted inbox packets must remain available to consumers.
@@ -604,8 +628,10 @@ class PipelinesOrchestrator:
                             if handle is not None and handle.config_payload
                             else dict(payload)
                         )
+                        private = "private_artifacts_v1" in config_payload.get("required_capabilities", [])
                         await transport.push_config(config_payload)
-                        await self._resume_remote_origins(config_payload)
+                        if not private:
+                            await self._resume_remote_origins(config_payload)
                         async for event in transport.stream_events(
                             last_event_id=last_event_id, event_epoch=event_epoch,
                         ):
@@ -616,7 +642,7 @@ class PipelinesOrchestrator:
                                 eid = 0
                             event_type = str(event.get("event_type") or "").strip()
                             incoming_epoch = str(event.get("event_epoch") or "").strip()
-                            if event_type == PROCESSING_READY_EVENT_TYPE:
+                            if not private and event_type == PROCESSING_READY_EVENT_TYPE:
                                 if incoming_epoch and incoming_epoch != event_epoch:
                                     if event_epoch:
                                         await self._suspend_remote_origins(server.id)
@@ -624,9 +650,9 @@ class PipelinesOrchestrator:
                                     event_epoch = incoming_epoch
                                     last_event_id = 0
                                 continue
-                            if incoming_epoch != event_epoch:
+                            if not private and incoming_epoch != event_epoch:
                                 continue
-                            if event_epoch and eid > 0 and eid <= last_event_id:
+                            if not private and event_epoch and eid > 0 and eid <= last_event_id:
                                 await acknowledge()
                                 continue
                             if event_type == OBSERVABILITY_BATCH_EVENT_TYPE:
@@ -636,6 +662,8 @@ class PipelinesOrchestrator:
                                     await acknowledge()
                                 continue
                             if event_type and event_type != PROJECTED_PACKET_EVENT_TYPE:
+                                if private:
+                                    raise ProcessingContinuityError("unsupported_private_event_type")
                                 if eid:
                                     last_event_id = max(last_event_id, eid)
                                     await acknowledge()
@@ -643,23 +671,38 @@ class PipelinesOrchestrator:
                             name = str(event.get("pipeline_name") or "").strip()
                             inbox = self._inboxes.get(name)
                             if inbox is None:
+                                if private:
+                                    raise ProcessingContinuityError("private_origin_inbox_missing")
                                 if eid:
                                     last_event_id = max(last_event_id, eid)
                                     await acknowledge()
                                 continue
-                            put_result = await inbox.put(event, timeout_s=0.05, cancel_event=None)
+                            put_result = await inbox.put(
+                                event, timeout_s=None if private else 0.05, cancel_event=self._stop,
+                            )
+                            if private and not put_result.accepted:
+                                raise ProcessingContinuityError("private_origin_inbox_rejected")
                             if eid and put_result.accepted:
                                 last_event_id = max(last_event_id, eid)
                                 await acknowledge()
                     except asyncio.CancelledError:
                         raise
+                    except ProcessingContinuityError as exc:
+                        handle = self._servers.get(server.id)
+                        if handle is not None:
+                            handle.continuity_error = str(exc)
+                        self._last_error = f"Processing server {server.id}: {exc}; delivery suspended"
+                        logger.error("processing continuity lost server=%s reason=%s", server.id, exc)
+                        return
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("processing pump failed server=%s: %s", server.id, exc)
-                        await self._suspend_remote_origins(server.id)
+                        if not private:
+                            await self._suspend_remote_origins(server.id)
                         await asyncio.sleep(backoff_s)
                         backoff_s = min(10.0, backoff_s * 1.5)
                         continue
-                    await self._suspend_remote_origins(server.id)
+                    if not private:
+                        await self._suspend_remote_origins(server.id)
                     await asyncio.sleep(backoff_s)
                     backoff_s = min(10.0, backoff_s * 1.5)
             except asyncio.CancelledError:
@@ -682,7 +725,9 @@ class PipelinesOrchestrator:
             await transport.push_config(payload)
         except Exception as exc:  # noqa: BLE001
             self._last_error = str(exc)
-            logger.warning("processing config push failed server=%s; will retry: %s", server.id, exc)
+            logger.warning(
+                "processing config push failed server=%s; will retry: %s", server.id, exc
+            )
 
     def _apply_processing_observability_event(
         self,

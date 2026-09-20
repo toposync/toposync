@@ -36,7 +36,11 @@ from ..telemetry import (
     create_default_pipeline_telemetry_disk_checkpoint,
     create_default_pipeline_telemetry_store,
 )
-from .plan import build_distributed_graphs
+from .plan import build_distributed_graphs, required_transport_capabilities
+from .stream_contract import (
+    PRIVATE_EVENT_MAX_BYTES, PRIVATE_REPLAY_MAX_BYTES, PRIVATE_STREAM_CAPABILITY,
+    PRIVATE_STREAM_MAX_CONNECTIONS, ProcessingContinuityError,
+)
 from .transport import PROCESSING_READY_EVENT_TYPE
 
 
@@ -66,6 +70,7 @@ def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
 
 
 class ProcessingConfig(BaseModel):
+    required_capabilities: list[str] = Field(default_factory=list, max_length=16)
     pipelines: list[Pipeline] = Field(default_factory=list)
     settings: AppSettings | None = None
 
@@ -73,6 +78,7 @@ class ProcessingConfig(BaseModel):
 class ProcessingAck(BaseModel):
     last_event_id: int = Field(default=0, ge=0)
     event_epoch: str = Field(default="", max_length=128)
+    stream_instance_id: str | None = Field(default=None, max_length=64)
 
 
 class ProcessingVisionManifestImportRequest(BaseModel):
@@ -187,6 +193,7 @@ class ProcessingServerRuntime:
         self._services = services
         self._registry = operator_registry
         self._compiler = compiler
+        self._execution_scheduler = ExecutionScheduler()
         self._pipeline_telemetry_store = pipeline_telemetry_store
         self._snapshot_store = PipelineStepSnapshotStore(files_dir=config_store.paths.files_dir)
         self.broadcaster = EventBroadcaster(max_queue_size=500)
@@ -194,15 +201,27 @@ class ProcessingServerRuntime:
         self._replay_events: deque[dict[str, Any]] = deque(maxlen=max(50, int(max_replay_events)))
         self._event_seq = 0
         self._event_epoch = uuid.uuid4().hex
+        self._stream_instance_id = uuid.uuid4().hex
+        self._private_mode = False
+        self._private_error: str | None = None
+        self._private_connections = 0
+        self._private_payloads: dict[int, str] = {}
+        self._replay_bytes = 0
+        self._private_event_max_bytes = PRIVATE_EVENT_MAX_BYTES
+        self._private_replay_max_bytes = PRIVATE_REPLAY_MAX_BYTES
+        self._config_lock = asyncio.Lock()
         self._last_acked_event_id = 0
         self._active: _ActiveBundle | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._observability_buffer: deque[dict[str, Any]] = deque()
         self._observability_flush_handle: asyncio.TimerHandle | None = None
-        self._observability_flush_interval_s = _env_float(
-            "TOPOSYNC_PROCESSING_OBSERVABILITY_FLUSH_INTERVAL_MS",
-            1000.0,
-        ) / 1000.0
+        self._observability_flush_interval_s = (
+            _env_float(
+                "TOPOSYNC_PROCESSING_OBSERVABILITY_FLUSH_INTERVAL_MS",
+                1000.0,
+            )
+            / 1000.0
+        )
         self._observability_batch_size = _env_int(
             "TOPOSYNC_PROCESSING_OBSERVABILITY_BATCH_SIZE",
             200,
@@ -224,7 +243,7 @@ class ProcessingServerRuntime:
             return
         self._loop = asyncio.get_running_loop()
 
-    async def stop(self) -> None:
+    async def stop(self, *, shutdown_scheduler: bool = True) -> None:
         active = self._active
         self._active = None
         if active is not None:
@@ -232,8 +251,16 @@ class ProcessingServerRuntime:
                 await active.runtime.stop()
             except Exception:
                 pass
+        if shutdown_scheduler:
+            await self._execution_scheduler.shutdown()
         self._recent_events.clear()
         self._replay_events.clear()
+        self._private_payloads.clear()
+        self._replay_bytes = 0
+        self._private_error = None
+        self._stream_instance_id = uuid.uuid4().hex
+        self.broadcaster.publish({"event_type": "stream_reset"})
+        self._private_mode = False
         self._event_seq = 0
         self._last_acked_event_id = 0
         self._cancel_observability_flush()
@@ -257,6 +284,15 @@ class ProcessingServerRuntime:
             "last_acked_event_id": self._last_acked_event_id,
             "recent_events": len(self._recent_events),
             "replay_events": len(self._replay_events),
+            "stream_instance_id": self._stream_instance_id,
+            "private_stream": {
+                "enabled": self._private_mode,
+                "replay_bytes": self._replay_bytes,
+                "max_replay_bytes": self._private_replay_max_bytes,
+                "max_event_bytes": self._private_event_max_bytes,
+                "connections": self._private_connections,
+                "continuity_error": self._private_error,
+            },
             "observability": {
                 "buffered_records": len(self._observability_buffer),
                 "emitted_batches": self._observability_emitted_batches,
@@ -270,12 +306,13 @@ class ProcessingServerRuntime:
 
     async def apply_config(self, payload: dict[str, Any]) -> None:
         parsed = ProcessingConfig.model_validate(payload)
-        if parsed.settings is not None:
-            await self._config_store.replace_settings(parsed.settings)
-        desired = [p for p in parsed.pipelines if getattr(p, "enabled", True) is not False]
-        self._reconcile(desired)
+        async with self._config_lock:
+            if parsed.settings is not None:
+                await self._config_store.replace_settings(parsed.settings)
+            desired = [p for p in parsed.pipelines if getattr(p, "enabled", True) is not False]
+            await self._reconcile(desired)
 
-    def _reconcile(self, desired: list[Pipeline]) -> None:
+    async def _reconcile(self, desired: list[Pipeline]) -> None:
         active = self._active
         if active is not None:
             existing_sig = json.dumps(
@@ -290,10 +327,11 @@ class ProcessingServerRuntime:
         loop = self._loop
         if loop is None:
             return
-        loop.create_task(self._apply(desired), name="toposync.processing.apply_config")
+        await self._apply(desired)
 
     async def _apply(self, desired: list[Pipeline]) -> None:
-        await self.stop()
+        await self.stop(shutdown_scheduler=False)
+        self._private_mode = "private_artifacts_v1" in required_transport_capabilities(desired, self._registry)
         if not desired:
             return
 
@@ -346,7 +384,7 @@ class ProcessingServerRuntime:
             processing_emit_projected_event=self._emit_projected_event,
             pipeline_telemetry_store=self._pipeline_telemetry_store,
             pipeline_observability_sink=self._enqueue_observability_record,
-            execution_scheduler=ExecutionScheduler(),
+            execution_scheduler=self._execution_scheduler,
             artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,
             artifact_global_counter=artifact_global_counter,
@@ -399,8 +437,53 @@ class ProcessingServerRuntime:
         summary["event_id"] = self._event_seq
         summary["event_type"] = event_type
         self._recent_events.append(summary)
-        self._replay_events.append(enriched)
-        self.broadcaster.publish(enriched)
+        if self._private_mode:
+            if self._private_error:
+                return
+            serialized = json.dumps(enriched, ensure_ascii=True, separators=(",", ":"))
+            if len(serialized) > self._private_event_max_bytes:
+                self._private_error = "event_size_limit_exceeded"
+                self.broadcaster.publish({"event_id": self._event_seq})
+                return
+            while self._replay_events and (
+                len(self._replay_events) >= self._replay_events.maxlen
+                or self._replay_bytes + len(serialized) > self._private_replay_max_bytes
+            ):
+                self._discard_replay_first()
+            if len(serialized) > self._private_replay_max_bytes:
+                self._private_error = "replay_size_limit_exceeded"
+                self.broadcaster.publish({"event_id": self._event_seq})
+                return
+            self._private_payloads[self._event_seq] = serialized
+            self._replay_bytes += len(serialized)
+            # Assinantes retêm só identificadores; o corpo tem um único dono no replay.
+            self._replay_events.append({"event_id": self._event_seq})
+            self.broadcaster.publish({"event_id": self._event_seq})
+        else:
+            self._replay_events.append(enriched)
+            self.broadcaster.publish(enriched)
+
+    def _discard_replay_first(self) -> None:
+        event = self._replay_events.popleft()
+        serialized = self._private_payloads.pop(int(event["event_id"]), None)
+        if serialized is not None:
+            self._replay_bytes -= len(serialized)
+
+    def next_private_event(self, after: int, stream_instance_id: str) -> str | None:
+        if stream_instance_id != self._stream_instance_id:
+            raise ProcessingContinuityError("processing_stream_restarted")
+        if not self._private_mode:
+            raise ProcessingContinuityError("private_stream_disabled")
+        if self._private_error:
+            raise ProcessingContinuityError(self._private_error)
+        if after > self._event_seq or after < self._last_acked_event_id:
+            raise ProcessingContinuityError("replay_cursor_unavailable")
+        if after == self._event_seq:
+            return None
+        serialized = self._private_payloads.get(after + 1)
+        if serialized is None:
+            raise ProcessingContinuityError("replay_gap")
+        return serialized
 
     def _enqueue_observability_record(self, record: dict[str, Any]) -> None:
         if not isinstance(record, dict):
@@ -455,6 +538,8 @@ class ProcessingServerRuntime:
             self._schedule_observability_flush()
 
     def replay_after(self, last_event_id: int, *, event_epoch: str = "") -> list[dict[str, Any]]:
+        if self._private_mode:
+            raise ProcessingContinuityError("Private replay must be read one event at a time")
         after = max(0, int(last_event_id))
         if event_epoch and event_epoch != self._event_epoch:
             after = 0
@@ -470,10 +555,15 @@ class ProcessingServerRuntime:
                 out.append(rec)
         return out
 
-    def ack(self, last_event_id: int, *, event_epoch: str = "") -> None:
-        if event_epoch and event_epoch != self._event_epoch:
+    def ack(self, last_event_id: int, *, event_epoch: str = "", stream_instance_id: str | None = None) -> None:
+        if not self._private_mode and event_epoch and event_epoch != self._event_epoch:
             return
         acked = max(0, int(last_event_id))
+        if self._private_mode or stream_instance_id is not None:
+            if stream_instance_id != self._stream_instance_id:
+                raise ProcessingContinuityError("processing_stream_restarted")
+            if acked > self._event_seq:
+                raise ProcessingContinuityError("ack_ahead_of_stream")
         if acked <= self._last_acked_event_id:
             return
         self._last_acked_event_id = acked
@@ -483,7 +573,7 @@ class ProcessingServerRuntime:
             except Exception:
                 rid = 0
             if rid <= acked:
-                self._replay_events.popleft()
+                self._discard_replay_first()
                 continue
             break
 
@@ -587,12 +677,31 @@ def create_processing_app() -> FastAPI:
 
     @app.post("/api/processing/config")
     async def set_processing_config(body: ProcessingConfig) -> dict[str, Any]:
+        required = required_transport_capabilities(body.pipelines, operator_registry)
+        if "private_artifacts_v1" in required:
+            required.add(PRIVATE_STREAM_CAPABILITY)
+        if required:
+            if not all(_processing_basic_auth() or ()) or _processing_basic_auth() is None:
+                raise HTTPException(
+                    status_code=409, detail="Private artifacts require processing authentication"
+                )
+            if not required.issubset(set(body.required_capabilities)):
+                raise HTTPException(
+                    status_code=409, detail="Origin did not negotiate the private artifact protocol"
+                )
+        if set(body.required_capabilities) - {"private_artifacts_v1", PRIVATE_STREAM_CAPABILITY}:
+            raise HTTPException(status_code=409, detail="Unsupported transport capability")
         await runtime.apply_config(body.model_dump(mode="json"))
-        return {"ok": True}
+        return {"ok": True, "stream_instance_id": runtime._stream_instance_id}
 
     @app.get("/api/processing/status")
     async def get_processing_status() -> dict[str, Any]:
         status = runtime.status()
+        status["transport_capabilities"] = (
+            ["private_artifacts_v1", PRIVATE_STREAM_CAPABILITY]
+            if _processing_basic_auth() and all(_processing_basic_auth())
+            else []
+        )
         timeout_s = _env_float("TOPOSYNC_PROCESSING_STATUS_DIAGNOSTICS_TIMEOUT", 3.5)
         try:
             status.update(
@@ -971,18 +1080,61 @@ def create_processing_app() -> FastAPI:
 
     @app.post("/api/processing/events/ack")
     async def ack_processing_events(body: ProcessingAck) -> dict[str, Any]:
-        runtime.ack(body.last_event_id, event_epoch=body.event_epoch)
+        try:
+            runtime.ack(body.last_event_id, event_epoch=body.event_epoch, stream_instance_id=body.stream_instance_id)
+        except ProcessingContinuityError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "last_acked_event_id": runtime.last_acked_event_id,
                 "event_epoch": runtime.ready_event()["event_epoch"]}
 
     @app.get("/api/processing/events/stream")
     async def stream_processing_events(request: Request) -> StreamingResponse:
-        q = runtime.broadcaster.subscribe()
+        private = runtime._private_mode
+        if private:
+            if request.headers.get("X-Toposync-Private-Stream") != PRIVATE_STREAM_CAPABILITY:
+                raise HTTPException(status_code=409, detail="Private stream negotiation required")
+            if runtime._private_connections >= PRIVATE_STREAM_MAX_CONNECTIONS:
+                raise HTTPException(status_code=429, detail="Private stream connection limit")
         last_event_id = 0
         try:
             last_event_id = int(request.headers.get("Last-Event-ID") or 0)
         except Exception:
             last_event_id = 0
+        stream_instance_id = runtime._stream_instance_id
+        if private:
+            async def private_gen():
+                # Alocar somente após os headers serem enviados: falha no envio inicial
+                # não pode consumir uma vaga cujo generator nunca será iniciado.
+                if runtime._private_connections >= PRIVATE_STREAM_MAX_CONNECTIONS:
+                    yield 'data: {"event_type":"continuity_error","reason":"private_stream_connection_limit"}\n\n'
+                    return
+                q = runtime.broadcaster.subscribe()
+                runtime._private_connections += 1
+                cursor = last_event_id
+                try:
+                    yield "retry: 1000\n\n"
+                    while True:
+                        serialized = runtime.next_private_event(cursor, stream_instance_id)
+                        if serialized is not None:
+                            cursor += 1
+                            yield f"data: {serialized}\n\n"
+                            serialized = None
+                            continue
+                        try:
+                            await asyncio.wait_for(q.get(), timeout=15)
+                        except TimeoutError:
+                            yield ": heartbeat\n\n"
+                except ProcessingContinuityError as exc:
+                    yield "data: " + json.dumps({"event_type": "continuity_error", "reason": str(exc)}) + "\n\n"
+                finally:
+                    runtime._private_connections -= 1
+                    runtime.broadcaster.unsubscribe(q)
+
+            return StreamingResponse(
+                private_gen(), media_type="text/event-stream",
+                headers={"X-Toposync-Stream-Instance": stream_instance_id},
+            )
+        q = runtime.broadcaster.subscribe()
         replay = deque(runtime.replay_after(
             last_event_id, event_epoch=request.headers.get("Last-Event-Epoch") or "",
         ))
@@ -995,6 +1147,8 @@ def create_processing_app() -> FastAPI:
                 yield f"event: ready\ndata: {json.dumps(ready)}\n\n"
                 while True:
                     event = replay.popleft() if replay else await q.get()
+                    if runtime._private_mode:
+                        return
                     ready = runtime.ready_event()
                     if ready["event_epoch"] != stream_epoch:
                         stream_epoch = ready["event_epoch"]

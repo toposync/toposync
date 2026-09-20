@@ -41,6 +41,8 @@ _UNSUPPORTED_OPERATOR_IDS: set[str] = {
     "vision.crop_objects",
     "vision.detect",
     "vision.group_events",
+    "vision.identity_evidence",
+    "vision.recognize_identity",
     "vision.pose_estimate",
     "vision.segment_instances",
     "vision.track",

@@ -1,0 +1,68 @@
+{
+  "model_id": "open_noodle_pet_small",
+  "display_name": "Open Noodle Pet Small",
+  "task": "embedding",
+  "runtime": "onnxruntime",
+  "artifact_format": "onnx",
+  "artifact_path": "../models/identity/open_noodle_pet_small.onnx",
+  "sha256": "6a5e2373ab348bed588cef4072f3914ca9c8bacde3e8d0651019e8dad86b24ba",
+  "input": {
+    "width": 224,
+    "height": 224,
+    "color_order": "rgb",
+    "layout": "nchw",
+    "resize_mode": "stretch",
+    "tensor_name": "input",
+    "rescale_factor": 0.00392156862745098,
+    "normalization": {
+      "mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "std": [
+        0.229,
+        0.224,
+        0.225
+      ]
+    }
+  },
+  "postprocess": {
+    "type": "pet_identity_rgb_v1",
+    "output_name": "embedding"
+  },
+  "classes": {
+    "labels": [
+      "cat",
+      "dog"
+    ]
+  },
+  "license": {
+    "code_license": "Apache-2.0 (ONNX Runtime; no Gallery code included)",
+    "weights_license": "Apache-2.0",
+    "redistribution_allowed": true,
+    "commercial_use_status": "upstream_license_notice_required",
+    "dataset_notes": "Producer declares Dogs-World CC0 and Cat Individual Images CC BY; dataset metadata and camera-domain evaluation remain separate gates."
+  },
+  "acquisition": {
+    "mode": "auto_download",
+    "source_url": "https://huggingface.co/open-noodle/pet-recognition-small/resolve/9dd4c915be29a81b116b3e30eb996c59d0e7ede0/recognition/model.onnx",
+    "guide_url": "https://huggingface.co/open-noodle/pet-recognition-small",
+    "explicit_consent_required": true
+  },
+  "provenance": {
+    "origin": "upstream",
+    "source_url": "https://huggingface.co/open-noodle/pet-recognition-small/resolve/9dd4c915be29a81b116b3e30eb996c59d0e7ede0/recognition/model.onnx",
+    "source_ref": "9dd4c915be29a81b116b3e30eb996c59d0e7ede0"
+  },
+  "hardware_profiles": {
+    "cpu": true
+  },
+  "capabilities": [
+    "identity.cat",
+    "identity.dog"
+  ],
+  "notes": [
+    "Explicit opt-in only. Model execution does not certify identification accuracy."
+  ]
+}

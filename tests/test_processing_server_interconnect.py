@@ -29,6 +29,7 @@ from toposync.runtime.pipelines import (
     TransformOperatorRuntime,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.pipelines.stats import PipelineStatsStore
 from toposync.runtime.pipelines.telemetry import PipelineTelemetryStore
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
@@ -490,6 +491,13 @@ def _register_settings_gate_operator(
     )
 
 
+def _current_probe_graph(graph: dict[str, Any], *, name: str) -> dict[str, Any]:
+    # Atualizar só o envelope das fixtures; operadores e assertions permanecem iguais.
+    return build_pipeline_graph_v2(
+        graph_uid=name, **{key: value for key, value in graph.items() if key != "schema_version"}
+    )
+
+
 def _processing_probe_graph(*, expected_packets: int) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -671,7 +679,7 @@ def test_processing_server_http_interconnect_executes_remote_workload(
                 Pipeline(
                     name="processing_server_probe",
                     processing_server_id="edge_gpu",
-                    graph=_processing_probe_graph(expected_packets=expected_packets),
+                    graph=_current_probe_graph(_processing_probe_graph(expected_packets=expected_packets), name="processing_probe"),
                 )
             )
 
@@ -802,7 +810,7 @@ def test_processing_server_syncs_settings_updates_to_running_remote_pipeline(
                 Pipeline(
                     name="processing_settings_sync",
                     processing_server_id="edge_gpu",
-                    graph=_settings_sync_probe_graph(),
+                    graph=_current_probe_graph(_settings_sync_probe_graph(), name="settings_sync_probe"),
                 )
             )
 

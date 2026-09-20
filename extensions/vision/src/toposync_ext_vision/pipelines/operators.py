@@ -344,6 +344,9 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             owner="com.toposync.vision",
             runtime_factory=lambda config, _deps: VisionGestureRecognizeRuntime(config),
         )
+    from ..identity.pipelines import register_identity_operators
+
+    register_identity_operators(registry)
     if registry.get("vision.synthetic_detection_source") is None:
         registry.register_operator(
             operator_id="vision.synthetic_detection_source",
@@ -568,7 +571,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             config_model=VisionGroupEventsConfig,
             inputs=[{"name": "in", "required": True}],
             outputs=[{"name": "out"}],
-            capabilities=["vision", "tracking", "grouping", "split_stream"],
+            capabilities=["vision", "tracking", "grouping", "split_stream", "origin_compatible"],
             defaults=VisionGroupEventsConfig().model_dump(),
             execution_mode="thread_pool",
             requires_payload_keys=["subject"],

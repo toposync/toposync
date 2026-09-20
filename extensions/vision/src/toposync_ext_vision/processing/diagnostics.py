@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..registry import ModelRegistry, build_default_model_registry, get_default_model_install_manager
+from ..registry import (
+    ModelRegistry,
+    build_default_model_registry,
+    get_default_model_install_manager,
+)
 from ..registry.builtin_data import OFFICIAL_DETECTION_MODEL_IDS
 from ..registry.local_build import probe_local_builder
 from ..registry.recommendations import (
@@ -64,15 +68,27 @@ def _collect_local_builder_summary(
             }
         )
     supported_candidates = [item for item in candidates if bool(item.get("supported"))]
-    primary = supported_candidates[0] if supported_candidates else (candidates[0] if candidates else {})
-    local_build_jobs = [item for item in list(install_jobs or []) if str(item.get("source_kind") or "").strip() == "local_build"]
+    primary = (
+        supported_candidates[0] if supported_candidates else (candidates[0] if candidates else {})
+    )
+    local_build_jobs = [
+        item
+        for item in list(install_jobs or [])
+        if str(item.get("source_kind") or "").strip() == "local_build"
+    ]
     last_job = local_build_jobs[0] if local_build_jobs else None
     return {
         "supported": bool(supported_candidates),
-        "reason": str(primary.get("reason") or ("unsupported" if candidates else "unconfigured")).strip(),
+        "reason": str(
+            primary.get("reason") or ("unsupported" if candidates else "unconfigured")
+        ).strip(),
         "backend": str(primary.get("backend") or "").strip(),
         "runtime": str(primary.get("runtime") or "").strip(),
-        "supported_models": [str(item.get("model_id") or "").strip() for item in supported_candidates if str(item.get("model_id") or "").strip()],
+        "supported_models": [
+            str(item.get("model_id") or "").strip()
+            for item in supported_candidates
+            if str(item.get("model_id") or "").strip()
+        ],
         "candidates": candidates,
         "last_job": dict(last_job) if isinstance(last_job, dict) else None,
     }
@@ -111,7 +127,11 @@ def collect_vision_diagnostics(
     system_info: dict[str, Any] | None = None,
     data_dir: str | None = None,
 ) -> dict[str, Any]:
-    registry = model_registry if isinstance(model_registry, ModelRegistry) else build_default_model_registry()
+    registry = (
+        model_registry
+        if isinstance(model_registry, ModelRegistry)
+        else build_default_model_registry()
+    )
     install_manager = get_default_model_install_manager(data_dir=data_dir)
     backends = collect_vision_runtime_backends()
     onnxruntime_backend = next(
@@ -158,6 +178,17 @@ def collect_vision_diagnostics(
             "pose": list_official_pose_shortlist(model_registry=registry),
         },
         "task_catalogs": {
+            **{
+                task: build_task_model_catalog(
+                    task=task,
+                    system_info=system_info,
+                    execution_providers=execution_providers,
+                    runtime_backends=backends,
+                    model_registry=registry,
+                    install_manager=install_manager,
+                )
+                for task in ("embedding", "face_detection")
+            },
             "classification": build_task_model_catalog(
                 task="classification",
                 system_info=system_info,

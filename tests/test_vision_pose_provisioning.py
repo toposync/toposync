@@ -111,7 +111,8 @@ def test_builtin_pose_is_pinned_official_and_uses_managed_store(tmp_path, monkey
     assert acquisition["install_supported"] is True
     assert acquisition["install_source_kind"] == "download"
     assert acquisition["install_source_label"] == manifest.acquisition.source_url
-    assert "pose" in collect_vision_runtime_backends()[0]["tasks"]
+    backends = {item["id"]: item for item in collect_vision_runtime_backends()}
+    assert "pose" in backends["onnxruntime"]["tasks"]
 
 
 def test_pose_catalog_checks_runtime_task_support_and_missing_artifact(tmp_path):

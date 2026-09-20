@@ -189,7 +189,7 @@ export function InteractiveStepCard({
     })
     .filter(([key]) => {
       if (step.operatorId === "core.notify") {
-        return !["title", "description", "priority", "realtime", "update_interval_seconds", "notification_type", "dedupe_key_template"].includes(key);
+        return !["title", "description", "priority", "realtime", "update_interval_seconds", "notification_type", "dedupe_key_template", "dedupe_by_occurrence"].includes(key);
       }
       return true;
     });

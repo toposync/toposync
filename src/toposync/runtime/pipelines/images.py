@@ -27,7 +27,7 @@ def resolve_image_artifact_for_data(
 ) -> tuple[str, Any | None]:
     artifact_name = normalize_artifact_name(input_artifact_name)
     artifact = packet.artifacts.get(artifact_name)
-    if artifact is None or artifact.data is None:
+    if artifact is None or artifact.private or artifact.data is None:
         return artifact_name, None
     return artifact_name, artifact.data
 
@@ -39,7 +39,7 @@ def resolve_image_artifact_for_reference(
 ) -> tuple[str, str | None]:
     artifact_name = normalize_artifact_name(input_artifact_name)
     artifact = packet.artifacts.get(artifact_name)
-    if artifact is None or not artifact.reference:
+    if artifact is None or artifact.private or not artifact.reference:
         return artifact_name, None
     return artifact_name, str(artifact.reference)
 

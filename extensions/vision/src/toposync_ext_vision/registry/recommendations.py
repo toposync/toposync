@@ -412,6 +412,7 @@ def _catalog_entry(
         "license": {
             "code_license": manifest.license.code_license,
             "weights_license": manifest.license.weights_license,
+            "dataset_notes": manifest.license.dataset_notes,
             "commercial_use_status": manifest.license.commercial_use_status,
             "redistribution_allowed": bool(manifest.license.redistribution_allowed),
             "official_build_allowed": bool(manifest.license.official_build_allowed),

@@ -407,6 +407,7 @@ class BoundedChannel(Generic[T]):
         self._pipeline_artifact_counter = pipeline_artifact_counter
         self._global_artifact_counter = global_artifact_counter
         self._queue: asyncio.Queue[_Envelope[T]] = asyncio.Queue(maxsize=self.maxsize)
+        self._item_available = asyncio.Event()
         self._metrics = _ChannelMetrics()
 
     @property
@@ -732,6 +733,7 @@ class BoundedChannel(Generic[T]):
         return dropped, dropped_bytes
 
     def _on_put_accepted(self) -> None:
+        self._item_available.set()
         self._metrics.put_accepted += 1
         depth = self.depth
         if depth > self._metrics.max_depth_seen:
@@ -764,37 +766,36 @@ class BoundedChannel(Generic[T]):
         timeout_s: float | None,
         cancel_event: asyncio.Event | None,
     ) -> _Envelope[T] | None:
-        wait_task = asyncio.create_task(self._queue.get())
-        cancel_task: asyncio.Task[bool] | None = None
-        timeout_task: asyncio.Task[bool] | None = None
-
-        if cancel_event is not None:
-            cancel_task = asyncio.create_task(cancel_event.wait())
-        if timeout_s is not None:
-            timeout_task = asyncio.create_task(asyncio.sleep(timeout_s, result=True))
-
-        done: set[asyncio.Task[Any]]
-        pending: set[asyncio.Task[Any]]
-        try:
-            pending_tasks = {wait_task}
-            if cancel_task is not None:
-                pending_tasks.add(cancel_task)
-            if timeout_task is not None:
-                pending_tasks.add(timeout_task)
-            done, pending = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            if cancel_task is not None and cancel_task.done() and cancel_task.cancelled():
-                cancel_task = None
-
-        if wait_task in done:
-            for task in pending:
-                task.cancel()
-            return wait_task.result()
-
-        wait_task.cancel()
-        for task in pending:
-            task.cancel()
-        return None
+        deadline = time.monotonic() + timeout_s if timeout_s is not None else None
+        while True:
+            # Auxiliary tasks only signal availability. They must never take ownership
+            # of an envelope that a canceled consumer can no longer deliver.
+            try:
+                return self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            if _is_canceled(cancel_event):
+                return None
+            remaining = _remaining_timeout(deadline)
+            if remaining is not None and remaining <= 0:
+                return None
+            self._item_available.clear()
+            available = asyncio.create_task(self._item_available.wait())
+            tasks = {available}
+            if cancel_event is not None:
+                tasks.add(asyncio.create_task(cancel_event.wait()))
+            try:
+                done, _ = await asyncio.wait(tasks, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if available not in done:
+                return None
+            # Check the queue before the cancel event, preserving the established
+            # item-wins tie rule. There is no await between removal and delivery.
+            # Another consumer may have won the item; in that case wait again.
 
 
 class KeyedBoundedChannel(Generic[T]):

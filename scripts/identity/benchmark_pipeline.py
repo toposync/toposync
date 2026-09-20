@@ -63,6 +63,7 @@ async def trial(
     visits: int,
     interval: float,
     parallel: bool = False,
+    context_only: bool = False,
 ) -> dict:
     frames = {}
     for species, filename, digest in SOURCES:
@@ -182,6 +183,10 @@ async def trial(
         runtime_factory=lambda config, dependencies: Source(),
     )
     nodes = [{"id": "source", "operator": "test.load_source", "config": {}}]
+    if context_only:
+        nodes.append(
+            {"id": "context", "operator": "vision.identity_context", "config": {"enabled": True}}
+        )
     if enabled:
         nodes.extend(
             [
@@ -274,8 +279,11 @@ async def trial(
             assert recognition_lifecycles == lifecycles
         if enabled:
             extraction_worker = await runtime.dependencies.execution_scheduler.run_sync(
-                worker_resources, mode="process_pool", process_pool_key="vision.identity_evidence",
-                concurrency_key="vision.identity_evidence", max_concurrency=1,
+                worker_resources,
+                mode="process_pool",
+                process_pool_key="vision.identity_evidence",
+                concurrency_key="vision.identity_evidence",
+                max_concurrency=1,
             )
 
     finally:
@@ -304,7 +312,11 @@ async def trial(
     values = [row["milliseconds"] for row in latencies]
     return {
         "identity_enabled": enabled,
-        "topology": "parallel_experiment" if parallel else "sequential",
+        "topology": "context_only_diagnostic"
+        if context_only
+        else "parallel_experiment"
+        if parallel
+        else "sequential",
         "parallel_experiment_limit": "Existing fanout shares backpressure and memory; bounded workload only"
         if parallel
         else None,
@@ -325,12 +337,31 @@ async def trial(
         "timing_by_species": {
             species: {
                 "frame_bytes": int(frames[species].nbytes),
-                "source_to_notification_p95_ms": float(np.percentile(
-                    [row["milliseconds"] for row in latencies if row["species"] == species], 95)),
-                "source_to_upsert_p95_ms": float(np.percentile(
-                    [row["source_to_upsert_ms"] for row in latencies if row["species"] == species], 95)),
-                "notification_storage_p95_ms": float(np.percentile(
-                    [row["notification_storage_ms"] for row in latencies if row["species"] == species], 95)),
+                "source_to_notification_p95_ms": float(
+                    np.percentile(
+                        [row["milliseconds"] for row in latencies if row["species"] == species], 95
+                    )
+                ),
+                "source_to_upsert_p95_ms": float(
+                    np.percentile(
+                        [
+                            row["source_to_upsert_ms"]
+                            for row in latencies
+                            if row["species"] == species
+                        ],
+                        95,
+                    )
+                ),
+                "notification_storage_p95_ms": float(
+                    np.percentile(
+                        [
+                            row["notification_storage_ms"]
+                            for row in latencies
+                            if row["species"] == species
+                        ],
+                        95,
+                    )
+                ),
             }
             for species in frames
         },
@@ -352,7 +383,6 @@ async def trial(
         "resource_scope": "Parent process; extraction worker measured separately",
         "extraction_worker": extraction_worker,
         "rss_native_units": "bytes" if platform.system() == "Darwin" else "kibibytes",
-
         "all_expected_notifications_and_lifecycles": True,
     }
 
@@ -364,11 +394,18 @@ def main():
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--enabled", action="store_true")
     parser.add_argument(
+        "--context-only",
+        action="store_true",
+        help="Diagnose link/operator overhead without inference",
+    )
+    parser.add_argument(
         "--parallel", action="store_true", help="Experimental fanout; requires --enabled"
     )
     parser.add_argument("--visits", type=int, default=30)
     parser.add_argument("--interval", type=float, default=0.04)
     args = parser.parse_args()
+    if args.context_only and (args.enabled or args.parallel):
+        parser.error("--context-only cannot run inference")
     if args.parallel and not args.enabled:
         parser.error("--parallel requires --enabled")
     if not 6 <= args.visits <= 300 or not 0.01 <= args.interval <= 1:
@@ -382,6 +419,7 @@ def main():
             args.output_dir,
             enabled=args.enabled,
             parallel=args.parallel,
+            context_only=args.context_only,
             visits=args.visits,
             interval=args.interval,
         )

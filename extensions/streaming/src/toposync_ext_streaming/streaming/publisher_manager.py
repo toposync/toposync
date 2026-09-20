@@ -449,8 +449,14 @@ class _PublisherRuntime:
                     "bgr24",
                     "-s",
                     f"{width}x{height}",
-                    "-r",
+                    "-framerate",
                     f"{fps:.3f}",
+                    # The writer delivers the latest available frame, not a
+                    # constant-rate file. Numbering arrivals at nominal fps
+                    # compresses live time whenever capture or processing is
+                    # slower and repeatedly drains the browser's live buffer.
+                    "-use_wallclock_as_timestamps",
+                    "1",
                     "-i",
                     "pipe:0",
                 ]
@@ -492,6 +498,10 @@ class _PublisherRuntime:
             args.extend(["-bf", "0"])
 
         filters: list[str] = []
+        if self._config.input_settings.mode == "rawvideo_pipe":
+            # Keep real arrival timestamps without manufacturing duplicate
+            # frames to meet the configured upper frame-rate limit.
+            args.extend(["-fps_mode", "vfr"])
         if self._config.input_settings.mode == "rtsp_pull":
             filters.append(f"fps={fps:.3f}")
             filters.append(f"scale={width}:{height}:force_original_aspect_ratio=decrease")

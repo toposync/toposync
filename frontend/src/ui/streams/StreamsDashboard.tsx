@@ -1,3 +1,4 @@
+import { playbackEndpointIdentity } from './playbackEndpointIdentity';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type Hls from "hls.js";
 import type { LiveViewFrame } from "@toposync/plugin-api";
@@ -1718,7 +1719,7 @@ function StreamAdvancedSettingsModal({
   );
 }
 
-function StreamTilePlayer({
+export function StreamTilePlayer({
   onFrame, controls = true,
   transmissionId,
   outputId,
@@ -1821,7 +1822,22 @@ function StreamTilePlayer({
   const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
   const [fullscreenActive, setFullscreenActive] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  usePresentedFrame(videoRef, active && status === "playing" && transport !== "jsmpeg", `${transmissionId}:${transport}:${mseUrl}:${webrtcUrl}:${hlsUrl}`, onFrame ? frame => {
+  const latestEndpoints = useRef({ mseUrl, hlsUrl, hlsNativeUrl, webrtcUrl, jsmpegUrl });
+  latestEndpoints.current = { mseUrl, hlsUrl, hlsNativeUrl, webrtcUrl, jsmpegUrl };
+  const endpointsIdentity = [mseUrl, hlsUrl, hlsNativeUrl, webrtcUrl, jsmpegUrl].map(playbackEndpointIdentity).join('\0');
+  const activeTransport = useRef(transport);
+  activeTransport.current = transport;
+  const previousHlsCredential = useRef({ hlsUrl, hlsNativeUrl });
+  const [hlsCredentialRevision, setHlsCredentialRevision] = useState(0);
+  useEffect(() => {
+    const previous = previousHlsCredential.current;
+    previousHlsCredential.current = { hlsUrl, hlsNativeUrl };
+    // HLS fetches new segments with its URL. Preserve its existing renewal
+    // behavior, but do not interrupt an already authenticated MSE/WebRTC socket.
+    if (activeTransport.current === 'hls' && (previous.hlsUrl !== hlsUrl || previous.hlsNativeUrl !== hlsNativeUrl))
+      setHlsCredentialRevision(value => value + 1);
+  }, [hlsUrl, hlsNativeUrl]);
+  usePresentedFrame(videoRef, active && status === "playing" && transport !== "jsmpeg", `${transmissionId}:${transport}:${endpointsIdentity}`, onFrame ? frame => {
     const selectedId = transport === "mse" ? mseOutputId : transport === "webrtc" ? webrtcOutputId : hlsOutputId;
     const output = urls?.outputs.find(output => output.protocol === transport && output.output_id === selectedId);
     const resolutionMatches = frame && output?.resolution?.width === frame.width && output?.resolution?.height === frame.height;
@@ -2404,6 +2420,7 @@ function StreamTilePlayer({
     };
 
     const startMsePlayback = async (video: HTMLVideoElement): Promise<void> => {
+      const { mseUrl } = latestEndpoints.current;
       if (!mseUrl) throw new Error("MSE URL is not available.");
       if (!canUseMse()) throw new Error("MediaSource is not available in this browser.");
       setTransport("mse");
@@ -2424,8 +2441,12 @@ function StreamTilePlayer({
           return;
         }
         let settled = false;
+        let playbackReady = false;
+        let frameWaitStarted = false;
         let sourceBuffer: SourceBuffer | null = null;
         const queue: ArrayBuffer[] = [];
+        let queuedBytes = 0;
+        let lastTrimTime = 0;
         const isActiveMseSession = (socket?: WebSocket | null) =>
           !cancelled &&
           mediaSource === localMediaSource &&
@@ -2438,8 +2459,15 @@ function StreamTilePlayer({
         const flush = () => {
           if (!isActiveMseSession() || localMediaSource.readyState !== "open") return;
           if (!sourceBuffer || sourceBuffer.updating || queue.length === 0) return;
+          if (video.currentTime - lastTrimTime > 10 && sourceBuffer.buffered.length && sourceBuffer.buffered.start(0) < video.currentTime - 31) {
+            lastTrimTime = video.currentTime;
+            try { sourceBuffer.remove(0, video.currentTime - 30); }
+            catch (error) { rejectOnce(error); }
+            return;
+          }
           const next = queue.shift();
           if (!next) return;
+          queuedBytes -= next.byteLength;
           try {
             sourceBuffer.appendBuffer(next);
           } catch (error) {
@@ -2448,12 +2476,23 @@ function StreamTilePlayer({
         };
         const resolveOnce = () => {
           if (settled) return;
+          playbackReady = true;
           settled = true;
           window.clearTimeout(timeoutId);
           resolve();
         };
         const rejectOnce = (error: unknown) => {
-          if (settled) return;
+          if (!isActiveMseSession()) return;
+          if (settled) {
+            if (!playbackReady) return;
+            playbackReady = false;
+            const message = asErrorMessage(error);
+            setStatus("error");
+            setErrorText(message);
+            destroyPlayback();
+            scheduleRetry(message);
+            return;
+          }
           settled = true;
           window.clearTimeout(timeoutId);
           reject(error);
@@ -2461,6 +2500,7 @@ function StreamTilePlayer({
         const openMseSocket = (attempt: number) => {
           if (!isActiveMseSession() || settled || sourceBuffer) return;
           const socket = new WebSocket(wsUrl);
+          let warmupRetryScheduled = false;
           mseSocket = socket;
           socket.binaryType = "arraybuffer";
           socket.addEventListener("open", () => {
@@ -2477,10 +2517,14 @@ function StreamTilePlayer({
               severity: event.wasClean ? "debug" : "warn",
               data: withTransportTelemetry({ code: event.code, reason: event.reason, was_clean: event.wasClean, attempt }),
             });
+            if (!warmupRetryScheduled)
+              rejectOnce(new Error("MSE connection closed."));
           });
           socket.addEventListener("error", () => {
             if (!isActiveMseSession(socket)) return;
-            if (attempt < MSE_CONNECT_ATTEMPTS) {
+            if (!sourceBuffer && !settled && attempt < MSE_CONNECT_ATTEMPTS) {
+              if (warmupRetryScheduled) return;
+              warmupRetryScheduled = true;
               recordWebPlaybackEvent("mse_warmup_retry", {
                 severity: "warn",
                 data: withTransportTelemetry({ output_id: mseOutputId ?? hlsOutputId ?? outputId, attempt }),
@@ -2497,6 +2541,8 @@ function StreamTilePlayer({
                 const mseError = errorFromMseControlMessage(event.data);
                 if (mseError) {
                   if (attempt < MSE_CONNECT_ATTEMPTS && isRetriableMseStartupError(mseError)) {
+                    if (warmupRetryScheduled) return;
+                    warmupRetryScheduled = true;
                     recordWebPlaybackEvent("mse_warmup_retry", {
                       severity: "warn",
                       message: mseError,
@@ -2539,22 +2585,33 @@ function StreamTilePlayer({
               return;
             }
             if (!(event.data instanceof ArrayBuffer)) return;
+            if (queuedBytes + event.data.byteLength > 16 * 1024 * 1024) {
+              rejectOnce(new Error("MSE decoder queue exceeded its limit."));
+              return;
+            }
             queue.push(event.data);
+            queuedBytes += event.data.byteLength;
             flush();
-            resolveOnce();
+            if (!frameWaitStarted) {
+              frameWaitStarted = true;
+              window.clearTimeout(timeoutId);
+              void waitForVideoElementFrame(video, MSE_FIRST_FRAME_TIMEOUT_MS,
+                i18n.t("core.ui.streams.errors.mse_first_frame_timeout", {}, "Timed out waiting for MSE video frame."))
+                .then(() => { if (isActiveMseSession()) resolveOnce(); })
+                .catch(rejectOnce);
+            }
           });
         };
         const onSourceOpen = () => {
           if (!isActiveMseSession() || localMediaSource.readyState !== "open") return;
           openMseSocket(1);
         };
+        const onVideoError = () => rejectOnce(new Error(video.error?.message || "MSE video decoder failed."));
+        video.addEventListener("error", onVideoError);
+        nativeCleanup = () => video.removeEventListener("error", onVideoError);
         localMediaSource.addEventListener("sourceopen", onSourceOpen, { once: true });
       });
-      await waitForVideoElementFrame(
-        video,
-        MSE_FIRST_FRAME_TIMEOUT_MS,
-        i18n.t("core.ui.streams.errors.mse_first_frame_timeout", {}, "Timed out waiting for MSE video frame."),
-      );
+      if (cancelled || mediaSource !== localMediaSource || mseSessionGeneration !== sessionGeneration) return;
       setFirstFrameReady(true);
       setStatus("playing");
       setErrorText(null);
@@ -2582,6 +2639,7 @@ function StreamTilePlayer({
     };
 
     const startNativeHlsPlayback = async (video: HTMLVideoElement): Promise<void> => {
+      const { hlsNativeUrl, hlsUrl } = latestEndpoints.current;
       setTransport("hls");
       const sourceUrl = String(hlsNativeUrl || hlsUrl || "").trim();
       await probeHlsUrlForBrowser(sourceUrl);
@@ -2651,6 +2709,7 @@ function StreamTilePlayer({
     };
 
     const startHlsJsPlayback = async (video: HTMLVideoElement): Promise<void> => {
+      const { hlsUrl } = latestEndpoints.current;
       setTransport("hls");
       await probeHlsUrlForBrowser(hlsUrl ?? "");
       if (cancelled) return;
@@ -2740,6 +2799,7 @@ function StreamTilePlayer({
     };
 
     const startWebRtcPlayback = async (video: HTMLVideoElement): Promise<void> => {
+      const { webrtcUrl } = latestEndpoints.current;
       if (!webrtcUrl) throw new Error(i18n.t("core.ui.streams.errors.webrtc_url_missing", {}, "WebRTC URL is not available."));
       if (!canUseWebRtc()) throw new Error(i18n.t("core.ui.streams.errors.webrtc_unsupported_browser", {}, "WebRTC is not supported in this browser."));
 
@@ -2890,6 +2950,7 @@ function StreamTilePlayer({
     };
 
     const startJsmpegPlayback = async (): Promise<void> => {
+      const { jsmpegUrl } = latestEndpoints.current;
       if (!jsmpegUrl) throw new Error("JSMpeg URL is not available.");
       const canvas = jsmpegCanvasRef.current;
       if (!canvas) throw new Error("JSMpeg canvas is not available.");
@@ -3425,12 +3486,11 @@ function StreamTilePlayer({
     };
   }, [
     hlsAuthHeader,
-    hlsNativeUrl,
+    endpointsIdentity,
+    hlsCredentialRevision,
     hlsQualityProfileId,
-    hlsUrl,
     hlsOutputId,
     mseOutputId,
-    mseUrl,
     outputId,
     allowMse,
     allowHls,
@@ -3439,7 +3499,6 @@ function StreamTilePlayer({
     preferMseFirst,
     preferWebRtcFirst,
     jsmpegOutputId,
-    jsmpegUrl,
     playbackActive,
     playbackPlan.effectiveMode,
     playbackPlan.webRtcBlocked,
@@ -3449,7 +3508,6 @@ function StreamTilePlayer({
     withTransportTelemetry,
     webrtcAuthHeader,
     webrtcOutputId,
-    webrtcUrl,
   ]);
 
   const playbackStatusLabel = useMemo(() => {

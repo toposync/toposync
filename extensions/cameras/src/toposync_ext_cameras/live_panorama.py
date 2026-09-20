@@ -279,6 +279,7 @@ class LivePanoramaService:
             )
             started = time.monotonic()
             located = await asyncio.to_thread(session.localizer.locate, image, evidence, geometry)
+            elapsed = time.monotonic() - started
             if (
                 session.closed
                 or intention_sequence != session.sequence
@@ -286,13 +287,17 @@ class LivePanoramaService:
                 and not session.task.done()
             ):
                 return {"status": "unlocalized", "reason": "superseded_observation"}
+            if elapsed >= 1.5:
+                # Slow recognition can seed image correspondences, but its old
+                # frame must not grant pointing authority or a visible pose.
+                located = {"status": "unlocalized", "reason": "panorama_frame_not_recent"}
             output = {k: v for k, v in located.items() if k != "capture_evidence"}
             output.update(
                 observation_sequence=body.sequence,
                 epoch=body.epoch,
                 media_time=body.media_time,
                 timing_basis="browser_presented_frame",
-                estimator_ms=(time.monotonic() - started) * 1000,
+                estimator_ms=elapsed * 1000,
             )
             if located.get("status") == "localized":
                 session.last_registration = time.monotonic()
@@ -473,6 +478,13 @@ class LivePanoramaService:
                             session.phase = "error"
                 finally:
                     await camera.close()
+                try:
+                    await asyncio.to_thread(navigator.localization_replay.preserve,
+                        self.panorama.root.parent / "live-panorama-localization",
+                        {"session_id": session.id, "sequence": intention.sequence,
+                         "physical_state": scanner.physical_state})
+                except (OSError, ValueError):
+                    scanner.issues.append({"code": "localization_replay_write_failed"})
                 self.panorama._atomic(
                     directory / "live-result.json",
                     dict(

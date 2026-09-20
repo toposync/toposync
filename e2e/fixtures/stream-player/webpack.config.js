@@ -1,0 +1,1 @@
+const path=require('path');const shared=require('../live-panorama/webpack.config');module.exports={...shared,entry:path.resolve(__dirname,'index.tsx'),output:{...shared.output,path:path.resolve(__dirname,'../../../.toposync-data/stream-player-fixture')},devServer:{...shared.devServer,port:5190}};

@@ -26,6 +26,7 @@ from scipy.sparse.linalg import lsmr
 from scipy.spatial.transform import Rotation
 
 from .panorama_mapping import _rotation_basis
+from .panorama_correspondences import stationary_overlay_points
 
 ALGORITHM_VERSION = "automatic_rotation_brown_v3"
 ANALYSIS_WIDTH = 960
@@ -231,9 +232,8 @@ def _match(features: list[_FeatureImage], progress: Any, cancelled: Any) -> list
         first_keys = np.asarray([match.queryIdx for match in selected])
         second_keys = np.asarray([match.trainIdx for match in selected])
         a, b = left.points[first_keys], right.points[second_keys]
-        displacement = np.linalg.norm(a - b, axis=1)
-        if np.median(displacement) > 12:
-            stationary = displacement < 1.25
+        stationary = stationary_overlay_points(a, b)
+        if stationary.any():
             left.overlay_points.extend(map(tuple, a[stationary]))
             right.overlay_points.extend(map(tuple, b[stationary]))
             a, b = a[~stationary], b[~stationary]

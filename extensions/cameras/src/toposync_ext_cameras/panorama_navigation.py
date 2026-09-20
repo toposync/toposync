@@ -28,6 +28,7 @@ from .processing.panorama_mapping import _rotation_basis, ray_to_image_pixel
 from .processing.panorama_localization import (
     MAXIMUM_ERROR_PIXELS as MAXIMUM_LOCALIZATION_ERROR_PIXELS,
 )
+from .processing.panorama_localization_replay import LocalizationReplay
 
 MAXIMUM_NAVIGATION_COMMANDS = 64
 MAXIMUM_FINE_CORRECTIONS = MAXIMUM_RETURN_CORRECTIONS
@@ -386,6 +387,9 @@ class VisualNavigator:
         self.response: dict[str, np.ndarray] = {}
         self.response_rotations: dict[str, np.ndarray] = {}
         self.trace: list[dict[str, Any]] = []
+        self.localization_replay = LocalizationReplay()
+        self.probe_durations: dict[str, float] = {}
+        self.last_pulse_stationary = False
 
     async def locate(self) -> dict[str, Any]:
         for attempt in range(3):
@@ -394,6 +398,7 @@ class VisualNavigator:
             except PanoramaCaptureError as error:
                 if attempt == 2 or error.code not in {
                     "panorama_visual_localization_failed", "panorama_visual_support_insufficient",
+                    "panorama_frame_not_recent",
                 }:
                     raise
                 # Observe again while stopped; never reuse the last good pose or
@@ -410,8 +415,11 @@ class VisualNavigator:
             frame = await self.scanner._reference_window()
             self.scanner.last_frame = frame
         result = await asyncio.to_thread(
-            self.localizer.locate, frame["image"], frame.get("capture_evidence", {})
+            getattr(self.localizer, "locate_diagnostic", self.localizer.locate),
+            frame["image"], frame.get("capture_evidence", {})
         )
+        self.localization_replay.observe(frame, result)
+        result = {key: value for key, value in result.items() if key != "diagnostics"}
         if not 0 <= time.monotonic() - frame.get("received_monotonic", 0) <= 1.0:
             raise PanoramaCaptureError("panorama_frame_not_recent")
         if result.get("status") != "localized":
@@ -432,7 +440,7 @@ class VisualNavigator:
             raise PanoramaCaptureError("visual_route_unavailable")
         return np.arctan2(local[:2], local[2])
 
-    async def _pulse(self, axis: str, amount: float) -> None:
+    async def _pulse(self, axis: str, amount: float, *, speed: float = DEFAULT_CONTINUOUS_PULSE_SPEED) -> None:
         if self.commands >= self.maximum_commands:
             raise PanoramaCaptureError("visual_navigation_budget_exhausted")
         self.scanner._check()
@@ -442,12 +450,14 @@ class VisualNavigator:
         ):
             raise PanoramaCaptureError("panorama_frame_not_recent")
         self.commands += 1
-        self.trace.append({"axis": axis, "amount": amount, "state": "pending"})
+        self.last_pulse_stationary = False
+        self.trace.append({"axis": axis, "amount": amount, "speed": speed, "state": "pending"})
         self.scanner.checkpoint["navigation_commands"] = self.trace
         await self.scanner._persist()
         capabilities = self.scanner.capabilities
         if capabilities.get("velocity_supported") or capabilities.get("relative_supported"):
-            result = await self.scanner._pulse(axis, 1 if amount >= 0 else -1, abs(amount))
+            options = {"speed": speed} if speed != DEFAULT_CONTINUOUS_PULSE_SPEED else {}
+            result = await self.scanner._pulse(axis, 1 if amount >= 0 else -1, abs(amount), **options)
         elif capabilities.get("absolute_supported"):
             pose = await self.scanner.camera.position()
             limits = capabilities.get("limits", {}).get(axis)
@@ -464,6 +474,12 @@ class VisualNavigator:
             raise PanoramaCaptureError("visual_control_unavailable")
         self.scanner.last_frame = result["frame"]
         self.scanner.last_pose = result.get("pose", {})
+        # Only the scanner's full causal no-effect window and observed Stop
+        # can qualify a larger identification probe. A tiny fitted delta alone
+        # cannot establish that the camera stayed still.
+        self.last_pulse_stationary = bool(result.get("stationary") is True
+            and self.scanner.physical_state == "stopped")
+        self.trace[-1]["stationary_verified"] = self.last_pulse_stationary
         self.trace[-1]["state"] = "observed"
         await self.scanner._persist()
 
@@ -499,9 +515,17 @@ class VisualNavigator:
         observations = []
         self.scanner.checkpoint["navigation_target_observations"] = observations
         while waypoints:
+            located = await self.locate()
+            if len(waypoints) > 1 and ray_to_image_pixel(
+                ray, self.localizer.lens, rotation_matrix=located["rotation_matrix"]
+            ) is not None:
+                # Overlap waypoints only acquire sight of the requested ray.
+                # Once freshly visible, aim at it instead of visiting centres
+                # of every remaining reference photograph.
+                waypoints = [np.asarray(ray)]
+                last_error = None
             target = waypoints[0]
             final = len(waypoints) == 1
-            located = await self.locate()
             intermediate = False
             if (
                 ray_to_image_pixel(
@@ -582,14 +606,17 @@ class VisualNavigator:
             if not axes:
                 raise PanoramaCaptureError("visual_control_resolution_unverified")
             missing = [axis for axis in axes if axis not in self.response]
+            fine_control = bool(final and measured
+                and measured["center_error_pixels"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS * 4
+                and self.scanner.capabilities.get("velocity_supported"))
             if missing:
                 axis = max(missing, key=lambda name: abs(error[0 if name == "pan" else 1]))
-                amount = 0.12
+                amount = self.probe_durations.get(axis, 0.12)
             else:
                 matrix = np.column_stack([self.response[axis] for axis in axes])
                 commands = correction_step(
                     matrix, error,
-                    minimum=0.05 if self.scanner.capabilities.get("velocity_supported") else 0,
+                    minimum=0.05 if self.scanner.capabilities.get("velocity_supported") and not fine_control else 0,
                 )
                 index = int(np.argmax(np.abs(commands)))
                 axis, amount = axes[index], float(commands[index])
@@ -597,8 +624,26 @@ class VisualNavigator:
                     raise PanoramaCaptureError("visual_control_resolution_unverified")
             if near:
                 fine += 1
+            pulse_amount, pulse_speed = amount, DEFAULT_CONTINUOUS_PULSE_SPEED
+            if fine_control and axis in self.response:
+                # Reuse the qualified return controller's fine pulse planner.
+                # Convert the observed angular response to local image units;
+                # neither radians nor pixels are sent as native motor positions.
+                scale = measured["analysis_width"] / self.localizer.lens["width"]
+                pixel_derivative = np.array([self.localizer.lens["fx"], self.localizer.lens["fy"]]) * scale / np.cos(error) ** 2
+                plan = _continuous_pulse_plan(self.response[axis] * pixel_derivative,
+                    np.asarray(measured["error_pixels"]), amount)
+                if plan is None:
+                    raise PanoramaCaptureError("visual_control_resolution_unverified")
+                duration, pulse_speed, equivalent_amount = plan
+                pulse_amount = float(np.copysign(duration, amount))
+                amount = equivalent_amount
             before = self._error(target, located)
-            await self._pulse(axis, amount)
+            if pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED:
+                await self._pulse(axis, pulse_amount)
+            else:
+                await self._pulse(axis, pulse_amount, speed=pulse_speed)
+            self.trace[-1]["response_equivalent_amount"] = amount
             after = await self.locate()
             updated = self._error(target, after)
             response = (updated - before) / amount
@@ -616,6 +661,14 @@ class VisualNavigator:
                     ):
                         final_measurement = measured
                         break
+                if (axis in missing and self.last_pulse_stationary
+                        and axis not in self.probe_durations
+                        and self.scanner.capabilities.get("velocity_supported")):
+                    # One bounded identification step after proven no-effect;
+                    # do not repeat corrections, relax Stop, or assume a gain.
+                    self.probe_durations[axis] = 0.24
+                    self.trace[-1]["next_probe_seconds"] = 0.24
+                    continue
                 raise PanoramaCaptureError("visual_response_unavailable")
             self.response[axis] = response
             self.response_rotations[axis] = np.asarray(after["rotation_matrix"])

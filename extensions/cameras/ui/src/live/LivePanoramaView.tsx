@@ -108,7 +108,7 @@ type State = {
         verified: boolean;
     } | null;
 };
-const reasonLabel: Record<string, string> = { motion_automation_unqualified: 'Tracking e retorno automático precisam estar desativados e qualificados antes do apontamento.', external_automation_active: 'Uma automação da câmera está ativa. Apontamento suspenso.', source_panorama_changed: 'A referência mudou. Reabra a visualização antes de apontar.', panorama_visual_localization_failed: 'O vídeo atual não corresponde às referências com confiança suficiente. Apontamento indisponível.', panorama_visual_support_insufficient: 'Detalhes visuais insuficientes para localizar o vídeo.', panorama_visual_localization_ambiguous: 'Localização ambígua. Aguarde uma observação confiável.', panorama_source_geometry_changed: 'A geometria da fonte mudou. Reabra a visualização.', camera_control_permission_required: 'Sua permissão permite visualizar, mas não mover esta câmera.', stop_unconfirmed: 'Parada física não confirmada. Controle suspenso.', live_control_failed: 'Falha de controle. Verifique a câmera antes de tentar novamente.', visual_navigation_budget_exhausted: 'O limite de correções foi atingido sem confirmar a centralização.' };
+const reasonLabel: Record<string, string> = { motion_automation_unqualified: 'Tracking e retorno automático precisam estar desativados e qualificados antes do apontamento.', external_automation_active: 'Uma automação da câmera está ativa. Apontamento suspenso.', source_panorama_changed: 'A referência mudou. Reabra a visualização antes de apontar.', panorama_frame_not_recent: 'A localização demorou além do limite de segurança. Aguardando uma nova imagem para alinhar e apontar.', panorama_visual_localization_failed: 'O vídeo atual não corresponde às referências com confiança suficiente. Apontamento indisponível.', panorama_visual_support_insufficient: 'Detalhes visuais insuficientes para localizar o vídeo.', panorama_visual_localization_ambiguous: 'Localização ambígua. Aguarde uma observação confiável.', panorama_source_geometry_changed: 'A geometria da fonte mudou. Reabra a visualização.', camera_control_permission_required: 'Sua permissão permite visualizar, mas não mover esta câmera.', stop_unconfirmed: 'Parada física não confirmada. Controle suspenso.', live_control_failed: 'Falha de controle. Verifique a câmera antes de tentar novamente.', visual_navigation_budget_exhausted: 'O limite de correções foi atingido sem confirmar a centralização.' };
 const phaseLabel: Record<string, string> = { localizing: 'Localizando', unlocalized: 'Alinhamento não confirmado', aligned: 'Localizando', moving: 'Movendo', stopping: 'Parando', stabilizing: 'Estabilizando', error: 'Controle indisponível' };
 function captureDate(value: unknown): string {
     const date = new Date(typeof value === 'number' ? value * 1000 : String(value));
@@ -185,17 +185,39 @@ function LiveSession({ host, choice, refreshReferences }: {
         queuedAt: number;
     } | null>(null);
     const estimator = useRef(false), lastEstimate = useRef(0), lastFrame = useRef(0), epoch = useRef(''), externalMovingRef = useRef(false), visibleRef = useRef(initialVisibility), hiddenAt = useRef(0);
+    const localizationMisses = useRef(0);
+    const observationGeneration = useRef(0);
     const analysis = useRef(document.createElement('canvas')), probe = useRef(document.createElement('canvas'));
     const [bounds] = useState(() => savedBounds());
     const { width, height } = choice.artifact;
     // A second canonical copy lets seam-crossing saved crops remain contiguous.
     function savedBounds() { const c = choice.artifact.crop; return validPanoramaCrop(c) ? { x: c.u_start * choice.artifact.width, y: c.v_start * choice.artifact.height, width: c.u_width * choice.artifact.width, height: c.v_height * choice.artifact.height } : { x: 0, y: 0, width: choice.artifact.width, height: choice.artifact.height }; }
     function clear() { registration.current = null; renderer.current?.clear(); setAligned(false); }
-    function accept(next: State) { if (!alive.current || next.session_id !== session.current || next.sequence < sequence.current)
-        return; stateRef.current = next; setState(next); if (next.moving || next.blocked)
-        clear(); }
+    function accept(next: State) {
+        if (!alive.current || next.session_id !== session.current || next.sequence < sequence.current)
+            return;
+        if (next.sequence > sequence.current) {
+            // Another authorized controller can stop this session. Its newer
+            // sequence cancels local targets and becomes the next click's base.
+            sequence.current = next.sequence;
+            observationGeneration.current += 1;
+            pendingTarget.current = null;
+            setMarker(null);
+            clear();
+        }
+        stateRef.current = next;
+        setState(next);
+        if (next.moving || next.blocked)
+            clear();
+    }
     useEffect(() => {
         alive.current = true;
+        observationGeneration.current += 1;
+        pendingTarget.current = null;
+        stateRef.current = null;
+        setState(null);
+        setMarker(null);
+        clear();
         let identifier = '';
         let disposed = false;
         const controller = new AbortController();
@@ -238,6 +260,7 @@ function LiveSession({ host, choice, refreshReferences }: {
     useEffect(() => {
         const change = () => {
             const next = document.visibilityState === 'visible';
+            observationGeneration.current += 1;
             visibleRef.current = next;
             setVisible(next);
             if (!next) {
@@ -264,6 +287,7 @@ function LiveSession({ host, choice, refreshReferences }: {
             return;
         const controller = new AbortController();
         let disposed = false;
+        let motionEpoch: number | null = null;
         const inspect = () => {
             const query = new URLSearchParams({ source_id: choice.source_id, include_control: 'true' });
             void request(`/api/cameras/cameras/${encodeURIComponent(choice.camera_id)}/ptz/status?${query}`, 'GET', undefined, controller.signal).then(result => {
@@ -273,7 +297,20 @@ function LiveSession({ host, choice, refreshReferences }: {
                 const controlled = String(result?.control?.motion_state ?? '').toLowerCase();
                 const moving = physical.includes('MOVING') || controlled === 'moving';
                 const external = moving && !stateRef.current?.moving;
+                const nextEpoch = result?.control?.motion_epoch;
+                const epochChanged = typeof nextEpoch === 'number' && motionEpoch !== null && nextEpoch !== motionEpoch;
+                if (typeof nextEpoch === 'number')
+                    motionEpoch = nextEpoch;
+                // A short external pulse may finish between status polls. Its
+                // controller epoch still invalidates any earlier registration.
+                if (epochChanged && !stateRef.current?.moving) {
+                    observationGeneration.current += 1;
+                    pendingTarget.current = null;
+                    setMarker(null);
+                    clear();
+                }
                 if (external !== externalMovingRef.current) {
+                    observationGeneration.current += 1;
                     externalMovingRef.current = external;
                     setExternalMoving(external);
                     clear();
@@ -336,6 +373,7 @@ function LiveSession({ host, choice, refreshReferences }: {
         }
         if (epoch.current !== value.epoch) {
             epoch.current = value.epoch;
+            localizationMisses.current = 0;
             clear();
             if (stateRef.current?.moving && stateRef.current.phase !== 'stopping')
                 stop();
@@ -368,11 +406,20 @@ function LiveSession({ host, choice, refreshReferences }: {
             setError('Geometria do transporte ainda não confirmada.');
             return;
         }
-        if (!session.current || estimator.current || stateRef.current?.moving || performance.now() - lastEstimate.current < 800)
+        // Retry two rejected observations with a new presented frame, without
+        // extending registration freshness or building an analysis backlog.
+        // Persistent failure returns to the ordinary cadence.
+        const estimateInterval = localizationMisses.current > 0 && localizationMisses.current <= 2 ? 200 : 800;
+        if (!session.current || estimator.current || stateRef.current?.moving || performance.now() - lastEstimate.current < estimateInterval)
             return;
         estimator.current = true;
         lastEstimate.current = performance.now();
         const identifier = session.current, intentionSequence = sequence.current, submitted = value;
+        const generation = observationGeneration.current;
+        const observationIsCurrent = () => alive.current && visibleRef.current
+            && session.current === identifier && sequence.current === intentionSequence
+            && epoch.current === submitted.epoch && observationGeneration.current === generation
+            && !externalMovingRef.current;
         const sourceSize = value.opticalSourceSize, rect = value.contentRect;
         const sample = analysis.current;
         sample.width = Math.min(960, sourceSize.width);
@@ -380,9 +427,14 @@ function LiveSession({ host, choice, refreshReferences }: {
         sample.getContext('2d')!.drawImage(value.image, rect.x * value.width, rect.y * value.height, rect.width * value.width, rect.height * value.height, 0, 0, sample.width, sample.height);
         const started = performance.now();
         void api(`/sessions/${identifier}/observe`, 'POST', { sequence: value.sequence, epoch: value.epoch, media_time: value.mediaTime, width: sourceSize.width, height: sourceSize.height, image: sample.toDataURL('image/jpeg', .86).split(',')[1] }).then(result => {
-            if (!alive.current || !visibleRef.current || session.current !== identifier || sequence.current !== intentionSequence || epoch.current !== submitted.epoch)
+            if (!observationIsCurrent())
                 return;
+            if (result.sequence !== intentionSequence) {
+                accept(result);
+                return;
+            }
             if (result.status === 'localized' && result.geometry && performance.now() - started < 1500 && !stateRef.current?.moving) {
+                localizationMisses.current = 0;
                 registration.current = { geometry: { ...result.geometry, content_rect: rect }, signature: currentSignature, epoch: submitted.epoch, verifiedAt: performance.now() };
                 setError('');
                 const queued = pendingTarget.current;
@@ -390,6 +442,7 @@ function LiveSession({ host, choice, refreshReferences }: {
                     dispatchIntent(queued);
             }
             else {
+                localizationMisses.current += 1;
                 const observed = registration.current;
                 const stillSharesRegisteredView = !!observed
                     && observed.epoch === submitted.epoch
@@ -405,7 +458,8 @@ function LiveSession({ host, choice, refreshReferences }: {
                     setError(result.reason);
             }
             accept(result);
-        }).catch(e => { if (alive.current && session.current === identifier) {
+        }).catch(e => { if (observationIsCurrent()) {
+            localizationMisses.current = 3;
             clear();
             setError(e.message);
         } }).finally(() => { estimator.current = false; });
@@ -454,12 +508,14 @@ function LiveSession({ host, choice, refreshReferences }: {
         if (!session.current || !stateRef.current)
             return;
         pendingTarget.current = null;
+        setError('');
         setMarker(target.marker);
         clear();
         const next = ++sequence.current;
+        const identifier = session.current;
         stateRef.current = { ...stateRef.current, moving: true, sequence: next, phase: 'moving' };
         setState(stateRef.current);
-        void api(`/sessions/${session.current}/intent`, 'POST', { sequence: next, x: target.x, y: target.y }).then(accept).catch(e => { if (alive.current && sequence.current === next) {
+        void api(`/sessions/${identifier}/intent`, 'POST', { sequence: next, x: target.x, y: target.y }).then(accept).catch(e => { if (alive.current && session.current === identifier && sequence.current === next) {
             stateRef.current = { ...stateRef.current!, moving: false, phase: 'error' };
             setState(stateRef.current);
             setError(e.message);
@@ -468,8 +524,12 @@ function LiveSession({ host, choice, refreshReferences }: {
     function stop() { pendingTarget.current = null; clear(); setMarker(null); if (stateRef.current) {
         stateRef.current = { ...stateRef.current, phase: 'stopping' };
         setState(stateRef.current);
-    } const next = ++sequence.current; void api(`/sessions/${session.current}/stop`, 'POST', { sequence: next }).then(accept).catch(e => setError(e.message)); }
+    } const next = ++sequence.current, identifier = session.current; void api(`/sessions/${identifier}/stop`, 'POST', { sequence: next }).then(accept).catch(e => { if (alive.current && session.current === identifier && sequence.current === next) setError(e.message); }); }
     const label = !connected ? 'Aguardando vídeo atual' : externalMoving ? 'Câmera em movimento externo' : aligned ? 'Vídeo alinhado' : phaseLabel[state?.phase ?? 'localizing'] ?? 'Alinhamento não confirmado';
+    const failedIntention = !!state?.error && state.sequence > 0 && !state.moving && !state.blocked;
+    const message = error || (failedIntention && aligned
+        ? 'O último apontamento não foi concluído. O vídeo está localizado novamente; você pode escolher outro destino.'
+        : state?.error || '');
     return <div style={{ position: 'relative', flex: 1, minHeight: 360, overflow: 'hidden' }}>
     <host.ui.NavigableViewport label="Panorama navegável" contentKey={choice.artifact.id} contentSize={{ width: width * 2, height }} initialBounds={bounds} controllerRef={navigation} onContentClick={click} style={{ width: '100%', height: '100%', minHeight: 360, background: '#151920' }}>
       <img draggable={false} src={resolveToposyncUrl(choice.artifact.image_url)} alt="Panorama capturado — referência histórica" style={{ position: 'absolute', width, height, filter: 'grayscale(1) brightness(.65)', pointerEvents: 'none' }}/>
@@ -491,7 +551,7 @@ function LiveSession({ host, choice, refreshReferences }: {
     </FloatingVideoPanel> : null}
     <div className="livePanoramaFooter">
       <span>Panorama capturado{choice.artifact.created_at ? ' em ' + captureDate(choice.artifact.created_at) : ''} · {choice.kind === 'candidate' ? 'Candidato selecionado' : 'Referência ativa'} · revisão {choice.artifact.revision}</span>
-      {(error || state?.error) && <span className="livePanoramaAlert" role="alert">{reasonLabel[error || state?.error || ''] ?? (error || state?.error)}</span>}
+      {message && <span className="livePanoramaAlert" role="alert">{reasonLabel[message] ?? message}</span>}
       <button className="chipButton livePanoramaReconnect" type="button" onClick={() => { setError(''); setState(null); stateRef.current = null; setRestart(value => value + 1); refreshReferences(); }}>Reconectar</button>
     </div>
   </div>;

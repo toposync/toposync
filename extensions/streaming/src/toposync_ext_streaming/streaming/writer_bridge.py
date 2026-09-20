@@ -349,16 +349,25 @@ class StreamWriterBridge:
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
-            tick_started = time.monotonic()
+            tick_started = self._monotonic()
+            next_tick = tick_started + self._tick_interval_s
             try:
                 await self._tick_once(tick_started)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 self._logger.exception("Streaming writer bridge tick failed")
-
-            elapsed = time.monotonic() - tick_started
-            sleep_s = max(0.01, self._tick_interval_s - elapsed)
+            else:
+                # The maintenance interval must not cap a live output's cadence.
+                # Wake for its next frame deadline, while idle and RTSP-pull outputs
+                # retain ordinary polling. Late work never queues a catch-up burst.
+                for publisher_id, due_at in self._next_due_by_publisher.items():
+                    if publisher_id in self._idle_since_by_publisher:
+                        continue
+                    if self._bypass_mode_by_publisher.get(publisher_id) == "on":
+                        continue
+                    next_tick = min(next_tick, due_at)
+            sleep_s = max(0.01, next_tick - self._monotonic())
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_s)
             except TimeoutError:

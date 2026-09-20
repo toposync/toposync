@@ -189,3 +189,47 @@ def _make_runtime(
         encoder_store=EncoderTrustStore(path=tmp_path / "encoder-state.json", host_id="local"),
         encoder_policy=encoder_policy,
     )
+
+
+def test_live_raw_frames_keep_elapsed_time_when_arrival_is_slower_than_nominal_rate(tmp_path):
+    """A real encoder must not turn one second of live input into 0.67 seconds."""
+    import json
+    import shutil
+    import subprocess
+    import time
+    import numpy as np
+    import pytest
+
+    ffmpeg, ffprobe = shutil.which('ffmpeg'), shutil.which('ffprobe')
+    if not ffmpeg or not ffprobe:
+        pytest.skip('Real FFmpeg and ffprobe are required for timestamp integration')
+    runtime = _make_runtime(tmp_path, supported_encoders={'libx264'},
+        encoding=PublisherEncodingSettings(width=64, height=64, fps=15, prefer_hardware=False))
+    args, _, _ = runtime._build_ffmpeg_args()
+    args[0] = ffmpeg
+    # Only replace the network sink. Input, encoder and timing are production arguments.
+    output = tmp_path / 'cadence.mkv'
+    args = args[:-5] + ['-f', 'matroska', str(output)]
+    process = subprocess.Popen(args, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    times = []
+    try:
+        for index in range(12):
+            if index:
+                time.sleep(.1 if index % 3 else .16)
+            times.append(time.monotonic())
+            process.stdin.write(np.full((64, 64, 3), index * 15, np.uint8).tobytes())
+            process.stdin.flush()
+        process.stdin.close()
+        assert process.wait(timeout=10) == 0, process.stderr.read().decode()
+        encoded = subprocess.check_output([ffprobe, '-v', 'error', '-show_frames',
+            '-select_streams', 'v', '-show_entries', 'frame=best_effort_timestamp_time',
+            '-of', 'json', str(output)], timeout=10)
+        stamps = [float(frame['best_effort_timestamp_time']) for frame in json.loads(encoded)['frames']]
+        assert len(stamps) == len(times)  # No fake frames to conceal lower input cadence.
+        assert all(b > a for a, b in zip(stamps, stamps[1:]))
+        assert abs((stamps[-1] - stamps[0]) - (times[-1] - times[0])) < .15
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        process.stderr.close()

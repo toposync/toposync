@@ -1879,7 +1879,8 @@ class PanoramaService:
                     model = self._read(model_path)
                     if not model or _digest(model) != key[1]:
                         raise ValueError("Reconstruction geometry changed")
-                    prepared = PanoramaLocalizer(model, photographs)
+                    prepared = PanoramaLocalizer(
+                        model, photographs, model_directory=self.root.parent / "panorama-matching-models")
                     coverage_path = SourcePanoramaService._private_path(directory, artifact["_files"]["coverage"])
                     prepared.coverage_mask = cv2.imread(str(coverage_path), cv2.IMREAD_GRAYSCALE)
                     if prepared.coverage_mask is None:

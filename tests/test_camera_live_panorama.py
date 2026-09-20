@@ -274,6 +274,8 @@ async def test_unknown_stop_discards_pending_and_never_reports_verified_current_
 
         def __init__(self, *args, maximum_commands):
             assert maximum_commands == module.MAXIMUM_LIVE_NAVIGATION_COMMANDS == 16
+            from toposync_ext_cameras.processing.panorama_localization_replay import LocalizationReplay
+            self.localization_replay = LocalizationReplay()
 
         async def aim(self, ray):
             events.append("aim")
@@ -382,3 +384,32 @@ async def test_reopening_an_artifact_removed_from_selection_requires_new_catalog
             OpenSession(camera_id="camera", source_id="source", artifact_id="a" * 32, revision=1),
         )
     assert caught.value.detail["code"] == "source_panorama_changed" and not service.sessions
+
+
+@pytest.mark.anyio
+async def test_slow_recognition_cannot_grant_pointing_authority(monkeypatch):
+    import base64
+    import cv2
+    import toposync_ext_cameras.live_panorama as module
+
+    service, session = setup()
+    clock = [100.0]
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    async def current(_session):
+        pass
+
+    def locate(*args):
+        clock[0] += 2
+        return {"status": "localized", "rotation_matrix": np.eye(3).tolist()}
+
+    service.current = current
+    session.localizer.lens = {"width": 128, "height": 96}
+    session.localizer.locate = locate
+    encoded = base64.b64encode(cv2.imencode(".jpg", np.zeros((48, 64, 3), np.uint8))[1]).decode()
+    result = await service.observe(session, module.Observation(
+        sequence=1, epoch="decoder", media_time=0.1, width=128, height=96, image=encoded))
+    assert result["status"] == "unlocalized" and result["reason"] == "panorama_frame_not_recent"
+    assert "geometry" not in result and session.last_registration == 0
+    with pytest.raises(HTTPException):
+        service.intend(session, Intention(sequence=1, x=0.5, y=0.5))

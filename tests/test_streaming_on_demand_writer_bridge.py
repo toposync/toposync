@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 import numpy
+import pytest
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.runtime import Lifecycle
@@ -105,6 +106,90 @@ class _MediaMtxApiClientStub:
 
     async def get_viewer_count_by_path(self) -> dict[str, int]:
         return dict(self.viewers_by_path)
+
+
+@pytest.mark.parametrize("fps", [15, 30, 60])
+def test_writer_loop_delivers_configured_cadence_above_ten_frames_per_second(monkeypatch, fps) -> None:
+    sent, _, _ = asyncio.run(_writer_loop_clock_scenario(monkeypatch, fps=fps))
+    assert 2 * fps - 1 <= len(sent) <= 2 * fps + 1
+    assert all(b - a >= 1 / fps - 1e-8 for a, b in zip(sent, sent[1:]))
+
+
+def test_writer_loop_returns_to_idle_polling_without_replaying_missed_frames(monkeypatch) -> None:
+    sent, ticks, waits = asyncio.run(_writer_loop_clock_scenario(monkeypatch, fps=30, idle_after=0.4))
+    assert sent and max(sent) < 0.7  # Includes the existing viewer refresh interval.
+    assert len([at for at in ticks if at >= 0.8]) <= 13
+    assert all(wait >= 0.01 for wait in waits)
+
+
+def test_writer_loop_does_not_burst_when_frame_processing_exceeds_deadline(monkeypatch) -> None:
+    sent, _, waits = asyncio.run(_writer_loop_clock_scenario(monkeypatch, fps=30, processing_seconds=0.2))
+    assert len(sent) <= 10
+    assert all(b - a >= 0.2 for a, b in zip(sent, sent[1:]))
+    assert all(wait >= 0.01 for wait in waits)
+
+
+def test_writer_loop_does_not_accelerate_retries_after_processing_failure(monkeypatch) -> None:
+    sent, ticks, _ = asyncio.run(_writer_loop_clock_scenario(monkeypatch, fps=30, fail_after=0.4))
+    assert sent and max(sent) < 0.4
+    assert len([at for at in ticks if at >= 0.8]) <= 13
+
+
+async def _writer_loop_clock_scenario(
+    monkeypatch, *, fps, idle_after=None, processing_seconds=0.0, fail_after=None,
+):
+    import toposync_ext_streaming.streaming.writer_bridge as module
+
+    clock = [1000.0]
+    sent, ticks, waits, errors = [], [], [], []
+    runtime = TransmissionRuntimeState(monotonic=lambda: clock[0])
+    publisher = _PublisherManagerStub()
+    viewers = _MediaMtxApiClientStub({"cadence": 1})
+    payload = {
+        "engine": {"enabled": True, "expose_to_lan": False},
+        "transmissions": [{"id": "cadence", "path": "cadence", "enabled": True,
+                           "outputs": [{"id": "main", "protocol": "hls", "enabled": True,
+                                        "resolution": {"width": 320, "height": 180}, "fps_limit": fps}]}],
+    }
+    bridge = StreamWriterBridge(
+        config_store=_ConfigStoreStub(payload), engine_manager=_EngineManagerStub(),
+        runtime_state=runtime, publisher_manager=publisher, mediamtx_api_client=viewers,
+        logger=SimpleNamespace(exception=lambda *args, **kwargs: errors.append(args)),
+        monotonic=lambda: clock[0], viewer_refresh_s=0.2,
+    )
+    original_tick = bridge._tick_once
+
+    async def tick(now):
+        ticks.append(now - 1000.0)
+        if fail_after is not None and now - 1000.0 >= fail_after:
+            raise RuntimeError("Controlled processing failure")
+        if idle_after is not None and now - 1000.0 >= idle_after:
+            viewers.viewers_by_path["cadence"] = 0
+        await runtime.update_writer_frame(
+            transmission_id="cadence", writer_id="source", lifecycle_state=Lifecycle.UPDATE,
+            writer_priority=1, frame=numpy.full((180, 320, 3), len(ticks) % 255, dtype=numpy.uint8),
+            frame_ts=now,
+        )
+        before = sum(publisher.frames_by_output.values())
+        await original_tick(now)
+        if sum(publisher.frames_by_output.values()) > before:
+            sent.append(now - 1000.0)
+        clock[0] += processing_seconds
+
+    async def wait_for(awaitable, *, timeout):
+        awaitable.close()
+        waits.append(timeout)
+        clock[0] += timeout
+        if clock[0] >= 1002.0 - 1e-8:
+            bridge._stop_event.set()
+        raise TimeoutError
+
+    bridge._tick_once = tick
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(module, "asyncio", SimpleNamespace(wait_for=wait_for, CancelledError=asyncio.CancelledError))
+    await bridge._run_loop()
+    assert bool(errors) == (fail_after is not None)
+    return sent, ticks, waits
 
 
 def test_on_demand_starts_and_stops_with_debounce() -> None:

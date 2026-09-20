@@ -25,6 +25,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from .panorama_correspondences import track_image_points
+
 
 @dataclass(frozen=True)
 class StabilitySettings:
@@ -472,42 +474,9 @@ class VisualStabilityDetector:
         points = self._corners(previous)
         if points is None or len(points) < self.settings.minimum_tracks:
             return None, {"tracks": 0 if points is None else len(points)}
-        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
-        following, status, _ = cv2.calcOpticalFlowPyrLK(
-            previous,
-            current,
-            points,
-            None,
-            winSize=(21, 21),
-            maxLevel=3,
-            criteria=criteria,
-        )
-        if following is None or status is None:
-            return None, {"tracks": 0}
-        returning, back_status, _ = cv2.calcOpticalFlowPyrLK(
-            current,
-            previous,
-            following,
-            None,
-            winSize=(21, 21),
-            maxLevel=3,
-            criteria=criteria,
-        )
-        if returning is None or back_status is None:
-            return None, {"tracks": 0}
-        height, width = previous.shape
-        source, target = points.reshape(-1, 2), following.reshape(-1, 2)
-        forward_backward = np.linalg.norm(returning.reshape(-1, 2) - source, axis=1)
-        valid = (
-            status.ravel().astype(bool)
-            & back_status.ravel().astype(bool)
-            & (forward_backward <= self.settings.maximum_forward_backward_error_pixels)
-            & np.isfinite(target).all(axis=1)
-            & (target[:, 0] >= 0)
-            & (target[:, 0] < width)
-            & (target[:, 1] >= 0)
-            & (target[:, 1] < height)
-        )
+        target, valid = track_image_points(
+            previous, current, points, self.settings.maximum_forward_backward_error_pixels)
+        source = points.reshape(-1, 2)
         source, target = source[valid], target[valid]
         transform, metrics = self._fit_motion(source, target, previous.shape)
         if transform is None and not self._has_motion_transition:

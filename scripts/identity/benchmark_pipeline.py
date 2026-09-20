@@ -39,7 +39,7 @@ from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_vision.identity.pipelines import register_identity_operators
 from toposync_ext_vision.identity.store import IdentityStore
-from real_pipeline_smoke import SOURCES
+from scripts.identity.real_pipeline_smoke import SOURCES
 
 
 class EmptyConfig(BaseModel):
@@ -53,6 +53,18 @@ def worker_resources():
         "cpu_seconds_including_startup": usage.ru_utime + usage.ru_stime,
         "peak_rss_native_units": usage.ru_maxrss,
     }
+
+
+def _timed_upsert(notifications, values):
+    started = time.perf_counter()
+    record, created = notifications.upsert(**values)
+    return record, created, started, time.perf_counter()
+
+
+async def persist_notification(notifications, values):
+    # Mesmo encaminhamento usado por NotificationsRuntime.upsert. Os tempos de
+    # SQLite são medidos na thread, sem confundir espera do executor com disco.
+    return await asyncio.to_thread(_timed_upsert, notifications, values)
 
 
 async def trial(
@@ -139,8 +151,10 @@ async def trial(
     async def upsert(**values):
         nonlocal created_count
         service_started = time.perf_counter()
-        record, created = notifications.upsert(**values)
-        stored_at = time.perf_counter()
+        record, created, storage_started, stored_at = await persist_notification(
+            notifications, values
+        )
+        returned_at = time.perf_counter()
         payload = values["payload"]
         key = (payload["subject"]["id"], payload["lifecycle"])
         visit = int(key[0].split("-")[1])
@@ -153,9 +167,11 @@ async def trial(
                     "phase": key[1],
                     "species": payload["subject"]["category"],
                     "source_to_upsert_ms": (service_started - sent[key]) * 1000,
-                    "notification_storage_ms": (stored_at - service_started) * 1000,
-                    "milliseconds": (time.perf_counter() - sent[key]) * 1000,
-                    "planned_milliseconds": (time.perf_counter() - planned[key]) * 1000,
+                    "notification_executor_wait_ms": (storage_started - service_started) * 1000,
+                    "notification_storage_ms": (stored_at - storage_started) * 1000,
+                    "notification_resume_ms": (returned_at - stored_at) * 1000,
+                    "milliseconds": (returned_at - sent[key]) * 1000,
+                    "planned_milliseconds": (returned_at - planned[key]) * 1000,
                 }
             )
         check_warmup()
@@ -286,6 +302,29 @@ async def trial(
                 max_concurrency=1,
             )
 
+    except BaseException as error:
+        # Preservar contadores antes da parada para distinguir perda, pressão e
+        # falha técnica. Nenhuma imagem, vetor ou payload entra no diagnóstico.
+        (output / "failure.json").write_text(
+            json.dumps(
+                {
+                    "instrument_version": 2,
+                    "error_type": type(error).__name__,
+                    "expected_packets": total_packets,
+                    "notification_callbacks": len(lifecycles),
+                    "recognition_callbacks": len(recognition_lifecycles),
+                    "notification_phases": {
+                        phase: sum(item[1] == phase for item in lifecycles)
+                        for phase in ("open", "update", "close")
+                    },
+                    "runtime": runtime.snapshot(),
+                    "release_gate_approved": False,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        raise
     finally:
         await runtime.stop()
         await runtime.dependencies.execution_scheduler.shutdown()
@@ -311,6 +350,9 @@ async def trial(
     usage_after = resource.getrusage(resource.RUSAGE_SELF)
     values = [row["milliseconds"] for row in latencies]
     return {
+        "instrument_version": 2,
+        "notification_execution": "asyncio.to_thread, matching NotificationsRuntime.upsert",
+        "notification_limit": "Store persistence only; excludes public projection and broadcaster",
         "identity_enabled": enabled,
         "topology": "context_only_diagnostic"
         if context_only

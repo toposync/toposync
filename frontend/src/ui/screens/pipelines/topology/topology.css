@@ -430,6 +430,11 @@
   display: none;
 }
 
+.pipelineTopologyInspector button:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 2px;
+}
+
 .pipelineTopologyInspectorContent {
   min-width: 0;
   display: grid;
@@ -449,11 +454,15 @@
   flex: 0 0 auto;
 }
 
+.pipelineTopologyInspectorHeader > div {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .pipelineTopologyInspectorTitle {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   font-size: 15px;
   font-weight: 800;
 }
@@ -671,6 +680,59 @@
   font-size: 13px;
   text-align: center;
   pointer-events: none;
+}
+
+/* The editor's translucent night surfaces cannot sit behind day-theme text. */
+:root:is([data-toposync-base-theme="topo-day"], [data-toposync-theme="topo-day"]) :is(
+  .pipelineTopologyRoot,
+  .pipelineTopologyFallback,
+  .pipelineTopologyToolbar,
+  .pipelineTopologyInspector,
+  .pipelineTopologyInspectorToggle,
+  .pipelineTopologyInspectorAlert,
+  .pipelineTopologyNode,
+  .pipelineTopologyStatusChip,
+  .pipelineTopologyPalette,
+  .pipelineTopologyPaletteClose,
+  .pipelineTopologyPaletteList button,
+  .pipelineTopologyPalette input,
+  .pipelineTopologyEditGrid input,
+  .pipelineTopologyEditGrid select,
+  .pipelineTopologyJsonInput,
+  .pipelineTopologyJsonFallback,
+  .pipelineTopologyActionError,
+  .pipelineTopologyCanvas .react-flow__attribution,
+  .pipelineTopologyCanvas .react-flow__controls,
+  .pipelineTopologyCanvas .react-flow__minimap
+) {
+  background: var(--color-surface-solid);
+}
+
+:root:is([data-toposync-base-theme="topo-day"], [data-toposync-theme="topo-day"]) :is(
+  .pipelineTopologyGraphPane:fullscreen,
+  .pipelineTopologyGraphPane[data-fullscreen="true"]
+) {
+  background: var(--color-canvas2d-background);
+}
+
+:root:is([data-toposync-base-theme="topo-day"], [data-toposync-theme="topo-day"]) .pipelineTopologyCanvas {
+  background:
+    linear-gradient(var(--color-canvas2d-grid-minor) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-canvas2d-grid-minor) 1px, transparent 1px),
+    var(--color-canvas2d-background);
+  background-size: 48px 48px;
+}
+
+:root:is([data-toposync-base-theme="topo-day"], [data-toposync-theme="topo-day"]) .pipelineTopologyStatusChip {
+  color: var(--text);
+}
+
+:root:is([data-toposync-base-theme="topo-day"], [data-toposync-theme="topo-day"]) .pipelineTopologyPaletteList button:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--accent) 12%, var(--color-surface-solid));
+}
+
+:root:is([data-toposync-base-theme="topo-day"], [data-toposync-theme="topo-day"]) .pipelineTopologyCanvas .react-flow__edge-textbg {
+  fill: var(--color-surface-solid);
 }
 
 @media (max-width: 960px) {

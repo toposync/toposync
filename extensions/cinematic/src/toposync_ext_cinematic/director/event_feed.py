@@ -93,14 +93,17 @@ def _event_from_notification(
         camera_id=camera_id,
         stream_id=stream_id,
     )
+    # Pipeline event timestamps may be relative media time, including legacy
+    # records without a time_basis. Retention uses civil notification dates.
+    pipeline_time = payload.get("source") == "pipelines" or event_payload.get("time_basis") in ("media", "packet_created_at")
     opened_at = _first_float(
-        event_payload.get("started_ts"),
+        None if pipeline_time else event_payload.get("started_ts"),
         payload.get("opened_at"),
         notification.get("createdAt"),
         notification.get("created_at"),
     )
     updated_at = _first_float(
-        event_payload.get("ts"),
+        None if pipeline_time else event_payload.get("ts"),
         payload.get("updated_at"),
         notification.get("updatedAt"),
         notification.get("updated_at"),

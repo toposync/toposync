@@ -1,0 +1,58 @@
+{
+  "model_id": "mediapipe_pose_33",
+  "display_name": "MediaPipe Pose 33",
+  "task": "pose",
+  "runtime": "onnxruntime",
+  "artifact_format": "onnx",
+  "artifact_path": "../models/mediapipe/pose_estimation_mediapipe_2023mar.onnx",
+  "sha256": "9d89c599319a18fb7d2e28451a883476164543182bafca5f09eb2cf767ed2f3f",
+  "input": {
+    "width": 256,
+    "height": 256,
+    "dtype": "float32",
+    "color_order": "rgb",
+    "layout": "nhwc",
+    "resize_mode": "stretch",
+    "pad_value": 0.0,
+    "rescale_factor": 0.00392156862745098,
+    "tensor_name": "input_1"
+  },
+  "postprocess": {
+    "type": "mediapipe_pose_33",
+    "output_name": "Identity",
+    "confidence_threshold_default": 0.5
+  },
+  "classes": {"labels": ["person"]},
+  "license": {
+    "code_license": "Apache-2.0",
+    "weights_license": "Apache-2.0: OpenCV Zoo model directory and upstream BlazePose GHUM model card.",
+    "dataset_notes": "Upstream describes consented and fitness images; no training dataset redistribution rights are granted here. GHUM training provenance does not grant rights to distribute the GHUM body model.",
+    "redistribution_allowed": true,
+    "commercial_use_status": "apache_2_0_with_upstream_scope_limitations",
+    "official_build_allowed": false
+  },
+  "acquisition": {
+    "mode": "auto_download",
+    "artifact_source": "onnx_ready",
+    "source_url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/pose_estimation_mediapipe/pose_estimation_mediapipe_2023mar.onnx",
+    "guide_url": "https://github.com/opencv/opencv_zoo/blob/47534e27c9851bb1128ccc0102f1145e27f23f98/models/pose_estimation_mediapipe/README.md",
+    "export_guide_url": "https://github.com/opencv/opencv_zoo/blob/47534e27c9851bb1128ccc0102f1145e27f23f98/models/pose_estimation_mediapipe/mp_pose.py",
+    "paper_url": "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20BlazePose%20GHUM%203D.pdf",
+    "supported_platforms": ["darwin", "linux", "windows"]
+  },
+  "provenance": {
+    "origin": "opencv_zoo",
+    "source_url": "https://github.com/opencv/opencv_zoo",
+    "source_ref": "47534e27c9851bb1128ccc0102f1145e27f23f98",
+    "source_file": "models/pose_estimation_mediapipe/pose_estimation_mediapipe_2023mar.onnx"
+  },
+  "hardware_profiles": {"cpu": true, "cuda": false, "openvino": false, "mps": false},
+  "capabilities": ["body_landmarks", "foot_landmarks", "hip_relative_3d"],
+  "recommended_profiles": ["cpu_low", "cpu_balanced"],
+  "notes": [
+    "Top-down pose consumes existing person detections; it does not install another detector or tracker.",
+    "The pinned artifact is 5557238 bytes; weights are installed on the selected processing server, not bundled.",
+    "Upstream targets nearby full-body fitness imagery. Occlusion, distant subjects and surveillance are outside its declared intended envelope and require independent qualification.",
+    "Hip-relative predicted 3D is not a calibrated world-map coordinate. Network scores do not prove landmark observation."
+  ]
+}

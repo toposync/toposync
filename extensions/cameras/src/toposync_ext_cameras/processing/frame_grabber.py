@@ -683,6 +683,14 @@ class FfmpegFrameGrabber:
                 "tcp",
                 "-allowed_media_types",
                 "video",
+                # Bound stream analysis and decoder frame-thread buffering so
+                # low-rate RTSP sources can publish within the snapshot budget.
+                "-analyzeduration",
+                "100000",
+                "-probesize",
+                "32768",
+                "-threads",
+                "1",
             ]
 
         args += [

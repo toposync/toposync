@@ -1203,7 +1203,15 @@ async def _wait_for_grabber_frame(
                 if requires_physical_evidence
                 else (accepted_frames == 0 or identity_is_new or timestamp_is_new)
             )
-            if physical_fence_passed and distinct_frame:
+            # A new sequence identifies another decoded frame, not necessarily a
+            # publication after this request. Do not count pre-request buffered
+            # frames toward the decoder freshness requirement.
+            publication_fence_passed = (
+                requires_physical_evidence
+                or min_frame_ts <= 0.0
+                or parsed_frame_ts > min_frame_ts
+            )
+            if physical_fence_passed and publication_fence_passed and distinct_frame:
                 accepted_frames += 1
                 last_accepted_ts = parsed_frame_ts
                 last_accepted_identity = identity
@@ -1284,6 +1292,14 @@ async def _ffmpeg_rtsp_probe(rtsp_url: str, *, timeout_ms: int) -> RtspProbeResp
             "error",
             "-timeout",
             str(attempt_timeout_us),
+            # Probe a frame, not the stream rate. Default analysis and frame
+            # threading can exhaust the operation budget on low-rate sources.
+            "-analyzeduration",
+            "100000",
+            "-probesize",
+            "32768",
+            "-threads",
+            "1",
             *input_args,
             "-an",
             "-sn",
@@ -4140,6 +4156,27 @@ class CamerasExtension(BaseExtension):
             control_point_set = control_point_sets[0] if control_point_sets else None
             return _map_control_point_set(control_point_set, body.query)
 
+        @app.get("/api/cameras/compositions/{composition_id}/observation-revision")
+        async def get_observation_revision(request: Request, composition_id: str) -> Any:
+            # Same authorization as the core composition reader; no inference or PTZ.
+            from fastapi.responses import JSONResponse
+            from .processing.composition_revision import composition_revision
+
+            _require_auth(request, action="core:compositions:read")
+            config = await _config_store(request).get_config()
+            composition = next((item for item in config.compositions if item.id == composition_id), None)
+            if composition is None:
+                raise HTTPException(status_code=404, detail="Unknown composition")
+            try:
+                revision = composition_revision(composition)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=409, detail="Composition revision unavailable") from None
+            return JSONResponse(
+                {"composition_id": composition.id, "map_revision": revision,
+                 "elements": [element.model_dump(mode="json") for element in composition.elements]},
+                headers={"Cache-Control": "no-store"},
+            )
+
         @app.post("/api/cameras/projection/solve")
         async def solve_camera_projection(
             request: Request, body: ProjectionSolveRequest
@@ -4174,10 +4211,36 @@ class CamerasExtension(BaseExtension):
                 ).encode("utf-8")
             ).hexdigest()
             accepted = quality.get("status") == "ready"
+            # Ground-plane acceptance does not establish a metric camera. Keep
+            # this diagnostic independent so existing mapping clients retain
+            # their contract, including the less strict ground check limit.
+            try:
+                from .processing.metric_camera import solve_metric_camera
+
+                metric_camera = solve_metric_camera(control_point_set.ground_projection)
+                metric_geometry = {
+                    "status": "ready",
+                    "maximum_reprojection_error": metric_camera.maximum_reprojection_error,
+                    "check_errors_meters": list(metric_camera.check_errors_meters),
+                }
+            except ValueError as exc:
+                reason = str(exc)
+                metric_geometry = {
+                    "status": "unavailable",
+                    "reason": reason
+                    if re.fullmatch(r"[a-z][a-z0-9_]*", reason)
+                    else "metric_camera_solution_unavailable",
+                }
+            except Exception:
+                metric_geometry = {
+                    "status": "unavailable",
+                    "reason": "metric_camera_solution_unavailable",
+                }
             return {
                 "accepted": accepted,
                 "status": quality.get("status"),
                 "quality": quality,
+                "metric_geometry": metric_geometry,
                 "calibration_digest": digest,
                 "valid_image_polygon": [
                     {"x": x, "y": y} for x, y in getattr(mapper, "image_polygon", ())

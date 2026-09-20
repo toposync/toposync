@@ -47,6 +47,8 @@ class VisionDetectRuntime(TransformOperatorRuntime):
         self._backend: DetectorBackend | None = None
         self._manifest: ModelManifest | None = None
         self._last_inference_by_stream: dict[str, float] = {}
+        self._forwarded_filter_streams: set[str] = set()
+        self._shutting_down = False
         self._telemetry_top_k = _read_env_int(
             "TOPOSYNC_TELEMETRY_VISION_TOP_K", 3, min_value=1, max_value=16
         )
@@ -323,6 +325,18 @@ class VisionDetectRuntime(TransformOperatorRuntime):
         return outputs
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        if self._shutting_down:
+            return []
+        if packet.lifecycle == Lifecycle.CLOSE:
+            # Annotated streams always retain source lifecycle. Filtered streams
+            # close only if forwarded; detection events already close themselves.
+            self._last_inference_by_stream.pop(packet.stream_id, None)
+            forward = self._parsed.emit_mode == "annotate" or (
+                self._parsed.emit_mode == "filter"
+                and packet.stream_id in self._forwarded_filter_streams
+            )
+            self._forwarded_filter_streams.discard(packet.stream_id)
+            return [packet] if forward else []
         artifact_name, frame = resolve_image_artifact_for_data(
             packet,
             input_artifact_name=self._parsed.input_artifact_name,
@@ -342,6 +356,8 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                 categories=self._categories_set or None,
                 concurrency_key=concurrency_key,
             )
+            if self._shutting_down:
+                return []
             detections = self._normalize_detections(
                 raw_detections,
                 packet=packet,
@@ -360,4 +376,11 @@ class VisionDetectRuntime(TransformOperatorRuntime):
         if self._parsed.emit_mode == "filter" and not detections:
             return []
         out = self._annotate_packet(packet, manifest=manifest, backend=backend, detections=detections)
+        if self._parsed.emit_mode == "filter":
+            self._forwarded_filter_streams.add(packet.stream_id)
         return [out]
+
+    async def shutdown(self) -> None:
+        self._shutting_down = True
+        self._last_inference_by_stream.clear()
+        self._forwarded_filter_streams.clear()

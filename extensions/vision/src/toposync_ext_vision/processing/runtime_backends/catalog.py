@@ -29,7 +29,7 @@ def collect_vision_runtime_backends() -> list[dict[str, Any]]:
             "id": "onnxruntime",
             "available": available,
             "version": version,
-            "tasks": ["classification", "detection", "segmentation"],
+            "tasks": ["classification", "detection", "segmentation", "pose"],
             "artifact_formats": ["onnx"],
             "execution_providers": execution_providers,
             "preferred_execution_providers": preferred_execution_providers,

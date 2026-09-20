@@ -54,6 +54,41 @@ export type CompositionElementPatch = Partial<Omit<CompositionElement, "position
   props?: Record<string, unknown>;
 };
 
+/** Source publication/capture provenance; media timestamps are not Unix clocks. */
+export type NotificationCaptureEvidence = {
+  capture_instance: string;
+  generation: number;
+  sequence: number;
+  published_at: number;
+  physical_timestamp_verified?: boolean;
+  [key: string]: unknown;
+};
+
+/** In-memory selected-detail image only. Never persist or merge into notification lists. */
+export type NotificationEphemeralImage = {
+  schemaVersion: 1;
+  packetId: string;
+  parentPacketId: string | null;
+  cameraId: string;
+  sourceStreamId: string;
+  artifactName: string;
+  mediaTimestamp: number;
+  captureEvidence: NotificationCaptureEvidence;
+  imageGeometry: {
+    image_size: [number, number];
+    source_size: [number, number];
+    to_source: [[number, number, number], [number, number, number], [number, number, number]];
+    capture_evidence: NotificationCaptureEvidence;
+    [key: string]: unknown;
+  };
+  width: number;
+  height: number;
+  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  dataBase64: string;
+  /** Unix milliseconds, at most 750 ms after original source publication. */
+  expiresAt: number;
+};
+
 export type Notification = {
   id: string;
   type: string;
@@ -64,6 +99,7 @@ export type Notification = {
   updatedAt?: string;
   priority?: "low" | "medium" | "high";
   payload?: unknown;
+  ephemeralImage?: NotificationEphemeralImage;
 };
 
 export type NotificationOverlayActions = {
@@ -106,6 +142,10 @@ export type Notification2DContext = {
   /** Composition currently shown in the viewport. Renderers should return null when the pin
    * belongs to another composition. */
   compositionId?: string;
+  /** Current displayed elements, including unsaved map edits. */
+  elements?: CompositionElement[];
+  /** Invalidate a cached pin after asynchronous changes such as evidence expiry. */
+  requestRender?: () => void;
 };
 
 export type Notification2DOverlay = {
@@ -120,6 +160,8 @@ export type NotificationRenderer = {
   id: string;
   type: string;
   render: (notification: Notification) => import("react").ReactNode;
+  /** Optional selected-detail content. Only this surface receives ephemeral pixels. */
+  renderDetails?: (notification: Notification) => import("react").ReactNode;
   create3DOverlay?: (
     ctx: Scene3DContext,
     notification: Notification,
@@ -520,3 +562,9 @@ export function resolveToposyncUrl(url: string): string;
 export function requestJson<T = unknown>(input: string, init?: RequestInit): Promise<T>;
 export function requestVoid(input: string, init?: RequestInit): Promise<void>;
 export function requestForm<T = unknown>(input: string, form: FormData, init?: RequestInit): Promise<T>;
+/** Share keyboard ownership between host and extension body-portal dialogs.
+ * Call on open and invoke the returned cleanup on close/unmount.
+ * Additive local API: older hosts may not export these functions at runtime.
+ */
+export declare function activateModalFocus(panel: HTMLElement, onClose: () => void): () => void;
+export declare function isActiveModalFocus(panel: HTMLElement | null): boolean;

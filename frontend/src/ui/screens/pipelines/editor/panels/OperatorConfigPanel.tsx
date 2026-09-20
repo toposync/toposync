@@ -1,4 +1,5 @@
 import React from "react";
+import { GestureConfigCard, PersonGroundConfigCard, PointingConfigCard } from "./HumanMotionPanels";
 import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
 import type { CameraContextsResponse, CamerasIndexResponse, PipelineOperatorDefinition } from "../../../../../util/api";
@@ -157,6 +158,7 @@ export function OperatorConfigPanel({
     operatorId === "vision.classify_image" ||
     operatorId === "vision.track" ||
     operatorId === "vision.detect" ||
+    operatorId === "vision.pose_estimate" ||
     operatorId === "vision.segment_instances"
   ) {
     return (
@@ -185,6 +187,15 @@ export function OperatorConfigPanel({
         onUpdateConfig={onUpdateConfig}
       />
     );
+  }
+  if (operatorId === "camera.person_ground_estimate") {
+    return <PersonGroundConfigCard config={config} onUpdateConfig={onUpdateConfig} showAdvanced={showAdvanced} contexts={activeCameraContexts} />;
+  }
+  if (operatorId === "vision.gesture_recognize") {
+    return <GestureConfigCard config={config} onUpdateConfig={onUpdateConfig} showAdvanced={showAdvanced} />;
+  }
+  if (operatorId === "camera.pointing_target") {
+    return <PointingConfigCard config={config} onUpdateConfig={onUpdateConfig} showAdvanced={showAdvanced} />;
   }
   if (operatorId === "vision.spatial_relation_event") {
     return (

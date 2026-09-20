@@ -1,0 +1,15 @@
+.pipelinesHumanMotionCard .pipelinesLabel {
+  min-width: 0;
+}
+
+.pipelinesHumanMotionCard .pipelinesInput,
+.pipelinesHumanMotionCard .pipelinesSelect {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.pipelinesHumanMotionCard .pipelinesCheckboxRow input {
+  flex: 0 0 auto;
+}

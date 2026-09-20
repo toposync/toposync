@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
@@ -38,6 +40,90 @@ def _build_registry() -> ModelRegistry:
             )
         ]
     )
+
+
+@pytest.mark.parametrize("emit_mode", ["annotate", "filter", "events"])
+@pytest.mark.parametrize("has_image", [False, True])
+def test_detector_close_without_model_respects_output_contract(emit_mode, has_image):
+    async def scenario():
+        # The configured model is deliberately unavailable: closing a stream
+        # must never require preparing a model or decoding an image.
+        runtime = VisionDetectRuntime(
+            {"model_id": "missing.detector", "emit_mode": emit_mode},
+            PipelineRuntimeDependencies(vision_model_registry=ModelRegistry([])),
+        )
+        runtime._last_inference_by_stream.update({"source:a": 1.0, "source:b": 2.0})
+        packet = Packet.create(
+            stream_id="source:a", lifecycle=Lifecycle.CLOSE,
+            payload={"camera_id": "camera:a", "source_stream_id": "source:a"},
+            artifacts={"main": Artifact("main", object(), mime_type="image/raw")} if has_image else {},
+        )
+        outputs = await runtime.process_packet(packet, _Context())
+        assert outputs == ([packet] if emit_mode == "annotate" else [])
+        if outputs:
+            assert outputs[0] is packet
+        assert runtime._backend is None
+        assert runtime._last_inference_by_stream == {"source:b": 2.0}
+
+    asyncio.run(scenario())
+
+
+def test_detector_shutdown_clears_stream_lifecycle_state():
+    async def scenario():
+        runtime = VisionDetectRuntime(
+            {"model_id": "missing.detector", "emit_mode": "filter"},
+            PipelineRuntimeDependencies(vision_model_registry=ModelRegistry([])),
+        )
+        runtime._last_inference_by_stream.update({"source:a": 1.0, "source:b": 2.0})
+        runtime._forwarded_filter_streams.update({"source:a", "source:b"})
+        close = Packet.create(stream_id="source:a", lifecycle=Lifecycle.CLOSE)
+        assert await runtime.process_packet(close, _Context()) == [close]
+        assert runtime._forwarded_filter_streams == {"source:b"}
+        assert runtime._last_inference_by_stream == {"source:b": 2.0}
+        await runtime.shutdown()
+        assert not runtime._last_inference_by_stream
+        assert not runtime._forwarded_filter_streams
+        assert runtime._backend is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("emit_mode", ["annotate", "filter", "events"])
+def test_detector_pending_inference_cannot_repopulate_after_shutdown(emit_mode):
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        class PendingContext(_Context):
+            async def run_blocking(self, func, /, *args, **kwargs):
+                entered.set()
+                await release.wait()
+                return [DetectionObject(label="person", label_id=0, score=0.9,
+                                        bbox01=(0.1, 0.2, 0.3, 0.4), model_id="fake.detector")]
+
+        class Backend:
+            backend_id = "fake"
+
+            def detect(self, frame, *, categories=None):
+                raise AssertionError("PendingContext supplies the controlled result")
+
+        runtime = VisionDetectRuntime(
+            {"model_id": "fake.detector", "emit_mode": emit_mode,
+             "inference_interval_seconds": 1},
+            PipelineRuntimeDependencies(vision_model_registry=_build_registry(),
+                                        detector_backend_factory=lambda manifest: Backend()),
+        )
+        packet = Packet.create(stream_id="source:a", artifacts={
+            "main": Artifact("main", object(), mime_type="image/raw")})
+        task = asyncio.create_task(runtime.process_packet(packet, PendingContext()))
+        await entered.wait()
+        await runtime.shutdown()
+        release.set()
+        assert await task == []
+        assert await runtime.process_packet(packet, _Context()) == []
+        assert not runtime._last_inference_by_stream
+        assert not runtime._forwarded_filter_streams
+
+    asyncio.run(scenario())
 
 
 def test_vision_detect_annotate_mode_writes_contract_payload() -> None:
@@ -274,6 +360,11 @@ def test_vision_detect_filter_mode_emits_packet_when_detections_exist() -> None:
         assert detections[0]["score"] == 0.88
         assert detections[0]["bbox01"] == [0.1, 0.2, 0.3, 0.4]
 
+        close = Packet.create(stream_id=packet.stream_id, lifecycle=Lifecycle.CLOSE)
+        assert await runtime.process_packet(close, _Context()) == [close]
+        assert await runtime.process_packet(close, _Context()) == []
+        assert not runtime._forwarded_filter_streams
+
     asyncio.run(scenario())
 
 
@@ -299,6 +390,8 @@ def test_vision_detect_filter_mode_drops_packets_without_detections() -> None:
 
         out_packets = await runtime.process_packet(packet, _Context())
         assert out_packets == []
+        close = Packet.create(stream_id=packet.stream_id, lifecycle=Lifecycle.CLOSE)
+        assert await runtime.process_packet(close, _Context()) == []
 
     asyncio.run(scenario())
 
@@ -343,6 +436,10 @@ def test_vision_detect_events_mode_closes_core_notification(tmp_path: Path) -> N
 
         out_packets = await detect.process_packet(packet, _Context())
         for out in out_packets:
+            await notify.process_packet(out, _NotifyContext())
+
+        source_close = Packet.create(stream_id=packet.stream_id, lifecycle=Lifecycle.CLOSE)
+        for out in await detect.process_packet(source_close, _Context()):
             await notify.process_packet(out, _NotifyContext())
 
         items, _cursor = await notifications.list(limit=20)

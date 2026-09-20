@@ -167,13 +167,16 @@ class TrackEventAssembler:
         next_number = int(self._next_event_number_by_source_stream.get(source_stream_id, 0)) + 1
         self._next_event_number_by_source_stream[source_stream_id] = next_number
         event_code = str(next_number)
-        event_id = f"{self._config.event_id_prefix}:{source_stream_id}:{event_code}"
+        # The display counter restarts with this runtime; persisted identities
+        # must not. Reuse the event's existing random correlation identifier.
+        correlation_id = uuid.uuid4().hex
+        event_id = f"{self._config.event_id_prefix}:{source_stream_id}:{event_code}:{correlation_id}"
         return _EventState(
             event_id=event_id,
             event_code=event_code,
-            stream_id=f"event:{source_stream_id}:{event_code}",
+            stream_id=f"event:{source_stream_id}:{event_code}:{correlation_id}",
             source_stream_id=source_stream_id,
-            correlation_id=uuid.uuid4().hex,
+            correlation_id=correlation_id,
             label=label,
         )
 
@@ -229,7 +232,9 @@ class TrackEventAssembler:
                 _normalize_string(payload.get("source_stream_id")) or source_stream_id
             )
             camera_id = _normalize_string(payload.get("camera_id")) or default_camera_id
-            world_anchor = _normalize_world_anchor(payload.get("world_anchor")) or packet_world_anchor
+            world_anchor = (
+                _normalize_world_anchor(payload.get("world_anchor")) or packet_world_anchor
+            )
             payload.update(
                 {
                     "tracklet_id": tracklet_id,
@@ -462,7 +467,9 @@ class TrackEventAssembler:
             "bbox01": list(object_data.get("bbox01") or []),
         }
         if world_anchor := object_data.get("world_anchor"):
-            subject["world_anchor"] = dict(world_anchor) if isinstance(world_anchor, dict) else world_anchor
+            subject["world_anchor"] = (
+                dict(world_anchor) if isinstance(world_anchor, dict) else world_anchor
+            )
         if state.tracklet_ids:
             subject["tracklet_ids"] = sorted(state.tracklet_ids)
         return subject
@@ -482,6 +489,20 @@ class TrackEventAssembler:
         vision["task"] = "tracking"
         vision["events"] = [dict(object_data)]
         vision["tracks"] = [dict(object_data)]
+        if "poses" in vision:
+            raw_poses = vision.get("poses")
+            vision["poses"] = (
+                [
+                    {**pose, "actor_subject_id": state.event_id}
+                    for pose in raw_poses
+                    if isinstance(pose, dict)
+                    and pose.get("tracking_id") == object_data.get("tracking_id")
+                    and pose.get("source_stream_id") == state.source_stream_id
+                    and pose.get("camera_id") == object_data.get("camera_id")
+                ]
+                if lifecycle != Lifecycle.CLOSE and isinstance(raw_poses, list)
+                else []
+            )
         vision["tracking_event"] = {
             "event_id": state.event_id,
             "event_code": state.event_code,
@@ -660,6 +681,28 @@ class TrackEventAssembler:
                         self._tracklet_key(state.source_stream_id, tracklet_id),
                         None,
                     )
+        return outputs
+
+    def close_stream(self, packet: Packet) -> list[Packet]:
+        """Close and forget only the disconnected source, without image evidence."""
+        outputs: list[Packet] = []
+        for event_id, state in list(self._events_by_id.items()):
+            if state.source_stream_id != packet.stream_id:
+                continue
+            if state.opened:
+                outputs.append(
+                    self._build_event_packet(
+                        packet,
+                        lifecycle=Lifecycle.CLOSE,
+                        object_data=dict(state.last_object),
+                        state=state,
+                    )
+                )
+            self._events_by_id.pop(event_id, None)
+            for tracklet_id in state.tracklet_ids:
+                self._event_id_by_tracklet_key.pop(
+                    self._tracklet_key(state.source_stream_id, tracklet_id), None
+                )
         return outputs
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002

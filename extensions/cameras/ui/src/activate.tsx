@@ -10,9 +10,13 @@ import { createCameraElementType } from "./elements/CameraElementType";
 import { createCamerasSettingsPanel } from "./settings/CamerasSettingsPanel";
 import { createAddCameraTool } from "./tools/addCameraTool";
 import { camerasTranslations } from "./translations";
+import { createHumanObservationRenderer } from "./notifications/HumanObservationRenderer";
+import { humanObservationTranslations } from "./notifications/humanObservationTranslations";
 
 export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(camerasTranslations);
+  host.i18n.registerTranslations(humanObservationTranslations);
+  host.registerNotificationRenderer(createHumanObservationRenderer(host));
   host.registerRenderView({
     id: "com.toposync.cameras.live-panorama",
     name: { key: "ext.cameras.live_panorama.title", fallback: "Panorâmica ao vivo" },

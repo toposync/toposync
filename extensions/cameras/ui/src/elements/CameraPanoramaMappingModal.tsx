@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { resolveToposyncUrl } from "@toposync/plugin-api";
+import { isActiveModalFocus, resolveToposyncUrl } from "@toposync/plugin-api";
 import type { CompositionElement, EditorToolSession, HostI18n, ToposyncHost, Viewport2DContext, NavigableViewportController } from "@toposync/plugin-api";
 
 import { CameraPanoramaRequestError, aimCameraPanorama, createCameraPanorama, deleteCameraPanorama, fetchCameraPanoramaContext, fetchCameraPanoramaJob, restoreCameraPanorama, updateCameraPanorama } from "../api/camerasApi";
@@ -281,6 +281,7 @@ export function CameraPanoramaMappingModal({ open, onClose, onOpenSettings, onAc
     closeButton?.setAttribute("aria-label", t("core.actions.close"));
     closeButton?.focus();
     const onKey = (event: KeyboardEvent) => {
+      if (typeof isActiveModalFocus === "function" && !isActiveModalFocus(panel ?? null)) return;
       if (event.key === "Escape") {
         const target = event.target as HTMLElement;
         if (target.closest(".cameraPanoramaViewport")) return;

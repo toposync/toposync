@@ -2118,6 +2118,10 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
   const updateIntervalSeconds = Number.isFinite(updateIntervalSecondsRaw) ? Math.max(0, Math.min(60, updateIntervalSecondsRaw)) : 1.0;
   const notificationType = textConfigValue((config as any).notification_type, "pipelines.event");
   const dedupeKeyTemplate = textConfigValue((config as any).dedupe_key_template, "{{subject.id}}");
+  const payloadPaths = Array.isArray(config.include_payload_paths)
+    ? config.include_payload_paths.filter((value): value is string => typeof value === "string")
+    : [];
+  const payloadPathOptions = payloadPaths.map((value) => ({ value, label: value }));
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -2175,8 +2179,18 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.notify.realtime")}</span>
-        <input type="checkbox" checked={realtime} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, realtime: event.target.checked }))} />
+        <input type="checkbox" checked={realtime} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, realtime: event.target.checked,
+          ...(!event.target.checked ? { include_ephemeral_image: false } : {}),
+        }))} />
       </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.notify.ephemeral_image")}</span>
+        <input type="checkbox" disabled={!realtime} checked={realtime && config.include_ephemeral_image === true}
+          aria-label={t("core.ui.pipelines.panels.notify.ephemeral_image")}
+          onChange={(event) => { if (realtime) onUpdateConfig((prev) => ({ ...prev, include_ephemeral_image: event.target.checked })); }} />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.notify.ephemeral_image_hint")}</div>
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.notify.update_interval_seconds")}</span>
@@ -2211,6 +2225,26 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
               }}
             />
           </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.notify.payload_paths")}</span>
+            <CreatableSelect<SelectOption, true>
+              isMulti
+              aria-label={t("core.ui.pipelines.panels.notify.payload_paths")}
+              styles={pipelinesReactSelectStyles}
+              value={payloadPathOptions}
+              options={payloadPathOptions}
+              placeholder={t("core.ui.pipelines.panels.notify.payload_paths_placeholder")}
+              formatCreateLabel={(value) => t("core.ui.pipelines.panels.notify.payload_paths_add", { path: value })}
+              isValidNewOption={(value) => payloadPaths.length < 16 && value.length <= 256
+                && /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(value)
+                && !payloadPaths.includes(value)}
+              onChange={(value: MultiValue<SelectOption>) => onUpdateConfig((prev) => ({
+                ...prev, include_payload_paths: value.map((item) => item.value),
+              }))}
+            />
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.notify.payload_paths_hint")}</div>
 
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.notify.dedupe_key_template")}</span>

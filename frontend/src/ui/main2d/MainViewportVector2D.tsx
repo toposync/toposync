@@ -437,7 +437,7 @@ export function MainViewportVector2D({
     if (!activeNotification || !activeNotificationRenderer?.create2DOverlay) return null;
     try {
       return activeNotificationRenderer.create2DOverlay(
-        { compositionId },
+        { compositionId, elements, requestRender: invalidate },
         activeNotification,
         { openImage: () => undefined },
       );
@@ -445,7 +445,7 @@ export function MainViewportVector2D({
       console.warn(`[vector2d:create2DOverlay:${activeNotificationRenderer.id}]`, err);
       return null;
     }
-  }, [activeNotification, activeNotificationRenderer, compositionId]);
+  }, [activeNotification, activeNotificationRenderer, compositionId, elements, invalidate]);
 
   useEffect(() => {
     return () => {
@@ -471,7 +471,7 @@ export function MainViewportVector2D({
     }
 
     return { screenX, screenY, trail, priority: pinData.priority, closed: pinData.closed };
-  }, [bounds, notificationOverlay, stageHeight, stageWidth, transform]);
+  }, [bounds, notificationOverlay, stageHeight, stageWidth, transform, stateVersion]);
 
   const vectorViewBox = useMemo(() => {
     const viewBox = computeMain2DVectorViewBox({

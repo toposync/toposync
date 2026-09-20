@@ -21,6 +21,8 @@ import { pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constan
 import type { InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 import { textConfigValue } from "../../utils";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
+import { buildFilterExpressionUpstreamContext } from "./filterExpressionContext";
+import { resolveVisionCatalogSelection } from "./visionCatalogSelection";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -240,7 +242,7 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
 
 function readTaskCatalog(
   status: Record<string, unknown> | undefined,
-  task: "classification" | "detection" | "segmentation",
+  task: "classification" | "detection" | "segmentation" | "pose",
 ): VisionTaskCatalog | null {
   if (!status || !isRecord(status)) return null;
   const vision = isRecord(status.vision) ? status.vision : null;
@@ -1222,14 +1224,32 @@ export function VisionConfigCard({
 
   const isClassification = String(operatorId || "").trim() === "vision.classify_image";
   const isSegmentation = String(operatorId || "").trim() === "vision.segment_instances";
-  const isDetection = !isTracking && !isClassification && !isSegmentation;
+  const isPose = String(operatorId || "").trim() === "vision.pose_estimate";
+  const isDetection = !isTracking && !isClassification && !isSegmentation && !isPose;
   const customOnnxSupported = isDetection || isClassification || isSegmentation;
-  const task = isSegmentation ? "segmentation" : isClassification ? "classification" : "detection";
+  const task = isPose ? "pose" : isSegmentation ? "segmentation" : isClassification ? "classification" : "detection";
   const resolvedProcessingServerId = String(processingServerId || "").trim() || "local";
+  const poseInputArtifact = textConfigValue(config.input_artifact_name, "");
+  const maxPosesRaw = Number(config.max_poses_per_frame ?? 16);
+  const maxPosesValid = Number.isInteger(maxPosesRaw) && maxPosesRaw >= 1 && maxPosesRaw <= 512;
+  const poseArtifactNames = useMemo(() => [...new Set([
+    "main",
+    ...buildFilterExpressionUpstreamContext(steps, index, operatorsById).artifactNames,
+    ...(poseInputArtifact ? [poseInputArtifact] : []),
+  ])], [steps, index, operatorsById, poseInputArtifact]);
 
-  const [serverStatus, setServerStatus] = useState<ProcessingServerStatus | null>(null);
-  const [catalogLoading, setCatalogLoading] = useState(false);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogResponse, setCatalogResponse] = useState<{ serverId: string; status: ProcessingServerStatus } | null>(null);
+  const serverStatus = catalogResponse?.serverId === resolvedProcessingServerId ? catalogResponse.status : null;
+  const catalogRequestRef = useRef(0);
+  const catalogServerRef = useRef(resolvedProcessingServerId);
+  catalogServerRef.current = resolvedProcessingServerId;
+  const selectedModelRef = useRef(modelId);
+  selectedModelRef.current = modelId;
+  const [catalogRequestState, setCatalogRequestState] = useState<{
+    serverId: string; loading: boolean; error: string | null;
+  }>({ serverId: resolvedProcessingServerId, loading: true, error: null });
+  const catalogLoading = catalogRequestState.serverId !== resolvedProcessingServerId || catalogRequestState.loading;
+  const catalogError = catalogRequestState.serverId === resolvedProcessingServerId ? catalogRequestState.error : null;
   const [showCustomOnnxWizard, setShowCustomOnnxWizard] = useState(false);
   const [showHuggingFaceWizard, setShowHuggingFaceWizard] = useState(false);
   const [customOnnxSuccess, setCustomOnnxSuccess] = useState<string | null>(null);
@@ -1257,25 +1277,25 @@ export function VisionConfigCard({
   const artifactFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const reloadCatalog = useCallback(async () => {
-    if (isTracking) return;
-    setCatalogLoading(true);
-    setCatalogError(null);
+    if (isTracking || catalogServerRef.current !== resolvedProcessingServerId) return;
+    const requestId = ++catalogRequestRef.current;
+    setCatalogRequestState({ serverId: resolvedProcessingServerId, loading: true, error: null });
     try {
       const nextStatus = await getProcessingServerStatus(resolvedProcessingServerId);
-      setServerStatus(nextStatus);
-      if (!nextStatus.ok) {
-        setCatalogError(String(nextStatus.error || ""));
-      }
+      if (requestId !== catalogRequestRef.current || catalogServerRef.current !== resolvedProcessingServerId) return;
+      setCatalogResponse({ serverId: resolvedProcessingServerId, status: nextStatus });
+      setCatalogRequestState({ serverId: resolvedProcessingServerId, loading: false,
+        error: nextStatus.ok ? null : String(nextStatus.error || "") });
     } catch (error: any) {
-      setCatalogError(String(error?.message ?? error));
-      setServerStatus(null);
-    } finally {
-      setCatalogLoading(false);
+      if (requestId !== catalogRequestRef.current || catalogServerRef.current !== resolvedProcessingServerId) return;
+      setCatalogRequestState({ serverId: resolvedProcessingServerId, loading: false, error: String(error?.message ?? error) });
+      setCatalogResponse(null);
     }
   }, [isTracking, resolvedProcessingServerId]);
 
   useEffect(() => {
     void reloadCatalog();
+    return () => { catalogRequestRef.current += 1; };
   }, [reloadCatalog]);
 
   const taskCatalog = useMemo(() => {
@@ -1303,6 +1323,8 @@ export function VisionConfigCard({
     setLocalBuildConsentChecked(false);
     setLocalBuildConsentError(null);
     setShowProvisionDetails(false);
+    setArtifactModalItem(null);
+    setArtifactModalFile(null);
   }, [modelId, resolvedProcessingServerId]);
 
   const categoryOptions = useMemo<SelectOption[]>(() => {
@@ -1318,30 +1340,37 @@ export function VisionConfigCard({
   }, [categories]);
 
   const fallbackCatalogItems = useMemo(
-    () => (isSegmentation ? segmentationFallbackItems() : isClassification ? classificationFallbackItems() : detectionFallbackItems()),
-    [isClassification, isSegmentation],
+    () => (isPose ? [] : isSegmentation ? segmentationFallbackItems() : isClassification ? classificationFallbackItems() : detectionFallbackItems()),
+    [isClassification, isSegmentation, isPose],
   );
 
   const catalogItems = useMemo(() => {
+    if (isPose && !taskCatalog) return [];
     const rawItems = taskCatalog?.items ?? [];
-    if (rawItems.length > 0) return rawItems;
+    if (rawItems.length > 0 && (!isPose || !modelId || rawItems.some((item) => item.modelId === modelId))) return rawItems;
+    if (isPose && modelId) return [fallbackCatalogItem(modelId, modelId, "onnxruntime", { custom: true }), ...rawItems];
     const fallback = [...fallbackCatalogItems];
     if (modelId && !fallback.some((item) => item.modelId === modelId)) {
       fallback.unshift(fallbackCatalogItem(modelId, modelId, "onnxruntime", { custom: true }));
     }
     return fallback;
-  }, [fallbackCatalogItems, modelId, taskCatalog]);
+  }, [fallbackCatalogItems, modelId, taskCatalog, isPose]);
 
   const selectedCatalogItem = useMemo(
     () => catalogItems.find((item) => item.modelId === modelId) ?? null,
     [catalogItems, modelId],
   );
+  const catalogSelection = resolveVisionCatalogSelection({
+    serverId: resolvedProcessingServerId, responseServerId: catalogResponse?.serverId,
+    responseOk: serverStatus?.ok === true, loading: catalogLoading, error: catalogError,
+    items: taskCatalog?.items ?? null, modelId,
+  });
 
   const modelOptions = useMemo<VisionModelOption[]>(() => {
     const hasAvailable = catalogItems.some((item) => item.availability === "available");
     const visibleItems = showAdvanced
       ? catalogItems
-      : hasAvailable
+      : hasAvailable && !isPose
       ? catalogItems.filter((item) => item.availability === "available" || item.modelId === modelId)
       : catalogItems;
     return visibleItems.map((item) => {
@@ -1353,16 +1382,13 @@ export function VisionConfigCard({
         value: item.modelId,
         label: `${item.displayName}${recommendedText}${customText}`,
         item,
-        isDisabled: item.availability !== "available" && item.modelId !== modelId,
+        isDisabled: (isPose ? item.availability === "incompatible" : item.availability !== "available") && item.modelId !== modelId,
       };
     });
-  }, [catalogItems, modelId, showAdvanced, t]);
-  const availableItems = useMemo(
-    () => catalogItems.filter((item) => item.availability === "available"),
-    [catalogItems],
-  );
+  }, [catalogItems, modelId, showAdvanced, isPose, t]);
+  const availableItems = catalogSelection.readyItems;
   const suggestedAvailableItem = useMemo(() => pickSuggestedAvailableModel(availableItems), [availableItems]);
-  const selectedModelIncompatible = selectedCatalogItem?.availability === "incompatible";
+  const selectedModelIncompatible = catalogSelection.item?.availability === "incompatible";
   const basicModelItems = useMemo(() => {
     const next: VisionModelCatalogItem[] = [];
     const seen = new Set<string>();
@@ -1374,7 +1400,7 @@ export function VisionConfigCard({
     }
     return next.slice(0, isSegmentation ? 4 : 6);
   }, [catalogItems, selectedCatalogItem]);
-  const manualInstallItem = selectedCatalogItem ?? null;
+  const manualInstallItem = catalogSelection.item;
   const manualInstallFile = artifactFileName(manualInstallItem?.artifactPath || "");
   const manualInstallAcquisition = manualInstallItem?.acquisition ?? defaultAcquisitionForModelId(manualInstallItem?.modelId || "");
   const manualInstallNeedsExport = manualInstallAcquisition.artifactSource === "checkpoint_export_required";
@@ -1408,8 +1434,8 @@ export function VisionConfigCard({
   const selectedModelMeta = [selectedBadgeText, selectedProfileLabel].filter(Boolean).join(" • ");
   const selectedModelHintKey = useMemo(() => modelHintTranslationKey(modelId), [modelId]);
   const manualInstallFailed = !!manualInstallItem?.installJob?.error || !!localBuildError;
-  const classificationNeedsModelSetup = isClassification && !manualInstallItem;
-  const classificationEmptyCatalog = isClassification && catalogItems.length === 0;
+  const classificationNeedsModelSetup = isClassification && catalogSelection.state === "select_model";
+  const classificationEmptyCatalog = isClassification && taskCatalog?.items.length === 0;
   const showBasicModelPicker = showAdvanced ? modelOptions.length > 0 : basicModelItems.length > 0;
   const provisionStatusTone = selectedModelIncompatible
     ? "unavailable"
@@ -1417,7 +1443,7 @@ export function VisionConfigCard({
       ? "failed"
       : manualInstallBusy
         ? "busy"
-        : manualInstallItem?.artifactExists
+        : catalogSelection.ready
           ? "ready"
           : "missing";
   const provisionStatusLabel = t(
@@ -1431,7 +1457,7 @@ export function VisionConfigCard({
       ? t("core.ui.pipelines.panels.yolo.provisioning.summary_busy")
       : manualInstallFailed
         ? t("core.ui.pipelines.panels.yolo.provisioning.summary_failed")
-        : manualInstallItem?.artifactExists
+        : catalogSelection.ready
           ? t("core.ui.pipelines.panels.yolo.provisioning.summary_ready")
           : manualLocalBuildActionable
             ? t("core.ui.pipelines.panels.yolo.provisioning.summary_missing_actionable")
@@ -1765,6 +1791,23 @@ export function VisionConfigCard({
   const artifactModalNeedsExport = artifactModalAcquisition.artifactSource === "checkpoint_export_required";
   const artifactModalGuideUrl = artifactModalAcquisition.guideUrl;
   const artifactModalExportGuideUrl = artifactModalAcquisition.exportGuideUrl;
+  const installPoseModel = async (item: VisionModelCatalogItem): Promise<void> => {
+    if (localBuildLoadingModelId || manualInstallBusy) return;
+    setLocalBuildLoadingModelId(item.modelId);
+    setLocalBuildError(null);
+    setLocalBuildSuccess(null);
+    try {
+      await installProcessingServerVisionModel(resolvedProcessingServerId, item.modelId);
+      if (catalogServerRef.current !== resolvedProcessingServerId || selectedModelRef.current !== item.modelId) return;
+      setLocalBuildSuccess(t("core.ui.pipelines.panels.pose.install_started", { model: item.displayName, serverId: resolvedProcessingServerId }));
+      await reloadCatalog();
+    } catch (error: unknown) {
+      if (catalogServerRef.current !== resolvedProcessingServerId || selectedModelRef.current !== item.modelId) return;
+      setLocalBuildError(String(error instanceof Error ? error.message : error));
+    } finally {
+      if (catalogServerRef.current === resolvedProcessingServerId && selectedModelRef.current === item.modelId) setLocalBuildLoadingModelId("");
+    }
+  };
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -1805,6 +1848,7 @@ export function VisionConfigCard({
               <span>{t("core.ui.pipelines.panels.yolo.model_id")}</span>
               {showAdvanced ? (
                 <Select<VisionModelOption, false>
+                  aria-label={t("core.ui.pipelines.panels.yolo.model_id")}
                   styles={pipelinesReactSelectStyles as any}
                   options={modelOptions}
                   value={selectedModelOption}
@@ -1845,12 +1889,30 @@ export function VisionConfigCard({
             </label>
           ) : null}
           <div className="pipelinesStepHint">
-            {isClassification
+            {isPose
+              ? t("core.ui.pipelines.panels.pose.model_hint")
+              : isClassification
               ? t("core.ui.pipelines.panels.yolo.classification_model_id_hint")
               : isSegmentation
               ? t("core.ui.pipelines.panels.yolo.segmentation_model_id_hint")
               : t("core.ui.pipelines.panels.yolo.model_id_hint")}
           </div>
+          {!manualInstallItem && !classificationNeedsModelSetup ? (
+            <div className="pipelinesOperatorConfigCard pipelinesProvisionCard">
+              <div className="cardBody" role="status">
+                {t(`core.ui.pipelines.panels.yolo.provisioning.catalog_${catalogSelection.state}`,
+                  { serverId: resolvedProcessingServerId, model: modelId })}
+              </div>
+              <div className="pipelinesProvisionActions">
+                <button className="pillButton" type="button" disabled={catalogLoading} onClick={() => void reloadCatalog()}>
+                  {t("core.ui.pipelines.panels.yolo.refresh_models")}
+                </button>
+                {onOpenProcessingServers ? <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
+                  {t("core.ui.pipelines.form.processing_server.manage")}
+                </button> : null}
+              </div>
+            </div>
+          ) : null}
           {classificationNeedsModelSetup ? (
             <div className="pipelinesOperatorConfigCard pipelinesProvisionCard" style={{ marginTop: 10 }}>
               <div className="cardHeaderRow">
@@ -1919,7 +1981,14 @@ export function VisionConfigCard({
                 <div className={`pipelinesProvisionStatus pipelinesProvisionStatus-${provisionStatusTone}`}>{provisionStatusLabel}</div>
               </div>
               {showSelectedModelNarrative ? <div className="cardBody">{t(selectedModelHintKey)}</div> : null}
-              <div className="cardBody">{provisionSummary}</div>
+              <div className="cardBody">{isPose && manualInstallItem.installSupported && !manualInstallItem.artifactExists && !manualInstallBusy && !manualInstallFailed && !selectedModelIncompatible
+                ? t("core.ui.pipelines.panels.pose.install_hint", { serverId: resolvedProcessingServerId })
+                : provisionSummary}</div>
+              {isPose && selectedModelIncompatible && manualInstallItem.availabilityReason ? (
+                <div className="errorText" role="alert">{manualInstallItem.availabilityReason === "fallback"
+                  ? t("core.ui.pipelines.panels.pose.model_missing", { model: modelId, serverId: resolvedProcessingServerId })
+                  : t("core.ui.pipelines.panels.pose.unavailable", { reason: manualInstallItem.availabilityReason })}</div>
+              ) : null}
               {manualSuggestedReadyItem ? (
                 <div className="pipelinesStepHint">
                   {t(
@@ -1950,7 +2019,15 @@ export function VisionConfigCard({
               {localBuildError ? <div className="errorText">{localBuildError}</div> : null}
               {!manualInstallItem.artifactExists || selectedModelIncompatible ? (
                 <div className="pipelinesProvisionActions">
-                  {manualInstallNeedsExport && manualLocalBuildActionable && !selectedModelIncompatible ? (
+                  {isPose && manualInstallItem.installSupported && !selectedModelIncompatible && !manualInstallItem.acquisition.explicitConsentRequired ? (
+                    <button className="pillButton pillButtonPrimary" type="button"
+                      disabled={!!localBuildLoadingModelId || manualInstallBusy || catalogLoading || !serverStatus?.ok}
+                      onClick={() => void installPoseModel(manualInstallItem)}>
+                      {localBuildLoadingModelId === manualInstallItem.modelId || manualInstallBusy
+                        ? t("core.ui.pipelines.panels.yolo.installing_model")
+                        : t("core.ui.pipelines.panels.yolo.install_model", { model: manualInstallItem.displayName })}
+                    </button>
+                  ) : manualInstallNeedsExport && manualLocalBuildActionable && !selectedModelIncompatible ? (
                     <button
                       className="pillButton pillButtonPrimary"
                       type="button"
@@ -2235,6 +2312,29 @@ export function VisionConfigCard({
         </>
       )}
 
+      {isPose ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.pose.input_artifact")}</span>
+            <select className="pipelinesInput" value={poseInputArtifact}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, input_artifact_name: event.target.value }))}>
+              <option value="">{t("core.ui.pipelines.panels.pose.input_automatic")}</option>
+              {poseArtifactNames.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.pose.input_hint")}</div>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.pose.max_poses")}</span>
+            <PipelinesNumberInput className="pipelinesInput" min={1} max={512} step={1}
+              value={maxPosesRaw} aria-invalid={!maxPosesValid} aria-describedby={`${stepUid}-pose-count-help`}
+              onChange={(value) => onUpdateConfig((prev) => ({ ...prev, max_poses_per_frame: value }))} />
+          </label>
+          <div id={`${stepUid}-pose-count-help`} className={maxPosesValid ? "pipelinesStepHint" : "errorText"}>
+            {t(maxPosesValid ? "core.ui.pipelines.panels.pose.max_poses_hint" : "core.ui.pipelines.panels.pose.max_poses_error")}
+          </div>
+        </>
+      ) : null}
+
       {isDetection ? (
         <>
           <label className="pipelinesLabel">
@@ -2308,7 +2408,7 @@ export function VisionConfigCard({
         </>
       ) : null}
 
-      {!isTracking && !isClassification ? (
+      {!isTracking && !isClassification && !isPose ? (
         <>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.yolo.categories")}</span>

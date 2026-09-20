@@ -4,6 +4,7 @@ import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 import { applyNodeChanges, Background, Controls, MiniMap, ReactFlow, useUpdateNodeInternals } from "@xyflow/react";
 import type {
   Connection,
+  EdgeChange,
   EdgeTypes,
   NodeChange,
   NodeTypes,
@@ -372,11 +373,28 @@ export function TopologyView({
 
   const handleNodesChange = useCallback(
     (changes: NodeChange<TopologyNode>[]) => {
+      for (const change of changes) {
+        if (change.type !== "select") continue;
+        setSelection((previous) => {
+          if (change.selected) return { kind: "node", id: change.id };
+          return previous.kind === "node" && previous.id === change.id ? { kind: "summary" } : previous;
+        });
+      }
       if (!canEdit) return;
       setCanvasNodes((previous) => applyNodeChanges(changes, previous) as TopologyNode[]);
     },
     [canEdit],
   );
+
+  const handleEdgesChange = useCallback((changes: EdgeChange<TopologyEdge>[]) => {
+    for (const change of changes) {
+      if (change.type !== "select") continue;
+      setSelection((previous) => {
+        if (change.selected) return { kind: "edge", id: change.id };
+        return previous.kind === "edge" && previous.id === change.id ? { kind: "summary" } : previous;
+      });
+    }
+  }, []);
 
   const handleNodeDragStop = useCallback<OnNodeDrag<TopologyNode>>(
     (_, node) => {
@@ -407,6 +425,18 @@ export function TopologyView({
       commitGraphResult(connectTopologyGraphEdge(latestGraphRef.current, connection, operatorsById));
     },
     [canEdit, commitGraphResult, operatorsById],
+  );
+
+  const handleInspectorConnect = useCallback(
+    (connection: Connection): string | null => {
+      if (!canEdit) return t("core.ui.pipelines.topology.read_only", {}, "Read-only graph view");
+      const result = connectTopologyGraphEdge(latestGraphRef.current, connection, operatorsById);
+      if (!result.ok) return editResultMessage(result, t);
+      // Keep the node inspector mounted so keyboard focus stays on Connect.
+      commitGraphResult({ ok: true, graph: result.graph });
+      return null;
+    },
+    [canEdit, commitGraphResult, operatorsById, t],
   );
 
   const handleUpdateNodeConfig = useCallback(
@@ -679,6 +709,7 @@ export function TopologyView({
             deleteKeyCode={canEdit ? ["Backspace", "Delete"] : null}
             onInit={setFlowInstance}
             onNodesChange={handleNodesChange}
+            onEdgesChange={handleEdgesChange}
             onNodesDelete={(deletedNodes) => deleteNodeIds(deletedNodes.map((node) => node.id))}
             onEdgesDelete={(deletedEdges) => {
               if (selection.kind === "node") return;
@@ -733,6 +764,7 @@ export function TopologyView({
         operatorPanels={operatorPanels}
         onOpenTelemetryField={onOpenTelemetryField}
         onUpdateNodeConfig={handleUpdateNodeConfig}
+        onConnect={handleInspectorConnect}
         onUpdateEdgePolicy={handleUpdateEdgePolicy}
         onDeleteNode={(nodeId) => deleteNodeIds([nodeId])}
         onDeleteEdge={(edgeId) => deleteEdgeIds([edgeId])}

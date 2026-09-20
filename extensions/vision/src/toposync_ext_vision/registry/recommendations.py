@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 from .builtin_data import (
     OFFICIAL_DETECTION_MODEL_IDS,
     OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS,
-    OFFICIAL_RTMPOSE_MODEL_IDS,
+    OFFICIAL_POSE_MODEL_IDS,
 )
 from .installer import VisionModelInstallManager
 from .manifests import ModelManifest, ModelRegistry, VisionTask, build_default_model_registry
@@ -115,6 +116,8 @@ def _pick_profile(
 
 
 def _profile_order_for_task(task: VisionTask, profile: ProfileId) -> tuple[str, ...]:
+    if task == "pose":
+        return OFFICIAL_POSE_MODEL_IDS
     if task == "segmentation":
         return _SEGMENTATION_PROFILE_ORDER.get(profile, _SEGMENTATION_PROFILE_ORDER["cpu_balanced"])
     if task == "detection":
@@ -126,7 +129,7 @@ def _official_model_ids_for_task(task: VisionTask) -> tuple[str, ...]:
     if task == "segmentation":
         return OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS
     if task == "pose":
-        return OFFICIAL_RTMPOSE_MODEL_IDS
+        return OFFICIAL_POSE_MODEL_IDS
     if task == "detection":
         return OFFICIAL_DETECTION_MODEL_IDS
     return ()
@@ -200,7 +203,7 @@ def _runtime_backend_status_by_id(
             {
                 "id": "onnxruntime",
                 "available": bool(providers),
-                "tasks": ["classification", "detection", "segmentation"],
+                "tasks": ["classification", "detection", "segmentation", "pose"],
                 "artifact_formats": ["onnx"],
                 "execution_providers": providers,
             }
@@ -238,6 +241,9 @@ def _availability_for_manifest(
     backend_status = backend_statuses.get(runtime)
     if backend_status is None or not bool(backend_status.get("available")):
         return "incompatible", "backend_unavailable", []
+    supported_tasks = backend_status.get("tasks")
+    if isinstance(supported_tasks, list) and manifest.task not in supported_tasks:
+        return "incompatible", "task_unsupported", []
 
     providers = {str(item or "").strip() for item in list(execution_providers or []) if str(item or "").strip()}
     artifact_exists = manifest.resolve_artifact_path().is_file()
@@ -255,7 +261,36 @@ def _availability_for_manifest(
         return "incompatible", "hardware_incompatible", []
     if not artifact_exists:
         return "manifest_only", "artifact_missing", compatible_provider_ids
+    if manifest.task == "pose":
+        error = _pose_artifact_error(manifest)
+        if error:
+            return "incompatible", error, compatible_provider_ids
     return "available", "ok", compatible_provider_ids
+
+
+@lru_cache(maxsize=16)
+def _validate_cached_pose_artifact(manifest_json: str, signature: tuple[int, int, int]) -> str:
+    """Cache validation results, never inference sessions, for catalog polling."""
+    from .model_store import _validate_manifest_runtime
+
+    _ = signature  # File replacement or modification invalidates the cache key.
+    try:
+        _validate_manifest_runtime(ModelManifest.model_validate_json(manifest_json))
+    except Exception as exc:
+        return str(exc)
+    return ""
+
+
+def _pose_artifact_error(manifest: ModelManifest) -> str:
+    try:
+        path = manifest.resolve_artifact_path()
+        stat = path.stat()
+        resolved = manifest.model_copy(update={"artifact_path": str(path)})
+        return _validate_cached_pose_artifact(
+            resolved.model_dump_json(), (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        )
+    except OSError as exc:
+        return str(exc)
 
 
 def _catalog_entry(
@@ -498,7 +533,7 @@ def list_official_pose_shortlist(
 ) -> list[dict[str, Any]]:
     registry = _coerce_registry(model_registry)
     manifests: list[dict[str, Any]] = []
-    for model_id in OFFICIAL_RTMPOSE_MODEL_IDS:
+    for model_id in OFFICIAL_POSE_MODEL_IDS:
         manifest = registry.get_manifest(model_id)
         if manifest is None or manifest.task != "pose":
             continue

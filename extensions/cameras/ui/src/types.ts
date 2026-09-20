@@ -318,6 +318,12 @@ export type CameraRayGroundCalibratedView = {
 };
 
 export type CameraProjectionSolveResult = {
+  metric_geometry?: {
+    status: "ready" | "unavailable";
+    reason?: string;
+    maximum_reprojection_error?: number | null;
+    check_errors_meters?: number[];
+  };
   accepted: boolean;
   status: "ready" | "review" | "incomplete";
   quality: {

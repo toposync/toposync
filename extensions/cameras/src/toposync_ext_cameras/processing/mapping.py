@@ -61,6 +61,7 @@ class GroundCalibrationPoint:
 class GroundProjectionSpec:
     lens: GroundLens
     points: tuple[GroundCalibrationPoint, ...]
+    source_geometry: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)

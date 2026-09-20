@@ -6,6 +6,7 @@ from typing import Any, AsyncIterator
 
 
 logger = logging.getLogger("toposync.pipelines.transport")
+PROCESSING_READY_EVENT_TYPE = "processing_ready"
 
 
 class ProcessingTransportError(RuntimeError):
@@ -87,12 +88,15 @@ class HttpProcessingTransport:
             error_prefix="Processing config push failed",
         )
 
-    async def stream_events(self, *, last_event_id: int = 0) -> AsyncIterator[dict[str, Any]]:
+    async def stream_events(self, *, last_event_id: int = 0,
+                            event_epoch: str = "") -> AsyncIterator[dict[str, Any]]:
         client = await self._ensure_client()
         url = f"{self._base}/api/processing/events/stream"
         headers: dict[str, str] = {}
         if int(last_event_id) > 0:
             headers["Last-Event-ID"] = str(int(last_event_id))
+        if event_epoch:
+            headers["Last-Event-Epoch"] = event_epoch
 
         async with client.stream("GET", url, headers=headers) as res:
             if res.status_code >= 300:
@@ -110,10 +114,13 @@ class HttpProcessingTransport:
                 if isinstance(event, dict):
                     yield event
 
-    async def ack(self, last_event_id: int) -> None:
+    async def ack(self, last_event_id: int, *, event_epoch: str = "") -> None:
         client = await self._ensure_client()
         url = f"{self._base}/api/processing/events/ack"
-        res = await client.post(url, json={"last_event_id": int(last_event_id)}, timeout=self._timeout_s)
+        payload = {"last_event_id": int(last_event_id)}
+        if event_epoch:
+            payload["event_epoch"] = event_epoch
+        res = await client.post(url, json=payload, timeout=self._timeout_s)
         if res.status_code >= 300:
             logger.debug("processing ack failed status=%s body=%s", res.status_code, res.text)
 

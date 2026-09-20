@@ -41,14 +41,15 @@ def _encode_artifact_inline(artifact: Artifact) -> dict[str, Any] | None:
     blob: bytes | None = None
     inline_json: Any = None
     encoding = "bytes"
-    mime = artifact.mime_type or "application/octet-stream"
+    # Encoding describes the transport container. Preserve the source MIME
+    # declaration (including absence) for consumers of the decoded artifact.
+    mime = artifact.mime_type
     if isinstance(artifact.data, (bytes, bytearray, memoryview)):
         blob = bytes(artifact.data)
     elif hasattr(artifact.data, "shape") and hasattr(artifact.data, "dtype"):
         try:
             blob = _encode_npy(artifact.data)
             encoding = "npy"
-            mime = mime or "application/x-toposync-npy"
         except Exception:
             return None
     elif isinstance(artifact.data, (dict, list, str, int, float, bool)):

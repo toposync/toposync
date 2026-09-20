@@ -1,8 +1,9 @@
-import React, { useEffect } from "react";
+import React, { useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 import { i18n } from "../util/i18n";
 import { Icon } from "./Icon";
+import { activateModalFocus } from "./modalFocus";
 
 type Props = {
   open: boolean;
@@ -26,17 +27,14 @@ export function Modal({
   bodyStyle,
 }: Props): React.ReactElement | null {
   const { t } = i18n.useI18n();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  useLayoutEffect(() => { onCloseRef.current = onClose; });
 
-  useEffect(() => {
-    if (!open) return;
-
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose]);
+  useLayoutEffect(() => {
+    if (!open || !panelRef.current) return;
+    return activateModalFocus(panelRef.current, () => onCloseRef.current());
+  }, [open]);
 
   if (!open) return null;
   if (typeof document === "undefined") return null;
@@ -62,6 +60,8 @@ export function Modal({
       role="presentation"
     >
       <div
+        ref={panelRef}
+        tabIndex={-1}
         className={["modalPanel", panelClassName].filter(Boolean).join(" ")}
         style={panelStyle}
         role="dialog"

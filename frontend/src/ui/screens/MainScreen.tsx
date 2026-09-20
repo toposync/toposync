@@ -157,6 +157,7 @@ function notificationPayload(notification: Notification): Record<string, unknown
 function notificationIsOpenRealtime(notification: Notification | null | undefined): boolean {
   if (!notification) return false;
   const payload = notificationPayload(notification);
+  if (payload.source === "pipelines") return false;
   return asTrimmedString(payload.status).toLowerCase() === "open" && payload.realtime === true;
 }
 
@@ -552,7 +553,17 @@ export function MainScreen({
     push(t("core.ui.notifications.details.meta.event_id", {}, "Event ID"), eventId);
     push(t("core.ui.notifications.details.meta.event_code", {}, "Event code"), eventCode);
     push(t("core.ui.notifications.details.meta.tracking_id", {}, "Tracking ID"), trackingId);
-    push(t("core.ui.notifications.details.meta.duration", {}, "Duration"), duration);
+    push(payload.source === "pipelines"
+      ? t("core.ui.notifications.details.meta.observed_duration", {}, "Duration through last update")
+      : t("core.ui.notifications.details.meta.duration", {}, "Duration"), duration);
+    if (event.duration_status === "clock_changed") {
+      push(t("core.ui.notifications.details.meta.duration", {}, "Duration"),
+        t("core.ui.notifications.details.meta.clock_changed", {}, "Time reference changed; duration unavailable"));
+    }
+    if (event.duration_status === "invalid_interval") {
+      push(t("core.ui.notifications.details.meta.duration", {}, "Duration"),
+        t("core.ui.notifications.details.meta.invalid_interval", {}, "Invalid time interval; duration unavailable"));
+    }
     push(t("core.ui.notifications.details.meta.created_at", {}, "Created"), createdAt);
     push(t("core.ui.notifications.details.meta.updated_at", {}, "Updated"), updatedAt);
 
@@ -1603,6 +1614,10 @@ export function MainScreen({
               {activeNotification.description ? <div className="notificationDetailsDescription">{activeNotification.description}</div> : null}
             </div>
 
+            {activeNotificationRenderer?.renderDetails ? (
+              activeNotificationRenderer.renderDetails(activeNotification)
+            ) : null}
+
             {activeNotificationImage ? (
               <div className="notificationGallery">
                 <div className="notificationGalleryStage">
@@ -1679,7 +1694,7 @@ export function MainScreen({
                   </div>
                 ) : null}
               </div>
-            ) : (
+            ) : activeNotificationRenderer?.renderDetails ? null : (
               <div className="cardBody">{t("core.ui.notifications.details.no_images", {}, "No images found for this detection.")}</div>
             )}
 

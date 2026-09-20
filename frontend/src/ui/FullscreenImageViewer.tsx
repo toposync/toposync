@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 import { i18n } from "../util/i18n";
 import { Icon } from "./Icon";
+import { activateModalFocus, isActiveModalFocus } from "./modalFocus";
 
 export type FullscreenImageViewerItem = {
   id: string;
@@ -82,6 +83,8 @@ export function FullscreenImageViewer({ open, items, index, onIndexChange, onClo
   const currentIndex = total > 0 ? Math.max(0, Math.min(index, total - 1)) : 0;
   const activeItem = items[currentIndex] ?? null;
   const canNavigate = total > 1;
+  const panelRef = useRef<HTMLDivElement>(null);
+  const visible = open && activeItem !== null;
 
   const showPrev = useCallback(() => {
     if (!canNavigate) return;
@@ -97,6 +100,12 @@ export function FullscreenImageViewer({ open, items, index, onIndexChange, onClo
     onClose();
     exitFullscreenIfActive();
   }, [onClose]);
+  const closeRef = useRef(close);
+  useLayoutEffect(() => { closeRef.current = close; });
+  useLayoutEffect(() => {
+    if (!visible || !panelRef.current) return;
+    return activateModalFocus(panelRef.current, () => closeRef.current());
+  }, [visible]);
 
   useEffect(() => {
     if (!open || total > 0) return;
@@ -112,12 +121,8 @@ export function FullscreenImageViewer({ open, items, index, onIndexChange, onClo
     if (!open) return;
 
     function onKeyDown(event: KeyboardEvent): void {
-      if (isEditableTarget(event.target)) return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        close();
-      } else if (event.key === "ArrowLeft") {
+      if (!isActiveModalFocus(panelRef.current) || event.defaultPrevented || isEditableTarget(event.target)) return;
+      if (event.key === "ArrowLeft") {
         event.preventDefault();
         event.stopPropagation();
         showPrev();
@@ -150,7 +155,7 @@ export function FullscreenImageViewer({ open, items, index, onIndexChange, onClo
   if (!open || !activeItem || typeof document === "undefined") return null;
 
   return createPortal(
-    <div className="fullscreenImageViewerBackdrop" role="dialog" aria-modal="true" aria-label={t("core.ui.image_viewer.title", {}, "Image viewer")}>
+    <div ref={panelRef} tabIndex={-1} className="fullscreenImageViewerBackdrop" role="dialog" aria-modal="true" aria-label={t("core.ui.image_viewer.title", {}, "Image viewer")}>
       <div className="fullscreenImageViewerHeader">
         <div className="fullscreenImageViewerTitle">{activeItem.label || t("core.ui.image_viewer.title", {}, "Image viewer")}</div>
         <button

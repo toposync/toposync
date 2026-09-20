@@ -107,7 +107,15 @@ module.exports = (_env, argv = {}) => {
           context: ["/api", "/extensions", "/files"],
           target: backendTarget,
           changeOrigin: true,
-          ws: true
+          ws: true,
+          onProxyReq(proxyRequest, _request, response) {
+            // An SSE GET has already finished receiving its request when the
+            // browser disconnects. http-proxy's request "aborted" handler does
+            // not cover that case: release the upstream on response close.
+            response.once("close", () => {
+              if (!response.writableFinished) proxyRequest.destroy();
+            });
+          }
         }
       ]
     }

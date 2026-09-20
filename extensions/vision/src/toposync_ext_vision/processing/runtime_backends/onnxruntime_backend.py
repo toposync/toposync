@@ -451,6 +451,12 @@ def build_pose_backend(manifest: ModelManifest):
         raise RuntimeError(f"build_pose_backend only supports task='pose', got {manifest.task!r}")
     if manifest.runtime != "onnxruntime":
         raise RuntimeError(f"Unsupported pose runtime: {manifest.runtime}")
-    raise RuntimeError(
-        "vision.pose_estimate is scaffolded, but no first-party pose backend is enabled yet."
-    )
+    if manifest.resolved_adapter_family() == "mediapipe_pose_33":
+        from .mediapipe_pose import MediaPipePoseBackend
+
+        return MediaPipePoseBackend(manifest)
+    if manifest.resolved_adapter_family() == "rtmpose_halpe26":
+        from .rtmpose_halpe26 import RTMPoseHalpe26Backend
+
+        return RTMPoseHalpe26Backend(manifest)
+    raise RuntimeError(f"Unsupported pose parser: {manifest.resolved_adapter_family()!r}")

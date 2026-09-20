@@ -58,7 +58,11 @@ const status = await requestJson("/api/demo/status");
 
 ## Runtime model
 
-`@toposync/plugin-api` is intentionally a types-first package. It ships a minimal runtime stub only so bundlers and package resolvers have a concrete entry point. Extension code should treat it as a contract package and import from it using `import type` whenever possible.
+`@toposync/plugin-api` is a types-first package with small shared runtime helpers. Use `import type` for contracts and import runtime helpers from the package root, which the host and extensions share as a Module Federation singleton.
+
+Body-portal dialogs can register `activateModalFocus(panel, onClose)` for their open lifetime and call its returned cleanup on close or unmount. Keep callbacks in a ref so rerenders do not release and reacquire focus. `isActiveModalFocus(panel)` lets custom keyboard handlers yield to a dialog opened above them. Older hosts may not expose these additive helpers; feature-detect them when supporting those hosts. The stack follows activation order: open nested dialogs after their parent has mounted, not both initially open in the same React commit.
+
+The coordinator temporarily makes content outside the top dialog `inert`, including lower dialogs and dynamically mounted background roots. It preserves existing inert attributes and restores the background before returning focus. Changes from another owner are remembered for cleanup; they cannot make the background interactive while the modal remains open. Keep interactive popup content inside the active panel, or register a nested modal scope for a separate body portal. Native `inert` support is required for accessibility-tree and pointer isolation; the keyboard trap alone does not provide those guarantees on older browsers.
 
 Editor tools may optionally declare `group` and `order` metadata. Hosts use those fields to organize the composition editor toolbar; tools without them remain compatible and fall back to the default group.
 

@@ -23,6 +23,10 @@ export const structuralTranslations = {
 
     "ext.structural.editor.wall_color": "Wall color",
     "ext.structural.editor.wall_texture": "Wall texture",
+    "ext.structural.editor.physical_height": "Measured physical height (m, optional)",
+    "ext.structural.editor.physical_height_hint": "Measure from the support floor to the top of the wall. Used for spatial pointing, independently of display height. Leave blank if unknown. Saved when you leave the field or press Enter.",
+    "ext.structural.editor.physical_height_error": "Enter a finite decimal measurement greater than zero, in metres, or leave blank. The previous value was not changed.",
+    "ext.structural.editor.physical_height_unknown": "Unknown — not measured",
     "ext.structural.editor.openings": "Openings",
     "ext.structural.editor.openings_empty": "No openings yet. Use tools or add one here.",
     "ext.structural.editor.opening_kind": "Type",
@@ -75,6 +79,10 @@ export const structuralTranslations = {
 
     "ext.structural.editor.wall_color": "Cor da parede",
     "ext.structural.editor.wall_texture": "Textura da parede",
+    "ext.structural.editor.physical_height": "Altura física medida (m, opcional)",
+    "ext.structural.editor.physical_height_hint": "Meça do piso de apoio ao topo da parede. Usada no apontamento espacial, independentemente da altura visual. Deixe vazio se não souber. Salva ao sair do campo ou pressionar Enter.",
+    "ext.structural.editor.physical_height_error": "Informe uma medida decimal finita maior que zero, em metros, ou deixe vazio. O valor anterior não foi alterado.",
+    "ext.structural.editor.physical_height_unknown": "Desconhecida — não medida",
     "ext.structural.editor.openings": "Aberturas",
     "ext.structural.editor.openings_empty": "Sem aberturas ainda. Use as ferramentas ou adicione aqui.",
     "ext.structural.editor.opening_kind": "Tipo",

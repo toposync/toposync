@@ -19,6 +19,7 @@ import {
   WALL_TOOL_ID,
 } from "./constants";
 import { distanceBetweenPoints } from "./geometry";
+import { parsePhysicalHeightInput, readPhysicalHeightMeters } from "./wallPhysicalHeight";
 import {
   formatMeters,
   formatSquareMeters,
@@ -35,6 +36,38 @@ import {
 const test: (name: string, fn: () => void | Promise<void>) => void =
   require("node:test").test;
 const assert: any = require("node:assert/strict");
+
+test("physical height stays unknown for old walls without modifying their properties", () => {
+  const props = { width: 0.15, color: "#fff" };
+  const before = JSON.stringify(props);
+  assert.equal(readPhysicalHeightMeters((props as Record<string, unknown>).physical_height_meters), null);
+  assert.equal(JSON.stringify(props), before);
+  for (const invalid of [null, undefined, "2.7", true, 0, -1, NaN, Infinity]) {
+    assert.equal(readPhysicalHeightMeters(invalid), null);
+  }
+});
+
+test("measured wall height accepts decimal metres and persists as number, not visual height", () => {
+  for (const input of ["2.45", "2,45", " 2.45 "]) {
+    const parsed = parsePhysicalHeightInput(input);
+    assert.deepEqual(parsed, { valid: true, value: 2.45 });
+    if (!parsed.valid) throw new Error("Expected physical measurement");
+    const restored = JSON.parse(JSON.stringify({ props: { width: .15, physical_height_meters: parsed.value } }));
+    assert.equal(readPhysicalHeightMeters(restored.props.physical_height_meters), 2.45);
+    assert.equal(restored.props.width, .15);
+  }
+  assert.deepEqual(parsePhysicalHeightInput(""), { valid: true, value: null });
+  assert.deepEqual(parsePhysicalHeightInput("   "), { valid: true, value: null });
+  const cleared = JSON.parse(JSON.stringify({ physical_height_meters: null }));
+  assert.equal(readPhysicalHeightMeters(cleared.physical_height_meters), null);
+});
+
+test("invalid physical heights are rejected rather than clamped or silently made unknown", () => {
+  for (const input of ["0", "-2", "NaN", "Infinity", "2 metres", "0x10", "2,4.5", "1e309", "9".repeat(400)]) {
+    assert.deepEqual(parsePhysicalHeightInput(input), { valid: false });
+  }
+  assert.deepEqual(parsePhysicalHeightInput("0.001"), { valid: true, value: .001 });
+});
 
 function wall(
   id: string,

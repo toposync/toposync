@@ -82,6 +82,14 @@ def upload_model_artifact(
             raise ModelRegistryError(
                 "This file does not match the selected model. Check that you downloaded the correct ONNX file."
             )
+        if manifest.task == "pose":
+            from .model_store import _validate_manifest_runtime
+
+            candidate = manifest.model_copy(update={"artifact_path": str(temp_path.resolve())})
+            try:
+                _validate_manifest_runtime(candidate)
+            except Exception as exc:
+                raise ModelRegistryError(f"Uploaded pose model is incompatible: {exc}") from exc
         os.replace(temp_path, target_path)
         return {
             "model_id": manifest.model_id,

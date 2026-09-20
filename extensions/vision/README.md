@@ -9,7 +9,8 @@ First-party extension focused on public task-oriented vision operators for the P
 - `vision.group_events`
 - `vision.crop_objects`
 - `vision.segment_instances`
-- `vision.pose_estimate` (skeleton only; not launched yet)
+- `vision.pose_estimate` (experimental MediaPipe Pose 33 and RTMPose-M Halpe26 backends)
+- `vision.gesture_recognize` (experimental temporal body gestures)
 
 The public surface is task-based, not vendor-based. The official first-party runtime is ONNX Runtime, with CPU as the default execution path.
 
@@ -87,8 +88,12 @@ The public surface is task-based, not vendor-based. The official first-party run
 - `vision.track` is now first-party and detector-agnostic: it consumes `payload["vision"]["detections"]`.
 - Every `TrackedObject` now carries `camera_id`, and can optionally carry `world_anchor` plus `appearance_embedding_artifact_name` for future multi-camera association work.
 - `vision.segment_instances` writes `payload["vision"]["segmentations"]`, attaches mask artifacts when enabled, and exposes the top mask as the semantic image key `mask`.
-- `vision.pose_estimate` already reserves the public operator id, config schema, packet contract, and `task=pose` registry path so future pose models can land without breaking the architecture.
-- Tracking contracts already carry optional keypoints, so future pose-aware trackers do not require a structural rewrite.
+- `vision.pose_estimate` consumes existing person detections, runs the selected pose model, and publishes named, unclipped landmarks. The `mediapipe_pose_33` manifest provisions a pinned ONNX artifact on the selected processing server.
+- `rtmpose_halpe26` is an experimental 2D alternative with an explicit Halpe26 skeleton. Its guided flow requires extracting `end2end.onnx` from the pinned upstream ZIP and uploading the ONNX, not the archive. The upload validates the pinned checksum and backend contract before replacing an existing artifact. Toposync does not bundle, mirror or automatically download these weights.
+- RTMPose preserves raw SimCC scores, including values above one; they are not calibrated probabilities. The legacy pose-level score is the source detection score, explicitly identified in metadata, because this model does not output global pose confidence. Halpe26 does not supply relative 3D or a world pointing direction.
+- Pose annotations retain their originating detection through `vision.track`; subject-specific processing does not rerun all people. Legacy keypoints remain available.
+- `vision.gesture_recognize` adds time-based hand-raised, both-hands-raised, waving and pointing-candidate states. A two-dimensional pointing candidate is not a three-dimensional target or authorization to act.
+- Setup, payload semantics, camera geometry requirements and experimental limitations are documented in [Pose, feet and gestures](../../docs/pose-gestos.md). These capabilities are not qualified for unattended physical actions.
 - `ModelManifest` now also accepts optional `capabilities` such as `reid`, so future re-identification models can be cataloged without changing the registry shape.
 - The pipeline editor now chooses models by task, not framework/vendor id. Basic setup is guided for common users, while advanced details expose runtime/model internals and custom manifest import when needed.
 - The first-party tracking backends are:

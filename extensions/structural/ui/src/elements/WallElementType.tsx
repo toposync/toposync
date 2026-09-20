@@ -4,6 +4,7 @@ import type * as ThreeTypes from "three";
 import type { BoundsXZ, CompositionElement, CompositionElementPatch, ElementType, HostI18n, PlanePoint } from "@toposync/plugin-api";
 
 import { rgbaFromHex, shadeHex } from "../colors";
+import { WallPhysicalHeightField } from "./WallPhysicalHeightField";
 import { DEFAULT_WALL_COLOR, DEFAULT_WALL_WIDTH, GROUND_Y, WALL_ELEMENT_TYPE_ID } from "../constants";
 import { addPoints, distanceBetweenPoints, normalizePoint, perpendicularPoint, scalePoint, subtractPoints } from "../geometry";
 import { readNumber, readPlanePoint, readString } from "../parsing";
@@ -934,6 +935,18 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
           </select>
         </div>
       </div>
+
+      <div className="sectionDivider" />
+
+      <WallPhysicalHeightField
+        key={element.id}
+        value={element.props.physical_height_meters}
+        onCommit={(value) => update({ props: { physical_height_meters: value } })}
+        label={t("ext.structural.editor.physical_height")}
+        hint={t("ext.structural.editor.physical_height_hint")}
+        error={t("ext.structural.editor.physical_height_error")}
+        unknown={t("ext.structural.editor.physical_height_unknown")}
+      />
 
       <div className="sectionDivider" />
 

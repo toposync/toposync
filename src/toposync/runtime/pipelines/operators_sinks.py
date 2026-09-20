@@ -819,9 +819,40 @@ class NotifyConfig(BaseModel):
     description: str = ""
     priority: Literal["silent", "low", "medium", "high"] = "medium"
     realtime: bool = True
+    include_ephemeral_image: bool = Field(
+        default=False,
+        description=(
+            "Opt-in current packet image delivered only to selected live notification streams, "
+            "never persisted. Requires realtime; publication lifetime 750 ms, at most 256 KiB "
+            "encoded and 2097152 pixels. Missing, transformed or stale images are omitted."
+        ),
+    )
     update_interval_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
     input_artifact_name: str = ""
     dedupe_key_template: str = "{{subject.id}}"
+    include_payload_paths: list[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description=(
+            "Opt-in payload paths copied into notification data, preserving nesting. "
+            "At most 16 paths of 256 characters; identifier tokens separated by dots, no wildcards. "
+            "Projection and diagnostics are bounded to depth 16, 8192 JSON nodes and 128 KiB. "
+            "Missing or invalid paths are omitted and reported in payload.data_projection. "
+            "No image pixels are stored. Empty preserves legacy notification behavior."
+        ),
+    )
+
+    @field_validator("include_payload_paths")
+    @classmethod
+    def _validate_payload_paths(cls, paths: list[str]) -> list[str]:
+        for path in paths:
+            if (
+                len(path) > 256
+                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", path)
+                is None
+            ):
+                raise ValueError("Payload paths must contain simple identifiers separated by dots")
+        return list(dict.fromkeys(paths))
 
     @field_validator(
         "notification_type", "title", "description", "input_artifact_name", "dedupe_key_template"
@@ -830,8 +861,143 @@ class NotifyConfig(BaseModel):
     def _trim_fields(cls, value: str) -> str:
         return str(value or "").strip()
 
+    @model_validator(mode="after")
+    def _require_realtime_image(self):
+        if self.include_ephemeral_image and not self.realtime:
+            raise ValueError("Ephemeral images require realtime notifications")
+        return self
+
 
 _NOTIFY_PRIORITIES = {"silent", "low", "medium", "high"}
+
+
+def _copy_notification_projection(value: Any) -> Any:
+    """Copy strict JSON atomically; never truncate coordinates or stringify objects.
+
+    The root has depth zero. Dictionary keys count as nodes, and the byte budget
+    is the compact ASCII-escaped JSON representation (including punctuation).
+    """
+    nodes = 0
+    size = 0
+
+    def charge(byte_count: int, node_count: int = 0) -> None:
+        nonlocal nodes, size
+        nodes += node_count
+        size += byte_count
+        if nodes > 8192:
+            raise ValueError("node_limit")
+        if size > 128 * 1024:
+            raise ValueError("byte_limit")
+
+    def scalar_size(item: Any) -> int:
+        if isinstance(item, str) and len(item) > 128 * 1024:
+            raise ValueError("byte_limit")
+        if type(item) is int and item.bit_length() > 128 * 1024 * 4:
+            raise ValueError("byte_limit")
+        try:
+            return len(json.dumps(item, ensure_ascii=True, allow_nan=False, separators=(",", ":")))
+        except (ValueError, OverflowError):
+            raise ValueError("invalid_json") from None
+
+    def visit(item: Any, depth: int) -> Any:
+        if depth > 16:
+            raise ValueError("depth_limit")
+        charge(0, 1)
+        if item is None or type(item) in (str, bool, int, float):
+            if type(item) is float and not math.isfinite(item):
+                raise ValueError("non_finite_number")
+            charge(scalar_size(item))
+            return item
+        if type(item) is list:
+            if len(item) > 8192:
+                raise ValueError("node_limit")
+            charge(2 + max(0, len(item) - 1))
+            return [visit(child, depth + 1) for child in item]
+        if type(item) is dict:
+            if len(item) > 8192:
+                raise ValueError("node_limit")
+            charge(2 + max(0, len(item) - 1))
+            result = {}
+            for key, child in item.items():
+                if type(key) is not str:
+                    raise ValueError("non_string_key")
+                charge(scalar_size(key) + 1, 1)
+                result[key] = visit(child, depth + 1)
+            return result
+        raise ValueError("unsupported_value_type")
+
+    return visit(value, 0)
+
+
+def _set_notification_path(target: dict, path: str, value: Any) -> None:
+    current = target
+    parts = path.split(".")
+    for part in parts[:-1]:
+        child = current.get(part)
+        current[part] = dict(child) if isinstance(child, dict) else {}
+        current = current[part]
+    current[parts[-1]] = value
+
+
+def _project_notification_payload(payload: dict, paths: list[str]) -> tuple[dict, dict]:
+    # Initialize all diagnostics first so their space is reserved in every
+    # cumulative budget check. A failed path contributes no partial subtree.
+    statuses = {path: {"status": "unavailable", "reason": "missing_path"} for path in paths}
+    selected: dict[str, Any] = {}
+    for path in paths:
+        value = payload
+        for token in path.split("."):
+            if not isinstance(value, dict) or token not in value:
+                break
+            value = value[token]
+        else:
+            candidate = dict(selected)
+            _set_notification_path(candidate, path, value)
+            try:
+                # Unavailable diagnostics are longer than ready diagnostics;
+                # reserve the largest reason before accepting another path.
+                budget_statuses = {
+                    key: {"status": "unavailable", "reason": "unsupported_value_type"}
+                    for key in paths
+                }
+                copied = _copy_notification_projection(
+                    {
+                        "data": candidate,
+                        "data_projection": {"status": "unavailable", "paths": budget_statuses},
+                    }
+                )
+            except ValueError as error:
+                statuses[path] = {"status": "unavailable", "reason": str(error)}
+            else:
+                selected = copied["data"]
+                statuses[path] = {"status": "ready"}
+    ready = sum(value["status"] == "ready" for value in statuses.values())
+    status = "ready" if ready == len(paths) else "partial" if ready else "unavailable"
+    return selected, {"status": status, "paths": statuses}
+
+
+def _merge_notification_projection(data: dict, selected: dict, paths: list[str]) -> dict:
+    # Explicitly selected paths replace legacy sanitized values, even when
+    # unavailable. Otherwise a truncated legacy value could masquerade as valid.
+    for path in paths:
+        current = data
+        parts = path.split(".")
+        for part in parts[:-1]:
+            current = current.get(part)
+            if not isinstance(current, dict):
+                break
+        else:
+            current.pop(parts[-1], None)
+
+    def merge(target: dict, source: dict) -> None:
+        for key, value in source.items():
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                merge(target[key], value)
+            else:
+                target[key] = value
+
+    merge(data, selected)
+    return data
 
 
 def _resolve_notify_priority(packet: Packet, default: str) -> str:
@@ -847,7 +1013,11 @@ def _resolve_notify_priority(packet: Packet, default: str) -> str:
 @dataclass(slots=True)
 class _NotifyState:
     started_ts: float
+    last_ts: float
+    time_basis: str
+    clock_scope: tuple[Any, ...]
     store_dedupe_key: str
+    duration_valid: bool = True
     last_emit_monotonic: float = 0.0
     last_signature: str = ""
     last_title: str = ""
@@ -857,6 +1027,36 @@ class _NotifyState:
     revision: int = 0
     trail: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=512))
     stored_images: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+
+    def event(self) -> dict[str, Any]:
+        duration = self.last_ts - self.started_ts
+        status = "observed" if math.isfinite(duration) else "invalid_interval"
+        if not self.duration_valid:
+            status = "clock_changed"
+        return {
+            "started_ts": self.started_ts,
+            "ts": self.last_ts,
+            "duration_seconds": max(0.0, duration) if status == "observed" else None,
+            "time_basis": self.time_basis,
+            "duration_status": status,
+        }
+
+
+def _notify_media_time(packet: Packet) -> float | None:
+    # Unlike resolve_media_ts, retain whether a timestamp is actually supplied.
+    for raw in (get_media_descriptor(packet).get("ts"), packet.payload.get("frame_ts"), packet.payload.get("ts")):
+        if not isinstance(raw, bool) and raw is not None:
+            value = _as_finite_float(raw)
+            if value is not None:
+                return value
+    return None
+
+
+def _notify_clock_scope(packet: Packet) -> tuple[Any, ...]:
+    capture = packet.payload.get("capture_evidence")
+    capture = capture if isinstance(capture, dict) else {}
+    return (packet.stream_id, get_source_descriptor(packet).get("clock_domain"),
+            capture.get("capture_instance"), capture.get("generation"))
 
 
 class NotifyRuntime(SinkRuntime):
@@ -878,15 +1078,40 @@ class NotifyRuntime(SinkRuntime):
         dedupe_key = self._dedupe_key(packet, context)
         now_monotonic = time.monotonic()
         ts = _resolve_ts(packet, "frame_ts")
+        media_ts = _notify_media_time(packet)
+        time_basis = "media" if media_ts is not None else "packet_created_at"
+        sample_ts = media_ts if media_ts is not None else float(packet.created_at)
+        clock_scope = _notify_clock_scope(packet)
 
         state = self._state.get(dedupe_key)
         if state is None:
             state = _NotifyState(
-                started_ts=ts,
+                started_ts=sample_ts,
+                last_ts=sample_ts,
+                time_basis=time_basis,
+                clock_scope=clock_scope,
                 store_dedupe_key=self._store_dedupe_key(dedupe_key, packet),
                 last_emit_monotonic=0.0,
             )
             self._state[dedupe_key] = state
+        elif state.time_basis == "media" and (
+            media_ts is None
+            or (packet.lifecycle == Lifecycle.CLOSE and clock_scope != state.clock_scope)
+        ):
+            # A terminal timestamp without the previous capture scope cannot
+            # extend the interval, but missing provenance is not a clock change.
+            # Keep the observed interval unless an explicit field conflicts.
+            if any(value is not None and value != previous
+                   for value, previous in zip(clock_scope, state.clock_scope, strict=True)):
+                state.duration_valid = False
+        else:
+            # Missing media, including frame-less CLOSE, cannot advance a media
+            # interval using the envelope's civil creation time. Track samples
+            # before throttle/deduplication so terminal duration includes them.
+            if state.time_basis != time_basis or state.clock_scope != clock_scope:
+                state.duration_valid = False
+            elif state.duration_valid:
+                state.last_ts = max(state.last_ts, sample_ts)
         self._state.move_to_end(dedupe_key)
 
         changed = False
@@ -978,6 +1203,27 @@ class NotifyRuntime(SinkRuntime):
                 )
         if not image_path:
             image_path = await self._select_thumbnail_path(packet, context)
+        data = _select_notification_data(packet)
+        projection_signature = {}
+        projection_envelope = {}
+        if self._config.include_payload_paths:
+            selected, projection_status = _project_notification_payload(
+                packet.payload, self._config.include_payload_paths
+            )
+            data = _merge_notification_projection(
+                data, selected, self._config.include_payload_paths
+            )
+            projection_signature = {
+                "selected_projection": selected,
+                "projection_status": projection_status,
+            }
+            projection_envelope = {"data_projection": projection_status}
+        image_signature = {}
+        if self._config.include_ephemeral_image:
+            image_capture, image_capture_status = _project_notification_payload(
+                packet.payload, ["capture_evidence"]
+            )
+            image_signature = {"image_capture": image_capture, "image_capture_status": image_capture_status}
         signature = _signature_payload(
             {
                 "title": title,
@@ -986,6 +1232,9 @@ class NotifyRuntime(SinkRuntime):
                 "lifecycle": lifecycle.value,
                 "priority": priority,
                 "revision": int(state.revision),
+                "duration_status": state.event()["duration_status"],
+                **projection_signature,
+                **image_signature,
             },
         )
         if (
@@ -1015,11 +1264,7 @@ class NotifyRuntime(SinkRuntime):
             "status": status,
             "priority": priority,
             "realtime": bool(self._config.realtime),
-            "event": {
-                "started_ts": float(state.started_ts),
-                "ts": float(ts),
-                "duration_seconds": max(0.0, float(ts) - float(state.started_ts)),
-            },
+            "event": state.event(),
             "subject": subject or None,
             "subject_id": subject_id or None,
             "subject_type": subject_type or None,
@@ -1031,8 +1276,22 @@ class NotifyRuntime(SinkRuntime):
             },
             "trail": list(state.trail),
             "stored_images": state.stored_images,
-            "data": _select_notification_data(packet),
+            "data": data,
+            **projection_envelope,
         }
+
+        image_arguments = {}
+        if self._config.include_ephemeral_image:
+            from .notification_image import build_ephemeral_notification_image
+
+            ephemeral_image, reason = await asyncio.to_thread(
+                build_ephemeral_notification_image, packet, self._config.input_artifact_name
+            )
+            image_arguments["ephemeral_image"] = ephemeral_image
+            payload["ephemeral_image_status"] = {
+                "status": "ready" if ephemeral_image is not None else "unavailable",
+                "reason": reason,
+            }
 
         try:
             await upsert(
@@ -1042,6 +1301,7 @@ class NotifyRuntime(SinkRuntime):
                 image_path=image_path,
                 payload=payload,
                 dedupe_key=state.store_dedupe_key,
+                **image_arguments,
             )
         finally:
             if lifecycle == Lifecycle.CLOSE:
@@ -1059,7 +1319,6 @@ class NotifyRuntime(SinkRuntime):
         if not self._state:
             return
 
-        now_ts = time.time()
         for dedupe_key, state in list(self._state.items()):
             try:
                 await upsert(
@@ -1080,11 +1339,7 @@ class NotifyRuntime(SinkRuntime):
                         "priority": state.last_priority or self._config.priority,
                         "realtime": bool(self._config.realtime),
                         "reason": "shutdown_synthesized",
-                        "event": {
-                            "started_ts": float(state.started_ts),
-                            "ts": float(now_ts),
-                            "duration_seconds": max(0.0, float(now_ts) - float(state.started_ts)),
-                        },
+                        "event": state.event(),
                     },
                     dedupe_key=state.store_dedupe_key,
                 )

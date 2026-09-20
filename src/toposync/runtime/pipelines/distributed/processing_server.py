@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import os
+import uuid
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -36,6 +37,7 @@ from ..telemetry import (
     create_default_pipeline_telemetry_store,
 )
 from .plan import build_distributed_graphs
+from .transport import PROCESSING_READY_EVENT_TYPE
 
 
 logger = logging.getLogger("toposync.processing")
@@ -70,6 +72,7 @@ class ProcessingConfig(BaseModel):
 
 class ProcessingAck(BaseModel):
     last_event_id: int = Field(default=0, ge=0)
+    event_epoch: str = Field(default="", max_length=128)
 
 
 class ProcessingVisionManifestImportRequest(BaseModel):
@@ -190,6 +193,7 @@ class ProcessingServerRuntime:
         self._recent_events: deque[dict[str, Any]] = deque(maxlen=max(200, int(max_recent_events)))
         self._replay_events: deque[dict[str, Any]] = deque(maxlen=max(50, int(max_replay_events)))
         self._event_seq = 0
+        self._event_epoch = uuid.uuid4().hex
         self._last_acked_event_id = 0
         self._active: _ActiveBundle | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -234,6 +238,13 @@ class ProcessingServerRuntime:
         self._last_acked_event_id = 0
         self._cancel_observability_flush()
         self._observability_buffer.clear()
+        self._event_epoch = uuid.uuid4().hex
+        # Wake existing subscribers when configuration resets the counter even
+        # if the new bundle will not produce another packet.
+        self.broadcaster.publish(self.ready_event())
+
+    def ready_event(self) -> dict[str, Any]:
+        return {"event_type": PROCESSING_READY_EVENT_TYPE, "event_epoch": self._event_epoch}
 
     def status(self) -> dict[str, Any]:
         active = self._active
@@ -242,6 +253,7 @@ class ProcessingServerRuntime:
             "pipelines": [p.name for p in (active.pipelines if active else [])],
             "runtime": active.runtime.snapshot() if active else None,
             "last_event_id": self._event_seq,
+            "event_epoch": self._event_epoch,
             "last_acked_event_id": self._last_acked_event_id,
             "recent_events": len(self._recent_events),
             "replay_events": len(self._replay_events),
@@ -382,6 +394,7 @@ class ProcessingServerRuntime:
         event_type = str(enriched.get("event_type") or PROJECTED_PACKET_EVENT_TYPE).strip()
         enriched["event_type"] = event_type
         enriched["event_id"] = self._event_seq
+        enriched["event_epoch"] = self._event_epoch
         summary = dict(recent or {})
         summary["event_id"] = self._event_seq
         summary["event_type"] = event_type
@@ -441,8 +454,10 @@ class ProcessingServerRuntime:
         if self._observability_buffer:
             self._schedule_observability_flush()
 
-    def replay_after(self, last_event_id: int) -> list[dict[str, Any]]:
+    def replay_after(self, last_event_id: int, *, event_epoch: str = "") -> list[dict[str, Any]]:
         after = max(0, int(last_event_id))
+        if event_epoch and event_epoch != self._event_epoch:
+            after = 0
         if after <= 0:
             return list(self._replay_events)
         out: list[dict[str, Any]] = []
@@ -455,7 +470,9 @@ class ProcessingServerRuntime:
                 out.append(rec)
         return out
 
-    def ack(self, last_event_id: int) -> None:
+    def ack(self, last_event_id: int, *, event_epoch: str = "") -> None:
+        if event_epoch and event_epoch != self._event_epoch:
+            return
         acked = max(0, int(last_event_id))
         if acked <= self._last_acked_event_id:
             return
@@ -954,8 +971,9 @@ def create_processing_app() -> FastAPI:
 
     @app.post("/api/processing/events/ack")
     async def ack_processing_events(body: ProcessingAck) -> dict[str, Any]:
-        runtime.ack(body.last_event_id)
-        return {"ok": True, "last_acked_event_id": runtime.last_acked_event_id}
+        runtime.ack(body.last_event_id, event_epoch=body.event_epoch)
+        return {"ok": True, "last_acked_event_id": runtime.last_acked_event_id,
+                "event_epoch": runtime.ready_event()["event_epoch"]}
 
     @app.get("/api/processing/events/stream")
     async def stream_processing_events(request: Request) -> StreamingResponse:
@@ -965,16 +983,24 @@ def create_processing_app() -> FastAPI:
             last_event_id = int(request.headers.get("Last-Event-ID") or 0)
         except Exception:
             last_event_id = 0
-        replay = runtime.replay_after(last_event_id)
+        replay = deque(runtime.replay_after(
+            last_event_id, event_epoch=request.headers.get("Last-Event-Epoch") or "",
+        ))
 
         async def gen():
             try:
                 yield "retry: 1000\n\n"
-                yield "event: ready\ndata: {}\n\n"
-                for item in replay:
-                    yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                ready = runtime.ready_event()
+                stream_epoch = ready["event_epoch"]
+                yield f"event: ready\ndata: {json.dumps(ready)}\n\n"
                 while True:
-                    event = await q.get()
+                    event = replay.popleft() if replay else await q.get()
+                    ready = runtime.ready_event()
+                    if ready["event_epoch"] != stream_epoch:
+                        stream_epoch = ready["event_epoch"]
+                        yield f"event: ready\ndata: {json.dumps(ready)}\n\n"
+                    if event.get("event_epoch") != stream_epoch or event.get("event_type") == PROCESSING_READY_EVENT_TYPE:
+                        continue
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             except asyncio.CancelledError:
                 raise

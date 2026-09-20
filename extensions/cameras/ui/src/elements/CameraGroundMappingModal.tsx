@@ -27,6 +27,9 @@ import type {
   PanTiltZoomState,
 } from "../types";
 import { SubModal } from "../ui/SubModal";
+import { CameraGroundLensEditor } from "./CameraGroundLensEditor";
+import { applyGroundLensDraft, groundImageResolutionStatus } from "../groundLensEditor";
+import type { GroundImageSize } from "../groundLensEditor";
 
 type PendingImagePoint = { x: number; y: number };
 type DragTarget = { id: string; side: "image" | "world" };
@@ -69,16 +72,11 @@ function lensForSource(source: CameraSourceConfig | undefined): CameraGroundLens
   if (
     (type !== "rectilinear_brown_v1" && type !== "fisheye_kb4_v1") ||
     ![fx, fy, cx, cy, ...coefficients].every(Number.isFinite) ||
-    (type === "rectilinear_brown_v1" && (coefficients.length < 4 || coefficients.length > 8)) ||
+    fx <= 0 || fy <= 0 ||
+    (type === "rectilinear_brown_v1" && ![4, 5, 8].includes(coefficients.length)) ||
     (type === "fisheye_kb4_v1" && coefficients.length !== 4)
   ) return { type: "identity_rectilinear_v1" };
   return { type, fx, fy, cx, cy, coefficients };
-}
-
-function lensLabel(lens: CameraGroundLens): string {
-  if (lens.type === "fisheye_kb4_v1") return "Olho de peixe (perfil da câmera)";
-  if (lens.type === "rectilinear_brown_v1") return "Retilínea com distorção (perfil da câmera)";
-  return "Retilínea padrão";
 }
 
 function numericPose(status: PanTiltZoomState | null): CameraPoseReference | null {
@@ -222,7 +220,9 @@ function imageContentBox(image: HTMLImageElement | null): ImageContentBox {
 function imagePoint(
   event: React.PointerEvent<HTMLElement>, image: HTMLImageElement | null,
 ): PendingImagePoint | null {
+  if (!image?.complete || image.naturalWidth < 2 || image.naturalHeight < 2) return null;
   const rect = event.currentTarget.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
   const content = imageContentBox(image);
   const x = (event.clientX - rect.left) / Math.max(1, rect.width);
   const y = (event.clientY - rect.top) / Math.max(1, rect.height);
@@ -275,6 +275,7 @@ export function CameraGroundMappingModal({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [snapshotState, setSnapshotState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [loadedImage, setLoadedImage] = useState<(GroundImageSize & { url: string; context: string }) | null>(null);
   const [message, setMessage] = useState("Capture uma vista e marque pontos no chão.");
   const [isMarkingImage, setIsMarkingImage] = useState(false);
   const [planScope, setPlanScope] = useState<"camera" | "content">("camera");
@@ -283,6 +284,7 @@ export function CameraGroundMappingModal({
   const [pendingImage, setPendingImage] = useState<PendingImagePoint | null>(null);
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
   const [solutions, setSolutions] = useState<Record<string, CameraProjectionSolveResult | undefined>>({});
+  const [lensEditingId, setLensEditingId] = useState<string | null>(null);
   const [ptzState, setPtzState] = useState<PanTiltZoomState | null>(null);
   const [ptzFeedbackState, setPtzFeedbackState] = useState<PtzFeedbackState>("idle");
   const [ptzFeedbackDetail, setPtzFeedbackDetail] = useState("");
@@ -304,6 +306,8 @@ export function CameraGroundMappingModal({
   const captureRef = useRef<(bindPose?: boolean) => Promise<void>>();
   const solveAbortRef = useRef<AbortController | null>(null);
   const snapshotImageRef = useRef<HTMLImageElement | null>(null);
+  const snapshotContextRef = useRef("");
+  const snapshotRequestContextRef = useRef("");
   const onSaveDraftRef = useRef(onSaveDraft);
   const lastPersistedDraftSignatureRef = useRef("");
   const [, setImageLayoutRevision] = useState(0);
@@ -313,6 +317,7 @@ export function CameraGroundMappingModal({
     [selectedId, views],
   );
   const selectedSolution = selectedView ? solutions[selectedView.id] : undefined;
+  useEffect(() => { setLensEditingId(null); }, [open, selectedView?.id]);
   const selectedViewRotation = viewRotationDegrees(selectedView);
   const renderedImage = imageContentBox(snapshotImageRef.current);
   const videoSources = useMemo(
@@ -325,6 +330,12 @@ export function CameraGroundMappingModal({
     return videoSources.find((source) => source.is_default) ?? videoSources[0];
   }, [selectedView, videoSources]);
   const selectedSourceHasPtz = sourceHasPtz(selectedSource);
+  const snapshotContext = JSON.stringify([cameraId, selectedView?.id, selectedSource?.id]);
+  snapshotContextRef.current = snapshotContext;
+  const imageSize = snapshotState === "ready" && loadedImage?.url === snapshotUrl && loadedImage.context === snapshotContext ? loadedImage : null;
+  const resolutionStatus = groundImageResolutionStatus(imageSize, selectedView?.projection_model.source_geometry ?? { width: 0, height: 0 });
+  const imageEditingReady = resolutionStatus === "match";
+  const imageDiagnostic = t(imageSize ? "ext.cameras.ground_lens.resolution_mismatch" : "ext.cameras.ground_lens.image_required");
   const points = selectedView?.projection_model.correspondences ?? [];
   const fitCount = points.filter((point) => point.role === "fit").length;
   const checkCount = points.filter((point) => point.role === "check").length;
@@ -332,8 +343,17 @@ export function CameraGroundMappingModal({
     ? ptzPosesMatch(selectedView?.pose_reference, ptzState)
     : null;
   const ptzFeedbackIsActive = ptzFeedbackState === "sending" || ptzFeedbackState === "following" || ptzFeedbackState === "settling";
-  const pointEditingBlocked = ptzFeedbackIsActive || Boolean(selectedView?.pose_reference && ptzCurrentMatchesView === false);
+  const pointEditingBlocked = !imageEditingReady || lensEditingId === selectedView?.id || ptzFeedbackIsActive || Boolean(selectedView?.pose_reference && ptzCurrentMatchesView === false);
   pointEditingBlockedRef.current = pointEditingBlocked;
+
+  useEffect(() => {
+    if (!pointEditingBlocked) return;
+    pendingImageRef.current = null;
+    dragRef.current = null;
+    setPendingImage(null);
+    setDragTarget(null);
+    setIsMarkingImage(false);
+  }, [pointEditingBlocked]);
 
   useEffect(() => {
     viewsRef.current = views;
@@ -364,6 +384,7 @@ export function CameraGroundMappingModal({
   const updateSelected = useCallback(
     (mutate: (view: CameraRayGroundCalibratedView) => CameraRayGroundCalibratedView, record = true) => {
       const activeId = selectedIdRef.current;
+      solveAbortRef.current?.abort();
       if (activeId) {
         setSolutions((current) => {
           const { [activeId]: _discarded, ...remaining } = current;
@@ -393,11 +414,14 @@ export function CameraGroundMappingModal({
 
   const applySnapshotBlob = useCallback((blob: Blob) => {
     const nextUrl = URL.createObjectURL(blob);
+    snapshotRequestContextRef.current = snapshotContextRef.current;
+    setLoadedImage(null);
     setSnapshotUrl((current) => {
       if (current) URL.revokeObjectURL(current);
       return nextUrl;
     });
-    setSnapshotState("ready");
+    // HTTP success is not image readiness: wait for the browser to decode it.
+    setSnapshotState("loading");
   }, []);
 
   const followPtzMotion = useCallback(async (sourceId: string, actionLabel: string) => {
@@ -675,6 +699,7 @@ export function CameraGroundMappingModal({
       return null;
     });
     setSnapshotState("idle");
+    setLoadedImage(null);
     setPtzState(null);
     setPtzFeedbackState("idle");
     setPtzFeedbackDetail("");
@@ -682,7 +707,7 @@ export function CameraGroundMappingModal({
     setPtzCommandInFlight(false);
     setPendingImage(null);
     setIsMarkingImage(false);
-  }, [selectedSource?.id, selectedView?.id]);
+  }, [cameraId, selectedSource?.id, selectedView?.id]);
 
   // The editor can open before the camera index arrives. Bind the new empty view
   // as soon as its real source becomes available, otherwise capture would keep
@@ -699,17 +724,7 @@ export function CameraGroundMappingModal({
         compatible_source_ids: [selectedSource.id],
         compatible_roles: [selectedSource.role],
       },
-      projection_model: {
-        ...view.projection_model,
-        source_geometry: {
-          width: selectedSource.video?.width ?? 1920,
-          height: selectedSource.video?.height ?? 1080,
-          rotation_degrees: 0,
-          mirror_x: false,
-          mirror_y: false,
-        },
-        lens: lensForSource(selectedSource),
-      },
+      // Source discovery must not overwrite parameters already entered in this draft.
     }), false);
     setMessage("Fonte da vista encontrada. Carregando o quadro atual…");
   }, [open, selectedSource, selectedView, updateSelected]);
@@ -724,7 +739,7 @@ export function CameraGroundMappingModal({
   }, [snapshotUrl]);
 
   useEffect(() => {
-    if (!selectedView || fitCount < 4) return;
+    if (!selectedView || fitCount < 4 || !imageEditingReady || lensEditingId === selectedView.id) return;
     solveAbortRef.current?.abort();
     const controller = new AbortController();
     solveAbortRef.current = controller;
@@ -739,9 +754,10 @@ export function CameraGroundMappingModal({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [fitCount, selectedView]);
+  }, [fitCount, selectedView, lensEditingId, imageEditingReady]);
 
   const addWorldPoint = useCallback((world: { x: number; z: number }) => {
+    if (pointEditingBlockedRef.current) return;
     const image = pendingImageRef.current;
     if (!image || !selectedIdRef.current) return;
     const active = viewsRef.current.find((view) => view.id === selectedIdRef.current);
@@ -781,6 +797,7 @@ export function CameraGroundMappingModal({
   }, [updateSelected]);
 
   const movePoint = useCallback((id: string, side: DragTarget["side"], point: { x: number; y: number } | { x: number; z: number }) => {
+    if (pointEditingBlockedRef.current) return;
     updateSelected(
       (view) => ({
         ...view,
@@ -943,7 +960,7 @@ export function CameraGroundMappingModal({
   function onImagePointerDown(event: React.PointerEvent<HTMLElement>): void {
     if (event.button !== 0) return;
     if (pointEditingBlockedRef.current) {
-      setMessage("Aguarde a câmera estabilizar ou volte à posição vinculada antes de ajustar pontos.");
+      setMessage(!imageEditingReady ? imageDiagnostic : "Aguarde a câmera estabilizar ou volte à posição vinculada antes de ajustar pontos.");
       return;
     }
     const image = imagePoint(event, snapshotImageRef.current);
@@ -982,6 +999,7 @@ export function CameraGroundMappingModal({
   }
 
   function onImagePointerMove(event: React.PointerEvent<HTMLElement>): void {
+    if (pointEditingBlockedRef.current) return;
     const current = dragRef.current;
     const point = imagePoint(event, snapshotImageRef.current);
     if (current?.side === "image" && point) movePoint(current.id, "image", point);
@@ -1030,7 +1048,7 @@ export function CameraGroundMappingModal({
   };
 
   const poseIsBound = !selectedSourceHasPtz || Boolean(selectedView?.pose_reference && numericPose(selectedView.pose_reference));
-  const canActivate = Boolean(selectedSolution?.accepted && poseIsBound);
+  const canActivate = Boolean(selectedSolution?.accepted && poseIsBound && imageEditingReady && !pointEditingBlocked && lensEditingId !== selectedView?.id);
   const pointsAreComplete = fitCount >= REQUIRED_FIT_POINTS && checkCount >= REQUIRED_CHECK_POINTS;
   const canAddPoint = !pointsAreComplete;
   const nextPointDescription = fitCount < REQUIRED_FIT_POINTS
@@ -1084,7 +1102,7 @@ export function CameraGroundMappingModal({
   };
   const startMarking = () => {
     if (pointEditingBlockedRef.current) {
-      setMessage("Aguarde a câmera estabilizar ou volte à posição vinculada antes de marcar pontos.");
+      setMessage(!imageEditingReady ? imageDiagnostic : "Aguarde a câmera estabilizar ou volte à posição vinculada antes de marcar pontos.");
       return;
     }
     if (pendingImage) {
@@ -1201,6 +1219,7 @@ export function CameraGroundMappingModal({
         {points.length ? <div className="cardMeta" style={{ paddingInline: 2 }}><strong>Ajustar:</strong> arraste qualquer marcador numerado na imagem ou na planta. O rascunho salva sozinho e Desfazer reverte o movimento.</div> : null}
 
         {legacyViews.length ? <div className="cardMeta">A calibração anterior continua ativa até você ativar um novo mapeamento validado.</div> : null}
+        {!imageEditingReady ? <div className="cardMeta" role="status">{imageDiagnostic}</div> : null}
 
         {selectedSourceHasPtz && isPtzControlsOpen ? <section className="card" style={{ margin: 0 }}>
           <div className="cardBody" style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12 }}>
@@ -1269,12 +1288,30 @@ export function CameraGroundMappingModal({
               </span>
             </div>
             <div style={{ position: "relative", aspectRatio: "16 / 9", minHeight: 260, background: "#020617", overflow: "hidden", cursor: pointEditingBlocked ? "not-allowed" : dragTarget?.side === "image" ? "grabbing" : isMarkingImage ? "crosshair" : undefined, touchAction: "none", userSelect: "none" }} onPointerDown={onImagePointerDown} onPointerMove={onImagePointerMove} onPointerUp={onImagePointerUp} onPointerCancel={onImagePointerUp}>
-              {snapshotUrl ? <img ref={snapshotImageRef} src={snapshotUrl} alt="Vista capturada da câmera" draggable={false} onLoad={() => setImageLayoutRevision((value) => value + 1)} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} /> : null}
+              {snapshotUrl ? <img key={snapshotUrl} ref={snapshotImageRef} src={snapshotUrl} alt={t("ext.cameras.ground_lens.captured_image")} draggable={false} onLoad={(event) => {
+                const image = event.currentTarget;
+                if (image !== snapshotImageRef.current || snapshotRequestContextRef.current !== snapshotContext) return;
+                const size = { width: image.naturalWidth, height: image.naturalHeight };
+                if (!image.complete || groundImageResolutionStatus(size, size) !== "match") {
+                  setLoadedImage(null);
+                  setSnapshotState("error");
+                  return;
+                }
+                setLoadedImage({ ...size, url: snapshotUrl, context: snapshotContext });
+                setSnapshotState("ready");
+                setImageLayoutRevision((value) => value + 1);
+              }} onError={(event) => {
+                if (event.currentTarget !== snapshotImageRef.current) return;
+                setLoadedImage(null);
+                setSnapshotState("error");
+                setSnapshotUrl(null);
+                setMessage(t("ext.cameras.ground_lens.image_decode_failed"));
+              }} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} /> : null}
               {ptzFeedbackIsActive ? <div style={{ position: "absolute", top: 10, right: 10, zIndex: 3, display: "flex", alignItems: "center", gap: 7, padding: "6px 9px", borderRadius: 999, background: "rgba(2, 6, 23, .82)", border: "1px solid rgba(255, 255, 255, .22)", color: "white", fontSize: 11, pointerEvents: "none" }}>
                 <i className="fa-solid fa-spinner fa-spin" aria-hidden="true" />
                 <span>{ptzFeedbackState === "sending" ? "Enviando movimento" : ptzFeedbackState === "settling" ? "Estabilizando imagem" : "Atualizando com a câmera"}</span>
               </div> : null}
-              {points.map((point, index) => (
+              {(imageEditingReady ? points : []).map((point, index) => (
                 <span key={point.id} title={pointEditingBlocked ? `Aguarde para ajustar o ponto ${pointLabel(index)}` : `Arraste para ajustar o ponto ${pointLabel(index)} na imagem`} style={{ position: "absolute", left: `${(renderedImage.left + point.image.x * renderedImage.width) * 100}%`, top: `${(renderedImage.top + point.image.y * renderedImage.height) * 100}%`, transform: "translate(-50%, -50%)", width: 30, height: 30, borderRadius: point.role === "check" ? 5 : 999, background: pointColor(index), border: "2px solid #0f172a", boxShadow: dragTarget?.side === "image" && dragTarget.id === point.id ? "0 0 0 3px rgba(255,255,255,.95), 0 4px 14px rgba(0,0,0,.45)" : "0 0 0 2px rgba(255,255,255,.5), 0 3px 10px rgba(0,0,0,.35)", color: "#0f172a", fontWeight: 800, fontSize: 12, display: "grid", placeItems: "center", cursor: pointEditingBlocked ? "not-allowed" : dragTarget?.side === "image" && dragTarget.id === point.id ? "grabbing" : "grab", touchAction: "none" }}>{pointLabel(index)}</span>
               ))}
               {pendingImage ? <span style={{ position: "absolute", left: `${(renderedImage.left + pendingImage.x * renderedImage.width) * 100}%`, top: `${(renderedImage.top + pendingImage.y * renderedImage.height) * 100}%`, transform: "translate(-50%, -50%)", width: 24, height: 24, borderRadius: 999, border: "2px dashed white", pointerEvents: "none" }} /> : null}
@@ -1325,10 +1362,24 @@ export function CameraGroundMappingModal({
             </div>
           </section>
 
+          {selectedView ? <CameraGroundLensEditor
+            key={`${selectedView.id}-${JSON.stringify([selectedView.projection_model.lens, selectedView.projection_model.source_geometry])}`}
+            view={selectedView} imageSize={imageSize} i18n={i18n}
+            onDirty={() => {
+              setLensEditingId(selectedView.id);
+              updateSelected((view) => ({ ...view, projection_quality: { status: "incomplete", estimated: false } }));
+            }}
+            onApply={(draft) => {
+              updateSelected((view) => applyGroundLensDraft(view, draft) ?? view);
+              setLensEditingId(null);
+            }}
+          /> : null}
           <section className="card" style={{ margin: 0 }}>
             <div className="cardBody" style={{ display: "flex", flexDirection: "column", gap: 8, padding: 12 }}>
               <strong>Validação</strong>
-              <div className="cardMeta">Lente: {selectedView ? lensLabel(selectedView.projection_model.lens) : "—"}</div>
+              <div className="cardMeta">{t("ext.cameras.ground_lens.ground_status")}: {t(imageEditingReady && selectedSolution?.accepted ? "ext.cameras.ground_lens.ready" : "ext.cameras.ground_lens.unavailable")}</div>
+              <div className="cardMeta" role="status">{t("ext.cameras.ground_lens.metric_status")}: {t(imageEditingReady && selectedSolution?.metric_geometry?.status === "ready" ? "ext.cameras.ground_lens.ready" : "ext.cameras.ground_lens.unavailable")}</div>
+              {selectedSolution?.metric_geometry?.reason ? <div className="cardMeta">{t("ext.cameras.ground_lens.metric_reason")}: <code>{selectedSolution.metric_geometry.reason}</code></div> : null}
               <div className="cardMeta">Cobertura: {selectedSolution ? `${Math.round(selectedSolution.quality.image_hull_area_ratio_uv * 100)}%` : "ainda não calculada"}</div>
               <div className="cardMeta">{canActivate ? "Pronta para ativar." : fitCount < REQUIRED_FIT_POINTS ? "Faltam pontos de ajuste." : checkCount < REQUIRED_CHECK_POINTS ? "Faltam pontos de conferência." : failedCheckIndexes.length ? `Refaça ou ajuste a${failedCheckIndexes.length === 1 ? " conferência" : "s conferências"} ${failedCheckLabel}.` : "Aguarde o resultado da validação."}</div>
               {selectedSourceHasPtz && !poseIsBound ? <div className="cardMeta">Antes de ativar: vincule uma posição PTZ estável.</div> : null}

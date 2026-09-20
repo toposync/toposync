@@ -8,6 +8,7 @@ from typing import Any
 
 from .builtin_data import (
     OFFICIAL_DETECTION_MODEL_IDS,
+    OFFICIAL_POSE_MODEL_IDS,
     OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS,
 )
 from .manifests import ModelManifest, ModelRegistryError
@@ -45,6 +46,7 @@ def is_official_model_id(model_id: str) -> bool:
     clean = str(model_id or "").strip().lower()
     return clean in {
         *OFFICIAL_DETECTION_MODEL_IDS,
+        *OFFICIAL_POSE_MODEL_IDS,
         *OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS,
     }
 
@@ -64,7 +66,7 @@ def validate_custom_manifest_payload(
         raise ModelRegistryError(
             f"Custom manifest cannot override first-party model_id '{manifest.model_id}'"
         )
-    if manifest.task not in {"detection", "segmentation", "classification"}:
+    if manifest.task not in {"detection", "segmentation", "classification", "pose"}:
         raise ModelRegistryError(
             f"Custom manifest task '{manifest.task}' is not supported by the current UI"
         )
@@ -79,6 +81,11 @@ def validate_custom_manifest_payload(
 
 
 def _validate_manifest_runtime(manifest: ModelManifest) -> None:
+    if manifest.task == "pose":
+        from ..processing.runtime_backends import build_pose_backend
+
+        build_pose_backend(manifest)
+        return
     if str(manifest.runtime or "").strip().lower() != "onnxruntime":
         return
     if manifest.task == "detection":

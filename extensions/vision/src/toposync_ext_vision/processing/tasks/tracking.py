@@ -7,7 +7,10 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Any
 
-from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
+from toposync.runtime.pipelines.execution import (
+    PipelineRuntimeDependencies,
+    TransformOperatorRuntime,
+)
 from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
@@ -16,7 +19,7 @@ from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 from ...pipelines.schemas import VisionTrackConfig
 from ..contracts import DetectionObject, TrackedObject, TrackerBackend, normalize_identifier
 from ..trackers import build_tracker_backend
-from .event_assembler import TrackEventAssembler
+from .event_assembler import TrackEventAssembler, _bbox_iou, _normalize_bbox
 
 
 def _read_env_int(name: str, fallback: int, *, min_value: int, max_value: int) -> int:
@@ -66,7 +69,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         self._operator_id = str(operator_id or "").strip() or "vision.track"
         self._backend: TrackerBackend | None = None
         self._event_assembler = TrackEventAssembler(self._parsed, operator_id=self._operator_id)
-        self._state_by_tracking_key: dict[str, _LifecycleState] = {}
+        self._state_by_tracking_key: dict[tuple[str, str], _LifecycleState] = {}
         self._pause_started_by_source_stream: dict[str, float] = {}
         self._pause_accumulated_by_source_stream: dict[str, float] = {}
         self._last_packet_by_source_stream: dict[str, Packet] = {}
@@ -130,7 +133,9 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         *,
         packet: Packet,
     ) -> TrackedObject:
-        camera_id = normalize_identifier(tracked.camera_id, fallback=self._camera_id_for_packet(packet))
+        camera_id = normalize_identifier(
+            tracked.camera_id, fallback=self._camera_id_for_packet(packet)
+        )
         world_anchor = tracked.world_anchor or self._world_anchor_for_packet(packet)
         appearance_embedding_artifact_name = (
             tracked.appearance_embedding_artifact_name
@@ -164,7 +169,11 @@ class VisionTrackRuntime(TransformOperatorRuntime):
                 use_world_anchor=self._parsed.use_world_anchor,
                 world_match_distance_meters=float(self._parsed.world_match_distance_meters),
             )
-        if backend is None or not hasattr(backend, "update") or not hasattr(backend, "reset_stream"):
+        if (
+            backend is None
+            or not hasattr(backend, "update")
+            or not hasattr(backend, "reset_stream")
+        ):
             raise TypeError(
                 "tracker_backend_factory must return an object that implements reset_stream() and update()"
             )
@@ -179,18 +188,134 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         if not isinstance(raw, list):
             return []
         detections: list[DetectionObject] = []
-        for item in raw:
-            if isinstance(item, DetectionObject):
-                detections.append(item)
-                continue
-            if not isinstance(item, dict):
+        for index, item in enumerate(raw):
+            if not isinstance(item, (DetectionObject, dict)):
                 continue
             try:
-                detections.append(DetectionObject(**item))
+                detection = item if isinstance(item, DetectionObject) else DetectionObject(**item)
+                if isinstance(vision.get("poses"), list):
+                    detection = replace(
+                        detection,
+                        metadata={
+                            **detection.metadata,
+                            "pose_source_detection_index": index,
+                            "pose_source_packet_id": packet.packet_id,
+                        },
+                    )
+                detections.append(detection)
             except Exception:
                 continue
         detections.sort(key=lambda detection: detection.score, reverse=True)
         return detections
+
+    def _associate_frame_poses(
+        self, packet: Packet, tracks: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Link only this frame's stream-space poses, without temporal reuse."""
+        vision = packet.payload.get("vision")
+        raw_poses = vision.get("poses") if isinstance(vision, dict) else None
+        if not isinstance(raw_poses, list):
+            return []
+        poses = [
+            pose
+            for pose in raw_poses
+            if isinstance(pose, dict)
+            and pose.get("landmark_reference", "stream_image") == "stream_image"
+        ]
+        candidates: dict[int, list[tuple[int, float]]] = {}
+        # Explicit detection/track lineage outranks geometry even if a filtered
+        # tracker box differs from its measurement or people overlap exactly.
+        explicit: set[int] = set()
+        for pose_index, pose in enumerate(poses):
+            metadata = pose.get("metadata") if isinstance(pose.get("metadata"), dict) else {}
+            detection_index = metadata.get("source_detection_index")
+            tracking_id = str(pose.get("tracking_id") or "")
+            has_detection_index = "source_detection_index" in metadata
+            if has_detection_index or tracking_id:
+                explicit.add(pose_index)
+            for track_index, track in enumerate(tracks):
+                if str(pose.get("label") or "").lower() != str(track.get("label") or "").lower():
+                    continue
+                if pose.get("source_stream_id") not in (None, "", packet.stream_id):
+                    continue
+                if pose.get("camera_id") not in (None, "", track.get("camera_id")):
+                    continue
+                track_metadata = (
+                    track.get("metadata") if isinstance(track.get("metadata"), dict) else {}
+                )
+                # A predicted track carrying an earlier frame's detection cannot
+                # claim an image estimate from this frame.
+                stamp = track_metadata.get("pose_source_packet_id")
+                if stamp is not None and stamp != packet.packet_id:
+                    continue
+                if has_detection_index:
+                    if (
+                        type(detection_index) is int
+                        and stamp == packet.packet_id
+                        and track_metadata.get("pose_source_detection_index") == detection_index
+                    ):
+                        candidates.setdefault(pose_index, []).append((track_index, 2.0))
+                    continue
+                if tracking_id:
+                    if tracking_id == track.get("tracking_id"):
+                        candidates.setdefault(pose_index, []).append((track_index, 2.0))
+                    continue
+                pose_bbox, track_bbox = (
+                    _normalize_bbox(pose.get("bbox01")),
+                    _normalize_bbox(track.get("bbox01")),
+                )
+                if pose_bbox is not None and track_bbox is not None:
+                    overlap = _bbox_iou(pose_bbox, track_bbox)
+                    if overlap >= 0.3:
+                        candidates.setdefault(pose_index, []).append((track_index, overlap))
+        assigned: dict[int, int] = {}
+        used_tracks: set[int] = set()
+        reserved_tracks = {
+            track_index
+            for pose_index in explicit
+            for track_index, _ in candidates.get(pose_index, [])
+        }
+        pairs = sorted(
+            (
+                (score, pose_index, track_index)
+                for pose_index, matches in candidates.items()
+                for track_index, score in matches
+            ),
+            reverse=True,
+        )
+        for score, pose_index, track_index in pairs:
+            if pose_index in assigned or track_index in used_tracks:
+                continue
+            if pose_index not in explicit and track_index in reserved_tracks:
+                continue
+            # Equal alternatives are ambiguous; never choose by array order.
+            if any(
+                other_track != track_index
+                and other_track not in used_tracks
+                and abs(other_score - score) < 1e-9
+                for other_track, other_score in candidates[pose_index]
+            ):
+                continue
+            if any(
+                other_pose != pose_index
+                and other_pose not in assigned
+                and abs(other_score - score) < 1e-9
+                for other_pose, matches in candidates.items()
+                for other_track, other_score in matches
+                if other_track == track_index
+            ):
+                continue
+            assigned[pose_index] = track_index
+            used_tracks.add(track_index)
+        return [
+            {
+                **poses[pose_index],
+                "tracking_id": tracks[track_index]["tracking_id"],
+                "source_stream_id": packet.stream_id,
+                "camera_id": tracks[track_index].get("camera_id"),
+            }
+            for pose_index, track_index in sorted(assigned.items())
+        ]
 
     def _motion_gate_open(self, packet: Packet) -> bool:
         value = packet.metadata.get("motion_gate_open")
@@ -304,6 +429,8 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         vision["tracker_id"] = self._parsed.tracker_id
         vision["runtime"] = self._ensure_backend().tracker_id
         vision["tracks"] = tracks
+        if "poses" in vision:
+            vision["poses"] = self._associate_frame_poses(packet, tracks)
         if tracks and not vision.get("model_id"):
             vision["model_id"] = tracks[0].get("model_id", "")
         return vision
@@ -374,9 +501,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         sample_count = min(len(tracks), max(1, int(self._telemetry_top_k)))
         for index in range(sample_count):
             try:
-                observe_numeric(
-                    METRIC_VISION_CONFIDENCE, float(tracks[index].score), now_s=ts_s
-                )
+                observe_numeric(METRIC_VISION_CONFIDENCE, float(tracks[index].score), now_s=ts_s)
             except Exception:
                 continue
 
@@ -387,7 +512,8 @@ class VisionTrackRuntime(TransformOperatorRuntime):
             self._state_by_tracking_key.pop(tracking_key, None)
         self._pause_started_by_source_stream.pop(source_stream_id, None)
         self._pause_accumulated_by_source_stream.pop(source_stream_id, None)
-        self._ensure_backend().reset_stream(source_stream_id)
+        if self._backend is not None:
+            self._backend.reset_stream(source_stream_id)
 
     def _idle_flush_packet(self, packet: Packet) -> Packet:
         payload = dict(packet.payload)
@@ -401,6 +527,8 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         next_vision["task"] = "tracking"
         next_vision["tracker_id"] = self._parsed.tracker_id
         next_vision["tracks"] = []
+        if "poses" in next_vision:
+            next_vision["poses"] = []
         payload["vision"] = next_vision
         metadata = dict(packet.metadata)
         metadata["source_stream_id"] = packet.stream_id
@@ -417,7 +545,9 @@ class VisionTrackRuntime(TransformOperatorRuntime):
     async def _flush_idle_events(self, context) -> list[Packet]:  # noqa: ANN001
         outputs: list[Packet] = []
         for source_stream_id, packet in list(self._last_packet_by_source_stream.items()):
-            out = await self._event_assembler.process_packet(self._idle_flush_packet(packet), context)
+            out = await self._event_assembler.process_packet(
+                self._idle_flush_packet(packet), context
+            )
             if not out:
                 continue
             outputs.extend(out)
@@ -461,9 +591,12 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         if (world_anchor := self._world_anchor_for_packet(packet)) is not None:
             runtime_metadata["world_anchor"] = world_anchor
         if (
-            appearance_embedding_artifact_name := self._appearance_embedding_artifact_name_for_packet(packet)
+            appearance_embedding_artifact_name
+            := self._appearance_embedding_artifact_name_for_packet(packet)
         ) is not None:
-            runtime_metadata["appearance_embedding_artifact_name"] = appearance_embedding_artifact_name
+            runtime_metadata["appearance_embedding_artifact_name"] = (
+                appearance_embedding_artifact_name
+            )
         return context.run_blocking(
             backend.update,
             packet.stream_id,
@@ -477,6 +610,11 @@ class VisionTrackRuntime(TransformOperatorRuntime):
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         now_monotonic = time.monotonic()
         source_stream_id = packet.stream_id
+        if packet.lifecycle == Lifecycle.CLOSE:
+            outputs = self._event_assembler.close_stream(packet)
+            self._clear_state_for_stream(source_stream_id)
+            self._last_packet_by_source_stream.pop(source_stream_id, None)
+            return outputs
         self._last_packet_by_source_stream[source_stream_id] = packet
 
         if bool(self._parsed.pause_when_gate_closed) and not self._motion_gate_open(packet):
@@ -518,11 +656,14 @@ class VisionTrackRuntime(TransformOperatorRuntime):
             if (
                 normalized.get("appearance_embedding_artifact_name") is None
                 and (
-                    appearance_embedding_artifact_name := self._appearance_embedding_artifact_name_for_packet(packet)
+                    appearance_embedding_artifact_name
+                    := self._appearance_embedding_artifact_name_for_packet(packet)
                 )
                 is not None
             ):
-                normalized["appearance_embedding_artifact_name"] = appearance_embedding_artifact_name
+                normalized["appearance_embedding_artifact_name"] = (
+                    appearance_embedding_artifact_name
+                )
             try:
                 tracks.append(TrackedObject(**normalized))
             except Exception:
@@ -552,17 +693,17 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         pause_total_now = self._pause_total_for_stream(
             source_stream_id, now_monotonic=now_monotonic
         )
-        active_keys: set[str] = set()
+        active_keys: set[tuple[str, str]] = set()
         objects: list[dict[str, Any]] = []
 
         for tracked in tracks:
-            tracking_key = tracked.tracking_id
+            tracking_key = (source_stream_id, tracked.tracking_id)
             active_keys.add(tracking_key)
             state = self._state_by_tracking_key.get(tracking_key)
             if state is None:
                 state = _LifecycleState(
                     correlation_id=uuid.uuid4().hex,
-                    stream_id=f"obj:{source_stream_id}:{tracking_key}",
+                    stream_id=f"obj:{source_stream_id}:{tracked.tracking_id}",
                     source_stream_id=source_stream_id,
                     opened=True,
                     last_seen_monotonic=now_monotonic,

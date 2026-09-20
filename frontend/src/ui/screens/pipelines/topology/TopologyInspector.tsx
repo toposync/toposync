@@ -1,12 +1,14 @@
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import type { PipelineOperatorPanel } from "@toposync/plugin-api";
+import type { Connection } from "@xyflow/react";
 
 import type { CameraContextsResponse, CamerasIndexResponse, PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
 import { localizePipelineAlert } from "../utils";
 import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../types";
 import { OperatorConfigPanel } from "../editor/panels/OperatorConfigPanel";
+import { TopologyConnectionEditor } from "./TopologyConnectionEditor";
 import type { TopologyEdgePolicyPatch } from "./topologyGraph";
 import {
   pressureBehaviorLabel,
@@ -40,6 +42,7 @@ type Props = {
   onUpdateEdgePolicy?: (edgeId: string, patch: TopologyEdgePolicyPatch) => void;
   onDeleteNode?: (nodeId: string) => void;
   onDeleteEdge?: (edgeId: string) => void;
+  onConnect?: (connection: Connection) => string | null;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 };
@@ -273,6 +276,7 @@ function NodeInspector({
   onOpenTelemetryField,
   onUpdateNodeConfig,
   onDeleteNode,
+  onConnect,
 }: NodeInspectorProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -312,6 +316,7 @@ function NodeInspector({
           </button>
         ) : null}
       </div>
+      <TopologyConnectionEditor key={node.id} node={node} model={model} editable={editable} onConnect={onConnect} />
       <div className="pipelineTopologyInspectorSection">
         <div className="pipelineTopologyInspectorSectionTitle pipelineTopologyInspectorSectionTitleRow">
           <span>{t("core.ui.pipelines.topology.config", {}, "Config")}</span>
@@ -563,6 +568,7 @@ export function TopologyInspector({
   onUpdateEdgePolicy,
   onDeleteNode,
   onDeleteEdge,
+  onConnect,
   collapsed,
   onToggleCollapsed,
 }: Props): React.ReactElement {
@@ -598,6 +604,7 @@ export function TopologyInspector({
             onOpenTelemetryField={onOpenTelemetryField}
             onUpdateNodeConfig={onUpdateNodeConfig}
             onDeleteNode={onDeleteNode}
+            onConnect={onConnect}
           />
         ) : edge ? (
           <EdgeInspector edge={edge} editable={editable} onUpdateEdgePolicy={onUpdateEdgePolicy} onDeleteEdge={onDeleteEdge} />

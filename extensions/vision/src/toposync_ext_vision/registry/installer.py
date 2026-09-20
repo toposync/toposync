@@ -272,6 +272,15 @@ class VisionModelInstallManager:
 
         key = manifest.model_id
         existing_artifact = manifest.resolve_artifact_path().is_file()
+        if existing_artifact and not force and manifest.task == "pose":
+            from .model_store import _validate_manifest_runtime
+
+            try:
+                _validate_manifest_runtime(manifest)
+            except Exception as exc:
+                raise ModelRegistryError(
+                    f"Installed pose model is invalid; reinstall it with force=true: {exc}"
+                ) from exc
         active_statuses = {"queued", "downloading", "verifying", "installing", "canceling"}
 
         with self._lock:
@@ -517,6 +526,12 @@ class VisionModelInstallManager:
                 raise RuntimeError(
                     f"Checksum mismatch for {manifest.model_id}: expected {expected}, got {digest.lower()}"
                 )
+
+            if manifest.task == "pose":
+                from .model_store import _validate_manifest_runtime
+
+                candidate = manifest.model_copy(update={"artifact_path": str(temp_path.resolve())})
+                await asyncio.to_thread(_validate_manifest_runtime, candidate)
 
             self._ensure_not_cancelled(manifest.model_id)
             self._update_job(manifest.model_id, status="installing", phase="finalizing", progress_pct=97.0)

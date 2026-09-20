@@ -57,6 +57,7 @@ import type {
 } from "../types";
 import { SubModal } from "../ui/SubModal";
 import { CameraPanoramaMappingModal } from "./CameraPanoramaMappingModal";
+import { CameraGroundMappingModal } from "./CameraGroundMappingModal";
 
 function roundRectPath(
   canvasContext: CanvasRenderingContext2D,
@@ -1036,6 +1037,7 @@ function CameraEditor({
   const totalSets = existingCalibratedViews.length;
   const spatialClipAreaId = readSpatialVideoClipAreaId(props);
   const [isPanoramaMappingOpen, setIsPanoramaMappingOpen] = useState(false);
+  const [isGroundMappingOpen, setIsGroundMappingOpen] = useState(false);
   const [legacyPanoramaContext, setLegacyPanoramaContext] = useState<CameraPanoramaContext | null>(null);
 
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndex | null>(null);
@@ -1225,7 +1227,15 @@ function CameraEditor({
             {t("ext.cameras.panorama.calibrate_camera")}
           </button>
         </div>
-
+        <button
+          className="secondaryButton"
+          type="button"
+          disabled={!selectedCameraId}
+          onClick={() => setIsGroundMappingOpen(true)}
+        >
+          {t("ext.cameras.editor.ground_calibration")}
+        </button>
+        <div className="cardMeta">{t("ext.cameras.editor.ground_calibration_hint")}</div>
       </div>
 
       <div className="field">
@@ -1284,6 +1294,20 @@ function CameraEditor({
           panorama_mapping: { job_id: job.id, revision: job.revision, source_id: job.source_id, status: "ready" },
           previous_panorama_mapping: props.panorama_mapping,
         } })}
+      />
+
+      <CameraGroundMappingModal
+        open={isGroundMappingOpen}
+        onClose={() => setIsGroundMappingOpen(false)}
+        host={host}
+        i18n={i18n}
+        element={element}
+        cameraId={selectedCameraId}
+        cameraSources={selectedCamera?.sources ?? []}
+        initialViews={props.calibrated_views}
+        initialDraftViews={props.calibrated_views_draft}
+        onSaveDraft={(views) => update({ props: { calibrated_views_draft: views } })}
+        onActivate={(views) => update({ props: { calibrated_views: views } })}
       />
 
     </div>

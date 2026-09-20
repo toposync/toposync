@@ -34,7 +34,7 @@ from ..observability import (
 from ..runtime import BoundedChannel, DropPolicy
 from ..shared_runtime import PipelineBundleRuntime, SharedRuntimeBuildError
 from .plan import build_distributed_graphs
-from .transport import HttpProcessingTransport
+from .transport import HttpProcessingTransport, PROCESSING_READY_EVENT_TYPE
 
 
 logger = logging.getLogger("toposync.pipelines.orchestrator")
@@ -62,6 +62,7 @@ class _ServerHandle:
     pump_task: asyncio.Task[None]
     config_payload: dict[str, Any] = field(default_factory=dict)
     last_event_id: int = 0
+    event_epoch: str = ""
     started_at: float = field(default_factory=time.time)
     observability_applied_records: int = 0
     observability_skipped_records: int = 0
@@ -180,6 +181,7 @@ class PipelinesOrchestrator:
                 "url": handle.server.url,
                 "started_at": handle.started_at,
                 "last_event_id": handle.last_event_id,
+                "event_epoch": handle.event_epoch,
                 "observability_applied_records": handle.observability_applied_records,
                 "observability_skipped_records": handle.observability_skipped_records,
             }
@@ -365,6 +367,20 @@ class PipelinesOrchestrator:
                 logger.warning("processing config re-sync failed server=%s: %s", sid, exc)
 
     async def _stop_all(self) -> None:
+        # Stop producers before consumers: a reconnect must not recreate an
+        # origin runtime while reconciliation is tearing that runtime down.
+        for handle in list(self._servers.values()):
+            handle.pump_task.cancel()
+            try:
+                await handle.pump_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await handle.transport.close()
+            except Exception:
+                pass
+        self._servers.clear()
+
         if self._local_bundle is not None:
             try:
                 await self._local_bundle.runtime.stop()
@@ -385,18 +401,6 @@ class PipelinesOrchestrator:
             except Exception:
                 pass
         self._inboxes.clear()
-
-        for handle in list(self._servers.values()):
-            handle.pump_task.cancel()
-            try:
-                await handle.pump_task
-            except asyncio.CancelledError:
-                pass
-            try:
-                await handle.transport.close()
-            except Exception:
-                pass
-        self._servers.clear()
 
     def _build_runtime_dependencies(
         self,
@@ -533,6 +537,25 @@ class PipelinesOrchestrator:
             pipeline=pipeline, runtime=runtime, started_at=time.time(), mode="origin"
         )
 
+    async def _suspend_remote_origins(self, server_id: str) -> None:
+        for name, handle in list(self._pipelines.items()):
+            if handle.mode != "origin" or handle.pipeline.processing_server_id != server_id:
+                continue
+            # Keep the handle registered until shutdown finishes, so cancellation
+            # during reconciliation still leaves it available to _stop_all.
+            await handle.runtime.stop()
+            if self._pipelines.get(name) is handle:
+                self._pipelines.pop(name, None)
+                self._inboxes.pop(name, None)
+
+    async def _resume_remote_origins(self, config_payload: dict[str, Any]) -> None:
+        for item in config_payload.get("pipelines", []):
+            if self._stop.is_set():
+                return
+            pipeline = Pipeline.model_validate(item)
+            if pipeline.enabled and pipeline.name not in self._pipelines:
+                await self._start_origin_pipeline_for_remote(pipeline)
+
     async def _start_remote_server(
         self,
         server: ProcessingServer,
@@ -554,7 +577,24 @@ class PipelinesOrchestrator:
 
         async def pump() -> None:
             last_event_id = 0
+            event_epoch = ""
             backoff_s = 0.5
+
+            async def acknowledge() -> None:
+                handle = self._servers.get(server.id)
+                if handle is not None:
+                    handle.last_event_id = last_event_id
+                    handle.event_epoch = event_epoch
+                try:
+                    if event_epoch:
+                        await transport.ack(last_event_id, event_epoch=event_epoch)
+                    else:
+                        await transport.ack(last_event_id)
+                except Exception as exc:  # noqa: BLE001
+                    # An ACK failure does not prove the data stream failed. Its
+                    # accepted inbox packets must remain available to consumers.
+                    logger.warning("processing acknowledgment failed server=%s: %s", server.id, exc)
+
             try:
                 while True:
                     try:
@@ -565,42 +605,61 @@ class PipelinesOrchestrator:
                             else dict(payload)
                         )
                         await transport.push_config(config_payload)
-                        async for event in transport.stream_events(last_event_id=last_event_id):
+                        await self._resume_remote_origins(config_payload)
+                        async for event in transport.stream_events(
+                            last_event_id=last_event_id, event_epoch=event_epoch,
+                        ):
                             backoff_s = 0.5
                             try:
                                 eid = int(event.get("event_id") or 0)
                             except Exception:
                                 eid = 0
                             event_type = str(event.get("event_type") or "").strip()
+                            incoming_epoch = str(event.get("event_epoch") or "").strip()
+                            if event_type == PROCESSING_READY_EVENT_TYPE:
+                                if incoming_epoch and incoming_epoch != event_epoch:
+                                    if event_epoch:
+                                        await self._suspend_remote_origins(server.id)
+                                        await self._resume_remote_origins(config_payload)
+                                    event_epoch = incoming_epoch
+                                    last_event_id = 0
+                                continue
+                            if incoming_epoch != event_epoch:
+                                continue
+                            if event_epoch and eid > 0 and eid <= last_event_id:
+                                await acknowledge()
+                                continue
                             if event_type == OBSERVABILITY_BATCH_EVENT_TYPE:
                                 self._apply_processing_observability_event(server.id, event)
                                 if eid:
                                     last_event_id = max(last_event_id, eid)
-                                    await transport.ack(last_event_id)
+                                    await acknowledge()
                                 continue
                             if event_type and event_type != PROJECTED_PACKET_EVENT_TYPE:
                                 if eid:
                                     last_event_id = max(last_event_id, eid)
-                                    await transport.ack(last_event_id)
+                                    await acknowledge()
                                 continue
                             name = str(event.get("pipeline_name") or "").strip()
                             inbox = self._inboxes.get(name)
                             if inbox is None:
                                 if eid:
                                     last_event_id = max(last_event_id, eid)
-                                    await transport.ack(last_event_id)
+                                    await acknowledge()
                                 continue
                             put_result = await inbox.put(event, timeout_s=0.05, cancel_event=None)
                             if eid and put_result.accepted:
                                 last_event_id = max(last_event_id, eid)
-                                await transport.ack(last_event_id)
+                                await acknowledge()
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("processing pump failed server=%s: %s", server.id, exc)
+                        await self._suspend_remote_origins(server.id)
                         await asyncio.sleep(backoff_s)
                         backoff_s = min(10.0, backoff_s * 1.5)
                         continue
+                    await self._suspend_remote_origins(server.id)
                     await asyncio.sleep(backoff_s)
                     backoff_s = min(10.0, backoff_s * 1.5)
             except asyncio.CancelledError:
@@ -609,6 +668,7 @@ class PipelinesOrchestrator:
                 handle = self._servers.get(server.id)
                 if handle is not None:
                     handle.last_event_id = last_event_id
+                    handle.event_epoch = event_epoch
 
         pump_task = asyncio.create_task(pump(), name=f"processing_pump[{server.id}]")
         self._servers[server.id] = _ServerHandle(

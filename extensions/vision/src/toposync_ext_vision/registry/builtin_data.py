@@ -197,12 +197,17 @@ OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS: tuple[str, ...] = (
     "rtmdet_ins_medium",
 )
 
-OFFICIAL_RTMPOSE_MODEL_IDS: tuple[str, ...] = ()
+OFFICIAL_RTMPOSE_MODEL_IDS: tuple[str, ...] = ("rtmpose_halpe26",)
+
+OFFICIAL_POSE_MODEL_IDS: tuple[str, ...] = (
+    "mediapipe_pose_33",
+    *OFFICIAL_RTMPOSE_MODEL_IDS,
+)
 
 OFFICIAL_VISION_MODEL_IDS: tuple[str, ...] = (
     *OFFICIAL_DETECTION_MODEL_IDS,
     *OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS,
-    *OFFICIAL_RTMPOSE_MODEL_IDS,
+    *OFFICIAL_POSE_MODEL_IDS,
 )
 
 

@@ -17,6 +17,7 @@
     "README.md",
     "basePath.js",
     "basePath.d.ts",
+    "modalFocus.js",
     "index.js",
     "index.d.ts"
   ],

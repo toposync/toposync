@@ -1,3 +1,3 @@
 "use strict";
 
-module.exports = require("./basePath");
+module.exports = { ...require("./basePath"), ...require("./modalFocus") };

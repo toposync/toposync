@@ -46,3 +46,10 @@ def test_rtsp_probe_timeout_uses_total_operation_budget(monkeypatch: pytest.Monk
     assert wait_timeouts == pytest.approx([5.0], abs=0.1)
     timeout_flag_index = create_calls[0].index("-timeout")
     assert int(create_calls[0][timeout_flag_index + 1]) <= 5_000_000
+    # A readiness check must decode one frame without filling the default
+    # analysis/frame-thread buffers (which can exceed the budget at 4 fps).
+    command = create_calls[0]
+    for flag, value in (("-analyzeduration", "100000"), ("-probesize", "32768"), ("-threads", "1")):
+        assert flag in command
+        assert command.index(flag) < command.index("-i")
+        assert command[command.index(flag) + 1] == value

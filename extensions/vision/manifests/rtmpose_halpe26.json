@@ -1,0 +1,62 @@
+{
+  "model_id": "rtmpose_halpe26",
+  "display_name": "RTMPose-M Halpe26 (experimental)",
+  "task": "pose",
+  "runtime": "onnxruntime",
+  "artifact_format": "onnx",
+  "artifact_path": "../models/rtmpose/halpe26.onnx",
+  "sha256": "26f3a19e61304a600dfb82d1001d41d24343b89fc70a33ffc84657e0b0bf2ecf",
+  "input": {
+    "width": 192,
+    "height": 256,
+    "dtype": "float32",
+    "color_order": "rgb",
+    "layout": "nchw",
+    "resize_mode": "stretch",
+    "pad_value": 0.0,
+    "rescale_factor": 1.0,
+    "tensor_name": "input",
+    "normalization": {
+      "mean": [123.675, 116.28, 103.53],
+      "std": [58.395, 57.12, 57.375]
+    }
+  },
+  "postprocess": {
+    "type": "rtmpose_halpe26",
+    "output_name": "simcc_x"
+  },
+  "classes": {"labels": ["person"]},
+  "license": {
+    "code_license": "Apache-2.0",
+    "weights_license": "Apache-2.0 declared by the author's Tau-J/RTMPose model repository at the pinned revision.",
+    "dataset_notes": "Body7 and Halpe26 training data have separate terms. The distributor's model declaration does not grant training-data redistribution rights or certify each dataset's provenance.",
+    "redistribution_allowed": false,
+    "commercial_use_status": "upstream_apache_2_0_declaration_with_dataset_scope_limitations",
+    "official_build_allowed": false
+  },
+  "acquisition": {
+    "mode": "guided_upload",
+    "artifact_source": "onnx_ready",
+    "source_url": "https://huggingface.co/Tau-J/RTMPose/resolve/cd4d7095f5cfc9cfc4f46289bee91ea4a1e1d9fd/rtmposev1/onnx_sdk/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.zip",
+    "guide_url": "https://github.com/Tau-J/rtmlib/blob/03a1693e59e4f7cd84582c0fb30459b3bf18ad42/README.md",
+    "export_guide_url": "https://github.com/open-mmlab/mmpose/blob/537bd8e543ab463fb55120d5caaa1ae22d6aaf06/mmpose/codecs/simcc_label.py"
+  },
+  "provenance": {
+    "origin": "author_openmmlab_checkpoint_mirror",
+    "source_url": "https://huggingface.co/Tau-J/RTMPose",
+    "source_ref": "cd4d7095f5cfc9cfc4f46289bee91ea4a1e1d9fd",
+    "source_file": "rtmposev1/onnx_sdk/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.zip"
+  },
+  "hardware_profiles": {"cpu": true, "cuda": false, "openvino": false, "mps": false},
+  "capabilities": ["body_landmarks", "foot_landmarks", "pose_2d"],
+  "notes": [
+    "Experimental 2D body and feet model; not qualified for physical localization or unattended gestures.",
+    "Download the pinned ZIP, extract end2end.onnx, then upload that ONNX file on the selected processing server. Do not upload the ZIP or a PyTorch checkpoint.",
+    "Archive: 52089522 bytes, SHA256 55b81170e236040b59fc792ad0a8315301ac4c079a3bdb1095d838aad3088d18. Extracted ONNX: 55685444 bytes, verified against the manifest SHA256.",
+    "Top-down inference reuses person detections. No detector, tracker or model download runs inside pose inference.",
+    "Halpe26 landmarks retain their original names and raw SimCC scores, which are not probabilities and can exceed one. No global pose confidence is produced; the legacy pose score retains the source detection score.",
+    "The backend uses upright MMPose Python affine preprocessing, not the rounded MMDeploy SDK crop sampler. PyTorch export parity and anatomical accuracy require independent qualification.",
+    "No hip-relative 3D, depth or world pointing direction is supplied by this model. CPU is the only evaluated provider.",
+    "Toposync does not mirror, bundle or automatically download these weights; manual upload is the selected product policy."
+  ]
+}

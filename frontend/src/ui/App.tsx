@@ -66,6 +66,7 @@ import { Viewport2D } from "./Viewport2D";
 import { NavigableViewport } from "./NavigableViewport";
 import { createMeasurementLineElementType } from "./editor/measurementLineElementType";
 import { builtinNotificationRenderers, notificationPriority } from "./notifications/pipelinesNotifications";
+import { attachEphemeralImage, createEphemeralImageSession, withoutEphemeralImage, type EphemeralImageLease } from "./notifications/ephemeralImage";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
 import {
   MainScreen,
@@ -321,9 +322,10 @@ function mergeNotificationPage(
   options: { replaceVisible: boolean; filter: NotificationsFilter },
 ): NotificationsState {
   const byId = { ...prev.byId };
-  for (const notification of pageNotifications) {
+  for (const raw of pageNotifications) {
+    const notification = withoutEphemeralImage(raw);
     const existing = byId[notification.id];
-    byId[notification.id] = existing ? { ...existing, ...notification } : notification;
+    byId[notification.id] = existing ? { ...withoutEphemeralImage(existing), ...notification } : notification;
   }
 
   const pageIds = pageNotifications.map((notification) => notification.id);
@@ -348,8 +350,9 @@ function upsertNotificationInState(
   next: Notification,
   filter: NotificationsFilter,
 ): NotificationsState {
+  next = withoutEphemeralImage(next);
   const existing = prev.byId[next.id];
-  const merged = existing ? { ...existing, ...next } : next;
+  const merged = existing ? { ...withoutEphemeralImage(existing), ...next } : next;
   const byId = { ...prev.byId, [next.id]: merged };
   const visible = new Set(prev.visibleIds);
   if (notificationMatchesFilter(merged, filter)) {
@@ -390,6 +393,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     unread_by_priority: { low: 0, medium: 0, high: 0 },
   });
   const [activeNotificationId, setActiveNotificationId] = useState<string | null>(null);
+  // Pixels exist only in this selected-detail lease, never notificationsState.
+  const [activeImageLease, setActiveImageLease] = useState<EphemeralImageLease | null>(null);
+  const activeImageSessionRef = useRef<ReturnType<typeof createEphemeralImageSession> | null>(null);
   const lastUserInteractionTsRef = useRef<number>(Date.now());
   const hasManualNotificationSelectionRef = useRef(false);
   const markNotificationsViewedInFlightRef = useRef<Promise<void> | null>(null);
@@ -468,7 +474,12 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     [notificationsState],
   );
 
-  const activeNotification = activeNotificationId ? notificationsState.byId[activeNotificationId] ?? null : null;
+  const selectedNotification = activeNotificationId ? notificationsState.byId[activeNotificationId] ?? null : null;
+  const activeNotification = useMemo(() => attachEphemeralImage(
+    selectedNotification, backendAvailable ? activeImageLease : null,
+  ), [selectedNotification, backendAvailable, activeImageLease]);
+
+  useLayoutEffect(() => { setActiveImageLease(null); }, [activeNotificationId, backendAvailable]);
 
   const abortNotificationListRequests = useCallback(() => {
     notificationsListAbortRef.current?.abort();
@@ -825,7 +836,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   }, []);
 
   const upsertNotification = useCallback((next: Notification, _op: "insert" | "update") => {
-    setNotificationsState((prev) => upsertNotificationInState(prev, next, notificationsFilterRef.current));
+    activeImageSessionRef.current?.observe(next);
+    const persistable = withoutEphemeralImage(next);
+    setNotificationsState((prev) => upsertNotificationInState(prev, persistable, notificationsFilterRef.current));
   }, []);
 
   const activeNotificationIsOpenRealtime = useMemo(() => {
@@ -956,6 +969,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     };
     es.onerror = (err) => {
       if (closed) return;
+      activeImageSessionRef.current?.clear();
       console.warn("Notifications SSE error", err);
     };
 
@@ -970,6 +984,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     if (!activeNotificationId) return;
 
     let closed = false;
+    const imageSession = createEphemeralImageSession(activeNotificationId, (lease) => {
+      if (!closed) setActiveImageLease(lease);
+    });
+    activeImageSessionRef.current = imageSession;
     activeNotificationFetchAbortRef.current?.abort();
     const controller = new AbortController();
     activeNotificationFetchAbortRef.current = controller;
@@ -988,26 +1006,36 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
 
     // Keep this selected-notification stream separate from the global list stream above.
     // Changing selection should only replace this stream, not the global notification stream.
-    const es = new EventSource(`/api/notifications/${encodeURIComponent(activeNotificationId)}/stream`);
+    const es = new EventSource(resolveToposyncUrl(`/api/notifications/${encodeURIComponent(activeNotificationId)}/stream?include_ephemeral_image=true`));
+    // Reconnect/open never restores the previous image, even for the same capture.
+    es.onopen = () => { if (!closed) imageSession.clear(); };
     es.onmessage = (ev) => {
+      if (closed) return;
       try {
+        if (typeof ev.data !== "string" || ev.data.length > 512 * 1024) { imageSession.clear(); return; }
         const parsed = JSON.parse(ev.data ?? "{}") as { op?: string; notification?: Notification };
         const op = parsed.op === "update" ? "update" : "insert";
         const notif = parsed.notification;
-        if (!notif || typeof notif.id !== "string") return;
+        if (!notif || typeof notif.id !== "string" || notif.id !== activeNotificationId) { imageSession.clear(); return; }
+        imageSession.receive(notif);
         upsertNotification(notif, op);
       } catch (err) {
-        console.warn("Failed to parse notification detail SSE", err);
+        imageSession.clear();
+        console.warn("Failed to parse notification detail SSE");
       }
     };
     es.onerror = (err) => {
       if (closed) return;
+      imageSession.clear();
       console.warn("Notification detail SSE error", err);
     };
 
     return () => {
       controller.abort();
       closed = true;
+      imageSession.dispose();
+      if (activeImageSessionRef.current === imageSession) activeImageSessionRef.current = null;
+      setActiveImageLease((current) => current?.notificationId === activeNotificationId ? null : current);
       es.close();
     };
   }, [activeNotificationId, backendAvailable, upsertNotification]);

@@ -33,6 +33,7 @@ from toposync.runtime.pipelines.operator_registry import (
 from toposync.runtime.pipelines.packet_contract import (
     get_source_descriptor,
     resolve_media_ts,
+    resolve_media_dimensions,
     resolve_source_device_id,
     resolve_source_id,
 )
@@ -1257,6 +1258,7 @@ class CameraMappingConfig(BaseModel):
         default_factory=CameraMappingPtzStateFetchConfig
     )
     attach_mapping_metadata: bool = True
+    attach_metric_camera: bool = False
 
     @field_validator(
         "camera_id",
@@ -3566,9 +3568,10 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             min_shared_axes=int(self._config.pose_selection.min_shared_axes),
         )
         self._resolved_sets_cache: dict[
-            str, tuple[Any, str | None, tuple[ControlPointSet, ...]]
+            str, tuple[Any, str | None, tuple[ControlPointSet, ...], str | None]
         ] = {}
         self._mapper_cache: dict[str, ControlPointMapper | GroundPlaneMapper | None] = {}
+        self._metric_camera_cache: dict[str, dict[str, Any]] = {}
         self._ptz_state_cache: dict[str, _CameraMappingPtzStateCacheEntry] = {}
         self._ptz_state_tasks: dict[str, asyncio.Task[PanTiltZoomState | None]] = {}
         self._ptz_device_by_camera_source: dict[str, str] = {}
@@ -3713,6 +3716,16 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         return replace(packet, payload=payload)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        if self._config.attach_metric_camera:
+            spatial = dict(packet.payload.get("spatial") or {})
+            spatial["camera"] = {
+                "status": "unavailable", "reason": "matching_metric_calibration_required",
+                "frame_packet_id": packet.packet_id,
+            }
+            packet = replace(packet, payload={**packet.payload, "spatial": spatial})
+            if packet.lifecycle == Lifecycle.CLOSE:
+                spatial["camera"]["reason"] = "subject_closed"
+                return [packet]
         panorama_packet = await self._process_panorama_packet(packet)
         if panorama_packet is not None:
             return [panorama_packet]
@@ -3733,7 +3746,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             return [packet]
 
         camera_id = _resolve_camera_id(packet, camera_id_override=self._config.camera_id)
-        composition_id, control_point_sets = await self._resolve_control_point_sets(camera_id=camera_id)
+        composition_id, control_point_sets, map_revision = await self._resolve_control_point_sets(camera_id=camera_id)
         has_ground_projection = any(
             item.ground_projection is not None for item in control_point_sets
         )
@@ -3938,6 +3951,12 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             ]
 
         confidence = self._mapping_confidence(selection=selection, mapper=mapper)
+        if self._config.attach_metric_camera:
+            self._attach_metric_geometry(
+                payload, packet=packet, selection=selection, camera_id=camera_id,
+                composition_id=composition_id, visual_pose_match=visual_pose_match,
+                map_revision=map_revision,
+            )
         self._annotate_detection_world_anchors(
             payload,
             mapper=mapper,
@@ -4017,6 +4036,72 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             metadata["calibrated_view_id"] = selection.control_point_set.id
             metadata["pose_evidence"] = pose_evidence
         return [replace(packet, payload=payload, metadata=metadata)]
+
+    def _attach_metric_geometry(
+        self, payload: dict[str, Any], *, packet: Packet, selection: ControlPointSetSelection,
+        camera_id: str, composition_id: str | None, visual_pose_match: VisualPoseMatch | None,
+        map_revision: str | None,
+    ) -> None:
+        from ..processing.metric_camera import solve_metric_camera
+
+        projection = selection.control_point_set.ground_projection
+        source_failure = None
+        if projection is not None:
+            geometry = projection.source_geometry or {}
+            content = geometry.get("content_rect") or {}
+            if (geometry.get("rotation_degrees", 0) or geometry.get("mirror_x") or geometry.get("mirror_y")
+                or (content and content != {"top_left": {"x": 0.0, "y": 0.0}, "bottom_right": {"x": 1.0, "y": 1.0}})):
+                source_failure = "metric_source_transform_requires_calibration"
+            width, height = resolve_media_dimensions(packet)
+            vision_size = (packet.payload.get("vision") or {}).get("pose_source_size")
+            if isinstance(vision_size, (list, tuple)) and len(vision_size) == 2:
+                width, height = vision_size
+            for artifact in packet.artifacts.values():
+                artifact_geometry = artifact.metadata.get("image_geometry")
+                if isinstance(artifact_geometry, dict) and artifact_geometry.get("source_size"):
+                    width, height = artifact_geometry["source_size"]
+                    break
+            expected_width, expected_height = geometry.get("width"), geometry.get("height")
+            if not all(isinstance(v, (int, float)) and math.isfinite(v) and v > 1 for v in (width, height, expected_width, expected_height)):
+                source_failure = "metric_source_dimensions_required"
+            elif not math.isclose(width / height, expected_width / expected_height, rel_tol=1e-5):
+                source_failure = "metric_source_aspect_ratio_changed"
+            selected = selection.control_point_set
+            if selected.pose_reference is not None or selected.requires_pose_evidence:
+                pose = packet.payload.get(self._config.pose_state_field) or {}
+                captured = pose.get("physical_updated_at")
+                if (not isinstance(captured, (int, float)) or not math.isfinite(captured)
+                    or abs(captured - resolve_media_ts(packet)) > .25
+                    or pose.get("geometry_safe") is not True or pose.get("move_status") != "idle"):
+                    source_failure = "metric_pose_not_bound_to_frame"
+        if source_failure:
+            result = {"status": "unavailable", "reason": source_failure}
+        elif projection is None or visual_pose_match is not None:
+            # A 2D alignment is not sufficient to update metric extrinsics.
+            reason = "metric_view_alignment_unavailable" if visual_pose_match is not None else "metric_ground_calibration_required"
+            result = {"status": "unavailable", "reason": reason}
+        else:
+            digest = hashlib.sha256(repr(projection).encode()).hexdigest()
+            result = self._metric_camera_cache.get(digest)
+            if result is None:
+                try:
+                    geometry = solve_metric_camera(projection)
+                    result = {"status": "ready", "geometry": geometry.to_dict()}
+                except (ValueError, TypeError, ArithmeticError) as error:
+                    result = {"status": "unavailable", "reason": str(error)}
+                if len(self._metric_camera_cache) >= 64:
+                    self._metric_camera_cache.clear()
+                self._metric_camera_cache[digest] = result
+        spatial = dict(payload.get("spatial") or {})
+        spatial["camera"] = {
+            **result, "frame_packet_id": packet.packet_id,
+            "camera_id": camera_id, "composition_id": composition_id,
+            "map_revision": map_revision,
+            "calibrated_view_id": selection.control_point_set.id,
+            "physical_view_id": selection.control_point_set.physical_view_id,
+            "source_stream_id": packet.stream_id,
+        }
+        payload["spatial"] = spatial
 
     async def _process_panorama_packet(self, packet: Packet) -> Packet | None:
         """Use the active, source-scoped panorama before any legacy projection."""
@@ -4290,19 +4375,20 @@ class CameraMappingRuntime(TransformOperatorRuntime):
 
     async def _resolve_control_point_sets(
         self, *, camera_id: str
-    ) -> tuple[str | None, tuple[ControlPointSet, ...]]:
+    ) -> tuple[str | None, tuple[ControlPointSet, ...], str | None]:
         if self._inline_control_point_sets:
-            return (self._config.composition_id or None), self._inline_control_point_sets
+            # Inline calibration alone does not prove a persisted-map revision.
+            return (self._config.composition_id or None), self._inline_control_point_sets, None
 
         cache_key = f"{camera_id}|{self._config.composition_id}"
         store = self._dependencies.config_store
         if not isinstance(store, ConfigStore):
-            return None, ()
+            return None, (), None
 
         cfg = await store.get_config()
         cached = self._resolved_sets_cache.get(cache_key)
         if cached is not None and cached[0] is cfg:
-            return cached[1], cached[2]
+            return cached[1], cached[2], cached[3]
 
         target_composition_id = self._config.composition_id or None
         for composition in cfg.compositions:
@@ -4319,11 +4405,21 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 )
                 if not valid_sets:
                     continue
-                self._resolved_sets_cache[cache_key] = (cfg, composition.id, valid_sets)
-                return composition.id, valid_sets
+                revision = None
+                if self._config.attach_metric_camera:
+                    from ..processing.composition_revision import composition_revision
 
-        self._resolved_sets_cache[cache_key] = (cfg, None, ())
-        return None, ()
+                    try:
+                        # Bind exactly the snapshot that supplied the calibration,
+                        # not a later store read after asynchronous pose resolution.
+                        revision = composition_revision(composition)
+                    except (ValueError, TypeError):
+                        pass  # No verified map display; legacy mapping is unchanged.
+                self._resolved_sets_cache[cache_key] = (cfg, composition.id, valid_sets, revision)
+                return composition.id, valid_sets, revision
+
+        self._resolved_sets_cache[cache_key] = (cfg, None, (), None)
+        return None, (), None
 
     def _resolve_mapper(
         self,
@@ -4831,6 +4927,11 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
 
 
 def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
+    from .person_ground import register_person_ground_operator
+    from .pointing import register_pointing_operator
+
+    register_person_ground_operator(registry)
+    register_pointing_operator(registry)
     registry.register_operator(
         operator_id="camera.frame_attach",
         description="Attaches frame artifacts from a secondary frame stream (e.g. HQ) to the current packet.",
@@ -5990,7 +6091,7 @@ def _control_point_set_from_calibrated_view_record(
             visual_pose_signature=_parse_visual_pose_signature(
                 projection_model.get("visual_pose_signature")
             ),
-            ground_projection=GroundProjectionSpec(lens=lens, points=points),
+            ground_projection=GroundProjectionSpec(lens=lens, points=points, source_geometry=parsed.source_geometry.model_dump()),
             requires_pose_evidence=bool(rec.get("requires_pose_evidence")),
         )
     if str(projection_model.get("type") or "image_quad_on_world") != "image_quad_on_world":

@@ -4856,6 +4856,11 @@ video {
   z-index: 50;
 }
 
+.modalPanel button:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 2px;
+}
+
 .modalPanel {
   width: min(720px, calc(100vw - 28px));
   max-height: calc(100vh - 28px);
@@ -4974,6 +4979,11 @@ video {
 .fullscreenImageViewerButton:hover {
   border-color: rgba(255, 255, 255, 0.44);
   background: rgba(255, 255, 255, 0.12);
+}
+
+.fullscreenImageViewerBackdrop button:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 2px;
 }
 
 .fullscreenImageViewerButton:disabled {

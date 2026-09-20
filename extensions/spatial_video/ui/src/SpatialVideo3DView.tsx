@@ -348,6 +348,7 @@ export function SpatialVideo3DView({
   const notificationOverlayNotificationIdRef = useRef<string | null>(null);
   const notificationOverlayRendererIdRef = useRef<string | null>(null);
   const notificationOverlayCompositionIdRef = useRef<string | null>(null);
+  const notificationOverlayElementsRef = useRef<CompositionElement[] | null>(null);
   const activeNotificationRef = useRef<Notification | null>(activeNotification ?? null);
   const activeNotificationRendererRef = useRef<NotificationRenderer | null>(activeNotificationRenderer ?? null);
   const onOpenImageRef = useRef(onOpenImage);
@@ -404,7 +405,8 @@ export function SpatialVideo3DView({
       !overlay ||
       notificationOverlayNotificationIdRef.current !== notification.id ||
       notificationOverlayRendererIdRef.current !== rendererDef.id ||
-      notificationOverlayCompositionIdRef.current !== currentCompositionId;
+      notificationOverlayCompositionIdRef.current !== currentCompositionId ||
+      notificationOverlayElementsRef.current !== elements;
 
     if (!needsRecreate) {
       overlay.update?.(notification);
@@ -449,6 +451,7 @@ export function SpatialVideo3DView({
       notificationOverlayNotificationIdRef.current = notification.id;
       notificationOverlayRendererIdRef.current = rendererDef.id;
       notificationOverlayCompositionIdRef.current = currentCompositionId;
+      notificationOverlayElementsRef.current = elements;
       bumpVersion();
     } catch (error) {
       console.warn("[spatial-video-3d:notificationOverlay]", error);
@@ -926,6 +929,7 @@ export function SpatialVideo3DView({
       }
     }
 
+    syncNotificationOverlay();
     fitContentIfAllowed();
   }, [
     elements,

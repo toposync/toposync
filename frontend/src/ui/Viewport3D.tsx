@@ -340,6 +340,7 @@ export function Viewport3D({
   const activeNotificationRendererRef = useRef<NotificationRenderer | null>(activeNotificationRenderer ?? null);
   const onOpenImageRef = useRef<Props["onOpenImage"]>(onOpenImage);
   const compositionIdRef = useRef<string | undefined>(compositionId);
+  const notificationOverlayElementsRef = useRef<CompositionElement[] | null>(null);
   const lastElementsContextRef = useRef<CompositionElement[] | null>(null);
   const lastAutoFitCompositionIdRef = useRef<string | null>(null);
   const userInteractedWithCameraRef = useRef(false);
@@ -403,7 +404,8 @@ export function Viewport3D({
       !overlay ||
       notificationOverlayNotificationIdRef.current !== notification.id ||
       notificationOverlayRendererIdRef.current !== rendererDef.id ||
-      notificationOverlayCompositionIdRef.current !== currentCompositionId;
+      notificationOverlayCompositionIdRef.current !== currentCompositionId ||
+      notificationOverlayElementsRef.current !== elements;
 
     if (!needsRecreate) {
       overlay.update?.(notification);
@@ -448,6 +450,7 @@ export function Viewport3D({
       notificationOverlayNotificationIdRef.current = notification.id;
       notificationOverlayRendererIdRef.current = rendererDef.id;
       notificationOverlayCompositionIdRef.current = currentCompositionId;
+      notificationOverlayElementsRef.current = elements;
       requestRenderRef.current?.();
     } catch (err) {
       console.warn("[notificationOverlay]", err);
@@ -461,6 +464,10 @@ export function Viewport3D({
     activeNotificationRef.current = activeNotification ?? null;
     syncNotificationOverlay();
   }, [activeNotification]);
+
+  useEffect(() => {
+    syncNotificationOverlay();
+  }, [elements]);
 
   useEffect(() => {
     activeNotificationRendererRef.current = activeNotificationRenderer ?? null;

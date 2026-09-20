@@ -20,6 +20,7 @@ from ..processing.tasks import (
     VisionSyntheticDetectionSourceRuntime,
     VisionTrackRuntime,
 )
+from ..processing.tasks.gestures import VisionGestureRecognizeConfig, VisionGestureRecognizeRuntime
 from ..registry import ModelRegistry, build_default_model_registry
 from .schemas import (
     VisionClassifyImageConfig,
@@ -301,6 +302,48 @@ def _vision_model_diagnostics(task: str) -> Any:
 
 
 def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
+    if registry.get("vision.gesture_recognize") is None:
+        registry.register_operator(
+            operator_id="vision.gesture_recognize",
+            description=(
+                "Body-relative 2D gesture candidates with duration, hysteresis and cooldown. "
+                "Annotates each tracked person by default; separate finite gesture events are opt-in. "
+                "Does not infer 3D targets or perform physical actions."
+            ),
+            config_model=VisionGestureRecognizeConfig,
+            inputs=[{"name": "in", "required": True}],
+            outputs=[{"name": "out"}],
+            capabilities=["vision", "pose", "gesture", "event"],
+            defaults=VisionGestureRecognizeConfig().model_dump(),
+            requires_payload_keys=["subject", "vision"],
+            state_kind="stateful_per_subject",
+            ordering="strict",
+            max_concurrency=1,
+            pressure_behavior="ignore",
+            preserves_lifecycle=False,
+            produces_payload_keys=["vision", "subject", "actor_subject_id", "gesture_event"],
+            expression_hints=[
+                payload_path_hint(
+                    "payload.vision.gestures", value_type="object",
+                    description="Temporal 2D gesture status, candidates and active episodes for the actor.",
+                ),
+                payload_path_hint(
+                    "payload.vision.gestures.status", value_type="string",
+                    description="active, none or unknown; unknown is insufficient evidence, not no gesture.",
+                ),
+                payload_path_hint(
+                    "payload.gesture_event", value_type="object",
+                    description="Independent gesture episode, emitted only in event mode.",
+                ),
+                payload_path_hint(
+                    "payload.actor_subject_id", value_type="string",
+                    description="Canonical presence subject responsible for the gesture event.",
+                ),
+            ],
+            share_strategy="never",
+            owner="com.toposync.vision",
+            runtime_factory=lambda config, _deps: VisionGestureRecognizeRuntime(config),
+        )
     if registry.get("vision.synthetic_detection_source") is None:
         registry.register_operator(
             operator_id="vision.synthetic_detection_source",

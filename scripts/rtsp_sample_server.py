@@ -593,6 +593,15 @@ def probe_rtsp_frame(*, ffmpeg_path: Path, url: str) -> tuple[bool, str]:
                 "2000000",
                 "-rtsp_transport",
                 "tcp",
+                # This is a one-frame readiness check, not a rate/codec survey.
+                # At low frame rates, default analysis plus automatic decoder
+                # frame threading can consume the entire four-second budget.
+                "-analyzeduration",
+                "100000",
+                "-probesize",
+                "32768",
+                "-threads",
+                "1",
                 "-i",
                 str(url),
                 "-frames:v",

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import replace
+import time
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .images import MAIN_ARTIFACT_NAME
@@ -202,6 +203,87 @@ def resolve_media_ts(packet: Packet) -> float:
         if legacy is not None:
             return float(legacy)
     return float(packet.created_at)
+
+
+@dataclass(frozen=True, slots=True)
+class FrameFreshness:
+    """Age of the stated evidence boundary, not an inferred exposure time."""
+
+    age_seconds: float | None
+    reason: str
+    basis: str | None = None
+
+
+def resolve_frame_freshness(
+    packet: Packet,
+    *,
+    local_monotonic_clock: bool = False,
+    now_unix: float | None = None,
+    now_monotonic: float | None = None,
+) -> FrameFreshness:
+    """Read immutable capture evidence without guessing the media clock domain.
+
+    A tracker or remote transport can recreate the packet envelope; its age and
+    media.ts therefore cannot substitute for sample freshness. Replay sources
+    retain their media timestamps and publish new, explicitly timed samples.
+
+    The default uses the source's Unix publication time. It requires comparable
+    wall clocks: a future timestamp is rejected, but an unknown positive source
+    clock offset cannot be detected without a clock-synchronization contract.
+    Callers must not claim remote clock alignment from this result.
+
+    Set local_monotonic_clock only when the producer and consumer are known to
+    share that monotonic clock. Capture-instance IDs identify decoders, not clock
+    domains. Physical age is available only with an explicitly verified physical
+    timestamp. Otherwise receive/publication age is a lower bound on image age;
+    it does not certify absence of upstream camera or decoder buffering.
+
+    Missing, invalid or contradictory evidence fails closed. Never renew it
+    from the current envelope, and never treat a large media timestamp as Unix.
+    """
+    evidence = packet.payload.get("capture_evidence")
+    if evidence is None:
+        return FrameFreshness(None, "capture_evidence_missing")
+    if not isinstance(evidence, dict):
+        return FrameFreshness(None, "capture_evidence_invalid")
+    instance = evidence.get("capture_instance")
+    generation = evidence.get("generation")
+    sequence = evidence.get("sequence")
+    if (
+        not isinstance(instance, str)
+        or not instance.strip()
+        or type(generation) is not int
+        or generation < 0
+        or type(sequence) is not int
+        or sequence <= 0
+    ):
+        return FrameFreshness(None, "capture_identity_invalid")
+    verified = evidence.get("physical_timestamp_verified", False)
+    if not isinstance(verified, bool):
+        return FrameFreshness(None, "capture_verification_invalid")
+
+    def positive_time(value: Any) -> float | None:
+        if isinstance(value, (bool, str, bytes)):
+            return None
+        parsed = _as_finite_float(value)
+        return parsed if parsed is not None and parsed > 0 else None
+
+    if local_monotonic_clock:
+        field = "captured_monotonic" if verified else "received_monotonic"
+        basis = "physical_capture" if verified else "local_receive"
+        now = positive_time(time.monotonic() if now_monotonic is None else now_monotonic)
+    else:
+        field = "published_at"
+        basis = "source_publication"
+        now = positive_time(time.time() if now_unix is None else now_unix)
+    timestamp = positive_time(evidence.get(field))
+    if timestamp is None:
+        return FrameFreshness(None, f"capture_{field}_invalid", basis)
+    if now is None:
+        return FrameFreshness(None, "freshness_reference_clock_invalid", basis)
+    if timestamp > now:
+        return FrameFreshness(None, "capture_clock_skew", basis)
+    return FrameFreshness(now - timestamp, "age_available", basis)
 
 
 def _artifact_dimension_from_metadata(artifact: Artifact | None, key: str) -> int | None:

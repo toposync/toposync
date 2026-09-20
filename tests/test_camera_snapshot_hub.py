@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from importlib.metadata import EntryPoint
 from pathlib import Path
 import time
@@ -223,6 +224,58 @@ class _FakeCameraHub:
 
     async def release(self, *, key: str) -> None:
         self.release_calls.append(key)
+
+
+@pytest.mark.parametrize("timestamps", [(98.0, 99.0), (99.0, 101.0)])
+def test_decoder_freshness_requires_two_publications_after_request(timestamps) -> None:
+    class Grabber:
+        calls = 0
+
+        def get_latest_sample(self) -> CaptureFrameSample:
+            index = min(self.calls, len(timestamps) - 1)
+            self.calls += 1
+            return CaptureFrameSample(
+                frame=np.zeros((2, 2, 3), dtype=np.uint8),
+                published_at=timestamps[index],
+                generation=1,
+                sequence=index + 1,
+            )
+
+    waited = asyncio.run(
+        cameras_plugin._wait_for_grabber_frame(
+            Grabber(), wait_ms=120, min_frame_ts=100.0, minimum_distinct_frames=2
+        )
+    )
+    assert waited.frame is None
+    assert not waited.freshness_unverifiable
+
+
+def test_decoder_freshness_ignores_old_publication_before_two_new_frames() -> None:
+    class Grabber:
+        calls = 0
+
+        def get_latest_sample(self) -> CaptureFrameSample:
+            timestamps = (99.0, 101.0, 102.0)
+            index = min(self.calls, len(timestamps) - 1)
+            self.calls += 1
+            return CaptureFrameSample(
+                frame=np.zeros((2, 2, 3), dtype=np.uint8),
+                published_at=timestamps[index],
+                generation=1,
+                sequence=index + 1,
+            )
+
+    grabber = Grabber()
+    waited = asyncio.run(
+        cameras_plugin._wait_for_grabber_frame(
+            grabber, wait_ms=250, min_frame_ts=100.0, minimum_distinct_frames=2
+        )
+    )
+    assert waited.frame is not None
+    assert waited.published_at == 102.0
+    assert waited.sequence == 3
+    assert grabber.calls == 3
+    assert not waited.physical_capture_verified
 
 
 def test_camera_snapshot_fresh_drains_two_frames_newer_than_request(

@@ -73,6 +73,23 @@ def test_track_event_keeps_same_tracklet_on_same_subject() -> None:
     asyncio.run(scenario())
 
 
+def test_track_event_identity_does_not_repeat_after_runtime_restart() -> None:
+    async def scenario() -> None:
+        outputs = []
+        for _ in range(2):
+            runtime = _runtime({"default_interval_seconds": 0.0})
+            outputs.append((await runtime.process_packet(
+                _packet(1.0, [_track("trk:camera:test:1")]), None,
+            ))[0])
+        first, restarted = outputs
+        assert first.payload["event_code"] == restarted.payload["event_code"] == "1"
+        assert first.payload["event_id"] != restarted.payload["event_id"]
+        assert first.payload["subject"]["id"] != restarted.payload["subject"]["id"]
+        assert first.stream_id != restarted.stream_id
+
+    asyncio.run(scenario())
+
+
 def test_track_event_stitches_fragmented_tracklets_inside_gap() -> None:
     async def scenario() -> None:
         runtime = _runtime({"default_interval_seconds": 0.0, "close_after_seconds": 5.0})

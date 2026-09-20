@@ -5,6 +5,7 @@ import os
 import socket
 import threading
 import time
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -32,9 +33,97 @@ from toposync.runtime.pipelines.stats import PipelineStatsStore
 from toposync.runtime.pipelines.telemetry import PipelineTelemetryStore
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
 from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport
+from toposync.runtime.pipelines.distributed import processing_server as processing_module
 
 
 _PROCESSING_TEST_METRIC_ID = "test.processing.score"
+
+
+def test_http_open_subscription_rotates_epoch_without_frames_and_rejects_old_ack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real routes/HTTP, minimal runtime lifecycle; no extensions or model inference."""
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "processing-data"))
+    monkeypatch.delenv("TOPOSYNC_PROCESSING_USERNAME", raising=False)
+    monkeypatch.delenv("TOPOSYNC_PROCESSING_PASSWORD", raising=False)
+    owners = []
+    constructor = processing_module.ProcessingServerRuntime
+
+    def capture_runtime(**arguments):
+        owner = constructor(**arguments)
+        owners.append(owner)
+        return owner
+
+    monkeypatch.setattr(processing_module, "ProcessingServerRuntime", capture_runtime)
+    app = processing_module.create_processing_app()
+    owner = owners[0]
+
+    @asynccontextmanager
+    async def minimal_lifespan(_app):
+        owner.start()
+        try:
+            yield
+        finally:
+            await owner.stop()
+
+    app.router.lifespan_context = minimal_lifespan
+    live_server = _LiveProcessingServer(app)
+    live_server.start()
+
+    async def on_server(operation):
+        return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(operation, owner._loop))
+
+    async def publish(label):
+        owner._publish_processing_event({"sample": label})
+
+    async def snapshot():
+        return owner.status()
+
+    async def scenario():
+        transport = HttpProcessingTransport(base_url=live_server.base_url, timeout_s=2)
+        stream = transport.stream_events()
+        try:
+            first_ready = await asyncio.wait_for(anext(stream), 2)
+            assert first_ready["event_type"] == "processing_ready"
+            first_epoch = first_ready["event_epoch"]
+            await on_server(publish("before-reconfiguration"))
+            first = await asyncio.wait_for(anext(stream), 2)
+            assert first["event_id"] == 1 and first["event_epoch"] == first_epoch
+            await transport.ack(1, event_epoch=first_epoch)
+            await transport.push_config({"pipelines": []})
+            # No packet has been published since the configuration changed.
+            second_ready = await asyncio.wait_for(anext(stream), 2)
+            assert second_ready["event_type"] == "processing_ready"
+            second_epoch = second_ready["event_epoch"]
+            assert second_epoch and second_epoch != first_epoch
+            state = await on_server(snapshot())
+            assert not state["active"] and state["last_event_id"] == 0
+            await on_server(publish("after-reconfiguration"))
+            second = await asyncio.wait_for(anext(stream), 2)
+            assert second["sample"] == "after-reconfiguration"
+            assert second["event_id"] == 1 and second["event_epoch"] == second_epoch
+            await transport.ack(100, event_epoch=first_epoch)
+            state = await on_server(snapshot())
+            assert state["last_acked_event_id"] == 0 and state["replay_events"] == 1
+            await stream.aclose()
+            stream = transport.stream_events(last_event_id=100, event_epoch=first_epoch)
+            assert (await asyncio.wait_for(anext(stream), 2))["event_epoch"] == second_epoch
+            replayed = await asyncio.wait_for(anext(stream), 2)
+            assert replayed == second
+            await transport.ack(1, event_epoch=second_epoch)
+            state = await on_server(snapshot())
+            assert state["last_acked_event_id"] == 1 and state["replay_events"] == 0
+        finally:
+            await stream.aclose()
+            await transport.close()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        live_server.stop()
+    assert not live_server._thread.is_alive()
+    assert not owner.broadcaster._subscribers
+    assert live_server._socket is None
 
 
 class _LiveProcessingServer:

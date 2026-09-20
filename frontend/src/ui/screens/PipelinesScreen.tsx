@@ -1087,7 +1087,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
             <div className="card">
               <div className="cardBody">{t("core.ui.loading")}</div>
             </div>
-          ) : error ? (
+          ) : error && !draft ? (
             <div className="card cardDanger">
               <div className="cardBody">{error}</div>
             </div>
@@ -1097,6 +1097,11 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
             </div>
           ) : (
             <div className="pipelinesEditorInner">
+              {error ? (
+                <div className="card cardDanger" role="alert">
+                  <div className="cardBody">{error}</div>
+                </div>
+              ) : null}
               <div className="pipelinesEditorHeader">
                 <div className="pipelinesEditorTitle">{draft.name}</div>
                 <div className="pipelinesEditorActions">

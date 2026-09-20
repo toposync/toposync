@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -44,6 +45,26 @@ def build_distributed_graphs(
     limits = dict(graph.get("limits") or {}) if isinstance(graph.get("limits"), dict) else {}
     nodes = list(graph.get("nodes") or [])
     edges = list(graph.get("edges") or [])
+
+    def bridge_edge(edge: dict[str, Any], *, source: dict[str, str],
+                    target: dict[str, str], suffix: str) -> dict[str, Any]:
+        if schema_version == 2:
+            # A bridge changes endpoints, not the user's queue/lifecycle policy.
+            result = deepcopy(edge)
+            result.update({"uid": f"{edge['uid']}:{suffix}", "from": source, "to": target})
+            if suffix == "filter":
+                # The inbox broadcasts all destinations. Coalescing here could
+                # replace A's update with B's before A's target filter runs.
+                # Apply the user's lossy policy only after target routing.
+                queue = dict(result.get("queue") or {})
+                queue.update({"drop_policy": "block", "key_policy": "none", "key_path": ""})
+                result["queue"] = queue
+            return result
+        return {
+            "from": source, "to": target,
+            "maxsize": int(edge.get("maxsize") or 8),
+            "drop_policy": str(edge.get("drop_policy") or "drop_oldest"),
+        }
 
     node_by_id: dict[str, dict[str, Any]] = {}
     for item in nodes:
@@ -128,12 +149,8 @@ def build_distributed_graphs(
             )
 
             proc_edges.append(
-                {
-                    "from": {"node": src_node, "port": src_port},
-                    "to": {"node": project_node_id, "port": "in"},
-                    "maxsize": int(edge.get("maxsize") or 8),
-                    "drop_policy": str(edge.get("drop_policy") or "drop_oldest"),
-                },
+                bridge_edge(edge, source={"node": src_node, "port": src_port},
+                            target={"node": project_node_id, "port": "in"}, suffix="project"),
             )
 
         processing_graph = {
@@ -170,23 +187,13 @@ def build_distributed_graphs(
                     },
                 )
 
-                maxsize = int(edge.get("maxsize") or 8)
-                drop_policy = str(edge.get("drop_policy") or "drop_oldest")
                 orig_edges.append(
-                    {
-                        "from": {"node": origin_inbox_node_id, "port": "out"},
-                        "to": {"node": filter_node_id, "port": "in"},
-                        "maxsize": maxsize,
-                        "drop_policy": drop_policy,
-                    },
+                    bridge_edge(edge, source={"node": origin_inbox_node_id, "port": "out"},
+                                target={"node": filter_node_id, "port": "in"}, suffix="filter"),
                 )
                 orig_edges.append(
-                    {
-                        "from": {"node": filter_node_id, "port": "out"},
-                        "to": {"node": tgt_node, "port": tgt_port},
-                        "maxsize": maxsize,
-                        "drop_policy": drop_policy,
-                    },
+                    bridge_edge(edge, source={"node": filter_node_id, "port": "out"},
+                                target={"node": tgt_node, "port": tgt_port}, suffix="deliver"),
                 )
 
         origin_graph = {
@@ -195,6 +202,16 @@ def build_distributed_graphs(
             "edges": orig_edges,
             "limits": limits,
         }
+
+    if schema_version == 2:
+        for side, partition in (("processing", processing_graph), ("origin", origin_graph)):
+            if partition is None:
+                continue
+            partition["uid"] = f"{graph.get('uid') or pipeline.name}:{side}"
+            partition["revision"] = graph.get("revision", 1)
+            for node in partition["nodes"]:
+                if "uid" not in node:
+                    node["uid"] = f"{partition['uid']}:{node['id']}"
 
     return DistributedGraphs(
         pipeline_name=pipeline.name,

@@ -410,7 +410,7 @@ export function SpatialVideoView({
     if (!activeNotification || !activeNotificationRenderer?.create2DOverlay) return null;
     try {
       return activeNotificationRenderer.create2DOverlay(
-        { compositionId },
+        { compositionId, elements, requestRender },
         activeNotification,
         { openImage: () => undefined },
       );
@@ -418,7 +418,7 @@ export function SpatialVideoView({
       console.warn(`[spatial-video:create2DOverlay:${activeNotificationRenderer.id}]`, error);
       return null;
     }
-  }, [activeNotification, activeNotificationRenderer, compositionId]);
+  }, [activeNotification, activeNotificationRenderer, compositionId, elements, requestRender]);
 
   useEffect(() => {
     return () => {
@@ -442,7 +442,7 @@ export function SpatialVideoView({
       priority: pinData.priority,
       closed: pinData.closed,
     };
-  }, [notificationOverlay, viewBounds]);
+  }, [notificationOverlay, viewBounds, version]);
 
   useEffect(() => {
     sceneBoundsRef.current = sceneBounds;

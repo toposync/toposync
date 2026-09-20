@@ -705,7 +705,7 @@ export function MainViewport2D({
     if (!activeNotification || !activeNotificationRenderer?.create2DOverlay) return null;
     try {
       return activeNotificationRenderer.create2DOverlay(
-        { compositionId },
+        { compositionId, elements, requestRender: invalidate },
         activeNotification,
         { openImage: () => undefined },
       );
@@ -713,7 +713,7 @@ export function MainViewport2D({
       console.warn(`[main2d:create2DOverlay:${activeNotificationRenderer.id}]`, err);
       return null;
     }
-  }, [activeNotification, activeNotificationRenderer, compositionId]);
+  }, [activeNotification, activeNotificationRenderer, compositionId, elements, invalidate]);
 
   useEffect(() => {
     return () => {
@@ -740,7 +740,7 @@ export function MainViewport2D({
       pinData.trail && pinData.trail.length >= 2 ? pinData.trail.map(project) : undefined;
 
     return { screenX: head.x, screenY: head.y, trail, priority: pinData.priority, closed: pinData.closed };
-  }, [manifest, notificationOverlay, transform]);
+  }, [manifest, notificationOverlay, transform, stateVersion]);
 
   return (
     <div

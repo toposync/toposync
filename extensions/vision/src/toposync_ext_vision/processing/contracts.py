@@ -4,6 +4,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from .pose_landmarks import PoseLandmark, normalize_landmarks
+
 
 def clamp01(value: float) -> float:
     try:
@@ -195,11 +197,32 @@ class PoseObject:
     model_id: str
     tracking_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    skeleton_id: str = "indexed_v1"
+    landmarks: list[PoseLandmark] = field(default_factory=list)
+    landmark_reference: str = "selected_image"
 
     def __post_init__(self) -> None:
         self.label = normalize_label(self.label)
         self.score = clamp01(self.score)
         self.bbox01 = normalize_bbox01(self.bbox01)
+        # The additive scientific contract is derived before legacy clipping.
+        # Legacy keypoints remain compatible; new consumers use named landmarks.
+        if not self.landmarks:
+            self.landmarks = normalize_landmarks(self.keypoints)
+        else:
+            self.landmarks = [
+                item if isinstance(item, PoseLandmark) else PoseLandmark(**item)
+                for item in self.landmarks
+            ]
+        if [item.index for item in self.landmarks] != list(range(len(self.landmarks))):
+            raise ValueError("Pose landmark indices must be contiguous, including missing joints")
+        if len({item.name for item in self.landmarks}) != len(self.landmarks):
+            raise ValueError("Pose landmark names must be unique")
+        self.skeleton_id = str(self.skeleton_id).strip()
+        if not self.skeleton_id:
+            raise ValueError("Pose skeleton_id is required")
+        if self.landmark_reference not in {"selected_image", "stream_image"}:
+            raise ValueError("Unknown pose landmark reference")
         self.keypoints = _normalize_keypoints(self.keypoints) or []
         self.model_id = str(self.model_id or "").strip()
         self.tracking_id = str(self.tracking_id or "").strip() or None

@@ -1,5 +1,6 @@
 import React from "react";
 import { createPortal } from "react-dom";
+import { activateModalFocus } from "@toposync/plugin-api";
 
 export function SubModal({
   title,
@@ -16,6 +17,15 @@ export function SubModal({
   panelStyle?: React.CSSProperties;
   bodyStyle?: React.CSSProperties;
 }): React.ReactElement | null {
+  const panelRef = React.useRef<HTMLDivElement>(null);
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+  React.useLayoutEffect(() => {
+    // Older hosts do not expose the shared coordinator. Preserve their existing
+    // modal behavior without introducing an independent competing focus trap.
+    if (!open || !panelRef.current || typeof activateModalFocus !== "function") return;
+    return activateModalFocus(panelRef.current, () => onCloseRef.current());
+  }, [open]);
   if (!open) return null;
 
   return createPortal(
@@ -28,6 +38,8 @@ export function SubModal({
       role="presentation"
     >
       <div
+        ref={panelRef}
+        tabIndex={-1}
         className="modalPanel"
         style={{ width: "min(980px, calc(100vw - 28px))", ...(panelStyle ?? {}) }}
         role="dialog"

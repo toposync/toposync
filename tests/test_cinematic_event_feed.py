@@ -47,6 +47,20 @@ def test_notification_event_feed_uses_notification_service_and_normalizes_event(
     asyncio.run(_run_uses_notification_service_and_normalizes_event())
 
 
+@pytest.mark.parametrize("basis", [None, "media"])
+def test_pipeline_media_clock_does_not_replace_notification_civil_time(basis) -> None:
+    async def scenario():
+        event = {"started_ts": 500.0, "ts": 900.0}
+        if basis:
+            event["time_basis"] = basis
+        services = _Services([_notification("timing", payload={"source": "pipelines", "event": event})])
+        batch = await NotificationEventFeed(services, _config(), notification_types=["pipelines.event"]).poll()
+        assert batch.events[0].opened_at == 10.0
+        assert batch.events[0].updated_at == 20.0
+
+    asyncio.run(scenario())
+
+
 async def _run_uses_notification_service_and_normalizes_event() -> None:
     services = _Services(
         [

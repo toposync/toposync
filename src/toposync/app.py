@@ -19,6 +19,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFi
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
+from starlette.types import Receive, Scope, Send
 from pydantic import BaseModel, Field
 
 from toposync.extensions import run_extension_shutdown_callbacks
@@ -1497,6 +1498,18 @@ async def _lifespan(app: FastAPI):
             pipeline_storage_manager.close()
         except Exception:
             pass
+
+
+class _NotificationStreamingResponse(StreamingResponse):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Sending can fail while the generator is suspended at a yield.
+            # Release its subscription before returning, not at garbage collection.
+            close = getattr(self.body_iterator, "aclose", None)
+            if callable(close):
+                await close()
 
 
 def create_app() -> FastAPI:
@@ -4733,20 +4746,32 @@ def create_app() -> FastAPI:
         return StreamingResponse(
             gen(),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
         )
 
     @app.get("/api/notifications/{notification_id}/stream")
-    async def notification_stream(request: Request, notification_id: str) -> StreamingResponse:
+    async def notification_stream(
+        request: Request, notification_id: str, include_ephemeral_image: bool = False
+    ) -> StreamingResponse:
         _require(request, action="core:notifications:stream")
         runtime: NotificationsRuntime = request.app.state.notifications
         wanted = notification_id.strip()
         if not wanted:
             raise HTTPException(status_code=400, detail="notification_id is required")
 
-        q = runtime.broadcaster.subscribe()
+        if include_ephemeral_image and runtime.broadcaster.ephemeral_image_stream_count >= 16:
+            raise HTTPException(status_code=429, detail="Too many ephemeral image streams")
 
         async def gen():
+            # Allocate only once streaming begins. A cancelled response whose
+            # iterator never starts must not reserve live-image capacity.
+            try:
+                q = runtime.broadcaster.subscribe(
+                    notification_id=wanted, include_ephemeral_image=include_ephemeral_image
+                )
+            except ValueError:
+                yield 'event: error\ndata: {"code":"ephemeral_image_stream_limit"}\n\n'
+                return
             try:
                 yield "retry: 1000\n\n"
                 yield "event: ready\ndata: {}\n\n"
@@ -4769,10 +4794,10 @@ def create_app() -> FastAPI:
             finally:
                 runtime.broadcaster.unsubscribe(q)
 
-        return StreamingResponse(
+        return _NotificationStreamingResponse(
             gen(),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers={"Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no"},
         )
 
     @app.get("/api/notifications/{notification_id}")

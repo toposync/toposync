@@ -13,6 +13,11 @@ export const styles = `
 .identityGallery :focus-visible {outline:2px solid var(--accent);outline-offset:3px}
 .identityGallery .identityGrid {display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px}
 .identityGallery .identityTile {border:1px solid var(--border);border-radius:10px;padding:10px;display:grid;gap:8px;text-align:left;background:var(--panel);color:var(--text);min-width:0}
+.identityGallery .identityTile:has(> .identityGroupDetails[open]) {grid-column:1 / -1}
+.identityGallery .identityTile:has(> .identityGroupDetails[open]) > .identityPhotoButton {max-width:160px}
+.identityGallery .identityGroupDetails summary {min-height:44px;cursor:pointer;line-height:1.5;overflow-wrap:anywhere}
+.identityGallery .identityGroupDetails > p {margin-bottom:12px}
+.identityGallery .identityGroupDetails label {min-height:44px}
 .identityGallery .identityTile.isSelected {border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .identityGallery .identityPhoto {width:100%;height:112px;object-fit:cover;border-radius:6px;background:var(--bg)}
 .identityGallery .identityPortrait {width:72px;height:72px;border-radius:12px;object-fit:cover}

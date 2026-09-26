@@ -253,6 +253,7 @@ class PtzController:
         get_automation_readiness: AutomationReadinessReader | None = None,
         resolve_transport_binding: TransportBindingResolver | None = None,
         validate_transport_binding: TransportBindingValidator | None = None,
+        prepare_continuous_transport: Callable[..., Any] | None = None,
         time_func: Callable[[], float] = time.time,
         monotonic_func: Callable[[], float] = time.monotonic,
         settle_duration_s: float = 1.0,
@@ -275,6 +276,7 @@ class PtzController:
             )
         self._resolve_transport_binding = resolve_transport_binding
         self._validate_transport_binding = validate_transport_binding
+        self._prepare_continuous_transport = prepare_continuous_transport
         self._wall_time = time_func
         self._monotonic = monotonic_func
         self._settle_duration_s = max(0.0, min(10.0, float(settle_duration_s)))
@@ -535,6 +537,33 @@ class PtzController:
             self._schedule_lease_expiry_watchdog_locked(device, renewed)
             device.updated_at = now_wall
             return renewed.as_dict()
+
+    async def prepare_continuous_move(self, *, lease_id: str, fence: int) -> dict[str, bool]:
+        """Warm read-only protocol metadata in this lease's own transport.
+
+        This does not reserve the command queue, alter motion state, or certify
+        a future command. Stop must remain able to execute during discovery.
+        """
+        self._ensure_accepting_commands()
+        async with self._lock:
+            _, lease = self._lease_locked(
+                _required_text(lease_id, "lease_id"), fence, now_monotonic=self._monotonic())
+        if self._prepare_continuous_transport is None or lease.transport_binding is None:
+            return {"prepared": False}
+        current, _ = await self._transport_binding_current(lease)
+        if not current:
+            raise PtzControlError("PTZ transport configuration changed")
+        value = self._prepare_continuous_transport(
+            camera_id=lease.camera_id, camera_source_id=lease.camera_source_id or None,
+            transport_context=lease.transport_binding.context)
+        if inspect.isawaitable(value):
+            value = await value
+        current, _ = await self._transport_binding_current(lease)
+        async with self._lock:
+            self._lease_locked(lease.lease_id, fence, now_monotonic=self._monotonic())
+        if not current:
+            raise PtzControlError("PTZ transport configuration changed")
+        return {"prepared": value is True}
 
     async def submit(
         self,

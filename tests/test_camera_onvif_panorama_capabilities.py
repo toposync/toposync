@@ -397,6 +397,36 @@ def test_published_timeout_is_duration_not_motor_pulse(monkeypatch, minimum, max
     assert discover(configuration_token='ptz-main')['continuous_timeout_s'] == expected
 
 
+@pytest.mark.parametrize("known_media", [None, "http://camera.test/media"])
+@pytest.mark.parametrize("published_timeout", [False, True])
+def test_timeout_reuses_known_media_but_still_discovers_profile_safety(monkeypatch, known_media, published_timeout):
+    async def run():
+        payloads = responses()
+        if published_timeout:
+            payloads['GetConfigurationOptions'] = payloads['GetConfigurationOptions'].replace(
+                '</tt:Spaces>', '</tt:Spaces><tt:PTZTimeout><tt:Min>PT1S</tt:Min>'
+                '<tt:Max>PT10S</tt:Max></tt:PTZTimeout>',
+            )
+        calls = install_transport(monkeypatch, payloads)
+        discovery = []
+
+        async def capabilities(_self):
+            discovery.append(True)
+            return 'http://camera.test/media', 'http://camera.test/ptz'
+
+        monkeypatch.setattr(onvif.OnvifClient, 'get_capabilities', capabilities)
+        client = onvif.OnvifClient('device', auth_mode='none')
+        result = await client.continuous_move_timeout(
+            'http://camera.test/ptz', profile_token='profile-main', requested_s=.3,
+            media_xaddr=known_media,
+        )
+        assert result == (1.0 if published_timeout else None)
+        assert len(discovery) == (0 if known_media else 1)
+        assert [method for method, _ in calls] == ['GetProfiles', 'GetConfigurationOptions']
+
+    asyncio.run(run())
+
+
 def test_device_timeout_clamps_separately_from_controller_stop(monkeypatch, tmp_path):
     from toposync_ext_cameras.ptz_controller import PtzController
 

@@ -18,6 +18,71 @@ export type VideoGeometry = {
     panorama_to_camera: number[][];
 };
 
+/** Two independently registered, advancing frames must agree before keeping a photo. */
+export function sameRegisteredView(left: VideoGeometry, right: VideoGeometry): boolean {
+    if (JSON.stringify(left.lens) !== JSON.stringify(right.lens)) return false;
+    if (![left, right].every(value => value.panorama_to_camera.length === 3
+        && value.panorama_to_camera.every(row => row.length === 3 && row.every(Number.isFinite))
+        && Number.isFinite(value.lens.fx) && value.lens.fx > 0 && Number.isFinite(value.lens.fy) && value.lens.fy > 0)) return false;
+    const rightMatrix = right.panorama_to_camera.flat();
+    const difference = left.panorama_to_camera.flat().map((value, index) => value - rightMatrix[index]);
+    return difference.length === 9 && difference.every(Number.isFinite)
+        && Math.hypot(...difference) * Math.max(right.lens.fx, right.lens.fy) <= 1;
+}
+
+export type RegisteredPhotoObservation = {
+    geometry: VideoGeometry;
+    epoch: string;
+    sequence: number;
+    mediaTime: number;
+    receivedAt: number;
+};
+
+export function stationaryPhotoPair(previous: RegisteredPhotoObservation | null, current: RegisteredPhotoObservation): boolean {
+    if (!previous || previous.epoch !== current.epoch || current.sequence <= previous.sequence) return false;
+    if (![previous, current].every(value => value.epoch.length > 0 && Number.isSafeInteger(value.sequence)
+        && value.sequence >= 0 && value.mediaTime >= 0 && value.receivedAt >= 0)) return false;
+    const elapsed = current.mediaTime - previous.mediaTime;
+    const age = current.receivedAt - previous.receivedAt;
+    return Number.isFinite(elapsed) && elapsed >= .5 && elapsed <= 3
+        && Number.isFinite(age) && age >= 500 && age <= 3000
+        && sameRegisteredView(previous.geometry, current.geometry);
+}
+
+/** Fixed-size historical atlas; no frame list, persistence or additional stream. */
+export function createSessionPanoramaBackground(target: HTMLCanvasElement, mask: TexImageSource, width: number, height: number) {
+    const projected = document.createElement('canvas');
+    // At most 2 Mpix per canonical image: 8 MiB projection + 16 MiB doubled atlas.
+    // Mask/source textures are bounded separately below; old frames are never retained.
+    const scale = Math.min(1, 2048 / width, 1024 / height);
+    projected.width = Math.max(1, Math.floor(width * scale));
+    projected.height = Math.max(1, Math.floor(height * scale));
+    target.width = projected.width * 2;
+    target.height = projected.height;
+    const coverage = document.createElement('canvas');
+    coverage.width = projected.width;
+    coverage.height = projected.height;
+    const coverageContext = coverage.getContext('2d')!;
+    coverageContext.imageSmoothingEnabled = false;
+    coverageContext.drawImage(mask as CanvasImageSource, 0, 0, coverage.width, coverage.height);
+    const projector = createPanoramaVideoRenderer(projected, coverage);
+    const context = target.getContext('2d')!;
+    return {
+        commit(image: HTMLCanvasElement, geometry: VideoGeometry) {
+            if (image.width > 960 || image.height > 960) throw new Error('Fotografia da sessão excede o limite de resolução');
+            projector.draw(image, geometry);
+            // Copy synchronously: the WebGL drawing buffer is intentionally not preserved.
+            context.drawImage(projected, 0, 0);
+            context.drawImage(projected, projected.width, 0);
+        },
+        clear() { context.clearRect(0, 0, target.width, target.height); },
+        dispose() {
+            projector.dispose();
+            projected.width = projected.height = coverage.width = coverage.height = target.width = target.height = 1;
+        },
+    };
+}
+
 /**
  * Rejects a registration only when change is spread through the image. A
  * person, foliage, compression noise, or a small exposure adjustment must not
@@ -144,6 +209,7 @@ export function createPanoramaVideoRenderer(canvas: HTMLCanvasElement, mask: Tex
     return {
         clear() { gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); },
         draw(image: TexImageSource, geometry: VideoGeometry) {
+            if (gl.isContextLost()) throw new Error('Contexto gráfico interrompido');
             gl.viewport(0, 0, canvas.width, canvas.height);
             gl.clear(gl.COLOR_BUFFER_BIT);
             gl.useProgram(program);

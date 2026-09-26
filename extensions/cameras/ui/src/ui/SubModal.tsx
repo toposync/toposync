@@ -28,11 +28,28 @@ export function SubModal({
   }, [open]);
   if (!open) return null;
 
+  // A submodal is rendered through a separate body portal. Keep its complete
+  // pointer sequence inside that portal so the editor modal behind it cannot
+  // interpret the interaction as a backdrop click.
+  const stopPortalEventPropagation = (event: React.SyntheticEvent) => {
+    event.stopPropagation();
+  };
+
   return createPortal(
     <div
       className="modalBackdrop"
-      style={{ zIndex: "calc(var(--z-modal) + 1)" }}
+      // Do not use a custom-property calculation here: hosts that do not load
+      // the token stylesheet discard it, placing this portal behind its owner.
+      style={{ zIndex: 101 }}
+      onPointerDown={stopPortalEventPropagation}
+      onPointerMove={stopPortalEventPropagation}
+      onPointerUp={stopPortalEventPropagation}
+      onPointerCancel={stopPortalEventPropagation}
+      onClick={stopPortalEventPropagation}
+      onDoubleClick={stopPortalEventPropagation}
+      onWheel={stopPortalEventPropagation}
       onMouseDown={(event) => {
+        event.stopPropagation();
         if (event.target === event.currentTarget) onClose();
       }}
       role="presentation"

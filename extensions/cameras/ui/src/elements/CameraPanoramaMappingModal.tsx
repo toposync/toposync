@@ -28,7 +28,7 @@ function imagePoint(event: React.MouseEvent<HTMLElement>, image: HTMLImageElemen
 function initialStep(job: CameraPanoramaJob | null): number {
   if (job?.active) return 3;
   if (!job?.panorama_url || job.state !== "ready") return 0;
-  return job.permissions?.can_activate ? 3 : job.solution?.preview?.eligible && job.points.filter((point) => point.role === "fit").length >= MINIMUM_FIT_POINTS ? 2 : 1;
+  return job.permissions?.can_activate ? 3 : job.points.filter((point) => point.role === "fit").length >= MINIMUM_FIT_POINTS ? 2 : 1;
 }
 
 function samePoint(left: PendingPoint, right: PendingPoint | undefined): boolean {
@@ -259,7 +259,7 @@ export function CameraPanoramaMappingModal({ open, onClose, onOpenSettings, onAc
   useEffect(() => {
     if (!open || loading || recoveryDraft || step === 0 || step === 3 || !job || job.active || selectedPointId) return;
     const role = fitCount < MINIMUM_FIT_POINTS ? "fit" : "check";
-    if (role === "check" && (checkPoints.length >= MINIMUM_CHECK_POINTS || !job.solution?.preview?.eligible)) {
+    if (role === "check" && checkPoints.length >= MINIMUM_CHECK_POINTS) {
       setSelectedPointId(job.points.find((point) => pointErrorForResume(point.id))?.id ?? job.points[0]?.id ?? null);
     } else setPending({ id: createUniqueId(), role, panorama: null, world: null });
     function pointErrorForResume(id: string): boolean { return Array.isArray(job?.solution?.quality.point_errors) && job.solution.quality.point_errors.some((point: { id?: string; inlier?: boolean }) => point.id === id && point.inlier === false); }
@@ -359,7 +359,7 @@ export function CameraPanoramaMappingModal({ open, onClose, onOpenSettings, onAc
     if (following) selectPoint(following);
     else if (next.filter((point) => point.role === complete.role).length < (complete.role === "fit" ? MINIMUM_FIT_POINTS : MINIMUM_CHECK_POINTS)) {
       setPending({ id: createUniqueId(), role: complete.role, panorama: null, world: null });
-    } else if (complete.role === "fit" && jobRef.current?.solution?.preview?.eligible && next.filter((point) => point.role === "check").length < MINIMUM_CHECK_POINTS) {
+    } else if (complete.role === "fit" && next.filter((point) => point.role === "check").length < MINIMUM_CHECK_POINTS) {
       setStep(2); setPending({ id: createUniqueId(), role: "check", panorama: null, world: null });
     } else if (jobRef.current?.permissions?.can_activate) { setStep(3); setSelectedPointId(null); }
     else { setSelectedPointId(complete.id); setSelectedCheck(complete.role === "check" ? complete.id : null); }
@@ -621,7 +621,7 @@ export function CameraPanoramaMappingModal({ open, onClose, onOpenSettings, onAc
           <div className="cameraPanoramaFooter">
 
             <div className="cameraPanoramaActions">
-              {pending && selectedChanged ? <button className="primaryButton" disabled={!pending.panorama || !pending.world || Boolean(busy || recoveryDraft)} onClick={() => void saveCurrentPoint()}>{text("confirm_place")}</button> : fitCount >= MINIMUM_FIT_POINTS && checkPoints.length < MINIMUM_CHECK_POINTS ? <button className="primaryButton" disabled={editingLocked || Boolean(recoveryDraft) || !job?.solution?.preview?.eligible} onClick={() => startPoint("check")}>{text("add_check")}</button> : null}
+              {pending && selectedChanged ? <button className="primaryButton" disabled={!pending.panorama || !pending.world || Boolean(busy || recoveryDraft)} onClick={() => void saveCurrentPoint()}>{text("confirm_place")}</button> : fitCount >= MINIMUM_FIT_POINTS && checkPoints.length < MINIMUM_CHECK_POINTS ? <button className="primaryButton" disabled={editingLocked || Boolean(recoveryDraft)} onClick={() => startPoint("check")}>{text("add_check")}</button> : null}
               {checkPoints.length >= MINIMUM_CHECK_POINTS && !selectedChanged ? <button className={canActivate && !dirty ? "primaryButton" : "chipButton"} disabled={!canActivate || dirty || Boolean(busy || recoveryDraft)} onClick={() => setStep(3)}>{text("continue_finish")}</button> : null}
             </div>
           </div>

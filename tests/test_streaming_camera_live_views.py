@@ -313,6 +313,19 @@ def test_camera_source_publication_can_enable_webrtc_explicitly(tmp_path: Path) 
     )
     assert "webrtc_low_latency" in {item["id"] for item in main["outputs"]}
 
+    # The PTZ transport may resize the video, but must retain the explicitly
+    # selected optical source and its original geometry for panorama projection.
+    views = client.get("/api/streams/live-views").json()
+    view = next(item for item in views if item["camera_id"] == "front")
+    variant = next(item for item in view["variants"] if item["camera_source_id"] == "main")
+    playback = client.get(
+        f"/api/streams/live-views/{view['id']}/playback?context=ptz&variant_id={variant['id']}"
+    )
+    assert playback.status_code == 200, playback.text
+    assert playback.json()["camera_source_id"] == "main"
+    assert playback.json()["optical_source_resolution"] == {"width": 1920, "height": 1080}
+    assert playback.json()["playback_plan"]["selected_transport"] == "webrtc"
+
 
 def test_camera_live_playback_resolves_context_to_selected_source_and_output(tmp_path: Path) -> None:
     client = _create_client(tmp_path)

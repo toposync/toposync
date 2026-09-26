@@ -36,6 +36,16 @@ class ReolinkPtzPosition:
 
 
 @dataclass(frozen=True, slots=True)
+class ReolinkNativeZoomPosition:
+    """Device reading and its advertised range, never an optical magnification."""
+
+    position: float
+    minimum: float
+    maximum: float
+    channel: int
+
+
+@dataclass(frozen=True, slots=True)
 class ReolinkCgiPreset:
     slot: int
     name: str
@@ -106,6 +116,36 @@ class ReolinkCgiClient:
     username: str = ""
     password: str = ""
     timeout_s: float = 3.0
+
+    async def get_native_zoom_position(self, *, channel: int = 0) -> ReolinkNativeZoomPosition:
+        """Read the native zoom coordinate without mapping it to ONVIF or a lens."""
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 0:
+            raise ReolinkCgiError("Reolink channel is invalid")
+
+        async def _read(token: str) -> ReolinkNativeZoomPosition:
+            entry = await self._command(
+                token, command="GetZoomFocus", action=1, param={"channel": channel},
+            )
+            containers = []
+            for key in ("value", "range"):
+                outer = entry.get(key)
+                value = outer.get("ZoomFocus") if isinstance(outer, dict) else None
+                if (not isinstance(value, dict) or type(value.get("channel")) is not int
+                        or value["channel"] != channel or not isinstance(value.get("zoom"), dict)):
+                    raise ReolinkCgiError("Reolink zoom channel or range could not be verified")
+                containers.append(value["zoom"])
+            bounds = containers[1].get("pos")
+            if not isinstance(bounds, dict):
+                raise ReolinkCgiError("Reolink zoom range could not be verified")
+            values = (containers[0].get("pos"), bounds.get("min"), bounds.get("max"))
+            if any(type(value) not in (int, float) or not math.isfinite(value) for value in values):
+                raise ReolinkCgiError("Reolink zoom position is invalid")
+            position, minimum, maximum = map(float, values)
+            if not minimum <= position <= maximum or minimum >= maximum:
+                raise ReolinkCgiError("Reolink zoom position is outside its advertised range")
+            return ReolinkNativeZoomPosition(position, minimum, maximum, channel)
+
+        return await self._with_session(_read)
 
     async def get_current_position(self, *, channel: int = 0) -> ReolinkPtzPosition:
         if isinstance(channel, bool) or not isinstance(channel, int) or channel < 0:

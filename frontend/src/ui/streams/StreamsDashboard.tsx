@@ -99,6 +99,7 @@ type WebRtcStatsSummary = {
   rttMs: number | null;
   packetLossPct: number | null;
   packetsLost: number | null;
+  packetsReceived: number | null;
   jitterMs: number | null;
   framesDecoded: number | null;
   framesPerSecond: number | null;
@@ -879,10 +880,10 @@ function hlsAttributeUris(playlistText: string): string[] {
   return out;
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
+async function fetchWithTimeout(url: string, init: RequestInit = {}, signal?: AbortSignal, timeoutMs = HLS_BROWSER_PROBE_TIMEOUT_MS): Promise<Response> {
   const abortController = new AbortController();
   const handleAbort = () => abortController.abort();
-  const timeoutId = window.setTimeout(() => abortController.abort(), HLS_BROWSER_PROBE_TIMEOUT_MS);
+  const timeoutId = window.setTimeout(() => abortController.abort(), timeoutMs);
   try {
     if (signal?.aborted) abortController.abort();
     else signal?.addEventListener("abort", handleAbort, { once: true });
@@ -989,6 +990,7 @@ async function collectWebRtcStats(peerConnection: RTCPeerConnection): Promise<We
     rttMs: rttSeconds !== null ? Math.round(rttSeconds * 1000) : null,
     packetLossPct: totalPackets && packetsLost !== null ? Math.max(0, (packetsLost / totalPackets) * 100) : null,
     packetsLost,
+    packetsReceived,
     jitterMs: jitterSeconds !== null ? Math.round(jitterSeconds * 1000) : null,
     framesDecoded,
     framesPerSecond,
@@ -2390,14 +2392,14 @@ export function StreamTilePlayer({
       clearVideoSource();
     };
 
-    const scheduleRetry = (reason: string) => {
+    const scheduleRetry = (reason: string, immediate = false) => {
       if (
         cancelled ||
         !playbackActive ||
         ((!allowMse || !mseUrl) && (!allowHls || !hlsUrl) && (!allowWebRtc || !webrtcUrl) && (!allowJsmpeg || !jsmpegUrl)) ||
         retryTimerId != null
       ) return;
-      const delayMs = Math.min(RETRY_BASE_MS * Math.max(1, 2 ** attempt), RETRY_MAX_MS);
+      const delayMs = immediate && attempt === 0 ? 0 : Math.min(RETRY_BASE_MS * Math.max(1, 2 ** attempt), RETRY_MAX_MS);
       recordWebPlaybackEvent("retry_scheduled", {
         severity: "warn",
         message: reason,
@@ -2806,7 +2808,28 @@ export function StreamTilePlayer({
       setTransport("webrtc");
       const nextPeerConnection = new RTCPeerConnection();
       peerConnection = nextPeerConnection;
+      let established = false;
+      let lastMediaTime = video.currentTime;
+      let lastProgressAt = performance.now();
+      let lastPacketCount: number | null = null;
+      let lastPacketsAt = performance.now();
+      let packetStallTimeout: number | null = null;
+      let statsPending = false;
+      let previousReception: { packets: number; frames: number; at: number } | null = null;
+      const recoverEstablishedConnection = () => {
+        if (!established || cancelled || peerConnection !== nextPeerConnection) return;
+        established = false;
+        const message = i18n.t("core.ui.streams.errors.webrtc_connection_failed", {}, "WebRTC connection failed.");
+        setFirstFrameReady(false);
+        setStatus("loading");
+        setErrorText(message);
+        destroyPlayback();
+        // One immediate retry for a previously working stream. Persistent
+        // failures retain the shared exponential backoff and cancellation.
+        scheduleRetry(message, true);
+      };
       const recordIceState = () => {
+        if (cancelled || peerConnection !== nextPeerConnection) return;
         const severity =
           nextPeerConnection.iceConnectionState === "failed" ||
           nextPeerConnection.connectionState === "failed" ||
@@ -2820,6 +2843,15 @@ export function StreamTilePlayer({
             connection_state: nextPeerConnection.connectionState,
           }),
         });
+        if (established && (nextPeerConnection.connectionState === "failed" || nextPeerConnection.connectionState === "closed" || nextPeerConnection.iceConnectionState === "failed")) {
+          recoverEstablishedConnection();
+        } else if (established && !video.paused && video.currentTime === lastMediaTime
+          && performance.now() - lastProgressAt >= 3000
+          && (nextPeerConnection.connectionState === "disconnected" || nextPeerConnection.iceConnectionState === "disconnected")) {
+          // The statistics clock already established the stall; do not wait
+          // for another tick after ICE confirms the connection loss.
+          recoverEstablishedConnection();
+        }
       };
       nextPeerConnection.addEventListener("iceconnectionstatechange", recordIceState);
       nextPeerConnection.addEventListener("connectionstatechange", recordIceState);
@@ -2856,7 +2888,7 @@ export function StreamTilePlayer({
 
         const abortController = new AbortController();
         webrtcAbortController = abortController;
-        const response = await fetch(webrtcUrl, {
+        const response = await fetchWithTimeout(webrtcUrl, {
           method: "POST",
           mode: "cors",
           headers: {
@@ -2865,8 +2897,7 @@ export function StreamTilePlayer({
             ...(webrtcAuthHeader ? { authorization: webrtcAuthHeader } : {}),
           },
           body: offerSdp,
-          signal: abortController.signal,
-        });
+        }, abortController.signal, WEBRTC_SIGNAL_TIMEOUT_MS);
         if (!response.ok) {
           let detail = "";
           try {
@@ -2910,17 +2941,63 @@ export function StreamTilePlayer({
 
       const sampleStats = () => {
         const currentPeerConnection = peerConnection;
-        if (!currentPeerConnection) return;
+        if (cancelled || currentPeerConnection !== nextPeerConnection) return;
+        // A terminal peer may not emit another state-change event or retain
+        // packet statistics. Reuse recovery before the missing-stats fallback.
+        if (established && (nextPeerConnection.connectionState === "failed" || nextPeerConnection.connectionState === "closed" || nextPeerConnection.iceConnectionState === "failed")) {
+          recoverEstablishedConnection();
+          return;
+        }
+        const now = performance.now();
+        if (!established || video.paused || video.currentTime !== lastMediaTime) {
+          lastMediaTime = video.currentTime;
+          lastProgressAt = now;
+        } else if (now - lastProgressAt >= 3000
+          && (nextPeerConnection.connectionState === "disconnected" || nextPeerConnection.iceConnectionState === "disconnected")) {
+          // A transient ICE change alone is not failure. Recover only when
+          // playback has also stopped, using the existing statistics clock.
+          recoverEstablishedConnection();
+          return;
+        }
+        if (statsPending) return;
+        statsPending = true;
         void collectWebRtcStats(currentPeerConnection)
           .then((stats) => {
-            if (cancelled) return;
+            if (cancelled || peerConnection !== currentPeerConnection) return;
+            const sampledAt = performance.now();
+            const packets = stats.packetsReceived;
+            const decoded = stats.framesDecoded;
+            if (!established || video.paused || packets == null || !Number.isFinite(packets) || packets < 0) {
+              lastPacketCount = null;
+              packetStallTimeout = null;
+            } else if (packets !== lastPacketCount) {
+              lastPacketCount = packets;
+              lastPacketsAt = sampledAt;
+              const reportedRate = stats.framesPerSecond;
+              const measuredRate = previousReception && decoded != null
+                && packets > previousReception.packets && decoded > previousReception.frames && sampledAt > previousReception.at
+                ? (decoded - previousReception.frames) * 1000 / (sampledAt - previousReception.at) : null;
+              const rate = reportedRate != null && reportedRate > 0 ? reportedRate : measuredRate;
+              packetStallTimeout = rate != null && Number.isFinite(rate) && rate > 0
+                ? Math.max(3000, 3000 / rate) : null;
+            } else if (packetStallTimeout != null && sampledAt - lastPacketsAt >= packetStallTimeout
+              && sampledAt - lastProgressAt >= packetStallTimeout && video.currentTime === lastMediaTime) {
+              // ICE can stay connected after media reception stops. Require
+              // both stalled playback and packets; allow three frame periods
+              // for observed low-rate sources, or retain ICE recovery if unknown.
+              recoverEstablishedConnection();
+              return;
+            }
+            previousReception = lastPacketCount != null && decoded != null && Number.isFinite(decoded) && decoded >= 0
+              ? { packets: lastPacketCount, frames: decoded, at: sampledAt } : null;
             setWebRtcStats(stats);
             recordWebPlaybackEvent("webrtc_stats", {
               severity: "debug",
               data: withTransportTelemetry(stats as unknown as Record<string, unknown>),
             });
           })
-          .catch(() => {});
+          .catch(() => { lastPacketCount = null; packetStallTimeout = null; previousReception = null; })
+          .finally(() => { statsPending = false; });
       };
       sampleStats();
       clearWebRtcStatsTimer();
@@ -2936,6 +3013,9 @@ export function StreamTilePlayer({
         i18n.t("core.ui.streams.errors.webrtc_first_frame_timeout", {}, "Timed out waiting for WebRTC video frame."),
       );
       setFirstFrameReady(true);
+      established = true;
+      lastMediaTime = video.currentTime;
+      lastProgressAt = performance.now();
       setStatus("playing");
       setErrorText(null);
     };
@@ -3327,6 +3407,11 @@ export function StreamTilePlayer({
             await startWebRtcPlayback(video);
             return;
           } catch (error) {
+            if (cancelled) return;
+            destroyWebRtc();
+            // srcObject takes precedence over src. Release the failed stream
+            // before MSE or HLS attaches its URL to the same video element.
+            clearVideoSource();
             const message = asErrorMessage(error);
             webRtcError = message;
             const normalizedMessage = message.toLowerCase();

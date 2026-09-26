@@ -90,6 +90,33 @@ def test_global_motion_then_stationary_window_accepts_without_complete_pose(scen
     json.dumps(results, allow_nan=False)
 
 
+@pytest.mark.parametrize("continuity", ["same", "generation", "gap"])
+def test_calibrated_recovery_only_establishes_transition_on_continuous_frames(scene, monkeypatch, continuity):
+    calls = []
+
+    def estimate(before, after):
+        calls.append((before.copy(), after.copy()))
+        return {"motion_pixels": 30, "inliers": 100, "validation_matches": 40,
+                "validation_p95_pixels": 1, "method": "calibrated_frame_rotation"}
+
+    detector = VisualStabilityDetector(replace(StabilitySettings(), analysis_width=320),
+                                       transition_estimator=estimate)
+    _observe(detector, scene, 0)
+    monkeypatch.setattr(detector, "_motion", lambda *args: (None, {}))
+    monkeypatch.setattr(detector, "_feature_motion", lambda *args: (None, {}))
+    result = _observe(detector, _frame(scene, 30, 1), 1,
+                      generation=2 if continuity == "generation" else 1,
+                      received=102 if continuity == "gap" else 100.1,
+                      media=2 if continuity == "gap" else .1)
+    assert not result["stable"]
+    assert bool(calls) == (continuity == "same")
+    assert result["has_motion_transition"] == (continuity == "same")
+    if continuity == "same":
+        assert result["code"] == "motion_reacquired"
+        detector.arm_stop(now=100.11)
+        assert not detector._window
+
+
 @pytest.mark.parametrize("media_timing", [False, True])
 def test_slow_initial_motion_is_observed_before_a_new_stable_window(scene, media_timing):
     detector = VisualStabilityDetector(
@@ -931,3 +958,33 @@ def test_distributed_recovery_still_requires_new_post_stop_global_window(scene, 
     assert not any(result["stable"] for result in results[:7])
     assert results[-1]["stable"]
     assert results[-1]["evidence"] == "visual_transition_verified"
+
+
+@pytest.mark.parametrize("tracking_lost", [False, True])
+def test_accumulated_distributed_transition_recovers_without_forging_stability(scene, monkeypatch, tracking_lost):
+    detector = _detector()
+    anchor = _frame(scene, 0, 0)
+    _observe(detector, anchor, 0)
+    original = detector._motion
+    monkeypatch.setattr(detector, "_motion", lambda *_: (
+        None if tracking_lost else np.eye(3), {"motion_pixels": 0.01},
+    ))
+    monkeypatch.setattr(detector, "_feature_motion", lambda *_: (None, {}))
+    assert not _observe(detector, _frame(scene, 0.1, 1), 1)["has_motion_transition"]
+
+    def motion(previous, current):
+        if np.array_equal(previous, anchor):
+            return None, {"distributed_transition": {
+                "motion_pixels": 3, "occupied_cells": 9, "inliers": 200,
+            }}
+        return np.eye(3), {"motion_pixels": 0.01}
+
+    monkeypatch.setattr(detector, "_motion", motion)
+    results = [_observe(detector, _frame(scene, 3, index), index) for index in range(2, 8)]
+    assert any(result["has_motion_transition"] for result in results)
+    assert not any(result["stable"] for result in results)
+    monkeypatch.setattr(detector, "_motion", original)
+    detector.arm_stop(now=100.75)
+    results = [_observe(detector, _frame(scene, 3, index), index) for index in range(8, 26)]
+    assert not any(result["stable"] for result in results[:7])
+    assert results[-1]["stable"]

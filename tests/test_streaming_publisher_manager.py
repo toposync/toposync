@@ -122,6 +122,68 @@ def test_encoder_trust_store_persists_expires_and_clears_quarantine(tmp_path) ->
     asyncio.run(scenario())
 
 
+def test_encoder_trust_persists_only_changes_without_bypassing_quarantine(tmp_path, monkeypatch) -> None:
+    from toposync_ext_streaming.streaming import encoder_state
+
+    writes = []
+    original_write = encoder_state._atomic_write_json
+
+    def record_write(path, payload):
+        writes.append(payload)
+        original_write(path, payload)
+
+    monkeypatch.setattr(encoder_state, "_atomic_write_json", record_write)
+    clock = {"now": 100.0}
+
+    async def scenario() -> None:
+        path = tmp_path / "encoder-state.json"
+        store = EncoderTrustStore(path=path, time_func=lambda: clock["now"])
+        await asyncio.gather(*(store.mark_trusted("h264_videotoolbox") for _ in range(20)))
+        assert len(writes) == 1
+        restored = EncoderTrustStore(path=path, time_func=lambda: clock["now"])
+        assert (await restored.mark_trusted("h264_videotoolbox")).state == "trusted"
+        assert len(writes) == 1
+        await restored.quarantine("h264_videotoolbox", reason="runtime_failure", duration_seconds=10)
+        assert len(writes) == 2
+        assert (await restored.mark_trusted("h264_videotoolbox")).state == "quarantined"
+        assert len(writes) == 2
+        clock["now"] = 111.0
+        recovered = await restored.mark_trusted("h264_videotoolbox")
+        assert recovered.state == "trusted"
+        assert recovered.failure_count == 1
+        assert len(writes) == 3
+        assert (await EncoderTrustStore(path=path).state_for("h264_videotoolbox")) == recovered
+
+    asyncio.run(scenario())
+
+
+def test_encoder_trust_retries_failed_persistence(tmp_path, monkeypatch) -> None:
+    import pytest
+    from toposync_ext_streaming.streaming import encoder_state
+
+    original_write = encoder_state._atomic_write_json
+    attempts = []
+
+    def fail_once(path, payload):
+        attempts.append(payload)
+        if len(attempts) == 1:
+            raise OSError("Storage temporarily unavailable")
+        original_write(path, payload)
+
+    monkeypatch.setattr(encoder_state, "_atomic_write_json", fail_once)
+
+    async def scenario() -> None:
+        path = tmp_path / "encoder-state.json"
+        store = EncoderTrustStore(path=path)
+        with pytest.raises(OSError):
+            await store.mark_trusted("h264_videotoolbox")
+        await store.mark_trusted("h264_videotoolbox")
+        assert len(attempts) == 2
+        assert (await EncoderTrustStore(path=path).state_for("h264_videotoolbox")).state == "trusted"
+
+    asyncio.run(scenario())
+
+
 def test_cpu_encoder_mode_never_selects_hardware(tmp_path) -> None:
     runtime = _make_runtime(
         tmp_path,

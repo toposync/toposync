@@ -22,6 +22,47 @@ from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
 
+@pytest.mark.parametrize("chunk_size", [3, 8192, 131072])
+def test_mjpeg_reader_preserves_fragmented_frames_with_linear_marker_search(monkeypatch, chunk_size):
+    from collections import deque
+    from types import SimpleNamespace
+    import toposync_ext_cameras.processing.frame_grabber as grabber
+
+    searched = []
+
+    class CountedBuffer(bytearray):
+        def find(self, value, start=0, *args):
+            if value == b"\xff\xd9":
+                searched.append(max(0, len(self) - start))
+            return super().find(value, start, *args)
+
+    frames = [b"\xff\xd8" + b"x" * size + b"\xff\xd9" for size in [7, 100003, 9]]
+    stream = b"noise\xff" + b"".join(frames)
+    chunks = iter(stream[index:index + chunk_size] for index in range(0, len(stream), chunk_size))
+    reader = grabber.FfmpegFrameGrabber.__new__(grabber.FfmpegFrameGrabber)
+    reader._frames_stop = threading.Event()
+    reader._frames_captured = reader._decode_failures = 0
+    reader._fps_samples = deque()
+    received = []
+    reader._frame_buffer = SimpleNamespace(set=lambda image, *args, **kwargs: received.append(image))
+    reader.is_opened = lambda: True
+    reader._stop_process = lambda: None
+
+    def read(_size):
+        chunk = next(chunks, None)
+        if chunk is None:
+            reader._frames_stop.set()
+        return chunk or b""
+
+    reader._read_chunk = read
+    monkeypatch.setattr(grabber, "bytearray", CountedBuffer, raising=False)
+    monkeypatch.setattr(grabber, "_decode_jpeg_frame", lambda image: image)
+    reader._reader_loop()
+    assert received == frames
+    assert reader._frames_captured == len(frames)
+    assert sum(searched) < len(stream) * 4
+
+
 def _manual_camera_device(
     camera_id: str,
     *,

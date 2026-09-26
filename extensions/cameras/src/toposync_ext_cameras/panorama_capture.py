@@ -8,6 +8,7 @@ controller's geometry_safe contract.
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import math
@@ -134,8 +135,10 @@ class PanoramaCamera:
         self._temporary_presets: set[str] = set()
         self._return_destinations: dict[str, dict[str, Any]] = {}
         self._return_creations: dict[str, dict[str, Any]] = {}
+        self._reference_destination: dict[str, Any] | None = None
         self._return_may_change_zoom = False
         self._automation: dict[str, bool | None] = {"auto_tracking": None, "automatic_return": None}
+        self._continuous_preparation: asyncio.Task | None = None
 
     async def _configuration(self) -> None:
         settings = await self.dependencies.config_store.get_settings()
@@ -195,17 +198,26 @@ class PanoramaCamera:
                     password=client.password,
                     timeout_s=client.timeout_s,
                 )
-                try:
-                    self._automation = await self._reolink.get_motion_automation()
-                except Exception:
-                    pass
-            capabilities = await client.get_ptz_capabilities(
-                endpoint,
-                profile_token=token,
-                configuration_token=getattr(profile, "ptz_configuration_token", ""),
-            )
+            # The exact optical profile is already verified. These independent
+            # read-only requests must all finish before exposing capabilities;
+            # no pose or automation reading is reused from another operation.
+            reads = [
+                asyncio.create_task(client.get_ptz_capabilities(
+                    endpoint, profile_token=token,
+                    configuration_token=getattr(profile, "ptz_configuration_token", ""),
+                )),
+                asyncio.create_task(self.position()),
+                asyncio.create_task(self._read_motion_automation()),
+            ]
+            try:
+                capabilities, position, automation = await asyncio.gather(*reads)
+            finally:
+                for read in reads:
+                    if not read.done():
+                        read.cancel()
+                await asyncio.gather(*reads, return_exceptions=True)
             capabilities = dict(capabilities)
-            position = await self.position()
+            self._automation = automation
             capabilities.update(
                 camera_id=self.camera_id,
                 source_id=self.source_id,
@@ -275,6 +287,53 @@ class PanoramaCamera:
             raise
         except Exception:
             raise PanoramaCaptureError("camera_discovery_failed") from None
+
+    async def _read_motion_automation(self) -> dict[str, bool | None]:
+        if self._reolink is not None:
+            try:
+                return await self._reolink.get_motion_automation()
+            except Exception:
+                pass
+        return {"auto_tracking": None, "automatic_return": None}
+
+    async def refresh_discovery_metadata(self) -> dict[str, Any]:
+        """Rediscover under the existing lease without recycling its capture."""
+        await self._guard()
+        binding = self._return_binding()
+        self._capabilities = None
+        self._reolink = None
+        try:
+            capabilities = await self.discover()
+            if self._return_binding() != binding:
+                raise PanoramaCaptureError("return_binding_changed")
+            await self._guard()
+            return capabilities
+        except BaseException:
+            # Partial or mismatched discovery must never become reusable metadata.
+            self._capabilities = None
+            raise
+
+    async def refresh_discovery_observations(self) -> dict[str, Any]:
+        """Reuse discovered protocol metadata, never an old pose or automation state."""
+        await self._configuration()
+        if self._capabilities is None:
+            return await self.discover()
+
+        reads = [asyncio.create_task(self.position()), asyncio.create_task(self._read_motion_automation())]
+        try:
+            position, automation = await asyncio.gather(*reads)
+        finally:
+            for read in reads:
+                if not read.done():
+                    read.cancel()
+            await asyncio.gather(*reads, return_exceptions=True)
+        self._automation = automation
+        self._capabilities = {
+            **self._capabilities, "position": position, "motion_automation": automation,
+            "source_identity": {**self._capabilities["source_identity"], "zoom": position["zoom"],
+                                "zoom_state": "reported" if position["zoom"] is not None else "unreported"},
+        }
+        return self._capabilities
 
     async def acquire(self) -> dict[str, Any]:
         await self.discover()
@@ -360,12 +419,51 @@ class PanoramaCamera:
             raise PanoramaCaptureError("camera_configuration_changed")
         return snapshot
 
+    async def prepare_continuous_move(self) -> bool:
+        if self._continuous_preparation is not None:
+            return await asyncio.shield(self._continuous_preparation)
+        self._continuous_preparation = asyncio.current_task()
+        try:
+            await self._guard()
+            result = await self.services.call("cameras.control.prepare_continuous_move",
+                                             lease_id=self.lease["lease_id"], fence=self.lease["fence"])
+            await self._guard()
+            return isinstance(result, dict) and result.get("prepared") is True
+        finally:
+            self._continuous_preparation = None
+
+    async def motion_epoch(self) -> int | None:
+        """Identify our final controller epoch while the same lease still owns it."""
+        snapshot = await self._guard(stopping=True)
+        epoch = snapshot.get("motion_epoch")
+        return epoch if type(epoch) is int else None
+
+    async def stop_receipt_is_current(self, receipt: dict[str, Any]) -> bool:
+        """Validate ownership/configuration, not physical stillness."""
+        if (not isinstance(receipt, dict) or not self.lease
+                or receipt.get("accepted") is not True
+                or receipt.get("stale_after_execution") is not False
+                or receipt.get("command_kind") != "stop"
+                or not receipt.get("command_id")
+                or type(receipt.get("motion_epoch")) is not int
+                or any(receipt.get(key) != self.lease[key] for key in ("lease_id", "fence"))):
+            return False
+        snapshot = await self._guard()
+        command = snapshot.get("last_command") or {}
+        return bool(snapshot.get("state") in {"idle", "manual_override", "acquired"}
+                    and snapshot.get("transport_binding_current") is True
+                    and type(snapshot.get("motion_epoch")) is int
+                    and snapshot.get("motion_epoch") == receipt["motion_epoch"]
+                    and command.get("command_id") == receipt["command_id"]
+                    and command.get("kind") == "stop")
+
     async def position(self) -> dict[str, Any]:
         if self._client is None:
             await self.discover()
         if self.lease is not None:
             await self._guard()
         try:
+            status_started = time.monotonic()
             status = await self._client.get_ptz_status(
                 self._ptz_xaddr, profile_token=self._profile_token
             )
@@ -387,17 +485,21 @@ class PanoramaCamera:
                 "error": error, "observed_monotonic": time.monotonic(),
             }
             result["position_provenance"] = {
-                "pan_tilt": {"source": "ONVIF.GetStatus", "space": result["pan_tilt_space"] or None},
+                "pan_tilt": {"source": "ONVIF.GetStatus", "space": result["pan_tilt_space"] or None,
+                             "started_monotonic": status_started,
+                             "observed_monotonic": result["observed_monotonic"]},
                 "zoom": {"source": "ONVIF.GetStatus", "space": result["zoom_space"] or None},
                 "native": None,
             }
             if self._reolink is not None:
                 try:
+                    native_started = time.monotonic()
                     native = await self._reolink.get_current_position()
                     result.update(native_pan=native.pan, native_tilt=native.tilt)
                     result["position_provenance"]["native"] = {
                         "source": "Reolink.GetPtzCurPos", "pan_field": "Ppos", "tilt_field": "Tpos",
                         "units": "device_native", "degrees_conversion_verified": False,
+                        "started_monotonic": native_started,
                         "observed_monotonic": time.monotonic(),
                     }
                 except Exception:
@@ -475,6 +577,11 @@ class PanoramaCamera:
             raise PanoramaCaptureError("invalid_velocity")
         if _finite(timeout_s) is None or not 0.05 <= timeout_s <= 2.0:
             raise PanoramaCaptureError("invalid_movement_duration")
+        if self._continuous_preparation is not None:
+            # Join only before a continuous command. Preset travel and Stop do
+            # not wait for optional metadata preparation. Submit still performs
+            # its ordinary ownership, configuration and device-timeout checks.
+            await asyncio.shield(asyncio.gather(self._continuous_preparation, return_exceptions=True))
         pan, tilt = self._motion_coordinates("continuous", pan, tilt)
         return await self._submit(
             {"kind": "continuous_move", "pan": pan, "tilt": tilt, "zoom": 0.0,
@@ -714,13 +821,20 @@ class PanoramaCamera:
     async def save_return(
         self, role: str = "original", *,
         before_create: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        preserve_zoom: bool = False,
     ) -> dict[str, Any]:
         """Save one immutable destination per role; never retry an uncertain creation."""
-        if role not in {"original", "work"}:
+        if role not in {"original", "work", "reference"}:
             raise PanoramaCaptureError("return_role_invalid")
+        if role == "reference" and (not preserve_zoom or before_create is None):
+            # Durable reference preparation must persist ownership before any
+            # device mutation and must never restore an optical zoom setting.
+            raise PanoramaCaptureError("reference_preparation_unqualified")
         await self._guard()
         if role in self._return_destinations:
             saved = self._return_destinations[role]
+            if preserve_zoom != saved.get("preserve_zoom", False):
+                raise PanoramaCaptureError("return_optical_policy_changed")
             await self._verify_return_binding(saved)
             if saved["kind"] == "preset":
                 await self._verify_return_preset(saved)
@@ -747,8 +861,15 @@ class PanoramaCamera:
                     "space": self._capabilities.get("defaults", {}).get("absolute"),
                     "zoom_space": pose.get("zoom_space") or self._capabilities.get("defaults", {}).get("absolute_zoom"),
                 }
+                if preserve_zoom:
+                    # Absolute pan/tilt can omit Z entirely, including cameras
+                    # with no zoom axis or no zoom telemetry.
+                    saved["preserve_zoom"] = True
+                if role == "reference":
+                    saved["owner_id"] = self.owner_id
                 self._return_destinations[role] = saved
                 return dict(saved)
+            optical_state = await self._return_optical_state() if preserve_zoom else None
             inventory = await self._preset_inventory()
             name = self._return_name(role)
             if any(item.get("name") == name for item in inventory):
@@ -765,6 +886,9 @@ class PanoramaCamera:
                 "baseline_tokens": [str(item["token"]) for item in inventory],
                 "zoom": pose["zoom"],
             }
+            if optical_state is not None:
+                pending["optical_state"] = optical_state
+                pending["preserve_zoom"] = True
             self._return_creations[role] = pending
             if before_create is not None:
                 await before_create(dict(pending))
@@ -782,6 +906,8 @@ class PanoramaCamera:
             except Exception as error:
                 pending["error_code"] = self._return_error(error, "return_creation_unconfirmed").code
         pending = self._return_creations[role]
+        if preserve_zoom != pending.get("preserve_zoom", False):
+            raise PanoramaCaptureError("return_optical_policy_changed")
         await self._verify_return_binding(pending)
         if pending.get("error_code") in {"return_preset_changed", "return_authorization_failed"}:
             raise PanoramaCaptureError(pending["error_code"])
@@ -797,6 +923,9 @@ class PanoramaCamera:
         if pending.get("resolved_token") and token != pending["resolved_token"]:
             raise PanoramaCaptureError("return_preset_changed")
         saved = {key: pending[key] for key in ("role", "binding", "preset_name", "owner_id", "zoom")}
+        if "optical_state" in pending:
+            saved["optical_state"] = pending["optical_state"]
+            saved["preserve_zoom"] = True
         saved.update(kind="preset", preset_token=token)
         pending["resolved_token"] = token
         await self._guard()
@@ -810,16 +939,64 @@ class PanoramaCamera:
         """Persist these ownership intents if a creation cannot be reconciled."""
         return [dict(value) for value in self._return_creations.values()]
 
+    async def _return_optical_state(self) -> dict[str, Any]:
+        """Read comparable native coordinates; do not infer magnification."""
+        if self._reolink is not None:
+            try:
+                native = await self._reolink.get_native_zoom_position()
+            except Exception:
+                raise PanoramaCaptureError("return_optical_state_unavailable") from None
+            return {"source": "Reolink.GetZoomFocus", "position": native.position,
+                    "minimum": native.minimum, "maximum": native.maximum, "channel": native.channel}
+        pose = await self.position()
+        space = pose.get("zoom_space") or (self._capabilities or {}).get("defaults", {}).get("absolute_zoom")
+        zoom = _finite(pose.get("zoom"))
+        if zoom is None or not space:
+            raise PanoramaCaptureError("return_optical_state_unavailable")
+        return {"source": "ONVIF.GetStatus", "space": space, "position": zoom}
+
+    async def verify_return_optical_state(self, saved: dict[str, Any]) -> None:
+        """Also call after observed arrival; a preset receipt cannot prove zoom."""
+        if saved.get("preserve_zoom") is True and saved.get("kind") == "preset" and "optical_state" not in saved:
+            raise PanoramaCaptureError("return_optical_state_unavailable")
+        if "optical_state" not in saved:
+            return
+        await self._guard()
+        await self._verify_return_binding(saved)
+        if await self._return_optical_state() != saved["optical_state"]:
+            raise PanoramaCaptureError("return_optical_state_mismatch")
+
     async def return_to(self, saved: dict[str, Any]) -> dict[str, Any]:
         await self._verify_return_binding(saved)
-        if saved.get("role", "original") not in {"original", "work"}:
+        if saved.get("role", "original") not in {"original", "work", "reference"}:
             raise PanoramaCaptureError("return_role_invalid")
+        if saved.get("role") == "reference":
+            if saved.get("preserve_zoom") is not True:
+                raise PanoramaCaptureError("reference_preparation_unqualified")
+            if saved.get("kind") == "absolute":
+                if saved.get("owner_id") != self.owner_id and saved != self._reference_destination:
+                    raise PanoramaCaptureError("return_owner_mismatch")
+                await self._guard()
+        if saved.get("kind") == "preset":
+            # Independent reads, both required before dispatch. Drain failed or
+            # cancelled checks before the caller can release camera ownership.
+            checks = [asyncio.create_task(self.verify_return_optical_state(saved)),
+                      asyncio.create_task(self._verify_return_preset(saved))]
+            try:
+                await asyncio.gather(*checks)
+            finally:
+                for check in checks:
+                    if not check.done():
+                        check.cancel()
+                await asyncio.gather(*checks, return_exceptions=True)
+        else:
+            await self.verify_return_optical_state(saved)
         if saved.get("kind") == "absolute":
             if "space" in saved and saved["space"] != (self._capabilities or {}).get("defaults", {}).get("absolute"):
                 raise PanoramaCaptureError("return_binding_changed")
             zoom = _finite(saved.get("zoom"))
             commanded_zoom = None
-            if zoom is not None:
+            if zoom is not None and saved.get("preserve_zoom") is not True:
                 position = await self.position()
                 zoom_space = (self._capabilities or {}).get("defaults", {}).get("absolute_zoom")
                 saved_space = saved.get("zoom_space") or zoom_space
@@ -837,23 +1014,49 @@ class PanoramaCamera:
                     commanded_zoom = zoom
             return await self.move_absolute(pan=saved["pan"], tilt=saved["tilt"], zoom=commanded_zoom)
         if saved.get("kind") == "preset":
-            await self._verify_return_preset(saved)
             self._return_may_change_zoom = True
             return await self._submit({"kind": "goto_preset", "preset_token": saved["preset_token"]})
         raise PanoramaCaptureError("return_unavailable")
 
     def _return_name(self, role: str = "original") -> str:
         # Role comes first so device truncation cannot turn work into original.
+        marker = {"original": "O", "work": "W", "reference": "R"}.get(role)
+        if marker is None:
+            raise PanoramaCaptureError("return_role_invalid")
         digest = hashlib.sha256(self.owner_id.encode()).hexdigest()[:16]
-        return f"Pano {'O' if role == 'original' else 'W'} {digest}"
+        return f"Pano {marker} {digest}"
 
     def _verify_return_owner(self, saved: dict[str, Any]) -> None:
+        if saved.get("role") == "reference" and saved == self._reference_destination:
+            return
         role = saved.get("role", "original")
         names = {self._return_name(role)}
         if role == "original":
             names.add(f"Panorama {self.owner_id[:20]}")
-        if role not in {"original", "work"} or saved.get("owner_id") != self.owner_id or saved.get("preset_name") not in names:
+        if role not in {"original", "work", "reference"} or saved.get("owner_id") != self.owner_id or saved.get("preset_name") not in names:
             raise PanoramaCaptureError("return_owner_mismatch")
+
+    async def bind_reference_destination(self, saved: dict[str, Any]) -> None:
+        """Bind a server-loaded reference without transferring its cleanup ownership.
+
+        The caller validates the persisted panorama/model association. Device
+        identity, optical state and inventory remain checked on every recall.
+        """
+        owner = saved.get("owner_id")
+        if (saved.get("role") != "reference" or saved.get("preserve_zoom") is not True
+                or not isinstance(owner, str) or not owner.startswith("native-")
+                or len(owner) != 39 or any(character not in "0123456789abcdef" for character in owner[7:])):
+            raise PanoramaCaptureError("return_owner_mismatch")
+        if saved.get("kind") == "preset":
+            expected = f"Pano R {hashlib.sha256(owner.encode()).hexdigest()[:16]}"
+            if saved.get("preset_name") != expected:
+                raise PanoramaCaptureError("return_owner_mismatch")
+        elif saved.get("kind") != "absolute":
+            raise PanoramaCaptureError("return_unavailable")
+        await self._verify_return_binding(saved)
+        # JSON records contain only values; keep caller mutations from changing
+        # the exact destination authorized for this adapter's lifetime.
+        self._reference_destination = copy.deepcopy(saved)
 
     async def _verify_return_preset(self, saved: dict[str, Any], *, allow_absent: bool = False) -> bool:
         self._verify_return_owner(saved)
@@ -941,4 +1144,8 @@ class PanoramaCamera:
                 await self.capture_service.release(capture.lease_id)
 
     async def close(self) -> None:
+        preparation = self._continuous_preparation
+        if preparation is not None:
+            await self.stop()
+            await asyncio.shield(asyncio.gather(preparation, return_exceptions=True))
         await self.release()

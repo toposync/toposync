@@ -3077,6 +3077,7 @@ class CamerasExtension(BaseExtension):
                     device_timeout = await client.continuous_move_timeout(
                         ptz_xaddr, profile_token=profile_token,
                         requested_s=safe_timeout or 0.5,
+                        media_xaddr=getattr(bound_context or entry, "media_xaddr", None),
                     )
                     if not allow_relative_fallback and (
                         isinstance(device_timeout, bool)
@@ -3407,6 +3408,13 @@ class CamerasExtension(BaseExtension):
                 )
             raise PtzControlError("Unsupported PTZ command")
 
+        async def _prepare_continuous_transport(**kwargs: Any) -> bool:
+            client, endpoint, profile, _, context = await _resolve_ptz_operation_context(**kwargs)
+            timeout = await client.continuous_move_timeout(
+                endpoint, profile_token=profile, requested_s=0.5,
+                media_xaddr=context.media_xaddr if context is not None else None)
+            return type(timeout) in (int, float) and math.isfinite(timeout) and 0 < timeout <= 30
+
         config_store = getattr(app.state, "config_store", None)
         if not isinstance(config_store, ConfigStore):
             raise RuntimeError("Toposync config_store not available")
@@ -3420,6 +3428,7 @@ class CamerasExtension(BaseExtension):
             require_automation_tracking_confirmation=True,
             resolve_transport_binding=_resolve_ptz_transport_binding,
             validate_transport_binding=_validate_ptz_transport_binding,
+            prepare_continuous_transport=_prepare_continuous_transport,
         )
         app.state.camera_ptz_controller = ptz_controller
         register_extension_shutdown_callback(app, ptz_controller.shutdown)
@@ -3430,6 +3439,7 @@ class CamerasExtension(BaseExtension):
         services.register("cameras.ptz.get_status", _svc_ptz_get_status)
         services.register("cameras.control.acquire", ptz_controller.acquire)
         services.register("cameras.control.renew", ptz_controller.renew)
+        services.register("cameras.control.prepare_continuous_move", ptz_controller.prepare_continuous_move)
         services.register("cameras.control.submit", ptz_controller.submit)
         services.register("cameras.control.release", ptz_controller.release)
         services.register("cameras.control.snapshot", ptz_controller.snapshot)

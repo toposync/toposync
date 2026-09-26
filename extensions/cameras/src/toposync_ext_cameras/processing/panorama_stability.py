@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 from collections import deque
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -111,9 +111,11 @@ class VisualStabilityDetector:
         *,
         overlay_regions: list[tuple[float, float, float, float]] | None = None,
         allow_observation_timing: bool = False,
+        transition_estimator: Callable[[np.ndarray, np.ndarray], dict | None] | None = None,
     ) -> None:
         self.settings = settings or StabilitySettings()
         self.allow_observation_timing = bool(allow_observation_timing)
+        self.transition_estimator = transition_estimator
         self.overlay_regions = tuple(overlay_regions or ())
         for left, top, right, bottom in self.overlay_regions:
             if not all(math.isfinite(value) for value in (left, top, right, bottom)):
@@ -840,12 +842,34 @@ class VisualStabilityDetector:
             # Feature homography remains reserved for lost tracking: its
             # subpixel variation on repetitive stationary scenes is not an
             # interchangeable measurement of this small accumulated motion.
-            if self._transition_tracking_lost:
+            recovered, recovered_metrics = self._motion(self._transition_anchor.image, gray)
+            recovery_method = "anchor_optical_flow"
+            distributed = recovered_metrics.get("distributed_transition")
+            if recovered is None and not distributed and self._transition_tracking_lost:
                 recovered, recovered_metrics = self._feature_motion(self._transition_anchor.image, gray)
                 recovery_method = "feature_recovery"
-            else:
-                recovered, recovered_metrics = self._motion(self._transition_anchor.image, gray)
-                recovery_method = "anchor_optical_flow"
+                if recovered is None and self.transition_estimator is not None:
+                    calibrated = self.transition_estimator(self._transition_anchor.image, gray)
+                    if calibrated is not None:
+                        self._has_motion_transition = True
+                        self._invalidate()
+                        self._recovery_diagnostic = {
+                            "recovery_code": "calibrated_transition",
+                            "recovery_metrics": {"anchor_sequence": self._transition_anchor.sequence, **calibrated},
+                        }
+                        return self._result("motion_reacquired", **base, **calibrated)
+            if distributed:
+                # The same distributed gate used between adjacent frames also
+                # applies to accumulated displacement from the fixed anchor.
+                # It supplies no transform and cannot qualify a stable window.
+                self._has_motion_transition = True
+                self._invalidate()
+                self._recovery_diagnostic = {
+                    "recovery_code": "distributed_anchor_transition",
+                    "recovery_metrics": {"method": recovery_method,
+                        "anchor_sequence": self._transition_anchor.sequence, **distributed},
+                }
+                return self._result("motion_reacquired", **base, **distributed)
             self._recovery_diagnostic = {
                 "recovery_code": (
                     "optical_change" if recovered_metrics.get("optical_change") else

@@ -22,6 +22,38 @@ from toposync_ext_cameras import panorama_scan as scan
 from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
 
 
+@pytest.mark.parametrize("case", ["current", "default", "expired", "future", "lost", "error", "slow", "unowned", "unstable"])
+def test_stop_receipt_reuse_never_skips_physical_observation(monkeypatch, case):
+    from unittest.mock import AsyncMock
+
+    async def run():
+        clock = [10.0]
+        monkeypatch.setattr(scan.time, "monotonic", lambda: clock[0])
+        scanner = object.__new__(scan._Scan)
+        scanner.acquired = case != "unowned"
+        scanner.last_stop_accepted_monotonic = {"expired": 8.0, "future": 11.0}.get(case, 9.5)
+        scanner.last_stop_receipt = {"command_id": "stop"}
+        scanner.physical_state = "unknown"
+
+        async def current(receipt):
+            assert receipt is scanner.last_stop_receipt
+            if case == "error":
+                raise RuntimeError("unavailable")
+            if case == "slow":
+                clock[0] += 2
+            return case != "lost"
+
+        scanner.camera = SimpleNamespace(stop_receipt_is_current=AsyncMock(side_effect=current))
+        scanner._stop = AsyncMock(return_value=True)
+        scanner._reference_window = AsyncMock(side_effect=RuntimeError("moving") if case == "unstable" else None)
+        await scanner._confirm_stop(reuse_accepted=case != "default")
+        assert scanner._stop.await_count == (0 if case in {"current", "unstable"} else 1)
+        scanner._reference_window.assert_awaited_once_with(timeout=3.0)
+        assert scanner.physical_state == ("stop_unconfirmed" if case == "unstable" else "stopped")
+
+    asyncio.run(run())
+
+
 class SimulatedCamera:
     """A textured view, observable movement, and independent command history."""
 
@@ -771,6 +803,38 @@ def test_endpoint_commit_requires_a_new_unchanged_stream_window(tmp_path, monkey
     assert diagnostic.value["endpoint_commit"]["frames"] >= 2
 
 
+@pytest.mark.parametrize("state", ["stopped", "moving", "unknown"])
+def test_stopped_frame_refresh_requires_observed_stop_and_preserves_new_frame_identity(tmp_path, monkeypatch, state):
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    candidate = asyncio.run(camera.frame())
+    scanner.last_frame = candidate
+    scanner.physical_state = state
+    if state != "stopped":
+        with pytest.raises(scan.PanoramaCaptureError, match="stop_unconfirmed"):
+            asyncio.run(scanner.refresh_stopped_frame())
+        assert scanner.last_frame is candidate
+    else:
+        fresh = asyncio.run(scanner.refresh_stopped_frame())
+        assert fresh["sequence"] > candidate["sequence"]
+        assert fresh["generation"] == candidate["generation"]
+        assert fresh["capture_instance"] == candidate["capture_instance"]
+        assert scanner.physical_state == "stopped"
+
+
+def test_failed_endpoint_refresh_does_not_preserve_stopped_state_without_new_stability(tmp_path):
+    from unittest.mock import AsyncMock
+    scanner = scan._Scan(SimulatedCamera(), tmp_path, _progress, lambda: False, None)
+    scanner.physical_state = "stopped"
+    scanner.last_frame = {"sequence": 1}
+    scanner._commit_endpoint_frame = AsyncMock(return_value=False)
+    scanner._reference_window = AsyncMock(side_effect=scan.PanoramaCaptureError("panorama_frame_unavailable"))
+    with pytest.raises(scan.PanoramaCaptureError, match="panorama_frame_unavailable"):
+        asyncio.run(scanner.refresh_stopped_frame())
+    assert scanner.physical_state == "unknown"
+
+
 def test_endpoint_commit_rejects_motion_hidden_behind_a_static_backlog(
     tmp_path, monkeypatch
 ):
@@ -1337,14 +1401,25 @@ def test_unconfirmed_command_records_the_cleanup_stop_receipt(
     assert attempt["stop_accepted_seconds"] >= 0
 
 
-def test_slow_position_queries_do_not_interrupt_continuous_video_observation(tmp_path, monkeypatch):
+@pytest.mark.parametrize('slow_stage', ['position', 'matching'])
+def test_slow_position_queries_do_not_interrupt_continuous_video_observation(tmp_path, monkeypatch, slow_stage):
     camera = SimulatedCamera()
     _clock(monkeypatch, camera)
     original_position, original_frame = camera.position, camera.frame
 
     async def slow_position():
-        camera.now += 1.2
+        if slow_stage == 'position':
+            camera.now += 1.2
         return await original_position()
+
+    original_match = scan._axis_command_match
+
+    def slow_match(*args, **options):
+        if slow_stage == 'matching':
+            camera.now += 1.2
+        return original_match(*args, **options)
+
+    monkeypatch.setattr(scan, '_axis_command_match', slow_match)
 
     async def timed_frame(**options):
         frame = await original_frame(**options)
@@ -1366,6 +1441,75 @@ def test_slow_position_queries_do_not_interrupt_continuous_video_observation(tmp
     assert result["pose"]["pan"] == pytest.approx(camera.pan)
     assert result["evidence"]["has_motion_transition"]
     assert result["evidence"]["window_observation_seconds"] >= 0.8 - 1e-9
+    # The ranked photograph is preserved, while navigation can consume the
+    # newer frame already checked by the endpoint commit window.
+    assert result['observation_frame']['sequence'] > result['frame']['sequence']
+    assert result['observation_frame']['received_monotonic'] > result['frame']['received_monotonic']
+    assert result['observation_frame']['generation'] == result['frame']['generation']
+    assert camera.now - result['observation_frame']['received_monotonic'] <= 1.0
+
+
+@pytest.mark.parametrize('cancellation', ['retarget', 'task'])
+@pytest.mark.parametrize('worker_fails', [False, True])
+def test_cancel_stops_during_visual_work_and_drains_before_return(tmp_path, monkeypatch, cancellation, worker_fails):
+    import threading
+
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+    release = threading.Event()
+
+    async def scenario():
+        entered, stopped = asyncio.Event(), asyncio.Event()
+        loop = asyncio.get_running_loop()
+        cancelled = False
+        scanner = scan._Scan(camera, tmp_path, _progress, lambda: cancelled, None)
+        original_observation, original_stop = scanner._observation, camera.stop
+        observations = 0
+
+        def observe(*args):
+            nonlocal observations
+            observations += 1
+            if observations == 2:
+                loop.call_soon_threadsafe(entered.set)
+                if not release.wait(5):
+                    raise RuntimeError('Test observer was not released')
+                if worker_fails:
+                    raise RuntimeError('Late obsolete visual failure')
+            return original_observation(*args)
+
+        async def stop():
+            result = await original_stop()
+            stopped.set()
+            return result
+
+        scanner._observation, camera.stop = observe, stop
+        await camera.acquire()
+        task = asyncio.create_task(scanner._move(
+            lambda: camera.move_velocity(pan=0.2, timeout_s=0.5), duration=0.5))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            if cancellation == 'retarget':
+                cancelled = True
+            else:
+                task.cancel()
+            # The worker remains deliberately blocked: Stop must not wait for
+            # its result, and the operation must not release ownership yet.
+            await asyncio.wait_for(stopped.wait(), 1)
+            # Allow asynchronous cleanup to finish if it incorrectly detached
+            # the blocked worker; merely checking on Stop's first tick races it.
+            await asyncio.sleep(0.05)
+            assert not task.done()
+        finally:
+            release.set()
+            with pytest.raises(scan._Stopped if cancellation == 'retarget' else asyncio.CancelledError):
+                await task
+        assert sum(event[0] == 'stop' for event in camera.events) == 1
+        attempt = scanner.checkpoint['diagnostics']['attempts'][-1]
+        assert attempt['outcome'] == 'interrupted'
+        assert attempt['stop_reason'] == 'observation_interrupted'
+        assert attempt['physical_state'] != 'stopped'
+
+    asyncio.run(scenario())
 
 
 def test_continuous_visual_capture_survives_unavailable_position_readback(
@@ -4697,8 +4841,9 @@ def test_uncertain_return_preserves_temporary_preset(
 
 
 @pytest.mark.parametrize("target_tilt", [0.05, 0.003])
+@pytest.mark.parametrize("observer_fails", [False, True])
 def test_absolute_stop_waits_for_optical_motion_when_status_reports_target_early(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target_tilt: float
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target_tilt: float, observer_fails: bool
 ):
     class AheadOfMotor(SimulatedCamera):
         delay = 0
@@ -4732,14 +4877,22 @@ def test_absolute_stop_waits_for_optical_motion_when_status_reports_target_early
 
     camera = AheadOfMotor()
     _clock(monkeypatch, camera)
+    observed = []
 
     async def scenario():
         scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
         scanner.last_pose = await camera.position()
+        def observer(frame):
+            assert scanner.physical_state != "stopped"
+            assert camera.tilt == pytest.approx(target_tilt)
+            observed.append(frame["sequence"])
+            if observer_fails:
+                raise RuntimeError("Optional preparation failed")
         return await scanner._move(
             lambda: camera.move_absolute(pan=0.0, tilt=target_tilt),
             target={"pan": 0.0, "tilt": target_tilt},
             allow_stationary=True,
+            stable_frame_observer=observer,
         )
 
     result = asyncio.run(scenario())
@@ -4750,6 +4903,8 @@ def test_absolute_stop_waits_for_optical_motion_when_status_reports_target_early
     assert attempt["stop_requested_seconds"] > attempt["first_motion_transition_seconds"]
     assert attempt["motion_transition_before_stop"] is True
     assert attempt["stop_reason"] == "visual_settled"
+    assert len(observed) == 1
+    assert bool(attempt.get("stable_frame_observer_failed")) == observer_fails
 
 
 def test_continuous_stop_uses_remaining_transport_budget_after_preflight(tmp_path, monkeypatch):
@@ -10401,3 +10556,79 @@ def test_failed_connection_recovery_is_archived_before_navigation_changes(tmp_pa
     assert recovered is False
     assert "connection_recovery" not in cursor
     assert cursor["connection_recovery_history"][-1]["state"] == "failed"
+
+
+@pytest.mark.parametrize("outcome", ["success", "aged_frame", "readback_error", "commit_error", "cancel"])
+def test_endpoint_reads_overlap_but_never_publish_or_release_before_both_finish(
+    tmp_path, monkeypatch, outcome
+):
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+
+    async def scenario():
+        await camera.acquire()
+        scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+        entered, release, committed, drained = (asyncio.Event() for _ in range(4))
+        original_readback = scanner._movement_readback
+        original_commit = scanner._commit_endpoint_frame
+        commits = []
+
+        async def readback(**arguments):
+            entered.set()
+            try:
+                await release.wait()
+                if outcome == "readback_error":
+                    raise PanoramaCaptureError("position_unavailable")
+                if outcome == "aged_frame":
+                    camera.now += 1.2
+                return await original_readback(**arguments)
+            finally:
+                drained.set()
+
+        async def commit(*arguments, **options):
+            assert entered.is_set()
+            verified = await original_commit(*arguments, **options)
+            assert verified
+            commits.append(scanner.last_frame["sequence"])
+            committed.set()
+            if outcome == "commit_error":
+                raise PanoramaCaptureError("endpoint_test_failure")
+            return verified
+
+        monkeypatch.setattr(scanner, "_movement_readback", readback)
+        monkeypatch.setattr(scanner, "_commit_endpoint_frame", commit)
+        operation = asyncio.create_task(scanner._move(
+            lambda: camera.move_velocity(pan=0.2, timeout_s=0.5), duration=0.5,
+        ))
+        try:
+            await asyncio.wait_for(committed.wait(), 5)
+            assert not drained.is_set()
+            assert not operation.done()
+            assert scanner.physical_state != "stopped"
+            if outcome == "cancel":
+                operation.cancel()
+                await asyncio.sleep(0)
+                assert not operation.done()
+            release.set()
+            if outcome in {"readback_error", "commit_error"}:
+                with pytest.raises(PanoramaCaptureError):
+                    await operation
+            elif outcome == "cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await operation
+            else:
+                result = await operation
+                assert result["stable"]
+                assert result["pose"]["pan"] == pytest.approx(camera.pan)
+                assert result["evidence"]["window_observation_seconds"] >= .8 - 1e-9
+                assert camera.now - result["observation_frame"]["received_monotonic"] <= 1
+                assert len(commits) == (2 if outcome == "aged_frame" else 1)
+                if outcome == "aged_frame":
+                    assert commits[1] > commits[0]
+            assert drained.is_set()
+            assert "stop" in _event_names(camera)
+        finally:
+            release.set()
+            await asyncio.gather(operation, return_exceptions=True)
+
+    asyncio.run(scenario())

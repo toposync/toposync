@@ -98,8 +98,18 @@ class EncoderTrustStore:
                 last_output_id=existing.last_output_id,
                 last_error=existing.last_error,
             )
+            # Publishers report success for every frame. Persist transitions,
+            # not identical records that would otherwise fsync at video rate.
+            if record == existing:
+                return existing
             records[normalized] = record
-            await self._persist_locked(records)
+            try:
+                await self._persist_locked(records)
+            except BaseException:
+                # A failed trust write must not become a successful no-op on
+                # the next frame. Reload the durable state before retrying.
+                self._records = None
+                raise
             return record
 
     async def quarantine(

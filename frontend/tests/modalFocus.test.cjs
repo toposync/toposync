@@ -154,6 +154,42 @@ test("effect cleanup and setup replay restores the real opener without leaking l
   assert.equal([...h.listeners.values()].reduce((n, set) => n + set.size, 0), 0);
 });
 
+test("camera submodal stays above its host and contains its pointer events", () => {
+  const React = {
+    createElement: (type, props, ...children) => ({ type, props: { ...props, children } }),
+    useRef: (value) => ({ current: value }),
+    useLayoutEffect() {},
+  };
+  const { SubModal } = evaluate(fs.readFileSync(
+    path.join(__dirname, "../../extensions/cameras/ui/src/ui/SubModal.tsx"), "utf8"), {
+    document: { body: {} },
+    require(name) {
+      if (name === "react") return React;
+      if (name === "react-dom") return { createPortal: (content, target) => ({ content, target }) };
+      if (name === "@toposync/plugin-api") return { activateModalFocus: () => {} };
+      throw new Error(name);
+    },
+  });
+  let closeCalls = 0;
+  const portal = SubModal({ open: true, title: "Calibration", onClose: () => { closeCalls++; }, children: null });
+  const backdrop = portal.content;
+  assert.equal(backdrop.props.style.zIndex, 101);
+
+  for (const name of ["onPointerDown", "onPointerMove", "onPointerUp", "onPointerCancel", "onClick", "onDoubleClick", "onWheel"]) {
+    let stopped = false;
+    backdrop.props[name]({ stopPropagation() { stopped = true; } });
+    assert.equal(stopped, true, `${name} must not reach the host modal`);
+  }
+  const panelEvent = { target: {}, currentTarget: {}, stopped: false, stopPropagation() { this.stopped = true; } };
+  backdrop.props.onMouseDown(panelEvent);
+  assert.equal(panelEvent.stopped, true);
+  assert.equal(closeCalls, 0, "an interaction within the submodal must not close its host");
+
+  const background = {};
+  backdrop.props.onMouseDown({ target: background, currentTarget: background, stopPropagation() {} });
+  assert.equal(closeCalls, 1, "the submodal backdrop itself remains dismissible");
+});
+
 for (const componentName of ["Modal", "SubModal"]) test(`actual ${componentName} shares focus with host portals across volatile onClose callbacks`, () => {
   const h = harness(), refs = [], effects = [], pending = [];
   let cursor = 0;

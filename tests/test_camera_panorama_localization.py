@@ -45,6 +45,142 @@ def test_rotation_has_independent_pixel_oracle_and_held_out_validation():
     assert result["validation_matches"] >= 80
 
 
+@pytest.mark.parametrize("case", ["rotation", "static", "foreground", "zoom", "missing_matcher", "dimensions"])
+def test_calibrated_transition_uses_observed_rotation_not_scene_change(case):
+    from types import SimpleNamespace
+
+    lens, current, reference, _ = _correspondences()
+    if case == "static":
+        reference = current.copy()
+    elif case == "foreground":
+        reference[100:] = current[100:]
+    elif case == "zoom":
+        reference = (current - [lens["cx"], lens["cy"]]) * 1.2 + [lens["cx"], lens["cy"]]
+    localizer = PanoramaLocalizer.__new__(PanoramaLocalizer)
+    localizer.lens = lens
+    localizer._contextual_matcher = None if case == "missing_matcher" else SimpleNamespace(
+        width=960, height=540, features=lambda image: image,
+        correspondences=lambda before, after: (reference, current),
+    )
+    previous = np.zeros((540, 960), np.uint8)
+    image = previous[:, :800] if case == "dimensions" else previous.copy()
+    result = localizer.calibrated_transition(previous, image)
+    assert (result is not None) == (case == "rotation")
+    if result is not None:
+        assert result["motion_pixels"] > 20
+        assert result["validation_p95_pixels"] < 1e-5
+
+
+@pytest.mark.parametrize("ordinary_decision", ["insufficient", "qualified", "ambiguous", "both_insufficient"])
+@pytest.mark.parametrize("start_normalized", [False, True])
+def test_contextual_contrast_retry_preserves_decisions_and_separates_photometry(
+    tmp_path, monkeypatch, ordinary_decision, start_normalized,
+):
+    from types import SimpleNamespace
+
+    lens, current, reference, rotation = _correspondences()
+    photograph = np.full((540, 960, 3), 80, np.uint8)
+    image = np.full((540, 960, 3), 40, np.uint8)
+    path = tmp_path / "reference.png"
+    cv2.imwrite(str(path), photograph)
+    localizer = PanoramaLocalizer(
+        {"lens": lens, "captures": [{"id": "one", "rotation_matrix": np.eye(3).tolist()}]},
+        [{"id": "one", "path": str(path)}], model_directory=tmp_path,
+    )
+    calls = []
+
+    def features(pixels, *, normalize=False):
+        calls.append((int(pixels[0, 0, 0]), normalize))
+        return normalize
+
+    def correspondences(first, second):
+        assert first == second, "Photometric descriptor forms must never mix"
+        if ordinary_decision == "both_insufficient" or (ordinary_decision == "insufficient" and first == start_normalized):
+            return np.empty((0, 2)), np.empty((0, 2))
+        return current, reference
+
+    localizer._contextual_matcher = SimpleNamespace(
+        width=960, height=540, features=features, correspondences=correspondences,
+    )
+    if ordinary_decision == "ambiguous":
+        monkeypatch.setattr(localizer, "_fit_contextual", lambda *args: {
+            "status": "unlocalized", "reason": "panorama_visual_localization_ambiguous",
+        })
+    result = localizer._contextual_locate(image, np.eye(3), ("test", 1, 1), {}, normalize=start_normalized)
+    if ordinary_decision == "both_insufficient":
+        assert result["status"] == "unlocalized"
+        assert calls.count((40, False)) == calls.count((40, True)) == 1
+        assert not localizer._anchors
+    elif ordinary_decision == "ambiguous":
+        assert result["reason"] == "panorama_visual_localization_ambiguous"
+        assert all(normalize == start_normalized for _, normalize in calls)
+        assert not localizer._anchors
+    else:
+        assert result["status"] == "localized"
+        assert np.allclose(result["rotation_matrix"], rotation, atol=1e-6)
+        normalized = start_normalized ^ (ordinary_decision == "insufficient")
+        anchor = next(iter(localizer._anchors.values()))
+        assert anchor["normalize"] is normalized
+        assert np.array_equal(anchor["gray"], image[:, :, 0])
+        assert calls.count((80, start_normalized)) == 1
+        assert calls.count((80, not start_normalized)) == int(ordinary_decision == "insufficient")
+        # A fresh observation reuses only descriptors of its own photometric form.
+        localizer._contextual_locate(image, np.eye(3), ("test", 1, 2), {}, normalize=normalized)
+        assert calls.count((80, normalized)) == 1
+
+
+@pytest.mark.parametrize('multiplicity', [1, 3])
+def test_complementary_photometry_qualifies_only_with_distributed_independent_support(tmp_path, multiplicity):
+    from types import SimpleNamespace
+
+    lens, current, reference, rotation = _correspondences()
+    image = np.full((540, 960, 3), 40, np.uint8)
+    path = tmp_path / 'reference.png'
+    assert cv2.imwrite(str(path), image)
+    localizer = PanoramaLocalizer(
+        {'lens': lens, 'captures': [{'id': 'one', 'rotation_matrix': np.eye(3).tolist()}]},
+        [{'id': 'one', 'path': str(path)}], model_directory=tmp_path,
+    )
+
+    def correspondences(first, second):
+        assert first == second
+        mask = current[:, 0] >= 480 if first else current[:, 0] < 480
+        a, b = current[mask], reference[mask]
+        assert fit_frame_rotation(a, b, lens, np.eye(3)) is None
+        return np.tile(a, (multiplicity, 1)), np.tile(b, (multiplicity, 1))
+
+    localizer._contextual_matcher = SimpleNamespace(
+        width=960, height=540, features=lambda _, normalize=False: normalize,
+        correspondences=correspondences,
+    )
+    diagnostics = {}
+    result = localizer._contextual_locate(image, np.eye(3), ('test', 1, 1), diagnostics)
+    oracle = fit_frame_rotation(current, reference, lens, np.eye(3))
+    assert result['status'] == 'localized'
+    assert diagnostics['photometry'] == 'combined_photometry_contextual_correspondences'
+    assert result['validation_matches'] == oracle['validation_matches']
+    assert np.allclose(result['rotation_matrix'], rotation, atol=1e-6)
+    assert result['validation_p95_pixels'] < 1e-5
+
+
+@pytest.mark.parametrize('age,extra', [(0, True), (6, False)])
+def test_recent_geometry_only_adds_one_reference_hint_to_full_candidate_search(age, extra):
+    import time
+    from collections import OrderedDict
+    from toposync_ext_cameras.processing.panorama_localization import MAXIMUM_CANDIDATES
+
+    localizer = object.__new__(PanoramaLocalizer)
+    localizer.references = [{'id': str(i), 'coarse': None} for i in range(MAXIMUM_CANDIDATES + 3)]
+    localizer.last_reference = str(MAXIMUM_CANDIDATES)
+    localizer._anchors = OrderedDict([('other-decoder', {
+        'seen': time.monotonic() - age, 'neighbors': localizer.references[-2:],
+    })])
+    candidates = localizer._rank_references(None)
+    assert [item['id'] for item in candidates[:MAXIMUM_CANDIDATES]] == [str(i) for i in range(MAXIMUM_CANDIDATES)]
+    assert len(candidates) == MAXIMUM_CANDIDATES + 1 + int(extra)
+    assert (localizer.references[-2] in candidates) is extra
+
+
 def test_support_and_partition_are_independent_of_order_and_duplicate_descriptors():
     lens, current, reference, _ = _correspondences()
     expected = fit_frame_rotation(current, reference, lens, np.eye(3))
@@ -126,6 +262,84 @@ def test_localizer_binds_cache_to_frame_bytes_and_never_reuses_last_pose(tmp_pat
         localizer.locate(np.zeros_like(image), {**evidence, "sequence": sequence})
     assert len(localizer.results) == 4
     assert localizer.locate(image, {})["reason"] == "panorama_frame_identity_missing"
+
+
+@pytest.mark.parametrize("diagnostic_first", [False, True])
+@pytest.mark.parametrize("blank", [False, True])
+def test_diagnostics_reuse_the_original_decision_and_evidence(tmp_path, monkeypatch, diagnostic_first, blank):
+    import copy
+
+    image = cv2.GaussianBlur(
+        np.random.default_rng(500).integers(0, 256, (540, 960), np.uint8), (5, 5), 1
+    )
+    path = tmp_path / "reference.png"
+    assert cv2.imwrite(str(path), image)
+    localizer = PanoramaLocalizer(
+        {"lens": _correspondences()[0],
+         "captures": [{"id": "one", "rotation_matrix": np.eye(3).tolist()}]},
+        [{"id": "one", "path": str(path)}],
+    )
+    if blank:
+        image = np.zeros_like(image)
+    evidence = {"capture_instance": "first", "generation": 1, "sequence": 1}
+    first = (localizer.locate_diagnostic if diagnostic_first else localizer.locate)(image, evidence)
+    expected = {key: value for key, value in first.items() if key != "diagnostics"}
+
+    def unexpected_recognition(*args, **kwargs):
+        pytest.fail("Inspecting the same frame must not run recognition again")
+
+    for method in ("_locate", "_tracked_locate", "_contextual_locate"):
+        monkeypatch.setattr(localizer, method, unexpected_recognition)
+    diagnostic = localizer.locate_diagnostic(image, evidence)
+    assert {key: value for key, value in diagnostic.items() if key != "diagnostics"} == expected
+    assert diagnostic["diagnostics"]["model_sha256"] == localizer.model_digest
+    assert diagnostic["diagnostics"]["photometry"] == ("local_contrast" if blank else "native")
+    original = copy.deepcopy(diagnostic)
+    if not blank:
+        assert diagnostic["diagnostics"]["candidates"][0]["stage"] == "accepted"
+        diagnostic["diagnostics"]["candidates"][0]["current"][0][0] = -999
+        diagnostic["rotation_matrix"][0][0] = -999
+    diagnostic["capture_evidence"]["sequence"] = -999
+    assert localizer.locate_diagnostic(image, evidence) == original
+    assert localizer.locate(image, evidence) == expected
+
+
+@pytest.mark.parametrize("change", ["sequence", "generation", "capture_instance", "bytes", "geometry", "shape"])
+def test_cached_diagnostics_cannot_cross_frame_or_geometry_changes(monkeypatch, change):
+    from collections import OrderedDict
+    from toposync.runtime.pipelines.image_geometry import image_geometry
+
+    localizer = object.__new__(PanoramaLocalizer)
+    localizer.lens = _correspondences()[0]
+    localizer.results = OrderedDict()
+    calls = []
+
+    def recognize(*args, **kwargs):
+        calls.append(True)
+        return {"status": "unlocalized", "reason": "panorama_visual_localization_ambiguous"}
+
+    monkeypatch.setattr(localizer, "_locate", recognize)
+    image = np.zeros((540, 960), np.uint8)
+    evidence = {"capture_instance": "first", "generation": 1, "sequence": 1}
+    geometry = image_geometry(960, 540, evidence)
+    localizer._locate_frame(image, evidence, geometry, {})
+    if change in evidence:
+        evidence = {**evidence, change: "second" if change == "capture_instance" else 2}
+        geometry["capture_evidence"] = evidence
+    elif change == "bytes":
+        image[0, 0] = 1
+    elif change == "geometry":
+        geometry["to_source"][0][2] = 1
+    else:
+        image = image.reshape(270, 1920)
+        geometry["image_size"] = [1920, 270]
+    localizer._locate_frame(image, evidence, geometry, {})
+    assert len(calls) == 2
+    localizer._locate_frame(image, evidence, geometry, {})
+    assert len(calls) == 2
+    geometry["source_size"] = [320, 240]
+    assert localizer._locate_frame(image, evidence, geometry, {})["reason"] == "panorama_source_geometry_changed"
+    assert len(calls) == 2
 
 
 def test_localizer_preserves_geometric_support_under_reduced_contrast(tmp_path):
@@ -246,6 +460,34 @@ def test_navigation_replay_keeps_exact_inputs_and_bounded_history(tmp_path):
             assert manifest['truncated'] is False
 
 
+@pytest.mark.parametrize("limited", [False, True])
+def test_navigation_replay_retains_slow_inputs_without_expanding_byte_budget(tmp_path, monkeypatch, limited):
+    import json
+    import zipfile
+    from toposync_ext_cameras.processing import panorama_localization_replay as module
+
+    if limited:
+        monkeypatch.setattr(module, "MAXIMUM_OPERATION_BYTES", 1024**2 + 4000)
+    replay = module.LocalizationReplay()
+    for sequence in range(8):
+        image = np.full((20, 50), sequence, dtype=np.uint8)
+        replay.observe({"image": image, "capture_evidence": {"sequence": sequence}},
+                       {"status": "localized"}, elapsed_seconds=.8 if sequence < 2 else .01)
+        image[:] = 99
+    replay.preserve(tmp_path, {"sequence": 1})
+    path = next(tmp_path.glob("*.zip"))
+    assert path.stat().st_size <= module.MAXIMUM_OPERATION_BYTES
+    with zipfile.ZipFile(path) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        sequences = [f["capture_evidence"]["sequence"] for f in manifest["frames"]]
+        assert sequences == ([0, 5, 6, 7] if limited else [0, 1, 5, 6, 7])
+        assert manifest["truncated"] is limited
+        assert manifest["frames"][0]["elapsed_seconds"] == .8
+        for index, sequence in enumerate(sequences):
+            with archive.open(f"frame-{index}.npy") as stream:
+                assert (np.lib.format.read_array(stream, allow_pickle=False) == sequence).all()
+
+
 def test_pruned_reverse_search_is_identical_to_exhaustive_reciprocity():
     from toposync_ext_cameras.processing.panorama_localization import _mutual_matches
     generator = np.random.default_rng(400)
@@ -277,8 +519,70 @@ def test_navigation_replay_serializes_shared_storage_budget(tmp_path):
     assert not list(tmp_path.glob("*.partial"))
 
 
-@pytest.mark.parametrize("change", ["movement", "transient", "epoch", "blank", "zoom", "ambiguous", "expired"])
-def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp_path, monkeypatch, change):
+def test_fixed_anchor_tracking_can_measure_large_displacement():
+    from toposync_ext_cameras.processing.panorama_correspondences import track_image_points
+
+    generator = np.random.default_rng(41)
+    image = np.zeros((540, 960), np.uint8)
+    for _ in range(500):
+        x, y = generator.integers([20, 20], [940, 520])
+        cv2.circle(image, (int(x), int(y)), int(generator.integers(3, 12)),
+                   int(generator.integers(40, 255)), -1)
+    image = cv2.GaussianBlur(image, (5, 5), 1)
+    points = cv2.goodFeaturesToTrack(image, 500, .01, 10).reshape(-1, 2)
+    current = cv2.warpAffine(image, np.float32([[1, 0, 60], [0, 1, 0]]), (960, 540))
+    measured, valid = track_image_points(image, current, points, .75, large_displacement=True)
+    correct = np.linalg.norm(measured[valid] - points[valid] - [60, 0], axis=1) < .5
+    assert correct.sum() >= 100
+    assert correct.mean() >= .8
+    # These are proposals, not a pose. Independent fitting remains mandatory.
+    _, blank_valid = track_image_points(image, np.zeros_like(image), points, .75,
+                                       large_displacement=True)
+    assert blank_valid.sum() == 0
+
+
+def test_batched_tracking_preserves_uneven_reference_pairs_and_ambiguity(monkeypatch):
+    from collections import OrderedDict
+    import time
+    from toposync_ext_cameras.processing import panorama_localization as module
+
+    image = np.random.default_rng(93).integers(0, 256, (540, 960), dtype=np.uint8)
+    image = cv2.GaussianBlur(image, (3, 3), .7)
+    current = cv2.warpAffine(image, np.float32([[1, 0, 3], [0, 1, 2]]), (960, 540))
+    points = cv2.goodFeaturesToTrack(image, 120, .01, 10).reshape(-1, 2)
+    groups = [points[:45], points[45:], points[:0]]
+    pairs = [({"id": str(index)}, group, group + [index * 100, 17])
+             for index, group in enumerate(groups)]
+    expected = []
+    for reference, group, original_reference in pairs:
+        measured, valid = module.track_image_points(image, current, group, .75)
+        expected.append((reference, measured[valid], original_reference[valid]))
+    localizer = object.__new__(PanoramaLocalizer)
+    key = ("capture", 1, np.eye(3).tobytes(), image.shape)
+    localizer._anchors = OrderedDict([(key, {"gray": image, "pairs": pairs,
+                                            "seen": time.monotonic(), "sequence": 1})])
+    track = module.track_image_points
+    calls = []
+    def tracked(*args, **kwargs):
+        calls.append(len(args[2]))
+        return track(*args, **kwargs)
+    def fit(measured_pairs, *args):
+        for measured, original in zip(measured_pairs, expected, strict=True):
+            assert measured[0] == original[0]
+            np.testing.assert_array_equal(measured[1], original[1])
+            np.testing.assert_array_equal(measured[2], original[2])
+        return {"status": "unlocalized", "reason": "panorama_visual_localization_ambiguous"}
+    monkeypatch.setattr(module, "track_image_points", tracked)
+    monkeypatch.setattr(localizer, "_fit_contextual", fit)
+    result = localizer._tracked_locate(current, np.eye(3), ("capture", 1, 2), {})
+    assert result["reason"] == "panorama_visual_localization_ambiguous"
+    assert calls == [len(points)]
+    assert not localizer._anchors
+
+
+@pytest.mark.parametrize("cross_capture", [False, True])
+@pytest.mark.parametrize("change", ["movement", "transient", "epoch", "generation", "blank", "zoom", "ambiguous", "expired", "crop", "source_geometry"])
+def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp_path, monkeypatch, change, cross_capture):
     from collections import OrderedDict
     import time
 
@@ -303,7 +607,9 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
         anchor["seen"] -= 6
     localizer._anchors = OrderedDict([(key, anchor)])
     def recognize(*args, **kwargs):
-        assert change not in {"movement", "transient", "ambiguous"}, "Measure eligible anchors before costly recognition"
+        assert change not in {"movement", "ambiguous"}, "Measure eligible anchors before costly recognition"
+        if change == "transient":
+            assert cross_capture and not np.any(args[0]), "Only lost cross-capture support needs global recovery"
         return {"status": "unlocalized", "reason": "panorama_visual_localization_failed"}
     monkeypatch.setattr(localizer, "_locate", recognize)
     if change in {"blank", "transient"}:
@@ -312,11 +618,23 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
         current = cv2.warpAffine(image, cv2.getRotationMatrix2D((480, 270), 0, 1.12), (960, 540))
     else:
         current = cv2.warpAffine(image, np.float32([[1, 0, 2], [0, 1, 3]]), (960, 540))
-    evidence = {"capture_instance": "new" if change == "epoch" else "capture",
+    evidence = {"capture_instance": "new" if change == "epoch" or cross_capture else "capture",
                 "generation": 1, "sequence": 2}
+    if change == "generation":
+        evidence = {**evidence, "capture_instance": "capture", "generation": 2}
+    geometry = None
+    if change == "crop":
+        geometry = {"source_size": [960, 540], "image_size": [960, 540],
+                    "to_source": [[1, 0, 12], [0, 1, 0], [0, 0, 1]], "capture_evidence": evidence}
+    if change == "source_geometry":
+        geometry = {"source_size": [961, 540], "image_size": [960, 540],
+                    "to_source": np.eye(3).tolist(), "capture_evidence": evidence}
+    # Epoch changes alone never opt in. Only the source-qualified browser path
+    # can propose original-reference pairs from an independent capture.
+    options = {"reference_candidates": cross_capture and change != "epoch"}
     diagnostics = {}
     last_qualified = anchor["seen"]
-    result = localizer._locate_frame(current, evidence, None, diagnostics)
+    result = localizer._locate_frame(current, evidence, geometry, diagnostics, **options)
     if change == "transient":
         assert result["status"] == "unlocalized"
         assert "rotation_matrix" not in result
@@ -324,10 +642,10 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
         assert localizer._anchors[key] is anchor
         evidence = {**evidence, "sequence": 3}
         current = cv2.warpAffine(image, np.float32([[1, 0, 2], [0, 1, 3]]), (960, 540))
-        result = localizer._locate_frame(current, evidence, None, diagnostics)
+        result = localizer._locate_frame(current, evidence, None, diagnostics, **options)
     if change in {"movement", "transient"}:
         assert result["status"] == "localized"
-        assert diagnostics["photometry"] == "tracked_correspondences"
+        assert diagnostics["photometry"] == ("cross_capture_correspondences" if cross_capture else "tracked_correspondences")
         assert result["capture_evidence"] == evidence
         measured = np.array(diagnostics["candidates"][0]["current"])
         expected = {tuple(reference): point + [2, 3] for point, reference in zip(points, references)}
@@ -336,7 +654,59 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
         assert np.median(np.linalg.norm(measured - positions, axis=1)) < 0.1
         assert np.array_equal(anchor["gray"], image)
         assert np.array_equal(anchor["pairs"][0][1], points.astype(np.float32))
+        if cross_capture:
+            assert anchor["sequence"] == 1
+            assert list(localizer._anchors) == [key]  # No identity relabel or anchor chain.
     else:
         assert result["status"] == "unlocalized"
         if change == "ambiguous":
             assert result["reason"] == "panorama_visual_localization_ambiguous"
+
+
+@pytest.mark.parametrize("scale", [1, 2])
+def test_native_recognition_seeds_original_pixels_and_recovers_after_tracking_loss(monkeypatch, scale):
+    from collections import OrderedDict
+
+    lens, points, reference_points, _ = _correspondences()
+    image = np.random.default_rng(61).integers(0, 256, (540, 960), dtype=np.uint8)
+    image = cv2.GaussianBlur(image, (3, 3), 0.7)
+    localizer = object.__new__(PanoramaLocalizer)
+    localizer.lens = {**lens, **{key: lens[key] * scale for key in ("width", "height", "fx", "fy")},
+                      "cx": (lens["cx"] + .5) * scale - .5, "cy": (lens["cy"] + .5) * scale - .5}
+    reference = {"id": "original", "rotation_matrix": np.eye(3).tolist()}
+    localizer.references = [reference]
+    localizer.results, localizer._anchors = OrderedDict(), OrderedDict()
+    localizer.model_directory = None
+    source_points = (points + .5) * scale - .5
+    source_references = (reference_points + .5) * scale - .5
+    calls = []
+
+    def recognize(current, matrix, diagnostics, **kwargs):
+        calls.append(current.copy())
+        diagnostics.update(photometry="native", candidates=[])
+        if not current.any():
+            return {"status": "unlocalized", "reason": "panorama_visual_localization_failed"}
+        candidate = {"reference_id": "original"}
+        fit = fit_frame_rotation(source_points, source_references, localizer.lens, np.eye(3), candidate)
+        diagnostics["candidates"].append(candidate)
+        return {"status": "localized", **fit, "reference_id": "original"}
+
+    monkeypatch.setattr(localizer, "_locate", recognize)
+    monkeypatch.setattr(localizer, "_recognition_neighbors", lambda result: [reference])
+    for sequence, current in enumerate([image, cv2.warpAffine(image, np.float32([[1, 0, 2], [0, 1, 3]]),
+                                                               (960, 540)), np.zeros_like(image)], 1):
+        evidence = {"capture_instance": "capture", "generation": 1, "sequence": sequence}
+        geometry = {"source_size": [960 * scale, 540 * scale], "image_size": [960, 540],
+                    "to_source": [[scale, 0, (scale - 1) / 2], [0, scale, (scale - 1) / 2], [0, 0, 1]],
+                    "capture_evidence": evidence}
+        diagnostics = {}
+        result = localizer._locate_frame(current, evidence, geometry, diagnostics)
+        if sequence == 2:
+            assert len(calls) == 1
+            assert result["status"] == "localized"
+            assert diagnostics["photometry"] == "tracked_correspondences"
+            assert np.array_equal(next(iter(localizer._anchors.values()))["gray"], image)
+        elif sequence == 3:
+            assert len(calls) == 3  # Native and normalized recovery were attempted.
+            assert result["status"] == "unlocalized"
+            assert "rotation_matrix" not in result

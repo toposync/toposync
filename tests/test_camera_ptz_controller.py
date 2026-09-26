@@ -102,6 +102,74 @@ def _controller(
     )
 
 
+@pytest.mark.parametrize('change', ['none', 'configuration_before', 'configuration_after', 'expired', 'cancelled'])
+def test_continuous_preparation_is_lease_bound_read_only_and_does_not_block_stop(tmp_path, change):
+    async def scenario():
+        transport, clock = _Transport(), _Clock()
+        entered, release, drained = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        revision = ['one']
+        context = object()
+
+        async def prepare(**kwargs):
+            assert kwargs['transport_context'] is context
+            assert kwargs['camera_id'] == 'camera' and kwargs['camera_source_id'] == 'main'
+            entered.set()
+            try:
+                await release.wait()
+                return True
+            finally:
+                drained.set()
+
+        controller = PtzController(
+            state_path=tmp_path / 'ptz.json', resolve_device=lambda value: value,
+            resolve_source=lambda camera, source: source or 'main',
+            execute_command=transport.execute, get_status=transport.status,
+            get_automation_readiness=lambda camera: True,
+            resolve_transport_binding=lambda camera, source: PtzTransportBinding(revision[0], context),
+            validate_transport_binding=lambda camera, source, binding: (binding.revision == revision[0], 'changed'),
+            prepare_continuous_transport=prepare, time_func=clock, monotonic_func=clock)
+        try:
+            lease = await controller.acquire(camera_id='camera', owner_kind='manual', owner_id='test', ttl_s=15)
+            transport.calls.clear()
+            if change == 'configuration_before':
+                revision[0] = 'two'
+                with pytest.raises(PtzControlError):
+                    await controller.prepare_continuous_move(lease_id=lease['lease_id'], fence=lease['fence'])
+                assert not entered.is_set() and not transport.calls
+                return
+            task = asyncio.create_task(controller.prepare_continuous_move(
+                lease_id=lease['lease_id'], fence=lease['fence']))
+            await asyncio.wait_for(entered.wait(), .5)
+            assert not transport.calls
+            # The metadata request remains blocked while a real controller Stop
+            # crosses the command queue. Preparation must never own that queue.
+            receipt = await asyncio.wait_for(controller.submit(
+                lease_id=lease['lease_id'], fence=lease['fence'], command_id='stop-during-prepare',
+                command={'kind': 'stop', 'pan_tilt': True, 'zoom': True}), .5)
+            assert receipt['accepted'] and not task.done()
+            assert [call['command']['kind'] for call in transport.calls] == ['stop']
+            if change == 'configuration_after':
+                revision[0] = 'two'
+            elif change == 'expired':
+                clock.now += 16
+            elif change == 'cancelled':
+                task.cancel()
+            release.set()
+            if change in {'configuration_after', 'expired'}:
+                with pytest.raises(PtzControlError):
+                    await task
+            elif change == 'cancelled':
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                assert await task == {'prepared': True}
+            assert drained.is_set()
+        finally:
+            release.set()
+            await controller.shutdown()
+    asyncio.run(scenario())
+
+
 def test_ptz_controller_manual_preempts_shared_device_automation_and_fences_old_lease(
     tmp_path: Path,
 ) -> None:

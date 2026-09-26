@@ -2355,7 +2355,10 @@ class _Scan:
         def write() -> None:
             # Decode one lossless diagnostic at a time, keeping the same NPZ
             # replay format without a second uncompressed frame collection.
-            with zipfile.ZipFile(self.directory / f"{identifier}.npz", "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            # Store without a second compression pass: serialization runs after
+            # the final observation, whose original freshness must be preserved.
+            # Frame count and the encoded in-memory evidence remain bounded.
+            with zipfile.ZipFile(self.directory / f"{identifier}.npz", "w", compression=zipfile.ZIP_STORED) as archive:
                 for index, (encoded, _) in enumerate(attempt.replay):
                     frame = cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE)
                     with archive.open(f"frame_{index}.npy", "w") as member:
@@ -2487,8 +2490,12 @@ class _Scan:
             pass
 
     async def _stop(self) -> bool:
+        self.last_stop_receipt = None
+        self.last_stop_accepted_monotonic = None
         try:
-            await self.camera.stop()
+            receipt = await self.camera.stop()
+            self.last_stop_receipt = receipt
+            self.last_stop_accepted_monotonic = time.monotonic()
             # A fenced accepted command is still not visual confirmation.
             self.physical_state = "unknown"
             return True
@@ -2607,11 +2614,23 @@ class _Scan:
         finally:
             self._diagnostic(diagnostic)
 
-    async def _confirm_stop(self) -> None:
-        if not await self._stop():
+    async def _confirm_stop(self, *, observation_timeout: float = 3.0, reuse_accepted: bool = False) -> None:
+        accepted = False
+        if reuse_accepted and self.acquired:
+            observed = getattr(self, "last_stop_accepted_monotonic", None)
+            if type(observed) in (int, float) and 0 <= time.monotonic() - observed <= 1:
+                try:
+                    accepted = await self.camera.stop_receipt_is_current(self.last_stop_receipt) is True
+                    accepted = accepted and 0 <= time.monotonic() - observed <= 1
+                except Exception:
+                    accepted = False
+        if not accepted and not await self._stop():
             return
+        # An accepted Stop only avoids duplicate dispatch; stillness is always
+        # established from the normal fresh observation window below.
+        self.physical_state = "unknown"
         try:
-            await self._reference_window(timeout=3.0)
+            await self._reference_window(timeout=observation_timeout)
             self.physical_state = "stopped"
         except Exception:
             self.physical_state = "stop_unconfirmed"
@@ -2716,6 +2735,32 @@ class _Scan:
             ),
         }
         return False
+
+    async def refresh_stopped_frame(self) -> dict:
+        """Extend an observed stop through the existing endpoint stream barrier.
+
+        Consumers may finish readback or preservation after the endpoint was
+        committed. Verify newer frames against that endpoint instead of handing
+        an aged observation to the next geometric measurement.
+        """
+        self._check()
+        if self.physical_state != "stopped" or self.last_frame is None:
+            raise PanoramaCaptureError("stop_unconfirmed")
+        diagnostic = _AttemptDiagnostic("stopped_endpoint_refresh", total_seconds=ENDPOINT_COMMIT_MAX_SECONDS)
+        try:
+            verified = await self._commit_endpoint_frame(
+                self.last_frame, diagnostic, deadline=time.monotonic() + ENDPOINT_COMMIT_MAX_SECONDS,
+            )
+            self._check()
+            if not verified:
+                self.physical_state = "unknown"
+                self.last_frame = await self._reference_window()
+                self._check()
+                self.physical_state = "stopped"
+            diagnostic.value["outcome"] = "reference_observed"
+            return self.last_frame
+        finally:
+            self._diagnostic(diagnostic)
 
     async def _terminal_scene(self, frames: deque[dict]) -> dict | None:
         """Classify observable detail after a failed attempt, never readiness.
@@ -3220,6 +3265,8 @@ class _Scan:
         target: dict | None = None,
         duration: float = 0.0,
         allow_stationary: bool = False,
+        transition_estimator: Callable | None = None,
+        stable_frame_observer: Callable[[dict], None] | None = None,
         requested_velocity: dict[str, float] | None = None,
         expected_frame: dict | None = None,
         movement_intent: dict[str, Any] | None = None,
@@ -3298,7 +3345,7 @@ class _Scan:
             self._check(budget=not self.returning)
         baseline = await self.camera.frame()
         self.last_frame = baseline
-        detector = VisualStabilityDetector(allow_observation_timing=True)
+        detector = VisualStabilityDetector(allow_observation_timing=True, transition_estimator=transition_estimator)
         start = time.monotonic()
         attempt_deadline = start + attempt_seconds
         observation_deadline = attempt_deadline
@@ -3756,9 +3803,25 @@ class _Scan:
                 if stopped and target is not None and now - pose_time >= 0.25:
                     self.last_pose = await self._absolute_readback()
                     pose_time = now
-                last_result = await asyncio.to_thread(
+                self._check(budget=not self.returning)
+                observation = asyncio.create_task(asyncio.to_thread(
                     self._observation, detector, frame, self.last_pose if stopped and target is not None else None
-                )
+                ))
+                try:
+                    # Learned recovery can take longer than a user's retarget.
+                    # Keep cancellation responsive while the CPU work runs;
+                    # neither cancelling its Future nor using its old result
+                    # would stop that worker safely.
+                    while not observation.done():
+                        await asyncio.wait({observation}, timeout=0.025)
+                        self._check(budget=not self.returning)
+                    last_result = observation.result()
+                except BaseException:
+                    start_stop("observation_interrupted")
+                    # Stop may execute now, but another physical operation must
+                    # wait until this observer has drained and cleanup completes.
+                    await asyncio.shield(asyncio.gather(observation, return_exceptions=True))
+                    raise
                 await asyncio.to_thread(
                     diagnostic.frame, frame, last_result, wait_seconds=now - wait_start, pose=self.last_pose
                 )
@@ -3864,32 +3927,67 @@ class _Scan:
                     and (target is None or allow_stationary or pose_matches >= 2)
                 ):
                     start_stop("visual_settled")
+                    if stable_frame_observer is not None:
+                        # Optional read-only preparation; never arrival evidence.
+                        # Stop is already scheduled and observation still continues.
+                        try:
+                            stable_frame_observer(frame)
+                        except Exception:
+                            diagnostic.value["stable_frame_observer_failed"] = True
                     continue
                 if stopped and last_result["stable"] and time.monotonic() < observation_deadline:
                     chosen = _selected_capture_frame(frames, last_result, frame)
                     if chosen is None:
                         raise PanoramaCaptureError("selected_capture_frame_unavailable")
-                    self.last_pose = await self._movement_readback(
-                        target=target, diagnostic=diagnostic
-                    )
-                    if not await self._commit_endpoint_frame(
-                        chosen,
-                        diagnostic,
-                        deadline=attempt_deadline,
-                    ):
+                    async def read_endpoint_pose():
+                        endpoint_started = time.monotonic()
+                        try:
+                            return await self._movement_readback(target=target, diagnostic=diagnostic)
+                        finally:
+                            diagnostic.value["endpoint_readback_seconds"] = time.monotonic() - endpoint_started
+
+                    # Both observations start after visual stability. Keep the
+                    # pose read off the image path, but require both results and
+                    # drain them before cancellation can release this camera.
+                    readback = asyncio.create_task(read_endpoint_pose())
+                    geometry_started = time.monotonic()
+                    geometry = asyncio.create_task(asyncio.to_thread(
+                        _axis_command_match, baseline["image"], chosen["image"],
+                        axis=(movement_intent or {}).get("axis"),
+                    ))
+                    try:
+                        matching = await asyncio.shield(geometry)
+                        diagnostic.value["endpoint_geometry_seconds"] = time.monotonic() - geometry_started
+                        commit_started = time.monotonic()
+                        committed = await self._commit_endpoint_frame(
+                            chosen, diagnostic, deadline=attempt_deadline,
+                        )
+                        diagnostic.value["endpoint_commit_seconds"] = time.monotonic() - commit_started
+                        self.last_pose = await asyncio.shield(readback)
+                        self._check(budget=not self.returning)
+                        # A slow position read must not turn the parallel stream
+                        # confirmation into an expired frame for navigation.
+                        if committed and not 0 <= time.monotonic() - self.last_frame["received_monotonic"] <= 1.0:
+                            diagnostic.value["endpoint_commit_renewed_after_readback"] = True
+                            commit_started = time.monotonic()
+                            committed = await self._commit_endpoint_frame(
+                                chosen, diagnostic, deadline=attempt_deadline,
+                            )
+                            diagnostic.value["endpoint_commit_seconds"] += time.monotonic() - commit_started
+                    finally:
+                        await asyncio.shield(asyncio.gather(readback, geometry, return_exceptions=True))
+                    if not committed:
                         detector.arm_stop(now=time.monotonic())
                         continue
                     self.physical_state = "stopped"
-                    matching = await asyncio.to_thread(
-                        _axis_command_match,
-                        baseline["image"],
-                        chosen["image"],
-                        axis=(movement_intent or {}).get("axis"),
-                    )
                     diagnostic.comparison(matching)
                     diagnostic.value["outcome"] = "capture_stable"
                     return {
                         "frame": chosen,
+                        # Keep the ranked photograph for acquisition, and expose
+                        # the newer, same-generation frame already verified by
+                        # the endpoint commit barrier for live navigation.
+                        "observation_frame": self.last_frame,
                         "evidence": last_result,
                         "pose": self.last_pose,
                         "match": matching,
@@ -4107,10 +4205,13 @@ class _Scan:
                     # Optional inspection must not mask the movement failure;
                     # Stop and command cleanup have already completed above.
                     diagnostic.value["terminal_scene_status"] = "unavailable"
+            replay_started = time.monotonic()
             try:
                 await self._preserve_replay(diagnostic)
             except Exception:
                 diagnostic.value["replay_write_failed"] = True
+            finally:
+                diagnostic.value["replay_write_seconds"] = time.monotonic() - replay_started
             self._diagnostic(diagnostic)
 
             if region_command is not None:

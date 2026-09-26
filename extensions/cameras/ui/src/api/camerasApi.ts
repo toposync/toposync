@@ -484,6 +484,29 @@ function sourcePanoramaPath(cameraId: string, sourceId: string): string {
   return `/api/cameras/cameras/${encodeURIComponent(cameraId)}/sources/${encodeURIComponent(sourceId)}/panorama`;
 }
 
+export type PanoramaNativeReference = {
+  id: string;
+  status: "queued" | "preparing" | "stopping" | "ready" | "unverified";
+  physical_state: string;
+  cleanup_confirmed: boolean;
+};
+
+function nativeReferencePath(cameraId: string): string {
+  return `/api/cameras/cameras/${encodeURIComponent(cameraId)}/panorama/native-reference`;
+}
+
+export function fetchPanoramaNativeReferences(cameraId: string, sourceId: string, artifactId: string, revision: number, signal?: AbortSignal): Promise<{ references: PanoramaNativeReference[] }> {
+  const query = new URLSearchParams({ source_id: sourceId, artifact_id: artifactId, revision: String(revision) });
+  return requestSourcePanorama(`${nativeReferencePath(cameraId)}?${query}`, { signal });
+}
+
+export function operatePanoramaNativeReference(cameraId: string, sourceId: string, artifactId: string, revision: number, preparationId: string, action: "prepare" | "stop" | "remove"): Promise<{ id: string; status: string }> {
+  return requestPanorama(`${nativeReferencePath(cameraId)}${action === "stop" ? "/stop" : ""}`, {
+    method: action === "remove" ? "DELETE" : "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source_id: sourceId, artifact_id: artifactId, revision, preparation_id: preparationId }),
+  }, action === "prepare" ? 85_000 : 20_000);
+}
+
 export function fetchCameraSourcePanorama(cameraId: string, sourceId: string, signal?: AbortSignal): Promise<import("../types").CameraSourcePanorama> {
   return requestSourcePanorama(sourcePanoramaPath(cameraId, sourceId), { signal });
 }

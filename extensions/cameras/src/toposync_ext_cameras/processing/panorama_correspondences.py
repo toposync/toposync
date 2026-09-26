@@ -6,13 +6,13 @@ import cv2
 
 
 def track_image_points(previous: np.ndarray, current: np.ndarray, points: np.ndarray,
-                       maximum_error: float) -> tuple[np.ndarray, np.ndarray]:
+                       maximum_error: float, *, large_displacement: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """Bidirectional image measurements; never infer missing point positions."""
     source = np.asarray(points, np.float32).reshape(-1, 2)
     invalid = np.zeros(len(source), dtype=bool)
     if not len(source) or previous.shape != current.shape:
         return source.copy(), invalid
-    parameters = dict(winSize=(21, 21), maxLevel=3,
+    parameters = dict(winSize=(21, 21), maxLevel=4 if large_displacement else 3,
                       criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
     following, status, _ = cv2.calcOpticalFlowPyrLK(
         previous, current, source.reshape(-1, 1, 2), None, **parameters)

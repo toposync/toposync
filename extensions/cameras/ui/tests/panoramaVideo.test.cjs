@@ -4,6 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),ts=require('typescript'),v
 const {execFileSync}=require('node:child_process');
 const context={exports:{}};vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/live/panoramaVideo.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
 const {panoramaVideoPixel,frameStillSharesRegisteredView}=context.exports;
+const {sameRegisteredView,stationaryPhotoPair}=context.exports;
 const repository=path.resolve(__dirname,'../../../..');
 const probes=JSON.parse(execFileSync(path.join(repository,'.venv/bin/python'),['-c',`
 import json, numpy as np, cv2
@@ -53,4 +54,18 @@ test('registration drift veto rejects a global camera view change',()=>{
  const shifted=frame(width,height,(x,y)=>[((x+13)*37+y*17)%256,((x+13)*11+y*43)%256,((x+13)*29+y*7)%256]);
  assert.equal(frameStillSharesRegisteredView(reference,shifted,width,height),false);
  assert.equal(frameStillSharesRegisteredView(reference,reference,width-1,height),false);
+});
+
+test('session photograph requires advancing independent observations with stable optical geometry',()=>{
+ const geometry=probes[0].geometry;
+ const first={geometry,epoch:'stream-a',sequence:10,mediaTime:4,receivedAt:1000};
+ const second={...first,sequence:30,mediaTime:4.8,receivedAt:1800};
+ assert.equal(stationaryPhotoPair(first,second),true);
+ assert.equal(stationaryPhotoPair(null,second),false);
+ for(const changes of [{epoch:'stream-b'},{sequence:10},{sequence:9},{sequence:NaN},{mediaTime:4},{mediaTime:8},{receivedAt:999},{receivedAt:5000}])
+   assert.equal(stationaryPhotoPair(first,{...second,...changes}),false,JSON.stringify(changes));
+ assert.equal(stationaryPhotoPair(first,{...second,geometry:probes[5].geometry}),false);
+ assert.equal(sameRegisteredView(geometry,{...geometry,lens:{...geometry.lens,fx:geometry.lens.fx*2}}),false);
+ assert.equal(sameRegisteredView(geometry,{...geometry,panorama_to_camera:[[1,0,0]]}),false);
+ assert.equal(sameRegisteredView(geometry,{...geometry,panorama_to_camera:[[NaN,0,0],[0,1,0],[0,0,1]]}),false);
 });

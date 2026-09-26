@@ -1134,6 +1134,7 @@ class OnvifClient:
 
     async def continuous_move_timeout(
         self, ptz_xaddr: str, *, profile_token: str, requested_s: float,
+        media_xaddr: str | None = None,
     ) -> float | None:
         """Device failsafe timeout, independent of the controller's earlier Stop.
 
@@ -1147,7 +1148,9 @@ class OnvifClient:
             bounds = None
             try:
                 if profile_token not in self._profile_ptz_configuration_tokens:
-                    media, _ = await self.get_capabilities()
+                    media = media_xaddr
+                    if not media:
+                        media, _ = await self.get_capabilities()
                     if media:
                         await self.get_profiles(media)
                 configuration = self._profile_ptz_configuration_tokens.get(profile_token)

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { createCameraSourcePanorama, fetchCameraSourcePanorama, fetchCameraSourcePanoramaJob, finalizeCameraSourcePanoramaReplacement, operateCameraSourcePanorama, saveCameraSourcePanoramaCrop } from "../api/camerasApi";
 import { createUniqueId } from "../parsing";
+import { fetchPanoramaNativeReferences, operatePanoramaNativeReference, type PanoramaNativeReference } from "../api/camerasApi";
 import type { CameraSourcePanorama, CameraSourcePanoramaArtifact, CameraSourcePanoramaCrop, CameraSourcePanoramaJob } from "../types";
 
 export function isPanoramaJobRunning(job: CameraSourcePanoramaJob | null | undefined): boolean {
@@ -23,6 +24,9 @@ export function useCameraSourcePanorama(cameraId: string, sourceId: string, enab
   const latestJobId = useRef<string | null>(null);
   const latestJob = useRef<CameraSourcePanoramaJob | null>(null);
   const replacementAttempt = useRef<string | null>(null);
+  const [nativeReferences, setNativeReferences] = useState<PanoramaNativeReference[] | null>(null);
+  const [nativeConnectionError, setNativeConnectionError] = useState(false);
+  const nativeAttempt = useRef<string | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -74,6 +78,26 @@ export function useCameraSourcePanorama(cameraId: string, sourceId: string, enab
           }
         }
         if (cancelled) return;
+        const referenceArtifact = next.active;
+        let nativeRunning = false;
+        if (referenceArtifact) {
+          try {
+            const catalog = await fetchPanoramaNativeReferences(cameraId, sourceId, referenceArtifact.id, referenceArtifact.revision, controller.signal);
+            if (cancelled) return;
+            if (generation === mutationGeneration.current) {
+              setNativeReferences(catalog.references);
+              setNativeConnectionError(false);
+              const attempt = catalog.references.find((reference) => reference.id === nativeAttempt.current);
+              if (attempt?.status === "ready" || (attempt?.status === "unverified" && attempt.cleanup_confirmed)) nativeAttempt.current = null;
+            }
+            nativeRunning = catalog.references.some((reference) => ["queued", "preparing", "stopping"].includes(reference.status));
+          } catch {
+            if (cancelled) return;
+            if (generation === mutationGeneration.current) setNativeConnectionError(true);
+          }
+        } else if (generation === mutationGeneration.current) {
+          setNativeReferences(null);
+        }
         if (generation === mutationGeneration.current) {
           setData(next);
           latestJobId.current = next.job?.id ?? null;
@@ -82,7 +106,7 @@ export function useCameraSourcePanorama(cameraId: string, sourceId: string, enab
         }
         setConnectionError(null);
         failures = 0;
-        delay = isPanoramaJobRunning(next.job) || operation.current ? 1_500 : 10_000;
+        delay = isPanoramaJobRunning(next.job) || operation.current || nativeRunning ? 1_500 : 10_000;
       } catch (error) {
         if (cancelled) return;
         setConnectionError(error);
@@ -158,5 +182,21 @@ export function useCameraSourcePanorama(cameraId: string, sourceId: string, enab
       setData((previous) => previous ? previous.active?.id === next.id ? { ...previous, active: next } : { ...previous, candidate: next } : previous);
     }), [cameraId, sourceId, perform]);
 
-  return { data, loading, connectionError, actionError, busy, refresh, start, operate, saveCrop, clearActionError: () => setActionError(null) };
+  const operateReference = useCallback((artifact: CameraSourcePanoramaArtifact, action: "prepare" | "stop" | "remove", identifier?: string) => {
+    if (action === "prepare" && !nativeAttempt.current) {
+      nativeAttempt.current = Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) => value.toString(16).padStart(2, "0")).join("");
+    }
+    const id = identifier ?? nativeAttempt.current;
+    if (!id) return Promise.resolve(null);
+    return perform(action === "stop" ? "stop" : `${action}_reference`,
+      () => operatePanoramaNativeReference(cameraId, sourceId, artifact.id, artifact.revision, id, action),
+      (result) => {
+        // A transport failure preserves the key. Only a terminal server
+        // response permits another preparation to create a new device point.
+        if (["ready", "interrupted", "retired"].includes(result.status) && nativeAttempt.current === id) nativeAttempt.current = null;
+      });
+  }, [cameraId, sourceId, perform]);
+
+  return { data, loading, connectionError, actionError, busy, refresh, start, operate, saveCrop,
+    nativeReferences, nativeConnectionError, nativeAttemptId: nativeAttempt.current, operateReference, clearActionError: () => setActionError(null) };
 }

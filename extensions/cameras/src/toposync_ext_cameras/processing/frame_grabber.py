@@ -785,6 +785,7 @@ class FfmpegFrameGrabber:
 
     def _reader_loop(self) -> None:
         buffer = bytearray()
+        end_search_from = 2
         while not self._frames_stop.is_set():
             if not self.is_opened():
                 time.sleep(0.15)
@@ -806,15 +807,20 @@ class FfmpegFrameGrabber:
                 if start < 0:
                     if len(buffer) > 2:
                         buffer[:] = buffer[-2:]
+                    end_search_from = 2
                     break
-                end = buffer.find(b"\xff\xd9", start + 2)
+                end = buffer.find(b"\xff\xd9", max(start + 2, end_search_from))
                 if end < 0:
                     if start > 0:
                         del buffer[:start]
+                    # Only the final byte can join a marker in the next chunk.
+                    # Rescanning a growing 4K JPEG on every read is quadratic.
+                    end_search_from = max(2, len(buffer) - 1)
                     break
 
                 jpg = bytes(buffer[start : end + 2])
                 del buffer[: end + 2]
+                end_search_from = 2
 
                 source_received_at = time.time()
                 source_received_monotonic = time.monotonic()

@@ -77,12 +77,17 @@ class ContextualMatcher:
         except Exception:
             self.extractor = ort.InferenceSession(str(extractor), options, providers=["CPUExecutionProvider"])
         matching_options = ort.SessionOptions()
-        matching_options.intra_op_num_threads = 2
+        # References are compared concurrently by the localizer. Keep one
+        # inference thread per comparison instead of nesting parallel pools.
+        matching_options.intra_op_num_threads = 1
         matching_options.inter_op_num_threads = 1
         self.matcher = ort.InferenceSession(str(matcher), matching_options, providers=["CPUExecutionProvider"])
 
-    def features(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def features(self, image: np.ndarray, *, normalize: bool = False) -> tuple[np.ndarray, np.ndarray]:
         image = cv2.resize(image, (self.width, self.height), interpolation=cv2.INTER_AREA)
+        if normalize:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+            image = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
         image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB if image.ndim == 2 else cv2.COLOR_BGR2RGB)
         image = cv2.copyMakeBorder(image, 0, self.padded_height - self.height,
                                   0, self.padded_width - self.width, cv2.BORDER_CONSTANT)

@@ -66,7 +66,10 @@ export function CameraSourcePanoramaSection({ ui, cameraId, sourceId, cameraName
   const text = useCallback((key: string, parameters?: Record<string, unknown>) => t(`ext.cameras.source_panorama.${key}`, parameters), [t]);
   const diagnostic = (code: string) => t(`ext.cameras.source_panorama.diagnostic_${code}`, {}, text("diagnostic_unknown"));
   const number = new Intl.NumberFormat(locale).format;
-  const { data, loading, connectionError, actionError, busy, refresh, start, operate, saveCrop, clearActionError } = useCameraSourcePanorama(cameraId, sourceId, persisted);
+  const { data, loading, connectionError, actionError, busy: actionBusy, refresh, start, operate, saveCrop,
+    nativeReferences, nativeConnectionError, nativeAttemptId, operateReference, clearActionError } = useCameraSourcePanorama(cameraId, sourceId, persisted);
+  const activeReference = nativeReferences?.find((reference) => ["queued", "preparing", "stopping"].includes(reference.status));
+  const busy = actionBusy ?? (activeReference ? "prepare_reference" : null);
   const [editingArtifact, setEditingArtifact] = useState<CameraSourcePanoramaArtifact | null>(null);
   const [showWhole, setShowWhole] = useState(false);
   const [notice, setNotice] = useState("");
@@ -254,6 +257,19 @@ export function CameraSourcePanoramaSection({ ui, cameraId, sourceId, cameraName
         <PanoramaImage ui={ui} text={text} key={artifact.id} artifact={artifact} crop={showWhole ? FULL_PANORAMA_CROP : fittedCrop} label={text(showWhole || !fitted ? "panorama_alt" : cropped ? "crop_alt" : "photographed_alt")} errorLabel={text("image_failed")} />
         <div className="sourcePanoramaActions"><button className="primaryButton" type="button" ref={editButton} disabled={Boolean(busy) || running} onClick={() => openEditor(artifact)}>{text(cropped ? "edit_crop" : "select_crop")}</button></div>
       </> : !running && !loading ? <div className="sourcePanoramaEmpty"><i className="fa-solid fa-panorama" aria-hidden="true" /><h3>{text("empty_title")}</h3><p>{text("empty_help")}</p></div> : null}
+      {data?.active && !editingArtifact ? <section className="sourcePanoramaJob" aria-label={text("native_title")} data-testid="panorama-native-references">
+        <h3>{text("native_title")}</h3>
+        <p className="cardMeta">{text("native_help")}</p>
+        {nativeConnectionError ? <p role="status">{text("native_connection_error")}</p> : null}
+        <div className="sourcePanoramaActions">
+          <button className="chipButton" type="button" disabled={!enabled || Boolean(busy) || running || nativeReferences === null || nativeConnectionError || nativeReferences.some((reference) => reference.status === "unverified" && !reference.cleanup_confirmed)} onClick={() => void operateReference(data.active!, "prepare")}>{text("native_prepare")}</button>
+          {(activeReference || (actionBusy === "prepare_reference" && nativeAttemptId)) ? <button className="chipButton" type="button" disabled={actionBusy === "stop" || activeReference?.status === "stopping"} onClick={() => void operateReference(data.active!, "stop", activeReference?.id ?? nativeAttemptId!)}>{text("native_stop")}</button> : null}
+        </div>
+        {nativeReferences?.map((reference, index) => <div key={reference.id} className="sourcePanoramaActions">
+          <span role="status">{text("native_point", { count: number(index + 1) })} · {text(reference.status === "unverified" && reference.cleanup_confirmed ? "native_not_saved" : `native_${reference.status}`)}</span>
+          {!["queued", "preparing", "stopping"].includes(reference.status) ? <button className="chipButton" type="button" disabled={Boolean(busy) || running || nativeConnectionError} onClick={() => void operateReference(data.active!, "remove", reference.id)}>{text(reference.cleanup_confirmed ? "native_discard" : reference.status === "unverified" ? "native_cleanup" : "native_remove")}</button> : null}
+        </div>)}
+      </section> : null}
       {artifact || job?.telemetry || issueCodes.length || job?.issues?.length || canCleanup || busy === "cleanup" || cleanupNotice ? <details className="sourcePanoramaDetails" data-testid="panorama-diagnostics"><summary ref={detailsSummary}>{text("details")}</summary>
         {!showJob && job?.outcomes ? <div data-testid="panorama-independent-outcomes">{(["acquisition", "reconstruction", "return"] as const).map((stage) => <p key={stage}><strong>{text(`outcome_${stage}`)}: </strong>{text(`outcome_${job.outcomes![stage]}`)}</p>)}</div> : null}
         {!showJob && resumeUnavailableCode ? <p>{diagnostic(resumeUnavailableCode)}</p> : null}

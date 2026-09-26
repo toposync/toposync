@@ -717,7 +717,7 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
             assert (pan, tilt, zoom) == (0.1, 0.2, 0.3)
             calls.append("absolute")
 
-        async def continuous_move_timeout(self, ptz_xaddr, *, profile_token, requested_s):
+        async def continuous_move_timeout(self, ptz_xaddr, *, profile_token, requested_s, media_xaddr=None):
             assert profile_token == "ptz-token"
             return None if movement_mode == "strict_missing_timeout" else 1.0
 

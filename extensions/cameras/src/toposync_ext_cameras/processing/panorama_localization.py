@@ -14,6 +14,7 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -212,6 +213,39 @@ def fit_frame_rotation(
 
 
 class PanoramaLocalizer:
+    def calibrated_transition(self, previous: np.ndarray, current: np.ndarray) -> dict | None:
+        """Recover observed displacement, never arrival, using the bound lens.
+
+        Reuse the loaded contextual matcher. No panorama target or cached pose
+        participates in this independent two-frame rotation estimate.
+        """
+        matching = self._contextual_matcher
+        if (matching is None or previous.shape != current.shape or current.ndim != 2
+                or (matching.height, matching.width) != current.shape):
+            return None
+        matrix, distortion, width, height = _lens_arrays(self.lens)
+        if abs(current.shape[1] / current.shape[0] - width / height) > 1e-6:
+            return None
+        before, after = matching.correspondences(matching.features(previous), matching.features(current))
+        scale = width / current.shape[1]
+        fitted = fit_frame_rotation(after * scale, before * scale, self.lens, np.eye(3))
+        if fitted is None:
+            return None
+        grid = np.asarray([(width * x, height * y) for y in (.15, .5, .85)
+                           for x in (.125, .375, .625, .875)])
+        coefficients = np.zeros(5) if distortion is None else distortion
+        rays = _local_rays(grid, matrix, coefficients) @ np.asarray(fitted["rotation_matrix"]).T
+        if np.any(rays[:, 2] <= .05):
+            return None
+        displacement = float(np.median(np.linalg.norm(_project(rays, matrix, coefficients) - grid, axis=1)) / scale)
+        # A small fitting wobble is not causal motion. This fallback is for
+        # lost large transitions, never subpixel settling or optical zoom.
+        if displacement <= max(3.0, 3 * fitted["validation_p95_pixels"]):
+            return None
+        return {"method": "calibrated_frame_rotation", "motion_pixels": displacement,
+                **{key: fitted[key] for key in ("inliers", "inlier_fraction", "validation_matches",
+                                               "validation_p95_pixels")}}
+
     """Bounded per-artifact descriptors and per-frame results, serialized by caller."""
 
     def __init__(self, model: dict[str, Any], photographs: list[dict[str, Any]], *,
@@ -223,7 +257,7 @@ class PanoramaLocalizer:
         _lens_arrays(self.lens)
         self.references = []
         self.last_reference: str | None = None
-        self.results: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
+        self.results: OrderedDict[tuple[Any, ...], tuple[dict[str, Any], dict[str, Any]]] = OrderedDict()
         self.model_directory = model_directory
         self._contextual_matcher = None
         self._matching_retry_after = 0.0
@@ -400,22 +434,27 @@ class PanoramaLocalizer:
         )
 
     def locate(
-        self, image: np.ndarray, evidence: dict[str, Any], image_geometry: dict | None = None
+        self, image: np.ndarray, evidence: dict[str, Any], image_geometry: dict | None = None,
+        *, reference_candidates: bool = False,
     ) -> dict[str, Any]:
+        """Locate current pixels; cross-capture proposals require a source-qualified caller."""
         with self._lock:
-            return self._locate_frame(image, evidence, image_geometry)
+            return self._locate_frame(image, evidence, image_geometry,
+                                      reference_candidates=reference_candidates)
 
     def locate_diagnostic(self, image: np.ndarray, evidence: dict[str, Any]) -> dict[str, Any]:
         """Private navigation replay; no images or feature arrays enter the API."""
         with self._lock:
-            diagnostics: dict[str, Any] = {"model_sha256": self.model_digest,
-                "references": {reference["id"]: reference["sha256"] for reference in self.references}}
+            diagnostics: dict[str, Any] = {}
             result = self._locate_frame(image, evidence, None, diagnostics)
-            return {**result, "diagnostics": diagnostics}
+            return {**result, "diagnostics": {"model_sha256": self.model_digest,
+                "references": {reference["id"]: reference["sha256"] for reference in self.references},
+                **diagnostics}}
 
     def _locate_frame(
         self, image: np.ndarray, evidence: dict[str, Any], image_geometry: dict | None,
         diagnostics: dict[str, Any] | None = None,
+        *, reference_candidates: bool = False,
     ) -> dict[str, Any]:
         identity = frame_identity(evidence)
         if identity is None:
@@ -443,31 +482,43 @@ class PanoramaLocalizer:
         digest = hashlib.blake2b(
             memoryview(np.ascontiguousarray(image)), digest_size=16
         ).hexdigest()
-        key = (*identity, digest, matrix.tobytes())
-        if key in self.results and diagnostics is None:
-            return dict(self.results[key])
+        key = (*identity, image.shape, digest, matrix.tobytes())
+        if key in self.results:
+            result, record = self.results[key]
+            if diagnostics is not None:
+                diagnostics.update(deepcopy(record))
+            return deepcopy(result)
+        # Keep the evidence with the original decision, even for ordinary calls.
+        # Inspecting it must not repeat recognition or refresh a tracking anchor.
+        record: dict[str, Any] = {}
         # Measure a valid anchor before spending its freshness budget on full
         # recognition. This still fits original-reference pixels independently;
         # no previous orientation is reused or advanced through a frame chain.
-        result = self._tracked_locate(image, matrix, identity, diagnostics)
+        result = (self._tracked_locate(image, matrix, identity, record, other_capture=True)
+                  if reference_candidates else None)
         if result is None:
-            result = self._locate(image, matrix, diagnostics)
+            result = self._tracked_locate(image, matrix, identity, record)
+        if result is None:
+            result = self._locate(image, matrix, record)
             if result.get("reason") in {
                 "panorama_visual_support_insufficient", "panorama_visual_localization_failed"
             }:
                 # Preserve qualified native matches and never override ambiguity.
-                if diagnostics is not None:
-                    diagnostics["native_attempt"] = dict(diagnostics)
-                result = self._locate(image, matrix, diagnostics, normalize=True)
+                record["native_attempt"] = dict(record)
+                result = self._locate(image, matrix, record, normalize=True)
             if result.get("reason") in {
                 "panorama_visual_support_insufficient", "panorama_visual_localization_failed"
             } and getattr(self, "model_directory", None) is not None:
-                result = self._contextual_locate(image, matrix, identity, diagnostics)
+                result = self._contextual_locate(image, matrix, identity, record)
+            if result.get("status") == "localized" and record.get("photometry") in {"native", "local_contrast"}:
+                self._anchor_native(image, matrix, identity, record)
         result = {**result, "capture_evidence": dict(evidence), "image_digest": digest}
-        self.results[key] = result
+        self.results[key] = (result, record)
         while len(self.results) > 4:
             self.results.popitem(last=False)
-        return dict(result)
+        if diagnostics is not None:
+            diagnostics.update(deepcopy(record))
+        return deepcopy(result)
 
     def _locate(self, image: np.ndarray, to_source: np.ndarray | None = None,
                 diagnostics: dict[str, Any] | None = None, *, normalize: bool = False) -> dict[str, Any]:
@@ -534,15 +585,50 @@ class PanoramaLocalizer:
         )
         if previous is not None and all(item["id"] != previous["id"] for item in candidates):
             candidates.append(previous)
+        # A different decoder may have just recognized this same optical source.
+        # Reuse only its central photograph as a search hint, never its pixels,
+        # frame identity or pose. The new raster must qualify independently.
+        for anchor in reversed(getattr(self, "_anchors", {}).values()):
+            neighbors = anchor.get("neighbors", [])
+            if neighbors and time.monotonic() - anchor["seen"] <= 5:
+                centered = neighbors[0]
+                if all(item["id"] != centered["id"] for item in candidates):
+                    candidates.append(centered)
+                break
         return candidates
 
+    def _anchor_native(self, image: np.ndarray, matrix: np.ndarray, identity: tuple, record: dict) -> None:
+        """Reuse original photographic correspondences, never the fitted pose."""
+        from toposync.runtime.pipelines.image_geometry import source_pixels
+
+        gray = _gray(image)
+        references = {reference["id"]: reference for reference in self.references}
+        pairs = []
+        for candidate in record.get("candidates", []):
+            if not candidate.get("current") or candidate["reference_id"] not in references:
+                continue
+            pixels = source_pixels(np.asarray(candidate["current"]), np.linalg.inv(matrix))
+            pixels = (pixels + 0.5) * [gray.shape[1] / image.shape[1], gray.shape[0] / image.shape[0]] - 0.5
+            # Retain competing reference pairs, including failed fits. Tracking
+            # must independently reject ambiguity just as recognition does.
+            pairs.append((references[candidate["reference_id"]], pixels.astype(np.float32),
+                          np.asarray(candidate["reference"])))
+        if pairs:
+            key = (*identity[:2], matrix.tobytes(), image.shape)
+            self._anchors[key] = {"gray": gray.copy(), "pairs": pairs, "seen": time.monotonic(),
+                                  "sequence": identity[2], "native": True}
+            self._anchors.move_to_end(key)
+            while len(self._anchors) > 4:
+                self._anchors.popitem(last=False)
+
     def _tracked_locate(self, image: np.ndarray, matrix: np.ndarray, identity: tuple,
-                        diagnostics: dict | None) -> dict | None:
+                        diagnostics: dict | None, *, other_capture: bool = False) -> dict | None:
         """Track original-reference pairs, not a previously fitted orientation.
 
         The anchor raster and its reference pixels never advance through a chain
         of frames. Every new orientation must pass the original geometric gates.
-        A transport gap, epoch change or lost image support requires recognition.
+        Ordinary tracking cannot cross epochs. A source-qualified observer may
+        separately propose another full raster's reference pairs for a new fit.
         """
         if not getattr(self, "_anchors", None):
             return None
@@ -553,25 +639,74 @@ class PanoramaLocalizer:
             if started - old["seen"] > 5:
                 self._anchors.pop(old_key)
         anchor = self._anchors.get(key)
+        if other_capture:
+            # The caller has qualified the same source/artifact. Cross-decoder
+            # proposals additionally require complete, equally sampled optical
+            # rasters: equal aspect ratio alone would admit crops and flips.
+            def full_raster(shape: tuple, transform: np.ndarray) -> bool:
+                sx, sy = self.lens["width"] / shape[1], self.lens["height"] / shape[0]
+                expected = np.array([[sx, 0, (sx - 1) / 2],
+                                     [0, sy, (sy - 1) / 2], [0, 0, 1]])
+                return abs(sx / sy - 1) <= 0.005 and np.allclose(transform, expected, atol=1e-8, rtol=0)
+
+            if not full_raster(image.shape, matrix):
+                return None
+            candidate = next(((candidate_key, candidate_anchor)
+                              for candidate_key, candidate_anchor in reversed(self._anchors.items())
+                              if candidate_key[0] != identity[0]
+                              and candidate_anchor["gray"].shape == gray.shape
+                              and full_raster(candidate_key[3], np.frombuffer(candidate_key[2], dtype=matrix.dtype).reshape(3, 3))), None)
+            if candidate is None:
+                return None
+            key, anchor = candidate
         pairs = []
-        if anchor is not None and identity[2] > anchor["sequence"]:
-            for reference, original_points, reference_points in anchor["pairs"]:
-                measured, valid = track_image_points(anchor["gray"], gray, original_points, 0.75)
-                pairs.append((reference, measured[valid], reference_points[valid]))
-            result = self._fit_contextual(pairs, image, matrix, diagnostics, "tracked_correspondences")
+        if anchor is not None and (other_capture or identity[2] > anchor["sequence"]):
+            # All references share the same two rasters. Build their optical
+            # flow pyramids once per attempt, then keep each reference's pairs
+            # separate for fitting and ambiguity checks.
+            original_points = (np.concatenate([points for _, points, _ in anchor["pairs"]])
+                               if anchor["pairs"] else np.empty((0, 2), np.float32))
+            for large_displacement in (False, True):
+                pairs = []
+                # A fixed anchor can span several PT pulses. Retry one coarser
+                # level only after insufficient support, as before.
+                measured, valid = track_image_points(anchor["gray"], gray, original_points, 0.75,
+                                                      large_displacement=large_displacement)
+                offset = 0
+                for reference, points, reference_points in anchor["pairs"]:
+                    end = offset + len(points)
+                    selected = valid[offset:end]
+                    pairs.append((reference, measured[offset:end][selected], reference_points[selected]))
+                    offset = end
+                result = self._fit_contextual(pairs, image, matrix, diagnostics,
+                                             "cross_capture_correspondences" if other_capture else "tracked_correspondences")
+                if (result["status"] == "localized"
+                        or result.get("reason") == "panorama_visual_localization_ambiguous"):
+                    break
             if result["status"] == "localized":
-                anchor["seen"], anchor["sequence"] = started, identity[2]
+                anchor["seen"] = started
+                if not other_capture:
+                    anchor["sequence"] = identity[2]
                 anchor["neighbors"] = self._recognition_neighbors(result)
                 self._anchors.move_to_end(key)
                 return result
             if result.get("reason") == "panorama_visual_localization_ambiguous":
                 self._anchors.pop(key, None)
                 return result
+            if other_capture:
+                # No fitted pose or new raster becomes an anchor. Failed
+                # proposals leave ordinary recognition as the recovery path.
+                return None
+            if anchor.get("native"):
+                # A native anchor has a cheap full recognition fallback. Do not
+                # force learned matching or keep rejecting after visual loss.
+                return None
             # Old geometry selects photographs only. Fresh learned pairs must
             # independently requalify the current frame; no old pose is returned.
             if anchor.get("neighbors"):
                 result = self._contextual_locate(image, matrix, identity, diagnostics,
-                                                references=anchor["neighbors"])
+                                                references=anchor["neighbors"],
+                                                normalize=anchor.get("normalize", False))
                 if result.get("reason") == "panorama_visual_localization_ambiguous":
                     self._anchors.pop(key, None)
             # A rejected frame does not renew the anchor or authorize a pose.
@@ -582,13 +717,16 @@ class PanoramaLocalizer:
         return None
 
     def _contextual_locate(self, image: np.ndarray, matrix: np.ndarray, identity: tuple,
-                          diagnostics: dict | None, *, references: list[dict] | None = None) -> dict:
+                          diagnostics: dict | None, *, references: list[dict] | None = None,
+                          normalize: bool = False, retry_photometry: bool = True,
+                          previous_pairs: list | None = None) -> dict:
         from .panorama_features import ContextualMatcher
 
         gray = _gray(image)
         height, width = gray.shape
         key = (*identity[:2], matrix.tobytes(), image.shape)
         started = time.monotonic()
+        feature_key = "contextual_normalized_features" if normalize else "contextual_features"
         if started < self._matching_retry_after:
             return {"status": "unlocalized", "reason": "panorama_visual_localization_failed"}
         try:
@@ -598,24 +736,27 @@ class PanoramaLocalizer:
                 self._contextual_matcher = matching
                 for reference in self.references:
                     reference.pop("contextual_features", None)
+                    reference.pop("contextual_normalized_features", None)
                 self._anchors.clear()
-            current = matching.features(image)
+            current = matching.features(image, normalize=normalize)
             if references is None:
+                if normalize:
+                    gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
                 _, coarse = cv2.ORB_create(nfeatures=400).detectAndCompute(gray, None)
-                selected = self._rank_references(coarse)
+                selected = self._rank_references(coarse, "normalized_" if normalize else "")
             else:
                 selected = references
 
             def prepare_reference(reference: dict) -> None:
-                if "contextual_features" not in reference:
+                if feature_key not in reference:
                     encoded = Path(reference["path"]).read_bytes()
                     if hashlib.sha256(encoded).hexdigest() != reference["sha256"]:
                         raise ValueError("Reference photograph changed")
                     reference_image = cv2.imdecode(np.frombuffer(encoded, np.uint8), cv2.IMREAD_COLOR)
-                    reference["contextual_features"] = matching.features(reference_image)
+                    reference[feature_key] = matching.features(reference_image, normalize=normalize)
 
             def measure_reference(reference: dict) -> tuple:
-                a, b = matching.correspondences(current, reference["contextual_features"])
+                a, b = matching.correspondences(current, reference[feature_key])
                 overlay = stationary_overlay_points(a * ANALYSIS_WIDTH / width, b * ANALYSIS_WIDTH / width)
                 a, b = a[~overlay], b[~overlay]
                 b = (b + 0.5) * [self.lens["width"] / width, self.lens["height"] / height] - 0.5
@@ -623,15 +764,30 @@ class PanoramaLocalizer:
 
             for reference in selected:
                 prepare_reference(reference)
-            if references is not None:
-                # Bounded recovery, one frame in flight. Reference descriptors
-                # are prepared serially; workers only compare immutable arrays.
-                with ThreadPoolExecutor(max_workers=min(4, len(selected))) as workers:
-                    pairs = list(workers.map(measure_reference, selected))
-            else:
-                pairs = [measure_reference(reference) for reference in selected]
+            # Bounded recovery, one frame in flight. Reference descriptors
+            # are prepared serially; workers only compare immutable arrays.
+            # Global recovery retains the same candidates and ambiguity checks.
+            with ThreadPoolExecutor(max_workers=max(1, min(8, len(selected)))) as workers:
+                pairs = list(workers.map(measure_reference, selected))
             method = "local_contextual_correspondences" if references is not None else "contextual_correspondences"
+            if normalize:
+                method = "local_contrast_" + method
             result = self._fit_contextual(pairs, image, matrix, diagnostics, method)
+            if previous_pairs is not None and result.get("reason") in {
+                "panorama_visual_support_insufficient", "panorama_visual_localization_failed"
+            }:
+                # Complementary photometries can cover different parts of the
+                # same photograph. Merge proposals, not fitted inliers: the
+                # existing pixel grouping removes duplicates/conflicts and
+                # fixes the independent validation partition before fitting.
+                merged = {reference["id"]: (reference, a, b) for reference, a, b in previous_pairs}
+                for reference, a, b in pairs:
+                    previous = merged.get(reference["id"])
+                    merged[reference["id"]] = (reference, a, b) if previous is None else (
+                        reference, np.concatenate((previous[1], a)), np.concatenate((previous[2], b)))
+                pairs = list(merged.values())
+                method = "combined_photometry_contextual_correspondences"
+                result = self._fit_contextual(pairs, image, matrix, diagnostics, method)
             if result["status"] == "localized":
                 # Coarse appearance can select an oblique photograph at night.
                 # Once geometry is independently qualified, also measure the
@@ -655,11 +811,23 @@ class PanoramaLocalizer:
             self._matching_retry_after = time.monotonic() + 30
             return {"status": "unlocalized", "reason": "panorama_visual_localization_failed"}
         if result["status"] == "localized":
-            self._anchors[key] = {"gray": gray.copy(), "pairs": pairs, "seen": time.monotonic(),
-                                  "sequence": identity[2], "neighbors": neighbors}
+            # Tracking always measures the original raster. Photometric changes
+            # affect descriptor proposals only, never source pixel geometry.
+            self._anchors[key] = {"gray": _gray(image).copy(), "pairs": pairs, "seen": time.monotonic(),
+                                  "sequence": identity[2], "neighbors": neighbors, "normalize": normalize}
             self._anchors.move_to_end(key)
             while len(self._anchors) > 4:
                 self._anchors.popitem(last=False)
+        elif retry_photometry and result.get("reason") in {
+            "panorama_visual_support_insufficient", "panorama_visual_localization_failed"
+        }:
+            # Preserve qualified and ambiguous decisions. Both photographs and
+            # current image use the same contrast transform, with separate caches.
+            # A contrast-qualified anchor can return to original photometry;
+            # try each form once, including when recovery starts normalized.
+            return self._contextual_locate(image, matrix, identity, diagnostics,
+                                           references=references, normalize=not normalize,
+                                           retry_photometry=False, previous_pairs=pairs)
         return result
 
     def _fit_contextual(self, pairs: list, image: np.ndarray, matrix: np.ndarray,

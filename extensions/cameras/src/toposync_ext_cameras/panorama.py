@@ -151,6 +151,13 @@ class Create(_Input):
         return self
 
 
+class PrepareNativeReference(_Input):
+    preparation_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    source_id: str = Field(min_length=1, max_length=200)
+    artifact_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    revision: int = Field(ge=1)
+
+
 class Revision(_Input):
     revision: int = Field(ge=1)
 
@@ -323,6 +330,7 @@ class PanoramaService:
         self.busy: dict[str, str] = {}
         self.tasks: dict[str, asyncio.Task[Any]] = {}
         self.cancelled: set[str] = set()
+        self._native_preparations: dict[str, tuple[str, PrepareNativeReference, asyncio.Task]] = {}
         self.leases: dict[str, dict[str, Any]] = {}
         self.lock = asyncio.Lock()
         self._localizers: OrderedDict[tuple[str, str], Any] = OrderedDict()
@@ -1851,6 +1859,264 @@ class PanoramaService:
                 "geometry_digest": binding["geometry"]["model_digest"], "source_id": source_id, "revision": revision,
                 "_coverage_mask": localizer.coverage_mask}
 
+    def native_references(self, camera_id: str, source_id: str, binding: dict) -> list[dict]:
+        """Read separate native points only for this exact panorama geometry."""
+        from .panorama_navigation import MAXIMUM_LIVE_CENTER_ERROR_PIXELS
+        if not _IDENTIFIER.fullmatch(str(binding.get("id", ""))):
+            return []
+        directory = self.root.parent / "source-panorama" / "artifacts" / binding["id"] / "native-references"
+        references = []
+        for path in sorted(directory.glob("*/reference.json")):
+            record = self._read(path) or {}
+            if not _IDENTIFIER.fullmatch(path.parent.name):
+                continue
+            if (record.get("schema_version") != 1 or record.get("status") != "ready"
+                    or record.get("camera_id") != camera_id or record.get("source_id") != source_id
+                    or record.get("artifact_id") != binding["id"]
+                    or record.get("artifact_revision") != binding["revision"]
+                    or record.get("geometry") != binding["geometry"]
+                    or record.get("source_identity") != binding["source_identity"]
+                    or record.get("id") != path.parent.name):
+                continue
+            validation = record.get("validation") or {}
+            if not isinstance(validation, dict) or not isinstance(validation.get("measurement"), dict):
+                continue
+            error = (validation.get("measurement") or {}).get("center_error_pixels")
+            if (record.get("physical_state") != "stopped" or validation.get("state") != "observed"
+                    or type(error) not in (int, float) or not 0 <= error <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS):
+                continue
+            destination = record.get("destination")
+            if (not isinstance(destination, dict) or destination.get("role") != "reference"
+                    or destination.get("owner_id") != f"native-{record['id']}"
+                    or destination.get("preserve_zoom") is not True):
+                continue
+            try:
+                ray = np.asarray(record["ray"], dtype=float)
+                if ray.shape != (3,) or not np.isfinite(ray).all() or abs(np.linalg.norm(ray) - 1) > 1e-6:
+                    continue
+            except (KeyError, ValueError, TypeError):
+                continue
+            references.append(record)
+        return references
+
+    def invalidate_native_reference(self, record: dict, reason: str) -> None:
+        """A changed device point needs preparation again, not another blind recall."""
+        if not all(_IDENTIFIER.fullmatch(str(record.get(key, ""))) for key in ("id", "artifact_id")):
+            return
+        path = (self.root.parent / "source-panorama" / "artifacts" / record["artifact_id"]
+                / "native-references" / record["id"] / "reference.json")
+        current = self._read(path)
+        if current == record:
+            self._atomic(path, {**current, "status": "unverified", "invalidated_reason": reason,
+                                "revision": current["revision"] + 1})
+
+    async def list_native_references(self, request: Request, camera_id: str, source_id: str,
+                                     artifact_id: str, revision: int) -> dict:
+        sources = self.app.state.camera_source_panorama
+        sources._authorize(request, camera_id)
+        if not _IDENTIFIER.fullmatch(artifact_id) or revision < 1:
+            raise _error("native_reference_unavailable", "Referência panorâmica inválida.")
+        _, settings, source = await sources._context(camera_id, source_id, request)
+        binding, _ = self._source_artifact(settings, source, artifact_id, revision)
+        ready = {record["id"] for record in self.native_references(camera_id, source_id, binding)}
+        directory = self.root.parent / "source-panorama" / "artifacts" / artifact_id / "native-references"
+        records = []
+        for path in sorted(directory.glob("*/reference.json")):
+            record = self._read(path) or {}
+            identifier = path.parent.name
+            if (not _IDENTIFIER.fullmatch(identifier) or record.get("id") != identifier
+                    or record.get("camera_id") != camera_id or record.get("source_id") != source_id
+                    or record.get("artifact_id") != artifact_id or record.get("status") == "retired"):
+                continue
+            active = self._native_preparations.get(identifier)
+            running = (active is not None and active[0] == camera_id and active[1].source_id == source_id
+                       and active[1].artifact_id == artifact_id and active[1].revision == revision
+                       and not active[2].done())
+            status = ("stopping" if f"native-{identifier}" in self.cancelled else "preparing") if running else (
+                "ready" if identifier in ready else "unverified")
+            # Device tokens, native coordinates and ownership records remain
+            # private. A stale 'preparing' journal is never a running operation.
+            records.append({"id": identifier, "status": status, "created_at": record.get("created_at"),
+                            "physical_state": record.get("physical_state", "unknown"),
+                            "cleanup_confirmed": record.get("cleanup_confirmed") is True})
+        known = {record["id"] for record in records}
+        for identifier, (owner_camera, body, task) in self._native_preparations.items():
+            if (identifier not in known and owner_camera == camera_id and body.source_id == source_id
+                    and body.artifact_id == artifact_id and body.revision == revision and not task.done()):
+                records.append({"id": identifier,
+                                "status": "stopping" if f"native-{identifier}" in self.cancelled else "queued",
+                                "physical_state": "unknown", "cleanup_confirmed": False})
+        return {"references": records}
+
+    async def stop_native_reference(self, request: Request, camera_id: str, body: PrepareNativeReference) -> dict:
+        self.app.state.camera_source_panorama._authorize(request, camera_id, control=True, write=True)
+        active = self._native_preparations.get(body.preparation_id)
+        if active is None:
+            return {"id": body.preparation_id, "status": "not_running"}
+        if active[:2] != (camera_id, body):
+            raise _error("native_reference_unavailable", "Preparação indisponível.")
+        self.cancelled.add(f"native-{body.preparation_id}")
+        return {"id": body.preparation_id, "status": "stopping"}
+
+    async def prepare_native_reference(self, request: Request, camera_id: str, body: PrepareNativeReference) -> dict:
+        from .panorama_scan import _Stopped
+
+        self.app.state.camera_source_panorama._authorize(request, camera_id, control=True, write=True)
+        if body.preparation_id in self._native_preparations:
+            raise _error("native_reference_busy", "Esta preparação já está em andamento.")
+        key = f"native-{body.preparation_id}"
+        self._native_preparations[body.preparation_id] = (camera_id, body, asyncio.current_task())
+        try:
+            return await self._prepare_native_reference(request, camera_id, body)
+        except _Stopped:
+            return {"id": body.preparation_id, "status": "interrupted"}
+        except asyncio.CancelledError:
+            if key not in self.cancelled:
+                raise
+            return {"id": body.preparation_id, "status": "interrupted"}
+        finally:
+            self._native_preparations.pop(body.preparation_id, None)
+            self.cancelled.discard(key)
+
+    async def _prepare_native_reference(self, request: Request, camera_id: str, body: PrepareNativeReference) -> dict:
+        """Prepare the currently observed view; never navigate to a requested ray.
+
+        This belongs to panorama preparation. Live clicks only consume its
+        persisted result. Repeating an interrupted request cannot create another
+        device preset, and an unverified point never enters navigation.
+        """
+        from .panorama_capture import PanoramaCaptureError
+        from .panorama_navigation import VisualNavigator, DEFAULT_NAVIGATION_PROBE_SECONDS
+        from .panorama_scan import _Scan, _Stopped
+
+        sources = self.app.state.camera_source_panorama
+        sources._authorize(request, camera_id, control=True, write=True)
+        async with self.reference_coordinator.hold(
+                camera_id, body.source_id, cancelled=lambda: f"native-{body.preparation_id}" in self.cancelled):
+            if f"native-{body.preparation_id}" in self.cancelled:
+                raise _Stopped
+            _, settings, source = await sources._context(camera_id, body.source_id, request)
+            binding, _ = self._source_artifact(settings, source, body.artifact_id, body.revision)
+            directory = (self.root.parent / "source-panorama" / "artifacts" / body.artifact_id
+                         / "native-references" / body.preparation_id)
+            path = directory / "reference.json"
+            if path.exists():
+                if any(record["id"] == body.preparation_id for record in self.native_references(camera_id, body.source_id, binding)):
+                    return {"id": body.preparation_id, "status": "ready", "reused": True}
+                raise _error("native_reference_reconciliation_required", "Esta preparação exige reconciliação antes de outra tentativa.")
+            localizer = await self.reference_localizer(camera_id, body.source_id, binding)
+            record = {"schema_version": 1, "revision": 1, "id": body.preparation_id,
+                      "camera_id": camera_id, "source_id": body.source_id,
+                      "artifact_id": body.artifact_id, "artifact_revision": body.revision,
+                      "geometry": binding["geometry"], "source_identity": binding["source_identity"],
+                      "status": "preparing", "created_at": time.time()}
+            self._atomic(path, record)
+            camera = self.camera_factory(services=self.services, camera_id=camera_id, source_id=body.source_id,
+                                         settings={}, job_id=f"native-{body.preparation_id}", output_dir=directory)
+
+            async def progress(event: dict) -> None:
+                pass
+
+            scanner = _Scan(camera, directory, progress, lambda: f"native-{body.preparation_id}" in self.cancelled, {})
+            navigator = VisualNavigator(scanner, localizer, maximum_commands=2)
+            destination = None
+            try:
+                async with asyncio.timeout(60):
+                    scanner.capabilities = await camera.discover()
+                    automation = scanner.capabilities.get("motion_automation", {})
+                    if (any(value is True for value in automation.values()) or
+                            not (all(automation.get(key) is False for key in ("auto_tracking", "automatic_return"))
+                                 or settings.get("control", {}).get("automation_exclusive_control_confirmed") is True)):
+                        raise PanoramaCaptureError("motion_automation_unqualified")
+                    scanner._check()
+                    await camera.acquire()
+                    scanner.acquired = True
+                    scanner._check()
+                    if not await scanner._stop():
+                        raise PanoramaCaptureError("stop_unconfirmed")
+                    scanner.last_frame = await scanner._reference_window()
+                    scanner.physical_state = "stopped"
+                    located = await navigator.locate()
+                    ray = _rotation_basis(located["rotation_matrix"])[:, 2]
+
+                    async def persist_intent(pending: dict) -> None:
+                        record["destination"] = pending
+                        self._atomic(path, record)
+
+                    scanner._check()
+                    destination = await camera.save_return("reference", preserve_zoom=True, before_create=persist_intent)
+                    record.update(destination=destination, ray=ray.tolist(), rotation_matrix=located["rotation_matrix"])
+                    self._atomic(path, record)
+                    # A recall at the saved position proves no movement. Use
+                    # one bounded departure through the existing navigator,
+                    # then verify the native return with independent imagery.
+                    scanner.last_frame = await scanner._reference_window()
+                    await navigator._pulse("pan", DEFAULT_NAVIGATION_PROBE_SECONDS)
+                    await navigator.approach_reference(destination, ray)
+                    record["validation"] = navigator.trace[-1]
+                    _, current_camera, current_source = await sources._context(camera_id, body.source_id, request)
+                    current, _ = self._source_artifact(current_camera, current_source, body.artifact_id, body.revision)
+                    if current["geometry"] != binding["geometry"] or current["source_identity"] != binding["source_identity"]:
+                        raise PanoramaCaptureError("return_binding_changed")
+                    scanner._check()
+                    record["status"] = "ready"
+            except BaseException:
+                record["status"] = "unverified"
+                raise
+            finally:
+                try:
+                    if scanner.acquired:
+                        await scanner._confirm_stop(observation_timeout=10)
+                        if scanner.physical_state != "stopped":
+                            record["status"] = "unverified"
+                        if record["status"] != "ready":
+                            for saved in ([destination] if destination else camera.pending_return_destinations()):
+                                await camera.remove_return(saved)
+                            record["cleanup_confirmed"] = True
+                except BaseException:
+                    record["status"] = "unverified"
+                    raise
+                finally:
+                    record["physical_state"] = scanner.physical_state
+                    record["commands"] = navigator.commands
+                    try:
+                        self._atomic(path, record)
+                    finally:
+                        await camera.close()
+            if record["status"] != "ready":
+                raise PanoramaCaptureError("stop_unconfirmed")
+            return {"id": body.preparation_id, "status": "ready", "commands": navigator.commands}
+
+    async def remove_native_reference(self, request: Request, camera_id: str, body: PrepareNativeReference) -> dict:
+        """Retire only this preparation's device resource; keep its audit record."""
+        sources = self.app.state.camera_source_panorama
+        sources._authorize(request, camera_id, control=True, write=True)
+        async with self.reference_coordinator.hold(camera_id, body.source_id):
+            await sources._context(camera_id, body.source_id, request)
+            directory = (self.root.parent / "source-panorama" / "artifacts" / body.artifact_id
+                         / "native-references" / body.preparation_id)
+            path = directory / "reference.json"
+            record = self._read(path)
+            if (not record or record.get("camera_id") != camera_id or record.get("source_id") != body.source_id
+                    or record.get("artifact_id") != body.artifact_id or record.get("artifact_revision") != body.revision
+                    or record.get("id") != body.preparation_id):
+                raise _error("native_reference_unavailable", "Ponto de referência indisponível.")
+            if record.get("cleanup_confirmed") is True:
+                self._atomic(path, {**record, "status": "retired", "revision": record["revision"] + 1})
+                return {"id": body.preparation_id, "status": "retired"}
+            camera = self.camera_factory(services=self.services, camera_id=camera_id, source_id=body.source_id,
+                                         settings={}, job_id=f"native-{body.preparation_id}", output_dir=directory)
+            try:
+                await camera.discover()
+                await camera.acquire()
+                if record.get("destination"):
+                    await camera.remove_return(record["destination"])
+                self._atomic(path, {**record, "status": "retired", "cleanup_confirmed": True,
+                                    "revision": record["revision"] + 1})
+            finally:
+                await camera.close()
+            return {"id": body.preparation_id, "status": "retired"}
+
     async def reference_localizer(self, camera_id: str, source_id: str, binding: dict) -> Any:
         """Share immutable descriptors between calibration and live viewing."""
         key = (binding["id"], binding["geometry"]["model_digest"])
@@ -1881,6 +2147,22 @@ class PanoramaService:
                         raise ValueError("Reconstruction geometry changed")
                     prepared = PanoramaLocalizer(
                         model, photographs, model_directory=self.root.parent / "panorama-matching-models")
+                    # Optional causal records select only the direction of a
+                    # short live probe. Missing legacy diagnostics grant no gain
+                    # model and must not prevent viewing the reference.
+                    from .panorama_navigation import reference_probe_observations
+
+                    checkpoint = source_job.get("_checkpoint") or {}
+                    diagnostics = checkpoint.get("diagnostics") or {}
+                    attempts = list(diagnostics.get("attempts") or [])
+                    for photo in photographs:
+                        replay = photo.get("observation_replay_id")
+                        if isinstance(replay, str) and re.fullmatch(r"replay-accepted-[a-f0-9]{32}", replay):
+                            record = self._read(source_directory / f"{replay}.json") or {}
+                            if record.get("complete") is True and isinstance(record.get("attempt"), dict):
+                                attempts.append(record["attempt"])
+                    prepared.probe_observations = reference_probe_observations(
+                        model, photographs, checkpoint.get("region_commands", []), attempts)
                     coverage_path = SourcePanoramaService._private_path(directory, artifact["_files"]["coverage"])
                     prepared.coverage_mask = cv2.imread(str(coverage_path), cv2.IMREAD_GRAYSCALE)
                     if prepared.coverage_mask is None:
@@ -2010,6 +2292,14 @@ class PanoramaService:
         return {"deleted": True, "id": job_id}
 
     async def shutdown(self) -> None:
+        native_tasks = []
+        for identifier, (_, _, task) in list(self._native_preparations.items()):
+            self.cancelled.add(f"native-{identifier}")
+            native_tasks.append(task)
+        if native_tasks:
+            # Cooperative cancellation follows the same physical Stop/finally
+            # path as the button; never abandon cleanup during shutdown.
+            await asyncio.gather(*native_tasks, return_exceptions=True)
         for job_id in set(self.leases) | set(self._navigation_scanners):
             self.cancelled.add(job_id)
             await self._finish(self.jobs[job_id])
@@ -2052,6 +2342,29 @@ def register_panorama_routes(
     @app.post(_PREFIX + "/aim")
     async def aim(request: Request, camera_id: str, body: Aim) -> dict[str, Any]:
         return await service.aim(request, camera_id, body)
+
+    @app.post(_PREFIX + "/native-reference")
+    async def prepare_native_reference(request: Request, camera_id: str, body: PrepareNativeReference) -> dict:
+        from .panorama_capture import PanoramaCaptureError
+        try:
+            return await service.prepare_native_reference(request, camera_id, body)
+        except PanoramaCaptureError as error:
+            raise _error(error.code, "O ponto não foi confirmado. Confira o estado da preparação antes de tentar novamente.") from None
+        except TimeoutError:
+            raise _error("native_reference_timeout", "A preparação excedeu o prazo. Confira a parada e a limpeza do ponto.") from None
+
+    @app.get(_PREFIX + "/native-reference")
+    async def list_native_references(request: Request, camera_id: str, source_id: str,
+                                     artifact_id: str, revision: int) -> dict:
+        return await service.list_native_references(request, camera_id, source_id, artifact_id, revision)
+
+    @app.post(_PREFIX + "/native-reference/stop")
+    async def stop_native_reference(request: Request, camera_id: str, body: PrepareNativeReference) -> dict:
+        return await service.stop_native_reference(request, camera_id, body)
+
+    @app.delete(_PREFIX + "/native-reference")
+    async def remove_native_reference(request: Request, camera_id: str, body: PrepareNativeReference) -> dict:
+        return await service.remove_native_reference(request, camera_id, body)
 
     @app.post(_PREFIX + "/restore")
     async def restore(request: Request, camera_id: str, body: Restore) -> dict[str, Any]:

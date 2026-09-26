@@ -1,5 +1,14 @@
 import { useEffect, useRef } from 'react';
 import type { LiveViewFrame } from '@toposync/plugin-api';
+
+/** Create a decoder epoch even in browsers that do not implement Crypto.randomUUID. */
+export function createPresentedFrameEpoch(): string {
+    const browserCrypto = globalThis.crypto;
+    if (typeof browserCrypto?.randomUUID === 'function')
+        return browserCrypto.randomUUID();
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 /** Observe the existing decoder; this hook never opens a transport. */
 export function usePresentedFrame(video: React.RefObject<HTMLVideoElement>, enabled: boolean, identity: string, onFrame?: (frame: LiveViewFrame | null) => void) {
     const callback = useRef(onFrame);
@@ -11,7 +20,7 @@ export function usePresentedFrame(video: React.RefObject<HTMLVideoElement>, enab
             return;
         }
         let disposed = false, handle = 0, sequence = 0, lastTime = -1;
-        const epoch = crypto.randomUUID();
+        const epoch = createPresentedFrameEpoch();
         const frameCallback = 'requestVideoFrameCallback' in element;
         function deliver(_now: number, metadata?: VideoFrameCallbackMetadata) {
             if (disposed || !element)

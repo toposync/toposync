@@ -339,3 +339,6 @@ A receita de pessoa parada aceita uma referência visual opcional para avaliar o
 
 
 Na receita com orientação, a cena armazenada conserva os pixels até a avaliação. O fluxo dispensa o debounce de parada para que mudanças entre indício, negativo e indisponível cheguem à notificação; permanece a limitação de frequência do avaliador e da notificação. Evidências positivas anteriores ficam no histórico com imagem, captura e vínculo de sujeito, explicitamente sem certificar o estado atual. O fechamento não apaga esse registro nem o apresenta como uma nova avaliação.
+
+
+A receita de orientação limita as atualizações por sujeito a uma amostra a cada cinco segundos antes de preparar e armazenar a cena, alinhada ao intervalo do avaliador. Abertura e fechamento atravessam esse limitador. Eventos entre amostras não são avaliados; a receita não comprova orientação contínua nesse intervalo. A amostragem reduz gravações redundantes e não substitui medição de custo com resolução, duração e modelo reais.

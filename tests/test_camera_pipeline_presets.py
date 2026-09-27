@@ -1365,7 +1365,7 @@ def test_stopped_orientation_replay_persists_scene_and_updates_unknown(tmp_path,
     from toposync.runtime.notifications.store import NotificationStore
     from toposync.runtime.pipelines import Artifact
     from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
-    from toposync.runtime.pipelines.operators_core import DebounceRuntime
+    from toposync.runtime.pipelines.operators_core import ThrottleRuntime
     from toposync.runtime.pipelines.operators_sinks import StoreImagesRuntime, NotifyRuntime
     from toposync_ext_ai.pipelines.runtime import AiConditionFilterRuntime
     from toposync_ext_vision.processing.tasks import VisionCropObjectsRuntime
@@ -1404,34 +1404,36 @@ def test_stopped_orientation_replay_persists_scene_and_updates_unknown(tmp_path,
             "vision.crop_objects": lambda config: VisionCropObjectsRuntime(config),
             "core.store_images": lambda config: StoreImagesRuntime(config, dependencies),
             "ai.condition_filter": lambda config: AiConditionFilterRuntime(config, dependencies),
-            "core.debounce": lambda config: DebounceRuntime(config),
+            "core.throttle": lambda config: ThrottleRuntime(config),
             "core.notify": lambda config: NotifyRuntime(config, dependencies),
         }
-        ids = ["stationary_event", "orientation_scene", "orientation_store", "orientation", "notify_crop", "notify_store", "notify"]
+        ids = ["stationary_event", "orientation_cadence", "orientation_scene", "orientation_store", "orientation", "notify_crop", "notify_store", "notify"]
         assert "core.debounce" not in _operator_ids(pipeline)
         by_id = {node["id"]: node for node in pipeline["graph"]["nodes"]}
         chain = [(node_id, runtimes[by_id[node_id]["operator"]](by_id[node_id]["config"])) for node_id in ids]
 
         async def replay():
             statuses = []
-            for timestamp in (0, 1, 2, 3, 8, 13, 14):
+            for timestamp in (0, 1, 2, *[3 + index * .25 for index in range(44)], 14):
                 monkeypatch.setattr("time.monotonic", lambda: 100.0 + timestamp)
                 packet = Packet.create(stream_id="person", lifecycle=Lifecycle.CLOSE if timestamp == 14 else Lifecycle.UPDATE,
                     payload={"frame_ts": timestamp, "source_stream_id": "camera", "camera_id": "cam1",
                              "subject": {"id": "person-1", "type": "event", "category": "person", "bbox01": [.2, .2, .4, .8]},
                              "world": {"x": 1, "z": 1},
                              "velocity": {"valid": True, "stopped": timestamp > 0, "speed_mps": 0 if timestamp > 0 else 1},
-                             "capture_evidence": {"capture_instance": "decoder", "generation": 0, "sequence": timestamp + 1, "published_at": time.time()}},
+                             "capture_evidence": {"capture_instance": "decoder", "generation": 0, "sequence": int(timestamp * 4) + 1, "published_at": time.time()}},
                     artifacts={"main": Artifact(name="main", data=np.zeros((240, 320, 3), dtype=np.uint8))})
                 packets = [packet]
                 for node_id, runtime in chain:
                     context = SimpleNamespace(pipeline_name="orientation-replay", node_id=node_id, run_blocking=run_blocking,
                                               metrics=SimpleNamespace(error_count=0), logger=logging.getLogger("orientation-replay"))
                     packets = [out for incoming in packets for out in await runtime.process_packet(incoming, context)]
-                if timestamp >= 3:
+                if timestamp in (3, 8, 13, 14):
                     statuses.append(records[-1].payload["data"]["ai"]["condition_filter"]["status"])
             assert statuses == ["matched", "not_matched", "unknown", "closed"]
             assert len(calls) == 3
+            scenes = list((tmp_path / "files").glob("pipelines/orientation-replay/orientation_store__orientation_scene/**/*.webp"))
+            assert len(scenes) == 3
             assert len({record.id for record in records}) == 1
             historical = records[-1].payload["data"]["historical_evidence"]["ai"]["condition_filter"]["observation"]
             assert historical["current_state_verified"] is False

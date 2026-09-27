@@ -5725,6 +5725,8 @@ class CamerasExtension(BaseExtension):
                 orientation_nodes = []
                 if preset == "person_stopped" and orientation_reference:
                     orientation_nodes = [
+                        {"id": "orientation_cadence", "operator": "core.throttle", "config": {
+                            "interval_seconds": 5, "key_field": "payload.subject.id"}},
                         {"id": "orientation_scene", "operator": "vision.crop_objects", "config": {
                             "preserve_scene": True, "output_artifact_name": "orientation_scene",
                             "fallback_to_detections": False, "missing_policy": "pass_through"}},

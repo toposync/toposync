@@ -513,7 +513,8 @@ export type CameraRegionEditorProps = {
   values: { left: number; top: number; right: number; bottom: number };
   onChange: (values: CameraRegionEditorProps["values"]) => void;
   /** Null while loading, on missing evidence, or after changing the source. */
-  onSnapshotBindingChange: (binding: CameraSnapshotBinding | null) => void;
+  onSnapshotBindingChange?: (binding: CameraSnapshotBinding | null) => void;
+  onConfirm: (values: CameraRegionEditorProps["values"], binding: CameraSnapshotBinding) => void;
   onClose: () => void;
 };
 

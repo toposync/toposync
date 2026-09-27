@@ -1958,7 +1958,7 @@ function CamerasSettingsPanelContent({
       </SubModal>
 
       {activeCamera && (pipelinePresetOpen === "audio_anomaly" || pipelinePresetOpen === "cat_litter_use" || pipelinePresetOpen === "cat_drinking" || pipelinePresetOpen === "area_presence" || pipelinePresetOpen === "area_entry" || pipelinePresetOpen === "area_group_entry" || pipelinePresetOpen === "doorbell_visitor") ? (
-        <CameraObservationPresetModal open preset={pipelinePresetOpen} camera={activeCamera}
+        <CameraObservationPresetModal ui={ui} open preset={pipelinePresetOpen} camera={activeCamera}
           activeSourceId={activeSourceId} pipelineOverview={cameraPipelines} mappedCompositions={mappedCompositions}
           processingServers={processingServers} i18n={i18n} onClose={() => setPipelinePresetOpen(null)}
           onCreated={handlePipelineCreated} />

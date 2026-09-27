@@ -1,5 +1,11 @@
 export const catActivityTranslations = {
   en: {
+    "ext.cameras.cat.regionSelect": "Select observation region",
+    "ext.cameras.cat.regionChange": "Change observation region",
+    "ext.cameras.cat.regionRequired": "Include the whole container and the cat’s relevant body parts.",
+    "ext.cameras.cat.regionSelected": "Region selected.",
+    "ext.cameras.cat.regionUnavailable": "Region selection is unavailable for this camera.",
+    "ext.cameras.cat.regionFixed": "Requires a fixed view. Reconfirm the region after reconnection or moving the camera. Camera movement without telemetry is not detected.",
     "ext.cameras.area.categories": "Who to observe",
     "ext.cameras.area.category.person": "People",
     "ext.cameras.area.category.cat": "Cats",
@@ -42,6 +48,12 @@ export const catActivityTranslations = {
     "ext.cameras.cat.name": "Recipe name",
   },
   "pt-BR": {
+    "ext.cameras.cat.regionSelect": "Selecionar região de observação",
+    "ext.cameras.cat.regionChange": "Alterar região de observação",
+    "ext.cameras.cat.regionRequired": "Inclua o recipiente inteiro e as partes do gato necessárias para observar a ação.",
+    "ext.cameras.cat.regionSelected": "Região selecionada.",
+    "ext.cameras.cat.regionUnavailable": "Seleção de região indisponível para esta câmera.",
+    "ext.cameras.cat.regionFixed": "Requer enquadramento fixo. Reconfirme a região após reconexão ou mover a câmera. Movimento sem telemetria não é detectado.",
     "ext.cameras.area.categories": "Quem observar",
     "ext.cameras.area.category.person": "Pessoas",
     "ext.cameras.area.category.cat": "Gatos",

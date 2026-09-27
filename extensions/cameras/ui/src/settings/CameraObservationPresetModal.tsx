@@ -1,15 +1,21 @@
 import React, { useEffect, useState } from "react";
-import { requestJson, resolveToposyncUrl } from "@toposync/plugin-api";
+import { requestJson, resolveToposyncUrl, type HostUi } from "@toposync/plugin-api";
+import type { CameraPipelinePresetRequest } from "../types";
 import { createCameraPipelinePreset } from "../api/camerasApi";
 import { SubModal } from "../ui/SubModal";
 import type { CameraPipelinePresetModal } from "./CameraPipelinePresetModal";
 
 export function CameraObservationPresetModal({
-  open, preset, camera, activeSourceId, mappedCompositions, processingServers, i18n, onClose, onCreated,
-}: React.ComponentProps<typeof CameraPipelinePresetModal>): React.ReactElement | null {
+  open, preset, camera, activeSourceId, mappedCompositions, processingServers, i18n, onClose, onCreated, ui,
+}: React.ComponentProps<typeof CameraPipelinePresetModal> & { ui?: HostUi }): React.ReactElement | null {
   const { t } = i18n.useI18n();
   const sources = camera.sources.filter((source) => source.enabled && source.kind === "video");
   const [sourceId, setSourceId] = useState("");
+  const regionContext = JSON.stringify([camera.control, sources.find(source => source.id === sourceId)]);
+  const [region, setRegion] = useState<CameraPipelinePresetRequest["observation_region"]>();
+  const [regionEditorOpen, setRegionEditorOpen] = useState(false);
+  const [draftRegion, setDraftRegion] = useState({ left: 0, top: 0, right: 100, bottom: 100 });
+  useEffect(() => { setRegion(undefined); setRegionEditorOpen(false); }, [open, preset, camera.id, sourceId, regionContext]);
   const [name, setName] = useState("");
   const [areaId, setAreaId] = useState("");
   const [categories, setCategories] = useState<Array<"person" | "cat" | "dog">>(["person", "cat", "dog"]);
@@ -48,13 +54,17 @@ export function CameraObservationPresetModal({
   const selectableCategories = preset === "area_presence" || preset === "area_entry";
   const visitor = preset === "doorbell_visitor";
   const audio = preset === "audio_anomaly";
+  const cat = preset === "cat_litter_use" || preset === "cat_drinking";
+  const RegionEditor = ui?.CameraRegionEditor;
+  const regionAvailable = Boolean(RegionEditor) && sources.find(source => source.id === sourceId)?.origin?.has_ptz !== true;
+  const regionReady = Boolean(regionAvailable && region && region.snapshot_binding.camera_id === camera.id && region.snapshot_binding.source_id === sourceId);
   const selectedSignal = signals.find(item => JSON.stringify([item.topic, item.item_name]) === signalId);
   const area = visitor || preset === "area_presence" || preset === "area_entry" || preset === "area_group_entry";
   if (!open || (!area && !audio && preset !== "cat_litter_use" && preset !== "cat_drinking")) return null;
   const selectedArea = mappedCompositions.flatMap(composition => (composition.areas ?? []).map(item => ({...item, compositionId: composition.id}))).find(item => JSON.stringify([item.compositionId, item.id]) === areaId);
   const key = audio ? "ext.cameras.audioRecipe" : visitor ? "ext.cameras.visitor" : area ? `ext.cameras.area.${preset === "area_presence" ? "presence" : preset === "area_group_entry" ? "group" : "entry"}` : `ext.cameras.cat.${preset === "cat_litter_use" ? "litter" : "water"}`;
   async function save(): Promise<void> {
-    if (saving || !sourceId || !preset || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference) || (selectableCategories && categories.length === 0)) return;
+    if (saving || !sourceId || !preset || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference) || (selectableCategories && categories.length === 0) || (cat && !regionReady)) return;
     setSaving(true);
     setError(null);
     try {
@@ -73,6 +83,7 @@ export function CameraObservationPresetModal({
       }
       const result = await createCameraPipelinePreset(camera.id, {
         audio_baseline,
+        observation_region: cat ? region : undefined,
         retain_audio: audio && retainAudio,
         area_categories: selectableCategories ? categories : undefined,
         preset, source_id: sourceId, pipeline_name: name.trim(), enabled: false,
@@ -87,7 +98,7 @@ export function CameraObservationPresetModal({
       setSaving(false);
     }
   }
-  return <SubModal open={open} title={t(`${key}.title`)} onClose={() => { if (!saving) onClose(); }}
+  return <><SubModal open={open && !regionEditorOpen} title={t(`${key}.title`)} onClose={() => { if (!saving) onClose(); }}
     panelStyle={{ width: "min(540px, calc(100vw - 28px))" }}>
     <p>{t(`${key}.description`)}</p>
     <p>{t(audio ? "ext.cameras.audioRecipe.limits" : "ext.cameras.cat.preview")}</p>
@@ -106,6 +117,14 @@ export function CameraObservationPresetModal({
         {sources.map((source) => <option key={source.id} value={source.id}>{source.name || source.id}</option>)}
       </select>
     </div> : null}
+    {cat && <div className="field">
+      <button className="chipButton" type="button" disabled={saving || !sourceId || !regionAvailable}
+        onClick={() => { setDraftRegion(region ?? { left: 0, top: 0, right: 100, bottom: 100 }); setRegionEditorOpen(true); }}>
+        {t(regionReady ? "ext.cameras.cat.regionChange" : "ext.cameras.cat.regionSelect")}
+      </button>
+      <p role="status" className="settingsDescription">{t(!regionAvailable ? "ext.cameras.cat.regionUnavailable" : regionReady ? "ext.cameras.cat.regionSelected" : "ext.cameras.cat.regionRequired")}</p>
+      <p className="settingsDescription">{t("ext.cameras.cat.regionFixed")}</p>
+    </div>}
     {area ? <label className="field"><span className="label">{t("ext.cameras.area.required")}</span>
       <select className="input" value={areaId} onChange={event => setAreaId(event.target.value)} disabled={saving}>
         <option value="">{t("ext.cameras.area.select")}</option>
@@ -142,8 +161,15 @@ export function CameraObservationPresetModal({
     </details>
     <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.paused")}</p>
     {error ? <p role="alert" className="errorText">{error}</p> : null}
-    <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference) || (selectableCategories && categories.length === 0)} onClick={() => void save()}>
+    <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference) || (selectableCategories && categories.length === 0) || (cat && !regionReady)} onClick={() => void save()}>
       {t(saving ? "ext.cameras.cat.saving" : "ext.cameras.cat.save")}
     </button>
-  </SubModal>;
+  </SubModal>
+    {cat && regionEditorOpen && RegionEditor && <RegionEditor open cameraId={camera.id} sourceId={sourceId}
+      values={draftRegion} onChange={setDraftRegion} onClose={() => setRegionEditorOpen(false)}
+      onConfirm={(values, binding) => {
+        if (binding.camera_id !== camera.id || binding.source_id !== sourceId || values.left >= values.right || values.top >= values.bottom) return;
+        setRegion({ ...values, snapshot_binding: binding }); setRegionEditorOpen(false);
+      }} />}
+  </>;
 }

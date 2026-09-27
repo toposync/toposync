@@ -1866,6 +1866,13 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_draw.clear_region": "Clear region",
     "core.ui.pipelines.panels.image_draw.apply": "Apply",
     "core.ui.pipelines.panels.image_draw.close": "Close",
+    "core.ui.pipelines.panels.image_draw.region_confirm": "Use region",
+    "core.ui.pipelines.panels.image_draw.region_unavailable": "Image identity unavailable. Refresh to try again.",
+    "core.ui.pipelines.panels.image_draw.region_keyboard": "Use the corner buttons and arrow keys to resize. Shift moves faster.",
+    "core.ui.pipelines.panels.image_draw.corner_tl": "Top left corner",
+    "core.ui.pipelines.panels.image_draw.corner_tr": "Top right corner",
+    "core.ui.pipelines.panels.image_draw.corner_br": "Bottom right corner",
+    "core.ui.pipelines.panels.image_draw.corner_bl": "Bottom left corner",
     "core.ui.pipelines.panels.image_draw.crop_instructions": "Drag to draw a rectangle. Drag inside to move. Drag corners to resize.",
     "core.ui.pipelines.panels.image_draw.privacy_instructions":
       "Drag to draw the privacy region. Drag inside to move. Drag corners to resize. The preview follows the selected effect.",
@@ -4473,6 +4480,13 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_draw.clear_region": "Limpar região",
     "core.ui.pipelines.panels.image_draw.apply": "Aplicar",
     "core.ui.pipelines.panels.image_draw.close": "Fechar",
+    "core.ui.pipelines.panels.image_draw.region_confirm": "Usar região",
+    "core.ui.pipelines.panels.image_draw.region_unavailable": "Imagem sem identificação disponível. Atualize para tentar novamente.",
+    "core.ui.pipelines.panels.image_draw.region_keyboard": "Use os cantos e as setas do teclado para ajustar. Shift move mais rápido.",
+    "core.ui.pipelines.panels.image_draw.corner_tl": "Canto superior esquerdo",
+    "core.ui.pipelines.panels.image_draw.corner_tr": "Canto superior direito",
+    "core.ui.pipelines.panels.image_draw.corner_br": "Canto inferior direito",
+    "core.ui.pipelines.panels.image_draw.corner_bl": "Canto inferior esquerdo",
     "core.ui.pipelines.panels.image_draw.crop_instructions":
       "Arraste para desenhar um retângulo. Arraste dentro para mover. Arraste os cantos para redimensionar.",
     "core.ui.pipelines.panels.image_draw.privacy_instructions":

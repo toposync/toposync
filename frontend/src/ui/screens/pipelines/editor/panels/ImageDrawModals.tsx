@@ -250,6 +250,7 @@ type CropModalProps = {
   values: CropRectValues;
   onChange: (values: CropRectValues) => void;
   onSnapshotBindingChange?: (binding: CameraSnapshotBinding | null) => void;
+  onConfirm?: (values: CropRectValues, binding: CameraSnapshotBinding) => void;
 };
 
 export function CropRectangleDrawModal({
@@ -260,6 +261,7 @@ export function CropRectangleDrawModal({
   values,
   onChange,
   onSnapshotBindingChange,
+  onConfirm,
 }: CropModalProps): React.ReactElement | null {
   const { t } = i18n.useI18n();
   const snapshot = useSnapshotObjectUrl(open, snapshotSource);
@@ -366,7 +368,7 @@ export function CropRectangleDrawModal({
   );
 
   const onHandlePointerDown = useCallback(
-    (handle: "tl" | "tr" | "br" | "bl", event: React.PointerEvent<HTMLDivElement>) => {
+    (handle: "tl" | "tr" | "br" | "bl", event: React.PointerEvent<HTMLButtonElement>) => {
       if (!dims) return;
       const el = containerRef.current;
       if (!el) return;
@@ -449,7 +451,7 @@ export function CropRectangleDrawModal({
     return { left, top, width, height };
   }, [rect01]);
 
-  const canInteract = open && Boolean(snapshot.url) && Boolean(dims);
+  const canInteract = open && !snapshot.loading && loadedUrl === snapshot.url && Boolean(snapshot.url) && Boolean(dims);
   const snapshotError = snapshot.loading ? null : snapshot.error;
   const showNoSnapshot = !snapshot.loading && !snapshot.url && !snapshotError;
 
@@ -564,18 +566,34 @@ export function CropRectangleDrawModal({
                 const cursor =
                   handle === "tl" || handle === "br" ? "nwse-resize" : "nesw-resize";
                 return (
-                  <div
+                  <button
+                    type="button"
                     key={handle}
-                    role="presentation"
+                    aria-label={t(`core.ui.pipelines.panels.image_draw.corner_${handle}`)}
+                    disabled={!canInteract}
                     onPointerDown={(event) => onHandlePointerDown(handle, event)}
+                    onKeyDown={(event) => {
+                      const direction = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+                      if (!direction || !canInteract) return;
+                      event.preventDefault(); event.stopPropagation();
+                      const step = event.shiftKey ? 0.05 : 0.005;
+                      const next = { ...rect01 };
+                      const xKey = handle === "tl" || handle === "bl" ? "x1" : "x2";
+                      const yKey = handle === "tl" || handle === "tr" ? "y1" : "y2";
+                      next[xKey] = clamp01(next[xKey] + direction[0] * step);
+                      next[yKey] = clamp01(next[yKey] + direction[1] * step);
+                      const normalized = normalizeRect01(next);
+                      setRect01(normalized); commitRect(normalized);
+                    }}
                     style={{
                       position: "absolute",
                       left: `${x * 100}%`,
                       top: `${y * 100}%`,
                       transform: "translate(-50%,-50%)",
-                      width: 14,
-                      height: 14,
+                      width: 28,
+                      height: 28,
                       borderRadius: 4,
+                      padding: 0,
                       background: "rgba(56,189,248,0.95)",
                       border: "2px solid rgba(255,255,255,0.95)",
                       boxShadow: "0 10px 18px rgba(0,0,0,0.28)",
@@ -598,10 +616,13 @@ export function CropRectangleDrawModal({
 
       <div className="modalFooter" style={{ justifyContent: "space-between" }}>
         <div className="pipelinesHint">
-          {dims ? t("core.ui.pipelines.panels.image_draw.snapshot_meta", { w: dims.width, h: dims.height, units }) : ""}
+          {onConfirm ? (!snapshotBinding ? t("core.ui.pipelines.panels.image_draw.region_unavailable") : t("core.ui.pipelines.panels.image_draw.region_keyboard"))
+            : dims ? t("core.ui.pipelines.panels.image_draw.snapshot_meta", { w: dims.width, h: dims.height, units }) : ""}
         </div>
-        <button className="primaryButton" type="button" onClick={onClose}>
-          {t("core.ui.pipelines.panels.image_draw.close")}
+        <button className="primaryButton" type="button"
+          disabled={Boolean(onConfirm) && (!snapshotBinding || !dims || rect01.x1 >= rect01.x2 || rect01.y1 >= rect01.y2)}
+          onClick={() => { if (onConfirm && snapshotBinding && dims) onConfirm(valuesFromRect01(rect01, units, dims), snapshotBinding); else if (!onConfirm) onClose(); }}>
+          {t(onConfirm ? "core.ui.pipelines.panels.image_draw.region_confirm" : "core.ui.pipelines.panels.image_draw.close")}
         </button>
       </div>
     </Modal>

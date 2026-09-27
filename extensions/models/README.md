@@ -67,3 +67,9 @@ geometry counts and `generated_approximation`, with `metric_reconstruction=false
 Authorization is checked again before publication. The generated Z-up mesh is
 converted to GLTF Y-up; the existing importer supplies scale/floor placement.
 This does not establish real dimensions or observed geometry behind the object.
+
+### Generate through the model tool
+
+Select **3D model**, choose a placement point, then select one PNG/WebP object image with a transparent background (up to 8 MiB). The same tool imports GLB/GLTF and their assets when a model file is selected. Generation uses the optional local runtime above; missing runtime, opaque images, busy workers and failures have explicit messages. The progress dialog supports keyboard access, Cancel and Escape.
+
+Generated elements retain the generation provenance and show an approximation notice when edited. Enter a known height to scale the object; generated geometry does not supply a measured reference height. Preview, placement, floor height and advanced scale reuse the importer. Ordinary opaque photos and automatic runtime installation are not yet supported.

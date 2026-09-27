@@ -188,6 +188,7 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
   const previewFilename = readString((element.props as any).preview, "");
   const size = readVector3((element.props as any).size, { x: 1, y: 1, z: 1 });
   const scale = readScale((element.props as any).scale, 1);
+  const generated = (element.props as any).generation?.kind === "generated_approximation";
   const animationEnabled = readBoolean((element.props as any).animation_enabled, false);
   const heightMeters = readNumber((element.position as any).y, 0);
 
@@ -202,6 +203,7 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
 
   return (
     <div>
+      {generated ? <p>{t("ext.models.editor.generated")}</p> : null}
       <div className="field">
         <div className="label">{t("core.element_editor.name")}</div>
         <input className="input" value={element.name} onChange={(e) => update({ name: e.target.value })} />
@@ -233,13 +235,14 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
           max={size.y * MAXIMUM_MODEL_SCALE}
           step="any"
           key={scale}
-          defaultValue={Number(finalSize.y.toPrecision(8))}
+          defaultValue={generated && !(element.props as any).reference_height ? "" : Number(finalSize.y.toPrecision(8))}
           aria-invalid={heightError}
           aria-describedby="model-height-hint"
           onBlur={(event) => {
+            if (generated && !event.target.value.trim()) { setHeightError(false); return; }
             const next = scaleFromKnownHeight(size.y, Number(event.target.value));
             setHeightError(next === null);
-            if (next !== null) update({ props: { scale: next } });
+            if (next !== null) update({ props: { scale: next, reference_height: Number(event.target.value) } });
           }}
         />
         <p id="model-height-hint" role={heightError ? "alert" : undefined}>
@@ -263,7 +266,7 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
             onChange={(e) => {
               const next = Number.parseFloat(e.target.value);
               if (!Number.isFinite(next)) return;
-              update({ props: { scale: clamp(next, MINIMUM_MODEL_SCALE, MAXIMUM_MODEL_SCALE) } });
+              update({ props: { scale: clamp(next, MINIMUM_MODEL_SCALE, MAXIMUM_MODEL_SCALE), reference_height: null } });
             }}
           />
         </div>

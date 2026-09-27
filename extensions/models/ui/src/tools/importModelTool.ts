@@ -1,4 +1,6 @@
-import { resolveToposyncUrl, type EditorTool, type HostI18n, type PlanePoint } from "@toposync/plugin-api";
+import { requestForm, resolveToposyncUrl, type EditorTool, type HostI18n, type PlanePoint } from "@toposync/plugin-api";
+
+import type { UploadFileResponse } from "../types";
 
 import { MAXIMUM_MODEL_BYTES } from "../validation";
 import { uploadToFilesDir } from "../api/filesApi";
@@ -16,7 +18,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
   return {
     id: IMPORT_MODEL_TOOL_ID,
     name: { key: "ext.models.tool.import", fallback: "3D model" },
-    description: { key: "ext.models.tool.hint", fallback: "Click to upload and place a model." },
+    description: { key: "ext.models.tool.hint", fallback: "Click to import a model or generate one from an object image." },
     icon: "cube",
     group: TOOL_GROUP_REFERENCES,
     order: 30,
@@ -34,7 +36,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
       let pendingPlacementPoint: PlanePoint | null = null;
       let isPointerArmed = false;
       let pointerDownScreen: { x: number; y: number } | null = null;
-      let activityState: "idle" | "uploading" | "processing" = "idle";
+      let activityState: "idle" | "uploading" | "generating" | "processing" = "idle";
       let lastError: string | null = null;
       let operation: AbortController | null = null;
       let disposed = false;
@@ -42,25 +44,27 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
 
       const t = i18n.t;
 
+      const progress = document.createElement("dialog");
+      progress.setAttribute("aria-label", t("ext.models.tool.import"));
+      progress.style.cssText = "width:min(420px,calc(100vw - 32px));box-sizing:border-box;padding:24px;border:1px solid var(--color-border-strong,#64748b);border-radius:18px;background:var(--color-surface-solid,#fff);color:var(--color-text-primary,#101418)";
+      const status = document.createElement("p");
+      status.setAttribute("role", "status");
+      status.setAttribute("aria-live", "polite");
+      const dismiss = document.createElement("button");
+      dismiss.className = "chipButton";
+      dismiss.style.minHeight = "44px";
+      dismiss.addEventListener("click", cancel);
+      progress.addEventListener("cancel", (event) => { event.preventDefault(); cancel(); });
+      progress.append(status, dismiss);
+      document.body.appendChild(progress);
+
       function invalidateViewport() {
+        const message = lastError ?? (activityState === "idle" ? "" : t(`ext.models.editor.${activityState}`));
+        status.textContent = message;
+        dismiss.textContent = t(lastError ? "ext.models.editor.close" : "ext.models.editor.cancel");
+        if (message && !progress.open && !disposed) progress.showModal();
+        if (!message && progress.open) progress.close();
         lastCanvas?.dispatchEvent(new Event("toposync:invalidate"));
-      }
-
-      debugLog("[models:tool] session created");
-
-      function drawPill(canvas: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) {
-        const radius = Math.min(999, Math.min(width, height) / 2);
-        canvas.beginPath();
-        canvas.moveTo(x + radius, y);
-        canvas.lineTo(x + width - radius, y);
-        canvas.quadraticCurveTo(x + width, y, x + width, y + radius);
-        canvas.lineTo(x + width, y + height - radius);
-        canvas.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-        canvas.lineTo(x + radius, y + height);
-        canvas.quadraticCurveTo(x, y + height, x, y + height - radius);
-        canvas.lineTo(x, y + radius);
-        canvas.quadraticCurveTo(x, y, x + radius, y);
-        canvas.closePath();
       }
 
       function cancel() {
@@ -81,7 +85,9 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
         const entryFile =
           files.find((file) => file.name.toLowerCase().endsWith(".glb")) ??
           files.find((file) => file.name.toLowerCase().endsWith(".gltf"));
-        if (!entryFile) throw new Error(t("ext.models.error.pick_entry"));
+        const imageFile = !entryFile && files.length === 1 && /\.(png|jpe?g|webp)$/i.test(files[0].name) ? files[0] : null;
+        if (!entryFile && !imageFile) throw new Error(t("ext.models.error.pick_entry"));
+        if (imageFile && imageFile.size > 8 * 1024 ** 2) throw new Error(t("ext.models.error.generation_image_too_large"));
         if (!placement) throw new Error("No placement point selected");
         signal.throwIfAborted();
 
@@ -90,19 +96,34 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
           files.map((file) => ({ name: file.name, size: file.size, type: file.type })),
         );
 
-        activityState = "uploading";
+        activityState = imageFile ? "generating" : "uploading";
         lastError = null;
         invalidateViewport();
 
-        debugLog("[models:tool] uploading entry", { name: entryFile.name });
-        const entryUpload = await uploadToFilesDir(entryFile, { filename: entryFile.name, signal });
+        let generation: Record<string, unknown> | undefined;
+        let entryUpload: UploadFileResponse;
+        if (imageFile) {
+          const form = new FormData();
+          form.append("file", imageFile);
+          try {
+            const result = await requestForm<UploadFileResponse & { generation: Record<string, unknown> }>("/api/models/generate", form, { signal });
+            entryUpload = result;
+            generation = result.generation;
+          } catch (error) {
+            signal.throwIfAborted();
+            const code = error instanceof Error ? error.message : "";
+            const known = ["local_generation_not_installed", "local_generation_busy", "isolated_object_image_required", "invalid_generation_image", "generation_image_too_large", "generation_timeout", "generation_memory_limit"];
+            throw new Error(t(`ext.models.error.${known.includes(code) ? code : "local_generation_failed"}`));
+          }
+        } else {
+          entryUpload = await uploadToFilesDir(entryFile!, { filename: entryFile!.name, signal });
+        }
         signal.throwIfAborted();
         const dir = entryUpload.dir;
         const entryName = entryUpload.filename;
 
-        for (const file of files) {
+        if (entryFile) for (const file of files) {
           if (file === entryFile) continue;
-          debugLog("[models:tool] uploading asset", { dir, name: file.name });
           await uploadToFilesDir(file, { dir, filename: file.name, signal });
           signal.throwIfAborted();
         }
@@ -120,7 +141,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
         signal.throwIfAborted();
         debugLog("[models:tool] preview uploaded", { url: previewUpload.url });
 
-        const inferredName = stripFileExtension(entryName);
+        const inferredName = stripFileExtension(imageFile?.name ?? entryName);
         const id = toolContext.createElement(MODEL_ELEMENT_TYPE_ID, {
           name: inferredName,
           position: { x: placement.x, y: 0, z: placement.z },
@@ -133,8 +154,10 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
             min_y: preview.minY,
             scale: suggestInitialScale(preview.size),
             animation_enabled: false,
+            ...(generation ? { generation } : {}),
           },
         });
+        progress.close();
         if (id) toolContext.openEditor(id);
         debugLog("[models:tool] element created", { id });
       }
@@ -217,43 +240,8 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
             pointerDownScreen = null;
           }
         },
-        renderOverlay2D: ({ ctx: canvas, viewport }) => {
+        renderOverlay2D: ({ viewport }) => {
           lastCanvas = viewport.canvas;
-          if (activityState === "idle" && !lastError) return;
-
-          const message =
-            activityState === "uploading"
-              ? t("ext.models.editor.uploading")
-              : activityState === "processing"
-                ? t("ext.models.editor.processing")
-                : lastError
-                  ? `${t("ext.models.editor.failed")}: ${lastError}`
-                  : "";
-
-          if (!message) return;
-
-          canvas.save();
-          canvas.font = "12px ui-sans-serif, system-ui";
-          canvas.textBaseline = "top";
-
-          const padding = 10;
-          const viewportWidth = viewport.width;
-          const textWidth = canvas.measureText(message).width;
-          const boxWidth = Math.min(viewportWidth - 24, textWidth + padding * 2);
-          const x0 = (viewportWidth - boxWidth) / 2;
-          const y0 = 14;
-
-          canvas.fillStyle = "rgba(8,12,26,0.82)";
-          canvas.strokeStyle = "rgba(255,255,255,0.14)";
-          canvas.lineWidth = 1;
-          drawPill(canvas, x0, y0, boxWidth, 28);
-          canvas.fill();
-          canvas.stroke();
-
-          canvas.fillStyle = "rgba(230,232,242,0.92)";
-          canvas.fillText(message, x0 + padding, y0 + 8);
-
-          canvas.restore();
         },
         getCursor: () => (activityState === "idle" ? "copy" : "wait"),
         dispose: () => {
@@ -261,6 +249,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
           disposed = true;
           cancel();
           input.remove();
+          progress.remove();
         },
       };
     },

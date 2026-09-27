@@ -115,6 +115,27 @@ def validate_proposal(before: Pipeline, raw: dict[str, Any], compiler: Any) -> P
     return after
 
 
+async def local_profiles(router: AiRouter) -> list[dict[str, str]]:
+    settings = await router.settings()
+    available_profiles: list[dict[str, str]] = []
+    installed_by_host: dict[str, set[str]] = {}
+    for profile in settings.profiles:
+        provider = settings.provider_by_id(profile.provider_id)
+        if (not profile.enabled or provider is None or not provider.enabled
+                or provider.kind != "ollama" or not provider.local
+                or urlparse(provider.host).hostname not in {"localhost", "127.0.0.1", "::1"}):
+            continue
+        if provider.host not in installed_by_host:
+            try:
+                models = await router.list_ollama_models(host=provider.host)
+                installed_by_host[provider.host] = {str(item.get("name") or item.get("model") or "") for item in models}
+            except Exception:
+                installed_by_host[provider.host] = set()
+        if profile.model in installed_by_host[provider.host]:
+            available_profiles.append({"id": profile.id, "name": profile.name, "model": profile.model})
+    return available_profiles
+
+
 def install_assistant_routes(app: FastAPI, router: AiRouter) -> None:
     # ponytail: 128 propostas temporárias; persistir se desfazer após reinício for necessário.
     proposals: dict[str, tuple[float, Pipeline | None, Pipeline | None, dict | None]] = {}
@@ -134,23 +155,7 @@ def install_assistant_routes(app: FastAPI, router: AiRouter) -> None:
     @app.get("/api/ai/assistant/pipelines")
     async def pipelines(request: Request) -> dict[str, Any]:
         require(request, "core:pipelines:read")
-        settings = await router.settings()
-        available_profiles: list[dict[str, str]] = []
-        installed_by_host: dict[str, set[str]] = {}
-        for profile in settings.profiles:
-            provider = settings.provider_by_id(profile.provider_id)
-            if (not profile.enabled or provider is None or not provider.enabled
-                    or provider.kind != "ollama" or not provider.local
-                    or urlparse(provider.host).hostname not in {"localhost", "127.0.0.1", "::1"}):
-                continue
-            if provider.host not in installed_by_host:
-                try:
-                    models = await router.list_ollama_models(host=provider.host)
-                    installed_by_host[provider.host] = {str(item.get("name") or item.get("model") or "") for item in models}
-                except Exception:
-                    installed_by_host[provider.host] = set()
-            if profile.model in installed_by_host[provider.host]:
-                available_profiles.append({"id": profile.id, "name": profile.name, "model": profile.model})
+        available_profiles = await local_profiles(router)
         return {
             "pipelines": [p.name for p in await app.state.config_store.list_pipelines()
                           if not p.enabled and p.editor_mode != "python"],

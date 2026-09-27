@@ -111,3 +111,29 @@ no servidor local. Seleção livre de operadores/modelos/servidores exige o edit
 modelo pronto impede a proposta. Os ensaios não certificam qualidade geral do modelo nem
 respostas narrativas sobre o histórico. Propostas textuais Ollama usam `think: false` para
 evitar geração interna desnecessária; o prazo total continua limitado a 120 segundos.
+
+
+## Respostas extrativas com fontes
+
+`POST /api/ai/history/answer` recebe `question` e `profile_id` opcional. Usa a
+busca existente, preserva seus limites e pede ao perfil Ollama local que selecione
+campos completos de título/descrição. Referência inexistente, texto modificado,
+recorte parcial de frase e campos adicionais são rejeitados. O servidor relê as
+fontes após a inferência; alterações ou exclusões invalidam a resposta. Conteúdo
+dos registros não chama serviços de configuração. `GET /api/ai/history/profiles`
+reutiliza descoberta dos modelos instalados sob `core:notifications:read`, sem
+exigir permissão de consultar pipelines.
+
+A interface apresenta os campos como citações, liga cada um ao registro original
+e conserva horário de criação e imagem disponível. Durações só aparecem quando
+já descritas na fonte; não são inferidas entre notificações. Campos maiores que
+2500 caracteres ficam fora da seleção do modelo, mas o registro original continua
+consultável. São até dez registros recuperados, sem certificação de cobertura,
+identidade, relevância ou veracidade do conteúdo original. Não há análise visual
+na resposta textual. Ausência, perfil indisponível ou seleção inválida mantêm um
+estado explícito e acesso às fontes. Uma pergunta sobre a tarde sem hoje/ontem
+pede definição de dia. A compreensão temporal permanece no vocabulário finito.
+
+Essa síntese extrativa não equivale a uma narrativa livre validada sobre a rotina:
+precisão de seleção, casos completos de gatos/visitantes e cobertura representativa
+precisam de avaliação independente com o modelo real.

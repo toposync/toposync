@@ -308,6 +308,10 @@ async def setup(self, app, *, bus, services) -> None:
         )
 ```
 
+Registration is also available through `await services.call("pipelines.register_operator", **options)` during setup. The service accepts the same options as the registry.
+
+If an operator divides an input stream only in some configurations, declare the static `split_stream` capability and supply `split_stream_when`. For example, with a boolean `split` configuration defaulting to `False`, use `split_stream_when=lambda config: config["split"]`. The synchronous predicate receives normalized node configuration with registered defaults and must describe the actual runtime behavior. Keep it deterministic and free of side effects. Diagnostics, runtime channel selection and Python DSL queue defaults use this decision. Without the callback, the static capability applies to every configuration; the callback cannot grant a capability that was not declared. Authorization and placement capabilities remain static.
+
 For deeper pipeline runtime rules, see [Pipelines](./pipelines.mdx).
 
 ## Packaging outside the monorepo {/* #packaging-outside-the-monorepo */}

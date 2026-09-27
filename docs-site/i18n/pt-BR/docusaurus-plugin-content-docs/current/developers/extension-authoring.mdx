@@ -309,6 +309,10 @@ async def setup(self, app, *, bus, services) -> None:
         )
 ```
 
+O registro também está disponível por `await services.call("pipelines.register_operator", **options)` durante o setup. O serviço aceita as mesmas opções do registro.
+
+Se o operador divide um fluxo de entrada apenas em algumas configurações, declare a capacidade estática `split_stream` e forneça `split_stream_when`. Por exemplo, para uma configuração booleana `split` com padrão `False`, use `split_stream_when=lambda config: config["split"]`. O predicado síncrono recebe a configuração normalizada do nó com os padrões registrados e deve descrever o comportamento real do runtime. Mantenha-o determinístico e sem efeitos colaterais. Diagnósticos, seleção de canais do runtime e padrões de fila do DSL Python usam essa decisão. Sem callback, a capacidade estática vale para todas as configurações; o callback não concede uma capacidade que não foi declarada. Capacidades de autorização e posicionamento permanecem estáticas.
+
 Para regras mais profundas do runtime de pipelines, veja [Pipelines](./pipelines.mdx).
 
 ## Empacotamento fora do monorepo {/* #packaging-outside-the-monorepo */}

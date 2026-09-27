@@ -5,6 +5,9 @@ import asyncio
 import pytest
 
 from toposync.runtime.config_store import Pipeline
+from toposync.runtime.notifications.store import NotificationStore
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
 from toposync.runtime.pipelines import Lifecycle, OperatorRegistry, Packet
 from toposync.runtime.pipelines.compiler import PipelineGraphCompiler
 from toposync_ext_vision.pipelines.operators import register_vision_pipeline_operators
@@ -90,6 +93,74 @@ def _near_members(*, distance: float = 2.0, world: bool = True) -> list[dict[str
     ]
 
 
+@pytest.mark.parametrize("changed_at", [2.0, 4.0, 5.0])
+def test_replacement_person_never_inherits_previous_dwell_or_occurrence(
+    monkeypatch, changed_at, tmp_path
+):
+    clock = [0.0]
+    monkeypatch.setattr(
+        "toposync_ext_vision.processing.tasks.spatial_relation_event.time.monotonic",
+        lambda: clock[0],
+    )
+    runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 4.0})
+
+    async def scenario():
+        events = []
+        assert await runtime.process_packet(_group_packet(members=_near_members()), None) == []
+        previous_id = None
+        if changed_at > 4:
+            clock[0] = 4.0
+            events.extend(
+                await runtime.process_packet(_group_packet(members=_near_members()), None)
+            )
+            previous_id = events[0].stream_id
+        clock[0] = changed_at
+        replacement = _near_members()
+        replacement[0]["event_id"] = "evt:person:2"
+        outputs = await runtime.process_packet(_group_packet(members=replacement), None)
+        events.extend(outputs)
+        assert [item.lifecycle for item in outputs] == ([Lifecycle.CLOSE] if previous_id else [])
+        if outputs:
+            assert outputs[0].stream_id == previous_id
+            assert (
+                outputs[0].payload["spatial_relation_event"]["matched_member_event_ids"][0]
+                == "evt:person:1"
+            )
+        clock[0] += 3.9
+        assert await runtime.process_packet(_group_packet(members=replacement), None) == []
+        clock[0] = changed_at + 4
+        outputs = await runtime.process_packet(_group_packet(members=replacement), None)
+        assert [item.lifecycle for item in outputs] == [Lifecycle.OPEN]
+        assert outputs[0].stream_id != previous_id
+        assert (
+            outputs[0].payload["spatial_relation_event"]["matched_member_event_ids"][0]
+            == "evt:person:2"
+        )
+        assert outputs[0].payload["spatial_relation_event"]["dwell_seconds"] == 4
+        events.extend(outputs)
+        store = NotificationStore(tmp_path / "notifications.sqlite3")
+        records = []
+
+        async def upsert(**values):
+            records.append(store.upsert(**values))
+
+        sink = NotifyRuntime(
+            {"dedupe_by_occurrence": True, "update_interval_seconds": 0},
+            PipelineRuntimeDependencies(notifications_upsert=upsert),
+        )
+        context = type("Context", (), {"pipeline_name": "person-vehicle", "node_id": "notify"})()
+        for event in [*events, outputs[0]]:
+            await sink.process_packet(event, context)
+        expected_count = 2 if previous_id else 1
+        assert sum(created for _, created in records) == expected_count
+        assert len({record.id for record, _ in records}) == expected_count
+        if previous_id:
+            assert records[1][0].payload["lifecycle"] == "close"
+            assert records[1][0].id != records[-1][0].id
+
+    asyncio.run(scenario())
+
+
 def test_spatial_relation_config_normalizes_roles_and_validates_hysteresis() -> None:
     config = VisionSpatialRelationEventConfig.model_validate(
         {
@@ -138,6 +209,41 @@ def test_spatial_relation_config_normalizes_roles_and_validates_hysteresis() -> 
         }
     )
     assert boundary.close_grace_seconds == boundary.stale_timeout_seconds
+
+
+def test_existing_pair_survives_a_closer_person_without_inheriting_exit_threshold(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(
+        "toposync_ext_vision.processing.tasks.spatial_relation_event.time.monotonic",
+        lambda: clock[0],
+    )
+    runtime = VisionSpatialRelationEventRuntime(
+        {"dwell_seconds": 0.0, "update_interval_seconds": 0.0}
+    )
+
+    async def scenario():
+        opened = (await runtime.process_packet(_group_packet(members=_near_members()), None))[0]
+        members = _near_members()
+        neighbor = _member("evt:person:2", "person", bbox01=(0.2, 0.1, 0.3, 0.7), world=(1, 0))
+        members.append(neighbor)
+        clock[0] = 1
+        update = (await runtime.process_packet(_group_packet(members=members), None))[0]
+        assert update.lifecycle == Lifecycle.UPDATE and update.stream_id == opened.stream_id
+        assert (
+            update.payload["spatial_relation_event"]["matched_member_event_ids"][0]
+            == "evt:person:1"
+        )
+        # A replacement inside the exit band but outside the entry band cannot open.
+        replacement = _near_members(distance=3.5)
+        replacement[0]["event_id"] = "evt:person:2"
+        clock[0] = 2
+        outputs = await runtime.process_packet(_group_packet(members=replacement), None)
+        assert [item.lifecycle for item in outputs] == [Lifecycle.CLOSE]
+        assert outputs[0].stream_id == opened.stream_id
+        clock[0] = 3
+        assert await runtime.process_packet(_group_packet(members=replacement), None) == []
+
+    asyncio.run(scenario())
 
 
 def test_spatial_relation_requires_both_roles_and_continuous_dwell(
@@ -290,7 +396,8 @@ def test_spatial_relation_resets_dwell_after_relation_break(
         assert runtime._flush_due(now_monotonic=clock[0]) == []
 
         clock[0] = 7.0
-        opened = runtime._flush_due(now_monotonic=clock[0])
+        assert runtime._flush_due(now_monotonic=clock[0]) == []
+        opened = await runtime.process_packet(_group_packet(members=_near_members()), None)
         assert [packet.lifecycle for packet in opened] == [Lifecycle.OPEN]
 
     asyncio.run(scenario())

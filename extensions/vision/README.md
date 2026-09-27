@@ -7,6 +7,7 @@ First-party extension focused on public task-oriented vision operators for the P
 - `vision.detect`
 - `vision.track`
 - `vision.group_events`
+- `vision.spatial_relation_event` confirms proximity after observed dwell. A valid matched pair stays stable when another member moves closer. Replacing either participant closes the previous occurrence and starts a new dwell; time without a new observation cannot confirm a candidate. These events describe proximity, not intent or recognition across separate visits.
 - `vision.identity_evidence` and `vision.recognize_identity` (explicit activation; [setup, curation and recovery](docs/IDENTITY_RECOGNITION.md))
 - `vision.crop_objects`
 - `vision.segment_instances`

@@ -259,7 +259,11 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         )
 
     def _best_match(
-        self, members: tuple[_Member, ...], *, use_exit_threshold: bool
+        self,
+        members: tuple[_Member, ...],
+        *,
+        use_exit_threshold: bool,
+        preferred: _RelationMatch | None = None,
     ) -> _RelationMatch | None:
         category_groups = list(self._config.required_categories.values())
         left_categories = set(category_groups[0])
@@ -307,6 +311,11 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                     distance=distance,
                     threshold=threshold,
                 )
+                if preferred is not None and (left.event_id, right.event_id) == (
+                    preferred.left.event_id,
+                    preferred.right.event_id,
+                ):
+                    return match
                 score = distance / max(1e-9, threshold)
                 if best is None or score < best[0]:
                     best = (score, match)
@@ -489,21 +498,6 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                 else:
                     self._states_by_group_id.pop(state.group_event_id, None)
                 continue
-            if not state.opened and state.candidate_since_monotonic is not None:
-                dwell = max(0.0, now_monotonic - state.candidate_since_monotonic)
-                if dwell >= float(self._config.dwell_seconds):
-                    self._next_relation_identity(state)
-                    state.opened_at_monotonic = now_monotonic
-                    state.last_emit_monotonic = now_monotonic
-                    outputs.append(
-                        self._build_packet(
-                            state,
-                            lifecycle=Lifecycle.OPEN,
-                            now_monotonic=now_monotonic,
-                            reason="confirmed",
-                        )
-                    )
-                continue
             if state.opened and state.losing_since_monotonic is not None:
                 losing_for = max(0.0, now_monotonic - state.losing_since_monotonic)
                 if losing_for >= float(self._config.close_grace_seconds):
@@ -524,6 +518,30 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             return outputs
 
         state = self._states_by_group_id.get(group.group_event_id)
+        relation_match = None
+        if group.lifecycle != Lifecycle.CLOSE:
+            relation_match = self._best_match(
+                group.members,
+                use_exit_threshold=bool(
+                    state and (state.opened or state.candidate_since_monotonic is not None)
+                ),
+                preferred=state.last_match if state else None,
+            )
+        if state is not None and state.last_match is not None and relation_match is not None:
+            previous = state.last_match
+            if (previous.left.event_id, previous.right.event_id) != (
+                relation_match.left.event_id,
+                relation_match.right.event_id,
+            ):
+                # Preserve the old packet and participants in its closing evidence.
+                if state.opened:
+                    outputs.append(
+                        self._close_state(
+                            state, now_monotonic=now_monotonic, reason="participants_changed"
+                        )
+                    )
+                state = None
+                relation_match = self._best_match(group.members, use_exit_threshold=False)
         if state is None:
             state = _RelationState(
                 group_event_id=group.group_event_id,
@@ -545,15 +563,6 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         state.last_bbox01 = group.bbox01
         state.last_world_envelope = group.world_envelope
 
-        relation_match = None
-        if group.lifecycle != Lifecycle.CLOSE:
-            relation_match = self._best_match(
-                group.members,
-                use_exit_threshold=bool(
-                    state.opened or state.candidate_since_monotonic is not None
-                ),
-            )
-
         if relation_match is not None:
             state.last_match = relation_match
             state.losing_since_monotonic = None
@@ -561,7 +570,9 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             if state.candidate_since_monotonic is None:
                 state.candidate_since_monotonic = now_monotonic
             if not state.opened:
-                if float(self._config.dwell_seconds) <= 0.0:
+                if now_monotonic - state.candidate_since_monotonic >= float(
+                    self._config.dwell_seconds
+                ):
                     self._next_relation_identity(state)
                     state.opened_at_monotonic = now_monotonic
                     state.last_emit_monotonic = now_monotonic

@@ -18,11 +18,15 @@ import { i18n, resolveLocalizedString } from "../../util/i18n";
 import { Modal } from "../Modal";
 import { CompositionSelectorModal } from "../CompositionSelectorModal";
 import { Icon } from "../Icon";
+import { GeoreferenceEditor } from "../GeoreferenceEditor";
+import type { Georeference } from "../../util/georeference";
 import { Viewport2D } from "../Viewport2D";
 import { drawMeasurementLine2D, MEASUREMENT_LINE_ELEMENT_TYPE_ID } from "../editor/measurementLineElementType";
 
 type Props = {
   compositionName: string;
+  georeference: unknown;
+  onSaveGeoreference: (value: Georeference, expected: unknown) => Promise<void>;
   compositions: CompositionSummary[];
   activeCompositionId: string;
   elements: CompositionElement[];
@@ -210,6 +214,8 @@ function finiteOrder(value: number | undefined, fallback: number): number {
 
 export function CompositionEditorScreen({
   compositionName,
+  georeference,
+  onSaveGeoreference,
   compositions,
   activeCompositionId,
   elements,
@@ -233,6 +239,7 @@ export function CompositionEditorScreen({
   onDeleteComposition,
 }: Props): React.ReactElement {
   const { locale, t } = i18n.useI18n();
+  const [isMapOpen, setIsMapOpen] = useState(false);
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
@@ -780,6 +787,7 @@ export function CompositionEditorScreen({
 
   return (
     <div className="screenRoot">
+      {isMapOpen && <GeoreferenceEditor value={georeference} elements={elements} elementTypesById={elementTypesById} onSave={onSaveGeoreference} onClose={() => setIsMapOpen(false)} />}
       <Viewport2D
         elements={elements}
         elementTypesById={elementTypesById}
@@ -803,7 +811,8 @@ export function CompositionEditorScreen({
         onRedo={onRedo}
       />
 
-      <div className="overlayTopRight">
+      <div className="overlayTopRight" style={{ zIndex: "calc(var(--z-viewport-overlay) + 1)" }}>
+        <button className="chipButton" type="button" onClick={() => setIsMapOpen(true)}>{t("core.map.map")}</button>
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
           {t("core.ui.rendering")}: 2D
         </button>

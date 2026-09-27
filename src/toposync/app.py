@@ -458,6 +458,11 @@ class CreateCompositionRequest(BaseModel):
     id: str | None = None
 
 
+class PatchCompositionMetaRequest(BaseModel):
+    changes: dict[str, Any]
+    expected: dict[str, Any]
+
+
 class RenameCompositionRequest(BaseModel):
     name: str
 
@@ -4475,6 +4480,23 @@ def create_app() -> FastAPI:
         _require(request, action="core:compositions:write")
         config_store: ConfigStore = request.app.state.config_store
         return await config_store.set_active_composition(composition)
+
+    @app.patch("/api/compositions/{composition_id}/meta", response_model=Composition)
+    async def patch_composition_meta(
+        request: Request, composition_id: str, body: PatchCompositionMetaRequest
+    ) -> Composition:
+        _require(request, action="core:compositions:write")
+        config_store: ConfigStore = request.app.state.config_store
+        if not set(body.changes).issubset(body.expected):
+            raise HTTPException(status_code=400, detail="Expected values required for all changed keys")
+        try:
+            return await config_store.patch_composition_meta(
+                composition_id, changes=body.changes, expected=body.expected
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown composition") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/compositions", response_model=CompositionsIndexResponse)
     async def list_compositions(request: Request) -> CompositionsIndexResponse:

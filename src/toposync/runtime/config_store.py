@@ -590,6 +590,24 @@ class ConfigStore:
             await self._persist_locked(cfg2)
             return composition
 
+    async def patch_composition_meta(
+        self, composition_id: str, *, changes: dict[str, Any], expected: dict[str, Any]
+    ) -> Composition:
+        """Atualiza metadados sem alterar elementos ou a composição ativa."""
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            composition = next((item for item in cfg.compositions if item.id == composition_id), None)
+            if composition is None:
+                raise KeyError(composition_id)
+            if any(composition.meta.get(key) != value for key, value in expected.items()):
+                raise ValueError("composition_metadata_changed")
+            updated = composition.model_copy(update={"meta": {**composition.meta, **changes}})
+            await self._persist_locked(_build_config(
+                cfg, compositions=[updated if item.id == composition_id else item for item in cfg.compositions]
+            ))
+            return updated
+
     async def list_compositions(self) -> tuple[str, list[Composition]]:
         cfg = await self.get_config()
         return cfg.active_composition_id, list(cfg.compositions)

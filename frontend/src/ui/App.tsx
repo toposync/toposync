@@ -40,6 +40,7 @@ import {
   patchExtensionSettings,
   patchAccessUser,
   putComposition,
+  patchCompositionMeta,
   renameComposition,
   createAccessUser,
   startAccessUserPairing,
@@ -100,6 +101,7 @@ type Composition = {
   id: string;
   name: string;
   elements: CompositionElement[];
+  meta?: Record<string, unknown>;
 };
 
 const SAVE_DEBOUNCE_MS = 400;
@@ -419,6 +421,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const extensionActivationPromisesRef = useRef<Map<string, Promise<void>>>(new Map());
   const [composition, setComposition] = useState<Composition>(() => defaultComposition());
   const compositionRef = useRef<Composition>(composition);
+  const persistedMetadataCompositionRef = useRef<Composition | null>(null);
   const [compositions, setCompositions] = useState<Array<{ id: string; name: string }>>([]);
   const [activeCompositionId, setActiveCompositionId] = useState<string>("ground");
   const [compositionLoaded, setCompositionLoaded] = useState(false);
@@ -1085,6 +1088,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     if (!compositionLoaded) return;
     if (!backendAvailable) return;
 
+    if (composition === persistedMetadataCompositionRef.current) return;
     const handle = window.setTimeout(() => {
       void putComposition(composition).catch((err) => {
         console.error("Failed to save composition to backend", err);
@@ -1683,6 +1687,19 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         />
       ) : screen === "editor" ? (
         <CompositionEditorScreen
+          georeference={composition.meta?.georeference}
+          onSaveGeoreference={async (georeference, expected) => {
+            const snapshot = compositionRef.current;
+            await patchCompositionMeta(snapshot.id, { georeference }, { georeference: expected ?? null });
+            recordHistoryBeforeChange(snapshot);
+            setComposition(current => {
+              if (current.id !== snapshot.id) return current;
+              const next = { ...current, meta: { ...current.meta, georeference } };
+              if (current === snapshot) persistedMetadataCompositionRef.current = next;
+              return next;
+            });
+            setCompositionRevision(value => value + 1);
+          }}
           compositionName={composition.name}
           compositions={compositions}
           activeCompositionId={activeCompositionId}

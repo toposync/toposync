@@ -1679,6 +1679,10 @@ export async function putComposition(composition: Composition): Promise<Composit
   return requestJson<Composition>("/api/composition", jsonRequest("PUT", composition), "Failed to save composition");
 }
 
+export async function patchCompositionMeta(id: string, changes: Record<string, unknown>, expected: Record<string, unknown>): Promise<Composition> {
+  return requestJson<Composition>(`/api/compositions/${encodeURIComponent(id)}/meta`, jsonRequest("PATCH", { changes, expected }), "Failed to save composition metadata");
+}
+
 export async function listCompositions(): Promise<CompositionsIndex> {
   return requestJson<CompositionsIndex>("/api/compositions", undefined, "Failed to list compositions");
 }

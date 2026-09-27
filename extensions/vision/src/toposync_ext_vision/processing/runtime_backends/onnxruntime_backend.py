@@ -261,7 +261,15 @@ class _OnnxRuntimeSessionBackend:
         self._providers = resolve_onnxruntime_execution_providers()
         if not self._providers:
             raise RuntimeError("No ONNX Runtime execution providers are available")
-        self._session = ort.InferenceSession(str(model_path), providers=self._providers)
+        # Multiple models share the host; match the identity backend's bounded pool.
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = 2
+        options.inter_op_num_threads = 1
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        self._session = ort.InferenceSession(
+            str(model_path), sess_options=options, providers=self._providers
+        )
         session_inputs = self._session.get_inputs()
         if not session_inputs:
             raise RuntimeError("ONNX model has no inputs")

@@ -274,6 +274,10 @@ def test_pose_upload_validates_before_replacing_and_recovers(tmp_path):
 def test_backend_retains_actor_reference_without_claiming_observation(tmp_path):
     manifest = _manifest(_model(tmp_path / "pose.onnx"))
     backend = build_pose_backend(manifest)
+    options = backend._session.get_session_options()
+    assert options.intra_op_num_threads == 2
+    assert options.inter_op_num_threads == 1
+    assert options.get_session_config_entry("session.intra_op.allow_spinning") == "0"
     detection = DetectionObject(
         label="person",
         label_id=0,

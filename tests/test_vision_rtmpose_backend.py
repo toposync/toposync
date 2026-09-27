@@ -250,7 +250,10 @@ def test_symbolic_session_metadata_is_accepted_but_effective_values_remain_valid
             assert feeds["input"].shape == (1, 3, 256, 192)
             return outputs
 
-    boundary = SimpleNamespace(InferenceSession=lambda *args, **kwargs: SymbolicSession(),
+    import onnxruntime as ort
+
+    boundary = SimpleNamespace(SessionOptions=ort.SessionOptions, ExecutionMode=ort.ExecutionMode,
+                               InferenceSession=lambda *args, **kwargs: SymbolicSession(),
                                get_available_providers=lambda: ["CPUExecutionProvider"])
     monkeypatch.setattr(onnxruntime_backend, "_import_onnxruntime", lambda: boundary)
     backend = backend_type()(manifest(model(tmp_path / "pose.onnx")))

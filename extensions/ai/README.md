@@ -40,7 +40,15 @@ identity or consumed volume. They require a configured vision-capable AI profile
 validated on representative positive, difficult negative and occluded recordings before relying
 on their recognition. API persistence and synthetic replay tests do not establish model accuracy.
 
-## Assistente de alteração de pipelines
+## Assistente de receitas e alteração de pipelines
+
+**Criar receita** interpreta o pedido usando o catálogo atual de câmeras/fontes de vídeo
+habilitadas, áreas mapeadas e receitas existentes. O modelo seleciona recursos; o construtor
+da extensão de câmeras produz e compila o grafo. Ambiguidades retornam uma pergunta.
+A prévia não grava; salvar revalida os recursos e cria desativado. Desfazer remove somente
+a receita ainda idêntica à criada, com comparação protegida pelo bloqueio do armazenamento.
+Não executa nem ativa dispositivos. Receitas visuais de gatos usam os perfis de análise
+configurados, que devem ser revisados antes da ativação.
 
 O painel **Assistente de pipelines** prepara uma proposta para um pipeline existente,
 desativado, em modo JSON ou interativo. A proposta usa um perfil Ollama habilitado
@@ -56,5 +64,8 @@ etapas diferentes ainda exige o editor.
 O modelo não executa Python ou comandos. Falha do provedor ou da validação mantém o
 pipeline original. O resumo e os detalhes técnicos precisam de revisão humana.
 
-Este fluxo ainda não certifica criação por linguagem natural, descoberta completa de
-recursos, qualidade geral do modelo nem respostas narrativas sobre o histórico.
+A criação está limitada às receitas do catálogo, com o modelo de detecção padrão disponível
+no servidor local. Seleção livre de operadores/modelos/servidores exige o editor. Falta de
+modelo pronto impede a proposta. Os ensaios não certificam qualidade geral do modelo nem
+respostas narrativas sobre o histórico. Propostas textuais Ollama usam `think: false` para
+evitar geração interna desnecessária; o prazo total continua limitado a 120 segundos.

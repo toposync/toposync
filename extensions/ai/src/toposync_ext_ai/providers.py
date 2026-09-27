@@ -506,6 +506,9 @@ class OllamaProvider:
                 "temperature": float(self._profile.temperature),
             },
         }
+        if image is None:
+            # Bounded, reviewed JSON proposals do not need an unbounded thinking stream.
+            body["think"] = False
         base_url = self._provider.host.rstrip("/")
         timeout = httpx.Timeout(float(self._profile.timeout_seconds), connect=5.0)
         async with httpx.AsyncClient(timeout=timeout) as client:

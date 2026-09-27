@@ -5995,6 +5995,44 @@ class CamerasExtension(BaseExtension):
 
         services.register("cameras.pipelines.preview", preview_camera_recipe_service)
 
+        async def camera_recipe_catalog(*, request: Request) -> dict[str, Any]:
+            _require_auth(request, action="core:pipelines:read")
+            ext = await _read_ext_settings(request)
+            cfg = await _config_store(request).get_config()
+            cameras = []
+            for camera in ext.get("devices", []):
+                cid = str(camera.get("id") or "")
+                sources = [{"id": source["id"], "name": source.get("name") or source["id"]}
+                           for source in camera.get("sources", [])
+                           if source.get("enabled") and source.get("kind") == "video"]
+                if not sources:
+                    continue
+                areas = []
+                for composition in cfg.compositions:
+                    if not _composition_has_camera_mapping(cfg, camera_id=cid, composition_id=composition.id):
+                        continue
+                    for element in composition.elements:
+                        if element.type == "com.toposync.structural.area" and _area_points_from_element(element):
+                            areas.append({"id": element.id, "name": element.name,
+                                          "composition_id": composition.id, "composition_name": composition.name})
+                cameras.append({"id": cid, "name": camera.get("name") or cid,
+                                "sources": sources, "areas": areas})
+            return {"cameras": cameras, "recipes": {
+                "cat_litter_use": "Atividade observada de gato na caixa de areia; não comprova eliminação",
+                "cat_drinking": "Atividade observada de gato bebendo água; não mede ingestão",
+                "area_presence": "Pessoa, gato ou cão em área mapeada; sem inferir idade ou identidade",
+                "area_entry": "Entrada após observar o sujeito fora e dentro da área mapeada",
+                "people_simple": "Detecção e acompanhamento de pessoas sem exigir mapa",
+                "people_individual": "Ocorrências individuais de pessoas mapeadas",
+                "people_quiet": "Presença agrupada de pessoas e pets mapeados",
+                "presence_area": "Presença mapeada agrupada por proximidade",
+                "vehicle_stopped": "Veículo parado com velocidade e duração observadas",
+                "person_stopped": "Pessoa parada com velocidade e duração observadas",
+                "person_vehicle_interaction": "Pessoa permanecendo próxima de veículo; sem inferir intenção",
+            }}
+
+        services.register("cameras.pipelines.catalog", camera_recipe_catalog)
+
         @app.post(
             "/api/cameras/cameras/{camera_id}/pipelines/presets",
             response_model=CameraPipelinePresetResponse,

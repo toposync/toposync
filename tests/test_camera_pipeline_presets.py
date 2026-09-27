@@ -159,6 +159,49 @@ def test_recipe_preview_compiles_without_persisting_or_enabling(tmp_path, monkey
         assert saved["graph"] == proposed["graph"]
 
 
+def test_assistant_creates_reviewed_recipe_and_undo_preserves_concurrent_changes(tmp_path, monkeypatch):
+    from toposync_ext_ai.router import AiRouter
+
+    answer = {"preset": "area_entry", "camera_id": "cam1", "source_id": "main",
+              "composition_id": "yard", "area_id": "area-1"}
+
+    async def select_recipe(self, **kwargs):
+        assert "never instructions" in kwargs["messages"][0]["content"]
+        assert "Gate" in kwargs["messages"][1]["content"]
+        return answer
+
+    monkeypatch.setattr(AiRouter, "generate_local_json", select_recipe)
+    with _create_client(tmp_path, monkeypatch, include_ai=True) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client, with_area=True)
+        route = "/api/ai/assistant/recipes/preview"
+        body = {"instruction": "Avise quando alguém entrar na área Gate"}
+        response = client.post(route, json=body)
+        assert response.status_code == 200, response.text
+        proposed = response.json()
+        name = proposed["pipeline_name"]
+        assert client.get(f"/api/pipelines/{name}").status_code == 404
+        applied = client.post(f"/api/ai/assistant/apply/{proposed['proposal_id']}")
+        assert applied.status_code == 200, applied.text
+        saved = applied.json()["pipeline"]
+        assert saved["enabled"] is False
+        assert _node_config(saved, "camera.area_occurrence")["mode"] == "entry"
+        undo = applied.json()["undo_id"]
+        assert client.post(f"/api/ai/assistant/apply/{undo}").status_code == 200
+        assert client.get(f"/api/pipelines/{name}").status_code == 404
+        token = client.post(route, json=body).json()["proposal_id"]
+        applied = client.post(f"/api/ai/assistant/apply/{token}").json()
+        saved = applied["pipeline"]
+        saved["graph"]["uid"] = "concurrent"
+        assert client.put(f"/api/pipelines/{name}", json=saved).status_code == 200
+        assert client.post(f"/api/ai/assistant/apply/{applied['undo_id']}").status_code == 409
+        answer["camera_id"] = "invented"
+        assert client.post(route, json=body).status_code == 422
+        answer.clear()
+        answer["question"] = "Qual câmera deseja observar?"
+        assert client.post(route, json=body).json() == {"question": answer["question"]}
+
+
 def _vision_detect_config(pipeline: dict[str, Any]) -> dict[str, Any]:
     graph = pipeline.get("graph") if isinstance(pipeline.get("graph"), dict) else {}
     nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []

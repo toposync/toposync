@@ -86,3 +86,24 @@ def test_assistant_validates_existing_operator_and_reference_changes():
         validate_proposal(before, {"graph": {**graph, "nodes": [{**graph["nodes"][0], "config": {"camera_id": "invented"}}]}}, compiler)
     with pytest.raises(Exception, match="Invalid config"):
         validate_proposal(before, {"graph": {**graph, "nodes": [{**graph["nodes"][0], "config": {"frames": "invalid"}}]}}, compiler)
+
+
+def test_local_json_disables_unbounded_thinking(monkeypatch):
+    import json
+    import httpx
+    from toposync_ext_ai.providers import OllamaProvider
+    from toposync_ext_ai.settings import AiProviderConfig, AiProfileConfig
+
+    def respond(request):
+        payload = json.loads(request.content)
+        assert payload["think"] is False
+        assert payload["format"] == "json"
+        return httpx.Response(200, json={"message": {"content": '{"question":"Qual câmera?"}'}})
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(
+        **kwargs, transport=httpx.MockTransport(respond)
+    ))
+    provider = OllamaProvider(AiProviderConfig(id="local"), AiProfileConfig(id="local"))
+    result = asyncio.run(provider.generate_json(messages=[{"role": "user", "content": "recipe"}]))
+    assert result == {"question": "Qual câmera?"}

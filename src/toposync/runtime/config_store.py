@@ -790,7 +790,9 @@ class ConfigStore:
             await self._persist_locked(cfg2)
             return pipeline
 
-    async def delete_pipeline(self, pipeline_name: str) -> Pipeline:
+    async def delete_pipeline(
+        self, pipeline_name: str, *, expected_pipeline: Pipeline | None = None
+    ) -> Pipeline:
         name = _normalize_pipeline_name(pipeline_name)
         await self.load()
         async with self._lock:
@@ -804,6 +806,8 @@ class ConfigStore:
                 pipelines.append(existing)
             if removed is None:
                 raise KeyError(name)
+            if expected_pipeline is not None and removed != expected_pipeline:
+                raise PipelineAlreadyExistsError("Pipeline changed since preview; review it again")
 
             cfg2 = _build_config(cfg, pipelines=pipelines)
             cfg2 = _normalize_config(cfg2)

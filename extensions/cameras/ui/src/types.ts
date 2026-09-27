@@ -1,3 +1,4 @@
+import type { CameraSnapshotBinding } from "@toposync/plugin-api";
 export type CameraConnectionType = "rtsp" | "onvif";
 export type CameraStreamProfile = "onvif" | "custom";
 export type CameraIngestMode = "centralized" | "runtime_local" | "direct";
@@ -496,6 +497,10 @@ export type CameraPipelinePresetRequest = {
   notification_title?: string;
   notification_description?: string;
   orientation_reference?: string;
+  observation_region?: {
+    left: number; top: number; right: number; bottom: number;
+    snapshot_binding: CameraSnapshotBinding;
+  };
   notification_priority?: CameraNotificationPriority;
   enable_ptz_attention?: boolean;
   ptz_attention_native_tracking_disabled_confirmed?: boolean;

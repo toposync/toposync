@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .pipelines.postprocess import ImageCropConfig, ImageCropSnapshotBinding
+
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 
 
@@ -45,10 +49,25 @@ CAT_ACTIVITY_RECIPES = {
 }
 
 
+class CameraObservationRegion(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    left: float = Field(ge=0, le=100)
+    top: float = Field(ge=0, le=100)
+    right: float = Field(ge=0, le=100)
+    bottom: float = Field(ge=0, le=100)
+    snapshot_binding: ImageCropSnapshotBinding
+
+    @model_validator(mode="after")
+    def _validate_crop(self) -> CameraObservationRegion:
+        ImageCropConfig.model_validate(self.model_dump())
+        return self
+
+
 def build_cat_activity_graph(
     *, preset: str, camera_id: str, source_id: str, graph_uid: str,
     notification_title: str = "", notification_description: str = "",
     notification_priority: NotificationPriority | None = None,
+    observation_region: CameraObservationRegion | None = None,
 ) -> dict[str, Any]:
     recipe = CAT_ACTIVITY_RECIPES[preset]
     nodes = [
@@ -73,6 +92,11 @@ def build_cat_activity_graph(
             "include_payload_paths": ["condition_occurrence"],
         }},
     ]
+    if observation_region is not None:
+        binding = observation_region.snapshot_binding
+        if binding.camera_id != camera_id or binding.source_id != source_id:
+            raise ValueError("Observation region belongs to a different camera or source")
+        nodes[2] = {"id": "crop", "operator": "camera.image_crop", "config": observation_region.model_dump()}
     edges = _linear_edges([node["id"] for node in nodes])
     for edge in edges:
         if edge["to"]["node"] in {"crop", "condition", "store"}:

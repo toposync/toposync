@@ -65,6 +65,7 @@ from .pipeline_templates import (
     build_pipeline_graph_v2,
     build_person_vehicle_interaction_graph,
     build_cat_activity_graph,
+    CameraObservationRegion,
     CAT_ACTIVITY_RECIPES,
 )
 from .area_events import build_area_occurrence_graph, register_area_occurrence_operator
@@ -732,6 +733,7 @@ class CameraPipelinePresetRequest(BaseModel):
     notification_title: str = ""
     notification_description: str = ""
     orientation_reference: str = Field(default="", max_length=240)
+    observation_region: CameraObservationRegion | None = None
     notification_priority: NotificationPriority | None = None
     enable_ptz_attention: bool = False
     ptz_attention_native_tracking_disabled_confirmed: bool = False
@@ -5402,6 +5404,7 @@ class CamerasExtension(BaseExtension):
             graph_uid: str = "camera_preset",
             area_categories: list[str] | None = None,
             orientation_reference: str = "",
+            observation_region: CameraObservationRegion | None = None,
         ) -> dict[str, Any]:
             if preset in {"area_presence", "area_entry", "area_group_entry", "doorbell_visitor"}:
                 return build_area_occurrence_graph(
@@ -5414,7 +5417,7 @@ class CamerasExtension(BaseExtension):
                 return build_cat_activity_graph(
                     preset=preset, camera_id=camera_id, source_id=source_id, graph_uid=graph_uid,
                     notification_title=notification_title, notification_description=notification_description,
-                    notification_priority=notification_priority,
+                    notification_priority=notification_priority, observation_region=observation_region,
                 )
             if preset == "vehicle_stopped":
                 detect_categories = VEHICLE_STOPPED_OBJECT_CATEGORIES
@@ -5870,6 +5873,10 @@ class CamerasExtension(BaseExtension):
                     detail=f"preset must be one of: {', '.join(CAMERA_PIPELINE_PRESETS)}",
                 )
 
+            if body.observation_region is not None and preset not in CAT_ACTIVITY_RECIPES:
+                raise HTTPException(400, "observation_region requires a cat activity recipe")
+            if body.observation_region is not None and body.enable_ptz_attention:
+                raise HTTPException(400, "A fixed observation region does not support PTZ attention")
             if body.orientation_reference.strip() and preset != "person_stopped":
                 raise HTTPException(status_code=400, detail="orientation_reference requires person_stopped")
             store = _config_store(request)
@@ -5888,6 +5895,11 @@ class CamerasExtension(BaseExtension):
             if not isinstance(source, dict):
                 raise HTTPException(status_code=409, detail="Camera source not found or disabled")
             source_id = str(source.get("id") or "").strip()
+
+            if body.observation_region is not None:
+                binding = body.observation_region.snapshot_binding
+                if binding.camera_id != cid or binding.source_id != source_id:
+                    raise HTTPException(400, "Select the observation region again for this camera and source")
 
             cfg = await store.get_config()
 
@@ -6020,6 +6032,7 @@ class CamerasExtension(BaseExtension):
                     notification_priority=notification_priority,
                     graph_uid=pipeline_name, area_categories=body.area_categories,
                     orientation_reference=body.orientation_reference.strip(),
+                    observation_region=body.observation_region,
                 )
                 if preset == "doorbell_visitor":
                     graph = add_recent_event_to_area_graph(graph, camera_id=cid,

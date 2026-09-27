@@ -1445,3 +1445,36 @@ def test_stopped_orientation_replay_persists_scene_and_updates_unknown(tmp_path,
             (tmp_path / "notification.json").write_text(json.dumps(asdict(records[-1]), ensure_ascii=False))
 
         asyncio.run(replay())
+
+
+@pytest.mark.parametrize("preset", ["cat_litter_use", "cat_drinking"])
+def test_cat_recipe_persists_bound_region_and_rejects_wrong_context(tmp_path, monkeypatch, preset):
+    from copy import deepcopy
+
+    with _create_client(tmp_path, monkeypatch, patch_model_readiness=False, include_ai=True) as client:
+        _configure_camera(client)
+        path = "/api/cameras/cameras/cam1/pipelines/presets"
+        region = dict(left=33, top=34, right=54, bottom=77, snapshot_binding=dict(
+            camera_id="cam1", source_id="main", capture_instance="decoder-session", generation=1,
+            width=3000, height=1989,
+        ))
+        body = dict(preset=preset, enabled=False, source_id="main", observation_region=region)
+        for field in ("camera_id", "source_id"):
+            invalid = deepcopy(body)
+            invalid["observation_region"]["snapshot_binding"][field] = "other"
+            assert client.post(path, json=invalid).status_code == 400
+        assert client.post(path, json={**body, "preset": "people_simple"}).status_code == 400
+        assert client.post(path, json={**body, "enable_ptz_attention": True}).status_code == 400
+        for change in (dict(right=101), dict(left=60), dict(left=True), dict(snapshot_binding=None), dict(units="pixels")):
+            assert client.post(path, json={**body, "observation_region": {**region, **change}}).status_code == 422
+        response = client.post(path, json=body)
+        assert response.status_code == 200, response.text
+        pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
+        assert pipeline["enabled"] is False
+        assert _operator_ids(pipeline) == ["camera.source", "core.fps_reducer", "camera.image_crop",
+                                          "ai.condition_filter", "core.store_images", "core.notify"]
+        crop = _node_config(pipeline, "camera.image_crop")
+        for key, value in region.items():
+            assert crop[key] == value
+        assert crop.get("units", "percent") == "percent"
+        assert _node_config(pipeline, "ai.condition_filter")["minimum_duration_seconds"] == 2

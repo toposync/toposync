@@ -1,8 +1,9 @@
 """Equivalent offline event load through the real scheduler and SQLite notifications.
 
 Compares source -> notification against the same source with identity operators.
-It uses licensed photos only for workload, not recognition accuracy. No actual
-camera/detector/tracker is exercised; this is not the final installation profile.
+It uses licensed photos only for workload, not recognition accuracy. With
+--vision-input the real detector and tracker consume those static photos.
+No physical camera is exercised; this is not the final installation profile.
 """
 
 from __future__ import annotations
@@ -76,6 +77,7 @@ async def trial(
     interval: float,
     parallel: bool = False,
     context_only: bool = False,
+    vision_input: bool = False,
 ) -> dict:
     frames = {}
     for species, filename, digest in SOURCES:
@@ -85,6 +87,8 @@ async def trial(
             image = ImageOps.exif_transpose(image).convert("RGB")
             image.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
             frames[species] = np.asarray(image)
+            if vision_input:
+                frames[species] = frames[species][:, :, ::-1].copy()
     gallery = IdentityStore(output / "gallery", scope="offline-load-fixture")
     notifications = NotificationStore(output / "notifications.sqlite3")
     sent, latencies, identities, lifecycles = {}, [], set(), []
@@ -125,25 +129,29 @@ async def trial(
             sent[packet_key] = time.perf_counter()
             if visit >= 3:
                 emission_lateness.append((sent[packet_key] - self.deadline) * 1000)
-            return Packet.create(
-                stream_id="licensed-photo-load",
-                lifecycle=phase,
-                payload={
-                    "camera_id": "offline-load",
-                    "frame_ts": time.time(),
+            payload = {
+                "camera_id": "offline-load",
+                "frame_ts": time.time(),
+                "benchmark_visit": visit,
+            }
+            if not vision_input:
+                payload.update({
                     "source_stream_id": "offline-load",
                     "correlation_id": f"load-{visit}",
                     "subject": {
-                        "id": f"load-{visit}",
-                        "type": "event",
-                        "category": species,
+                        "id": f"load-{visit}", "type": "event", "category": species,
                         "bbox01": [0, 0, 1, 1],
                     },
                     "world_position": {"x": 1.0, "z": 2.0},
-                },
+                })
+            return Packet.create(
+                stream_id=f"load-{visit}" if vision_input else "licensed-photo-load",
+                lifecycle=phase,
+                payload=payload,
                 artifacts={
                     "frame": Artifact(
-                        name="frame", data=frames[species], metadata={"color_order": "rgb"}
+                        name="frame", data=frames[species],
+                        metadata={"color_order": "bgr" if vision_input else "rgb"}
                     )
                 },
             )
@@ -156,7 +164,7 @@ async def trial(
         )
         returned_at = time.perf_counter()
         payload = values["payload"]
-        key = (payload["subject"]["id"], payload["lifecycle"])
+        key = (f"load-{payload['data']['benchmark_visit']}", payload["lifecycle"])
         visit = int(key[0].split("-")[1])
         identities.add(record.id)
         created_count += int(created)
@@ -180,7 +188,7 @@ async def trial(
 
     class RecognitionCollector(TransformOperatorRuntime):
         async def process_packet(self, value, context):
-            recognition_lifecycles.append((value.payload["subject"]["id"], value.lifecycle.value))
+            recognition_lifecycles.append((f"load-{value.payload['benchmark_visit']}", value.lifecycle.value))
             check_warmup()
             if len(recognition_lifecycles) == total_packets:
                 recognition_completed.set()
@@ -189,6 +197,9 @@ async def trial(
     registry = OperatorRegistry()
     register_builtin_operators(registry)
     register_identity_operators(registry)
+    if vision_input:
+        from toposync_ext_vision.pipelines.operators import register_vision_pipeline_operators
+        register_vision_pipeline_operators(registry)
     registry.register_operator(
         operator_id="test.load_source",
         config_model=EmptyConfig,
@@ -199,6 +210,16 @@ async def trial(
         runtime_factory=lambda config, dependencies: Source(),
     )
     nodes = [{"id": "source", "operator": "test.load_source", "config": {}}]
+    if vision_input:
+        nodes.extend([
+            {"id": "detect", "operator": "vision.detect", "config": {
+                "model_id": "rfdetr_det_medium", "emit_mode": "annotate",
+                "categories": ["person", "cat", "dog"], "input_artifact_name": "frame",
+            }},
+            {"id": "track", "operator": "vision.track", "config": {
+                "default_interval_seconds": 0,
+            }},
+        ])
     if context_only:
         nodes.append(
             {"id": "context", "operator": "vision.identity_context", "config": {"enabled": True}}
@@ -223,7 +244,9 @@ async def trial(
             ]
         )
     nodes.append(
-        {"id": "notify", "operator": "core.notify", "config": {"update_interval_seconds": 0}}
+        {"id": "notify", "operator": "core.notify", "config": {
+            "update_interval_seconds": 0, "include_payload_paths": ["benchmark_visit"],
+        }}
     )
     edges = [
         {
@@ -249,7 +272,8 @@ async def trial(
         )
         nodes.append({"id": "collector", "operator": "test.recognition_collector", "config": {}})
         pairs = [
-            ("source", "context"),
+            *([("source", "detect"), ("detect", "track")] if vision_input else []),
+            ("track" if vision_input else "source", "context"),
             ("context", "notify"),
             ("context", "extract"),
             ("extract", "resolve"),
@@ -354,6 +378,7 @@ async def trial(
         "notification_execution": "asyncio.to_thread, matching NotificationsRuntime.upsert",
         "notification_limit": "Store persistence only; excludes public projection and broadcaster",
         "identity_enabled": enabled,
+        "input_path": "RF-DETR Medium -> real tracker" if vision_input else "preassigned subjects",
         "topology": "context_only_diagnostic"
         if context_only
         else "parallel_experiment"
@@ -435,6 +460,7 @@ def main():
     parser.add_argument("--model-data-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--enabled", action="store_true")
+    parser.add_argument("--vision-input", action="store_true", help="Detect and track public frames instead of preassigning subjects")
     parser.add_argument(
         "--context-only",
         action="store_true",
@@ -462,6 +488,7 @@ def main():
             enabled=args.enabled,
             parallel=args.parallel,
             context_only=args.context_only,
+            vision_input=args.vision_input,
             visits=args.visits,
             interval=args.interval,
         )

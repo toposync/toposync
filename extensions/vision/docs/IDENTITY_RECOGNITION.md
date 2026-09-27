@@ -130,6 +130,18 @@ python scripts/identity/real_pipeline_smoke.py \
 
 The expected uncalibrated outcome is `calibration_required` for all three species, three notifications and six retained observations after reopening the gallery. Successful model installation alone does not establish this result.
 
+For a bounded notification latency replay, `python -m scripts.identity.benchmark_pipeline`
+accepts the same directories, plus `--visits 30 --interval 0.3`. Run into separate
+new output directories with recognition disabled and with `--enabled --parallel`,
+keeping every other argument and installed model identical. Add `--vision-input`
+to **both** runs to include RF-DETR Medium and the real tracker; install that
+detector first. Without it, the source assigns subjects directly. The runner
+checks notification counts, lifecycle order and usable inference for each species.
+Its boundary ends at SQLite persistence, before public projection and broadcasting.
+The three repeated photos are workload inputs, not independent visits or camera
+capture evidence. Compare only runs with the same input path and cadence; these
+partial measurements do not certify the installation's latency requirement.
+
 Release acceptance additionally requires independent enrollment/development/holdout sessions, unknown identities and similar pets, frozen coverage/eligibility criteria, false-identification bounds, equivalent-load latency measurements, and rendered user journeys. Those conclusions cannot be obtained from the smoke check.
 
 Use the [offline evaluation protocol](IDENTITY_EVALUATION.md) to validate a frozen, authorized dataset and report visit-level results with uncertainty. Synthetic accounting tests of that tool do not establish recognition quality.

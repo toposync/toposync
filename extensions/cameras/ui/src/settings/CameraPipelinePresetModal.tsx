@@ -257,6 +257,7 @@ export function CameraPipelinePresetModal({
   onCreated: (pipelineName: string) => void;
 }): React.ReactElement | null {
   const { t } = i18n.useI18n();
+  const formId = React.useId();
   const [sourceId, setSourceId] = useState("");
   const [pipelineName, setPipelineName] = useState("");
   const [suggestedName, setSuggestedName] = useState("");
@@ -584,8 +585,8 @@ export function CameraPipelinePresetModal({
 
         <div className="rowWrap">
           <div className="field">
-            <label className="label">{t("ext.cameras.pipeline_preset.source", {}, "Camera source")}</label>
-            <select className="input" value={sourceId} onChange={(event) => updateSource(event.target.value)} disabled={noSource || creating}>
+            <label className="label" htmlFor={`${formId}-source`}>{t("ext.cameras.pipeline_preset.source", {}, "Camera source")}</label>
+            <select id={`${formId}-source`} className="input" value={sourceId} onChange={(event) => updateSource(event.target.value)} disabled={noSource || creating}>
               {videoSources.map((source) => (
                 <option key={source.id} value={source.id}>
                   {source.name || source.id}
@@ -594,8 +595,8 @@ export function CameraPipelinePresetModal({
             </select>
           </div>
           <div className="field">
-            <label className="label">{t("ext.cameras.pipeline_preset.processing_server", {}, "Processing server")}</label>
-            <select className="input" value={processingServerId} onChange={(event) => setProcessingServerId(event.target.value)} disabled={creating}>
+            <label className="label" htmlFor={`${formId}-processing-server`}>{t("ext.cameras.pipeline_preset.processing_server", {}, "Processing server")}</label>
+            <select id={`${formId}-processing-server`} className="input" value={processingServerId} onChange={(event) => setProcessingServerId(event.target.value)} disabled={creating}>
               <option value="local">{t("ext.cameras.settings.ingest.host.local", {}, "Main environment")}</option>
               {processingServers
                 .filter((server) => normalizeServerId(server.id) !== "local")
@@ -612,9 +613,9 @@ export function CameraPipelinePresetModal({
         </div>
 
         <div className="field">
-          <label className="label">{t("ext.cameras.pipeline_preset.model.label", {}, "Detection model")}</label>
+          <label className="label" htmlFor={`${formId}-model-label`}>{t("ext.cameras.pipeline_preset.model.label", {}, "Detection model")}</label>
           <div className="cameraPipelineModelSelectRow">
-            <select
+            <select id={`${formId}-model-label`}
               className="input"
               value={modelId}
               onChange={(event) => {
@@ -768,8 +769,8 @@ export function CameraPipelinePresetModal({
 
         {isMappingPreset ? (
           <div className="field">
-            <label className="label">{t("ext.cameras.pipeline_preset.composition", {}, "Mapped composition")}</label>
-            <select className="input" value={compositionId} onChange={(event) => setCompositionId(event.target.value)} disabled={noMapping || creating}>
+            <label className="label" htmlFor={`${formId}-composition`}>{t("ext.cameras.pipeline_preset.composition", {}, "Mapped composition")}</label>
+            <select id={`${formId}-composition`} className="input" value={compositionId} onChange={(event) => setCompositionId(event.target.value)} disabled={noMapping || creating}>
               {mappedCompositions.map((composition) => (
                 <option key={composition.id} value={composition.id}>
                   {composition.name || composition.id}
@@ -816,8 +817,8 @@ export function CameraPipelinePresetModal({
         {presetSupportsArea(preset) ? (
           <div className="rowWrap">
             <div className="field">
-              <label className="label">{t("ext.cameras.pipeline_preset.area", {}, "Optional area")}</label>
-              <select className="input" value={areaId} onChange={(event) => updateArea(event.target.value)} disabled={noMapping || creating}>
+              <label className="label" htmlFor={`${formId}-area`}>{t("ext.cameras.pipeline_preset.area", {}, "Optional area")}</label>
+              <select id={`${formId}-area`} className="input" value={areaId} onChange={(event) => updateArea(event.target.value)} disabled={noMapping || creating}>
                 <option value="">
                   {t("ext.cameras.pipeline_preset.area.whole_composition", {}, "Whole mapped composition")}
                 </option>
@@ -839,8 +840,8 @@ export function CameraPipelinePresetModal({
             {isStopPreset ? (
               <>
                 <div className="field">
-                  <label className="label">{t("ext.cameras.pipeline_preset.stopped_speed", {}, "Maximum speed to count as stopped (km/h)")}</label>
-                  <input
+                  <label className="label" htmlFor={`${formId}-stopped-speed`}>{t("ext.cameras.pipeline_preset.stopped_speed", {}, "Maximum speed to count as stopped (km/h)")}</label>
+                  <input id={`${formId}-stopped-speed`}
                     className="input"
                     type="number"
                     min="0"
@@ -854,8 +855,8 @@ export function CameraPipelinePresetModal({
                   />
                 </div>
                 <div className="field">
-                  <label className="label">{t("ext.cameras.pipeline_preset.min_stationary_seconds", {}, "Minimum stopped time (seconds)")}</label>
-                  <input
+                  <label className="label" htmlFor={`${formId}-min-stationary-seconds`}>{t("ext.cameras.pipeline_preset.min_stationary_seconds", {}, "Minimum stopped time (seconds)")}</label>
+                  <input id={`${formId}-min-stationary-seconds`}
                     className="input"
                     type="number"
                     min="0"
@@ -879,21 +880,21 @@ export function CameraPipelinePresetModal({
             <span className="label">{t("ext.cameras.pipeline_preset.orientation.reference", {}, "Visible reference")}</span>
             <input className="input" maxLength={240} value={orientationReference}
               onChange={(event) => setOrientationReference(event.target.value)} disabled={creating}
-              aria-describedby="orientation-reference-help" />
+              aria-describedby={`${formId}-orientation-reference-help`} />
           </label>
-          <p id="orientation-reference-help" className="settingsStatusMuted" style={{whiteSpace: "normal"}}>
+          <p id={`${formId}-orientation-reference-help`} className="settingsStatusMuted" style={{whiteSpace: "normal"}}>
             {t("ext.cameras.pipeline_preset.orientation.help", {}, "Describe a visible reference, such as the white facade in the background. Uses the configured visual AI profile. Hidden or ambiguous references remain unavailable; does not infer gaze or intent.")}
           </p>
         </details> : null}
 
         <div className="field">
-          <label className="label">{t("ext.cameras.pipeline_preset.pipeline_name", {}, "Pipeline name")}</label>
-          <input className="input" value={pipelineName} onChange={(event) => setPipelineName(safePipelineName(event.target.value))} disabled={creating} />
+          <label className="label" htmlFor={`${formId}-pipeline-name`}>{t("ext.cameras.pipeline_preset.pipeline_name", {}, "Pipeline name")}</label>
+          <input id={`${formId}-pipeline-name`} className="input" value={pipelineName} onChange={(event) => setPipelineName(safePipelineName(event.target.value))} disabled={creating} />
         </div>
 
         <div className="field">
-          <label className="label">{t("ext.cameras.pipeline_preset.notification_priority", {}, "Notification priority")}</label>
-          <select
+          <label className="label" htmlFor={`${formId}-notification-priority`}>{t("ext.cameras.pipeline_preset.notification_priority", {}, "Notification priority")}</label>
+          <select id={`${formId}-notification-priority`}
             className="input"
             value={notificationPriority}
             onChange={(event) => setNotificationPriority(event.target.value as CameraNotificationPriority)}

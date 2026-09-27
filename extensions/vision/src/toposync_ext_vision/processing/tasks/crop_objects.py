@@ -63,7 +63,7 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
             bbox_source = f"{bbox_source}|reproject:frame_warp"
 
         bbox01_used = _expand_bbox01(bbox01_selected, padding_ratio=float(self._config.padding_ratio))
-        cropped = _crop_bbox01(
+        cropped = (image, (0.0, 0.0, 1.0, 1.0)) if self._config.preserve_scene else _crop_bbox01(
             image=image,
             bbox01=bbox01_used,
             min_crop_size_px=int(self._config.min_crop_size_px),
@@ -91,7 +91,7 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
                     "source": self._operator_id,
                     "subject_context": subject_context,
                     "source_artifact_name": selected_name or MAIN_ARTIFACT_NAME,
-                    "bbox01": list(bbox01_used),
+                    "bbox01": list(pixel_bbox01),
                     "bbox01_original": list(bbox01_input),
                     "bbox01_selected": list(bbox01_selected),
                     "bbox_source": bbox_source,

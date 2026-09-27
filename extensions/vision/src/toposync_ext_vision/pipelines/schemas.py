@@ -136,6 +136,7 @@ class VisionCropObjectsConfig(BaseModel):
     bbox_field: str = "subject.bbox01"
     fallback_to_detections: bool = True
     missing_policy: Literal["drop", "pass_through"] = "drop"
+    preserve_scene: bool = False
     padding_ratio: float = Field(default=0.08, ge=0.0, le=1.0)
     min_crop_size_px: int = Field(default=8, ge=1, le=4096)
     crop_close_frames: bool = False

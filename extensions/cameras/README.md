@@ -333,3 +333,6 @@ unchanged. New stopped-person, stopped-vehicle and person/vehicle interaction
 recipes explicitly project `area_id` into notification history. Existing manual
 graphs need the same `include_payload_paths` selection; old records are not
 backfilled by matching names.
+
+
+A receita de pessoa parada aceita uma referência visual opcional para avaliar orientação corporal, como uma fachada distinguível ao fundo. A opção preserva a cena inteira e vincula a avaliação à pessoa acompanhada; usa o perfil visual configurado e mantém a ocorrência de parada mesmo quando a orientação fica indisponível. A notificação diferencia indício positivo, negativo visível e indisponibilidade, e conserva contexto de avaliação para revisão. Não confirma olhar, atenção, intenção nem direção tridimensional. Referência oculta ou ambígua não permite confirmação. O campo é opcional e fica recolhido na configuração; sem referência, a receita de parada mantém seu fluxo normal. A API aceita `orientation_reference` (até 240 caracteres) somente em `person_stopped`. Precisão visual depende de qualificação empírica do perfil.

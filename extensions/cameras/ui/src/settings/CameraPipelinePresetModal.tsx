@@ -262,6 +262,7 @@ export function CameraPipelinePresetModal({
   const [suggestedName, setSuggestedName] = useState("");
   const [compositionId, setCompositionId] = useState("");
   const [areaId, setAreaId] = useState("");
+  const [orientationReference, setOrientationReference] = useState("");
   const [stoppedSpeedKmh, setStoppedSpeedKmh] = useState(VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
   const [minStationarySeconds, setMinStationarySeconds] = useState(VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS);
   const [notificationPriority, setNotificationPriority] = useState<CameraNotificationPriority>("medium");
@@ -303,6 +304,7 @@ export function CameraPipelinePresetModal({
     setPipelineName(nextSuggested);
     setCompositionId(mappedCompositions[0]?.id ?? "");
     setAreaId("");
+    setOrientationReference("");
     setStoppedSpeedKmh(VEHICLE_STOPPED_DEFAULT_SPEED_KMH);
     setMinStationarySeconds(VEHICLE_STOPPED_DEFAULT_MIN_STATIONARY_SECONDS);
     setNotificationPriority(defaultNotificationPriority(preset));
@@ -405,6 +407,7 @@ export function CameraPipelinePresetModal({
           presetConfirmsStop(preset) ? Math.max(0, Number(stoppedSpeedKmh) || 0) / 3.6 : undefined,
         min_stationary_seconds:
           presetConfirmsStop(preset) ? Math.max(0, Number(minStationarySeconds) || 0) : undefined,
+        orientation_reference: preset === "person_stopped" ? orientationReference.trim() : undefined,
         notification_priority: notificationPriority,
         enable_ptz_attention: enablePtzAttention,
         ptz_attention_native_tracking_disabled_confirmed: nativeTrackingDisabledConfirmed,
@@ -869,6 +872,19 @@ export function CameraPipelinePresetModal({
             ) : null}
           </div>
         ) : null}
+
+        {preset === "person_stopped" ? <details>
+          <summary>{t("ext.cameras.pipeline_preset.orientation.title", {}, "Body orientation (optional)")}</summary>
+          <label className="field">
+            <span className="label">{t("ext.cameras.pipeline_preset.orientation.reference", {}, "Visible reference")}</span>
+            <input className="input" maxLength={240} value={orientationReference}
+              onChange={(event) => setOrientationReference(event.target.value)} disabled={creating}
+              aria-describedby="orientation-reference-help" />
+          </label>
+          <p id="orientation-reference-help" className="settingsStatusMuted" style={{whiteSpace: "normal"}}>
+            {t("ext.cameras.pipeline_preset.orientation.help", {}, "Describe a visible reference, such as the white facade in the background. Uses the configured visual AI profile. Hidden or ambiguous references remain unavailable; does not infer gaze or intent.")}
+          </p>
+        </details> : null}
 
         <div className="field">
           <label className="label">{t("ext.cameras.pipeline_preset.pipeline_name", {}, "Pipeline name")}</label>

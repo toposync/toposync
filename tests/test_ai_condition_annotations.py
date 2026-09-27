@@ -3,6 +3,7 @@ import time
 from dataclasses import replace
 
 import numpy as np
+import pytest
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync_ext_ai.pipelines.runtime import AiConditionFilterRuntime
@@ -108,7 +109,8 @@ def test_annotation_distinguishes_visible_negative_from_unobservable_condition()
     asyncio.run(scenario())
 
 
-def test_annotation_binds_subject_to_actual_crop_and_rejects_mismatched_context():
+@pytest.mark.parametrize("preserve_scene", [False, True])
+def test_annotation_binds_subject_to_actual_crop_and_rejects_mismatched_context(preserve_scene):
     import copy
     from toposync_ext_vision.processing.tasks import VisionCropObjectsRuntime
 
@@ -126,7 +128,7 @@ def test_annotation_binds_subject_to_actual_crop_and_rejects_mismatched_context(
             {"emit_mode": "annotate", "bind_subject_context": True,
              "condition_description": "Torso oriented toward the visible facade", "evaluation_interval_seconds": 0},
             PipelineRuntimeDependencies(services=service))
-        cropper = VisionCropObjectsRuntime({"padding_ratio": .5, "min_crop_size_px": 1})
+        cropper = VisionCropObjectsRuntime({"padding_ratio": .5, "min_crop_size_px": 1, "preserve_scene": preserve_scene})
         source = Packet.create(stream_id="person", payload={
             "subject": {"id": "person-1", "bbox01": [.2, .3, .4, .7]},
             "capture_evidence": {"capture_instance": "decoder", "generation": 0,
@@ -135,8 +137,13 @@ def test_annotation_binds_subject_to_actual_crop_and_rejects_mismatched_context(
         cropped = (await cropper.process_packet(source, None))[0]
         target = cropped.artifacts["main"].metadata["subject_context"]
         assert target["subject_id"] == "person-1"
-        assert target["bbox01"] != source.payload["subject"]["bbox01"]
-        assert all(.2 < axis < .8 for axis in target["bbox01"])
+        if preserve_scene:
+            assert target["bbox01"] == source.payload["subject"]["bbox01"]
+            assert cropped.artifacts["main"].data is source.artifacts["main"].data
+            assert cropped.artifacts["main"].metadata["bbox01"] == [0, 0, 1, 1]
+        else:
+            assert target["bbox01"] != source.payload["subject"]["bbox01"]
+            assert all(.2 < axis < .8 for axis in target["bbox01"])
         output = (await runtime.process_packet(cropped, None))[0]
         annotation = output.payload["ai"]["condition_filter"]
         assert annotation["status"] == "matched" and annotation["subject_context"] == target

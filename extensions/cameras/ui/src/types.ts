@@ -495,6 +495,7 @@ export type CameraPipelinePresetRequest = {
   min_stationary_seconds?: number;
   notification_title?: string;
   notification_description?: string;
+  orientation_reference?: string;
   notification_priority?: CameraNotificationPriority;
   enable_ptz_attention?: boolean;
   ptz_attention_native_tracking_disabled_confirmed?: boolean;

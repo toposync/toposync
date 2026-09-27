@@ -1327,3 +1327,29 @@ def test_assistant_doorbell_uses_explicit_cached_signal_without_discovery(tmp_pa
         cached.descriptors_loaded_at_ts -= 3601
         assert client.post("/api/ai/assistant/apply/" + another["proposal_id"]).status_code == 409
         assert manager.cached_boolean_descriptors("cam1") == []
+
+
+def test_person_stopped_orientation_keeps_scene_and_bound_annotation(tmp_path, monkeypatch):
+    with _create_client(tmp_path, monkeypatch, include_ai=True) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client)
+        response = client.post("/api/cameras/cameras/cam1/pipelines/presets", json={
+            "preset": "person_stopped", "orientation_reference": "Fachada branca ao fundo", "enabled": False})
+        assert response.status_code == 200, response.text
+        pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
+        assert pipeline["enabled"] is False
+        scene = _node_config_by_id(pipeline, "orientation_scene")
+        assert scene["preserve_scene"] is True and scene["fallback_to_detections"] is False
+        annotation = _node_config_by_id(pipeline, "orientation")
+        assert annotation["emit_mode"] == "annotate" and annotation["bind_subject_context"] is True
+        assert "Fachada branca ao fundo" in annotation["condition_description"]
+        assert annotation["input_artifact_name"] == "orientation_scene"
+        assert _node_config_by_id(pipeline, "orientation_store")["input_artifact_name"] == "orientation_scene"
+        notify = _node_config(pipeline, "core.notify")
+        assert "ai.condition_filter" in notify["include_payload_paths"]
+        assert "{{payload.ai.condition_filter.description}}" in notify["description"]
+        compiled = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert compiled.status_code == 200, compiled.text
+        invalid = client.post("/api/cameras/cameras/cam1/pipelines/presets", json={
+            "preset": "vehicle_stopped", "orientation_reference": "Fachada branca"})
+        assert invalid.status_code == 400

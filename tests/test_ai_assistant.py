@@ -12,10 +12,10 @@ from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync_ext_ai.assistant import describe_changes, install_assistant_routes, validate_proposal
 
 
-def test_assistant_compiler_and_review_apply_undo_conflict(tmp_path):
+def test_assistant_compiler_and_review_apply_undo_conflict(tmp_path, monkeypatch):
     store = ConfigStore(paths=UserDataPaths(data_dir=tmp_path, config_path=tmp_path / "config.json", files_dir=tmp_path / "files"))
     graph = {"schema_version": 2, "uid": "before", "nodes": [], "edges": []}
-    pipeline = Pipeline(name="review", enabled=False, graph=graph)
+    pipeline = Pipeline(name="review", display_name="Revisão local", enabled=False, graph=graph)
     asyncio.run(store.create_pipeline(pipeline))
     registry = OperatorRegistry()
     compiler = PipelineGraphCompiler(registry)
@@ -38,7 +38,13 @@ def test_assistant_compiler_and_review_apply_undo_conflict(tmp_path):
     app.state.pipeline_operator_registry = registry
     app.state.pipeline_graph_compiler = compiler
     install_assistant_routes(app, Router())
+    async def no_profiles(router):
+        return []
+    monkeypatch.setattr("toposync_ext_ai.assistant.local_profiles", no_profiles)
     with TestClient(app) as client:
+        catalog = client.get("/api/ai/assistant/pipelines").json()
+        assert catalog["pipelines"] == ["review"]
+        assert catalog["pipeline_labels"] == {"review": "Revisão local"}
         def preview():
             response = client.post("/api/ai/assistant/preview", json={"pipeline_name": "review", "instruction": "Change graph identifier"})
             assert response.status_code == 200, response.text

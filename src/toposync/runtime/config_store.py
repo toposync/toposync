@@ -84,11 +84,19 @@ class AppSettings(BaseModel):
 
 class Pipeline(BaseModel):
     name: str
+    display_name: str = Field(default="", max_length=160)
     enabled: bool = True
     processing_server_id: str = "local"
     editor_mode: Literal["interactive", "json", "python"] = "json"
     python_source: str = ""
     graph: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("display_name")
+    @classmethod
+    def _validate_display_name(cls, value: str) -> str:
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Pipeline display name cannot contain control characters")
+        return value.strip()
 
     @field_validator("name", mode="before")
     @classmethod
@@ -777,6 +785,11 @@ class ConfigStore:
             cfg = self._config or _default_config()
             if any(existing.name == pipeline.name for existing in cfg.pipelines):
                 raise PipelineAlreadyExistsError(f"Pipeline already exists: {pipeline.name}")
+            if any(
+                (existing.display_name or existing.name) == (pipeline.display_name or pipeline.name)
+                for existing in cfg.pipelines
+            ):
+                raise PipelineAlreadyExistsError(f"Pipeline already exists: {pipeline.display_name or pipeline.name}")
             cfg2 = _build_config(cfg, pipelines=[*cfg.pipelines, pipeline])
             cfg2 = _normalize_config(cfg2)
             await self._persist_locked(cfg2)
@@ -814,6 +827,12 @@ class ConfigStore:
                 existing.name == pipeline.name for existing in cfg.pipelines
             ):
                 raise PipelineAlreadyExistsError(f"Pipeline already exists: {pipeline.name}")
+            if any(
+                existing.name != name
+                and (existing.display_name or existing.name) == (pipeline.display_name or pipeline.name)
+                for existing in cfg.pipelines
+            ):
+                raise PipelineAlreadyExistsError(f"Pipeline already exists: {pipeline.display_name or pipeline.name}")
 
             pipelines = list(cfg.pipelines)
             pipelines[idx] = pipeline

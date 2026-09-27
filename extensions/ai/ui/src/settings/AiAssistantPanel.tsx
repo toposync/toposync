@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { AiHistorySearch } from "./AiHistorySearch";
 import { requestJson, type SettingsPanel } from "@toposync/plugin-api";
 
-type Catalog = { pipelines: string[]; profiles: { id: string; name: string; model: string }[] };
+type Catalog = { pipelines: string[]; pipeline_labels?: Record<string, string>; profiles: { id: string; name: string; model: string }[] };
 type Preview = { proposal_id: string; difference: string; changes: string[]; pipeline_name: string };
 
 export function createAiAssistantPanel(): SettingsPanel {
@@ -61,21 +61,21 @@ function PipelineEditor({ create }: { create: boolean }): React.ReactElement {
     } catch (reason) { setError(String(reason)); }
     finally { setBusy(false); }
   }
-  return <section aria-label="Assistente de pipelines" style={{ display: "grid", gap: 16, maxWidth: 900, minWidth: 0, overflowWrap: "anywhere" }}>
+  return <section aria-label="Assistente de pipelines" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16, maxWidth: 900, minWidth: 0, overflowWrap: "anywhere" }}>
     <p>{create ? "Descreva o que deseja observar. O assistente usa as receitas e câmeras disponíveis e pergunta quando faltar uma escolha. Revise antes de salvar; a receita começa desativada." : "Descreva uma alteração nas etapas existentes de um pipeline desativado. Revise a proposta antes de salvar. O assistente não ativa dispositivos."}</p>
     {!create && !catalog.pipelines.length && <p>Não há pipelines desativados disponíveis. Crie ou desative um pipeline no editor para começar.</p>}
     {!catalog.profiles.length && <p>Nenhum perfil com modelo Ollama instalado foi encontrado. Verifique o servidor e os perfis nas configurações de inteligência artificial.</p>}
-    {!create && <label className="field">Pipeline<select className="input" value={pipeline} disabled={busy} onChange={(event) => { setPipeline(event.target.value); setPreview(null); }}>
-      {catalog.pipelines.map((name) => <option key={name}>{name}</option>)}
+    {!create && <label className="field">Pipeline<select className="input" style={{ minWidth: 0, width: "100%" }} value={pipeline} disabled={busy} onChange={(event) => { setPipeline(event.target.value); setPreview(null); }}>
+      {catalog.pipelines.map((name) => <option key={name} value={name}>{catalog.pipeline_labels?.[name] || name}</option>)}
     </select></label>}
-    <details><summary>Modelo local</summary><label className="field">Perfil<select className="input" value={profile} disabled={busy} onChange={(event) => { setProfile(event.target.value); setPreview(null); }}>
+    <details><summary>Modelo local</summary><label className="field">Perfil<select className="input" style={{ minWidth: 0, width: "100%" }} value={profile} disabled={busy} onChange={(event) => { setProfile(event.target.value); setPreview(null); }}>
       {catalog.profiles.map((item) => <option key={item.id} value={item.id}>{item.name} — {item.model}</option>)}
     </select></label></details>
     <label className="field">{create ? "O que deseja observar?" : "O que deseja alterar?"}<textarea className="input" style={{ height: "auto", padding: 10, resize: "vertical" }} rows={4} maxLength={4000} value={instruction} disabled={busy} onChange={(event) => { setInstruction(event.target.value); setPreview(null); }} placeholder={create ? "Por exemplo: avise quando um gato usar a caixa na câmera da lavanderia" : "Por exemplo: aumentar a duração mínima de presença para 30 segundos"} /></label>
     {error && <p role="alert">{error} Você também pode usar o editor de pipelines.</p>}
     <div aria-live="polite">{busy ? "Preparando alteração…" : message}</div>
     {preview ? <>
-      <h3>Revisar: {preview.pipeline_name}</h3>
+      <h3>Revisar: {catalog.pipeline_labels?.[preview.pipeline_name] || preview.pipeline_name}</h3>
       <p>{create ? "Ao aplicar, a receita será criada desativada." : "Ao aplicar, somente o grafo será salvo. O pipeline permanece desativado."} Revise configurações e efeitos antes de ativá-lo no editor.</p>
       <ul>{preview.changes.map((change, index) => <li key={index}>{change}</li>)}</ul>
       <details><summary>Detalhes técnicos</summary><pre tabIndex={0} aria-label="Diferenças propostas" style={{ overflow: "auto", maxHeight: 360, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{preview.difference}</pre></details>

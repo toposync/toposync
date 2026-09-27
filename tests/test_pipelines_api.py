@@ -1174,3 +1174,34 @@ def test_pipelines_telemetry_overview_endpoints_aggregate_all_pipelines(
             "pipelines/alpha_pipeline/frame_1.png",
             "pipelines/beta_pipeline/frame_2.png",
         ]
+
+
+def test_pipeline_display_names_persist_and_remain_unique(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        payload = Pipeline(name="natural_name", display_name="Ensaio pose vídeo local", enabled=False,
+                           graph=_v2_graph("natural_name")).model_dump()
+        assert client.post("/api/pipelines", json=payload).status_code == 201
+        duplicate = client.post("/api/pipelines/natural_name/duplicate", json={
+            "new_name": "natural_copy", "display_name": "Cópia do ensaio"})
+        assert duplicate.status_code == 201
+        assert duplicate.json()["display_name"] == "Cópia do ensaio"
+        assert duplicate.json()["name"] == "natural_copy"
+        assert duplicate.json()["enabled"] is False
+        collision = {**payload, "name": "different_identifier"}
+        assert client.post("/api/pipelines", json=collision).status_code == 409
+        assert client.put("/api/pipelines/natural_copy", json={**duplicate.json(),
+                          "display_name": payload["display_name"]}).status_code == 409
+        for label in ["x" * 161, "bad\nname", "\nname"]:
+            assert client.post("/api/pipelines", json={**collision, "display_name": label}).status_code == 422
+            assert client.post("/api/pipelines/natural_name/duplicate", json={
+                "new_name": "invalid_copy", "display_name": label}).status_code in (400, 422)
+        assert client.post("/api/pipelines", json={**payload, "name": "Nome inválido"}).status_code == 422
+        legacy_collision = {**collision, "display_name": "legacy_name"}
+        assert client.post("/api/pipelines", json=legacy_collision).status_code == 201
+        assert client.post("/api/pipelines", json={**payload, "name": "legacy_name", "display_name": ""}).status_code == 409
+    with _create_client(tmp_path, monkeypatch) as client:
+        saved = client.get("/api/pipelines/natural_name").json()
+        assert saved["display_name"] == "Ensaio pose vídeo local"
+        assert saved["enabled"] is False
+        for name in ("natural_name", "natural_copy", "different_identifier"):
+            assert client.delete(f"/api/pipelines/{name}").status_code == 200

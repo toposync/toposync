@@ -367,6 +367,10 @@ export function defaultPipeline(name: string): Pipeline {
   };
 }
 
+export function newPipelineIdentifier(): string {
+  return `pipeline_${Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
 function slugifyOperatorId(operatorId: string): string {
   const raw = String(operatorId || "").trim();
   if (!raw) return "step";

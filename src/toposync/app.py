@@ -809,6 +809,7 @@ class FilterExpressionValidateResponse(BaseModel):
 
 class PipelineDuplicateRequest(BaseModel):
     new_name: str = ""
+    display_name: str = Field(default="", max_length=160)
 
 
 class PipelineRuntimeStatusResponse(BaseModel):
@@ -3997,6 +3998,7 @@ def create_app() -> FastAPI:
 
         payload = source.model_dump(mode="json")
         payload["name"] = new_name
+        payload["display_name"] = str(getattr(body, "display_name", "") or "")
         if str(getattr(source, "editor_mode", "json")) == "python":
             payload["python_source"] = _maybe_add_python_pipeline_alias(
                 str(payload.get("python_source") or ""),

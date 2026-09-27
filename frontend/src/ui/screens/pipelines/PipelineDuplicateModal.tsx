@@ -15,8 +15,9 @@ type Props = {
 function suggestDuplicateName(baseName: string, existing: Set<string>): string {
   const base = String(baseName || "").trim() || "fluxo";
   let index = 2;
-  while (existing.has(`${base}_${index}`)) index += 1;
-  return `${base}_${index}`;
+  const candidate = () => `${base.slice(0, 157 - String(index).length)} (${index})`;
+  while (existing.has(candidate())) index += 1;
+  return candidate();
 }
 
 export function PipelineDuplicateModal({ open, pipeline, existingNames, onClose, onDuplicate }: Props): React.ReactElement | null {
@@ -40,14 +41,14 @@ export function PipelineDuplicateModal({ open, pipeline, existingNames, onClose,
       return;
     }
     const existing = new Set((existingNames ?? []).map((name) => String(name || "").trim()).filter(Boolean));
-    setNewName(suggestDuplicateName(pipeline.name, existing));
+    setNewName(suggestDuplicateName(pipeline.display_name || pipeline.name, existing));
   }, [open, pipeline, existingNames]);
 
   const canDuplicate = useMemo(() => {
     if (!pipeline) return false;
     const trimmed = newName.trim();
     if (!trimmed) return false;
-    if (trimmed === pipeline.name) return false;
+    if (trimmed === (pipeline.display_name || pipeline.name)) return false;
     return true;
   }, [newName, pipeline]);
 
@@ -68,7 +69,7 @@ export function PipelineDuplicateModal({ open, pipeline, existingNames, onClose,
 
   const title = useMemo(() => {
     if (!pipeline) return t("core.ui.pipelines.duplicate.title");
-    return t("core.ui.pipelines.duplicate.title_with_name", { name: pipeline.name });
+    return t("core.ui.pipelines.duplicate.title_with_name", { name: pipeline.display_name || pipeline.name });
   }, [pipeline, t]);
 
   if (!open) return null;
@@ -89,6 +90,7 @@ export function PipelineDuplicateModal({ open, pipeline, existingNames, onClose,
           <input
             className="pipelinesInput"
             value={newName}
+            maxLength={160}
             placeholder={t("core.ui.pipelines.duplicate.placeholder")}
             onChange={(event) => setNewName(event.target.value)}
             onKeyDown={(event) => {

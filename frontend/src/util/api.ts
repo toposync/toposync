@@ -159,6 +159,7 @@ export type AccessOptionsPayload = {
 
 export type Pipeline = {
   name: string;
+  display_name?: string;
   enabled?: boolean;
   processing_server_id?: string;
   editor_mode?: "interactive" | "json" | "python";
@@ -2114,11 +2115,11 @@ export async function putPipeline(name: string, pipeline: Pipeline): Promise<Pip
   );
 }
 
-export async function duplicatePipeline(name: string, newName: string): Promise<Pipeline> {
+export async function duplicatePipeline(name: string, newName: string, displayName = ""): Promise<Pipeline> {
   const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/duplicate`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ new_name: String(newName || "") }),
+    body: JSON.stringify({ new_name: String(newName || ""), display_name: displayName }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

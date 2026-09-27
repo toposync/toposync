@@ -44,6 +44,7 @@ import {
   buildGraphFromInteractiveSteps,
   buildInteractiveStepsFromGraph,
   defaultPipeline,
+  newPipelineIdentifier,
   emptyGraph,
   isRecord,
   jsonPretty,
@@ -188,8 +189,8 @@ function isImplicitPipeline(pipeline: Pipeline): boolean {
 }
 
 function comparePipelinesByName(left: Pipeline, right: Pipeline): number {
-  const leftName = String(left.name || "").trim();
-  const rightName = String(right.name || "").trim();
+  const leftName = String(left.display_name || left.name || "").trim();
+  const rightName = String(right.display_name || right.name || "").trim();
   const semanticOrder = PIPELINE_NAME_COLLATOR.compare(leftName, rightName);
   return semanticOrder || leftName.localeCompare(rightName);
 }
@@ -277,7 +278,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
         .map((pipeline) => {
           const name = String(pipeline.name || "").trim();
           if (!name) return null;
-          return { value: name, label: name };
+          return { value: name, label: pipeline.display_name || name };
         })
         .filter(Boolean) as SelectOption[],
     [explicitPipelines],
@@ -832,7 +833,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     if (!name) return;
     setError(null);
     try {
-      const created = await createPipeline(defaultPipeline(name));
+      const created = await createPipeline({ ...defaultPipeline(newPipelineIdentifier()), display_name: name });
       setPipelines((prev) => sortPipelinesForDisplay([...prev, created]));
       setSelectedName(created.name);
       if (compactLayout) setSidebarOpen(false);
@@ -912,7 +913,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     async (newName: string) => {
       if (!draft) return;
       if (isImplicitPipeline(draft)) return;
-      const created = await duplicatePipeline(draft.name, newName);
+      const created = await duplicatePipeline(draft.name, newPipelineIdentifier(), newName);
       setPipelines((prev) => sortPipelinesForDisplay([...prev, created]));
       setSelectedName(created.name);
       if (compactLayout) setSidebarOpen(false);
@@ -926,7 +927,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       setError(t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here."));
       return;
     }
-    if (!confirm(t("core.ui.pipelines.confirm_delete", { name: draft.name }))) return;
+    if (!confirm(t("core.ui.pipelines.confirm_delete", { name: draft.display_name || draft.name }))) return;
     setError(null);
     try {
       await deletePipeline(draft.name);
@@ -960,7 +961,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
           if (compactLayout) setSidebarOpen(false);
         }}
       >
-        <div className="pipelinesListItemName">{pipeline.name}</div>
+        <div className="pipelinesListItemName">{pipeline.display_name || pipeline.name}</div>
         <div className="pipelinesListItemMeta">{metaParts.join(" · ")}</div>
       </button>
     );
@@ -977,7 +978,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
           {isAggregateHome ? (
             <div className="pipelinesFlag">{t("core.ui.pipelines.telemetry.aggregate.scope", {}, "All pipelines")}</div>
           ) : draft ? (
-            <div className="pipelinesFlag">{draft.name}</div>
+            <div className="pipelinesFlag">{draft.display_name || draft.name}</div>
           ) : null}
           {compactLayout ? (
             <button
@@ -1023,6 +1024,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               name="pipeline_create_name"
               placeholder={t("core.ui.pipelines.create.placeholder_name")}
               value={createName}
+              maxLength={160}
               onChange={(event) => setCreateName(event.target.value)}
             />
             <button className="pillButton" type="button" onClick={() => void handleCreate()}>
@@ -1103,7 +1105,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                 </div>
               ) : null}
               <div className="pipelinesEditorHeader">
-                <div className="pipelinesEditorTitle">{draft.name}</div>
+                <div className="pipelinesEditorTitle">{draft.display_name || draft.name}</div>
                 <div className="pipelinesEditorActions">
                   <button
                     className="pillButton pillButtonPrimary"
@@ -1333,7 +1335,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       <PipelineDuplicateModal
         open={duplicateOpen}
         pipeline={draft}
-        existingNames={pipelines.map((pipeline) => pipeline.name)}
+        existingNames={pipelines.map((pipeline) => pipeline.display_name || pipeline.name)}
         onClose={() => setDuplicateOpen(false)}
         onDuplicate={handleDuplicate}
       />

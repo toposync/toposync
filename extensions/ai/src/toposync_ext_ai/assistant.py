@@ -158,9 +158,11 @@ def install_assistant_routes(app: FastAPI, router: AiRouter) -> None:
     async def pipelines(request: Request) -> dict[str, Any]:
         require(request, "core:pipelines:read")
         available_profiles = await local_profiles(router)
+        available_pipelines = [p for p in await app.state.config_store.list_pipelines()
+                               if not p.enabled and p.editor_mode != "python"]
         return {
-            "pipelines": [p.name for p in await app.state.config_store.list_pipelines()
-                          if not p.enabled and p.editor_mode != "python"],
+            "pipelines": [p.name for p in available_pipelines],
+            "pipeline_labels": {p.name: p.display_name or p.name for p in available_pipelines},
             "profiles": available_profiles,
         }
 

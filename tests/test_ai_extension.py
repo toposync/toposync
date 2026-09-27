@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import pytest
@@ -781,3 +782,30 @@ def test_ai_settings_and_preview_api(tmp_path, monkeypatch: pytest.MonkeyPatch) 
         assert preview.json()["found"] is True
         assert preview.json()["bbox01"] == pytest.approx([0.2, 0.2, 0.8, 0.8])
         assert len(preview.json()["detections"]) == 1
+
+
+def test_ai_annotation_preserves_packets_when_concurrency_is_full() -> None:
+    async def scenario():
+        services = _BlockingConditionServices()
+        runtime = AiConditionFilterRuntime(
+            {"emit_mode": "annotate", "profile_id": "primary", "condition_description": "visible package",
+             "evaluation_interval_seconds": 0, "max_concurrency": 1, "concurrency_policy": "skip"},
+            PipelineRuntimeDependencies(services=services))
+        context = _ConditionRunContext()
+        first = _image_packet("visitor-1")
+        first.payload["capture_evidence"] = {"capture_instance": "test", "generation": 0,
+                                            "sequence": 1, "published_at": time.time()}
+        await context.put(first)
+        task = asyncio.create_task(runtime.run(context))
+        await asyncio.wait_for(services.primary_started.wait(), timeout=1)
+        second = _image_packet("visitor-2")
+        await context.put(second)
+        await _wait_until(lambda: len(context.emitted) == 1)
+        assert context.emitted[0].packet_id == second.packet_id
+        assert context.emitted[0].payload["ai"]["condition_filter"]["reason"] == "concurrency_full"
+        assert context.metrics.dropped_packets == 0
+        context.cancel()
+        services.release_primary.set()
+        await asyncio.wait_for(task, timeout=1)
+        assert len(context.emitted) == 2
+    asyncio.run(scenario())

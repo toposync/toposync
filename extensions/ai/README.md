@@ -152,3 +152,21 @@ que qualquer texto desse tamanho cabe no modelo. Modelo/perfil indisponível ou
 requisição excessiva preserva a alternativa manual. Chamadas visuais mantêm seu
 contrato próprio. Esses limites reduzem reserva de contexto, mas não limitam o
 tamanho dos pesos de um modelo escolhido pelo usuário.
+
+### Anotação visual sem filtrar a ocorrência
+
+`ai.condition_filter` aceita `emit_mode: annotate` quando uma condição visual deve
+complementar um evento existente sem apagar resultados negativos. O lifecycle,
+identificador, artefatos e demais dados do evento são preservados. O resultado fica
+em `payload.ai.condition_filter`: `matched`, `not_matched`, `unknown` ou `closed`.
+Consuma `status` junto de `matches` e `confidence`; uma resposta positiva abaixo do
+limiar continua `unknown`.
+
+Esse modo exige evidência de captura com publicação recente (limite configurado por
+`evidence_timeout_seconds`). Não reaproveita decisões de outro quadro. Repetição,
+intervalo entre avaliações, imagem ausente, falha de inferência, falta de capacidade
+ou saturação conservam o evento com estado desconhecido. CLOSE não faz inferência.
+O limite de streams existente também limita esse estado; entradas sem atividade
+expiram para liberar capacidade. A chamada é limitada a 30 segundos. Isso certifica
+somente o contrato de software: resultado do modelo requer validação visual própria,
+e publicação recente não certifica sincronização ou ausência de buffering na câmera.

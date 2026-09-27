@@ -90,7 +90,8 @@ def register_ai_pipeline_operators(registry: OperatorRegistry) -> None:
             description=(
                 "AI visual condition filter. Evaluates a text condition against the frame and emits only "
                 "matching packets, attaching boolean/confidence metadata. Occurrence mode emits "
-                "open/update/close events from fresh observations with bounded evidence gaps."
+                "open/update/close events from fresh observations with bounded evidence gaps. "
+                "Annotation mode preserves every occurrence and marks unavailable evidence as unknown."
             ),
             config_model=AiConditionFilterConfig,
             inputs=[{"name": "in", "required": True}],

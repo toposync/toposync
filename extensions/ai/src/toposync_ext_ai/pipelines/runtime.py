@@ -39,6 +39,8 @@ class _ConditionState:
     last_eval_at: float = 0.0
     last_result: ConditionEvaluationResult | None = None
     stream_allowed: bool | None = None
+    last_capture: tuple | None = None
+    last_publication_time: float = float("-inf")
 
 
 @dataclass(slots=True)
@@ -555,7 +557,10 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                             concurrency_reason = "primary_concurrency_full"
 
                 if slot is None:
-                    context.metrics.dropped_packets += 1
+                    if self._config.emit_mode == "annotate":
+                        await context.emit(self._annotate(packet, result=None, status="unknown", reason="concurrency_full"), port=self.output_port)
+                    else:
+                        context.metrics.dropped_packets += 1
                     continue
 
                 task = asyncio.create_task(
@@ -714,6 +719,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         fallback_profile_ids: list[str] | None,
         concurrency_reason: str,
     ) -> list[Packet]:
+        if self._config.emit_mode == "annotate":
+            return await self._process_annotation(packet, profile_id, fallback_profile_ids)
         stream_key = packet.stream_id
         state = self._states.setdefault(stream_key, _ConditionState())
 
@@ -768,6 +775,53 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             input_image_key=image_key,
         )
         return [annotated] if passes else []
+
+    async def _process_annotation(self, packet, profile_id, fallback_profile_ids):
+        # Annotation never decides lifecycle or suppresses the upstream occurrence.
+        def unknown(reason):
+            return [self._annotate(packet, result=None, status="unknown", reason=reason)]
+
+        if packet.lifecycle == Lifecycle.CLOSE:
+            self._states.pop(packet.stream_id, None)
+            return [self._annotate(packet, result=None, status="closed")]
+        freshness = resolve_frame_freshness(packet)
+        if freshness.age_seconds is None or freshness.age_seconds > self._config.evidence_timeout_seconds:
+            return unknown("stale_evidence")
+        artifact_name, image = resolve_image_artifact_for_data(packet, input_artifact_name=self._config.input_artifact_name)
+        if image is None or not self._config.condition_description:
+            return unknown("missing_image_or_condition")
+        if packet.stream_id not in self._states and len(self._states) >= self._config.maximum_occurrence_streams:
+            now = time.monotonic()
+            self._states = {key: value for key, value in self._states.items()
+                            if now - value.last_eval_at <= self._config.evidence_timeout_seconds}
+            if len(self._states) >= self._config.maximum_occurrence_streams:
+                return unknown("stream_capacity")
+        state = self._states.setdefault(packet.stream_id, _ConditionState())
+        evidence = packet.payload["capture_evidence"]
+        capture = (evidence["capture_instance"], evidence["generation"], evidence["sequence"])
+        if float(evidence["published_at"]) < state.last_publication_time:
+            return unknown("replayed_evidence")
+        if state.last_capture is not None and capture[0] == state.last_capture[0] and (
+                capture[1] < state.last_capture[1] or (
+                    capture[1] == state.last_capture[1] and capture[2] <= state.last_capture[2])):
+            return unknown("replayed_evidence")
+        if state.last_eval_at and time.monotonic() - state.last_eval_at < self._config.evaluation_interval_seconds:
+            return unknown("evaluation_interval")
+        state.last_capture = capture
+        state.last_publication_time = float(evidence["published_at"])
+        state.last_eval_at = time.monotonic()
+        try:
+            result = await asyncio.wait_for(self._evaluate_condition(
+                image=image, description=self._config.condition_description,
+                profile_id=profile_id, fallback_profile_ids=fallback_profile_ids,
+            ), timeout=30)
+        except Exception:
+            return unknown("evaluation_failed")
+        unavailable = result.reason in {"ai_service_unavailable", "all_ai_profiles_failed",
+            "no_ai_profile_available", "invalid_ai_service_response"}
+        status = "unknown" if unavailable or result.confidence < self._config.confidence_threshold else ("matched" if result.matches else "not_matched")
+        return [self._annotate(packet, result=result, status=status,
+                              input_artifact_name=artifact_name, input_image_key=artifact_name)]
 
     @staticmethod
     async def _acquire_condition_slot(

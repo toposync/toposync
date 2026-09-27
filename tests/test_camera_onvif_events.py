@@ -343,7 +343,8 @@ def test_onvif_state_gate_can_fail_open_when_configured() -> None:
     asyncio.run(scenario())
 
 
-def test_onvif_event_source_suppresses_repeated_boolean_state_values() -> None:
+def test_onvif_event_source_suppresses_repeated_boolean_state_values(monkeypatch) -> None:
+    monkeypatch.setattr("toposync_ext_cameras.pipelines.operators.time.time", lambda: 100.0)
     services = ServiceRegistry()
     events = [
         {
@@ -387,6 +388,9 @@ def test_onvif_event_source_suppresses_repeated_boolean_state_values() -> None:
             "data": {"IsPeople": "true"},
         },
     ]
+
+    for event in events:
+        event["received_at_ts"] = 100.0
 
     async def recent_events(*, camera_id: str, after_sequence: int, limit: int) -> dict[str, Any]:
         assert camera_id == "cam1"
@@ -439,10 +443,11 @@ def test_onvif_state_gate_to_camera_source_compiles() -> None:
     pipeline = Pipeline(
         name="onvif_gate_probe",
         graph={
-            "schema_version": 1,
+            "schema_version": 2,
+            "uid": "onvif_gate_probe",
             "nodes": [
                 {
-                    "id": "gate",
+                    "id": "gate", "uid": "gate",
                     "operator": "camera.onvif_state_gate",
                     "config": {
                         "camera_id": "cam1",
@@ -451,13 +456,14 @@ def test_onvif_state_gate_to_camera_source_compiles() -> None:
                     },
                 },
                 {
-                    "id": "source",
+                    "id": "source", "uid": "source",
                     "operator": "camera.source",
                     "config": {"rtsp_url": "rtsp://camera/stream"},
                 },
             ],
             "edges": [
                 {
+                    "uid": "gate_to_source",
                     "from": {"node": "gate", "port": "out"},
                     "to": {"node": "source", "port": "gate"},
                 }
@@ -516,3 +522,34 @@ def test_onvif_events_api_exposes_service_response(tmp_path: Path, monkeypatch: 
     body = res.json()
     assert body["camera_id"] == "cam1"
     assert body["boolean_states"][0]["label"] == "Motion"
+
+
+def test_onvif_live_source_rejects_prestart_history_invalid_receipts_and_replay(monkeypatch):
+    monkeypatch.setattr("toposync_ext_cameras.pipelines.operators.time.time", lambda: 100.0)
+    services = ServiceRegistry()
+    base = {"topic": "example/doorbell", "operation": "Changed", "source": {}, "key": {}, "data": {}}
+    events = [{**base, "sequence": index + 1, "received_at_ts": receipt}
+              for index, receipt in enumerate((99.9, None, float("nan"), True, 101.0, 100.0))]
+
+    async def recent_events(**kwargs):
+        # Deliberately return replayed events even after the requested cursor.
+        return {"events": events}
+    services.register("cameras.onvif_events.recent_events", recent_events)
+    runtime = OnvifEventSourceRuntime({"camera_id": "cam1"}, PipelineRuntimeDependencies(services=services))
+
+    class Context:
+        pipeline_name = "live_event_probe"
+        node_id = "events"
+
+    async def scenario():
+        packet = await runtime.produce(Context())
+        assert packet is not None
+        assert packet.payload["onvif_event"]["sequence"] == 6
+        assert packet.payload["onvif_event"]["received_at_ts"] == 100.0
+        assert await runtime.produce(Context()) is None
+        events.append({**base, "sequence": 7, "received_at_ts": 100.0})
+        following = await runtime.produce(Context())
+        assert following is not None
+        assert following.payload["onvif_event"]["sequence"] == 7
+        assert await runtime.produce(Context()) is None
+    asyncio.run(scenario())

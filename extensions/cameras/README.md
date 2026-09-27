@@ -209,3 +209,19 @@ avoid phase cancellation and does not perform speaker separation.
 `language` code alongside its existing explicit clock parameters.
 `camera.audio_features` supports the same optional transcription, disabled by
 default for pipelines. Existing packet and occurrence identifiers are preserved.
+
+
+## Live ONVIF event sources
+
+`camera.onvif_event_source` emits events received locally since its runtime was
+constructed. It does not replay the event manager's earlier buffer on startup.
+A missing, non-finite or future local receipt timestamp is rejected, and already
+consumed sequence numbers are not emitted again. `received_at_ts` remains in the
+payload as local receipt evidence; it does not certify camera capture time or
+clock synchronization. Use `camera.onvif_state_gate` for a current boolean state,
+rather than interpreting buffered events as new activity.
+
+Topic and item filters must come from the device's discovered event capabilities.
+The presence of an ONVIF event source does not prove that a particular camera
+reports a doorbell, package or visitor. Correlation with video still requires an
+explicit time window, a shared source/area association and fresh visual evidence.

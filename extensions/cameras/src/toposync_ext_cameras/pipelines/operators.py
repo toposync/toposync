@@ -1315,6 +1315,7 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = OnvifEventSourceConfig.model_validate(config)
         self._dependencies = dependencies
+        self._started_at = time.time()
         self._last_sequence = 0
         self._pending: list[Packet] = []
         self._last_boolean_values: dict[tuple[Any, ...], bool] = {}
@@ -1344,8 +1345,16 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
                 sequence = int(event.get("sequence") or 0)
             except Exception:
                 sequence = 0
-            if sequence > max_seen:
-                max_seen = sequence
+            if sequence <= max_seen:
+                continue
+            max_seen = sequence
+            # A live source must not replay the manager's pre-start history as
+            # new activity. Receipt time is local evidence, not camera capture time.
+            received_at = event.get("received_at_ts")
+            if (isinstance(received_at, bool) or not isinstance(received_at, (int, float))
+                    or not math.isfinite(received_at)
+                    or not self._started_at <= received_at <= time.time()):
+                continue
             if not self._matches_event(event):
                 continue
             value, item_name = self._event_boolean_value(event)

@@ -22,3 +22,48 @@ Leaving the model tool or pressing Escape aborts pending file uploads and discar
 late import results. A cancelled operation cannot place a model or reset a newer
 operation. Already stored files are not deleted; a preview decoder that has already
 started may finish, but its result is discarded after cancellation.
+
+## Optional local generation backend
+
+`POST /api/models/generate` accepts one multipart `file` and requires both
+`core:files:read` and `core:files:write`. This backend is not yet exposed by the
+model editor. It currently accepts a PNG/WebP cutout with transparency, at most
+8 MiB and 16 million pixels. Opaque photos require a separate, evaluated background
+preparation step; they receive `isolated_object_image_required` without inference.
+
+The server looks for a trusted, administrator-installed TripoSR runtime under
+`<data_dir>/models/triposr`, or `TOPOSYNC_MODELS_TRIPOSR_HOME`. It never accepts
+runtime paths, commands, model downloads or cloud fallbacks from the request.
+Required layout:
+
+- `environment/bin/python`: isolated Python with PyTorch, torchmcubes and TripoSR dependencies.
+- `source/tsr/`: official TripoSR source revision `107cefdc244c39106fa830359024f6a2f1c78871`.
+- `weights/config.yaml` and `weights/model.ckpt`: `stabilityai/TripoSR` revision `5b521936b01fbe1890f6f9baed0254ab6351c04a`.
+- `huggingface/hub/`: offline cache for the `facebook/dino-vitb16` configuration, revision `f205d5d8e640a89a2b8ef0369670dfc37cc07fc2`, including its `refs/main` pointer. Additional DINO weights are not needed.
+
+`triposr_manifest.json` pins source/configuration/weight SHA-256 hashes, checked
+inside every worker before importing provider code. Preserve the upstream MIT
+license and attribution with an installation. Installation is currently manual;
+the application does not infer readiness from the presence of files alone.
+Missing runtime returns 503; a conflicting generation returns 409. The evaluated
+runtime uses macOS/CPU, Python 3.12, PyTorch 2.11.0, torchmcubes revision
+`879926d0ef58e6ce0ac2630fdecb5e53af7ed3ff`, transformers 4.35.0, numpy 1.26.4,
+trimesh 4.0.5, omegaconf 2.3.0, einops 0.7.0 and rembg 2.0.69. Other environments
+require qualification; Windows is currently unavailable. The server environment
+itself does not need PyTorch. Do not install these versions over an existing
+processing environment.
+
+One worker per runtime directory is enforced across server processes with a file
+lock. The worker uses two CPU threads, a 128³ extraction grid and offline caches;
+a watchdog checks its peak memory every 100 ms and exits above 12 GiB. The server
+enforces a 300-second timeout and reaps the process on disconnect or cancellation.
+This is a sampled memory guard, not a reservation or an instantaneous allocation
+cap. Original input and intermediate files are temporary and removed at the end.
+
+A successful response follows the existing file-upload shape (`dir`, `filename`,
+`url`, `size_bytes`) and adds `generation`. The same metadata is stored alongside
+`model.glb` as `generation.json`. It identifies the provider/revisions, input hash,
+geometry counts and `generated_approximation`, with `metric_reconstruction=false`.
+Authorization is checked again before publication. The generated Z-up mesh is
+converted to GLTF Y-up; the existing importer supplies scale/floor placement.
+This does not establish real dimensions or observed geometry behind the object.

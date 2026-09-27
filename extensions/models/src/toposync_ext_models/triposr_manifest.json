@@ -1,0 +1,23 @@
+{
+  "provider": "TripoSR",
+  "source_revision": "107cefdc244c39106fa830359024f6a2f1c78871",
+  "model_revision": "5b521936b01fbe1890f6f9baed0254ab6351c04a",
+  "license": "MIT",
+  "files": {
+    "source/tsr/system.py": "7aec93e421394ad7c746b6d63a0189532b57b26af9a199fc75ac3bb7c993c94f",
+    "source/tsr/utils.py": "d9d1a645fef7ea489615bff3471fd01a4941a2c0e138c5dff5daae619563279b",
+    "source/tsr/bake_texture.py": "931d066c25d5943dc7b71469b63c308df3f37b8e7f6df558ee5e348d7936d5b7",
+    "source/tsr/models/nerf_renderer.py": "afe8c12c964078b2c6bb3922d2e30969aa59f7edbacb8cb73d2c3df839dc785f",
+    "source/tsr/models/isosurface.py": "94c9a2ec27f8fe3c2fb57558ef28be253eb77074d2c171d49a41cf73d95d6f5e",
+    "source/tsr/models/network_utils.py": "b3d48e86be9ca3f3abc1bfd774f640fd350e4365843d804e2a3145e7692e1419",
+    "source/tsr/models/tokenizers/triplane.py": "44811fbd53013d6f49e229ecfd0717f89dd8ebeb71608aeb1f8e5ed1d5e8e378",
+    "source/tsr/models/tokenizers/image.py": "f6da23124dfabe6a1f8d0d27693d0cece6574de68be15487a77781b6a9d73195",
+    "source/tsr/models/transformer/attention.py": "347c1a707257cb4eb664ebe9ecd16db7b6006131e74925c049245d2c0101ba7e",
+    "source/tsr/models/transformer/basic_transformer_block.py": "ced8ce4c5c5bbc13368130bc15dee1717cc6bc7f35699f64d03aeec185b1198e",
+    "source/tsr/models/transformer/transformer_1d.py": "fd83a71d59d04ef0a45dbadcc63f9d56d354ebc011a40f5589eb1786a1dd15f4",
+    "weights/config.yaml": "74ca708ce086bf68e97709ea6b3d91f14717921c04691e84043f0eb8fcc68e62",
+    "weights/model.ckpt": "429e2c6b22a0923967459de24d67f05962b235f79cde6b032aa7ed2ffcd970ee",
+    "huggingface/hub/models--facebook--dino-vitb16/snapshots/f205d5d8e640a89a2b8ef0369670dfc37cc07fc2/config.json": "b87c0270b97db085fd82cf114a761fd0f62ae7914fbd407c752a2260646b689c",
+    "huggingface/hub/models--facebook--dino-vitb16/refs/main": "a473faa6f7c22cb025a5389790a297b842ceb2c7a21bf8b74c5812ead8001874"
+  }
+}

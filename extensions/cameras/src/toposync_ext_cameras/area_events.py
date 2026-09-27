@@ -159,12 +159,21 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         payload = dict(packet.payload)
         subject = dict(packet.payload["subject"])
         subject.update({"type": "event", "id": identity, "lifecycle": lifecycle.value})
+        duration = resolve_media_ts(packet) - state.started_at
+        category = {"person": "Pessoa", "dog": "Cão", "cat": "Gato"}[subject["category"]]
+        action = "entrada observada" if self.config.mode == "entry" else "presença observada"
+        description = f"{category}: {action} na área {self.config.area.name}. Evidência por {duration:.1f} segundos."
+        if lifecycle == Lifecycle.CLOSE:
+            description += (
+                " Saída da área observada." if status == "left_area"
+                else " Observação encerrada; presença atual não confirmada."
+            )
         payload.update({
             "subject": subject, "correlation_id": identity,
             "area_occurrence": {"area": self.config.area.name, "mode": self.config.mode,
                 "status": status, "observed_subject": packet.payload["subject"],
                 "started_at": state.started_at, "last_evidence_at": resolve_media_ts(packet),
-                "duration_seconds": resolve_media_ts(packet) - state.started_at},
+                "duration_seconds": duration, "description": description},
         })
         return replace(packet, stream_id=f"area:{identity}", lifecycle=lifecycle, payload=payload,
             parent_packet_id=packet.packet_id,
@@ -217,7 +226,8 @@ def build_area_occurrence_graph(*, preset, camera_id, source_id, detection_model
         {"id": "store", "operator": "core.store_images", "config": {"format": "webp"}},
         {"id": "notify", "operator": "core.notify", "config": {
             "notification_type": "pipelines.tracking", "title": notification_title or "{{camera_name}}: {{payload.area_occurrence.area}}",
-            "description": notification_description or "{{payload.area_occurrence.observed_subject.category}}: {{payload.area_occurrence.duration_seconds}} s de evidência na área.",
+            "description": notification_description or "{{payload.area_occurrence.description}}",
+            "include_payload_paths": ["area_occurrence"],
             "priority": notification_priority or "high", "dedupe_key_template": "{{subject.id}}", "dedupe_by_occurrence": True}},
     ]
     if grouped:

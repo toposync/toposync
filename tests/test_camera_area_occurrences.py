@@ -6,8 +6,9 @@ from toposync.runtime.notifications.store import NotificationStore
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
-from toposync_ext_cameras.area_events import AreaOccurrenceRuntime
+from toposync_ext_cameras.area_events import AreaOccurrenceRuntime, build_area_occurrence_graph
 from toposync_ext_vision.processing.tasks.group_events import VisionGroupEventsRuntime
+from toposync_ext_home_assistant.pipelines import _render_template
 
 
 AREA = {"name": "piscina", "points": [{"x": 0, "z": 0}, {"x": 2, "z": 0}, {"x": 2, "z": 2}, {"x": 0, "z": 2}]}
@@ -20,6 +21,48 @@ def observation(timestamp, x=1, subject="cat-1", generation=0):
         "capture_evidence": {"capture_instance": "decoder", "generation": generation,
                              "sequence": int(timestamp * 100) + 1, "published_at": time.time()},
     })
+
+
+def test_perimeter_description_persists_facts_and_loss_without_duplicate_alert(tmp_path):
+    async def scenario():
+        graph = build_area_occurrence_graph(
+            preset="area_entry", camera_id="one", source_id="main", detection_model_id="detector",
+            composition_id="yard", area_restriction_config={"areas": [AREA], "include_area_names": [AREA["name"]]},
+            graph_uid="perimeter",
+        )
+        configurations = {node["id"]: node["config"] for node in graph["nodes"]}
+        area = AreaOccurrenceRuntime(configurations["area"])
+        store = NotificationStore(tmp_path / "notifications.sqlite3")
+        records = []
+
+        async def upsert(**values):
+            records.append(store.upsert(**values))
+
+        sink = NotifyRuntime({**configurations["notify"], "update_interval_seconds": 0},
+                             PipelineRuntimeDependencies(notifications_upsert=upsert))
+        context = type("Context", (), {"pipeline_name": "perimeter", "node_id": "notify"})()
+        assert await area.process_packet(observation(0), None) == []  # Already inside is not an entry.
+        assert await area.process_packet(observation(1, x=3), None) == []
+        assert await area.process_packet(observation(2), None) == []
+        for timestamp in (3, 4):
+            for packet in await area.process_packet(observation(timestamp), None):
+                await sink.process_packet(packet, context)
+        assert records[-1][0].description == "Gato: entrada observada na área piscina. Evidência por 2.0 segundos."
+        missing = observation(5)
+        missing.payload.pop("world")
+        for packet in await area.process_packet(missing, None):
+            await sink.process_packet(packet, context)
+            assert _render_template(packet, "{{payload.area_occurrence.description}}") == packet.payload["area_occurrence"]["description"]
+        record = records[-1][0]
+        assert record.description.endswith("Observação encerrada; presença atual não confirmada.")
+        assert "Saída" not in record.description
+        assert record.payload["data"]["area_occurrence"]["duration_seconds"] == 2
+        assert record.payload["data"]["area_occurrence"]["observed_subject"]["category"] == "cat"
+        assert len({item.id for item, _ in records}) == 1
+        assert sum(created for _, created in records) == 1
+        assert await area.process_packet(observation(4), None) == []
+
+    asyncio.run(scenario())
 
 
 def test_grouped_crossings_require_distinct_people_in_fixed_window_and_preserve_evidence_duration(tmp_path):

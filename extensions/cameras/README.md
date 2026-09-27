@@ -19,6 +19,20 @@ mapping still determine whether a stationary event has sufficient evidence; this
 sampling rate does not certify physical accuracy or camera availability. Existing
 saved graphs are not rewritten when a recipe changes.
 
+Area presence/entry occurrences provide a deterministic Portuguese description in
+`payload.area_occurrence.description`, retained in the notification with the
+structured area, observed category and evidence duration. Entry requires an
+observed outside-to-inside transition. Loss of evidence ends observation without
+claiming that the subject left; an observed exit is described separately. This is
+a factual caption, not visual identification, gaze, intent or package recognition.
+Notification timestamps and stored images remain the existing evidence links;
+the caption does not reinterpret a media timestamp as wall-clock time.
+
+An explicitly configured `home_assistant.speak` branch can reuse
+`{{payload.area_occurrence.description}}` as its message. Speaker selection,
+authorization, freshness checks and disabled-by-default behavior still apply;
+creating an area recipe does not enable speech or operate a device.
+
 ## APIs
 
 - `GET /api/cameras/index`

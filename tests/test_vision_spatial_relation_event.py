@@ -966,3 +966,31 @@ def test_relation_requires_fresh_evidence_from_each_member(invalid):
         assert await runtime.process_packet(packet, None) == []
 
     asyncio.run(scenario())
+
+
+def test_member_close_reaches_relation_even_when_group_updates_are_throttled():
+    from test_vision_group_events import _event_packet
+    from toposync_ext_vision.processing.tasks.group_events import VisionGroupEventsRuntime
+
+    async def scenario():
+        producer = VisionGroupEventsRuntime({"mode": "proximity", "categories": ["person", "car"],
+                                             "minimum_members": 2, "include_stationary_members": True,
+                                             "update_interval_seconds": 30})
+        relation = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "close_grace_seconds": 0})
+        results = []
+        for timestamp, code, category, x, lifecycle in (
+            (1, "1", "person", 0, Lifecycle.OPEN), (1, "2", "car", 2, Lifecycle.OPEN),
+            (2, "1", "person", 0, Lifecycle.CLOSE),
+        ):
+            packet = _event_packet(timestamp, code, category=category, lifecycle=lifecycle,
+                                  world={"x": x, "z": 0, "confidence": 0.9})
+            packet.payload["capture_evidence"] = {"capture_instance": "decoder", "generation": 0,
+                                                   "sequence": timestamp, "published_at": time.time()}
+            for group in await producer.process_packet(packet, None):
+                results.extend(await relation.process_packet(group, None))
+        assert [packet.lifecycle for packet in results] == [Lifecycle.OPEN, Lifecycle.CLOSE]
+        assert results[0].stream_id == results[1].stream_id
+        assert results[1].payload["spatial_relation_event"]["dwell_seconds"] == 0
+        assert relation._states_by_group == {}
+
+    asyncio.run(scenario())

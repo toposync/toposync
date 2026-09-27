@@ -929,9 +929,13 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             )
             return outputs
 
-        if member.lifecycle == Lifecycle.CLOSE:
+        member_closed = member.lifecycle == Lifecycle.CLOSE
+        if member_closed and previous is not None and not previous.active:
             return outputs
-        if not self._should_emit_update(group, now_monotonic=now_monotonic, packet_ts=packet_ts):
+        # Membership loss must reach consumers even between periodic updates.
+        if not member_closed and not self._should_emit_update(
+            group, now_monotonic=now_monotonic, packet_ts=packet_ts
+        ):
             return outputs
         self._mark_emitted(group, now_monotonic=now_monotonic, packet_ts=packet_ts)
         outputs.append(

@@ -227,7 +227,10 @@ def test_group_events_close_member_does_not_close_group_before_idle() -> None:
         )
 
         assert opened[0].lifecycle == Lifecycle.OPEN
-        assert close_member == []
+        assert [packet.lifecycle for packet in close_member] == [Lifecycle.UPDATE]
+        assert close_member[0].payload["subject"]["id"] == opened[0].payload["subject"]["id"]
+        assert close_member[0].payload["subject"]["members"][0]["active"] is False
+        assert await runtime.process_packet(_event_packet(3.0, "1", lifecycle=Lifecycle.CLOSE), None) == []
 
     asyncio.run(scenario())
 
@@ -269,15 +272,16 @@ def test_group_preserves_separate_recognition_links_without_inheriting_member_id
             },
         )
         updated = (await runtime.process_packet(second, None))[0]
-        assert (
+        membership_update = (
             await runtime.process_packet(_event_packet(3.0, "1", lifecycle=Lifecycle.CLOSE), None)
-            == []
-        )
+        )[0]
+        assert membership_update.lifecycle == Lifecycle.UPDATE
+        assert membership_update.payload["subject"]["members"][0]["active"] is False
         closed_member = (await runtime.process_packet(_source_packet(7.0), None))[0]
         assert closed_member.lifecycle == Lifecycle.CLOSE
         assert not opened.artifacts and "recognition" not in opened.payload
         assert opened.payload["subject"]["id"] == updated.payload["subject"]["id"]
-        for packet in (updated, closed_member):
+        for packet in (updated, membership_update, closed_member):
             assert "recognition" not in packet.payload
             assert "private-person" not in str(packet.payload) and "private-cat" not in str(
                 packet.payload

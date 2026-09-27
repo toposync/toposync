@@ -261,7 +261,7 @@ function notificationFilterFacetsEqual(left: NotificationsFilter, right: Notific
 }
 
 function notificationFiltersEqual(left: NotificationsFilter, right: NotificationsFilter): boolean {
-  return notificationFilterFacetsEqual(left, right) && left.query === right.query && Boolean(left.semantic) === Boolean(right.semantic);
+  return notificationFilterFacetsEqual(left, right) && left.query === right.query && (left.semantic || false) === (right.semantic || false);
 }
 
 function isOpenRealtimeNotification(notification: Notification | null | undefined): boolean {

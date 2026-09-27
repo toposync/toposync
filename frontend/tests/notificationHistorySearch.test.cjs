@@ -7,7 +7,7 @@ const ts = require("typescript");
 const filename = path.resolve(__dirname, "../src/ui/App.tsx");
 const source = fs.readFileSync(filename, "utf8");
 const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = new Set(["notificationMatchesFilter", "mergeNotificationPage", "upsertNotificationInState"]);
+const names = new Set(["notificationMatchesFilter", "mergeNotificationPage", "upsertNotificationInState", "notificationFiltersEqual", "notificationFilterFacetsEqual", "stringArraysEqual"]);
 const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text));
 const context = {withoutEphemeralImage: value => value, sortNotificationIdsByCreatedDesc: ids => [...ids].sort(), asRecord: value => value && typeof value === "object" ? value : {}, notificationPriority: () => "medium"};
 vm.createContext(context);
@@ -29,8 +29,8 @@ test("nontext metadata is excluded from realtime search", () => {
   }
 });
 
-test("semantic results preserve ranking and realtime never applies a lexical filter", () => {
-  const filter = {priorities:["medium"],types:[],query:"felino tomando água",semantic:true};
+for (const semantic of [true, "visual"]) test(`semantic ${semantic} results preserve ranking and realtime never applies a lexical filter`, () => {
+  const filter = {priorities:["medium"],types:[],query:"felino tomando água",semantic};
   const page = [{id:"z",title:"Gato no bebedouro"},{id:"a",title:"Outro evento"}];
   const initial = context.mergeNotificationPage({byId:{},visibleIds:[]},page,{replaceVisible:true,filter});
   assert.equal(initial.visibleIds.join(","),"z,a");
@@ -56,4 +56,10 @@ test("temporal results replace stale history, append pages and retain updates un
   assert.equal(added.visibleIds.join(","),"one,two");
   const cleared = context.mergeNotificationPage(added,[],{replaceVisible:true,filter,resolvedOnServer:true});
   assert.equal(cleared.visibleIds.length,0);
+});
+
+test("changing text to visual search invalidates the previous result", () => {
+  const filter = {priorities:["medium"],types:[],query:"pacote",semantic:true};
+  assert.equal(context.notificationFiltersEqual(filter, {...filter,semantic:"visual"}),false);
+  assert.equal(context.notificationFiltersEqual(filter, {...filter}),true);
 });

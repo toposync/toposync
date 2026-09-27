@@ -202,7 +202,7 @@ export type Priority = "low" | "medium" | "high";
 const ALL_PRIORITIES: Priority[] = ["high", "medium", "low"];
 
 export type NotificationsFilter = {
-  semantic?: boolean;
+  semantic?: boolean | "visual";
   priorities: Priority[];
   types: string[]; // empty array = "all types"
   query: string;
@@ -256,7 +256,7 @@ export function loadNotificationsFilter(): NotificationsFilter {
       priorities: priorities.length > 0 ? priorities : DEFAULT_NOTIFICATIONS_FILTER.priorities,
       types,
       query,
-      semantic: parsed.semantic === true,
+      semantic: parsed.semantic === "visual" ? "visual" : parsed.semantic === true,
     };
   } catch {
     return { ...DEFAULT_NOTIFICATIONS_FILTER };
@@ -391,6 +391,12 @@ export function MainScreen({
   const { t, locale } = i18n.useI18n();
   const timeRange = notificationsSearchStatus?.time_range;
   const timezoneRequired = notificationsSearchStatus?.reason === "installation_timezone_required";
+  const visualSearchMessage = [
+    t("core.ui.notifications.filter.visual_summary", { limit: notificationsSearchStatus?.scope_limit ?? 250 }),
+    (notificationsSearchStatus?.pending ?? 0) > 0 ? t("core.ui.notifications.filter.visual_pending", { count: notificationsSearchStatus?.pending }) : "",
+    (notificationsSearchStatus?.unavailable_images ?? 0) > 0 ? t("core.ui.notifications.filter.visual_unavailable", { count: notificationsSearchStatus?.unavailable_images }) : "",
+    (notificationsSearchStatus?.without_images ?? 0) > 0 ? t("core.ui.notifications.filter.visual_without_images", { count: notificationsSearchStatus?.without_images }) : "",
+  ].filter(Boolean).join(" ");
   const timeFormatter = timeRange ? new Intl.DateTimeFormat(locale, {
     timeZone: timeRange.timezone, dateStyle: "short", timeStyle: "short",
   }) : null;
@@ -1252,10 +1258,14 @@ export function MainScreen({
                         />
                       </div>
 
-                      <label>
-                        <input type="checkbox" checked={filter.semantic === true}
-                          onChange={(event) => setFilter((previous) => ({ ...previous, semantic: event.target.checked }))} />
-                        {t("core.ui.notifications.filter.semantic")}
+                      <label className="notificationsFilterSection">
+                        <span className="notificationsFilterSectionTitle">{t("core.ui.notifications.filter.method")}</span>
+                        <select className="notificationsFilterSearch" value={filter.semantic === "visual" ? "visual" : filter.semantic ? "text" : "literal"}
+                          onChange={(event) => setFilter((previous) => ({ ...previous, semantic: event.target.value === "visual" ? "visual" : event.target.value === "text" }))}>
+                          <option value="literal">{t("core.ui.notifications.filter.literal")}</option>
+                          <option value="text">{t("core.ui.notifications.filter.semantic")}</option>
+                          <option value="visual">{t("core.ui.notifications.filter.visual")}</option>
+                        </select>
                       </label>
                       {(filter.semantic || timeRange) && filter.query.trim() ? (
                         <button type="button" className="chipButton" disabled={notificationsLoading} onClick={onNotificationsSearchRefresh}>
@@ -1263,7 +1273,9 @@ export function MainScreen({
                         </button>
                       ) : null}
                       <p id="notificationsSearchMode" className="muted" role="status">
-                        {timezoneRequired ? t("core.ui.notifications.filter.timezone_required") : notificationsSearchStatus?.mode === "semantic_text"
+                        {timezoneRequired ? t("core.ui.notifications.filter.timezone_required") : notificationsSearchStatus?.mode === "semantic_visual"
+                          ? visualSearchMessage
+                          : notificationsSearchStatus?.mode === "semantic_text"
                           ? t("core.ui.notifications.filter.semantic_scope", { limit: notificationsSearchStatus.scope_limit ?? 250, pending: notificationsSearchStatus.pending ?? 0 })
                           : notificationsSearchStatus?.status === "degraded"
                             ? t("core.ui.notifications.filter.semantic_fallback")
@@ -1331,7 +1343,9 @@ export function MainScreen({
             {timeSearchMessage && filter.query.trim() ? <div className="cardBody" role="status">{timeSearchMessage}</div> : null}
             {notificationsSearchStatus && filter.semantic && filter.query.trim() && !timezoneRequired ? (
               <div className="cardBody" role="status">
-                {notificationsSearchStatus.mode === "semantic_text"
+                {notificationsSearchStatus.mode === "semantic_visual"
+                  ? visualSearchMessage
+                  : notificationsSearchStatus.mode === "semantic_text"
                   ? t("core.ui.notifications.filter.semantic_summary", { limit: notificationsSearchStatus.scope_limit ?? 250, pending: notificationsSearchStatus.pending ?? 0 })
                   : notificationsSearchStatus.status === "degraded" ? t("core.ui.notifications.filter.semantic_fallback")
                     : t("core.ui.notifications.filter.search_mode")}
@@ -1344,10 +1358,10 @@ export function MainScreen({
               onTouchStart={noteNotificationPaginationUserEngagement}
               onWheel={noteNotificationPaginationUserEngagement}
             >
-              {visibleNotifications.length === 0 ? (
+              {visibleNotifications.length === 0 && !notificationsLoading ? (
                 <div className="card">
                   <div className="cardBody">
-                    {t("core.ui.notifications_empty")}
+                    {t(filter.query.trim() ? "core.ui.notifications.search_empty" : "core.ui.notifications_empty")}
                   </div>
                   {filterRestrictive ? (
                     <button type="button" className="notificationsFilterLink" onClick={clearFilter}>

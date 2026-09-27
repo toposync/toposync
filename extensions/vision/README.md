@@ -110,7 +110,7 @@ The public surface is task-based, not vendor-based. The official first-party run
 
 ## Experimental visual history backend
 
-The AI history endpoint accepts `mode=visual` for multilingual text-to-image ranking of visible notification images. It reuses notification authorization, time filters and SQLite. Similarity does not confirm identity or trigger automation. The existing interface still exposes text search; visual search setup and interface are not yet delivered.
+The AI history endpoint accepts `mode=visual` for multilingual text-to-image ranking of visible notification images. It reuses notification authorization, time filters and SQLite. Similarity does not confirm identity or trigger automation. The notification filter offers words, text meaning and images. Guided visual model installation is not yet delivered.
 
 This optional backend requires the `visual-search` extra and locally provisioned files listed with checksums in `history_embeddings.py`, under the installation's `vision-models` directory. It never downloads models during search. The image encoder is [Xenova CLIP ViT-B/32](https://huggingface.co/Xenova/clip-vit-base-patch32/tree/d15189d7028b43f1d3e65039190477f6af591c2a) and the aligned text encoder is [Sentence Transformers multilingual CLIP](https://huggingface.co/sentence-transformers/clip-ViT-B-32-multilingual-v1/tree/58edf8cada9e398793dca955574a48cbb7f18be2). The current quantized text export was validated on ARM64 CPU; other platforms need their own validation.
 

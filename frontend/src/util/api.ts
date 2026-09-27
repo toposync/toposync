@@ -833,7 +833,9 @@ export type HomeAssistantRegistryResponse = {
 };
 
 export type NotificationSearchStatus = {
-  mode: "literal" | "semantic_text"; status: "ready" | "partial" | "degraded"; scope_limit?: number; pending?: number;
+  mode: "literal" | "semantic_text" | "semantic_visual"; status: "ready" | "partial" | "degraded"; scope_limit?: number; pending?: number;
+  unavailable_images?: number;
+  without_images?: number;
   reason?: string;
   time_range?: { timezone: string; created_after: number; created_before: number; basis: "notification_created_at"; expression: string };
 };
@@ -847,7 +849,7 @@ export type NotificationsPage = {
 export type NotificationPriority = "low" | "medium" | "high";
 
 export type NotificationsListParams = {
-  semantic?: boolean;
+  semantic?: boolean | "visual";
   before?: number | null;
   limit?: number;
   priorities?: NotificationPriority[];
@@ -1746,6 +1748,7 @@ export async function listNotifications(
   }
   const query = String(listParams.query ?? "").trim();
   if (query) params.set("query", query);
+  if (listParams.semantic === "visual" && query) params.set("mode", "visual");
   const path = listParams.semantic && query ? "/api/ai/history/search" : "/api/notifications";
   const res = await fetch(`${path}?${params.toString()}`, { signal: listParams.signal });
   if (listParams.semantic && query && res.status === 404) {

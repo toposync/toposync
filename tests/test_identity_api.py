@@ -364,6 +364,8 @@ def test_camera_scope_survives_unassignment_and_protects_implicit_curation(
     )
     listing = client.get("/api/vision/identities")
     assert listing.status_code == 200 and listing.json()["identities"] == []
+    from toposync_ext_ai.history_answer import install_history_answer_routes
+    install_history_answer_routes(client.app, client.app.state.services, object())
     for restricted in (identity, orphan_id, standalone_id, merged_id):
         denied = client.get("/api/vision/identities/history-scope", params={"identity_id": restricted})
         assert denied.status_code == 403
@@ -371,6 +373,9 @@ def test_camera_scope_survives_unassignment_and_protects_implicit_curation(
         history = client.get(f"/api/vision/identities/{restricted}/notifications")
         assert history.status_code == 403
         assert "notifications" not in history.json()
+        answer = client.post("/api/ai/history/answer", json={"question": "pessoa", "identity_id": restricted})
+        assert answer.status_code == 403
+        assert "notifications" not in answer.json()
     for restricted in (standalone_id, merged_id):
         assert (
             client.post(
@@ -691,5 +696,68 @@ def test_identity_retrieval_rechecks_association_and_notification_after_search(c
         response = client.get(f"/api/vision/identities/{identity}/notifications", params={"query": "pessoa", "mode": "visual"})
         assert response.status_code == 409, response.text
         assert "notifications" not in response.json()
+    finally:
+        gallery.close()
+
+
+@pytest.mark.parametrize("change", [None, "association", "notification_reference", "camera_filter"])
+def test_assistant_identity_sources_are_revalidated_after_answer(client, change):
+    import json
+    from toposync_ext_ai.history_answer import install_history_answer_routes
+    from toposync_ext_ai.text_embeddings import install_text_history_routes
+    from test_identity_store import curate
+    gallery, identity, single, group = _history_fixture(client)
+    calls = []
+    class Router:
+        async def generate_local_json(self, **values):
+            content = values["messages"][1]["content"]
+            assert identity not in content
+            assert "enrollment" not in content
+            records = json.loads(content)["records"]
+            assert set(records) == {single.id, group.id}
+            calls.append(records)
+            if change == "association":
+                observation = next(item for item in gallery.observations() if item["occurrence_id"] == "enrollment")
+                curate(gallery, "unassign", {"observation_ids": [observation["id"]]})
+            elif change in {"notification_reference", "camera_filter"}:
+                client.app.state.notifications.store.upsert(type="event", title="Pessoa", dedupe_key="single", payload={"data": {
+                    "camera_id": "camera" if change == "notification_reference" else "other",
+                    "recognition": {"occurrence_id": "different" if change == "notification_reference" else "enrollment"}}})
+            return {"citations": [{"notification_id": single.id, "field": "title", "excerpt": records[single.id]["title"]}]}
+    try:
+        install_text_history_routes(client.app, client.app.state.services)
+        install_history_answer_routes(client.app, client.app.state.services, Router())
+        response = client.post("/api/ai/history/answer", json={"question": "pessoa", "identity_id": identity, "data_filter": {"camera_id": "camera"}})
+        assert len(calls) == 1
+        if change in {"association", "notification_reference"}:
+            assert response.status_code == 409, response.text
+            assert "notifications" not in response.json()
+        else:
+            assert response.status_code == 200, response.text
+            result = response.json()
+            assert response.headers["cache-control"] == "private, no-store"
+            if change == "camera_filter":
+                assert result["answer"] == {"status": "unavailable", "citations": []}
+                assert [item["id"] for item in result["notifications"]] == [group.id]
+            else:
+                assert result["answer"]["status"] == "extractive"
+                assert {item["id"] for item in result["notifications"]} == {single.id, group.id}
+    finally:
+        gallery.close()
+
+
+def test_assistant_empty_identity_never_calls_embedding_or_answer_model(client):
+    from toposync_ext_ai.history_answer import install_history_answer_routes
+    from toposync_ext_vision.identity.store import IdentityStore
+    from test_identity_store import curate
+    gallery = IdentityStore(client.app.state.config_store.paths.data_dir / "identities", scope="installation")
+    try:
+        identity = curate(gallery, "create", {"name": "Sem visitas", "species": "cat"})["identity_id"]
+        # No AI retrieval services or model methods exist in this installation.
+        install_history_answer_routes(client.app, client.app.state.services, object())
+        response = client.post("/api/ai/history/answer", json={"question": "gato", "identity_id": identity})
+        assert response.status_code == 200, response.text
+        assert response.json()["notifications"] == []
+        assert response.json()["search"]["reason"] == "no_associated_notifications"
     finally:
         gallery.close()

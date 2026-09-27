@@ -150,6 +150,22 @@ dos registros não chama serviços de configuração. `GET /api/ai/history/profi
 reutiliza descoberta dos modelos instalados sob `core:notifications:read`, sem
 exigir permissão de consultar pipelines.
 
+A API também aceita `data_filter` com os mesmos filtros exatos do histórico,
+`mode=text|visual`, `identity_id` explícito e `association=human|recognized`.
+A seleção humana é padrão; sugestões nunca entram. A visão fornece a seleção
+privada autorizada pela mesma função usada na recuperação de notificações.
+Sem essa extensão, uma consulta com identidade falha com 503, sem ampliar a
+busca. Uma identidade sem eventos associados não chama embeddings nem geração.
+
+Antes e depois da geração, o servidor verifica acesso e associações atuais.
+Mudanças de vínculo retornam 409; acesso revogado retorna 403. Fontes que saíram
+dos filtros, foram apagadas ou se tornaram silenciosas não sustentam citações.
+Falha do modelo conserva somente fontes atuais dentro da seleção. Respostas
+usam `Cache-Control: private, no-store`. Biometria, galeria e payload bruto nunca
+entram no modelo. A recuperação visual pode ordenar imagens, mas a resposta
+continua extrativa de títulos/descrições, sem nova interpretação visual.
+Os controles desses filtros no assistente ainda precisam de integração visual.
+
 A interface apresenta os campos como citações, liga cada um ao registro original
 e conserva horário de criação e imagem disponível. Durações só aparecem quando
 já descritas na fonte; não são inferidas entre notificações. Campos maiores que

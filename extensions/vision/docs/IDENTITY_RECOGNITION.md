@@ -195,3 +195,12 @@ are a snapshot: refresh or returning focus rechecks access, and local gallery
 curation invalidates them. Identical realtime repeats preserve results; changed
 records are removed pending an authorized refresh. New public events are not
 admitted by client-side identity guesses.
+
+
+The internal `vision.identity.history_selection` service shares the authorized
+selection used by notification retrieval with the AI history answerer. It
+requires the current authenticated request and rechecks identity, camera and
+notification permissions on every call. Its private scope and occurrence keys
+are not model context or public notification fields. Consumers must revalidate
+after generation before returning evidence; the service does not certify model
+accuracy or authorize device actions.

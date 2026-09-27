@@ -82,10 +82,12 @@ class VisionExtension(BaseExtension):
                     )
                 return self._identity_store
 
-        from .identity.api import create_identity_router
+        from functools import partial
+        from .identity.api import create_identity_router, identity_history_selection
 
         app.include_router(create_identity_router(identity_store))
         services.register("vision.identity.store", identity_store)
+        services.register("vision.identity.history_selection", partial(identity_history_selection, get_store=identity_store))
 
         def maintain_existing_gallery():
             # Reopen existing galleries after restart without creating one for unused installations.

@@ -95,3 +95,33 @@ def test_history_profile_discovery_uses_read_permission(tmp_path):
     client, calls, _ = client_for(tmp_path, lambda identifier: {}, denied=True)
     assert client.get("/api/ai/history/profiles").status_code == 403
     assert not calls
+
+
+@pytest.mark.parametrize("fields", [{"data_filter": {"camera_id": 7}}, {"data_filter": {"camera_id": ""}}, {"data_filter": {"x": "a" * 513}}, {"association": "suggested"}, {"mode": "invented"}])
+def test_invalid_history_selection_never_calls_services(tmp_path, fields):
+    client, calls, _ = client_for(tmp_path, lambda identifier: {})
+    assert client.post("/api/ai/history/answer", json={"question": "gato", **fields}).status_code == 422
+    assert calls == []
+
+
+def test_private_identity_with_missing_vision_fails_closed(tmp_path):
+    from toposync.runtime.services import ServiceRegistry
+    client, _, _ = client_for(tmp_path, lambda identifier: {})
+    app = FastAPI()
+    app.state.auth = client.app.state.auth
+    app.state.notifications = client.app.state.notifications
+    install_history_answer_routes(app, ServiceRegistry(), object())
+    response = TestClient(app).post("/api/ai/history/answer", json={"question": "gato", "identity_id": "missing"})
+    assert response.status_code == 503
+    assert "notifications" not in response.json()
+
+
+def test_notification_permission_is_checked_again_after_inference(tmp_path):
+    def revoke(runtime, record):
+        def deny(**values):
+            raise HTTPException(403, "revoked during answer")
+        client.app.state.auth.authorize = deny
+    client, _, _ = client_for(tmp_path, lambda identifier: {"citations": [{"notification_id": identifier, "field": "title", "excerpt": "Gato na água"}]}, mutate=revoke)
+    response = client.post("/api/ai/history/answer", json={"question": "gato"})
+    assert response.status_code == 403
+    assert "notifications" not in response.json()

@@ -135,6 +135,29 @@ def _authorize(request: Request, *, write: bool = False, cameras: set[str] | Non
     return principal.user_id
 
 
+async def identity_history_selection(*, request: Request, get_store: Callable[[], IdentityStore],
+                                     identity_id: str, association: str = "human") -> dict:
+    """Private selection shared by retrieval and answering; every call reauthorizes."""
+    from .history import matching_notification_ids
+
+    _authorize(request)
+    request.app.state.auth.authorize(context=request.state.auth_context,
+        action="core:notifications:read", resource_type=None, resource_selector="*")
+    def select():
+        try:
+            gallery = get_store()
+        except Exception as exc:
+            raise HTTPException(503, "Identity gallery unavailable") from exc
+        try:
+            return gallery.history_scope(identity_id, association=association,
+                authorize_cameras=lambda cameras: _authorize(request, cameras=cameras))
+        except IdentityConflict as exc:
+            raise HTTPException(409, "Identity changed; refresh the selection") from exc
+    scope = await asyncio.to_thread(select)
+    identifiers = await asyncio.to_thread(matching_notification_ids, request.app.state.notifications.store, scope)
+    return {"scope": scope, "notification_ids": identifiers}
+
+
 def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
     router = APIRouter(prefix="/api/vision/identities", tags=["identity"])
 
@@ -217,22 +240,11 @@ def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
     ):
         from toposync.runtime.notifications.store import parse_data_filter
         from toposync.runtime.notifications.time_query import resolve_history_time
-        from .history import matching_notification_ids
-
-        _authorize(request)
-        request.app.state.auth.authorize(context=request.state.auth_context,
-            action="core:notifications:read", resource_type=None, resource_selector="*")
         response.headers["Cache-Control"] = "private, no-store"
-        gallery = store()
-        def selection():
-            try:
-                return gallery.history_scope(identity_id, association=association,
-                    authorize_cameras=lambda cameras: _authorize(request, cameras=cameras))
-            except IdentityConflict as exc:
-                raise HTTPException(409, "Identity changed; refresh the selection") from exc
-        scope = await asyncio.to_thread(selection)
+        selected = await identity_history_selection(request=request, get_store=store,
+            identity_id=identity_id, association=association)
+        scope, identifiers = selected["scope"], selected["notification_ids"]
         runtime = request.app.state.notifications
-        identifiers = await asyncio.to_thread(matching_notification_ids, runtime.store, scope)
         try:
             filters = parse_data_filter(data_filter)
         except ValueError as exc:
@@ -268,8 +280,8 @@ def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
                 **(interpretation or {})}}
         elif interpretation:
             result["search"].update(interpretation)
-        current = await asyncio.to_thread(selection)
-        current_ids = await asyncio.to_thread(matching_notification_ids, runtime.store, current)
+        selected = await identity_history_selection(request=request, get_store=store, identity_id=identity_id, association=association)
+        current, current_ids = selected["scope"], selected["notification_ids"]
         if current != scope or not {item["id"] for item in result["notifications"]}.issubset(current_ids):
             raise HTTPException(409, "Identity history changed; refresh the selection")
         request.app.state.auth.authorize(context=request.state.auth_context,

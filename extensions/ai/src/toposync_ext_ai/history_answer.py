@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI, Request
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import FastAPI, HTTPException, Request, Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from toposync.runtime.notifications.store import parse_data_filter
 
 from .assistant import local_profiles, require
 
@@ -15,6 +17,15 @@ class HistoryQuestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
     question: str = Field(min_length=1, max_length=1000, pattern=r"\S")
     profile_id: str | None = None
+    identity_id: str | None = Field(default=None, min_length=1, max_length=128, strict=True)
+    association: Literal["human", "recognized"] = "human"
+    mode: Literal["text", "visual"] = "text"
+    data_filter: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("data_filter")
+    @classmethod
+    def validate_filter(cls, value):
+        return parse_data_filter(value)
 
 
 class Citation(BaseModel):
@@ -36,12 +47,40 @@ def install_history_answer_routes(app: FastAPI, services: Any, router: Any) -> N
         return {"profiles": await local_profiles(router)}
 
     @app.post("/api/ai/history/answer")
-    async def answer(request: Request, body: HistoryQuestion) -> dict[str, Any]:
+    async def answer(request: Request, response: Response, body: HistoryQuestion) -> dict[str, Any]:
         require(request, "core:notifications:read")
+        response.headers["Cache-Control"] = "private, no-store"
         question = body.question.strip().rstrip("?.! ")
         if re.search(r"\b(tarde|manhã|manha|noite|madrugada)\b", question, re.I) and not re.search(r"\b(hoje|ontem)\b", question, re.I):
             return {"answer": {"status": "needs_date", "message": "De qual dia? Indique hoje ou ontem e o período na consulta."}, "notifications": [], "search": {}}
-        result = await services.call("ai.search_notifications", query=question, limit=10)
+        async def selection():
+            try:
+                return await services.call("vision.identity.history_selection", request=request,
+                    identity_id=body.identity_id, association=body.association)
+            except KeyError as exc:
+                raise HTTPException(503, "Identity history unavailable") from exc
+        identity_selection = await selection() if body.identity_id else None
+        parameters = {"query": question, "limit": 10, "data_filter": body.data_filter}
+        if identity_selection is not None:
+            parameters["notification_ids"] = identity_selection["notification_ids"]
+        service = "ai.search_visual_notifications" if body.mode == "visual" else "ai.search_notifications"
+        result = (await services.call(service, **parameters) if identity_selection is None or identity_selection["notification_ids"] else {
+            "notifications": [], "search": {"mode": "literal", "status": "ready", "reason": "no_associated_notifications"}
+        })
+
+        async def validate_selection():
+            require(request, "core:notifications:read")
+            if identity_selection is not None:
+                current = await selection()
+                if current["scope"] != identity_selection["scope"] or not {item["id"] for item in result["notifications"]}.issubset(current["notification_ids"]):
+                    raise HTTPException(409, "Identity history changed; refresh the selection")
+        await validate_selection()
+
+        async def current_sources():
+            items, _ = await app.state.notifications.list(limit=10,
+                notification_ids=[item["id"] for item in result["notifications"]], data_filter=body.data_filter)
+            by_id = {item["id"]: item for item in items}
+            return [by_id[item["id"]] for item in result["notifications"] if item["id"] in by_id]
         result["answer"] = {"status": "no_evidence", "citations": []}
         if not result["notifications"]:
             return result
@@ -72,21 +111,20 @@ def install_history_answer_routes(app: FastAPI, services: Any, router: Any) -> N
                     raise ValueError("unsupported_history_citation")
                 seen.add(key)
             # Deletion or edits during inference invalidate the evidence used by the model.
-            current = []
-            for item in result["notifications"]:
-                fresh = await app.state.notifications.get(item["id"])
-                if fresh is None or any(fresh.get(key) != item.get(key) for key in ("title", "description", "updatedAt", "priority")):
-                    raise ValueError("history_changed_during_answer")
-                current.append(fresh)
+            current = await current_sources()
+            if len(current) != len(result["notifications"]) or any(
+                any(fresh.get(key) != old.get(key) for key in ("title", "description", "updatedAt", "priority"))
+                for fresh, old in zip(current, result["notifications"])
+            ):
+                raise ValueError("history_changed_during_answer")
             result["notifications"] = current
             result["answer"] = {"status": "extractive" if selected.citations else "no_supported_answer",
                                 "citations": [citation.model_dump() for citation in selected.citations]}
         except Exception:
             # Keep retrieval useful when the local profile or its output is unavailable.
             # Do not return stale sources after a concurrent removal or privacy change.
-            result["notifications"] = [fresh for item in result["notifications"]
-                if (fresh := await app.state.notifications.get(item["id"])) is not None
-                and fresh.get("priority") in {"low", "medium", "high"}]
+            result["notifications"] = await current_sources()
             result["answer"] = {"status": "unavailable", "citations": []}
             result["search"]["returned_count"] = len(result["notifications"])
+        await validate_selection()
         return result

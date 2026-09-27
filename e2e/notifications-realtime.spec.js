@@ -103,8 +103,8 @@ test("main screen keeps global and selected-notification SSE separate", async ({
   await page.waitForFunction(() => {
     const events = window.__toposyncEventSourceEvents || [];
     return (
-      events.some((event) => event.kind === "open" && /\/api\/notifications\/stream$/.test(event.url)) &&
-      events.some((event) => event.kind === "open" && /\/api\/notifications\/notif-two\/stream$/.test(event.url))
+      events.some((event) => event.kind === "open" && /\/api\/notifications\/stream(?:\?.*)?$/.test(event.url)) &&
+      events.some((event) => event.kind === "open" && /\/api\/notifications\/notif-two\/stream(?:\?.*)?$/.test(event.url))
     );
   });
 
@@ -113,15 +113,15 @@ test("main screen keeps global and selected-notification SSE separate", async ({
   await page.waitForFunction(() => {
     const events = window.__toposyncEventSourceEvents || [];
     return (
-      events.some((event) => event.kind === "close" && /\/api\/notifications\/notif-two\/stream$/.test(event.url)) &&
-      events.some((event) => event.kind === "open" && /\/api\/notifications\/notif-one\/stream$/.test(event.url))
+      events.some((event) => event.kind === "close" && /\/api\/notifications\/notif-two\/stream(?:\?.*)?$/.test(event.url)) &&
+      events.some((event) => event.kind === "open" && /\/api\/notifications\/notif-one\/stream(?:\?.*)?$/.test(event.url))
     );
   });
 
   const events = await page.evaluate(() => window.__toposyncEventSourceEvents);
-  const globalOpens = events.filter((event) => event.kind === "open" && /\/api\/notifications\/stream$/.test(event.url));
-  const globalCloses = events.filter((event) => event.kind === "close" && /\/api\/notifications\/stream$/.test(event.url));
-  const detailOpens = events.filter((event) => event.kind === "open" && /\/api\/notifications\/[^/]+\/stream$/.test(event.url));
+  const globalOpens = events.filter((event) => event.kind === "open" && /\/api\/notifications\/stream(?:\?.*)?$/.test(event.url));
+  const globalCloses = events.filter((event) => event.kind === "close" && /\/api\/notifications\/stream(?:\?.*)?$/.test(event.url));
+  const detailOpens = events.filter((event) => event.kind === "open" && /\/api\/notifications\/[^/]+\/stream(?:\?.*)?$/.test(event.url));
 
   expect(globalOpens).toHaveLength(1);
   expect(globalCloses).toHaveLength(0);

@@ -52,6 +52,7 @@ class AudioSourceRuntime(SourceOperatorRuntime):
                 }
                 packet = Packet.create(stream_id=capture_id, payload={
                     "camera_id": resolved.camera_id,
+                    "camera_name": getattr(resolved, "camera_name", ""),
                     "source": {"source_id": resolved.source_id, "device_id": resolved.camera_id, "modality": "audio"},
                     "media": {"modality": "audio", "ts": offset, "duration_seconds": duration},
                     "audio_capture": metadata,

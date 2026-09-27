@@ -550,7 +550,6 @@ export function MainScreen({
 
     const cameraName = asTrimmedString(data.camera_name);
     const cameraId = asTrimmedString(data.camera_id);
-    const cameraLabel = cameraName || cameraId;
     const subject = asRecord(payload.subject) || asRecord(data.subject);
     const subjectId = asTrimmedString(payload.subject_id) || asTrimmedString(subject?.id);
     const subjectType = asTrimmedString(payload.subject_type) || asTrimmedString(subject?.type);
@@ -566,7 +565,8 @@ export function MainScreen({
     push(t("core.ui.notifications.details.meta.status", {}, "Status"), asTrimmedString(payload.status) ? t(`core.ui.notifications.details.status.${payload.status}`, {}, asTrimmedString(payload.status)) : "");
     push(t("core.ui.notifications.details.meta.lifecycle", {}, "Lifecycle"), payload.lifecycle, true);
     push(t("core.ui.notifications.details.meta.pipeline", {}, "Pipeline"), payload.pipeline_name, true);
-    push(t("core.ui.notifications.details.meta.camera", {}, "Camera"), cameraLabel);
+    push(t("core.ui.notifications.details.meta.camera", {}, "Camera"), cameraName);
+    if (!cameraName) push(t("core.ui.notifications.details.meta.camera", {}, "Camera"), cameraId, true);
     push(t("core.ui.notifications.details.meta.area", {}, "Area"), data.area_label);
     push(t("core.ui.notifications.details.meta.subject_id", {}, "Subject ID"), subjectId, true);
     push(t("core.ui.notifications.details.meta.subject_type", {}, "Subject type"), subjectType, true);
@@ -590,6 +590,7 @@ export function MainScreen({
     out.push({
       label: t("core.ui.notifications.details.meta.images", {}, "Images"),
       value: String(activeNotificationImages.length),
+      technical: activeNotificationImages.length === 0,
     });
     return out;
   }, [activeNotification, activeNotificationImages.length, locale, t]);
@@ -598,10 +599,9 @@ export function MainScreen({
     if (!activeNotification) return null;
     const payload = asRecord(activeNotification.payload);
     const data = asRecord(payload.data);
-    const camera = asTrimmedString(data.camera_name) || asTrimmedString(data.camera_id);
+    const camera = asTrimmedString(data.camera_name);
     const area = asTrimmedString(data.area_label);
-    const pipeline = asTrimmedString(payload.pipeline_name);
-    const parts = [camera || pipeline, area].filter(Boolean);
+    const parts = [camera, area].filter(Boolean);
     if (!parts.length) return null;
     return parts.join(" • ");
   }, [activeNotification]);
@@ -1751,7 +1751,7 @@ export function MainScreen({
                   </div>
                 ) : null}
               </div>
-            ) : activeNotificationRenderer?.renderDetails ? null : (
+            ) : activeNotificationRenderer?.renderDetails || notificationDetailPanels.some(panel => panel.supports(activeNotification)) ? null : (
               <div className="cardBody">{t("core.ui.notifications.details.no_images", {}, "No images found for this detection.")}</div>
             )}
 

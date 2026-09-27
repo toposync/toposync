@@ -12,10 +12,14 @@ import { createAddCameraTool } from "./tools/addCameraTool";
 import { camerasTranslations } from "./translations";
 import { createHumanObservationRenderer } from "./notifications/HumanObservationRenderer";
 import { humanObservationTranslations } from "./notifications/humanObservationTranslations";
+import { AudioObservationDetails, audioHistoryTranslations, supportsAudioObservation } from "./notifications/AudioObservationDetails";
 
 export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(camerasTranslations);
   host.i18n.registerTranslations(humanObservationTranslations);
+  host.i18n.registerTranslations(audioHistoryTranslations);
+  host.registerNotificationDetailPanel?.({ id: "com.toposync.cameras.audio", supports: supportsAudioObservation,
+    render: notification => <AudioObservationDetails notification={notification} i18n={host.i18n} /> });
   host.registerNotificationRenderer(createHumanObservationRenderer(host));
   host.registerRenderView({
     id: "com.toposync.cameras.live-panorama",

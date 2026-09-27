@@ -54,7 +54,7 @@ def test_real_decoder_and_source_lifecycle(tmp_path, monkeypatch):
     requests = []
     async def resolve(request, dependencies):
         requests.append(request)
-        return SimpleNamespace(rtsp_url=str(path), source_id="main", camera_id="fixture")
+        return SimpleNamespace(rtsp_url=str(path), source_id="main", camera_id="fixture", camera_name="Microfone de ensaio")
     monkeypatch.setattr("toposync_ext_cameras.pipelines.operators.get_global_camera_capture_service",
                         lambda: SimpleNamespace(resolve=resolve))
     packets = []
@@ -94,6 +94,7 @@ def test_real_decoder_and_source_lifecycle(tmp_path, monkeypatch):
         assert packets[-1].lifecycle == Lifecycle.CLOSE and packets[-1].artifacts == {}
         assert sum(created for _, created in records) == 1
         assert records[-1][0].payload["status"] == "closed"
+        assert records[-1][0].payload["data"]["camera_name"] == "Microfone de ensaio"
         saved = records[-1][0].payload["data"]["historical_evidence"]["audio_analysis"]
         assert saved["duration_seconds"] == 0.25
         assert saved["windows"][0]["anomaly"]["status"] == "above_baseline"

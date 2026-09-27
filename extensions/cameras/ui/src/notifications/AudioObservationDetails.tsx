@@ -1,0 +1,73 @@
+import React from "react";
+import type { HostI18n, Notification } from "@toposync/plugin-api";
+import { readRecord, readString } from "../parsing";
+
+function evidence(notification: Notification) {
+  const data = readRecord(readRecord(notification.payload).data);
+  return readRecord(data.historical_evidence);
+}
+
+export function supportsAudioObservation(notification: Notification): boolean {
+  return Object.keys(readRecord(evidence(notification).audio_analysis)).length > 0;
+}
+
+export function AudioObservationDetails({ notification, i18n }: { notification: Notification; i18n: HostI18n }) {
+  const { t, locale } = i18n.useI18n();
+  const data = evidence(notification);
+  const analysis = readRecord(data.audio_analysis);
+  const occurrence = readRecord(data.audio_occurrence);
+  const baseline = readRecord(analysis.baseline);
+  const transcription = readRecord(analysis.transcription);
+  const duration = analysis.duration_seconds;
+  const reasons: Record<string, string> = {
+    above_baseline: "above", returned_to_baseline: "quiet", evidence_timeout: "missing",
+    evidence_gap: "missing", analysis_unavailable: "missing", source_closed: "ended",
+    source_capacity: "ended", stale_evidence: "missing", invalid_clock: "missing",
+    invalid_window: "missing", baseline_unavailable: "missing", baseline_changed: "changed",
+  };
+  const key = reasons[readString(occurrence.status)] ?? "unknown";
+  const text = readString(transcription.text).slice(0, 4096);
+  return <section className="card" aria-label={t("ext.cameras.audioHistory.title")}>
+    <div className="cardBody" style={{ overflowWrap: "anywhere" }}>
+      <strong>{t("ext.cameras.audioHistory.title")}</strong>
+      <p>{t(`ext.cameras.audioHistory.${key}`)}</p>
+      {readString(baseline.reference) && <p>{t("ext.cameras.audioHistory.reference", { name: readString(baseline.reference) })}</p>}
+      {typeof duration === "number" && Number.isFinite(duration) && duration > 0 &&
+        <p>{t("ext.cameras.audioHistory.window", { seconds: duration.toLocaleString(locale, { maximumFractionDigits: 2 }) })}</p>}
+      <p>{t("ext.cameras.audioHistory.retention")}</p>
+      {text && <><p>{t("ext.cameras.audioHistory.transcription")}</p><blockquote>{text}</blockquote></>}
+      <p className="cardMeta">{t("ext.cameras.audioHistory.clock")}</p>
+    </div>
+  </section>;
+}
+
+export const audioHistoryTranslations = {
+  en: {
+    "ext.cameras.audioHistory.title": "Recorded audio evidence",
+    "ext.cameras.audioHistory.above": "Sound exceeded the supplied normal reference. This does not classify its cause or danger.",
+    "ext.cameras.audioHistory.quiet": "Observation ended after sound returned to the reference range.",
+    "ext.cameras.audioHistory.missing": "Observation ended without continuous valid audio evidence. Quiet was not confirmed.",
+    "ext.cameras.audioHistory.ended": "Observation ended because the source or processing stopped.",
+    "ext.cameras.audioHistory.changed": "Observation ended because the normal reference changed.",
+    "ext.cameras.audioHistory.unknown": "Recorded analysis; the reason for ending is unavailable.",
+    "ext.cameras.audioHistory.reference": "Normal reference: {{name}}",
+    "ext.cameras.audioHistory.window": "Last analyzed excerpt: {{seconds}} s. This is not the full occurrence duration.",
+    "ext.cameras.audioHistory.retention": "The audio recording was not retained. Available evidence consists of measurements and any saved transcription.",
+    "ext.cameras.audioHistory.transcription": "Automatic transcription — review against the source; wording may be wrong.",
+    "ext.cameras.audioHistory.clock": "Intervals follow decoded samples. Receipt time does not establish synchronized camera capture time or sound location.",
+  },
+  "pt-BR": {
+    "ext.cameras.audioHistory.title": "Evidência de áudio registrada",
+    "ext.cameras.audioHistory.above": "O som superou a referência normal informada. Isso não classifica sua causa nem perigo.",
+    "ext.cameras.audioHistory.quiet": "Observação encerrada após o som voltar à faixa da referência.",
+    "ext.cameras.audioHistory.missing": "Observação encerrada sem evidência contínua de áudio válido. Não foi confirmado silêncio.",
+    "ext.cameras.audioHistory.ended": "Observação encerrada porque a fonte ou o processamento parou.",
+    "ext.cameras.audioHistory.changed": "Observação encerrada porque a referência normal mudou.",
+    "ext.cameras.audioHistory.unknown": "Análise registrada; motivo do encerramento indisponível.",
+    "ext.cameras.audioHistory.reference": "Referência normal: {{name}}",
+    "ext.cameras.audioHistory.window": "Último trecho analisado: {{seconds}} s. Não é a duração total da ocorrência.",
+    "ext.cameras.audioHistory.retention": "A gravação de áudio não foi retida. A evidência disponível contém medidas e eventual transcrição salva.",
+    "ext.cameras.audioHistory.transcription": "Transcrição automática — revise com a fonte; as palavras podem estar incorretas.",
+    "ext.cameras.audioHistory.clock": "Intervalos seguem as amostras decodificadas. O horário de recepção não comprova captura sincronizada nem localização do som.",
+  },
+};

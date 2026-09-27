@@ -98,3 +98,36 @@ def test_history_http_time_bounds_are_validated(tmp_path, monkeypatch):
         client.app.state.notifications.store.upsert(type="event", title="Gato no bebedouro", now=window["created_before"])
         result = client.get("/api/notifications", params={"query": "gato no bebedouro ontem à tarde"}).json()
         assert [item["id"] for item in result["notifications"]] == [cat.id]
+        result = client.get("/api/notifications", params={"data_filter": '{"camera_id":"absent"}'}).json()
+        assert result["notifications"] == []
+        assert client.get("/api/notifications", params={"data_filter": '{"camera_id":7}'}).status_code == 422
+
+
+def test_exact_data_filters_precede_limit_and_share_cursor_text_and_time(tmp_path):
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    store = runtime.store
+    payload = {"data": {"camera_id": "patio", "area_id": "water", "identity": {"status": "suggested"}}}
+    first, _ = store.upsert(type="event", title="Gato", payload=payload, now=100)
+    second, _ = store.upsert(type="event", title="Gato", payload=payload, now=101)
+    for index in range(260):
+        store.upsert(type="event", title="Gato", payload={"data": {"camera_id": "garage", "area_id": "water"}}, now=102 + index)
+    for value in (7, {"id": "patio"}, ["patio"], None):
+        store.upsert(type="event", title="Gato", payload={"data": {"camera_id": value, "area_id": "water"}})
+    store.upsert(type="event", title="Gato", payload={**payload, "priority": "silent"})
+    filters = {"camera_id": "patio", "area_id": "water"}
+    page, cursor = runtime.list_sync(data_filter=filters, query="gato", created_after=100, created_before=102, limit=1)
+    assert [item["id"] for item in page] == [second.id]
+    page, _ = runtime.list_sync(data_filter=filters, before=cursor, limit=1)
+    assert [item["id"] for item in page] == [first.id]
+    for extra in ({"area_id": "Water"}, {"identity.status": "confirmed"}, {"camera_id": "pat%"}, {"camera_id": "7"}):
+        assert runtime.list_sync(data_filter={**filters, **extra})[0] == []
+    store._conn.execute("DELETE FROM notification WHERE id IN (?, ?)", (first.id, second.id))
+    assert runtime.list_sync(data_filter=filters)[0] == []
+
+
+@pytest.mark.parametrize("value", ['[]', 'null', '{', '{"camera_id":7}', '{"camera_id":""}',
+    {"camera_id[*]": "patio"}, {"a." * 17 + "b": "value"}, {str(index): "value" for index in range(9)}])
+def test_data_filter_rejects_invalid_contracts(value):
+    from toposync.runtime.notifications.store import parse_data_filter
+    with pytest.raises(ValueError):
+        parse_data_filter(value)

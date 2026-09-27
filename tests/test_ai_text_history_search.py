@@ -96,7 +96,7 @@ def test_relative_semantic_query_and_date_only_share_configured_timezone(tmp_pat
 
     search.config_store = Settings()
     calls = []
-    async def unavailable(query, limit, priorities, types, start, end):
+    async def unavailable(query, limit, priorities, types, start, end, data_filter=None):
         calls.append((query, start, end))
         raise httpx.ConnectError("offline")
     monkeypatch.setattr(search, "_semantic", unavailable)
@@ -133,6 +133,16 @@ def test_history_route_requires_notification_read(tmp_path: Path) -> None:
         assert client.get("/api/ai/history/search", params={"query":"gato"}).status_code == 403
         assert client.get("/api/ai/history/search", params={"query":"gato", "mode":"visual"}).status_code == 403
         assert client.get("/api/ai/history/search", params={"query":"   "}).status_code == 422
+        app.state.auth = SimpleNamespace(mode="bypass", requires_setup=lambda: False, authorize=lambda **kwargs: None)
+        match, _ = app.state.notifications.store.upsert(type="event", title="Gato", payload={"data": {"camera_id": "patio"}})
+        app.state.notifications.store.upsert(type="event", title="Gato", payload={"data": {"camera_id": "garage"}})
+        for mode in ("text", "visual"):
+            params = {"query": "gato", "mode": mode, "data_filter": '{"camera_id":"patio"}'}
+            result = client.get("/api/ai/history/search", params=params)
+            assert result.status_code == 200
+            assert [item["id"] for item in result.json()["notifications"]] == [match.id]
+            assert result.json()["search"]["status"] == "degraded"
+            assert client.get("/api/ai/history/search", params={**params, "data_filter": '{"camera_id":7}'}).status_code == 422
 
 
 def test_literal_and_temporal_results_report_actual_truncation(tmp_path, monkeypatch):

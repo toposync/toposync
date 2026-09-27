@@ -40,6 +40,24 @@ identity or consumed volume. They require a configured vision-capable AI profile
 validated on representative positive, difficult negative and occluded recordings before relying
 on their recognition. API persistence and synthetic replay tests do not establish model accuracy.
 
+## Exact history metadata filters
+
+The notification and history search endpoints accept `data_filter` as a JSON query
+parameter, for example `{"camera_id":"patio","area_id":"water"}`. The internal
+`notifications.list`, `ai.search_notifications` and `ai.search_visual_notifications`
+services accept the same dictionary directly. All fields must match: comparisons
+are exact, case-sensitive strings within `payload.data`, before pagination and the
+semantic corpus limit. Nested fields use simple dotted paths. Missing, numeric,
+array or object values do not match text. At most eight fields, sixteen path
+segments, 256 characters per path and 512 per value are accepted; HTTP input is
+limited to 8192 characters. Invalid filters return 422.
+
+The same filter applies to date-only queries, consistency reads and literal
+fallback. Filtering an identity field does not establish or strengthen identity;
+callers must distinguish confirmed evidence from suggestions. Existing global
+priority counts remain global. These are API capabilities; camera and area filter
+controls in the history interface are still pending.
+
 ## History time windows
 
 `GET /api/notifications`, the `notifications.list` service and

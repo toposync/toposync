@@ -117,3 +117,44 @@ def test_rejected_images_do_not_starve_later_batches_and_changed_bytes_retry(tmp
     (files / "0").write_bytes(b"replaced image")
     run()
     assert batches[-1] == [records[0]]
+
+
+def test_visual_filters_scope_corpus_reread_and_literal_fallback(tmp_path):
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    files = tmp_path / "files"
+    files.mkdir()
+    (files / "cat.png").write_bytes(b"fixture")
+    cat, _ = runtime.store.upsert(type="event", title="Gato", image_path="cat.png",
+        payload={"data": {"camera_id": "patio", "area_id": "water"}}, dedupe_key="cat")
+    for index in range(260):
+        runtime.store.upsert(type="event", title="Gato", image_path="cat.png",
+            payload={"data": {"camera_id": "garage", "area_id": "water"}})
+
+    class Services:
+        mode = "available"
+        async def call(self, name, **kwargs):
+            if name.endswith("_space"):
+                return "clip-filter-fixture"
+            assert set(kwargs["images"]).issubset({cat.id})
+            if self.mode == "unavailable":
+                raise ValueError("unavailable")
+            if self.mode == "changed":
+                runtime.store.upsert(type="event", title="Gato", image_path="cat.png",
+                    payload={"data": {"camera_id": "other", "area_id": "water"}}, dedupe_key="cat")
+            vector = [1.0] + [0.0] * 511
+            return {"space": "clip-filter-fixture", "query": vector,
+                "images": {identifier: vector for identifier in kwargs["images"]}}
+
+    services = Services()
+    search = VisualHistorySearch(runtime, services, SimpleNamespace(paths=SimpleNamespace(files_dir=files)))
+    def run():
+        return asyncio.run(search.search(query="gato", created_after=0, data_filter={"camera_id": "patio", "area_id": "water"}))
+    result = run()
+    assert [item["id"] for item in result["notifications"]] == [cat.id]
+    assert result["search"]["corpus_truncated"] is False
+    services.mode = "unavailable"
+    result = run()
+    assert result["search"]["status"] == "degraded"
+    assert [item["id"] for item in result["notifications"]] == [cat.id]
+    services.mode = "changed"
+    assert run()["notifications"] == []

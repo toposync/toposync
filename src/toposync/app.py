@@ -1292,6 +1292,7 @@ async def _lifespan(app: FastAPI):
         priorities: list[str] | tuple[str, ...] | None = None,
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
+        data_filter: dict[str, str] | None = None,
         created_after: float | None = None,
         created_before: float | None = None,
         include_silent: bool = False,
@@ -1302,6 +1303,7 @@ async def _lifespan(app: FastAPI):
             priorities=priorities,
             types=types,
             query=query,
+            data_filter=data_filter,
             created_after=created_after,
             created_before=created_before,
             include_silent=include_silent,
@@ -4711,12 +4713,18 @@ def create_app() -> FastAPI:
         priority: list[str] | None = Query(default=None),
         notification_type: list[str] | None = Query(default=None, alias="type"),
         query: str | None = None,
+        data_filter: str | None = Query(default=None, max_length=8192),
         created_after: float | None = Query(default=None, ge=0, allow_inf_nan=False),
         created_before: float | None = Query(default=None, ge=0, allow_inf_nan=False),
     ) -> dict[str, Any]:
         _require(request, action="core:notifications:read")
         if created_after is not None and created_before is not None and created_after >= created_before:
             raise HTTPException(422, "Notification time interval must have positive duration")
+        from toposync.runtime.notifications.store import parse_data_filter
+        try:
+            filters = parse_data_filter(data_filter)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         runtime: NotificationsRuntime = request.app.state.notifications
         interpretation = None
         if query and created_after is None and created_before is None:
@@ -4736,6 +4744,7 @@ def create_app() -> FastAPI:
                 priorities=priority,
                 types=notification_type,
                 query=query,
+                data_filter=filters,
                 created_after=created_after,
                 created_before=created_before,
                 cancel_check=check_cancelled,

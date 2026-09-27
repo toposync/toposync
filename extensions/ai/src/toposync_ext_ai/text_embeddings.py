@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from toposync.runtime.notifications.time_query import resolve_history_time
+from toposync.runtime.notifications.store import parse_data_filter
 
 from .assistant import require
 
@@ -95,7 +96,8 @@ class TextHistorySearch:
         return {identifier: json.loads(vector) for identifier, digest, vector in rows
                 if identifier in documents and documents[identifier][0] == digest}
 
-    async def search(self, *, query: str, limit: int = 10, priorities: list[str] | None = None, types: list[str] | None = None, created_after: float | None = None, created_before: float | None = None) -> dict[str, Any]:
+    async def search(self, *, query: str, limit: int = 10, priorities: list[str] | None = None, types: list[str] | None = None, created_after: float | None = None, created_before: float | None = None, data_filter: dict[str, str] | None = None) -> dict[str, Any]:
+        data_filter = parse_data_filter(data_filter)
         query = query.strip()
         if not query or len(query) > 1000 or not 1 <= limit <= 50:
             raise ValueError("invalid_history_query")
@@ -110,24 +112,24 @@ class TextHistorySearch:
                 created_before = interpretation["time_range"]["created_before"]
             if not query:
                 items, _ = await self.notifications.list(limit=limit + 1, priorities=priorities, types=types,
-                                                        created_after=created_after, created_before=created_before)
+                                                        created_after=created_after, created_before=created_before, data_filter=data_filter)
                 return {"notifications": items[:limit], "search": {"mode": "literal", "status": "ready",
                     "returned_count": min(len(items), limit), "results_truncated": len(items) > limit,
                     **(interpretation or {})}}
         async with self.lock:
             try:
-                result = await self._semantic(query, limit, priorities, types, created_after, created_before)
+                result = await self._semantic(query, limit, priorities, types, created_after, created_before, data_filter)
                 result["search"].update(interpretation or {})
                 return result
             except (httpx.HTTPError, ValueError, KeyError, TypeError, sqlite3.Error):
-                items, _ = await self.notifications.list(query=query, limit=limit + 1, priorities=priorities, types=types, created_after=created_after, created_before=created_before)
+                items, _ = await self.notifications.list(query=query, limit=limit + 1, priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter)
                 return {"notifications": items[:limit], "search": {"mode": "literal", "status": "degraded",
                     "returned_count": min(len(items), limit), "results_truncated": len(items) > limit,
                     "reason": self.fallback_reason, "visual_similarity": False,
                     "time_basis": "notification_created_at", "created_after": created_after, "created_before": created_before,
                     **(interpretation or {})}}
 
-    async def _semantic(self, query: str, limit: int, priorities: list[str] | None = None, types: list[str] | None = None, created_after: float | None = None, created_before: float | None = None) -> dict[str, Any]:
+    async def _semantic(self, query: str, limit: int, priorities: list[str] | None = None, types: list[str] | None = None, created_after: float | None = None, created_before: float | None = None, data_filter: dict[str, str] | None = None) -> dict[str, Any]:
         settings = await self.services.call("ai.settings.get")
         provider = next((provider for provider in settings.providers
                          if provider.enabled and provider.kind == "ollama" and provider.local), None)
@@ -136,7 +138,7 @@ class TextHistorySearch:
         endpoint = urlsplit(provider.host)
         if endpoint.scheme not in {"http", "https"} or endpoint.hostname not in {"localhost", "127.0.0.1", "::1"} or endpoint.username or endpoint.password:
             raise ValueError("loopback_provider_required")
-        items, _ = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before)
+        items, _ = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter)
         documents = {item["id"]: (hashlib.sha256(document_text(item).encode()).hexdigest(), document_text(item)) for item in items}
         async with httpx.AsyncClient(base_url=provider.host.rstrip("/"), timeout=60, trust_env=False) as client:
             response = await client.get("/api/tags")
@@ -167,11 +169,11 @@ class TextHistorySearch:
             if batch:
                 cached = await asyncio.to_thread(self.cache, space, documents, dict(zip(batch, vectors)))
         # Releitura garante que alteração, prioridade silenciosa ou exclusão não exponham evidência antiga.
-        current, cursor = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before)
+        current, cursor = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter)
         older = []
         if len(current) == CORPUS_LIMIT and cursor is not None:
             older, _ = await self.notifications.list(before=cursor, limit=1, priorities=priorities,
-                types=types, created_after=created_after, created_before=created_before)
+                types=types, created_after=created_after, created_before=created_before, data_filter=data_filter)
         ranked = []
         for item in current:
             identifier = item["id"]
@@ -211,9 +213,13 @@ def install_text_history_routes(app: FastAPI, services: Any) -> None:
             return {"ready": False, "install_supported": False, "reason": "extension_unavailable"}
 
     @app.get("/api/ai/history/search")
-    async def history(request: Request, query: str = Query(min_length=1, max_length=1000, pattern=r"\S"), limit: int = Query(default=10, ge=1, le=50), priority: list[str] | None = Query(default=None), notification_type: list[str] | None = Query(default=None, alias="type"), created_after: float | None = Query(default=None, ge=0, allow_inf_nan=False), created_before: float | None = Query(default=None, ge=0, allow_inf_nan=False), mode: Literal["text", "visual"] = "text") -> dict[str, Any]:
+    async def history(request: Request, query: str = Query(min_length=1, max_length=1000, pattern=r"\S"), limit: int = Query(default=10, ge=1, le=50), priority: list[str] | None = Query(default=None), notification_type: list[str] | None = Query(default=None, alias="type"), created_after: float | None = Query(default=None, ge=0, allow_inf_nan=False), created_before: float | None = Query(default=None, ge=0, allow_inf_nan=False), mode: Literal["text", "visual"] = "text", data_filter: str | None = Query(default=None, max_length=8192)) -> dict[str, Any]:
         require(request, "core:notifications:read")
         if created_after is not None and created_before is not None and created_after >= created_before:
             raise HTTPException(422, "Notification time interval must have positive duration")
+        try:
+            data_filter = parse_data_filter(data_filter)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         selected = visual if mode == "visual" else search
-        return await selected.search(query=query, limit=limit, priorities=priority, types=notification_type, created_after=created_after, created_before=created_before)
+        return await selected.search(query=query, limit=limit, priorities=priority, types=notification_type, created_after=created_after, created_before=created_before, data_filter=data_filter)

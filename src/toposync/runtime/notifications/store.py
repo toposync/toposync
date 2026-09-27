@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import re
 import sqlite3
 import threading
 import time
@@ -12,6 +13,27 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+def parse_data_filter(value: str | dict[str, str] | None) -> dict[str, str]:
+    """Bounded exact matches on projected notification data; no expressions or wildcards."""
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        if len(value) > 8192:
+            raise ValueError("Notification data filter is too large")
+        try:
+            value = json.loads(value)
+        except (ValueError, RecursionError) as exc:
+            raise ValueError("Notification data filter must be a JSON object") from exc
+    if not isinstance(value, dict) or len(value) > 8:
+        raise ValueError("Notification data filter must contain at most eight fields")
+    for key, item in value.items():
+        if (not isinstance(key, str) or len(key) > 256 or len(key.split(".")) > 16
+                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", key) is None
+                or not isinstance(item, str) or not 1 <= len(item) <= 512):
+            raise ValueError("Notification data filters require simple field paths and nonempty text values")
+    return dict(value)
 
 
 _INIT_SQL = """
@@ -310,6 +332,7 @@ class NotificationStore:
         priorities: list[str] | tuple[str, ...] | None = None,
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
+        data_filter: dict[str, str] | None = None,
         created_after: float | None = None,
         created_before: float | None = None,
         include_silent: bool = False,
@@ -361,6 +384,12 @@ class NotificationStore:
             placeholders = ", ".join("?" for _ in requested_types)
             where_sql.append(f"type IN ({placeholders})")
             params.extend(requested_types)
+
+        for key, value in parse_data_filter(data_filter).items():
+            path = f"$.data.{key}"
+            where_sql.append("CASE WHEN json_valid(payload_json) THEN "
+                             "json_type(payload_json, ?) = 'text' AND json_extract(payload_json, ?) = ? ELSE 0 END")
+            params.extend((path, path, value))
 
         # ponytail: varredura linear; usar índice textual se a latência medida exigir.
         searchable = "title || ' ' || description || ' ' || CASE WHEN json_valid(payload_json) THEN " + " || ' ' || ".join(

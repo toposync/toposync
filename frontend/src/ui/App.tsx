@@ -754,9 +754,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       i18n,
       ui: {
         NavigableViewport,
-        CameraRegionEditor: ({ open, cameraId, sourceId, values, onChange, onClose }) => sourceId ? (
+        CameraRegionEditor: ({ open, cameraId, sourceId, values, onChange, onClose, onSnapshotBindingChange }) => sourceId ? (
           <CropRectangleDrawModal open={open} onClose={onClose} units="percent" values={values} onChange={onChange}
-            snapshotSource={{ kind: "camera", cameraId, sourceId }} />
+            snapshotSource={{ kind: "camera", cameraId, sourceId }} onSnapshotBindingChange={onSnapshotBindingChange} />
         ) : null,
         Viewport2DReplica: ({
           session,

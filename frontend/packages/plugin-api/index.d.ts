@@ -496,12 +496,24 @@ export type NavigableViewportProps = {
   onBlur?: () => void;
 };
 
+/** Decoder continuity, not certification of the physical camera pose. */
+export type CameraSnapshotBinding = {
+  camera_id: string;
+  source_id: string;
+  capture_instance: string;
+  generation: number;
+  width: number;
+  height: number;
+};
+
 export type CameraRegionEditorProps = {
   open: boolean;
   cameraId: string;
   sourceId: string;
   values: { left: number; top: number; right: number; bottom: number };
   onChange: (values: CameraRegionEditorProps["values"]) => void;
+  /** Null while loading, on missing evidence, or after changing the source. */
+  onSnapshotBindingChange: (binding: CameraSnapshotBinding | null) => void;
   onClose: () => void;
 };
 

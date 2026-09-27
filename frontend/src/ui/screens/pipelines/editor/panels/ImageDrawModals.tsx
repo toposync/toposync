@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { fetchCameraSnapshot, fetchPipelinePreviewFrame, fetchRtspSnapshot, type PipelinePreviewFrameRequest } from "../../../../../util/api";
+import type { CameraSnapshotBinding } from "@toposync/plugin-api";
+
+import { fetchCameraSnapshotWithEvidence, fetchPipelinePreviewFrame, fetchRtspSnapshot, type PipelinePreviewFrameRequest } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
 import { Icon } from "../../../../Icon";
 import { Modal } from "../../../../Modal";
@@ -11,6 +13,7 @@ export type SnapshotSource =
   | { kind: "pipeline_step"; request: PipelinePreviewFrameRequest };
 
 type SnapshotState = {
+  capture: Omit<CameraSnapshotBinding, "width" | "height"> | null;
   url: string | null;
   loading: boolean;
   error: string | null;
@@ -18,6 +21,7 @@ type SnapshotState = {
 };
 
 function useSnapshotObjectUrl(open: boolean, source: SnapshotSource | null): SnapshotState {
+  const [capture, setCapture] = useState<SnapshotState["capture"]>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +39,7 @@ function useSnapshotObjectUrl(open: boolean, source: SnapshotSource | null): Sna
   }, []);
 
   useEffect(() => {
+    setCapture(null);
     if (!open || !source) {
       setLoading(false);
       setError(null);
@@ -51,16 +56,21 @@ function useSnapshotObjectUrl(open: boolean, source: SnapshotSource | null): Sna
     setError(null);
 
     const load = async () => {
-      const blob =
-        source.kind === "camera"
-          ? await fetchCameraSnapshot(source.cameraId, controller.signal, source.sourceId)
-          : source.kind === "rtsp"
-            ? await fetchRtspSnapshot(
-                { url: source.url, username: source.username, password: source.password },
-                controller.signal,
-              )
-            : await fetchPipelinePreviewFrame(source.request, controller.signal);
+      let blob: Blob;
+      let capture: SnapshotState["capture"] = null;
+      if (source.kind === "camera") {
+        const result = await fetchCameraSnapshotWithEvidence(source.cameraId, controller.signal, source.sourceId);
+        blob = result.blob;
+        if (source.sourceId && result.capture) {
+          capture = { camera_id: source.cameraId, source_id: source.sourceId, ...result.capture };
+        }
+      } else if (source.kind === "rtsp") {
+        blob = await fetchRtspSnapshot({ url: source.url, username: source.username, password: source.password }, controller.signal);
+      } else {
+        blob = await fetchPipelinePreviewFrame(source.request, controller.signal);
+      }
       if (cancelled) return;
+      setCapture(capture);
       const nextUrl = URL.createObjectURL(blob);
       setUrl((previous) => {
         if (previous) URL.revokeObjectURL(previous);
@@ -99,7 +109,7 @@ function useSnapshotObjectUrl(open: boolean, source: SnapshotSource | null): Sna
     nonce,
   ]);
 
-  return { url, loading, error, refresh };
+  return { url, loading, error, refresh, capture };
 }
 
 type ImageDims = { width: number; height: number };
@@ -239,6 +249,7 @@ type CropModalProps = {
   units: "percent" | "pixels";
   values: CropRectValues;
   onChange: (values: CropRectValues) => void;
+  onSnapshotBindingChange?: (binding: CameraSnapshotBinding | null) => void;
 };
 
 export function CropRectangleDrawModal({
@@ -248,10 +259,21 @@ export function CropRectangleDrawModal({
   units,
   values,
   onChange,
+  onSnapshotBindingChange,
 }: CropModalProps): React.ReactElement | null {
   const { t } = i18n.useI18n();
   const snapshot = useSnapshotObjectUrl(open, snapshotSource);
   const [dims, setDims] = useState<ImageDims | null>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const snapshotBinding = useMemo(() => !snapshot.loading && !snapshot.error && dims && loadedUrl === snapshot.url
+    && snapshotSource?.kind === "camera" && snapshot.capture?.camera_id === snapshotSource.cameraId
+    && snapshot.capture?.source_id === snapshotSource.sourceId
+    ? { ...snapshot.capture, ...dims } : null,
+  [snapshot.loading, snapshot.error, snapshot.capture, snapshot.url, dims, loadedUrl,
+    snapshotSource?.kind, (snapshotSource as any)?.cameraId, (snapshotSource as any)?.sourceId]);
+  useEffect(() => {
+    if (open) onSnapshotBindingChange?.(snapshotBinding);
+  }, [open, snapshotBinding, onSnapshotBindingChange]);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const stageSize = useElementClientSize(open, stageRef);
   const renderDims = useMemo(
@@ -502,7 +524,10 @@ export function CropRectangleDrawModal({
                 const img = event.currentTarget;
                 const width = Number(img.naturalWidth || 0);
                 const height = Number(img.naturalHeight || 0);
-                if (width > 1 && height > 1) setDims({ width, height });
+                if (width > 1 && height > 1) {
+                  setDims({ width, height });
+                  setLoadedUrl(snapshot.url);
+                }
               }}
               draggable={false}
             />

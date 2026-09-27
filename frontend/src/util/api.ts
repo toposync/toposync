@@ -2404,13 +2404,25 @@ export async function getCameraContexts(
 }
 
 export async function fetchCameraSnapshot(cameraId: string, signal?: AbortSignal, sourceId?: string): Promise<Blob> {
+  return (await fetchCameraSnapshotWithEvidence(cameraId, signal, sourceId)).blob;
+}
+
+export async function fetchCameraSnapshotWithEvidence(cameraId: string, signal?: AbortSignal, sourceId?: string): Promise<{
+  blob: Blob;
+  capture: { capture_instance: string; generation: number } | null;
+}> {
   const query = sourceId ? `?${new URLSearchParams({ source_id: sourceId })}` : "";
   const response = await fetch(resolveToposyncUrl(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot${query}`), { signal });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Snapshot failed: ${response.status}`);
   }
-  return response.blob();
+  const captureInstance = response.headers.get("X-Toposync-Snapshot-Capture-Instance")?.trim();
+  const rawGeneration = response.headers.get("X-Toposync-Snapshot-Frame-Generation");
+  const generation = rawGeneration && /^\d+$/.test(rawGeneration) ? Number(rawGeneration) : NaN;
+  const capture = captureInstance && Number.isSafeInteger(generation)
+    ? { capture_instance: captureInstance, generation } : null;
+  return { blob: await response.blob(), capture };
 }
 
 export async function fetchRtspSnapshot(

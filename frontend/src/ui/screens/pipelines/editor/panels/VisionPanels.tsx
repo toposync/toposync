@@ -240,7 +240,7 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
   };
 }
 
-function readTaskCatalog(
+export function readTaskCatalog(
   status: Record<string, unknown> | undefined,
   task: "classification" | "detection" | "segmentation" | "pose",
 ): VisionTaskCatalog | null {

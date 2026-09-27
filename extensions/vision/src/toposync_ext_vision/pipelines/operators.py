@@ -311,6 +311,8 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 "Does not infer 3D targets or perform physical actions."
             ),
             config_model=VisionGestureRecognizeConfig,
+            default_input_policy={"queue": {"max_items": 256, "drop_policy": "keyed_latest_only"}},
+            default_output_policy={"queue": {"max_items": 256, "drop_policy": "keyed_latest_only"}},
             inputs=[{"name": "in", "required": True}],
             outputs=[{"name": "out"}],
             capabilities=["vision", "pose", "gesture", "event"],

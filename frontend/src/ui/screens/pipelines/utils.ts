@@ -359,7 +359,7 @@ export function emptyGraph(): Record<string, unknown> {
 export function defaultPipeline(name: string): Pipeline {
   return {
     name,
-    enabled: true,
+    enabled: false,
     processing_server_id: "local",
     editor_mode: "interactive",
     python_source: "",

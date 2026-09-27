@@ -104,3 +104,21 @@ test("all unknown-catalog states have matching English and Portuguese messages",
     assert.deepEqual(parameters(matches[0][1]), parameters(matches[1][1]), key);
   }
 });
+
+
+test("human motion preset selects installed supported models only on the requested server", () => {
+  const select = context.exports.selectHumanMotionModels;
+  const detector = { ...available, classesSource: "coco80" };
+  const pose = { ...available, modelId: "rtmpose_halpe26" };
+  const input = { serverId: "remote", responseServerId: "remote", responseOk: true, detection: [detector], pose: [pose] };
+  assert.deepEqual(JSON.parse(JSON.stringify(select(input))), { detection: detector.modelId, pose: pose.modelId });
+  for (const override of [
+    { responseServerId: "local" }, { responseOk: false }, { detection: null }, { pose: null },
+    { detection: [{ ...detector, artifactExists: false }] },
+    { detection: [{ ...detector, classesSource: "unknown" }] },
+    { pose: [{ ...pose, availability: "manifest_only" }] },
+    { pose: [{ ...pose, modelId: "unknown_skeleton" }] },
+  ]) assert.equal(select({ ...input, ...override }), null);
+  const preferred = { ...pose, modelId: "mediapipe_pose_33" };
+  assert.equal(select({ ...input, pose: [pose, preferred] }).pose, preferred.modelId);
+});

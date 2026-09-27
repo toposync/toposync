@@ -17,8 +17,12 @@ import "@xyflow/react/dist/style.css";
 import "./topology.css";
 
 import type { CamerasIndexResponse, GraphRuntimeInfo, PipelineAlert, PipelineOperatorDefinition } from "../../../../util/api";
+import { getProcessingServerStatus } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
-import { prettyOperatorDescription, prettyOperatorName } from "../utils";
+import { buildGraphFromInteractiveSteps, buildInteractiveStepsFromGraph, createInteractiveStep, prettyOperatorDescription, prettyOperatorName } from "../utils";
+import { PIPELINE_OPERATOR_RECIPES } from "../constants";
+import { readTaskCatalog } from "../editor/panels/VisionPanels";
+import { selectHumanMotionModels } from "../editor/panels/visionCatalogSelection";
 import type { SelectOption, TelemetryFieldInspectorRequest } from "../types";
 import { useCameraContexts } from "../editor/useCameraContexts";
 import {
@@ -153,6 +157,10 @@ export function TopologyView({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [operatorQuery, setOperatorQuery] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [preparingHumanMotion, setPreparingHumanMotion] = useState(false);
+  const [humanMotionNeedsModels, setHumanMotionNeedsModels] = useState(false);
+  const presetContext = useRef({ graph, processingServerId, editable });
+  presetContext.current = { graph, processingServerId, editable };
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<TopologyNode, TopologyEdge> | null>(null);
   const [canvasNodes, setCanvasNodes] = useState<TopologyNode[]>([]);
   const [pendingFocusNodeId, setPendingFocusNodeId] = useState<string | null>(null);
@@ -270,6 +278,7 @@ export function TopologyView({
         return;
       }
       setActionError(null);
+      setHumanMotionNeedsModels(false);
       if (latestGraphRef.current && latestGraphRef.current !== result.graph) {
         const nextUndoStack = [...undoGraphStackRef.current.slice(-9), latestGraphRef.current as Record<string, unknown>];
         undoGraphStackRef.current = nextUndoStack;
@@ -286,6 +295,54 @@ export function TopologyView({
     },
     [onChangeGraph, t],
   );
+
+  const prepareHumanMotion = async () => {
+    if (!canEdit || preparingHumanMotion) return;
+    const snapshot = presetContext.current;
+    const parsed = buildInteractiveStepsFromGraph(snapshot.graph, operatorsById);
+    if (parsed.warning || parsed.steps.length > 1 || (parsed.steps.length === 1 && parsed.steps[0].operatorId !== "camera.source")) {
+      setActionError(t("core.ui.pipelines.human_motion.new_flow"));
+      return;
+    }
+    setPreparingHumanMotion(true);
+    setHumanMotionNeedsModels(false);
+    setPaletteOpen(false);
+    setActionError(t("core.ui.pipelines.human_motion.checking"));
+    try {
+      const response = await getProcessingServerStatus(snapshot.processingServerId);
+      const current = presetContext.current;
+      if (!current.editable || current.graph !== snapshot.graph || current.processingServerId !== snapshot.processingServerId) return;
+      const models = selectHumanMotionModels({
+        serverId: current.processingServerId, responseServerId: snapshot.processingServerId, responseOk: response.ok,
+        detection: readTaskCatalog(response.status, "detection")?.items ?? null,
+        pose: readTaskCatalog(response.status, "pose")?.items ?? null,
+      });
+      if (!models) {
+        setHumanMotionNeedsModels(true);
+        setActionError(t("core.ui.pipelines.human_motion.models_required", { server: processingServerId }));
+        return;
+      }
+      const recipe = PIPELINE_OPERATOR_RECIPES.find(item => item.id === "recipe.vision.observe_human_motion")!;
+      const steps = [...parsed.steps];
+      const used = new Set(steps.map(step => step.nodeId));
+      for (const item of recipe.steps) {
+        if (item.operatorId === "camera.source" && steps.length) continue;
+        const operator = operatorsById[item.operatorId];
+        if (!operator) throw new Error("Operator unavailable");
+        const config: Record<string, unknown> = { ...operator.defaults, ...item.defaultsOverride };
+        if (item.operatorId === "vision.detect") config.model_id = models.detection;
+        if (item.operatorId === "vision.pose_estimate") config.model_id = models.pose;
+        if (item.operatorId === "core.notify") config.title = t(recipe.labelKey);
+        steps.push(createInteractiveStep(item.operatorId, config, used));
+      }
+      const result = buildGraphFromInteractiveSteps(steps, operatorsById, snapshot.graph);
+      if (!result.graph || result.error) throw new Error(result.error || "Invalid recipe");
+      commitGraphResult({ ok: true, graph: result.graph, nodeId: steps[0].nodeId });
+      setPaletteOpen(false);
+    } catch {
+      setActionError(t("core.ui.pipelines.human_motion.catalog_failed", { server: processingServerId }));
+    } finally { setPreparingHumanMotion(false); }
+  };
 
   const undoLastEdit = useCallback(() => {
     if (!canEdit) return;
@@ -660,6 +717,10 @@ export function TopologyView({
                 onChange={(event) => setOperatorQuery(event.target.value)}
               />
               <div className="pipelineTopologyPaletteList">
+                {!operatorQuery.trim() || /pose|gest|motion/i.test(operatorQuery) ? <button type="button" disabled={preparingHumanMotion} onClick={() => void prepareHumanMotion()}>
+                  <strong>{t("core.ui.pipelines.recipe_name.vision.observe_human_motion")}</strong>
+                  <span>{t(preparingHumanMotion ? "core.ui.pipelines.human_motion.checking" : "core.ui.pipelines.recipe_description.vision.observe_human_motion")}</span>
+                </button> : null}
                 {filteredOperatorOptions.map((operator) => {
                   const label = prettyOperatorName(operator.id) || operator.id;
                   const description = prettyOperatorDescription(operator) || operator.id;
@@ -687,7 +748,9 @@ export function TopologyView({
             </div>
           ) : null}
           {actionError || validationError ? (
-            <div className="pipelineTopologyActionError">{actionError || validationError}</div>
+            <div className="pipelineTopologyActionError" role="status">{actionError || validationError}
+              {humanMotionNeedsModels && onOpenProcessingServers ? <button type="button" className="pillButton" onClick={onOpenProcessingServers}>{t("core.ui.pipelines.human_motion.prepare_models")}</button> : null}
+            </div>
           ) : null}
           <ReactFlow<TopologyNode, TopologyEdge>
             key={flowKey}

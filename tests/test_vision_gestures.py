@@ -442,6 +442,8 @@ def test_registry_defaults_and_strict_configuration():
     assert spec is not None
     assert spec.definition.defaults["output_mode"] == "annotate"
     assert spec.definition.share_strategy == "never"
+    for policy in (spec.definition.default_input_policy, spec.definition.default_output_policy):
+        assert policy["queue"] == {"max_items": 256, "drop_policy": "keyed_latest_only"}
     assert isinstance(spec.runtime_factory({}, None), VisionGestureRecognizeRuntime)
     for changes in (
         {"output_mode": "physical_action"},

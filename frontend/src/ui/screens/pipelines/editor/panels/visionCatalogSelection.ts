@@ -35,3 +35,22 @@ export function resolveVisionCatalogSelection<T extends CatalogModel>(input: {
     readyItems,
   };
 }
+
+
+export function selectHumanMotionModels(input: {
+  serverId: string;
+  responseServerId: string;
+  responseOk: boolean;
+  detection: readonly (CatalogModel & { classesSource?: string; badgeIds?: string[] })[] | null;
+  pose: readonly CatalogModel[] | null;
+}): { detection: string; pose: string } | null {
+  const ready = <T extends CatalogModel>(items: readonly T[] | null) => resolveVisionCatalogSelection({
+    ...input, items, loading: false, error: null, modelId: "",
+  }).readyItems;
+  // O preset usa somente taxonomia e esqueletos já suportados pelo contrato.
+  const detectors = ready(input.detection).filter(item => item.classesSource === "coco80");
+  const detection = detectors.find(item => item.badgeIds?.includes("recommended")) ?? detectors[0];
+  const poses = ready(input.pose);
+  const pose = ["mediapipe_pose_33", "rtmpose_halpe26"].map(id => poses.find(item => item.modelId === id)).find(Boolean);
+  return detection && pose ? { detection: detection.modelId, pose: pose.modelId } : null;
+}

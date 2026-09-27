@@ -4,6 +4,14 @@ Recurso experimental, composto por operadores de visão e câmera. Estimativas n
 
 ## Configuração inicial
 
+Para começar com pose e gestos de imagem, crie um fluxo desativado e escolha
+**Adicionar nó → Observar pose e gestos**. O preset consulta os modelos instalados
+no servidor selecionado e prepara câmera, detecção contínua, pose, acompanhamento,
+gestos e notificação com imagem efêmera. Escolha a câmera na primeira etapa.
+Se faltar detector compatível ou pose, o rascunho permanece intacto e o editor
+oferece preparar os modelos. Também é possível partir somente de uma etapa de câmera.
+Este preset não adiciona calibração, localização métrica ou atuação física.
+
 No editor de fluxos, escolha o servidor de processamento antes de preparar os modelos. Adicione as etapas nesta ordem:
 
 ```text

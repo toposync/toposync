@@ -125,6 +125,28 @@ export const PIPELINE_OPERATOR_GROUP_ORDER = Object.keys(PIPELINE_OPERATOR_GROUP
 
 export const PIPELINE_OPERATOR_RECIPES = [
   {
+    id: "recipe.vision.observe_human_motion",
+    group: "vision",
+    level: "basic",
+    order: 15,
+    labelKey: "core.ui.pipelines.recipe_name.vision.observe_human_motion",
+    descriptionKey: "core.ui.pipelines.recipe_description.vision.observe_human_motion",
+    fallbackLabel: "Observe pose and gestures",
+    fallbackDescription: "Prepares live pose and gestures using models installed on the selected server.",
+    steps: [
+      { operatorId: "camera.source" },
+      { operatorId: "vision.detect", defaultsOverride: { emit_mode: "annotate", categories: ["person"], confidence_threshold: 0.25 } },
+      { operatorId: "vision.pose_estimate" },
+      { operatorId: "vision.track", defaultsOverride: { default_interval_seconds: 0, use_world_anchor: "never" } },
+      { operatorId: "vision.gesture_recognize", defaultsOverride: { output_mode: "annotate" } },
+      { operatorId: "core.notify", defaultsOverride: {
+        notification_type: "com.toposync.cameras.human_observation",
+        realtime: true, include_ephemeral_image: true, update_interval_seconds: 0,
+        include_payload_paths: ["subject", "camera_id", "source_stream_id", "capture_evidence", "vision.poses", "vision.pose_media_ts", "vision.pose_frame_packet_id", "vision.gestures"],
+      } },
+    ],
+  },
+  {
     id: "recipe.vision.detect_objects",
     group: "vision",
     level: "basic",

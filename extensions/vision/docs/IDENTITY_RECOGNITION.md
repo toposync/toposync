@@ -137,7 +137,12 @@ keeping every other argument and installed model identical. Add `--vision-input`
 to **both** runs to include RF-DETR Medium and the real tracker; install that
 detector first. Without it, the source assigns subjects directly. The runner
 checks notification counts, lifecycle order and usable inference for each species.
-Its boundary ends at SQLite persistence, before public projection and broadcasting.
+By default its boundary ends at SQLite persistence. Add `--published` to both runs
+to measure `NotificationsRuntime.upsert`, public projection, broadcasting to one
+subscriber and JSON consumption. That mode reports internal storage timings as
+null rather than mislabeling publication time as disk time; HTTP delivery and
+browser rendering remain outside the measurement. The subscriber must receive
+every publication and is removed when the trial ends.
 The three repeated photos are workload inputs, not independent visits or camera
 capture evidence. Compare only runs with the same input path and cadence; these
 partial measurements do not certify the installation's latency requirement.

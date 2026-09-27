@@ -3,6 +3,8 @@
 Compares source -> notification against the same source with identity operators.
 It uses licensed photos only for workload, not recognition accuracy. With
 --vision-input the real detector and tracker consume those static photos.
+--published includes real public projection, one subscriber and JSON consumption,
+but not HTTP delivery or browser rendering.
 No physical camera is exercised; this is not the final installation profile.
 """
 
@@ -24,6 +26,7 @@ from pydantic import BaseModel
 
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.notifications.store import NotificationStore
+from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.pipelines import (
     Artifact,
     Lifecycle,
@@ -78,6 +81,7 @@ async def trial(
     parallel: bool = False,
     context_only: bool = False,
     vision_input: bool = False,
+    published: bool = False,
 ) -> dict:
     frames = {}
     for species, filename, digest in SOURCES:
@@ -90,7 +94,9 @@ async def trial(
             if vision_input:
                 frames[species] = frames[species][:, :, ::-1].copy()
     gallery = IdentityStore(output / "gallery", scope="offline-load-fixture")
-    notifications = NotificationStore(output / "notifications.sqlite3")
+    publication = NotificationsRuntime(data_dir=output) if published else None
+    subscriber = publication.broadcaster.subscribe() if publication else None
+    notifications = publication.store if publication else NotificationStore(output / "notifications.sqlite3")
     sent, latencies, identities, lifecycles = {}, [], set(), []
     planned, emission_lateness = {}, []
     created_count = 0
@@ -159,14 +165,23 @@ async def trial(
     async def upsert(**values):
         nonlocal created_count
         service_started = time.perf_counter()
-        record, created, storage_started, stored_at = await persist_notification(
-            notifications, values
-        )
+        if publication:
+            public = await publication.upsert(**values)
+            event = subscriber.get_nowait()
+            assert event["notification"] == public
+            assert json.loads(json.dumps(event))["notification"]["id"] == public["id"]
+            identifier, created = public["id"], event["op"] == "insert"
+            storage_started = stored_at = None
+        else:
+            record, created, storage_started, stored_at = await persist_notification(
+                notifications, values
+            )
+            identifier = record.id
         returned_at = time.perf_counter()
         payload = values["payload"]
         key = (f"load-{payload['data']['benchmark_visit']}", payload["lifecycle"])
         visit = int(key[0].split("-")[1])
-        identities.add(record.id)
+        identities.add(identifier)
         created_count += int(created)
         lifecycles.append(key)
         if visit >= 3:
@@ -175,9 +190,9 @@ async def trial(
                     "phase": key[1],
                     "species": payload["subject"]["category"],
                     "source_to_upsert_ms": (service_started - sent[key]) * 1000,
-                    "notification_executor_wait_ms": (storage_started - service_started) * 1000,
-                    "notification_storage_ms": (stored_at - storage_started) * 1000,
-                    "notification_resume_ms": (returned_at - stored_at) * 1000,
+                    "notification_executor_wait_ms": (storage_started - service_started) * 1000 if storage_started is not None else None,
+                    "notification_storage_ms": (stored_at - storage_started) * 1000 if stored_at is not None else None,
+                    "notification_resume_ms": (returned_at - stored_at) * 1000 if stored_at is not None else None,
                     "milliseconds": (returned_at - sent[key]) * 1000,
                     "planned_milliseconds": (returned_at - planned[key]) * 1000,
                 }
@@ -332,7 +347,7 @@ async def trial(
         (output / "failure.json").write_text(
             json.dumps(
                 {
-                    "instrument_version": 2,
+                    "instrument_version": 3,
                     "error_type": type(error).__name__,
                     "expected_packets": total_packets,
                     "notification_callbacks": len(lifecycles),
@@ -359,6 +374,10 @@ async def trial(
             )
         }
         gallery.close()
+        if publication:
+            drained = subscriber.empty()
+            publication.broadcaster.unsubscribe(subscriber)
+            assert drained
     if enabled:
         assert set(evidence_counts) == {"person", "cat", "dog"}
         assert sum(evidence_counts.values()) >= visits, (
@@ -374,9 +393,9 @@ async def trial(
     usage_after = resource.getrusage(resource.RUSAGE_SELF)
     values = [row["milliseconds"] for row in latencies]
     return {
-        "instrument_version": 2,
-        "notification_execution": "asyncio.to_thread, matching NotificationsRuntime.upsert",
-        "notification_limit": "Store persistence only; excludes public projection and broadcaster",
+        "instrument_version": 3,
+        "notification_execution": "NotificationsRuntime.upsert with subscribed JSON consumer" if published else "asyncio.to_thread, matching NotificationsRuntime.upsert",
+        "notification_limit": "Includes public projection, broadcaster and JSON consumption; excludes HTTP/browser delivery" if published else "Store persistence only; excludes public projection and broadcaster",
         "identity_enabled": enabled,
         "input_path": "RF-DETR Medium -> real tracker" if vision_input else "preassigned subjects",
         "topology": "context_only_diagnostic"
@@ -419,7 +438,7 @@ async def trial(
                         95,
                     )
                 ),
-                "notification_storage_p95_ms": float(
+                "notification_storage_p95_ms": None if published else float(
                     np.percentile(
                         [
                             row["notification_storage_ms"]
@@ -460,6 +479,7 @@ def main():
     parser.add_argument("--model-data-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--enabled", action="store_true")
+    parser.add_argument("--published", action="store_true", help="Measure real notification publication and subscribed JSON consumption")
     parser.add_argument("--vision-input", action="store_true", help="Detect and track public frames instead of preassigning subjects")
     parser.add_argument(
         "--context-only",
@@ -489,6 +509,7 @@ def main():
             parallel=args.parallel,
             context_only=args.context_only,
             vision_input=args.vision_input,
+            published=args.published,
             visits=args.visits,
             interval=args.interval,
         )

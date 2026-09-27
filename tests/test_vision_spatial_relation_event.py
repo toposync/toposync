@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from dataclasses import replace
+from dataclasses import asdict, replace
 import itertools
+import json
 import time
 
 import pytest
@@ -992,5 +993,103 @@ def test_member_close_reaches_relation_even_when_group_updates_are_throttled():
         assert results[0].stream_id == results[1].stream_id
         assert results[1].payload["spatial_relation_event"]["dwell_seconds"] == 0
         assert relation._states_by_group == {}
+
+    asyncio.run(scenario())
+
+
+def test_proximity_counts_only_observed_returns_and_resets_on_member_loss(monkeypatch, tmp_path):
+    clock = [0.0]
+    monkeypatch.setattr("toposync_ext_vision.processing.tasks.spatial_relation_event.time.monotonic", lambda: clock[0])
+
+    async def scenario():
+        runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "close_grace_seconds": 0,
+                                                     "update_interval_seconds": 0, "visit_window_seconds": 10})
+        results = []
+        for timestamp, distance in ((0, 8), (1, 2), (2, 8), (3, 2)):
+            clock[0] = timestamp
+            results.extend(await runtime.process_packet(_group_packet(members=_near_members(distance=distance)), None))
+        opened = [packet for packet in results if packet.lifecycle == Lifecycle.OPEN]
+        assert [packet.payload["spatial_relation_event"]["visits"]["count"] for packet in opened] == [1, 2]
+        assert opened[0].stream_id != opened[1].stream_id
+        store = NotificationStore(tmp_path / "notifications.sqlite3")
+        records = []
+
+        async def upsert(**values):
+            records.append(store.upsert(**values))
+
+        sink = NotifyRuntime(
+            {"dedupe_by_occurrence": True, "update_interval_seconds": 0,
+             "description": "{{payload.spatial_relation_event.visits.description}}Pessoa próxima de veículo",
+             "include_payload_paths": ["spatial_relation_event"]},
+            PipelineRuntimeDependencies(notifications_upsert=upsert),
+        )
+        context = type("Context", (), {"pipeline_name": "person-vehicle", "node_id": "notify"})()
+        for packet in [*results, opened[-1]]:
+            await sink.process_packet(packet, context)
+        assert len({record.id for record, _ in records}) == 2
+        record = records[-1][0]
+        assert record.payload["data"]["spatial_relation_event"]["visits"]["count"] == 2
+        assert record.description.startswith("2 aproximações do mesmo par, em 10 s de acompanhamento contínuo.")
+        (tmp_path / "notification.json").write_text(json.dumps(asdict(record), ensure_ascii=False), encoding="utf-8")
+        assert await runtime.process_packet(runtime._states_by_group[next(iter(runtime._states_by_group))].last_packet, None) == []
+        clock[0] = 4
+        await runtime.process_packet(_group_packet(members=[]), None)
+        clock[0] = 5
+        after_loss = await runtime.process_packet(_group_packet(members=_near_members()), None)
+        assert after_loss[0].payload["spatial_relation_event"]["visits"]["count"] == 0
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("reset", ["generation", "participant", "timeout", "window"])
+def test_proximity_return_history_expires_or_resets(monkeypatch, reset):
+    clock = [0.0]
+    monkeypatch.setattr("toposync_ext_vision.processing.tasks.spatial_relation_event.time.monotonic", lambda: clock[0])
+
+    async def scenario():
+        runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "close_grace_seconds": 0,
+                                                     "update_interval_seconds": 0, "visit_window_seconds": 3})
+        for timestamp, distance in ((0, 8), (1, 2), (2, 8)):
+            clock[0] = timestamp
+            await runtime.process_packet(_group_packet(members=_near_members(distance=distance)), None)
+        clock[0] = 3 if reset != "window" else 5
+        packet = _group_packet(members=_near_members())
+        if reset == "generation":
+            packet.payload["capture_evidence"]["generation"] = 1
+        elif reset == "participant":
+            packet.payload["subject"]["members"][0]["event_id"] = "another-person"
+        elif reset == "timeout":
+            runtime._flush_due(now_monotonic=20)
+        opened = await runtime.process_packet(packet, None)
+        assert opened[-1].payload["spatial_relation_event"]["visits"]["count"] == (1 if reset == "window" else 0)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("returns", [2, 257])
+def test_group_to_relation_counts_returns_with_bounded_history(returns):
+    from test_vision_group_events import _event_packet
+    from toposync_ext_vision.processing.tasks.group_events import VisionGroupEventsRuntime
+
+    async def scenario():
+        producer = VisionGroupEventsRuntime({"mode": "proximity", "categories": ["person", "car"],
+                                             "include_stationary_members": True, "update_interval_seconds": 0})
+        relation = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "close_grace_seconds": 0,
+                                                      "update_interval_seconds": 0, "visit_window_seconds": 1000})
+        opened = []
+        for timestamp in range(1 + 2 * returns):
+            for code, category, x in (("1", "person", 10 if timestamp % 2 else 0), ("2", "car", 2)):
+                packet = _event_packet(timestamp, code, category=category, world={"x": x, "z": 0, "confidence": 0.9})
+                packet.payload["capture_evidence"] = {"capture_instance": "decoder", "generation": 0,
+                                                       "sequence": timestamp + 1, "published_at": time.time()}
+                for group in await producer.process_packet(packet, None):
+                    opened.extend(result for result in await relation.process_packet(group, None)
+                                  if result.lifecycle == Lifecycle.OPEN)
+        assert len(opened) == returns + 1
+        assert opened[0].payload["spatial_relation_event"]["visits"]["count"] == 0
+        visits = opened[-1].payload["spatial_relation_event"]["visits"]
+        assert visits["count"] == min(returns, 256)
+        assert visits["count_is_lower_bound"] is (returns > 256)
+        assert len(next(iter(relation._states_by_group.values())).visits) <= 256
 
     asyncio.run(scenario())

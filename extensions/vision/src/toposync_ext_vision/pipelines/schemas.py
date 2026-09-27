@@ -336,6 +336,7 @@ class VisionSpatialRelationEventConfig(BaseModel):
     close_grace_seconds: float = Field(default=6.0, ge=0.0, le=3600.0)
     stale_timeout_seconds: float = Field(default=15.0, gt=0.0, le=3600.0)
     update_interval_seconds: float = Field(default=1.0, ge=0.0, le=300.0)
+    visit_window_seconds: float = Field(default=300.0, gt=0.0, le=86400.0)
     event_id_prefix: str = "rel"
 
     @field_validator("required_categories")

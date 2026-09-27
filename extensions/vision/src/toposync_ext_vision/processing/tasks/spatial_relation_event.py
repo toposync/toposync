@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -151,6 +152,10 @@ class _RelationState:
     last_world_envelope: dict[str, Any] | None
     last_members: tuple[_Member, ...] = field(default_factory=tuple)
     last_match: _RelationMatch | None = None
+    visit_pair: tuple[str, str] | None = None
+    observed_outside: bool = False
+    visits: deque[float] = field(default_factory=lambda: deque(maxlen=256))
+    visits_overflow_until: float = float("-inf")
     candidate_since_monotonic: float | None = None
     last_positive_media_ts: float | None = None
     capture: tuple[str, int, int] | None = None
@@ -293,6 +298,7 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         *,
         use_exit_threshold: bool,
         preferred: _RelationMatch | None = None,
+        require_proximity: bool = True,
     ) -> _RelationMatch | None:
         category_groups = list(self._config.required_categories.values())
         left_categories = set(category_groups[0])
@@ -331,7 +337,7 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                         if use_exit_threshold
                         else float(self._config.enter_image_center_distance)
                     )
-                if distance > threshold:
+                if require_proximity and distance > threshold:
                     continue
                 match = _RelationMatch(
                     left=left,
@@ -403,6 +409,15 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         if trusted_world_envelope is not None:
             subject["world_envelope"] = dict(trusted_world_envelope)
             subject["world_anchor"] = dict(trusted_world_envelope["center"])
+        while state.visits and state.visits[0] <= state.media_ts - self._config.visit_window_seconds:
+            state.visits.popleft()
+        visits_description = ""
+        if len(state.visits) > 1:
+            qualifier = "Pelo menos " if state.media_ts < state.visits_overflow_until else ""
+            visits_description = (
+                f"{qualifier}{len(state.visits)} aproximações do mesmo par, em "
+                f"{self._config.visit_window_seconds:g} s de acompanhamento contínuo. "
+            )
         relation = {
             "source_group_event_id": state.group_event_id,
             "source_group_event_code": state.group_event_code,
@@ -416,6 +431,14 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             "distance": float(match.distance) if match is not None else None,
             "threshold": float(match.threshold) if match is not None else None,
             "dwell_seconds": state.observed_duration_seconds,
+            "visits": {
+                "count": len(state.visits),
+                "description": visits_description,
+                "window_seconds": self._config.visit_window_seconds,
+                "count_is_lower_bound": state.media_ts < state.visits_overflow_until,
+                "scope": "continuous_pair_tracking",
+                "requires_observed_entry": True,
+            },
             "loss_seconds": loss_seconds,
             "reason": _text(reason) or None,
         }
@@ -503,7 +526,18 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             now_monotonic=now_monotonic,
             reason=reason,
         )
-        self._states_by_group.pop((state.source_stream_id, state.camera_id, state.group_event_id), None)
+        if reason == "relation_lost" and state.observed_outside:
+            state.relation_event_id = ""
+            state.relation_event_code = ""
+            state.correlation_id = ""
+            state.candidate_since_monotonic = None
+            state.last_positive_media_ts = None
+            state.observed_duration_seconds = 0.0
+            state.losing_since_monotonic = None
+            state.opened_at_monotonic = None
+            state.last_match = None
+        else:
+            self._states_by_group.pop((state.source_stream_id, state.camera_id, state.group_event_id), None)
         return packet
 
     def _flush_due(self, *, now_monotonic: float) -> list[Packet]:
@@ -636,6 +670,18 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         state.last_bbox01 = group.bbox01
         state.last_world_envelope = group.world_envelope
 
+        observed_pair = relation_match or self._best_match(
+            group.members, use_exit_threshold=True, preferred=state.last_match, require_proximity=False
+        )
+        pair_ids = (observed_pair.left.event_id, observed_pair.right.event_id) if observed_pair else None
+        if pair_ids is None or pair_ids != state.visit_pair:
+            state.visits.clear()
+            state.visits_overflow_until = float("-inf")
+            state.observed_outside = False
+            state.visit_pair = pair_ids
+        if observed_pair is not None and relation_match is None and observed_pair.distance > observed_pair.threshold:
+            state.observed_outside = True
+
         if relation_match is not None:
             pair_media_ts = min(relation_match.left.media_ts, relation_match.right.media_ts)
             if state.last_positive_media_ts is not None and state.losing_since_monotonic is None:
@@ -650,6 +696,11 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                 state.candidate_since_monotonic = now_monotonic
             if not state.opened:
                 if state.observed_duration_seconds >= float(self._config.dwell_seconds):
+                    if state.observed_outside:
+                        if len(state.visits) == state.visits.maxlen:
+                            state.visits_overflow_until = state.visits[0] + self._config.visit_window_seconds
+                        state.visits.append(pair_media_ts)
+                    state.observed_outside = False
                     self._next_relation_identity(state)
                     state.opened_at_monotonic = now_monotonic
                     state.last_emit_monotonic = now_monotonic
@@ -662,6 +713,7 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                         )
                     )
                 return outputs
+            state.observed_outside = False
             interval = float(self._config.update_interval_seconds)
             last_emit = state.last_emit_monotonic
             if interval <= 0.0 or last_emit is None or (now_monotonic - last_emit) >= interval:

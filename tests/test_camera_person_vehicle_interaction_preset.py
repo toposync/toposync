@@ -287,6 +287,7 @@ def test_person_vehicle_interaction_builds_semantic_relation_graph_v2(
         assert relation.get("stale_timeout_seconds") == 15.0
 
         notify = _node_config(pipeline, "core.notify")
+        assert notify.get("description").startswith("{{payload.spatial_relation_event.visits.description}}")
         assert notify.get("priority") == "high"
         assert notify.get("title") == "{{camera_name}}: interação entre pessoa e veículo"
         assert notify.get("dedupe_key_template") == "{{subject.id}}"

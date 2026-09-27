@@ -285,3 +285,25 @@ Visual condition responses include `observable`: true means the provider reports
 
 
 For annotations about a particular tracked subject, `bind_subject_context: true` requires the selected artifact to carry `subject_context` produced by the object cropper. It checks subject identity, source bounding box, capture evidence and a finite normalized target box in the actual selected image. Missing or inconsistent context emits `unknown` without calling the model. The model receives the target box and an instruction not to substitute another subject; the annotation retains the binding for review. In this mode the provider must explicitly report `observable=true`; an omitted visibility assessment is unknown. The option is limited to annotation mode and does not alter upstream lifecycle. It does not establish a house reference or qualify model accuracy by itself.
+
+## Revisão de fala registrada
+
+Com a extensão AI habilitada, o detalhe de uma notificação com transcrição oferece
+**Revisar conteúdo da fala**. A ação usa o perfil local padrão já configurado,
+sem fallback para cloud. Exibe interpretação contextual e segmentos exatos com
+posição no trecho; não identifica a pessoa, intenção, perigo ou segurança e não
+aciona dispositivos. A transcrição automática também precisa ser conferida.
+
+`POST /api/ai/history/{notification_id}/review-transcription` exige leitura de
+notificações. Aceita `{}` ou `profile_id` e lê exclusivamente a transcrição
+armazenada. Texto parcial, segmentos inconsistentes ou contexto insuficiente
+não recebem uma conclusão afirmativa. Saída inválida ou provedor indisponível
+resulta em indisponibilidade explícita. Após inferência, autorização e registro
+são verificados novamente; alteração ou exclusão descarta a resposta. Citações
+são extraídas no servidor pelos índices validados, nunca copiadas do modelo.
+
+Resultados são temporários e descartados ao mudar a evidência ou voltar à janela.
+A revisão diferencia negação, citação/ficção, fala potencialmente ameaçadora,
+ausência de palavras ameaçadoras no trecho e contexto insuficiente. Essas classes
+não certificam confiabilidade da transcrição nem são um detector de perigo.
+Não há deduplicação acústica, localização ou automação de resposta neste recurso.

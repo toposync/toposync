@@ -15,6 +15,7 @@ from toposync.runtime.services import ServiceRegistry
 from .assistant import install_assistant_routes
 from .text_embeddings import install_text_history_routes
 from .history_answer import install_history_answer_routes
+from .transcription_review import install_transcription_review_routes
 from .jev import evaluate_event_text
 from .catalog import list_builtin_model_catalog
 from .pipelines import register_ai_pipeline_operators
@@ -75,6 +76,7 @@ class AiExtension(BaseExtension):
         install_assistant_routes(app, router)
         install_text_history_routes(app, services)
         install_history_answer_routes(app, services, router)
+        install_transcription_review_routes(app, router)
         services.register("ai.jev.evaluate_event_text", evaluate_event_text)
 
         services.register("ai.catalog.list", lambda: list_builtin_model_catalog())

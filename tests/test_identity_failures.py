@@ -30,6 +30,26 @@ def extractor(tmp_path):
     )
 
 
+def test_process_specification_is_resolved_once_per_extractor(tmp_path, monkeypatch):
+    from toposync_ext_vision.registry.manifests import ModelManifest
+
+    original = ModelManifest.resolve_artifact_path
+    resolved = []
+
+    def resolve(manifest):
+        resolved.append(manifest.artifact_path)
+        return original(manifest)
+
+    monkeypatch.setattr(ModelManifest, "resolve_artifact_path", resolve)
+    model = extractor(tmp_path)
+    first = model.process_specification()
+    assert model.process_specification() is first
+    assert len(resolved) == 1
+    replacement = extractor(tmp_path / "new-installation")
+    assert replacement.process_specification() != first
+    assert len(resolved) == 2
+
+
 def extract(model):
     frame = np.random.default_rng(10).integers(20, 220, size=(128, 128, 3), dtype=np.uint8)
     return model.extract(

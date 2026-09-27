@@ -65,6 +65,7 @@ class IdentityExtractor:
         self._session = None
         self._detector = None
         self._recognizer = None
+        self._process_specification: tuple[str, str | None] | None = None
         if manifest.task != "embedding":
             raise ValueError("identity extraction requires an embedding model")
         adapter = manifest.resolved_adapter_family()
@@ -82,13 +83,18 @@ class IdentityExtractor:
         )
 
     def process_specification(self) -> tuple[str, str | None]:
+        if self._process_specification is not None:
+            return self._process_specification
         # Resolver caminhos no servidor selecionado antes de cruzar seu processo local.
         def encode(manifest):
             return manifest.model_copy(
                 update={"artifact_path": str(manifest.resolve_artifact_path())}
             ).model_dump_json()
 
-        return encode(self.manifest), encode(self.face_detector) if self.face_detector else None
+        self._process_specification = (
+            encode(self.manifest), encode(self.face_detector) if self.face_detector else None
+        )
+        return self._process_specification
 
     def _load(self) -> None:
         if self._session is not None or self._recognizer is not None:

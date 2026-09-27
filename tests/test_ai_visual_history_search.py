@@ -158,3 +158,74 @@ def test_visual_filters_scope_corpus_reread_and_literal_fallback(tmp_path):
     assert [item["id"] for item in result["notifications"]] == [cat.id]
     services.mode = "changed"
     assert run()["notifications"] == []
+
+
+def test_scan_budget_advances_without_stale_or_missing_evidence(tmp_path, monkeypatch):
+    import os
+    from toposync_ext_ai import visual_history
+
+    monkeypatch.setattr(visual_history, "SCAN_BYTES", 4)
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    files = tmp_path / "files"
+    files.mkdir()
+    records = []
+    for index in range(4):
+        (files / str(index)).write_bytes(b"data")
+        record, _ = runtime.store.upsert(type="event", title="Gato", image_path=str(index))
+        records.append(record)
+    batches = []
+    during_inference = None
+
+    class Services:
+        async def call(self, name, **kwargs):
+            if name.endswith("_space"):
+                return "clip-budget-fixture"
+            batches.append(dict(kwargs["images"]))
+            if during_inference:
+                during_inference()
+            vector = [1.0] + [0.0] * 511
+            return {"space": "clip-budget-fixture", "query": vector,
+                    "images": {key: vector for key in kwargs["images"]}}
+
+    search = VisualHistorySearch(runtime, Services(), SimpleNamespace(paths=SimpleNamespace(files_dir=files)))
+
+    def run():
+        return asyncio.run(search.search(query="gato", created_after=0))
+
+    first = run()
+    assert first["search"]["indexed"] == 1
+    assert first["search"]["pending"] == 3
+    assert first["search"]["unavailable_images"] == 0
+    run()
+    complete = run()
+    assert complete["search"]["indexed"] == 4
+    assert complete["search"]["pending"] == 0
+    assert complete["search"]["status"] == "ready"
+    assert sum(len(batch) for batch in batches) == 4
+    search = VisualHistorySearch(runtime, Services(), SimpleNamespace(paths=SimpleNamespace(files_dir=files)))
+    for _ in range(3):
+        resumed = run()
+    assert resumed["search"]["indexed"] == 4
+    assert sum(len(batch) for batch in batches) == 4
+    # Same size and restored mtime must still invalidate via ctime.
+    path = files / "0"
+    before = path.stat()
+    path.write_bytes(b"edit")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    run()
+    assert batches[-1] == {records[0].id: b"edit"}
+    path.unlink()
+    removed = run()
+    assert removed["search"]["unavailable_images"] == 1
+    assert records[0].id not in {item["id"] for item in removed["notifications"]}
+    assert records[0].id not in search.fingerprints
+    def replace_during_inference():
+        (files / "1").write_bytes(b"race")
+
+    during_inference = replace_during_inference
+    changed = run()
+    assert records[1].id not in {item["id"] for item in changed["notifications"]}
+    assert changed["search"]["pending"] == 1
+    during_inference = None
+    assert run()["search"]["indexed"] == 3
+    assert batches[-1] == {records[1].id: b"race"}

@@ -14,7 +14,7 @@ SCAN_BYTES = 64 * 1024 * 1024
 BATCH_SIZE = 8
 
 
-def read_evidence(root: Path, item: dict[str, Any]) -> bytes:
+def evidence_path(root: Path, item: dict[str, Any]) -> Path:
     url = item.get("imageUrl")
     if not isinstance(url, str) or not url.startswith("/files/"):
         raise ValueError("notification_image_unavailable")
@@ -25,6 +25,11 @@ def read_evidence(root: Path, item: dict[str, Any]) -> bytes:
     path = (root / relative).resolve()
     if not path.is_relative_to(root) or not path.is_file():
         raise ValueError("notification_image_unavailable")
+    return path
+
+
+def read_evidence(root: Path, item: dict[str, Any]) -> bytes:
+    path = evidence_path(root, item)
     with path.open("rb") as stream:
         data = stream.read(MAX_IMAGE_BYTES + 1)
     if not 0 < len(data) <= MAX_IMAGE_BYTES:
@@ -41,24 +46,49 @@ def evidence_hash(item: dict[str, Any], data: bytes) -> str:
 class VisualHistorySearch(TextHistorySearch):
     fallback_reason = "local_visual_embeddings_unavailable"
 
-    def documents(self, items: list[dict[str, Any]]) -> tuple[dict, int]:
-        documents, used, unavailable = {}, 0, 0
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fingerprints: dict[str, tuple[tuple, str]] = {}
+
+    def documents(self, items: list[dict[str, Any]]) -> tuple[dict, int, set[str]]:
+        documents, used, unavailable, deferred = {}, 0, 0, set()
+        identifiers = {item["id"] for item in items}
+        self.fingerprints = {key: value for key, value in self.fingerprints.items()
+                             if key in identifiers}
         for item in items:
             if not item.get("imageUrl"):
-                continue
-            if used >= SCAN_BYTES:
-                unavailable += 1
+                self.fingerprints.pop(item["id"], None)
                 continue
             try:
+                path = evidence_path(self.config_store.paths.files_dir, item)
+                stat = path.stat()
+                fingerprint = (str(path), stat.st_dev, stat.st_ino, stat.st_size,
+                               stat.st_mtime_ns, stat.st_ctime_ns, item["imageUrl"], document_text(item))
+                previous = self.fingerprints.get(item["id"])
+                # Reuse only while local file identity, timestamps and notification text agree.
+                # Keep digests, never image bytes; the current corpus bounds this cache.
+                if previous is not None and previous[0] == fingerprint:
+                    documents[item["id"]] = (previous[1], item["imageUrl"])
+                    continue
+                self.fingerprints.pop(item["id"], None)
+                if not 0 < stat.st_size <= MAX_IMAGE_BYTES:
+                    raise ValueError("notification_image_bytes_exceed_budget")
+                if used + stat.st_size > SCAN_BYTES:
+                    deferred.add(item["id"])
+                    continue
                 data = read_evidence(self.config_store.paths.files_dir, item)
                 used += len(data)
-                if used > SCAN_BYTES:
-                    unavailable += 1
+                after = path.stat()
+                if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) != fingerprint[1:6] or evidence_path(self.config_store.paths.files_dir, item) != path:
+                    deferred.add(item["id"])
                     continue
-                documents[item["id"]] = (evidence_hash(item, data), item["imageUrl"])
+                digest = evidence_hash(item, data)
+                self.fingerprints[item["id"]] = (fingerprint, digest)
+                documents[item["id"]] = (digest, item["imageUrl"])
             except (OSError, ValueError):
+                self.fingerprints.pop(item["id"], None)
                 unavailable += 1
-        return documents, unavailable
+        return documents, unavailable, deferred
 
     def discard(self, space: str, identifiers: set[str]) -> None:
         with sqlite3.connect(self.notifications.store.path) as connection:
@@ -78,9 +108,9 @@ class VisualHistorySearch(TextHistorySearch):
         space = await self.services.call("vision.history_embedding_space")
         if not isinstance(space, str) or not space.startswith("clip-") or len(space) > 256:
             raise ValueError("invalid_visual_embedding_space")
-        documents, _ = await asyncio.to_thread(self.documents, items)
+        documents, _, deferred = await asyncio.to_thread(self.documents, items)
         cached = await asyncio.to_thread(self.cache, space, documents)
-        await asyncio.to_thread(self.discard, space, {item["id"] for item in items} - documents.keys())
+        await asyncio.to_thread(self.discard, space, {item["id"] for item in items} - documents.keys() - deferred)
         batch = [item for item in items if item["id"] in documents and item["id"] not in cached][:BATCH_SIZE]
         images = {}
         for item in batch:
@@ -105,10 +135,11 @@ class VisualHistorySearch(TextHistorySearch):
         cached = await asyncio.to_thread(self.cache, space, documents, {**vectors, **{key: [] for key in rejected}})
         # Re-read metadata and bytes after inference. Removed or replaced evidence cannot survive through cache.
         current, cursor = await self.notifications.list(limit=CORPUS_LIMIT, **filters)
-        current_documents, unavailable = await asyncio.to_thread(self.documents, current)
+        current_documents, unavailable, deferred = await asyncio.to_thread(self.documents, current)
         valid = {identifier for identifier in current_documents
                  if identifier in documents and current_documents[identifier] == documents[identifier]}
-        await asyncio.to_thread(self.discard, space, {item["id"] for item in items} - valid)
+        removed = {item["id"] for item in items} - {item["id"] for item in current}
+        await asyncio.to_thread(self.discard, space, (documents.keys() - valid) | removed)
         rejected = {identifier for identifier in valid if cached.get(identifier) == []}
         ranked = []
         for item in current:
@@ -121,7 +152,7 @@ class VisualHistorySearch(TextHistorySearch):
         older = []
         if len(current) == CORPUS_LIMIT and cursor is not None:
             older, _ = await self.notifications.list(before=cursor, limit=1, **filters)
-        pending = len(current_documents) - len(ranked) - len(rejected)
+        pending = len(current_documents) - len(ranked) - len(rejected) + len(deferred)
         unavailable += len(rejected)
         return {"notifications": ranked[:limit], "search": {
             "mode": "semantic_visual", "status": "partial" if pending or unavailable else "ready", "space": space,

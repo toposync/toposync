@@ -215,6 +215,14 @@ class IdentityExtractor:
                 if min(float(face[2]), float(face[3])) < 48:
                     return abstain("unobservable", "insufficient_face_resolution")
                 aligned = self._recognizer.alignCrop(crop, face)
+                # A qualidade do corpo/fundo não qualifica a face usada como referência.
+                face_gray = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
+                light = float(np.mean(face_gray))
+                sharpness = float(cv2.Laplacian(face_gray, cv2.CV_64F).var())
+                if light < 15 or light > 240:
+                    return abstain("unobservable", "exposure")
+                if sharpness < 16:
+                    return abstain("unobservable", "blur")
                 vector = self._recognizer.feature(aligned).reshape(-1)
                 # A região retornada permanece relativa ao quadro original, não ao crop.
                 sx, sy = (right - left) / crop.shape[1], (bottom - top) / crop.shape[0]

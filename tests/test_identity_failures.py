@@ -63,6 +63,64 @@ def test_missing_corrupt_and_busy_model_abstain_with_curatable_photo(tmp_path):
     assert extract(model).reason == "model_checksum_mismatch"
 
 
+@pytest.mark.parametrize(
+    "face_light,reason", [(128, "blur"), (0, "exposure"), (255, "exposure"), (None, None)]
+)
+def test_reference_quality_comes_from_face_not_sharp_body(face_light, reason):
+    from types import SimpleNamespace
+
+    manifests = Path(__file__).parents[1] / "extensions/vision/manifests"
+    model = IdentityExtractor(
+        load_manifest_file(manifests / "opencv_sface_2021dec.json"),
+        face_detector=load_manifest_file(manifests / "opencv_yunet_2023mar.json"),
+    )
+    feature_calls = []
+    face_image = (
+        np.random.default_rng(12).integers(100, 110, size=(112, 112, 3), dtype=np.uint8)
+        if face_light is None
+        else np.full((112, 112, 3), face_light, dtype=np.uint8)
+    )
+
+    def feature(face):
+        feature_calls.append(True)
+        return np.ones((1, 128), dtype=np.float32)
+
+    # Controlled model boundary verifies quality gating, not real recognition accuracy.
+    model._detector = SimpleNamespace(
+        setInputSize=lambda size: None,
+        detect=lambda crop: (None, np.array([[16, 16, 64, 64]], dtype=np.float32)),
+    )
+    model._recognizer = SimpleNamespace(
+        alignCrop=lambda crop, face: face_image,
+        feature=feature,
+    )
+    result = model.extract(
+        np.random.default_rng(10).integers(20, 220, size=(128, 128, 3), dtype=np.uint8),
+        species="person",
+        occurrence_id="visit",
+        source_id="source",
+        camera_id="camera",
+        capture_id="frame",
+        observed_at=1,
+        region=(0, 0, 1, 1),
+    )
+    if reason is None:
+        import cv2
+
+        sharpness = cv2.Laplacian(cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+        assert result.status == "pending"
+        assert result.evidence.reference_eligible
+        assert result.evidence.quality == pytest.approx(sharpness / 200)
+        assert 0 < result.evidence.quality < 1
+        assert feature_calls == [True]
+    else:
+        assert (result.status, result.reason) == ("unobservable", reason)
+        assert result.crop and result.evidence.vector is None
+        assert not result.evidence.reference_eligible
+        assert result.evidence.quality_reasons == (reason,)
+        assert not feature_calls
+
+
 def test_full_database_rolls_back_observation_and_recovers_without_duplicate(tmp_path):
     gallery = IdentityStore(tmp_path, scope="test")
     original = gallery.observe(evidence("original"), policy())

@@ -246,6 +246,20 @@ time. Consequently it cannot establish multi-camera time-of-arrival localization
 The source does not infer acoustic occurrences or enable notifications by itself.
 Local-file decoder tests do not certify physical camera audio support.
 
+For explainable alerts, connect `camera.audio_source` → `camera.audio_features`
+(with an explicit baseline) → `camera.audio_occurrence` → `core.notify`.
+The occurrence operator groups consecutive above-baseline windows, closes after
+two seconds back within baseline, and closes as uncertain when evidence stops
+for five seconds. Quiet and timeout durations are configurable. Baseline changes,
+source closure and evidence gaps end the previous occurrence. No baseline means
+no acoustic occurrence, and loudness alone does not mean danger, speech or intent.
+Use notification occurrence deduplication and retain `audio_analysis` and
+`audio_occurrence` as historical evidence. Terminal output keeps the last positive
+analysis; quiet periods do not overwrite it or extend the positive evidence time.
+Microphones remain separate until same-sound association can be demonstrated.
+The operator retains at most 128 source/capture watermarks and drops PCM artifacts
+from emitted and retained occurrence packets. Eviction closes an active occurrence.
+
 
 ## Live ONVIF event sources
 

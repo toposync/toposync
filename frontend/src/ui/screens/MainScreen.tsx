@@ -1437,8 +1437,6 @@ export function MainScreen({
                             <div className="notificationCardRenderer">{renderer.render(n)}</div>
                           ) : n.description ? (
                             <div className="notificationCardDesc">{n.description}</div>
-                          ) : n.payload ? (
-                            <div className="notificationCardDesc">{JSON.stringify(n.payload)}</div>
                           ) : null}
                         </div>
                       </div>

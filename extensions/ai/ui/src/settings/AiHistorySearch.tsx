@@ -4,7 +4,7 @@ import { requestJson, resolveToposyncUrl, type Notification } from "@toposync/pl
 type SearchResult = {
   notifications: Notification[];
   answer?: { status: string; message?: string; citations?: { notification_id: string; field: string; excerpt: string }[] };
-  search: { mode: string; status: string; pending?: number; scope_limit?: number; reason?: string; results_truncated?: boolean; corpus_truncated?: boolean;
+  search: { mode: string; status: string; pending?: number; unavailable_images?: number; without_images?: number; scope_limit?: number; reason?: string; results_truncated?: boolean; corpus_truncated?: boolean;
     time_range?: { timezone: string; created_after: number; created_before: number } };
 };
 
@@ -135,7 +135,11 @@ export function AiHistorySearch(): React.ReactElement {
       {range && <p>Notificações criadas de {dateFormat.format(new Date(range.created_after * 1000))} até {dateFormat.format(new Date(range.created_before * 1000))}, sem incluir o término ({range.timezone}).</p>}
       <p>Cobertura limitada às notificações disponíveis{result.search.scope_limit ? `, até ${result.search.scope_limit} registros recentes` : ""}. Períodos sem registro permanecem desconhecidos. Hoje/ontem e períodos do dia usam o fuso da instalação.</p>
       {(result.search.results_truncated || result.search.corpus_truncated) && <p>Há registros fora desta seleção. Esta resposta não resume todo o histórico.</p>}
-      {result.search.status === "partial" && <p>Indexação parcial: {result.search.pending ?? 0} registros pendentes.</p>}
+      {(result.search.pending ?? 0) > 0 && <p>Indexação parcial: {result.search.pending} registros pendentes.</p>}
+      {result.search.mode === "semantic_visual" && <>
+        {(result.search.unavailable_images ?? 0) > 0 && <p>{result.search.unavailable_images} imagens indisponíveis para busca visual. Esses registros não foram avaliados por imagem.</p>}
+        {(result.search.without_images ?? 0) > 0 && <p>{result.search.without_images} registros sem imagem ficaram fora da busca visual. Consulte também por texto.</p>}
+      </>}
       {!result.notifications.length && <p>Nenhum registro encontrado. Isso não comprova ausência de acontecimentos. Consulte também o histórico manual.</p>}
       <ol>{result.notifications.map((item) => <li id={`history-source-${item.id}`} key={item.id} style={{ marginBottom: 20, overflowWrap: "anywhere" }}>
         <strong>{item.title}</strong>

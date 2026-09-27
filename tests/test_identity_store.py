@@ -813,3 +813,45 @@ def test_policy_fingerprint_is_stable_across_json_and_equivalent_defaults():
     )
     decoded = RecognitionPolicy.model_validate_json(original.model_dump_json())
     assert len({item.fingerprint() for item in [original, restored, explicit, decoded]}) == 1
+
+
+@pytest.mark.parametrize("species", ["person", "cat", "dog"])
+def test_history_scope_uses_current_decisions_and_distinguishes_human_provenance(store, species):
+    identity, sample, _ = enroll(store, species=species)
+    automatic = store.observe(evidence("automatic-visit", species=species), policy(species))
+    assert automatic.status == "recognized" and automatic.provenance == "automatic"
+    suggested = store.observe(evidence("suggested-visit", species=species), policy(species, automatic=False))
+    assert suggested.status == "suggested"
+    checked = []
+    def authorize(cameras):
+        assert store._connection.in_transaction
+        checked.append(set(cameras))
+    def read(association="human", identifier=identity):
+        return store.history_scope(identifier, association=association, authorize_cameras=authorize)
+    assert [item["occurrence_id"] for item in read()["occurrences"]] == ["enrollment"]
+    recognized = read("recognized")
+    assert {item["occurrence_id"]: item["provenance"] for item in recognized["occurrences"]} == {
+        "enrollment": "human", "automatic-visit": "automatic"}
+    assigned = curate(store, "assign", {"identity_id": identity, "observation_ids": [automatic.observation_id]})
+    assert len(read()["occurrences"]) == 2
+    store.undo(assigned["operation_id"], expected_revision=store.revision)
+    assert len(read()["occurrences"]) == 1
+    target = curate(store, "create", {"species": species, "name": "Target"})["identity_id"]
+    merged = curate(store, "merge", {"source_id": identity, "target_id": target})
+    with pytest.raises(IdentityConflict):
+        read()
+    assert len(read("recognized", target)["occurrences"]) == 2
+    store.undo(merged["operation_id"], expected_revision=store.revision)
+    assert len(read("recognized")["occurrences"]) == 2
+    observation = next(item for item in store.observations() if item["occurrence_id"] == sample.occurrence_id)
+    curate(store, "unassign", {"observation_ids": [observation["id"]]})
+    assert read()["occurrences"] == []
+    assert checked and all("camera" in cameras for cameras in checked)
+    assert {"camera", "*"} in checked  # Merging an unscoped profile conservatively retains owner-only access.
+    revision = store.revision
+    store.no_evidence("automatic-visit", observed_at=1000, status="unobservable", reason="lost", continuity_seconds=0)
+    assert read("recognized")["occurrences"] == []
+    assert store.revision == revision  # Consumers must recheck decisions, not only gallery revision.
+    store.delete_identity(identity, expected_revision=store.revision)
+    with pytest.raises(IdentityConflict):
+        read()

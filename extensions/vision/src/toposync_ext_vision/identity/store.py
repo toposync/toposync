@@ -516,6 +516,36 @@ class IdentityStore:
                 )
             return {"observations": result, "revision": revision, "next_cursor": next_cursor}
 
+    def history_scope(
+        self, identity_id: str, *, association: str = "human",
+        authorize_cameras: Callable[[set[str]], None],
+    ) -> dict:
+        """Current accepted decisions, never candidate proximity or historical assignments.
+
+        A shared transaction keeps decisions, conservative access scope and revision
+        coherent even when another connection curates the gallery during this read.
+        Only decision metadata is decrypted, never crops or embedding evidence.
+        """
+        if association not in {"human", "recognized"}:
+            raise ValueError("Invalid identity association selection")
+        with self._transaction() as connection:
+            authorized = self.camera_ids(identity_id=identity_id)
+            authorize_cameras(authorized)
+            self._identity(connection, identity_id)
+            occurrences = []
+            for row in connection.execute("SELECT id,camera_id,decision FROM occurrence ORDER BY id"):
+                decision = RecognitionDecision.model_validate(self._open(row["decision"]))
+                if (decision.status != "recognized" or decision.identity_id != identity_id
+                        or association == "human" and decision.provenance != "human"):
+                    continue
+                if row["camera_id"] not in authorized:
+                    authorize_cameras({row["camera_id"]})
+                    authorized.add(row["camera_id"])
+                occurrences.append({"occurrence_id": row["id"], "provenance": decision.provenance,
+                                    "decision_revision": decision.revision, "evidence_at": decision.evidence_at})
+            return {"identity_id": identity_id, "association": association,
+                    "revision": self.revision, "occurrences": occurrences}
+
     def occurrence_details(self, occurrence_id: str) -> dict | None:
         with self._lock:
             row = self._connection.execute(

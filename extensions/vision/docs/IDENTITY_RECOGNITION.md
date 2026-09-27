@@ -149,3 +149,27 @@ Use the [offline evaluation protocol](IDENTITY_EVALUATION.md) to validate a froz
 ## Paired development packages
 
 This development snapshot uses core and vision version `0.9.0.dev0`; it is not a published stable release. Vision requires core `>=0.9.0.dev0` both in wheel metadata and its extension manifest. The existing installer pins the running core during extension resolution, so installing this vision package on an older core is rejected before replacement. The extension manager also rejects an incompatible core before setup. Upgrade the paired core package before enabling this vision version; a wheel built from the older `0.8.0` core does not implement private artifacts or the bounded process executor used here.
+
+
+## Authorized identity selection for history
+
+`GET /api/vision/identities/history-scope?identity_id=...` returns the current
+accepted occurrence decisions for an identity, with `Cache-Control: private,
+no-store`. The default `association=human` includes only human-confirmed decisions.
+Explicit `association=recognized` also includes recorded automatic/continuity
+matches, preserving each decision's provenance. Suggestions and candidate
+proximity never qualify. This is historical association metadata, not a new
+recognition accuracy or current-presence claim.
+
+The gallery transaction reads conservative source permissions, decisions and
+revision together. Existing identity and camera permissions apply; partially
+accessible identities remain inaccessible. Results contain occurrence keys,
+provenance, decision revisions and evidence times, without names, candidates,
+crops or embeddings. Corrections, merge/undo, unassignment and deletion affect
+the next selection. A merged/deleted identity requires refreshing the selector.
+Consumers must reauthorize and compare the full selection after long-running
+retrieval: an observation can change its decision without changing gallery
+revision. Do not copy this private mapping into public notification payloads.
+
+This endpoint supplies selection only. Connecting it to notification retrieval
+and person/pet filter controls remains a separate integration step.

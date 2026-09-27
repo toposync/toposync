@@ -191,6 +191,17 @@ def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
             },
         }
 
+    @router.get("/history-scope")
+    def history_scope(request: Request, response: Response, identity_id: Identifier,
+                      association: Literal["human", "recognized"] = "human"):
+        _authorize(request)
+        response.headers["Cache-Control"] = "private, no-store"
+        try:
+            return store().history_scope(identity_id, association=association,
+                authorize_cameras=lambda cameras: _authorize(request, cameras=cameras))
+        except IdentityConflict as exc:
+            raise HTTPException(status_code=409, detail="Identity changed; refresh the selection") from exc
+
     @router.get("/observations")
     def observations(
         request: Request,

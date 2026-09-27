@@ -363,6 +363,10 @@ def test_camera_scope_survives_unassignment_and_protects_implicit_curation(
     )
     listing = client.get("/api/vision/identities")
     assert listing.status_code == 200 and listing.json()["identities"] == []
+    for restricted in (identity, orphan_id, standalone_id, merged_id):
+        denied = client.get("/api/vision/identities/history-scope", params={"identity_id": restricted})
+        assert denied.status_code == 403
+        assert "occurrences" not in denied.json()
     for restricted in (standalone_id, merged_id):
         assert (
             client.post(
@@ -531,6 +535,14 @@ def test_occurrence_names_are_bounded_to_current_identity_and_refresh_after_rena
             (identity, "Visible name")
         ]
         assert unrelated not in response.text and "Unrelated private name" not in response.text
+        scope_response = client.get("/api/vision/identities/history-scope", params={"identity_id": identity})
+        assert scope_response.status_code == 200
+        assert scope_response.headers["cache-control"] == "private, no-store"
+        scope = scope_response.json()
+        assert scope["association"] == "human"
+        assert [(item["occurrence_id"], item["provenance"]) for item in scope["occurrences"]] == [("summary-visit", "human")]
+        assert all(key not in scope_response.text for key in ("Visible name", "Unrelated private name", "candidate_ids", "vector", "embedding", "crop"))
+        assert client.get("/api/vision/identities/history-scope", params={"identity_id": identity, "association": "suggested"}).status_code == 422
         assert "vector" not in response.text
         curate(gallery, "rename", {"identity_id": identity, "name": "Updated name"})
         refreshed = client.get("/api/vision/identities/occurrences/summary-visit").json()

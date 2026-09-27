@@ -4,6 +4,10 @@ import { resolveToposyncUrl, type HostI18n } from "@toposync/plugin-api";
 type Analysis = {
   status: string;
   baseline: { reference: string } | null;
+  transcription?: {
+    status: string;
+    segments: Array<{ offset_seconds: number; duration_seconds: number; text: string }>;
+  };
   windows: Array<{
     offset_seconds: number;
     duration_seconds: number;
@@ -16,11 +20,12 @@ type Analysis = {
 };
 
 export function AudioFileAnalysis({ i18n }: { i18n: HostI18n }): React.ReactElement {
-  const { t } = i18n.useI18n();
+  const { t, locale } = i18n.useI18n();
   const label = (key: string) => t(`ext.cameras.audio.${key}`);
   const id = useId();
   const [file, setFile] = useState<File | null>(null);
   const [reference, setReference] = useState<File | null>(null);
+  const [language, setLanguage] = useState(locale.startsWith("pt") ? "pt" : "en");
   const [result, setResult] = useState<Analysis | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -55,6 +60,8 @@ export function AudioFileAnalysis({ i18n }: { i18n: HostI18n }): React.ReactElem
         parameters.set("baseline_rms", String(rms));
         parameters.set("baseline_reference", reference.name.slice(0, 200));
       }
+      parameters.set("transcribe", "true");
+      if (language) parameters.set("language", language);
       const next = await request(file, parameters);
       if (!controller.signal.aborted) setResult(next);
     } catch (reason) {
@@ -74,6 +81,13 @@ export function AudioFileAnalysis({ i18n }: { i18n: HostI18n }): React.ReactElem
           aria-describedby={`${id}-format`} style={{ maxWidth: "100%" }}
           onChange={(event) => { setFile(event.target.files?.[0] || null); setResult(null); setError(""); }} />
         <p id={`${id}-format`} className="settingsDescription">{label("format")}</p>
+        <label className="label" htmlFor={`${id}-language`}>{label("speechLanguage")}</label>
+        <select id={`${id}-language`} className="input" value={language} disabled={busy}
+          onChange={event => { setLanguage(event.target.value); setResult(null); }}>
+          <option value="pt">Português</option>
+          <option value="en">English</option>
+          <option value="">{label("automaticLanguage")}</option>
+        </select>
         <details>
           <summary>{label("advanced")}</summary>
           <p className="settingsDescription">{label("referenceHelp")}</p>
@@ -88,6 +102,17 @@ export function AudioFileAnalysis({ i18n }: { i18n: HostI18n }): React.ReactElem
         <div role="status" aria-live="polite">{busy ? label("busy") : result ? label(result.status === "silent" ? "silent" : "audible") : ""}</div>
         {result ? <>
           <p className="settingsDescription">{label("limitations")}</p>
+          <section aria-labelledby={`${id}-transcription`}>
+            <h3 id={`${id}-transcription`}>{label("transcriptionTitle")}</h3>
+            <p>{label(result.transcription?.status === "no_speech" ? "noSpeech"
+              : result.transcription?.status === "busy" ? "transcriptionBusy"
+              : result.transcription?.status === "partial" ? "transcriptionPartial"
+              : result.transcription?.status === "transcribed" ? "transcriptionReview" : "transcriptionUnavailable")}</p>
+            {result.transcription?.segments.map((segment, index) => <p key={index} style={{ overflowWrap: "anywhere" }}>
+              <span>{segment.offset_seconds.toFixed(1)}–{(segment.offset_seconds + segment.duration_seconds).toFixed(1)} s: </span>
+              {segment.text}
+            </p>)}
+          </section>
           <p>{result.baseline ? t("ext.cameras.audio.baselineUsed", { name: result.baseline.reference }) : label("baselineMissing")}</p>
           <div style={{ overflowX: "auto", maxWidth: "100%" }}>
             <table style={{ width: "100%", textAlign: "left" }}>

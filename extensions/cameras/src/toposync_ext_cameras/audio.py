@@ -91,7 +91,7 @@ def analyze_pcm(
     }
 
 
-def analyze_wav(data: bytes, *, clock: AudioClock, baseline: AudioBaseline | None = None) -> dict:
+def decode_wav_pcm(data: bytes) -> tuple[np.ndarray, int]:
     if not 0 < len(data) <= MAX_WAV_BYTES:
         raise ValueError("wav_exceeds_budget")
     try:
@@ -110,4 +110,9 @@ def analyze_wav(data: bytes, *, clock: AudioClock, baseline: AudioBaseline | Non
     except (wave.Error, EOFError) as exc:
         raise ValueError("invalid_wav") from exc
     samples = np.frombuffer(pcm, dtype="<i2").astype(np.int16).reshape(-1, channels)
+    return samples, rate
+
+
+def analyze_wav(data: bytes, *, clock: AudioClock, baseline: AudioBaseline | None = None) -> dict:
+    samples, rate = decode_wav_pcm(data)
     return analyze_pcm(samples, rate, clock=clock, baseline=baseline)

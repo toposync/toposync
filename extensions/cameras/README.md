@@ -137,3 +137,55 @@ the last evidence, excluding the idle timeout. This describes observed crossings
 not family relationships, intent or biometric identity. Tracking fragmentation
 can still overcount a physical person; validate tracking and mapping with the
 installation's footage before relying on counts.
+
+## Local audio review and transcription
+
+Camera settings accept a WAV sample of up to 30 seconds, PCM16, mono or stereo,
+and 12 MB. Signal measurements and optional reference comparison remain available
+without a transcription model. The selected file is processed locally and is not
+retained or played. Timestamps are offsets within that file, not verified capture
+times. These checks do not establish camera audio capture or sound localization.
+
+From a source checkout, enable the optional dependencies with `uv sync --group audio`
+and run the backend with `uv run --group audio python -m toposync serve` (plus the
+installation's usual arguments). The model directory is
+`<data-dir>/audio-models/faster-whisper-tiny`. To provision the pinned public model,
+run the following with that environment and the intended data directory:
+
+```python
+from pathlib import Path
+from hashlib import sha256
+from huggingface_hub import snapshot_download
+
+model = Path("/absolute/data-dir/audio-models/faster-whisper-tiny")
+snapshot_download(
+    "Systran/faster-whisper-tiny",
+    revision="d90ca5fe260221311c53c58e660288d3deb8d356",
+    allow_patterns=["model.bin", "config.json", "tokenizer.json", "vocabulary.txt"],
+    local_dir=model, token=False, max_workers=1,
+)
+assert sha256((model / "model.bin").read_bytes()).hexdigest() == (
+    "dcb76c6586fc06cbdac6dd21f14cfd129cc4cdd9dce19bf4ffa62e59cbe6e6d1"
+)
+```
+
+The four files total approximately 78 MB. See the
+[model repository](https://huggingface.co/Systran/faster-whisper-tiny) and
+[Faster Whisper documentation](https://github.com/SYSTRAN/faster-whisper).
+Inference never downloads a missing model or sends audio to a remote provider.
+It uses CPU/int8, two inference threads, one worker and one admitted transcription
+per application process. Busy requests retain signal analysis and report that
+transcription is busy. The model is released after each call; leaving the page
+does not forcibly interrupt a native call already running.
+
+Choose the speech language; the interface defaults to its own language and also
+offers automatic detection. Automatic detection can choose the wrong language
+for short recordings. Text and segment timings are model output for review, not
+verbatim guarantees, speaker identity or intent. Decoding is bounded to 128 new
+tokens; a partial result is labelled. Stereo uses the higher-energy channel to
+avoid phase cancellation and does not perform speaker separation.
+
+`POST /api/cameras/audio/analyze` accepts `transcribe=true` and an optional
+`language` code alongside its existing explicit clock parameters.
+`camera.audio_features` supports the same optional transcription, disabled by
+default for pipelines. Existing packet and occurrence identifiers are preserved.

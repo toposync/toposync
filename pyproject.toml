@@ -19,6 +19,7 @@ dependencies = [
 toposync = "toposync.cli:main"
 
 [dependency-groups]
+audio = ["toposync-ext-cameras[transcription]"]
 dev = [
   "pytest>=8.3",
   "ruff>=0.8",

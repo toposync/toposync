@@ -3,23 +3,28 @@
 from dataclasses import replace
 from collections import deque
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.runtime import Lifecycle
 
 from .audio import AudioBaseline, AudioClock, analyze_pcm
+from .audio_transcription import transcribe_pcm
 
 
 class AudioFeaturesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     baseline: AudioBaseline | None = None
+    transcribe: bool = False
+    language: str | None = Field(default=None, pattern="^[a-z]{2,3}$")
 
 
 class AudioFeaturesRuntime(TransformOperatorRuntime):
     def __init__(self, config, deps):
         self.config = AudioFeaturesConfig.model_validate(config)
         self._recent = deque(maxlen=32)
+        store = getattr(deps, "config_store", None)
+        self._data_dir = store.paths.data_dir if store is not None else None
 
     async def process_packet(self, packet, context):
         if packet.lifecycle == Lifecycle.CLOSE:
@@ -33,6 +38,11 @@ class AudioFeaturesRuntime(TransformOperatorRuntime):
                 clock=clock, baseline=self.config.baseline,
                 availability=metadata.get("availability", "available"),
             )
+            if self.config.transcribe and result["status"] in {"audible", "silent"}:
+                result["transcription"] = await context.run_blocking(
+                    transcribe_pcm, artifact.data, metadata.get("sample_rate"),
+                    data_dir=self._data_dir, language=self.config.language,
+                )
             source_id, capture_id = metadata.get("source_id"), metadata.get("capture_id")
             correlation = {"status": "unavailable", "reason": "baseline_and_verified_capture_clock_required", "candidates": []}
             if (

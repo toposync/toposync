@@ -12,6 +12,7 @@ from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync_ext_cameras.audio import AudioBaseline, AudioClock, analyze_pcm, analyze_wav
 from toposync_ext_cameras.audio_api import install_audio_routes
 from toposync_ext_cameras.audio_pipeline import AudioFeaturesRuntime, register_audio_operator
+from toposync_ext_cameras.audio_transcription import MODEL_DIRECTORY, _inference_lock, transcribe_pcm
 
 
 def wav_bytes(samples, rate=16000):
@@ -67,6 +68,31 @@ def test_audio_states_are_distinct_and_stereo_does_not_cancel():
     assert result["windows"][0]["anomaly"]["status"] == "unavailable"
 
 
+def test_transcription_is_optional_bounded_and_keeps_analysis_when_model_is_missing(tmp_path):
+    app = FastAPI()
+    install_audio_routes(app)
+    with TestClient(app) as client:
+        path = "/api/cameras/audio/analyze?started_at=0&clock_basis=synthetic&transcribe=true"
+        result = client.post(path, content=wav_bytes(tone())).json()
+        assert result["status"] == "audible"
+        assert result["transcription"]["reason"] == "transcription_model_not_installed"
+        result = client.post(path, content=wav_bytes(np.zeros(16000, dtype=np.int16))).json()
+        assert result["transcription"]["status"] == "no_speech"
+        assert result["transcription"]["text"] == ""
+        assert client.post(path + "&language=../bad", content=wav_bytes(tone())).status_code == 422
+        assert client.post(path, content=wav_bytes(np.zeros(31 * 16000, dtype=np.int16))).status_code == 422
+    # Busy admission is tested without loading an inference model.
+    directory = tmp_path / MODEL_DIRECTORY
+    directory.mkdir(parents=True)
+    for name in ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"):
+        (directory / name).touch()
+    assert _inference_lock.acquire(blocking=False)
+    try:
+        assert transcribe_pcm(tone(), 16000, data_dir=tmp_path)["status"] == "busy"
+    finally:
+        _inference_lock.release()
+
+
 def test_noise_short_impulse_clipping_and_explicit_baseline():
     clock = AudioClock(started_at=0, basis="synthetic")
     noise = np.random.default_rng(1).integers(-100, 100, 16000, dtype=np.int16)
@@ -109,6 +135,11 @@ def test_audio_operator_preserves_occurrence_and_exposes_features():
         assert result.packet_id == packet.packet_id and result.lifecycle == packet.lifecycle
         assert result.payload["source_id"] == "synthetic"
         assert result.payload["audio_analysis"]["windows"][0]["dominant_frequency_hz"] == 1000
+        assert runtime.config.transcribe is False
+        enabled = AudioFeaturesRuntime({"transcribe": True, "language": "pt"}, None)
+        transcribed = (await enabled.process_packet(packet, Context()))[0]
+        assert transcribed.packet_id == packet.packet_id and transcribed.lifecycle == packet.lifecycle
+        assert transcribed.payload["audio_analysis"]["transcription"]["reason"] == "transcription_model_not_installed"
         invalid = Packet.create(stream_id="test", payload={})
         assert (await runtime.process_packet(invalid, Context()))[0].payload["audio_analysis"]["status"] == "unavailable"
 

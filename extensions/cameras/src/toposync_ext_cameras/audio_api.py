@@ -5,7 +5,8 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
 
-from .audio import AudioBaseline, AudioClock, MAX_WAV_BYTES, analyze_wav
+from .audio import AudioBaseline, AudioClock, MAX_WAV_BYTES, analyze_pcm, decode_wav_pcm
+from .audio_transcription import transcribe_pcm
 
 
 def install_audio_routes(app: FastAPI) -> None:
@@ -17,6 +18,8 @@ def install_audio_routes(app: FastAPI) -> None:
         clock_uncertainty_seconds: float | None = Query(default=None, ge=0, allow_inf_nan=False),
         baseline_rms: float | None = Query(default=None, gt=0, le=1, allow_inf_nan=False),
         baseline_reference: str | None = Query(default=None, min_length=1, max_length=200),
+        transcribe: bool = False,
+        language: str | None = Query(default=None, pattern="^[a-z]{2,3}$"),
     ):
         if (baseline_rms is None) != (baseline_reference is None):
             raise HTTPException(422, "Informe valor e referência do baseline juntos.")
@@ -28,6 +31,14 @@ def install_audio_routes(app: FastAPI) -> None:
         clock = AudioClock(started_at=started_at, basis=clock_basis, uncertainty_seconds=clock_uncertainty_seconds)
         baseline = AudioBaseline(rms=baseline_rms, reference=baseline_reference) if baseline_rms is not None else None
         try:
-            return await asyncio.to_thread(analyze_wav, bytes(data), clock=clock, baseline=baseline)
+            samples, rate = await asyncio.to_thread(decode_wav_pcm, bytes(data))
+            result = await asyncio.to_thread(analyze_pcm, samples, rate, clock=clock, baseline=baseline)
+            if transcribe:
+                store = getattr(request.app.state, "config_store", None)
+                directory = store.paths.data_dir if store is not None else None
+                result["transcription"] = await asyncio.to_thread(
+                    transcribe_pcm, samples, rate, data_dir=directory, language=language,
+                )
+            return result
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc

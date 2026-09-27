@@ -1,4 +1,9 @@
 const en = {
+  compare_versions: "Compare panoramas",
+  current_panorama: "Current panorama",
+  new_panorama: "New panorama",
+  use_panorama: "Use this panorama",
+  selection_help: "Review the new image before using it. The previous image stays saved; existing mappings are not recalibrated automatically.",
   diagnostic_native_reference_busy: "This preparation is already running. Wait or stop it.",
   diagnostic_native_reference_unavailable: "This point is unavailable. Refresh the panorama.",
   diagnostic_native_reference_reconciliation_required: "Check and clean up the previous preparation before trying again.",
@@ -407,6 +412,11 @@ const en = {
 };
 
 const pt: Record<keyof typeof en, string> = {
+  compare_versions: "Comparar panorâmicas",
+  current_panorama: "Panorâmica atual",
+  new_panorama: "Nova panorâmica",
+  use_panorama: "Usar esta panorâmica",
+  selection_help: "Revise a nova imagem antes de usá-la. A anterior permanece salva; os mapeamentos existentes não são recalibrados automaticamente.",
   diagnostic_native_reference_busy: "Esta preparação já está em andamento. Aguarde ou interrompa.",
   diagnostic_native_reference_unavailable: "Este ponto está indisponível. Atualize a panorâmica.",
   diagnostic_native_reference_reconciliation_required: "Confira e limpe a preparação anterior antes de tentar novamente.",

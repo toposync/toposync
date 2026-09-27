@@ -1305,7 +1305,7 @@ def test_new_complete_preserves_previous_and_resets_crop(environment):
     assert second["candidate_reason"] == "coverage_alignment_unverified"
 
 
-def test_policy_v4_candidate_is_promoted_once_without_new_camera_work(environment):
+def test_policy_v4_candidate_cannot_replace_existing_geometry_on_reopen(environment):
     client, fake, service, _ = environment
     first = wait_done(client, create(client))
     second = wait_done(client, create(client, "replacement-before-contract-change"))
@@ -1316,13 +1316,23 @@ def test_policy_v4_candidate_is_promoted_once_without_new_camera_work(environmen
 
     service.jobs[second["id"]]["_acquisition_policy"] = {"version": 4}
     pending = client.get(BASE).json()
-    assert pending["replacement_pending"] is True
+    assert pending["replacement_pending"] is False
     assert pending["active"]["id"] == first["artifact_id"]
     migrated = client.post(BASE + "/finalize").json()
 
-    assert migrated["active"]["id"] == second["artifact_id"]
-    assert migrated["previous"]["id"] == first["artifact_id"]
-    assert migrated["candidate"] is None
+    assert migrated["active"]["id"] == first["artifact_id"]
+    assert migrated["previous"] is None
+    assert migrated["candidate"]["id"] == second["artifact_id"]
+    selection = {"artifact_id": second["artifact_id"], "expected_revision": migrated["revision"]}
+    stale = client.post(BASE + "/finalize", json={**selection, "expected_revision": selection["expected_revision"] - 1})
+    assert stale.status_code == 409
+    assert client.get(BASE).json()["active"]["id"] == first["artifact_id"]
+    selected = client.post(BASE + "/finalize", json=selection)
+    assert selected.status_code == 200
+    assert selected.json()["active"]["id"] == second["artifact_id"]
+    assert selected.json()["previous"]["id"] == first["artifact_id"]
+    assert selected.json()["candidate"] is None
+    assert client.get(BASE).json()["active"]["id"] == second["artifact_id"]
     assert (fake.moves, fake.calls, fake.returns, fake.stops) == before
 
 

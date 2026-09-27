@@ -511,8 +511,8 @@ export function fetchCameraSourcePanorama(cameraId: string, sourceId: string, si
   return requestSourcePanorama(sourcePanoramaPath(cameraId, sourceId), { signal });
 }
 
-export function finalizeCameraSourcePanoramaReplacement(cameraId: string, sourceId: string, signal?: AbortSignal): Promise<import("../types").CameraSourcePanorama> {
-  return requestSourcePanorama(`${sourcePanoramaPath(cameraId, sourceId)}/finalize`, { method: "POST", signal });
+export function finalizeCameraSourcePanoramaReplacement(cameraId: string, sourceId: string, signal?: AbortSignal, selection?: { artifact_id: string; expected_revision: number }): Promise<import("../types").CameraSourcePanorama> {
+  return requestSourcePanorama(`${sourcePanoramaPath(cameraId, sourceId)}/finalize`, { method: "POST", signal, ...(selection ? { headers: { "content-type": "application/json" }, body: JSON.stringify(selection) } : {}) });
 }
 
 export async function createCameraSourcePanorama(cameraId: string, sourceId: string, idempotencyKey: string): Promise<import("../types").CameraSourcePanoramaJob> {

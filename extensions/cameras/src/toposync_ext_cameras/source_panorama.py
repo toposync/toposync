@@ -405,6 +405,11 @@ class SavePanoramaCrop(_Input):
     crop: PanoramaCrop
 
 
+class SelectSourcePanorama(_Input):
+    artifact_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    expected_revision: int = Field(ge=0)
+
+
 def _error(code: str, message: str, status: int = 409) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code, "message": message})
 
@@ -880,7 +885,7 @@ def _replacement_candidate_reason(
         and artifact.get("status") in {"ready", "partial"}
         and _artifact_quality_approved(artifact)
     ):
-        return None
+        return (reason or "coverage_alignment_unverified") if active is not None else None
     return reason
 
 
@@ -1890,6 +1895,7 @@ class SourcePanoramaService:
         output: dict[str, Any] = {
             "camera_id": camera_id,
             "source_id": source_id,
+            "revision": int(pointer.get("revision", 0)),
             "active": None,
             "previous": None,
             "candidate": None,
@@ -1928,15 +1934,16 @@ class SourcePanoramaService:
                         )
                 except HTTPException:
                     pass
-        output["replacement_pending"] = self._automatic_replacement_eligible(
+        output["candidate_selectable"] = self._replacement_eligible(
             pointer,
             camera_id=camera_id,
             source_id=source_id,
             current_identity=current_identity,
         )
+        output["replacement_pending"] = not pointer.get("active") and output["candidate_selectable"]
         return output
 
-    def _automatic_replacement_eligible(
+    def _replacement_eligible(
         self,
         pointer: dict[str, Any],
         *,
@@ -1971,26 +1978,30 @@ class SourcePanoramaService:
         pointer: dict[str, Any],
         *,
         current_identity: str,
+        selection: SelectSourcePanorama | None = None,
     ) -> dict[str, Any]:
-        """Finish the old review state for a successful regional capture.
-
-        Policy v4 originally kept every result as a candidate, even when the
-        reconstruction was approved.  The product contract now treats capture
-        as a replacement operation: a usable result becomes active and the old
-        active result remains recoverable as ``previous``.
-        """
+        """Replacing an active panorama requires an explicit, versioned selection."""
         candidate = pointer.get("candidate")
         artifact_id = candidate.get("artifact_id") if isinstance(candidate, dict) else None
+        if selection is not None and (
+            selection.artifact_id != artifact_id
+            or selection.expected_revision != int(pointer.get("revision", 0))
+        ):
+            raise _error("panorama_revision_conflict", "A panorâmica mudou. Atualize antes de selecionar.")
+        if selection is None and pointer.get("active") is not None:
+            return pointer
         if (
             not isinstance(candidate, dict)
             or not isinstance(artifact_id, str)
-            or not self._automatic_replacement_eligible(
+            or not self._replacement_eligible(
                 pointer,
                 camera_id=camera_id,
                 source_id=source_id,
                 current_identity=current_identity,
             )
         ):
+            if selection is not None:
+                raise _error("invalid_reconstruction", "A panorâmica não está qualificada para uso.")
             return pointer
         replacement = {
             "revision": int(pointer.get("revision", 0)) + 1,
@@ -2011,6 +2022,7 @@ class SourcePanoramaService:
         request: Request,
         camera_id: str,
         source_id: str,
+        selection: SelectSourcePanorama | None = None,
     ) -> dict[str, Any]:
         self._authorize(request, camera_id, write=True)
         _, camera, source = await self._context(camera_id, source_id, request)
@@ -2020,6 +2032,7 @@ class SourcePanoramaService:
             source_id,
             pointer,
             current_identity=_identity(camera, source),
+            selection=selection,
         )
         return await self.get_source(request, camera_id, source_id)
 
@@ -3231,9 +3244,9 @@ def register_source_panorama_routes(
 
     @app.post(_SOURCE + "/finalize")
     async def finalize_replacement(
-        request: Request, camera_id: str, source_id: str
+        request: Request, camera_id: str, source_id: str, body: SelectSourcePanorama | None = None
     ) -> dict[str, Any]:
-        return await service.finalize_replacement(request, camera_id, source_id)
+        return await service.finalize_replacement(request, camera_id, source_id, body)
 
     @app.get(_JOBS + "/{job_id}")
     async def get_job(request: Request, job_id: str) -> dict[str, Any]:

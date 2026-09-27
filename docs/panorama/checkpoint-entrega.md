@@ -1,5 +1,17 @@
 # Panorâmica ao vivo — aceleração e recuperação em validação, 25/09/2026
 
+## Integração local — 26/09/2026
+
+Base `0b162eb5`, sem novas capturas ou movimentos físicos. A verificação local de cobertura e sessão live encontrou 213 testes aprovados e duas falhas de publicação regional: uma reconstrução aprovada substituía o ativo, inclusive quando sua identidade óptica estava antiga. Corrigida a publicação v4 para conservar o novo resultado como candidato quando já existe geometria ativa. Reabertura e a finalização automática do cliente também preservam o ativo; a primeira publicação continua disponível. Os arquivos integrais e máscaras anteriores permanecem intactos. A regressão de API/publicação passou em 283 testes; o cenário foi ampliado para identidade atual/antiga e retorno confirmado/não confirmado.
+
+Na atenção PTZ, observações vencidas não iniciam nem prolongam atenção; observações atrasadas conservam somente sua validade restante. Resolução lenta é reavaliada antes da aquisição de controle. Teste anterior reproduziu `FOCUSED` indevido com observação de seis segundos e timeout de cinco. Aprovação local: 40 testes do controlador, 39 de integração API/pipeline e quatro de modelos/persistência. Evidência simulada não qualifica acompanhamento mecânico contínuo.
+
+Revisão da integração encontrou que a proteção automática precisava preservar também uma adoção deliberada: a interface agora permite comparar a imagem atual com a candidata e escolher **Usar esta panorâmica**. A seleção exige identidade e revisão esperadas, recusa conflitos, mantém a anterior e não recalibra mapeamentos. Controles de preparação ligados à imagem ativa ficam ocultos durante a revisão da candidata. Doze casos focados de API/cobertura, traduções, tipos e build aprovados; o cenário de navegador usa aplicação renderizada e imagens/transporte sintéticos, com inspeção desktop e móvel. A seleção não inicia movimento.
+
+Aceites físicos de cobertura, rapidez de chegada/retarget e recuperação prolongada continuam **não alcançados nesta rodada**. Os resultados históricos permanecem com seus limites originais; nenhuma autorização de movimento foi presumida. A próxima prova física depende de autorização específica e cenário congelado; outras frentes da integração seguem independentes.
+
+## Histórico anterior
+
 Ordenação de chegada também exercitada no Chromium isolado: a função real de aceitação preserva o indicador após resposta atrasada, aceita a próxima sequência e respeita bloqueio prioritário. Nenhuma requisição de rede; navegador encerrado após o teste. A apresentação e o registro são fixtures, portanto esta prova não cobre o componente completo, a extensão servida ou movimento físico. Validação prática com o pacote recompilado continua pendente.
 
 Validação adicional reutiliza a montagem existente de LiveSession React com renderer real, imagens sintéticas e transporte simulado: respostas tardias de sucesso e falha não desfazem chegada confirmada por consulta nem introduzem alerta indevido. Arquivo de integração aprovado após inclusão dos cenários; 47 testes locais haviam passado antes dessa ampliação. Pacote da extensão recompilado. Viewport, player, geometria observada e câmera permanecem simulados neste teste; aceite físico não é ampliado.

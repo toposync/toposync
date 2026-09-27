@@ -182,6 +182,12 @@ export function useCameraSourcePanorama(cameraId: string, sourceId: string, enab
       setData((previous) => previous ? previous.active?.id === next.id ? { ...previous, active: next } : { ...previous, candidate: next } : previous);
     }), [cameraId, sourceId, perform]);
 
+  const selectCandidate = useCallback(() => {
+    if (!data?.candidate || data.revision === undefined) return Promise.resolve(null);
+    return perform("select", () => finalizeCameraSourcePanoramaReplacement(cameraId, sourceId, undefined,
+      { artifact_id: data.candidate!.id, expected_revision: data.revision! }), setData);
+  }, [cameraId, sourceId, data, perform]);
+
   const operateReference = useCallback((artifact: CameraSourcePanoramaArtifact, action: "prepare" | "stop" | "remove", identifier?: string) => {
     if (action === "prepare" && !nativeAttempt.current) {
       nativeAttempt.current = Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) => value.toString(16).padStart(2, "0")).join("");
@@ -197,6 +203,6 @@ export function useCameraSourcePanorama(cameraId: string, sourceId: string, enab
       });
   }, [cameraId, sourceId, perform]);
 
-  return { data, loading, connectionError, actionError, busy, refresh, start, operate, saveCrop,
+  return { data, loading, connectionError, actionError, busy, refresh, start, operate, saveCrop, selectCandidate,
     nativeReferences, nativeConnectionError, nativeAttemptId: nativeAttempt.current, operateReference, clearActionError: () => setActionError(null) };
 }

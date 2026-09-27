@@ -436,7 +436,8 @@ def test_real_move_refuses_exhausted_command_budget(tmp_path, monkeypatch, retur
 
 
 @pytest.mark.parametrize("return_verified", [True, False])
-def test_product_publishes_integral_without_coverage_approval_or_replacing_active(tmp_path, monkeypatch, return_verified):
+@pytest.mark.parametrize("source_changed", [True, False])
+def test_product_publishes_integral_without_coverage_approval_or_replacing_active(tmp_path, monkeypatch, return_verified, source_changed):
     from fastapi.testclient import TestClient
     from test_camera_source_panorama_api import FakeScanner, make_app, create, wait_done, BASE
 
@@ -486,13 +487,18 @@ def test_product_publishes_integral_without_coverage_approval_or_replacing_activ
         assert all(p["sha256"] and p["source_identity"] for p in fake.inputs)
         artifact_path = service.root / "artifacts" / active["id"] / "artifact.json"
         artifact = json.loads(artifact_path.read_text())
-        artifact["_identity"] = "old-binding-still-used-by-a-mapping"
+        if source_changed:
+            artifact["_identity"] = "old-binding-still-used-by-a-mapping"
         artifact_path.write_text(json.dumps(artifact))
         second = wait_done(client, create(client, "coverage-second"))
         assert second["artifact_id"] != first["artifact_id"]
         after = client.get(BASE).json()
         assert after["active"]["id"] == active["id"]
         assert after["candidate"]["id"] == second["artifact_id"]
+        assert after["replacement_pending"] is False
+        finalized = client.post(BASE + "/finalize").json()
+        assert finalized["active"]["id"] == active["id"]
+        assert finalized["candidate"]["id"] == second["artifact_id"]
         assert client.get(active["image_url"]).content == image
         assert client.get(active["coverage_url"]).content == mask
         assert after["candidate"]["crop"] == {"u_start": 0, "u_width": 1, "v_start": 0, "v_height": 1}

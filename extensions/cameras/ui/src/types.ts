@@ -787,6 +787,8 @@ export type CameraSourcePanoramaJob = {
 export type CameraSourcePanorama = {
   camera_id: string;
   source_id: string;
+  revision?: number;
+  candidate_selectable?: boolean;
   active: CameraSourcePanoramaArtifact | null;
   previous: CameraSourcePanoramaArtifact | null;
   candidate?: CameraSourcePanoramaArtifact | null;

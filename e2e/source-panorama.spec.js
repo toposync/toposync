@@ -120,11 +120,11 @@ for (const partial of [false, true]) test(`completed capture becomes the single 
   await expect(section.getByTestId("panorama-independent-outcomes")).toBeVisible();
 });
 
-test("an approved legacy candidate is finalized once and shown as the current panorama", async ({ page, request }) => {
+test("a candidate replaces the current panorama only after explicit review", async ({ page, request }) => {
   const source = await state(request);
   const artifact = (id, revision) => ({
     id, revision, status: "ready", created_at: Date.now() / 1000,
-    width: 2, height: 2, image_url: `/api/cameras/panorama-artifacts/${id}/files/panorama`,
+    width: 640, height: 240, image_url: `/api/cameras/panorama-artifacts/${id}/files/panorama`,
     coverage_url: `/api/cameras/panorama-artifacts/${id}/files/coverage`,
     crop: { u_start: 0, u_width: 1, v_start: 0, v_height: 1 }, crop_revision: 1,
     coverage: { acquisition_complete: true }, quality: { status: "ready", reasons: [] },
@@ -141,16 +141,31 @@ test("an approved legacy candidate is finalized once and shown as the current pa
   };
   let finalized = 0;
   await page.route(`**${resource}/finalize`, route => {
+    expect(route.request().headers()["content-type"]).toBe("application/json");
+    expect(route.request().postDataJSON()).toEqual({ artifact_id: candidate.id, expected_revision: 7 });
     finalized += 1;
-    return route.fulfill({ json: { ...source, active: candidate, previous, candidate: null, replacement_pending: false, job } });
+    return route.fulfill({ json: { ...source, revision: 8, active: candidate, previous, candidate: null, replacement_pending: false, job } });
   });
-  await page.route(`**${resource}`, route => route.fulfill({ json: { ...source, active: previous, candidate, replacement_pending: true, job } }));
-  await page.route(`**${candidate.image_url}`, route => route.fulfill({
-    contentType: "image/png",
-    body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mNkYGD4z8DAwMDAxAADAA0HAQFLmVKMAAAAAElFTkSuQmCC", "base64"),
+  await page.route(`**${resource}`, route => route.fulfill({ json: { ...source, revision: finalized ? 8 : 7, active: finalized ? candidate : previous, candidate: finalized ? null : candidate, candidate_selectable: true, replacement_pending: false, job } }));
+  await page.route("**/api/cameras/panorama-artifacts/*/files/panorama", route => route.fulfill({
+    contentType: "image/svg+xml",
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="240"><rect width="640" height="240" fill="#9fcdd7"/><path d="M0 180 L100 120 L220 160 L390 80 L640 180 V240 H0Z" fill="#698d69"/></svg>',
   }));
 
   const section = await openPanorama(page);
+  await section.getByRole("button", { name: "New panorama", exact: true }).click();
+  await expect(section.getByRole("button", { name: "Use this panorama", exact: true })).toBeEnabled();
+  await expect(section.getByRole("button", { name: "New panorama", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(section.getByText("Panorama updated.", { exact: true })).toHaveCount(0);
+  await expect(section.getByTestId("panorama-native-references")).toHaveCount(0);
+  expect(finalized).toBe(0);
+  await section.getByRole("button", { name: "Use this panorama", exact: true }).scrollIntoViewIfNeeded();
+  await screenshot(page, "candidate-review-desktop");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await checkLayout(section, 390);
+  await section.getByRole("button", { name: "Use this panorama", exact: true }).scrollIntoViewIfNeeded();
+  await screenshot(page, "candidate-review-mobile");
+  await section.getByRole("button", { name: "Use this panorama", exact: true }).click();
   await expect.poll(() => finalized).toBe(1);
   await expect(section.getByText("Panorama updated.", { exact: true })).toBeVisible();
   await expect(section.getByRole("button", { name: "Current panorama", exact: true })).toHaveCount(0);

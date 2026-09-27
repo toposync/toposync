@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { requestJson } from "@toposync/plugin-api";
+import { requestJson, resolveToposyncUrl } from "@toposync/plugin-api";
 import { createCameraPipelinePreset } from "../api/camerasApi";
 import { SubModal } from "../ui/SubModal";
 import type { CameraPipelinePresetModal } from "./CameraPipelinePresetModal";
@@ -18,6 +18,7 @@ export function CameraObservationPresetModal({
   const [loadingSignals, setLoadingSignals] = useState(false);
   const [signalsUnavailable, setSignalsUnavailable] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reference, setReference] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setSourceId(sources.find((source) => source.id === activeSourceId)?.id || sources[0]?.id || "");
@@ -26,6 +27,7 @@ export function CameraObservationPresetModal({
     setSignalId("");
     setServerId("local");
     setError(null);
+    setReference(null);
   }, [open, preset, camera.id, activeSourceId]);
   useEffect(() => {
     if (!open || preset !== "doorbell_visitor") return;
@@ -40,17 +42,32 @@ export function CameraObservationPresetModal({
     return () => controller.abort();
   }, [open, preset, camera.id]);
   const visitor = preset === "doorbell_visitor";
+  const audio = preset === "audio_anomaly";
   const selectedSignal = signals.find(item => JSON.stringify([item.topic, item.item_name]) === signalId);
   const area = visitor || preset === "area_presence" || preset === "area_entry" || preset === "area_group_entry";
-  if (!open || (!area && preset !== "cat_litter_use" && preset !== "cat_drinking")) return null;
+  if (!open || (!area && !audio && preset !== "cat_litter_use" && preset !== "cat_drinking")) return null;
   const selectedArea = mappedCompositions.flatMap(composition => (composition.areas ?? []).map(item => ({...item, compositionId: composition.id}))).find(item => JSON.stringify([item.compositionId, item.id]) === areaId);
-  const key = visitor ? "ext.cameras.visitor" : area ? `ext.cameras.area.${preset === "area_presence" ? "presence" : preset === "area_group_entry" ? "group" : "entry"}` : `ext.cameras.cat.${preset === "cat_litter_use" ? "litter" : "water"}`;
+  const key = audio ? "ext.cameras.audioRecipe" : visitor ? "ext.cameras.visitor" : area ? `ext.cameras.area.${preset === "area_presence" ? "presence" : preset === "area_group_entry" ? "group" : "entry"}` : `ext.cameras.cat.${preset === "cat_litter_use" ? "litter" : "water"}`;
   async function save(): Promise<void> {
-    if (saving || !sourceId || !preset || (area && !selectedArea) || (visitor && !selectedSignal)) return;
+    if (saving || !sourceId || !preset || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference)) return;
     setSaving(true);
     setError(null);
     try {
+      let audio_baseline: { reference: string; rms: number } | undefined;
+      if (audio && reference) {
+        if (reference.size > 12_000_000) throw new Error(t("ext.cameras.audioRecipe.invalid"));
+        const response = await fetch(resolveToposyncUrl("/api/cameras/audio/analyze?started_at=0&clock_basis=synthetic"), {
+          method: "POST", body: reference, headers: { "Content-Type": "audio/wav" },
+        });
+        if (!response.ok) throw new Error(t("ext.cameras.audioRecipe.invalid"));
+        const result = await response.json() as { windows: { duration_seconds: number; rms: number }[] };
+        const duration = result.windows.reduce((sum, window) => sum + window.duration_seconds, 0);
+        const rms = Math.sqrt(result.windows.reduce((sum, window) => sum + window.rms ** 2 * window.duration_seconds, 0) / duration);
+        if (!Number.isFinite(rms) || rms <= 0) throw new Error(t("ext.cameras.audioRecipe.invalid"));
+        audio_baseline = { reference: reference.name.slice(0, 200), rms };
+      }
       const result = await createCameraPipelinePreset(camera.id, {
+        audio_baseline,
         preset, source_id: sourceId, pipeline_name: name.trim(), enabled: false,
         event_topic: selectedSignal?.topic, event_item_name: selectedSignal?.item_name,
         processing_server_id: serverId, area_id: selectedArea?.id ?? "", composition_id: selectedArea?.compositionId ?? "",
@@ -66,7 +83,12 @@ export function CameraObservationPresetModal({
   return <SubModal open={open} title={t(`${key}.title`)} onClose={() => { if (!saving) onClose(); }}
     panelStyle={{ width: "min(540px, calc(100vw - 28px))" }}>
     <p>{t(`${key}.description`)}</p>
-    <p>{t("ext.cameras.cat.preview")}</p>
+    <p>{t(audio ? "ext.cameras.audioRecipe.limits" : "ext.cameras.cat.preview")}</p>
+    {audio && <label className="field"><span className="label">{t("ext.cameras.audioRecipe.reference")}</span>
+      <input type="file" accept=".wav,audio/wav" disabled={saving} style={{ maxWidth: "100%" }}
+        onChange={event => { setReference(event.target.files?.[0] ?? null); setError(null); }} />
+      <span className="settingsDescription">{t("ext.cameras.audioRecipe.referenceHelp")}</span>
+    </label>}
     {sources.length > 1 ? <div className="field">
       <label className="label" htmlFor="cat-recipe-source">{t("ext.cameras.cat.source")}</label>
       <select id="cat-recipe-source" className="input" value={sourceId} onChange={(event) => setSourceId(event.target.value)} disabled={saving}>
@@ -80,7 +102,7 @@ export function CameraObservationPresetModal({
           {(composition.areas ?? []).filter(item => item.vertices_count >= 3).map(item => <option key={item.id} value={JSON.stringify([composition.id, item.id])}>{item.name || item.id}</option>)}
         </optgroup>)}
       </select>
-    </label> : <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.profile")}</p>}
+    </label> : !audio ? <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.profile")}</p> : null}
     {visitor && <label className="field"><span className="label">{t("ext.cameras.visitor.signal")}</span>
       <select className="input" value={signalId} onChange={event => setSignalId(event.target.value)} disabled={saving || loadingSignals}>
         <option value="">{t("ext.cameras.visitor.select")}</option>
@@ -100,7 +122,7 @@ export function CameraObservationPresetModal({
     </details>
     <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.paused")}</p>
     {error ? <p role="alert" className="errorText">{error}</p> : null}
-    <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea) || (visitor && !selectedSignal)} onClick={() => void save()}>
+    <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference)} onClick={() => void save()}>
       {t(saving ? "ext.cameras.cat.saving" : "ext.cameras.cat.save")}
     </button>
   </SubModal>;

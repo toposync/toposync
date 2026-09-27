@@ -140,3 +140,29 @@ def register_audio_occurrence(registry):
         input_modalities=["audio"], output_modalities=["audio"], owner="com.toposync.cameras",
         runtime_factory=lambda config, deps: AudioOccurrenceRuntime(config),
     )
+
+
+def build_audio_recipe(*, graph_uid, camera_id, source_id, baseline, title="", description=""):
+    from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+    from .audio import AudioBaseline
+
+    baseline = AudioBaseline.model_validate(baseline).model_dump()
+    nodes = [
+        {"id": "source", "operator": "camera.audio_source", "config": {"camera_id": camera_id, "source_id": source_id}},
+        {"id": "analysis", "operator": "camera.audio_features", "config": {"baseline": baseline}},
+        {"id": "occurrence", "operator": "camera.audio_occurrence", "config": {}},
+        {"id": "notify", "operator": "core.notify", "config": {
+            "title": title or "Som acima da referência",
+            "description": description or "Intensidade acima do som normal informado. Não confirma perigo, fala ou intenção.",
+            "dedupe_by_occurrence": True,
+            "historical_evidence_paths": ["audio_analysis", "audio_occurrence"],
+        }},
+    ]
+    edges = [{"from": {"node": before["id"], "port": "out"}, "to": {"node": after["id"], "port": "in"},
+              "traffic": {"modality": "audio", "semantic_class": "event" if before["id"] == "occurrence" else "frame",
+                          "continuous": before["id"] != "occurrence"},
+              "queue": {"max_items": 4, "drop_policy": "block"},
+              "backpressure": {"mode": "pause_upstream"}}
+             for before, after in zip(nodes, nodes[1:])]
+    return build_pipeline_graph_v2(graph_uid=graph_uid, nodes=nodes, edges=edges,
+                                   meta={"audio_support": "unverified", "requires_explicit_baseline": True})

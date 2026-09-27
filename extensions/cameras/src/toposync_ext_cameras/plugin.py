@@ -68,6 +68,8 @@ from .pipeline_templates import (
     CAT_ACTIVITY_RECIPES,
 )
 from .area_events import build_area_occurrence_graph, register_area_occurrence_operator
+from .audio import AudioBaseline
+from .audio_events import build_audio_recipe
 from .event_context import register_recent_onvif_event_operator, add_recent_event_to_area_graph
 from .processing.camera_hub import get_global_camera_hub
 from .processing.mapping import build_calibration_mapper
@@ -128,6 +130,7 @@ CLIENT_CLOSED_REQUEST_STATUS = 499
 DEFAULT_CAMERA_DETECTION_MODEL_ID = "rfdetr_det_medium"
 PIPELINE_NAME_MAX_LENGTH = 120
 CAMERA_PIPELINE_PRESETS = (
+    "audio_anomaly",
     "area_presence",
     "area_entry",
     "area_group_entry",
@@ -217,6 +220,7 @@ async def _raise_if_request_disconnected(request: Request) -> None:
 
 NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
 PRESET_PIPELINE_NAME_PARTS = {
+    "audio_anomaly": "som_acima_da_referencia",
     "area_presence": "presenca_em_area_definida",
     "area_entry": "entrada_em_area_definida",
     "area_group_entry": "pessoas_entrando_juntas",
@@ -696,6 +700,7 @@ class CameraPipelinesResponse(BaseModel):
 
 class CameraPipelinePresetRequest(BaseModel):
     preset: Literal[
+        "audio_anomaly",
         "area_presence",
         "area_entry",
         "area_group_entry",
@@ -711,6 +716,7 @@ class CameraPipelinePresetRequest(BaseModel):
         "person_vehicle_interaction",
     ]
     source_id: str = ""
+    audio_baseline: AudioBaseline | None = None
     pipeline_name: str = ""
     enabled: bool = True
     processing_server_id: str = "local"
@@ -5330,7 +5336,7 @@ class CamerasExtension(BaseExtension):
                 operator_id = str(node.get("operator") or node.get("operator_id") or "").strip()
                 config = node.get("config") if isinstance(node.get("config"), dict) else {}
                 node_camera_id = str(config.get("camera_id") or "").strip()
-                if operator_id == "camera.source":
+                if operator_id in {"camera.source", "camera.audio_source"}:
                     if node_camera_id == cid:
                         involved = True
                         source_id = str(config.get("source_id") or "").strip()
@@ -5831,6 +5837,11 @@ class CamerasExtension(BaseExtension):
             cfg = await store.get_config()
 
             composition_id = str(body.composition_id or "").strip()
+            if preset == "audio_anomaly":
+                if body.audio_baseline is None:
+                    raise HTTPException(400, "Choose an explicit normal-sound reference for this source")
+                if body.enable_ptz_attention:
+                    raise HTTPException(400, "Audio baseline does not establish a location for PTZ attention")
             area_restriction_config: dict[str, Any] | None = None
             requires_mapping = preset in CAMERA_MAPPING_REQUIRED_PRESETS or bool(
                 body.enable_ptz_attention
@@ -5919,7 +5930,7 @@ class CamerasExtension(BaseExtension):
             detection_model_id = (
                 str(body.model_id or "").strip() or DEFAULT_CAMERA_DETECTION_MODEL_ID
             )
-            if preset not in CAT_ACTIVITY_RECIPES:
+            if preset not in CAT_ACTIVITY_RECIPES and preset != "audio_anomaly":
                 await _ensure_camera_preset_detection_model_ready(
                     store,
                     processing_server_id=processing_server_id,
@@ -5933,7 +5944,11 @@ class CamerasExtension(BaseExtension):
                     else body.notification_priority
                     or ("high" if preset == "vehicle_stopped" else "medium")
                 )
-                graph = _build_camera_preset_graph(
+                graph = build_audio_recipe(
+                    graph_uid=pipeline_name, camera_id=cid, source_id=source_id,
+                    baseline=body.audio_baseline,
+                    title=body.notification_title.strip(), description=body.notification_description.strip(),
+                ) if preset == "audio_anomaly" else _build_camera_preset_graph(
                     preset=preset,
                     camera_id=cid,
                     source_id=source_id,
@@ -6002,7 +6017,7 @@ class CamerasExtension(BaseExtension):
 
             pipeline = Pipeline(
                 name=pipeline_name,
-                enabled=False if preset == "doorbell_visitor" else bool(body.enabled),
+                enabled=False if preset in {"doorbell_visitor", "audio_anomaly"} else bool(body.enabled),
                 processing_server_id=processing_server_id,
                 editor_mode="interactive",
                 python_source="",

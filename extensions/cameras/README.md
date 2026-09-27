@@ -260,6 +260,13 @@ Microphones remain separate until same-sound association can be demonstrated.
 The operator retains at most 128 source/capture watermarks and drops PCM artifacts
 from emitted and retained occurrence packets. Eviction closes an active occurrence.
 
+In camera settings, choose **Sound above reference**, select a normal-sound WAV
+from that source at its usual gain, and save the recipe. The interface calculates
+the baseline locally; digital silence is rejected. The recipe always starts
+disabled, including API requests that ask to enable it. Preparing it does not
+probe the camera, install a visual model, transcribe speech or move PTZ. Audio
+support remains unverified until an authorized runtime test observes the source.
+
 
 ## Live ONVIF event sources
 

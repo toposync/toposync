@@ -36,6 +36,27 @@ CAMERA_PIPELINE_PRESETS_REQUIRING_MAPPING = {
 }
 
 
+def test_audio_recipe_requires_baseline_and_saves_disabled_without_vision(tmp_path, monkeypatch):
+    with _create_client(tmp_path, monkeypatch, patch_model_readiness=False) as client:
+        _configure_camera(client)
+        path = "/api/cameras/cameras/cam1/pipelines/presets"
+        body = {"preset": "audio_anomaly", "enabled": True, "source_id": "main"}
+        assert client.post(path, json=body).status_code == 400
+        body["audio_baseline"] = {"reference": "Normal da garagem.wav", "rms": 0.01}
+        invalid = {**body, "audio_baseline": {"reference": "", "rms": 0}}
+        assert client.post(path, json=invalid).status_code == 422
+        assert client.post(path, json={**body, "enable_ptz_attention": True}).status_code == 400
+        response = client.post(path, json=body)
+        assert response.status_code == 200, response.text
+        pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
+        assert pipeline["enabled"] is False
+        assert _operator_ids(pipeline) == ["camera.audio_source", "camera.audio_features", "camera.audio_occurrence", "core.notify"]
+        assert _node_config(pipeline, "camera.audio_features")["baseline"]["rms"] == 0.01
+        assert _node_config(pipeline, "camera.audio_features").get("transcribe", False) is False
+        assert _node_config(pipeline, "core.notify")["dedupe_by_occurrence"] is True
+        assert pipeline["graph"]["meta"]["audio_support"] == "unverified"
+
+
 @pytest.mark.parametrize("preset", ["person_stopped", "vehicle_stopped"])
 def test_stopped_recipe_keeps_observing_beyond_motion_hold(tmp_path, monkeypatch, preset):
     with _create_client(tmp_path, monkeypatch) as client:

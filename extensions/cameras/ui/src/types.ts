@@ -448,6 +448,7 @@ export type CameraContextsResponse = {
 };
 
 export type CameraPipelinePreset =
+  | "audio_anomaly"
   | "area_presence"
   | "area_entry"
   | "area_group_entry"
@@ -478,6 +479,7 @@ export type CameraPipelinesResponse = {
 
 export type CameraPipelinePresetRequest = {
   preset: CameraPipelinePreset;
+  audio_baseline?: { reference: string; rms: number };
   source_id?: string;
   pipeline_name?: string;
   enabled?: boolean;

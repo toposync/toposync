@@ -1,5 +1,12 @@
 export const catActivityTranslations = {
   en: {
+    "ext.cameras.audioRecipe.title": "Sound above reference",
+    "ext.cameras.audioRecipe.description": "Group periods louder than the normal sound reference for this source. Does not identify danger, speech or intent.",
+    "ext.cameras.audioRecipe.steps": "Choose a normal recording and save disabled",
+    "ext.cameras.audioRecipe.reference": "Normal sound recording (WAV)",
+    "ext.cameras.audioRecipe.referenceHelp": "Use up to 30 seconds from this source, at its normal gain. The file is analyzed locally and is not stored. Digital silence is not a usable reference.",
+    "ext.cameras.audioRecipe.limits": "Audio support is not yet verified. Activation opens an audio connection; keep disabled until you are ready to test. No camera movement or transcription is included.",
+    "ext.cameras.audioRecipe.invalid": "Choose a valid PCM16 WAV, up to 30 seconds and 12 MB, containing normal ambient sound.",
     "ext.cameras.visitor.title": "Visitor and doorbell",
     "ext.cameras.visitor.description": "Observe a person in the selected area within five seconds of the chosen camera event. Does not establish who pressed the button, identity or occupation. Checks for a visible package without treating missing or uncertain evidence as absence of a visitor.",
     "ext.cameras.visitor.signal": "Which camera event corresponds to the doorbell?",
@@ -29,6 +36,13 @@ export const catActivityTranslations = {
     "ext.cameras.cat.name": "Recipe name",
   },
   "pt-BR": {
+    "ext.cameras.audioRecipe.title": "Som acima da referência",
+    "ext.cameras.audioRecipe.description": "Agrupe períodos mais intensos que o som normal desta fonte. Não identifica perigo, fala ou intenção.",
+    "ext.cameras.audioRecipe.steps": "Escolha uma gravação normal e salve desativado",
+    "ext.cameras.audioRecipe.reference": "Gravação de som normal (WAV)",
+    "ext.cameras.audioRecipe.referenceHelp": "Use até 30 segundos desta fonte, com o ganho habitual. O arquivo é analisado localmente e não é armazenado. Silêncio digital não serve como referência.",
+    "ext.cameras.audioRecipe.limits": "O suporte a áudio ainda não foi verificado. Ativar abre uma conexão de áudio; mantenha desativado até preparar o ensaio. Não inclui movimento de câmera nem transcrição.",
+    "ext.cameras.audioRecipe.invalid": "Escolha um WAV PCM16 válido, com até 30 segundos e 12 MB, contendo som ambiente normal.",
     "ext.cameras.visitor.title": "Visitante e campainha",
     "ext.cameras.visitor.description": "Observe uma pessoa na área escolhida em até cinco segundos do evento selecionado da câmera. Não confirma quem apertou o botão, identidade ou profissão. Avalia indício visual de pacote sem tratar evidência ausente ou incerta como ausência de visitante.",
     "ext.cameras.visitor.signal": "Qual evento da câmera corresponde à campainha?",

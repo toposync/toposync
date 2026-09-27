@@ -511,3 +511,24 @@ def test_camera_snapshot_uses_warm_hub_reuses_lease_and_expires(
         third = client.get("/api/cameras/cameras/lab_rtsp_camera/snapshot?source_id=main")
         assert third.status_code == 200
         assert len(fake_hub.acquire_calls) == 2
+
+
+@pytest.mark.parametrize("capture_instance", ["decoder-session-1", ""])
+def test_camera_snapshot_preserves_capture_identity_without_physical_claim(tmp_path, monkeypatch, capture_instance):
+    from dataclasses import replace
+
+    class Grabber(_UnverifiedFakeGrabber):
+        def get_latest_sample(self):
+            return replace(super().get_latest_sample(), capture_instance=capture_instance)
+
+    hub = _FakeCameraHub()
+    hub.grabber = Grabber()
+    monkeypatch.setattr(cameras_plugin, "get_global_camera_hub", lambda: hub)
+    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        _save_rtsp_camera(client)
+        response = client.get("/api/cameras/cameras/lab_rtsp_camera/snapshot?source_id=main")
+    assert response.status_code == 200
+    assert response.headers.get("x-toposync-snapshot-capture-instance", "") == capture_instance
+    assert response.headers["x-toposync-snapshot-frame-generation"] == "1"
+    assert response.headers["x-toposync-snapshot-capture-evidence"] == "unverified"
+    assert "x-toposync-snapshot-captured-timestamp" not in response.headers

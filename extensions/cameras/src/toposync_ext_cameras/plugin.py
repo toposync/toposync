@@ -986,6 +986,7 @@ class WarmSnapshotResult:
     source_received_monotonic: float = 0.0
     capture_generation: int = 0
     capture_sequence: int = 0
+    capture_instance: str = ""
     captured_at: float = 0.0
     physical_capture_verified: bool = False
 
@@ -998,6 +999,7 @@ class WaitedSnapshotFrame:
     source_received_monotonic: float = 0.0
     generation: int = 0
     sequence: int = 0
+    capture_instance: str = ""
     captured_at: float = 0.0
     physical_capture_verified: bool = False
     freshness_unverifiable: bool = False
@@ -1201,6 +1203,7 @@ async def _wait_for_grabber_frame(
                 )
                 generation = int(getattr(sample, "generation", 0) or 0)
                 sequence = int(getattr(sample, "sequence", 0) or 0)
+                capture_instance = str(getattr(sample, "capture_instance", "") or "")
                 captured_at = float(getattr(sample, "captured_at", 0.0) or 0.0)
                 captured_monotonic = float(getattr(sample, "captured_monotonic", 0.0) or 0.0)
                 physical_capture_verified = bool(
@@ -1213,6 +1216,7 @@ async def _wait_for_grabber_frame(
                 source_received_monotonic = 0.0
                 generation = 0
                 sequence = 0
+                capture_instance = ""
                 captured_at = 0.0
                 captured_monotonic = 0.0
                 physical_capture_verified = False
@@ -1260,6 +1264,7 @@ async def _wait_for_grabber_frame(
                         source_received_monotonic=source_received_monotonic,
                         generation=generation,
                         sequence=sequence,
+                        capture_instance=capture_instance,
                         captured_at=captured_at,
                         physical_capture_verified=physical_capture_verified,
                     )
@@ -1284,6 +1289,7 @@ def _encode_snapshot_frame(waited: WaitedSnapshotFrame) -> WarmSnapshotResult:
         source_received_monotonic=float(waited.source_received_monotonic or 0.0),
         capture_generation=int(waited.generation or 0),
         capture_sequence=int(waited.sequence or 0),
+        capture_instance=waited.capture_instance,
         captured_at=float(waited.captured_at or 0.0),
         physical_capture_verified=bool(waited.physical_capture_verified),
     )
@@ -4997,6 +5003,8 @@ class CamerasExtension(BaseExtension):
                         headers["X-Toposync-Snapshot-Source-Received-Monotonic"] = (
                             f"{float(warm.source_received_monotonic):.6f}"
                         )
+                    if warm.capture_instance:
+                        headers["X-Toposync-Snapshot-Capture-Instance"] = warm.capture_instance
                     if warm.capture_generation > 0:
                         headers["X-Toposync-Snapshot-Frame-Generation"] = str(
                             int(warm.capture_generation)

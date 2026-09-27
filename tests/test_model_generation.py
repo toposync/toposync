@@ -61,8 +61,12 @@ def test_unavailable_denied_and_invalid_inputs_never_start_worker(tmp_path, monk
         assert client.post('/api/models/generate', files={'file': ('object.png', image_bytes())}).status_code == 503
         app.state.auth.denied = True
         assert client.post('/api/models/generate', files={'file': ('object.png', image_bytes())}).status_code == 403
-    app, _ = app_for(tmp_path, monkeypatch)
+    app, home = app_for(tmp_path, monkeypatch)
     with TestClient(app) as client:
+        marker = home / "installing.json"
+        marker.write_text("{}")
+        assert client.post('/api/models/generate', files={'file': ('object.png', image_bytes())}).status_code == 503
+        marker.unlink()
         for data, expected in [(b'bad', 422), (image_bytes(False), 422), (b'x' * (generation.MAXIMUM_IMAGE_BYTES + 1), 413)]:
             assert client.post('/api/models/generate', files={'file': ('object.png', data)}).status_code == expected
     assert not calls

@@ -26,8 +26,7 @@ started may finish, but its result is discarded after cancellation.
 ## Optional local generation backend
 
 `POST /api/models/generate` accepts one multipart `file` and requires both
-`core:files:read` and `core:files:write`. This backend is not yet exposed by the
-model editor. It currently accepts a PNG/WebP cutout with transparency, at most
+`core:files:read` and `core:files:write`. The model tool uses this endpoint. It currently accepts a PNG/WebP cutout with transparency, at most
 8 MiB and 16 million pixels. Opaque photos require a separate, evaluated background
 preparation step; they receive `isolated_object_image_required` without inference.
 
@@ -43,8 +42,8 @@ Required layout:
 
 `triposr_manifest.json` pins source/configuration/weight SHA-256 hashes, checked
 inside every worker before importing provider code. Preserve the upstream MIT
-license and attribution with an installation. Installation is currently manual;
-the application does not infer readiness from the presence of files alone.
+license and attribution with an installation. The application does not infer
+readiness from the presence of files alone.
 Missing runtime returns 503; a conflicting generation returns 409. The evaluated
 runtime uses macOS/CPU, Python 3.12, PyTorch 2.11.0, torchmcubes revision
 `879926d0ef58e6ce0ac2630fdecb5e53af7ed3ff`, transformers 4.35.0, numpy 1.26.4,
@@ -72,4 +71,24 @@ This does not establish real dimensions or observed geometry behind the object.
 
 Select **3D model**, choose a placement point, then select one PNG/WebP object image with a transparent background (up to 8 MiB). The same tool imports GLB/GLTF and their assets when a model file is selected. Generation uses the optional local runtime above; missing runtime, opaque images, busy workers and failures have explicit messages. The progress dialog supports keyboard access, Cancel and Escape.
 
-Generated elements retain the generation provenance and show an approximation notice when edited. Enter a known height to scale the object; generated geometry does not supply a measured reference height. Preview, placement, floor height and advanced scale reuse the importer. Ordinary opaque photos and automatic runtime installation are not yet supported.
+Generated elements retain the generation provenance and show an approximation notice when edited. Enter a known height to scale the object; generated geometry does not supply a measured reference height. Preview, placement, floor height and advanced scale reuse the importer. Ordinary opaque photos are not yet supported. Runtime installation is an explicit administrator operation.
+
+### Install the evaluated runtime
+
+On **macOS ARM with Python 3.12**, install `uv`, CMake and Apple Command Line Tools first. From the server Python environment, run:
+
+```sh
+python -m toposync_ext_models.install_triposr /absolute/path/to/data/models/triposr
+```
+
+This creates a separate environment; it does not modify the server environment or global compiler settings. Allow several gigabytes of free disk space. It downloads the pinned provider source, MIT license, configuration and approximately 1.68 GB checkpoint; generation itself remains offline. `triposr_requirements.txt` fixes all evaluated Python dependency versions. The extractor is built from a fixed Git revision without reusing binary build cache, with two compilation jobs and explicit linkage to the isolated PyTorch. Package artifacts are obtained from the administrator's configured package index; dependency versions are checked, but the installer does not claim a complete dependency artifact hash lock.
+
+An existing directory is refused. If this installer was interrupted, inspect its `installation.log`, fix the diagnosed cause, then repeat with `--resume`. Resumption requires the matching incomplete-install marker; it never adopts an unrelated directory. Existing assets with wrong hashes are preserved and rejected. The server refuses a runtime while its incomplete marker exists. Installation holds the same runtime lock used by generation.
+
+Optional `--asset-cache /path/to/existing/runtime` reuses **copies** of hash-verified source/weight assets, without changing the cache. This avoids downloading the checkpoint again. The evaluated installation used this path; a complete uncached download/install journey has not been separately qualified.
+
+```sh
+python -m toposync_ext_models.install_triposr /absolute/path/to/runtime --check
+```
+
+The check verifies asset hashes, exact dependency versions, extractor source revision, dependency compatibility, provider import and a real CPU mesh extraction. It loads no model and does not certify generation quality. Success writes `installation.json` on installation and removes the incomplete marker. Commands have bounded timeouts and their process groups are reaped on timeout/interruption; logs stay in the chosen runtime directory. Other operating systems/architectures remain unqualified by this installer.

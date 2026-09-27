@@ -31,7 +31,7 @@ def authorize(request: Request):
 def provider_home(app: FastAPI) -> Path:
     default = app.state.config_store.paths.data_dir / "models" / "triposr"
     home = Path(os.environ.get("TOPOSYNC_MODELS_TRIPOSR_HOME", str(default))).resolve()
-    if os.name != "posix" or not all((home / path).is_file() for path in (
+    if os.name != "posix" or (home / "installing.json").exists() or not all((home / path).is_file() for path in (
         "environment/bin/python", "source/tsr/system.py", "weights/model.ckpt", "weights/config.yaml",
     )):
         raise HTTPException(503, "local_generation_not_installed")

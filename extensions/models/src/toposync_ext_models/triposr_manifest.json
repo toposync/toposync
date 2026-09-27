@@ -18,6 +18,7 @@
     "weights/config.yaml": "74ca708ce086bf68e97709ea6b3d91f14717921c04691e84043f0eb8fcc68e62",
     "weights/model.ckpt": "429e2c6b22a0923967459de24d67f05962b235f79cde6b032aa7ed2ffcd970ee",
     "huggingface/hub/models--facebook--dino-vitb16/snapshots/f205d5d8e640a89a2b8ef0369670dfc37cc07fc2/config.json": "b87c0270b97db085fd82cf114a761fd0f62ae7914fbd407c752a2260646b689c",
-    "huggingface/hub/models--facebook--dino-vitb16/refs/main": "a473faa6f7c22cb025a5389790a297b842ceb2c7a21bf8b74c5812ead8001874"
+    "huggingface/hub/models--facebook--dino-vitb16/refs/main": "a473faa6f7c22cb025a5389790a297b842ceb2c7a21bf8b74c5812ead8001874",
+    "source/LICENSE": "ade0a66629bdd7e01e46b3296b3851cff0fd27989bca53da470ad6e96ed620fb"
   }
 }

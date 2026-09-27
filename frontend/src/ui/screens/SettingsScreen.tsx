@@ -1394,6 +1394,13 @@ export function SettingsScreen({
     );
   }
 
+  function renderMobileOption(entry: SettingsEntry): React.ReactNode {
+    const dirty = entry.kind === "extension" && dirtyExtensions[entry.id];
+    return <option key={entry.id} value={entry.id}>
+      {entry.title}{dirty ? ` — ${t("core.ui.settings.unsaved_changes")}` : ""}
+    </option>;
+  }
+
   return (
     <div className="settingsRoot screenRoot">
       <div className="settingsTopbar">
@@ -1412,6 +1419,30 @@ export function SettingsScreen({
       </div>
 
       <div className="settingsLayout">
+        <label className="settingsMobileNavigation">
+          <span className="label">{t("core.ui.settings.section")}</span>
+          <select className="input" value={activePanelId} onChange={(event) => {
+            const value = event.target.value;
+            if (value === "__action_pipelines") requestExit("pipelines");
+            else if (value === "__action_processing_servers") requestExit("processing_servers");
+            else if (value === "__action_access") requestExit("access");
+            else setActivePanelId(value);
+          }}>
+            <optgroup label={t("core.ui.settings.sidebar.main")}>
+              {primarySidebarEntries.map(renderMobileOption)}
+              <option value="__action_pipelines">{t("core.ui.settings.nav.pipelines.title")}</option>
+            </optgroup>
+            <optgroup label={t("core.ui.settings.sidebar.system")}>
+              {viewSidebarEntry ? renderMobileOption(viewSidebarEntry) : null}
+              <option value="__action_processing_servers">{t("core.ui.settings.nav.processing_servers.title")}</option>
+              {integrationSidebarEntries.map(renderMobileOption)}
+            </optgroup>
+            <optgroup label={t("core.ui.settings.sidebar.admin")}>
+              {extensionManagementSidebarEntry ? renderMobileOption(extensionManagementSidebarEntry) : null}
+              {canManageAccess ? <option value="__action_access">{t("core.ui.settings.nav.access.title")}</option> : null}
+            </optgroup>
+          </select>
+        </label>
         <div className="settingsSidebar">
           <div className="settingsSidebarList">
             <div className="settingsSidebarGroup">

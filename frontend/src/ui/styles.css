@@ -5119,6 +5119,10 @@ video {
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
 
+.settingsMobileNavigation {
+  display: none;
+}
+
 .settingsSidebarList {
   display: flex;
   flex-direction: column;
@@ -6633,15 +6637,20 @@ video {
   }
 
   .settingsSidebar {
-    width: 100%;
-    min-width: 0;
-    max-height: 42vh;
-    border-right: 0;
+    display: none;
+  }
+
+  .settingsMobileNavigation {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px;
     border-bottom: 1px solid var(--color-border-subtle);
   }
 
   .settingsMain {
-    flex: 1 1 58vh;
+    flex: 1;
   }
 
   .settingsFooter {

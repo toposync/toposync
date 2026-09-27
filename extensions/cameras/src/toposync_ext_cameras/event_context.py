@@ -102,11 +102,13 @@ def add_recent_event_to_area_graph(graph, *, camera_id, topic, item_name, notifi
                 "closed": "Observação encerrada; consulte as imagens registradas. Não confirma entrega ou profissão.",
             }}},
         {"id": "store_visitor", "uid": "store_visitor", "operator": "core.store_images",
-         "config": {"input_artifact_name": "visitor", "format": "webp"}},
+         "config": {"input_artifact_name": "visitor", "format": "webp", "drop_data_after_store": False}},
     ]
+    # Store the exact crop before inference so historical evidence can cite it.
+    nodes[store_index + 1], nodes[store_index + 2] = nodes[store_index + 2], nodes[store_index + 1]
     outgoing = next(edge for edge in graph["edges"] if edge["from"]["node"] == "area")
     outgoing["to"] = {"node": "visitor_crop", "port": "in"}
-    for source, target in [("visitor_crop", "package"), ("package", "store_visitor"), ("store_visitor", "store")]:
+    for source, target in [("visitor_crop", "store_visitor"), ("store_visitor", "package"), ("package", "store")]:
         graph["edges"].append({**outgoing, "uid": f"{source}_to_{target}",
             "from": {"node": source, "port": "out"}, "to": {"node": target, "port": "in"},
             "traffic": {"modality": "image", "semantic_class": "frame", "continuous": False}})
@@ -117,9 +119,11 @@ def add_recent_event_to_area_graph(graph, *, camera_id, topic, item_name, notifi
             node["config"]["title"] = notification_title or "{{camera_name}}: pessoa junto a evento da câmera"
             node["config"]["description"] = notification_description or (
                 "{{payload.area_occurrence.description}} Coincidência temporal com evento da câmera; "
-                "não confirma quem acionou nem identidade ou profissão. {{payload.ai.condition_filter.description}}"
+                "não confirma quem acionou nem identidade ou profissão. {{payload.ai.condition_filter.description}} "
+                "{{payload.historical_evidence.ai.condition_filter.observation.description}}"
             )
             node["config"]["include_payload_paths"] = ["area_occurrence", "onvif_context", "ai.condition_filter"]
+            node["config"]["historical_evidence_paths"] = ["ai.condition_filter.observation"]
     incoming = next(edge for edge in graph["edges"] if edge["to"]["node"] == "area")
     graph["edges"].append({**incoming, "uid": "event_context_to_area",
         "from": {"node": "event_context", "port": "out"}, "to": {"node": "area", "port": "in"}})

@@ -5,6 +5,7 @@ import hashlib
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Any
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
@@ -961,6 +962,20 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             "max_concurrency": int(self._config.max_concurrency),
             "concurrency_policy": self._config.concurrency_policy,
         }
+        if self._config.emit_mode == "annotate" and status == "matched":
+            capture = packet.payload.get("capture_evidence", {})
+            artifact = packet.artifacts.get(input_artifact_name or MAIN_ARTIFACT_NAME)
+            published_at = capture.get("published_at")
+            if isinstance(published_at, (int, float)) and artifact is not None and artifact.reference:
+                label = self._config.annotation_labels.get("matched", self._config.condition_description)
+                stamp = datetime.fromtimestamp(published_at, timezone.utc).isoformat()
+                ai_payload["condition_filter"]["observation"] = {
+                    "description": f"Registro nesta ocorrência, imagem publicada em {stamp}: {label}",
+                    "published_at": published_at, "capture_evidence": dict(capture),
+                    "image_reference": artifact.reference, "packet_id": packet.packet_id,
+                    "confidence": float(result.confidence), "model": result.model,
+                    "current_state_verified": False,
+                }
         payload["ai"] = ai_payload
         return replace(packet, payload=payload)
 

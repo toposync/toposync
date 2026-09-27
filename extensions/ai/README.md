@@ -176,3 +176,19 @@ são expostos como `payload.ai.condition_filter.description`, sem copiar conclus
 livres do modelo para a notificação. Não use o rótulo positivo quando `status` for
 `unknown`. A receita visitante utiliza recorte estrito do sujeito e preserva o
 visitante quando esse recorte não existe; imagem de outra detecção não o substitui.
+
+Quando a anotação positiva usa um artefato já armazenado, `observation` registra a
+referência da imagem, publicação, confiança e modelo. O texto identifica uma imagem
+passada desta ocorrência; `current_state_verified=false` impede interpretá-la como
+estado atual. Grave o recorte antes da inferência com `drop_data_after_store=false`
+para conservar os pixels necessários à avaliação. Sem referência armazenada, não é
+emitida essa evidência histórica.
+
+`core.notify.historical_evidence_paths` pode reter o último valor não nulo de cada
+caminho selecionado, em `data.historical_evidence`, separadamente dos dados atuais.
+A receita de visitante seleciona `ai.condition_filter.observation`. A retenção usa
+os limites da projeção existente: até 16 caminhos e 128 KiB, sem pixels; dados
+inválidos não substituem a evidência anterior. Atualizações limitadas por intervalo
+ainda alimentam o histórico. CLOSE normal ou sintetizado no desligamento conserva
+a evidência; outra ocorrência começa sem herdá-la. É a última evidência por caminho,
+não um arquivo completo de todas as avaliações ou de todas as imagens.

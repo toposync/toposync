@@ -9,7 +9,7 @@ import time
 import struct
 import zlib
 from collections import OrderedDict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -845,7 +845,10 @@ class NotifyConfig(BaseModel):
         ),
     )
 
-    @field_validator("include_payload_paths")
+    historical_evidence_paths: list[str] = Field(default_factory=list, max_length=16,
+        description="Retain the latest non-null value per selected path within this occurrence, separately from current data. Uses the same bounded projection as include_payload_paths.")
+
+    @field_validator("include_payload_paths", "historical_evidence_paths")
     @classmethod
     def _validate_payload_paths(cls, paths: list[str]) -> list[str]:
         for path in paths:
@@ -1032,6 +1035,7 @@ class _NotifyState:
     revision: int = 0
     trail: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=512))
     stored_images: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    historical_evidence: dict[str, Any] = field(default_factory=dict)
 
     def event(self) -> dict[str, Any]:
         duration = self.last_ts - self.started_ts
@@ -1178,6 +1182,20 @@ class NotifyRuntime(SinkRuntime):
                     next_list = next_list[-64:]
                 state.stored_images[key] = next_list
 
+        history_status = None
+        if self._config.historical_evidence_paths:
+            selected, history_status = _project_notification_payload(packet.payload, self._config.historical_evidence_paths)
+            candidate = dict(state.historical_evidence)
+            for path in self._config.historical_evidence_paths:
+                value = _deep_get(selected, path)
+                if value is not None:
+                    _set_notification_path(candidate, path, value)
+            try:
+                state.historical_evidence = _copy_notification_projection(candidate)
+            except ValueError as error:
+                history_status = {"status": "unavailable", "reason": str(error)}
+            packet = replace(packet, payload={**packet.payload, "historical_evidence": state.historical_evidence})
+
         if changed:
             state.revision = int(state.revision) + 1
 
@@ -1185,6 +1203,8 @@ class NotifyRuntime(SinkRuntime):
         lifecycle = packet.lifecycle
         if lifecycle == Lifecycle.UPDATE and interval > 0.0 and state.last_emit_monotonic:
             if (now_monotonic - state.last_emit_monotonic) < interval:
+                if self._config.historical_evidence_paths:
+                    state.last_description = _render_template(packet, self._config.description)
                 return []
 
         subject = _resolve_subject(packet)
@@ -1216,6 +1236,8 @@ class NotifyRuntime(SinkRuntime):
         if not image_path:
             image_path = await self._select_thumbnail_path(packet, context)
         data = _select_notification_data(packet)
+        if self._config.historical_evidence_paths:
+            data["historical_evidence"] = state.historical_evidence
         projection_signature = {}
         projection_envelope = {}
         if self._config.include_payload_paths:
@@ -1230,6 +1252,8 @@ class NotifyRuntime(SinkRuntime):
                 "projection_status": projection_status,
             }
             projection_envelope = {"data_projection": projection_status}
+        if history_status is not None:
+            projection_envelope["historical_evidence_projection"] = history_status
         image_signature = {}
         if self._config.include_ephemeral_image:
             image_capture, image_capture_status = _project_notification_payload(
@@ -1246,6 +1270,7 @@ class NotifyRuntime(SinkRuntime):
                 "revision": int(state.revision),
                 "duration_status": state.event()["duration_status"],
                 **projection_signature,
+                **({"historical_evidence": state.historical_evidence} if self._config.historical_evidence_paths else {}),
                 **image_signature,
             },
         )
@@ -1360,6 +1385,8 @@ class NotifyRuntime(SinkRuntime):
                         "realtime": bool(self._config.realtime),
                         "reason": "shutdown_synthesized",
                         "event": state.event(),
+                        **({"data": {"historical_evidence": state.historical_evidence}}
+                           if self._config.historical_evidence_paths else {}),
                     },
                     dedupe_key=state.store_dedupe_key,
                 )

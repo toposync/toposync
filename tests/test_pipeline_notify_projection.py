@@ -248,3 +248,63 @@ def test_cyclic_or_custom_objects_are_unavailable_without_stringification():
     assert status["status"] == "unavailable"
     assert status["paths"]["cycle"]["reason"] == "depth_limit"
     assert status["paths"]["custom"]["reason"] == "unsupported_value_type"
+
+
+def test_historical_evidence_survives_missing_invalid_and_close_but_not_new_occurrence():
+    async def scenario():
+        notify, emitted = runtime({"update_interval_seconds": 0, "dedupe_by_occurrence": True,
+            "historical_evidence_paths": ["observation"],
+            "description": "Current: {{payload.current}}. History: {{payload.historical_evidence.observation.description}}"})
+        first = packet(lifecycle=Lifecycle.OPEN)
+        first.payload.update({"current": "positive", "observation": {"description": "Past package", "published_at": 100}})
+        await notify.process_packet(first, CONTEXT)
+        for value in (None, {"invalid": b"pixels"}, {"huge": "x" * 140000}):
+            current = packet()
+            current.payload.update({"current": "unknown", "observation": value})
+            await notify.process_packet(current, CONTEXT)
+        closed = packet(lifecycle=Lifecycle.CLOSE)
+        closed.payload["current"] = "closed"
+        await notify.process_packet(closed, CONTEXT)
+        assert emitted[-1]["description"] == "Current: closed. History: Past package"
+        evidence = emitted[-1]["payload"]["data"]["historical_evidence"]["observation"]
+        assert evidence == {"description": "Past package", "published_at": 100}
+        different = packet(lifecycle=Lifecycle.OPEN)
+        different.payload["subject"]["id"] = "another-visitor"
+        different.payload["current"] = "unknown"
+        await notify.process_packet(different, CONTEXT)
+        assert emitted[-1]["payload"]["data"]["historical_evidence"] == {}
+        assert "Past package" not in emitted[-1]["description"]
+        # Even an explicitly closed key reused later must not inherit history.
+        again = packet(lifecycle=Lifecycle.OPEN)
+        again.payload["current"] = "unknown"
+        await notify.process_packet(again, CONTEXT)
+        assert emitted[-1]["payload"]["data"]["historical_evidence"] == {}
+    asyncio.run(scenario())
+
+
+def test_historical_evidence_is_captured_before_notification_throttle():
+    async def scenario():
+        notify, emitted = runtime({"update_interval_seconds": 60, "historical_evidence_paths": ["observation"]})
+        await notify.process_packet(packet(lifecycle=Lifecycle.OPEN), CONTEXT)
+        update = packet()
+        update.payload["observation"] = {"description": "Positive in throttled update"}
+        await notify.process_packet(update, CONTEXT)
+        assert len(emitted) == 1
+        await notify.process_packet(packet(lifecycle=Lifecycle.CLOSE), CONTEXT)
+        assert emitted[-1]["payload"]["data"]["historical_evidence"]["observation"]["description"] == "Positive in throttled update"
+    asyncio.run(scenario())
+
+
+def test_shutdown_preserves_throttled_historical_evidence():
+    async def scenario():
+        notify, emitted = runtime({"update_interval_seconds": 60, "historical_evidence_paths": ["observation"],
+            "description": "History: {{payload.historical_evidence.observation.description}}"})
+        await notify.process_packet(packet(lifecycle=Lifecycle.OPEN), CONTEXT)
+        update = packet()
+        update.payload["observation"] = {"description": "Past visible package", "published_at": 100}
+        await notify.process_packet(update, CONTEXT)
+        await notify.shutdown()
+        assert emitted[-1]["payload"]["reason"] == "shutdown_synthesized"
+        assert emitted[-1]["payload"]["data"]["historical_evidence"]["observation"]["published_at"] == 100
+        assert "Past visible package" in emitted[-1]["description"]
+    asyncio.run(scenario())

@@ -199,9 +199,9 @@ def test_visitor_package_annotation_preserves_negative_and_missing_occurrences(m
         for admitted in await admission.process_packet(packet, context):
             for occurrence in await area.process_packet(admitted, context):
                 for cropped in await crop.process_packet(occurrence, context):
-                    for annotated in await annotate.process_packet(cropped, context):
-                        for stored in await image_store.process_packet(annotated, context):
-                            await sink.process_packet(stored, context)
+                    for stored in await image_store.process_packet(cropped, context):
+                        for annotated in await annotate.process_packet(stored, context):
+                            await sink.process_packet(annotated, context)
 
     async def scenario():
         await send(100)
@@ -220,6 +220,14 @@ def test_visitor_package_annotation_preserves_negative_and_missing_occurrences(m
         assert records[-1][0].payload["data"]["onvif_context"]["causal_relationship_verified"] is False
         await send(108, visible=False, lifecycle=Lifecycle.CLOSE)
         assert "Observação encerrada" in records[-1][0].description
+        assert "Registro nesta ocorrência" in records[-1][0].description
+        assert "Indício visual de pacote" in records[-1][0].description
+        historical = records[-1][0].payload["data"]["historical_evidence"]["ai"]["condition_filter"]["observation"]
+        assert historical["published_at"] == 100
+        assert historical["current_state_verified"] is False
+        assert (tmp_path / historical["image_reference"]).is_file()
+        assert records[-1][0].payload["data"]["ai"]["condition_filter"]["status"] == "closed"
+        assert len(store.list(query="indício visual de pacote")[0]) == 1
         assert len(calls) == 2
         assert len({record.id for record, _ in records}) == 1
         before = len(records)

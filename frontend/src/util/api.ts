@@ -849,6 +849,7 @@ export type NotificationsPage = {
 export type NotificationPriority = "low" | "medium" | "high";
 
 export type NotificationsListParams = {
+  dataFilter?: Record<string, string>;
   semantic?: boolean | "visual";
   before?: number | null;
   limit?: number;
@@ -1746,6 +1747,7 @@ export async function listNotifications(
   for (const type of listParams.types ?? []) {
     if (type.trim()) params.append("type", type.trim());
   }
+  if (Object.keys(listParams.dataFilter ?? {}).length) params.set("data_filter", JSON.stringify(listParams.dataFilter));
   const query = String(listParams.query ?? "").trim();
   if (query) params.set("query", query);
   if (listParams.semantic === "visual" && query) params.set("mode", "visual");
@@ -2788,4 +2790,13 @@ export async function getVisualHistorySetup(signal?: AbortSignal): Promise<Visua
   const response = await fetch("/api/ai/history/visual-setup", { signal });
   if (!response.ok) throw new Error(`Visual search setup: ${response.status}`);
   return response.json();
+}
+
+
+export type NotificationDataOption = { value: string; label: string | null };
+export async function getNotificationDataOptions(field: string, labelField: string, signal?: AbortSignal): Promise<NotificationDataOption[]> {
+  const params = new URLSearchParams({ field, label_field: labelField });
+  const response = await fetch(`/api/notifications/data-options?${params}`, { signal });
+  if (!response.ok) throw new Error(`History options: ${response.status}`);
+  return (await response.json()).options;
 }

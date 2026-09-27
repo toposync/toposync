@@ -238,8 +238,21 @@ function sortNotificationIdsByCreatedDesc(
     .sort((leftId, rightId) => compareNotificationsByCreatedDesc(byId[leftId], byId[rightId]));
 }
 
+function notificationMatchesDataFilter(notification: Notification, filter: NotificationsFilter): boolean {
+  const data = asRecord(asRecord(notification.payload).data);
+  return Object.entries(filter.dataFilter ?? {}).every(([path, expected]) => {
+    let value: unknown = data;
+    for (const key of path.split(".")) {
+      const record = asRecord(value);
+      value = Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
+    }
+    return typeof value === "string" && value === expected;
+  });
+}
+
 function notificationMatchesFilter(notification: Notification, filter: NotificationsFilter): boolean {
   if (!filter.priorities.includes(notificationPriority(notification))) return false;
+  if (!notificationMatchesDataFilter(notification, filter)) return false;
   if (filter.types.length > 0 && !filter.types.includes(notification.type)) return false;
   const normalize = (value: string) => value.toLowerCase().normalize("NFD").replace(/\p{Mn}/gu, "");
   const terms = normalize(filter.query).trim().split(/\s+/).filter(Boolean);
@@ -257,7 +270,9 @@ function stringArraysEqual(left: readonly string[], right: readonly string[]): b
 }
 
 function notificationFilterFacetsEqual(left: NotificationsFilter, right: NotificationsFilter): boolean {
-  return stringArraysEqual(left.priorities, right.priorities) && stringArraysEqual(left.types, right.types);
+  return stringArraysEqual(left.priorities, right.priorities) && stringArraysEqual(left.types, right.types)
+    && Object.keys(left.dataFilter ?? {}).length === Object.keys(right.dataFilter ?? {}).length
+    && Object.entries(left.dataFilter ?? {}).every(([key, value]) => right.dataFilter?.[key] === value);
 }
 
 function notificationFiltersEqual(left: NotificationsFilter, right: NotificationsFilter): boolean {
@@ -370,6 +385,7 @@ function upsertNotificationInState(
   const existing = prev.byId[next.id];
   const merged = existing ? { ...withoutEphemeralImage(existing), ...next } : next;
   const byId = { ...prev.byId, [next.id]: merged };
+  if (!notificationMatchesDataFilter(merged, filter)) return { ...prev, byId, visibleIds: prev.visibleIds.filter(id => id !== next.id) };
   // A relevância depende do modelo; eventos novos não entram por coincidência literal.
   if (prev.resolvedOnServer || (filter.semantic && filter.query.trim())) return { ...prev, byId };
   const visible = new Set(prev.visibleIds);
@@ -918,6 +934,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           types: notificationsRequestFilter.types,
           query: notificationsRequestFilter.query,
           semantic: notificationsRequestFilter.semantic,
+          dataFilter: notificationsRequestFilter.dataFilter,
           signal: controller.signal,
         });
         if (controller.signal.aborted || notificationsListRequestRef.current !== requestId) return;
@@ -1513,6 +1530,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         priorities: filter.priorities,
         types: filter.types,
         query: filter.query,
+        dataFilter: filter.dataFilter,
         signal: controller.signal,
       });
       if (controller.signal.aborted || notificationsListRequestRef.current !== requestId) return;

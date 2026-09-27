@@ -4758,6 +4758,19 @@ def create_app() -> FastAPI:
             limiter=request.app.state.notification_read_limiters["list"],
         )
 
+    @app.get("/api/notifications/data-options")
+    async def notification_data_options(request: Request, field: str = Query(max_length=256), label_field: str = Query(max_length=256)) -> dict[str, Any]:
+        _require(request, action="core:notifications:read")
+        from toposync.runtime.notifications.store import parse_data_filter
+        try:
+            parse_data_filter({field: "value", label_field: "label"})
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
+            return {"options": request.app.state.notifications.store.data_options(field, label_field, cancel_check=check_cancelled)}
+        return await _run_cancelable_request_work(request, build_response,
+            limiter=request.app.state.notification_read_limiters["list"])
+
     @app.get("/api/notifications/count")
     async def count_notifications(request: Request) -> dict[str, Any]:
         _require(request, action="core:notifications:read")

@@ -101,6 +101,8 @@ def test_history_http_time_bounds_are_validated(tmp_path, monkeypatch):
         result = client.get("/api/notifications", params={"data_filter": '{"camera_id":"absent"}'}).json()
         assert result["notifications"] == []
         assert client.get("/api/notifications", params={"data_filter": '{"camera_id":7}'}).status_code == 422
+        assert client.get("/api/notifications/data-options", params={"field":"camera_id", "label_field":"camera_name"}).json() == {"options": []}
+        assert client.get("/api/notifications/data-options", params={"field":"camera_id[*]", "label_field":"camera_name"}).status_code == 422
 
 
 def test_exact_data_filters_precede_limit_and_share_cursor_text_and_time(tmp_path):
@@ -131,3 +133,20 @@ def test_data_filter_rejects_invalid_contracts(value):
     from toposync.runtime.notifications.store import parse_data_filter
     with pytest.raises(ValueError):
         parse_data_filter(value)
+
+
+def test_history_options_cover_visible_corpus_with_latest_labels_and_no_silent_leak(tmp_path):
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    store = runtime.store
+    store.upsert(type="event", title="Old", payload={"data": {"camera_id": "patio", "camera_name": "Pátio antigo"}})
+    for index in range(260):
+        store.upsert(type="event", title="Other", payload={"data": {"camera_id": "garage", "camera_name": "Garagem"}})
+    store.upsert(type="event", title="Renamed", payload={"data": {"camera_id": "patio", "camera_name": "Pátio"}})
+    store.upsert(type="event", title="Silent", payload={"priority": "silent", "data": {"camera_id": "secret", "camera_name": "Hidden"}})
+    store.upsert(type="event", title="Invalid", payload={"data": {"camera_id": 7, "camera_name": "Invalid"}})
+    options = store.data_options("camera_id", "camera_name")
+    assert options == [{"value": "patio", "label": "Pátio"}, {"value": "garage", "label": "Garagem"}]
+    store._conn.execute("UPDATE notification SET payload_json = '{' WHERE title = 'Invalid'")
+    assert store.data_options("camera_id", "camera_name") == options
+    with pytest.raises(ValueError):
+        store.data_options("camera_id[*]", "camera_name")

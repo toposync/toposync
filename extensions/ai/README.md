@@ -55,8 +55,16 @@ limited to 8192 characters. Invalid filters return 422.
 The same filter applies to date-only queries, consistency reads and literal
 fallback. Filtering an identity field does not establish or strengthen identity;
 callers must distinguish confirmed evidence from suggestions. Existing global
-priority counts remain global. These are API capabilities; camera and area filter
-controls in the history interface are still pending.
+priority counts remain global. The history filter offers camera and area selectors under **Camera and area**,
+with names from persisted evidence and exact identifiers in requests. Selection
+persists locally; missing historical names and deleted selections remain explicit.
+`GET /api/notifications/data-options?field=camera_id&label_field=camera_name`
+returns distinct text values from all visible history, using the latest record's
+label for each value. It uses the existing notification read permission and
+cancellable request worker. It does not enumerate silent records or imply that a
+historical camera is currently available. The same generic endpoint supports area
+metadata. Live updates that leave the selected location are removed from results;
+new semantic matches still require refreshing the search.
 
 ## History time windows
 

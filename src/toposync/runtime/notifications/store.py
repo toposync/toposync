@@ -421,6 +421,24 @@ class NotificationStore:
         next_cursor = records[-1].seq if records else None
         return records, next_cursor
 
+    def data_options(self, field: str, label_field: str, *, cancel_check: _CancelCheck | None = None) -> list[dict[str, Any]]:
+        parse_data_filter({field: "value", label_field: "label"})
+        # ponytail: scan visible history; add a maintained facet index only after measured need.
+        def read(conn: sqlite3.Connection):
+            return conn.execute("""
+                SELECT value, label, MAX(seq) AS latest FROM (
+                    SELECT seq,
+                        CASE WHEN json_valid(payload_json) AND json_type(payload_json, ?) = 'text'
+                            THEN json_extract(payload_json, ?) END AS value,
+                        CASE WHEN json_valid(payload_json) AND json_type(payload_json, ?) = 'text'
+                            THEN json_extract(payload_json, ?) END AS label
+                    FROM notification WHERE priority_bucket IN ('low', 'medium', 'high')
+                ) WHERE length(value) BETWEEN 1 AND 512
+                GROUP BY value ORDER BY latest DESC
+            """, (f"$.data.{field}", f"$.data.{field}", f"$.data.{label_field}", f"$.data.{label_field}")).fetchall()
+        return [{"value": row["value"], "label": row["label"] if isinstance(row["label"], str) and 0 < len(row["label"]) <= 512 else None}
+                for row in self._run_read(read, cancel_check=cancel_check)]
+
     def upsert(
         self,
         *,

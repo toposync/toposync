@@ -35,6 +35,7 @@ import {
   notificationThumbnailUrl,
   type NotificationImageItem,
 } from "../notifications/pipelinesNotifications";
+import { HistoryLocationFilter } from "../notifications/HistoryLocationFilter";
 import { VisualHistoryPreparation } from "../notifications/VisualHistoryPreparation";
 import { StreamsDashboard } from "../streams/StreamsDashboard";
 import { navigate, replace, usePathname } from "../router";
@@ -203,6 +204,7 @@ export type Priority = "low" | "medium" | "high";
 const ALL_PRIORITIES: Priority[] = ["high", "medium", "low"];
 
 export type NotificationsFilter = {
+  dataFilter?: Record<string, string>;
   semantic?: boolean | "visual";
   priorities: Priority[];
   types: string[]; // empty array = "all types"
@@ -258,6 +260,8 @@ export function loadNotificationsFilter(): NotificationsFilter {
       types,
       query,
       semantic: parsed.semantic === "visual" ? "visual" : parsed.semantic === true,
+      dataFilter: Object.fromEntries(Object.entries(parsed.dataFilter ?? {}).filter(([key, value]) =>
+        (key === "camera_id" || key === "area_id") && typeof value === "string" && value.length > 0 && value.length <= 512)),
     };
   } catch {
     return { ...DEFAULT_NOTIFICATIONS_FILTER };
@@ -267,6 +271,7 @@ export function loadNotificationsFilter(): NotificationsFilter {
 function isFilterRestrictive(filter: NotificationsFilter): boolean {
   if (filter.priorities.length < ALL_PRIORITIES.length) return true;
   if (filter.types.length > 0) return true;
+  if (Object.keys(filter.dataFilter ?? {}).length > 0) return true;
   if (filter.query.trim().length > 0) return true;
   return false;
 }
@@ -1243,6 +1248,9 @@ export function MainScreen({
                           })}
                         </div>
                       </div>
+
+                      <span className="muted">{t("core.ui.notifications.location.global_totals")}</span>
+                      <HistoryLocationFilter filter={filter} setFilter={setFilter} />
 
                       <div className="notificationsFilterSection">
                         <label className="notificationsFilterSectionTitle" htmlFor="notificationsFilterSearch">

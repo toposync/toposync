@@ -7,7 +7,7 @@ const ts = require("typescript");
 const filename = path.resolve(__dirname, "../src/ui/App.tsx");
 const source = fs.readFileSync(filename, "utf8");
 const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = new Set(["notificationMatchesFilter", "mergeNotificationPage", "upsertNotificationInState", "notificationFiltersEqual", "notificationFilterFacetsEqual", "stringArraysEqual"]);
+const names = new Set(["notificationMatchesDataFilter", "notificationMatchesFilter", "mergeNotificationPage", "upsertNotificationInState", "notificationFiltersEqual", "notificationFilterFacetsEqual", "stringArraysEqual"]);
 const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text));
 const context = {withoutEphemeralImage: value => value, sortNotificationIdsByCreatedDesc: ids => [...ids].sort(), asRecord: value => value && typeof value === "object" ? value : {}, notificationPriority: () => "medium"};
 vm.createContext(context);
@@ -62,4 +62,21 @@ test("changing text to visual search invalidates the previous result", () => {
   const filter = {priorities:["medium"],types:[],query:"pacote",semantic:true};
   assert.equal(context.notificationFiltersEqual(filter, {...filter,semantic:"visual"}),false);
   assert.equal(context.notificationFiltersEqual(filter, {...filter}),true);
+});
+
+
+test("location selection scopes literal updates and removes mismatches from semantic results", () => {
+  const first = { id: "one", type: "event", title: "Gato", payload: {data: {camera_id: "patio", area_id: "water"}} };
+  const filter = {priorities:["medium"],types:[],query:"gato",dataFilter:{camera_id:"patio",area_id:"water"}};
+  assert.equal(context.notificationMatchesFilter(first, filter), true);
+  for (const camera_id of ["Patio", 7, ["patio"], null]) {
+    assert.equal(context.notificationMatchesFilter({...first,payload:{data:{camera_id,area_id:"water"}}}, filter), false);
+  }
+  const previous = {byId:{one:first},visibleIds:["one"]};
+  for (const semantic of [false,true,"visual"]) {
+    const next = {...first,payload:{data:{camera_id:"garage",area_id:"water"}}};
+    assert.deepEqual(Array.from(context.upsertNotificationInState(previous,next,{...filter,semantic}).visibleIds), []);
+  }
+  assert.equal(context.notificationFiltersEqual(filter,{...filter,dataFilter:{area_id:"water",camera_id:"patio"}}),true);
+  assert.equal(context.notificationFiltersEqual(filter,{...filter,dataFilter:{camera_id:"garage"}}),false);
 });

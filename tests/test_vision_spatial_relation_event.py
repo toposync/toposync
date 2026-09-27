@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
+import time
 
 import pytest
 
@@ -15,6 +17,8 @@ from toposync_ext_vision.pipelines.schemas import VisionSpatialRelationEventConf
 from toposync_ext_vision.processing.tasks.spatial_relation_event import (
     VisionSpatialRelationEventRuntime,
 )
+
+_capture_sequence = itertools.count(1)
 
 
 def _member(
@@ -64,6 +68,9 @@ def _group_packet(
         stream_id="group:camera:front:1",
         lifecycle=lifecycle,
         payload={
+            "capture_evidence": {"capture_instance": "test-decoder", "generation": 0,
+                                 "sequence": next(_capture_sequence), "published_at": time.time()},
+            "frame_ts": time.monotonic(),
             "group_event_id": "grp:camera:front:1",
             "group_event_code": "1",
             "source_stream_id": "camera:front",
@@ -224,6 +231,43 @@ def test_closed_group_replay_cannot_create_another_relation():
     asyncio.run(scenario())
 
 
+def test_repeated_capture_cannot_confirm_dwell_and_reset_does_not_inherit_it(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr("toposync_ext_vision.processing.tasks.spatial_relation_event.time.monotonic", lambda: clock[0])
+
+    async def scenario():
+        runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 4})
+        original = _group_packet(members=_near_members())
+        assert await runtime.process_packet(original, None) == []
+        clock[0] = 4
+        repeat = _group_packet(members=_near_members())
+        repeat.payload["capture_evidence"] = dict(original.payload["capture_evidence"])
+        assert await runtime.process_packet(repeat, None) == []
+        reset = _group_packet(members=_near_members())
+        reset.payload["capture_evidence"]["generation"] = 1
+        assert await runtime.process_packet(reset, None) == []
+        clock[0] = 5
+        assert await runtime.process_packet(original, None) == []
+        clock[0] = 8
+        fresh = _group_packet(members=_near_members())
+        fresh.payload["capture_evidence"]["generation"] = 1
+        opened = await runtime.process_packet(fresh, None)
+        assert [packet.lifecycle for packet in opened] == [Lifecycle.OPEN]
+        assert opened[0].payload["spatial_relation_event"]["dwell_seconds"] == 4
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("evidence", [None, {}, {"capture_instance": "x", "generation": 0, "sequence": 1, "published_at": 1}])
+def test_missing_or_stale_capture_cannot_open_relation(evidence):
+    async def scenario():
+        runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 0})
+        packet = _group_packet(members=_near_members())
+        packet.payload["capture_evidence"] = evidence
+        assert await runtime.process_packet(packet, None) == []
+    asyncio.run(scenario())
+
+
 def test_identical_group_ids_from_different_sources_keep_separate_occurrences():
     async def scenario():
         runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "close_grace_seconds": 0, "update_interval_seconds": 0})
@@ -235,8 +279,76 @@ def test_identical_group_ids_from_different_sources_keep_separate_occurrences():
         assert second.payload["correlation_id"] != first.payload["correlation_id"]
         closed = (await runtime.process_packet(_group_packet(members=[], lifecycle=Lifecycle.CLOSE), None))[0]
         assert closed.stream_id == first.stream_id
+        other = _group_packet(members=_near_members())
+        other.payload.update(source_stream_id="camera:other", camera_id="other")
         updated = (await runtime.process_packet(other, None))[0]
         assert updated.stream_id == second.stream_id and updated.lifecycle == Lifecycle.UPDATE
+
+    asyncio.run(scenario())
+
+
+def test_same_frame_group_member_updates_are_accepted_without_extending_duration(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr("toposync_ext_vision.processing.tasks.spatial_relation_event.time.monotonic", lambda: clock[0])
+
+    async def scenario():
+        runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "update_interval_seconds": 0})
+        single = _group_packet(members=_near_members()[:1])
+        assert await runtime.process_packet(single, None) == []
+        both = _group_packet(members=_near_members())
+        both.payload["capture_evidence"] = dict(single.payload["capture_evidence"])
+        both.payload["frame_ts"] = single.payload["frame_ts"]
+        opened = (await runtime.process_packet(both, None))[0]
+        clock[0] = 4
+        same_frame = _group_packet(members=_near_members())
+        same_frame.payload["capture_evidence"] = dict(single.payload["capture_evidence"])
+        same_frame.payload["frame_ts"] = single.payload["frame_ts"]
+        update = (await runtime.process_packet(same_frame, None))[0]
+        assert update.stream_id == opened.stream_id
+        assert update.payload["spatial_relation_event"]["dwell_seconds"] == 0
+
+    asyncio.run(scenario())
+
+
+def test_old_capture_close_cannot_end_relation_after_reset():
+    async def scenario():
+        runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "update_interval_seconds": 0})
+        first = (await runtime.process_packet(_group_packet(members=_near_members()), None))[0]
+        current = _group_packet(members=_near_members())
+        current.payload["capture_evidence"]["generation"] = 1
+        outputs = await runtime.process_packet(current, None)
+        assert [packet.lifecycle for packet in outputs] == [Lifecycle.CLOSE, Lifecycle.OPEN]
+        assert outputs[0].stream_id == first.stream_id
+        assert outputs[0].payload["spatial_relation_event"]["reason"] == "source_reset"
+        assert outputs[1].stream_id != first.stream_id
+        assert await runtime.process_packet(_group_packet(members=[], lifecycle=Lifecycle.CLOSE), None) == []
+        fresh = _group_packet(members=_near_members())
+        fresh.payload["capture_evidence"]["generation"] = 1
+        assert (await runtime.process_packet(fresh, None))[0].stream_id == outputs[1].stream_id
+    asyncio.run(scenario())
+
+
+def test_group_to_relation_preserves_capture_and_media_dwell():
+    from test_vision_group_events import _event_packet
+    from toposync_ext_vision.processing.tasks.group_events import VisionGroupEventsRuntime
+
+    async def scenario():
+        producer = VisionGroupEventsRuntime({"mode": "proximity", "categories": ["person", "car"],
+                                             "include_stationary_members": True, "update_interval_seconds": 0})
+        runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 1, "update_interval_seconds": 0})
+        results = []
+        for timestamp in (0, 1):
+            for code, category, x in (("1", "person", 0), ("2", "car", 2)):
+                packet = _event_packet(timestamp, code, category=category,
+                                      world={"x": x, "z": 0, "confidence": 0.9},
+                                      lifecycle=Lifecycle.OPEN if timestamp == 0 else Lifecycle.UPDATE)
+                packet.payload["capture_evidence"] = {"capture_instance": "decoder", "generation": 0,
+                                                       "sequence": timestamp + 1, "published_at": time.time()}
+                for group in await producer.process_packet(packet, None):
+                    results.extend(await runtime.process_packet(group, None))
+        assert [packet.lifecycle for packet in results] == [Lifecycle.OPEN, Lifecycle.UPDATE]
+        assert all(packet.payload["spatial_relation_event"]["dwell_seconds"] == 1 for packet in results)
+        assert len({packet.stream_id for packet in results}) == 1
 
     asyncio.run(scenario())
 

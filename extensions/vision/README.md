@@ -25,6 +25,13 @@ closed groups without dropping replay protection after 4,096 occurrences. A new
 producer epoch can reuse a closed identifier; this does not establish person identity
 across sessions or qualify recovery when the previous group never closed.
 
+Proximity observations require valid, recent capture evidence. Dwell follows media
+time rather than processing delay; same-frame member updates may update geometry
+but cannot add elapsed time. Older capture generations/sequences are rejected.
+A capture reset closes the old relation and starts fresh confirmation; a late close
+from the old generation cannot terminate the new relation. Publication freshness
+does not prove physical camera latency or synchronized remote clocks.
+
 ## Dependencies
 
 - The default `toposync` application bundle includes the first-party ONNX Runtime CPU stack.

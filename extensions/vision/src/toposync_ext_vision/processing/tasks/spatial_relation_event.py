@@ -8,6 +8,7 @@ from typing import Any
 
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
+from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness, resolve_media_ts
 from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 
 from ...pipelines.schemas import VisionSpatialRelationEventConfig
@@ -150,7 +151,10 @@ class _RelationState:
     last_members: tuple[_Member, ...] = field(default_factory=tuple)
     last_match: _RelationMatch | None = None
     candidate_since_monotonic: float | None = None
-    last_positive_monotonic: float | None = None
+    last_positive_media_ts: float | None = None
+    capture: tuple[str, int, int] | None = None
+    published_at: float = float("-inf")
+    media_ts: float = float("-inf")
     observed_duration_seconds: float = 0.0
     losing_since_monotonic: float | None = None
     loss_reason: str = ""
@@ -519,9 +523,45 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
 
         key = (group.source_stream_id, group.camera_id, group.group_event_id)
         subject = packet.payload["subject"]
-        if self._closed_groups.capacity_reached or self._closed_groups.observe(key, subject):
+        if self._closed_groups.capacity_reached or self._closed_groups.observe(key, subject, retain=False):
             return outputs
         state = self._states_by_group.get(key)
+        capture = None
+        evidence = packet.payload.get("capture_evidence")
+        media_ts = resolve_media_ts(packet)
+        if group.lifecycle == Lifecycle.CLOSE and state is not None and state.capture is not None:
+            if not isinstance(evidence, dict) or (
+                evidence.get("capture_instance"), evidence.get("generation")
+            ) != state.capture[:2]:
+                return outputs
+        if group.lifecycle != Lifecycle.CLOSE:
+            freshness = resolve_frame_freshness(packet)
+            if freshness.age_seconds is None or freshness.age_seconds > self._config.stale_timeout_seconds:
+                if state is not None:
+                    if state.opened:
+                        outputs.append(self._close_state(state, now_monotonic=now_monotonic, reason="evidence_unavailable"))
+                    else:
+                        self._states_by_group.pop(key, None)
+                return outputs
+            capture = (evidence["capture_instance"], evidence["generation"], evidence["sequence"])
+            if state is not None and state.capture is not None:
+                if evidence["published_at"] < state.published_at:
+                    return outputs
+                if capture[0] == state.capture[0] and (capture[1] < state.capture[1] or (
+                    capture[1] == state.capture[1] and capture[2] < state.capture[2]
+                )):
+                    return outputs
+                if capture == state.capture and (media_ts != state.media_ts or packet.packet_id == state.last_packet.packet_id):
+                    return outputs
+                if capture[:2] != state.capture[:2]:
+                    if state.opened:
+                        outputs.append(self._close_state(state, now_monotonic=now_monotonic, reason="source_reset"))
+                    self._states_by_group.pop(key, None)
+                    state = None
+                elif media_ts < state.media_ts:
+                    return outputs
+        if self._closed_groups.capacity_reached or self._closed_groups.observe(key, subject):
+            return outputs
         if group.lifecycle == Lifecycle.CLOSE:
             self._closed_groups.close(key, subject)
             if state is None:
@@ -565,27 +605,30 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         state.group_event_code = group.group_event_code or state.group_event_code
         state.source_stream_id = group.source_stream_id or state.source_stream_id
         state.camera_id = group.camera_id or state.camera_id
-        state.last_input_monotonic = now_monotonic
+        if capture != state.capture:
+            state.last_input_monotonic = now_monotonic
+        if capture is not None:
+            state.capture = capture
+            state.published_at = evidence["published_at"]
+            state.media_ts = media_ts
         state.last_packet = packet
         state.last_members = group.members
         state.last_bbox01 = group.bbox01
         state.last_world_envelope = group.world_envelope
 
         if relation_match is not None:
-            if state.last_positive_monotonic is not None and state.losing_since_monotonic is None:
+            if state.last_positive_media_ts is not None and state.losing_since_monotonic is None:
                 state.observed_duration_seconds += max(
-                    0.0, now_monotonic - state.last_positive_monotonic
+                    0.0, media_ts - state.last_positive_media_ts
                 )
-            state.last_positive_monotonic = now_monotonic
+            state.last_positive_media_ts = media_ts
             state.last_match = relation_match
             state.losing_since_monotonic = None
             state.loss_reason = ""
             if state.candidate_since_monotonic is None:
                 state.candidate_since_monotonic = now_monotonic
             if not state.opened:
-                if now_monotonic - state.candidate_since_monotonic >= float(
-                    self._config.dwell_seconds
-                ):
+                if state.observed_duration_seconds >= float(self._config.dwell_seconds):
                     self._next_relation_identity(state)
                     state.opened_at_monotonic = now_monotonic
                     state.last_emit_monotonic = now_monotonic
@@ -614,7 +657,7 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
 
         if not state.opened:
             state.candidate_since_monotonic = None
-            state.last_positive_monotonic = None
+            state.last_positive_media_ts = None
             state.observed_duration_seconds = 0.0
             state.last_match = None
             if group.lifecycle == Lifecycle.CLOSE:

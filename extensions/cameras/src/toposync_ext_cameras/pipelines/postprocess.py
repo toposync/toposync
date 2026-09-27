@@ -508,6 +508,18 @@ class ImageResizeConfig(BaseModel):
     allow_upscale: bool = False
 
 
+class ImageCropSnapshotBinding(BaseModel):
+    """Decoder continuity only; this does not certify physical camera position."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    camera_id: str = Field(min_length=1)
+    source_id: str = Field(min_length=1)
+    capture_instance: str = Field(min_length=1)
+    generation: int = Field(ge=0)
+    width: int = Field(gt=1)
+    height: int = Field(gt=1)
+
+
 class ImageCropConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_artifact_name: str = ""
@@ -519,6 +531,16 @@ class ImageCropConfig(BaseModel):
 
     output_artifact_name: str = MAIN_ARTIFACT_NAME
     min_crop_size_px: int = Field(default=8, ge=1, le=4096)
+    snapshot_binding: ImageCropSnapshotBinding | None = None
+
+    @model_validator(mode="after")
+    def _validate_bound_region(self) -> ImageCropConfig:
+        if self.snapshot_binding is not None:
+            max_x = 100 if self.units == "percent" else self.snapshot_binding.width
+            max_y = 100 if self.units == "percent" else self.snapshot_binding.height
+            if not (self.left < self.right <= max_x and self.top < self.bottom <= max_y):
+                raise ValueError("Snapshot region must be ordered and inside the selected image")
+        return self
 
     @field_validator("output_artifact_name")
     @classmethod
@@ -1355,7 +1377,38 @@ class ImageCropRuntime(TransformOperatorRuntime):
         self._config = ImageCropConfig.model_validate(config)
         self._dependencies = dependencies
 
+    def _matches_snapshot(self, packet: Packet, binding: ImageCropSnapshotBinding) -> bool:
+        # PTZ requires a separate, observed pose binding, not decoder continuity.
+        if (
+            "pan_tilt_zoom_state" in packet.payload
+            or resolve_source_device_id(packet) != binding.camera_id
+            or resolve_source_id(packet) != binding.source_id
+        ):
+            return False
+        name, frame = _resolve_input_image(
+            packet, input_artifact_name=self._config.input_artifact_name
+        )
+        if getattr(frame, "shape", ())[:2] != (binding.height, binding.width):
+            return False
+        artifact = packet.artifacts.get(name)
+        geometry = artifact.metadata.get("image_geometry") if artifact is not None else None
+        evidence = packet.payload.get("capture_evidence")
+        if not isinstance(geometry, dict) or not isinstance(evidence, dict):
+            return False
+        return (
+            evidence.get("capture_instance") == binding.capture_instance
+            and type(evidence.get("generation")) is int
+            and evidence["generation"] == binding.generation
+            and geometry.get("capture_evidence") == evidence
+            and geometry.get("source_size") == [binding.width, binding.height]
+            and geometry.get("image_size") == [binding.width, binding.height]
+            and geometry.get("to_source") == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        )
+
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        binding = self._config.snapshot_binding
+        if binding is not None and not self._matches_snapshot(packet, binding):
+            return []
         packet = _ensure_original_artifact(packet)
         selected_name, frame = _resolve_input_image(
             packet,
@@ -1438,7 +1491,7 @@ class ImageCropRuntime(TransformOperatorRuntime):
             image=frame, bbox01=bbox01_current, min_crop_size_px=self._config.min_crop_size_px
         )
         if crop is None:
-            return [packet]
+            return [] if binding is not None else [packet]
 
         base_bbox01 = (0.0, 0.0, 1.0, 1.0)
         existing_crop = packet.payload.get("frame_crop")

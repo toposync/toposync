@@ -2408,3 +2408,57 @@ def test_expiring_target_measurement_reobserves_before_arrival_without_motion(mo
             asyncio.run(navigator.aim([1, 0, 0]))
         assert len(windows) == 2
     assert navigator.commands == 0
+
+
+def test_outbound_inverse_probe_rejects_overshoot_at_dispatched_duration():
+    from toposync_ext_cameras import panorama_navigation as navigation
+
+    checkpoint = {"return_outbound_seed": {
+        "return_epoch": "current", "axis": "pan", "direction": 1,
+        "duration_seconds": 0.3, "overlap": 0.97, "displacement": 30.0,
+        "observed_shift": [-30.0, 0.0],
+    }}
+    # A 50 ms prediction improves this residual; the actual 80 ms probe
+    # overshoots it. Reject before dispatch instead of relying on Stop later.
+    error = np.array([-3.0, -1.0])
+    assert np.linalg.norm(error + [5.0, 0.0]) < np.linalg.norm(error)
+    assert np.linalg.norm(error + [8.0, 0.0]) > np.linalg.norm(error)
+    decision = navigation._outbound_inverse_probe(
+        checkpoint, error, return_epoch="current", missing_axes=["pan"]
+    )
+    assert decision is not None and decision[1] == 0
+    # Native recall can also cross the reference; use the observed forward
+    # direction when that is the candidate which reduces the residual.
+    forward = navigation._outbound_inverse_probe(
+        checkpoint, np.array([10.0, 0.0]),
+        return_epoch="current", missing_axes=["pan"],
+    )
+    assert forward is not None and forward[1] == 0.08
+
+
+def test_reference_return_never_falls_back_to_blind_probe_after_seed_overshoot(monkeypatch):
+    from toposync_ext_cameras import panorama_navigation as navigation
+
+    monkeypatch.setattr(navigation, "_match", lambda *_: {
+        "verified": True, "overlap": 0.97, "displacement": 4.02,
+        "shift_x": 2.79, "shift_y": -1.58,
+    })
+
+    async def pulse(*_args, **_kwargs):
+        pytest.fail("Both observed-direction candidates overshoot; no command is justified")
+
+    scanner = SimpleNamespace(
+        checkpoint={"return_epoch": "current", "return_outbound_seed": {
+            "return_epoch": "current", "axis": "pan", "direction": 1,
+            "duration_seconds": 0.3, "overlap": 0.96, "displacement": 32.98,
+            "observed_shift": [-26.07, -0.58],
+        }},
+        capabilities={"velocity_supported": True, "axes": {"pan": True, "tilt": True}},
+        _pulse=pulse,
+    )
+    asyncio.run(navigation.correct_reference(
+        scanner, np.zeros((1, 1), np.uint8),
+        {"frame": {"image": np.zeros((1, 1), np.uint8)}},
+    ))
+    assert scanner.checkpoint["return_correction_state"] == "rejected"
+    assert scanner.checkpoint["return_corrections"][-1]["reason"] == "visual_control_resolution_unverified"

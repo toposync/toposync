@@ -456,11 +456,12 @@ def _outbound_inverse_probe(
     return_epoch: str,
     missing_axes: list[str],
 ) -> tuple[str, float, dict[str, Any]] | None:
-    """Choose one inverse probe from the causal outbound observation.
+    """Choose one direction probe from the causal outbound observation.
 
     This is deliberately only a direction probe: a camera may have backlash,
     so the inverse displacement is not promoted to a reusable response model
-    until the resulting frame demonstrates improvement.
+    until the resulting frame demonstrates improvement. A zero amount means
+    the seed predicts no improving probe; None means no usable seed.
     """
     seed = checkpoint.get("return_outbound_seed")
     if not isinstance(seed, dict) or seed.get("return_epoch") != return_epoch:
@@ -485,11 +486,22 @@ def _outbound_inverse_probe(
         or not np.isfinite(shift).all()
     ):
         return None
-    inverse_delta = -shift * (MINIMUM_CONTINUOUS_PULSE_SECONDS / duration)
+    # Unmeasured directions are dispatched as 80 ms probes below. Predict
+    # that same command, rather than the shorter measured-correction floor.
+    probe_seconds = 0.08
+    inverse_delta = -shift * (probe_seconds / duration)
     current_norm = float(np.linalg.norm(error))
-    if float(np.linalg.norm(error + inverse_delta)) > current_norm - max(0.25, current_norm * 0.01):
-        return None
-    return axis, float(-direction * MINIMUM_CONTINUOUS_PULSE_SECONDS), {
+    improvement_limit = current_norm - max(0.25, current_norm * 0.01)
+    amount = float(-direction * probe_seconds)
+    if float(np.linalg.norm(error + inverse_delta)) > improvement_limit:
+        # Native recall may land on the other side of the reference. If
+        # neither direction can improve it, do not fall back to a blind probe.
+        amount = (
+            float(direction * probe_seconds)
+            if float(np.linalg.norm(error - inverse_delta)) <= improvement_limit
+            else 0.0
+        )
+    return axis, amount, {
         "axis": axis,
         "outbound_direction": direction,
         "duration_seconds": duration,
@@ -1309,7 +1321,21 @@ async def correct_reference(scanner: _Scan, reference: np.ndarray, result: dict)
             )
             if seeded is not None:
                 axis, amount, outbound_seed = seeded
-                command_kind = "outbound_inverse_probe"
+                if amount == 0:
+                    trace.append({
+                        "axis": axis, "state": "rejected", "verified": False,
+                        "reason": "visual_control_resolution_unverified",
+                        "outbound_seed": outbound_seed, "return_epoch": return_epoch,
+                    })
+                    terminal_state = "rejected"
+                    if callable(persist):
+                        await persist()
+                    break
+                command_kind = (
+                    "outbound_inverse_probe"
+                    if np.sign(amount) != outbound_seed["outbound_direction"]
+                    else "outbound_direction_probe"
+                )
             else:
                 axis = max(
                     missing,
@@ -1325,7 +1351,7 @@ async def correct_reference(scanner: _Scan, reference: np.ndarray, result: dict)
             # Reversing an axis requires its own short observation; do not apply
             # the gain measured in the other direction to a larger correction.
             amount = direction * 0.08
-            if command_kind != "outbound_inverse_probe":
+            if command_kind not in {"outbound_inverse_probe", "outbound_direction_probe"}:
                 command_kind = "direction_probe" if axis in responses else "probe"
         pulse_seconds = abs(amount)
         pulse_speed = DEFAULT_CONTINUOUS_PULSE_SPEED

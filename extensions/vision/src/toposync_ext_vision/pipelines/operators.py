@@ -670,6 +670,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             inputs=[{"name": "in", "required": True}],
             outputs=[{"name": "out"}],
             capabilities=["vision", "detection", "heavy_compute", "split_stream"],
+            split_stream_when=lambda config: config.get("emit_mode", "events") == "events",
             defaults=VisionDetectConfig().model_dump(),
             execution_mode="thread_pool",
             max_concurrency=1,

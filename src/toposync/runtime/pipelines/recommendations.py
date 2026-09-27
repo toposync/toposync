@@ -597,7 +597,8 @@ def analyze_compiled_pipeline(
     split_nodes = [
         node.node_id
         for node in pipeline.nodes
-        if "split_stream" in capabilities_by_node_id.get(node.node_id, set())
+        if (operator := registry.get(node.operator_id)) is not None
+        and operator.splits_stream(node.normalized_config)
     ]
     if split_nodes:
         reachable_after_split: set[str] = set()

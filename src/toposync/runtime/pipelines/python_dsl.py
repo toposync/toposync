@@ -155,7 +155,10 @@ class DslGraphBuilder:
             f"Operator {operator_id!r} has multiple input ports; set _input_port explicitly",
         )
 
-    def default_edge_policy(self, source_operator_id: str, target_operator_id: str) -> tuple[int, str]:
+    def default_edge_policy(
+        self, source_operator_id: str, target_operator_id: str,
+        source_config: dict[str, Any] | None = None,
+    ) -> tuple[int, str]:
         source_caps = self._get_caps(source_operator_id)
         target_caps = self._get_caps(target_operator_id)
 
@@ -163,7 +166,8 @@ class DslGraphBuilder:
             return 1, DropPolicy.LATEST_ONLY.value
         if "sink" in target_caps or "origin_only" in target_caps:
             return 128, DropPolicy.DROP_OLDEST.value
-        if "split_stream" in source_caps:
+        source = self._registry.get(source_operator_id)
+        if source is not None and source.splits_stream(source_config or {}):
             return 64, DropPolicy.KEYED_LATEST_ONLY.value
         if "heavy_compute" in target_caps:
             return 1, DropPolicy.LATEST_ONLY.value
@@ -347,6 +351,7 @@ class OperatorExpr:
         default_maxsize, default_drop_policy = self._builder.default_edge_policy(
             str(source_node.get("operator") or ""),
             self.operator_id,
+            source_node.get("config"),
         )
         maxsize = default_maxsize if self.maxsize is None else int(self.maxsize)
         drop_policy = default_drop_policy if self.drop_policy is None else str(self.drop_policy)
@@ -434,6 +439,7 @@ class NodeExpr:
         default_maxsize, default_drop_policy = self._builder.default_edge_policy(
             str(source_node.get("operator") or ""),
             self.operator_id,
+            source_node.get("config"),
         )
         maxsize = default_maxsize if self.maxsize is None else int(self.maxsize)
         drop_policy = default_drop_policy if self.drop_policy is None else str(self.drop_policy)

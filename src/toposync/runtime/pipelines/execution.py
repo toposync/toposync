@@ -550,14 +550,11 @@ class PipelineRuntime:
         inputs_by_node_port: dict[tuple[str, str], BoundedChannel[Packet] | KeyedBoundedChannel[Packet]] = {}
 
         node_by_id = {node.node_id: node for node in self.compiled.nodes}
-        caps_by_node_id: dict[str, set[str]] = {}
-        for node in self.compiled.nodes:
-            registered = self.registry.get(node.operator_id)
-            if registered is None:
-                continue
-            caps_by_node_id[node.node_id] = {str(cap) for cap in (registered.definition.capabilities or [])}
-
-        split_nodes = [node_id for node_id, caps in caps_by_node_id.items() if "split_stream" in caps]
+        split_nodes = [
+            node.node_id for node in self.compiled.nodes
+            if (registered := self.registry.get(node.operator_id)) is not None
+            and registered.splits_stream(node.normalized_config)
+        ]
         reachable_after_split: set[str] = set()
         if split_nodes:
             adjacency: dict[str, set[str]] = {}

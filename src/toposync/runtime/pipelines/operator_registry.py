@@ -380,6 +380,19 @@ class RegisteredOperator:
     owner: str | None
     runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None
     diagnostics_factory: Callable[[dict[str, Any], dict[str, Any]], list[OperatorDiagnostic | dict[str, Any]]] | None = None
+    split_stream_when: Callable[[dict[str, Any]], bool] | None = None
+
+    def splits_stream(self, config: dict[str, Any]) -> bool:
+        """Resolve configured fan-out without changing static access/placement capabilities.
+
+        Extensions may narrow their split_stream declaration with split_stream_when.
+        Callers supply normalized node configuration; omitted values use defaults.
+        """
+        if "split_stream" not in self.definition.capabilities:
+            return False
+        if self.split_stream_when is None:
+            return True
+        return self.split_stream_when({**self.definition.defaults, **config})
 
 
 class OperatorRegistry:
@@ -424,6 +437,7 @@ class OperatorRegistry:
         owner: str | None = None,
         runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None,
         diagnostics_factory: Callable[[dict[str, Any], dict[str, Any]], list[OperatorDiagnostic | dict[str, Any]]] | None = None,
+        split_stream_when: Callable[[dict[str, Any]], bool] | None = None,
     ) -> OperatorDefinition:
         normalized_operator_id = str(operator_id or "").strip()
         if normalized_operator_id in self._items:
@@ -538,6 +552,7 @@ class OperatorRegistry:
             owner=str(owner or "").strip() or None,
             runtime_factory=runtime_factory,
             diagnostics_factory=diagnostics_factory,
+            split_stream_when=split_stream_when,
         )
         return definition
 

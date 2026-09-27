@@ -10,6 +10,7 @@ import time
 
 import httpx
 from pydantic import BaseModel
+import pytest
 
 from toposync.runtime.config_store import Pipeline, ProcessingServer
 from toposync.runtime.notifications import NotificationsRuntime
@@ -23,10 +24,11 @@ from test_private_stream_continuity import dependencies
 
 
 class Config(BaseModel):
-    pass
+    hold_open: bool = False
 
 
-def test_private_audio_crosses_real_http_and_is_retained_only_at_origin(tmp_path):
+@pytest.mark.parametrize("restart", [False, True], ids=["normal", "processing-restart"])
+def test_private_audio_crosses_real_http_and_is_retained_only_at_origin(tmp_path, restart):
     root = Path(__file__).resolve().parents[1]
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
@@ -53,6 +55,7 @@ def test_private_audio_crosses_real_http_and_is_retained_only_at_origin(tmp_path
                     time.sleep(0.05)
 
             async def scenario():
+                nonlocal process
                 shared = dependencies(tmp_path / "origin")
                 registry = shared["operator_registry"]
                 register_audio_operator(registry)
@@ -64,7 +67,7 @@ def test_private_audio_crosses_real_http_and_is_retained_only_at_origin(tmp_path
                 transport = HttpProcessingTransport(base_url=url, username="isolated-test", password="disposable-audio-contract")
                 graph = build_audio_recipe(graph_uid="audio_http", camera_id="synthetic-camera", source_id="synthetic",
                                            baseline={"reference": "synthetic quiet", "rms": 0.01}, retain_audio=True)
-                graph["nodes"][0].update(operator="test.audio_probe", config={})
+                graph["nodes"][0].update(operator="test.audio_probe", config={"hold_open": restart})
                 graph["nodes"][-1]["config"]["historical_evidence_paths"].append("processing_pid")
                 pipeline = Pipeline(name="audio_http", graph=graph, processing_server_id="probe")
                 server = ProcessingServer(id="probe", name="Probe", kind="http", url=url,
@@ -72,17 +75,58 @@ def test_private_audio_crosses_real_http_and_is_retained_only_at_origin(tmp_path
                 try:
                     await orchestrator._start_origin_pipeline_for_remote(pipeline)
                     await orchestrator._start_remote_server(server, [pipeline], settings_payload={})
+                    recovery = {}
+                    if restart:
+                        async with asyncio.timeout(10):
+                            while True:
+                                before, _ = notifications.store.list()
+                                if before and before[0].payload.get("status") == "open":
+                                    break
+                                await asyncio.sleep(0.02)
+                        first_id = before[0].id
+                        first_pid = process.pid
+                        first_clip = before[0].payload["data"]["historical_evidence"]["audio_occurrence"]["clip"]["id"]
+                        process.kill()
+                        await asyncio.to_thread(process.wait, timeout=5)
+                        async with asyncio.timeout(10):
+                            while notifications.store.get(first_id).payload.get("status") != "closed":
+                                await asyncio.sleep(0.05)
+                        interrupted = notifications.store.get(first_id)
+                        assert interrupted.payload["data"]["historical_evidence"]["audio_occurrence"]["status"] == "evidence_timeout"
+                        assert interrupted.payload["event"]["duration_seconds"] <= 2
+                        process = subprocess.Popen([sys.executable, str(root / "tests/fixtures/audio_processing_probe.py"), str(port)],
+                                                   cwd=root, env=environment, stdout=log, stderr=subprocess.STDOUT)
+                        async with asyncio.timeout(15):
+                            while not orchestrator._servers[server.id].continuity_error:
+                                assert process.poll() is None
+                                await asyncio.sleep(0.05)
+                        assert orchestrator._servers[server.id].continuity_error == "processing_stream_restarted"
+                        assert len(notifications.store.list()[0]) == 1
+                        # Explicit fresh run; never silently resume an unverifiable stream epoch.
+                        await orchestrator.stop()
+                        pipeline.graph["nodes"][0]["config"]["hold_open"] = False
+                        orchestrator = PipelinesOrchestrator(**shared, notifications=notifications,
+                                                            files_dir=tmp_path / "origin/files")
+                        await orchestrator._start_origin_pipeline_for_remote(pipeline)
+                        await orchestrator._start_remote_server(server, [pipeline], settings_payload={})
+                        recovery = {"interrupted_notification": first_id, "old_processing_pid": first_pid,
+                                    "closed_reason": "evidence_timeout", "continuity_error": "processing_stream_restarted",
+                                    "resume": "explicit fresh run"}
                     async with asyncio.timeout(15):
                         while True:
                             records, _ = notifications.store.list()
-                            if records and records[0].payload.get("status") == "closed":
+                            if len(records) == (2 if restart else 1) and records[0].payload.get("status") == "closed":
                                 break
                             await asyncio.sleep(0.05)
-                    assert len(records) == 1
+                    assert len(records) == (2 if restart else 1)
                     evidence = records[0].payload["data"]["historical_evidence"]
                     assert evidence["processing_pid"] == process.pid != os.getpid()
                     clip = evidence["audio_occurrence"]["clip"]
                     assert clip["status"] == "retained"
+                    if restart:
+                        assert records[0].id != first_id and clip["id"] != first_clip
+                        assert AudioClipStore(tmp_path / "origin").read(first_clip, authorize=lambda camera: None) is not None
+                        assert notifications.store.get(first_id).payload == interrupted.payload
                     cameras = []
                     _, wav = AudioClipStore(tmp_path / "origin").read(clip["id"], authorize=cameras.append)
                     samples, rate = decode_wav_pcm(wav)
@@ -93,7 +137,8 @@ def test_private_audio_crosses_real_http_and_is_retained_only_at_origin(tmp_path
                     async with asyncio.timeout(5):
                         while (await transport.status())["private_stream"]["connections"]:
                             await asyncio.sleep(0.05)
-                    (tmp_path / "result.json").write_text(json.dumps({"notifications": 1, "closed": True,
+                    (tmp_path / "result.json").write_text(json.dumps({"notifications": len(records), "closed": True,
+                        "recovery": recovery,
                         "sample_rate": rate, "samples": len(samples), "origin_pid": os.getpid(),
                         "processing_pid": process.pid, "private_clip_at_origin_only": True,
                         "connections_after_stop": 0, "physical_audio_evaluated": False}, indent=2) + "\n")

@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 import os
 import sys
 import time
+import uuid
 
 import numpy as np
 from pydantic import BaseModel
@@ -15,22 +16,24 @@ from toposync_ext_cameras.audio_pipeline import register_audio_operator
 
 
 class Config(BaseModel):
-    pass
+    hold_open: bool = False
 
 
 class Source(SourceOperatorRuntime):
-    def __init__(self):
+    def __init__(self, config):
         self.sequence = 0
+        self.hold_open = Config.model_validate(config).hold_open
+        self.capture_id = uuid.uuid4().hex
 
     async def produce(self, context):
         index = self.sequence
-        if index >= 3:
+        if index >= 3 or (self.hold_open and index >= 2):
             await context.sleep(0.05)
             return None
         self.sequence += 1
-        metadata = {"sample_rate": 16000, "capture_id": "audio-http-probe", "source_id": "synthetic",
+        metadata = {"sample_rate": 16000, "capture_id": self.capture_id, "source_id": "synthetic",
                     "clock": {"started_at": time.time(), "basis": "synthetic"}}
-        packet = Packet.create(stream_id="audio-http-probe", lifecycle=Lifecycle.CLOSE if index == 2 else Lifecycle.UPDATE,
+        packet = Packet.create(stream_id=self.capture_id, lifecycle=Lifecycle.CLOSE if index == 2 else Lifecycle.UPDATE,
                                payload={"camera_id": "synthetic-camera", "source": {"source_id": "synthetic"},
                                         "audio_capture": metadata, "media": {"ts": index}, "processing_pid": os.getpid()})
         if index == 2:
@@ -51,7 +54,7 @@ async def lifespan(application):
         registry.register_operator(operator_id="test.audio_probe", config_model=Config,
                                    inputs=[], outputs=[{"name": "out"}], capabilities=["source"],
                                    defaults={}, share_strategy="never", owner="test",
-                                   runtime_factory=lambda config, dependencies: Source())
+                                   runtime_factory=lambda config, dependencies: Source(config))
         yield
 
 

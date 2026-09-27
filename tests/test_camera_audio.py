@@ -203,6 +203,12 @@ def test_temporal_candidates_require_explicit_shared_clock_and_never_claim_same_
         assert (await capture("c", "third", 10, uncertainty=None))["status"] == "unavailable"
         assert (await capture("c", "third", 10, reference="another-clock"))["candidates"] == []
         assert (await capture("d", "fourth", 20))["candidates"] == []
+        await capture("a", "first", 100)
+        await capture("a", "first", 100.1)
+        later = await capture("b", "second", 100.2)
+        assert later["candidates"] == [{"source_id": "a", "capture_id": "first"}]
+        assert later["status"] == "possible_overlap"
+        assert (await capture("c", "third", 100, reference="another-clock"))["candidates"] == []
         for index in range(40):
             await capture("d", str(index), 30 + index * 2)
         assert len(runtime._recent) == 32

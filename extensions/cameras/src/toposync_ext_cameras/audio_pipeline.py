@@ -65,18 +65,21 @@ class AudioFeaturesRuntime(TransformOperatorRuntime):
                 ]
                 candidates = [
                     {"source_id": source, "capture_id": capture}
-                    for source, capture, reference, previous in self._recent
-                    if source != source_id and reference == clock.synchronization_reference
-                    and any(max(start, other_start) <= min(end, other_end)
-                            for start, end in intervals for other_start, other_end in previous)
+                    for source, capture in dict.fromkeys(
+                        (source, capture) for source, capture, reference, previous in self._recent
+                        if source != source_id and reference == clock.synchronization_reference
+                        and any(max(start, other_start) <= min(end, other_end)
+                                for start, end in intervals for other_start, other_end in previous)
+                    )
                 ]
                 correlation = {
                     "status": "possible_overlap" if candidates else "no_overlap_in_recent_window",
                     "reason": "temporal_overlap_does_not_confirm_same_sound", "candidates": candidates,
-                    "retained_captures_limit": 32,
+                    "retained_blocks_limit": 32,
                 }
-                if intervals and not any(source == source_id and capture == capture_id for source, capture, _, _ in self._recent):
-                    self._recent.append((source_id, capture_id, clock.synchronization_reference, intervals))
+                block = (source_id, capture_id, clock.synchronization_reference, intervals)
+                if intervals and block not in self._recent:
+                    self._recent.append(block)
             result["correlation"] = correlation
         except (ValueError, TypeError, AttributeError):
             result = {"status": "unavailable", "reason": "invalid_audio_capture_contract", "windows": []}

@@ -342,3 +342,12 @@ Na receita com orientação, a cena armazenada conserva os pixels até a avalia�
 
 
 A receita de orientação limita as atualizações por sujeito a uma amostra a cada cinco segundos antes de preparar e armazenar a cena, alinhada ao intervalo do avaliador. Abertura e fechamento atravessam esse limitador. Eventos entre amostras não são avaliados; a receita não comprova orientação contínua nesse intervalo. A amostragem reduz gravações redundantes e não substitui medição de custo com resolução, duração e modelo reais.
+
+
+Audio temporal correlation retains at most 32 anomalous PCM blocks per
+`camera.audio_features` runtime (`retained_blocks_limit`), including later blocks
+from the same capture session. Candidates are unique source/capture pairs whose
+intervals overlap after declared uncertainty, with the same verified capture-clock
+reference. Retention is bounded by arrival count, not a guaranteed time horizon.
+Receipt clocks remain ineligible. Temporal overlap does not prove the same sound
+and does not merge occurrences or suppress notifications from different cameras.

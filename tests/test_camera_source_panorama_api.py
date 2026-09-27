@@ -1407,6 +1407,27 @@ def test_stop_failure_and_exception_are_sanitized(environment):
     assert "private-host" not in json.dumps(failed)
 
 
+def test_control_failure_uses_known_actionable_message(environment):
+    from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
+
+    client, fake, service, _ = environment
+
+    async def blocked(camera, output, **kwargs):
+        raise PanoramaCaptureError("external_automation_active")
+
+    service.scan_runner = blocked
+    response = client.post(BASE + "/jobs", json={
+        "idempotency_key": "automation-active", "operation": "verify_control",
+    })
+    failed = wait_done(client, response.json()["job"])
+    assert failed["status"] == "failed"
+    assert failed["error"] == {
+        "code": "external_automation_active",
+        "message": "Uma automação da câmera está ativa. Interrompa essa automação antes de gerar a panorâmica.",
+    }
+    assert fake.moves == 0
+
+
 def test_restart_interrupts_without_moving(tmp_path: Path):
     app, fake, service, _ = make_app(tmp_path)
     job_id = "a" * 32

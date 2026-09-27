@@ -2663,7 +2663,10 @@ class SourcePanoramaService:
                 error=detail
                 or {
                     "code": code,
-                    "message": "Não foi possível concluir a panorâmica. As imagens aproveitadas foram guardadas.",
+                    "message": _ISSUE_MESSAGES.get(
+                        code,
+                        "Não foi possível concluir a panorâmica. As imagens aproveitadas foram guardadas.",
+                    ),
                 },
             )
         finally:

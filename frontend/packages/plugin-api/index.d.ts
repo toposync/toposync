@@ -496,7 +496,18 @@ export type NavigableViewportProps = {
   onBlur?: () => void;
 };
 
+export type CameraRegionEditorProps = {
+  open: boolean;
+  cameraId: string;
+  sourceId: string;
+  values: { left: number; top: number; right: number; bottom: number };
+  onChange: (values: CameraRegionEditorProps["values"]) => void;
+  onClose: () => void;
+};
+
 export type HostUi = {
+  /** Draw a region in percent on a snapshot of the explicitly selected source. */
+  CameraRegionEditor?: (props: CameraRegionEditorProps) => import("react").ReactNode;
   NavigableViewport: (props: NavigableViewportProps) => import("react").ReactNode;
   Viewport2DReplica: (props: Viewport2DReplicaProps) => import("react").ReactNode;
   LiveViewPlayer?: (props: LiveViewPlayerProps) => import("react").ReactNode;

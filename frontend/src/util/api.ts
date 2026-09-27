@@ -5,6 +5,7 @@ export type EmitEventResponse = {
   stopped: boolean;
 };
 
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 import type { CompositionElement } from "@toposync/plugin-api";
 import type { Notification } from "@toposync/plugin-api";
 
@@ -2402,8 +2403,9 @@ export async function getCameraContexts(
   return res.json();
 }
 
-export async function fetchCameraSnapshot(cameraId: string, signal?: AbortSignal): Promise<Blob> {
-  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot`, { signal });
+export async function fetchCameraSnapshot(cameraId: string, signal?: AbortSignal, sourceId?: string): Promise<Blob> {
+  const query = sourceId ? `?${new URLSearchParams({ source_id: sourceId })}` : "";
+  const response = await fetch(resolveToposyncUrl(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot${query}`), { signal });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Snapshot failed: ${response.status}`);

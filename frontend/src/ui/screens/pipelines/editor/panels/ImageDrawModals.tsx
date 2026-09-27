@@ -6,7 +6,7 @@ import { Icon } from "../../../../Icon";
 import { Modal } from "../../../../Modal";
 
 export type SnapshotSource =
-  | { kind: "camera"; cameraId: string }
+  | { kind: "camera"; cameraId: string; sourceId?: string }
   | { kind: "rtsp"; url: string; username?: string; password?: string }
   | { kind: "pipeline_step"; request: PipelinePreviewFrameRequest };
 
@@ -53,7 +53,7 @@ function useSnapshotObjectUrl(open: boolean, source: SnapshotSource | null): Sna
     const load = async () => {
       const blob =
         source.kind === "camera"
-          ? await fetchCameraSnapshot(source.cameraId, controller.signal)
+          ? await fetchCameraSnapshot(source.cameraId, controller.signal, source.sourceId)
           : source.kind === "rtsp"
             ? await fetchRtspSnapshot(
                 { url: source.url, username: source.username, password: source.password },
@@ -91,6 +91,7 @@ function useSnapshotObjectUrl(open: boolean, source: SnapshotSource | null): Sna
     open,
     source?.kind,
     (source as any)?.cameraId,
+    (source as any)?.sourceId,
     (source as any)?.url,
     (source as any)?.username,
     (source as any)?.password,

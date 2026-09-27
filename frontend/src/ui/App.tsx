@@ -69,6 +69,7 @@ import {
 import { getPreviousPathname, navigate, replace, usePathname } from "./router";
 import { Viewport2D } from "./Viewport2D";
 import { NavigableViewport } from "./NavigableViewport";
+import { CropRectangleDrawModal } from "./screens/pipelines/editor/panels/ImageDrawModals";
 import { createMeasurementLineElementType } from "./editor/measurementLineElementType";
 import { builtinNotificationRenderers, notificationPriority } from "./notifications/pipelinesNotifications";
 import { attachEphemeralImage, createEphemeralImageSession, withoutEphemeralImage, type EphemeralImageLease } from "./notifications/ephemeralImage";
@@ -753,6 +754,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       i18n,
       ui: {
         NavigableViewport,
+        CameraRegionEditor: ({ open, cameraId, sourceId, values, onChange, onClose }) => sourceId ? (
+          <CropRectangleDrawModal open={open} onClose={onClose} units="percent" values={values} onChange={onChange}
+            snapshotSource={{ kind: "camera", cameraId, sourceId }} />
+        ) : null,
         Viewport2DReplica: ({
           session,
           className,

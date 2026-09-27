@@ -1184,3 +1184,53 @@ def test_doorbell_visitor_requires_discovered_signal_and_saves_disabled(tmp_path
         edges = pipeline["graph"]["edges"]
         assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "event_context" for edge in edges)
         assert any(edge["from"]["node"] == "event_context" and edge["to"]["node"] == "area" for edge in edges)
+
+
+def test_assistant_doorbell_uses_explicit_cached_signal_without_discovery(tmp_path, monkeypatch):
+    import asyncio
+    import time
+    from types import SimpleNamespace
+    from toposync_ext_ai.router import AiRouter
+    from toposync_ext_cameras.onvif.events import OnvifEventDescriptor
+
+    answer = {"preset": "doorbell_visitor", "camera_id": "cam1", "source_id": "main",
+              "composition_id": "yard", "area_id": "area-1",
+              "event_topic": "fixture/doorbell", "event_item_name": "Pressed"}
+    async def selection(self, **kwargs):
+        return answer
+    monkeypatch.setattr(AiRouter, "generate_local_json", selection)
+    with _create_client(tmp_path, monkeypatch, include_ai=True) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client, with_area=True)
+        manager = client.app.state.camera_onvif_event_manager
+        async def forbidden(*args, **kwargs):
+            raise AssertionError("Assistant must not discover or start camera")
+        monkeypatch.setattr(manager, "_ensure_runtime", forbidden)
+        route = "/api/ai/assistant/recipes/preview"
+        instruction = "Na área Gate, associe Campainha de ensaio à campainha e observe visitantes"
+        body = {"instruction": instruction}
+        missing = client.post(route, json=body)
+        assert missing.status_code == 200
+        assert "Descubra" in missing.json()["question"]
+        cached = SimpleNamespace(available=True, descriptors_loaded_at_ts=time.time(), task=None,
+                                 stop_event=asyncio.Event(), descriptors=[OnvifEventDescriptor(
+                                     topic="fixture/doorbell", item_name="Pressed", item_type="xs:boolean",
+                                     is_property=True, label="Campainha de ensaio")])
+        manager._runtimes["cam1"] = cached
+        ambiguous = client.post(route, json={"instruction": "Observe visitantes na campainha"})
+        assert "Qual sinal" in ambiguous.json()["question"]
+        answer["event_topic"] = "invented"
+        assert client.post(route, json=body).status_code == 422
+        answer["event_topic"] = "fixture/doorbell"
+        preview = client.post(route, json=body)
+        assert preview.status_code == 200, preview.text
+        proposal = preview.json()
+        assert any("Campainha de ensaio" in change for change in proposal["changes"])
+        applied = client.post("/api/ai/assistant/apply/" + proposal["proposal_id"])
+        assert applied.status_code == 200, applied.text
+        assert applied.json()["pipeline"]["enabled"] is False
+        assert _node_config(applied.json()["pipeline"], "camera.recent_onvif_event")["topic"] == "fixture/doorbell"
+        another = client.post(route, json=body).json()
+        cached.descriptors_loaded_at_ts -= 3601
+        assert client.post("/api/ai/assistant/apply/" + another["proposal_id"]).status_code == 409
+        assert manager.cached_boolean_descriptors("cam1") == []

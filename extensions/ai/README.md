@@ -201,3 +201,19 @@ Ollama usa contexto32768, saída limitada a8192tokens e retenção30s tanto para
 como para visão. Respostas incompletas e truncamento de contexto são recusados;
 essa garantia exige Ollama0.34.4 ou posterior. Os limites não constituem garantia
 de latência ou precisão; valide o modelo e as cenas do ambiente de implantação.
+
+### Visitante e campainha no assistente
+
+A receita exige câmera, área mapeada e associação explícita ao nome de um sinal
+booleano descoberto nas configurações da câmera. O assistente lê somente a
+ descoberta recente mantida em memória pelo gerenciador ONVIF; não inicia
+ descoberta, captura ou assinatura de eventos. A consulta do catálogo exige
+ também leitura de configurações, como a consulta de sinais da câmera.
+
+Sinal ausente ou expirado exige descoberta explícita na câmera. Um único sinal
+não implica campainha, e movimento não comprova acionamento. A prévia apresenta
+o nome escolhido; salvar revalida a descoberta sem contato com o dispositivo e
+mantém o fluxo desativado. A correlação temporal não identifica quem acionou e o
+indício visual de pacote não identifica profissão ou entrega. Cache desaparece
+no reinício e expira conforme o prazo do gerenciador. Suporte físico e precisão
+exigem evidência independente; testes controlados não os certificam.

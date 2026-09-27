@@ -913,6 +913,15 @@ class OnvifEventStateManager:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await runtime.task
 
+    def cached_boolean_descriptors(self, camera_id: str) -> list[dict[str, Any]]:
+        """Read fresh discovery only; never resolve a device or start a watcher."""
+        runtime = self._runtimes.get(camera_id)
+        if (runtime is None or not runtime.available or runtime.descriptors_loaded_at_ts <= 0
+                or not 0 <= time.time() - runtime.descriptors_loaded_at_ts <= self._descriptors_ttl_s):
+            return []
+        return [descriptor.as_dict() for descriptor in runtime.descriptors
+                if descriptor.is_property and descriptor.is_boolean and descriptor.item_name]
+
     async def list_descriptors(self, camera_id: str) -> dict[str, Any]:
         runtime = await self._ensure_runtime(camera_id)
         await self._ensure_descriptors(runtime)

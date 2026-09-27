@@ -5798,6 +5798,7 @@ class CamerasExtension(BaseExtension):
             request: Request,
             camera_id: str,
             body: CameraPipelinePresetRequest,
+            *, cached_events_only: bool = False,
         ) -> Pipeline:
             cid = str(camera_id or "").strip()
             if not cid:
@@ -5869,7 +5870,8 @@ class CamerasExtension(BaseExtension):
                 if not topic or not item_name:
                     raise HTTPException(400, "Choose the camera event corresponding to the doorbell")
                 try:
-                    available_events = await _services(request).call("cameras.onvif_events.list", camera_id=cid)
+                    available_events = ({"boolean_states": onvif_event_manager.cached_boolean_descriptors(cid)}
+                                        if cached_events_only else await _services(request).call("cameras.onvif_events.list", camera_id=cid))
                 except Exception as exc:
                     raise HTTPException(409, "Camera event capabilities could not be confirmed") from exc
                 descriptors = available_events.get("boolean_states", []) if isinstance(available_events, dict) else []
@@ -6028,14 +6030,17 @@ class CamerasExtension(BaseExtension):
         async def preview_camera_recipe_service(
             *, request: Request, camera_id: str, recipe: dict[str, Any],
         ) -> dict[str, Any]:
-            return await preview_camera_pipeline_from_preset(
-                request, camera_id, CameraPipelinePresetRequest.model_validate(recipe)
-            )
+            _require_auth(request, action="core:pipelines:read")
+            _require_auth(request, action="core:pipelines:compile")
+            body = CameraPipelinePresetRequest.model_validate(recipe).model_copy(update={"enabled": False})
+            pipeline = await prepare_camera_pipeline_from_preset(request, camera_id, body, cached_events_only=True)
+            return {"pipeline": pipeline.model_dump(mode="json")}
 
         services.register("cameras.pipelines.preview", preview_camera_recipe_service)
 
         async def camera_recipe_catalog(*, request: Request) -> dict[str, Any]:
             _require_auth(request, action="core:pipelines:read")
+            _require_auth(request, action="core:settings:read")
             ext = await _read_ext_settings(request)
             cfg = await _config_store(request).get_config()
             cameras = []
@@ -6055,8 +6060,11 @@ class CamerasExtension(BaseExtension):
                             areas.append({"id": element.id, "name": element.name,
                                           "composition_id": composition.id, "composition_name": composition.name})
                 cameras.append({"id": cid, "name": camera.get("name") or cid,
-                                "sources": sources, "areas": areas})
+                                "sources": sources, "areas": areas,
+                                "event_signals": [{key: item.get(key, "") for key in ("topic", "item_name", "label")}
+                                                  for item in onvif_event_manager.cached_boolean_descriptors(cid)]})
             return {"cameras": cameras, "recipes": {
+                "doorbell_visitor": "Visitante na área durante sinal associado explicitamente à campainha; não confirma quem acionou, identidade ou profissão",
                 "cat_litter_use": "Atividade observada de gato na caixa de areia; não comprova eliminação",
                 "cat_drinking": "Atividade observada de gato bebendo água; não mede ingestão",
                 "area_presence": "Pessoa, gato ou cão em área mapeada; sem inferir idade ou identidade",

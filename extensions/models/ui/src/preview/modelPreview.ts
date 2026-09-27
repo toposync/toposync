@@ -2,7 +2,7 @@ import * as THREEStandalone from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 import { MAXIMUM_MODEL_SCALE, MINIMUM_MODEL_SCALE } from "../constants";
-import { disposeModel, validateModel } from "../validation";
+import { disposeModel, orientModel, validateModel } from "../validation";
 import { clamp } from "../parsing";
 import type { ModelPreviewResult, Vector3 } from "../types";
 
@@ -68,7 +68,7 @@ function addLights(scene: THREEStandalone.Scene): void {
 
 export async function generateModelTopDownPreview(
   modelUrl: string,
-  options?: { renderSize?: number; paddingRatio?: number },
+  options?: { renderSize?: number; paddingRatio?: number; orientation?: Vector3 },
 ): Promise<ModelPreviewResult> {
   const maximumRenderSize = Math.max(128, Math.min(1024, options?.renderSize ?? 640));
   const paddingRatio = clamp(options?.paddingRatio ?? 0.08, 0, 0.5);
@@ -80,7 +80,7 @@ export async function generateModelTopDownPreview(
 
   let renderer: THREEStandalone.WebGLRenderer | undefined;
   try {
-    const workingModel = model;
+    const workingModel = orientModel(model, options?.orientation ?? { x: 0, y: 0, z: 0 });
     workingModel.updateMatrixWorld(true);
 
     const boundingBox = validateModel(workingModel);

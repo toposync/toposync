@@ -37,7 +37,7 @@ export function validateModel(model: THREE.Object3D): THREE.Box3 {
       }
     }
   });
-  const bounds = new THREE.Box3().setFromObject(model);
+  const bounds = new THREE.Box3().setFromObject(model, true);
   const size = bounds.getSize(new THREE.Vector3());
   if (vertices === 0 || ![...bounds.min.toArray(), ...bounds.max.toArray()].every(Number.isFinite) || size.length() < 1e-6) {
     throw new Error("Model has no finite geometry");
@@ -55,4 +55,12 @@ export function disposeModel(model: THREE.Object3D): void {
       material.dispose();
     }
   });
+}
+
+/** Rotate around the imported origin without overwriting the GLTF scene transform. */
+export function orientModel(model: THREE.Object3D, orientation: { x: number; y: number; z: number }): THREE.Group {
+  const oriented = new THREE.Group();
+  oriented.rotation.set(orientation.x, orientation.y, orientation.z);
+  oriented.add(model);
+  return oriented;
 }

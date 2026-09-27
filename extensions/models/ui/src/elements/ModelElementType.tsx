@@ -1,10 +1,12 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { resolveToposyncUrl, type BoundsXZ, type CompositionElement, type CompositionElementPatch, type ElementType, type HostI18n } from "@toposync/plugin-api";
 
 import { MAXIMUM_MODEL_SCALE, MINIMUM_MODEL_SCALE, MODEL_ELEMENT_TYPE_ID } from "../constants";
 import { clamp, readNumber, readScale, readString, readVector3, scaleFromKnownHeight } from "../parsing";
 import { createGltfModelRuntime } from "../runtime/gltfModel";
+import { generateModelTopDownPreview } from "../preview/modelPreview";
+import { uploadToFilesDir } from "../api/filesApi";
 import type { Vector3 } from "../types";
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
@@ -191,6 +193,38 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
   const generated = (element.props as any).generation?.kind === "generated_approximation";
   const animationEnabled = readBoolean((element.props as any).animation_enabled, false);
   const heightMeters = readNumber((element.position as any).y, 0);
+  const orientation = readVector3((element.props as any).orientation, { x: 0, y: 0, z: 0 });
+  const [angles, setAngles] = useState(() => ({ x: orientation.x * 180 / Math.PI, y: orientation.y * 180 / Math.PI, z: orientation.z * 180 / Math.PI }));
+  const [orienting, setOrienting] = useState(false);
+  const [orientationError, setOrientationError] = useState(false);
+  const operation = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setOrienting(false); setOrientationError(false);
+    setAngles({ x: orientation.x * 180 / Math.PI, y: orientation.y * 180 / Math.PI, z: orientation.z * 180 / Math.PI });
+    return () => { operation.current?.abort(); operation.current = null; };
+  }, [element.id, orientation.x, orientation.y, orientation.z]);
+
+  async function applyOrientation() {
+    if (operation.current || !Object.values(angles).every(value => Number.isFinite(value) && Math.abs(value) <= 180)) return;
+    const controller = new AbortController();
+    operation.current = controller;
+    setOrienting(true); setOrientationError(false);
+    const next = { x: angles.x * Math.PI / 180, y: angles.y * Math.PI / 180, z: angles.z * Math.PI / 180 };
+    try {
+      const url = resolveToposyncUrl(`/files/${encodeURIComponent(directory)}/${encodeURIComponent(modelFilename)}`);
+      const preview = await generateModelTopDownPreview(url, { orientation: next });
+      controller.signal.throwIfAborted();
+      const blob = await (await fetch(preview.dataUrl, { signal: controller.signal })).blob();
+      const uploaded = await uploadToFilesDir(blob, { dir: directory, filename: `preview-${crypto.randomUUID()}.png`, signal: controller.signal });
+      controller.signal.throwIfAborted();
+      update({ props: { orientation: next, size: preview.size, center: preview.center, min_y: preview.minY, preview: uploaded.filename, reference_height: null } });
+    } catch {
+      if (!controller.signal.aborted) setOrientationError(true);
+    } finally {
+      if (operation.current === controller) { operation.current = null; setOrienting(false); }
+    }
+  }
+
 
   const previewUrl =
     directory && previewFilename
@@ -234,12 +268,12 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
           min={size.y * MINIMUM_MODEL_SCALE}
           max={size.y * MAXIMUM_MODEL_SCALE}
           step="any"
-          key={scale}
-          defaultValue={generated && !(element.props as any).reference_height ? "" : Number(finalSize.y.toPrecision(8))}
+          key={`${scale}:${size.y}:${(element.props as any).reference_height}`}
+          defaultValue={!(element.props as any).reference_height ? "" : Number(finalSize.y.toPrecision(8))}
           aria-invalid={heightError}
           aria-describedby="model-height-hint"
           onBlur={(event) => {
-            if (generated && !event.target.value.trim()) { setHeightError(false); return; }
+            if (!event.target.value.trim()) { setHeightError(false); return; }
             const next = scaleFromKnownHeight(size.y, Number(event.target.value));
             setHeightError(next === null);
             if (next !== null) update({ props: { scale: next, reference_height: Number(event.target.value) } });
@@ -251,6 +285,22 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
       </div>
       <details>
         <summary>{t("ext.models.editor.advanced")}</summary>
+        <form onSubmit={(event) => { event.preventDefault(); void applyOrientation(); }}>
+          <fieldset disabled={orienting} style={{ border: 0, padding: 0, margin: 0 }}>
+            <legend>{t("ext.models.editor.orientation")}</legend>
+            <div className="rowWrap">
+              {(["x", "z", "y"] as const).map(axis => <div className="field" key={axis} style={{ flex: 1, minWidth: 140 }}>
+                <label className="label" htmlFor={`model-orientation-${axis}`}>{t(`ext.models.editor.orientation_${axis}`)}</label>
+                <input className="input" style={{ minWidth: 0, width: "100%", boxSizing: "border-box" }} id={`model-orientation-${axis}`} type="number" min={-180} max={180} step="any" required
+                  value={Number.isFinite(angles[axis]) ? angles[axis] : ""} onChange={event => setAngles({ ...angles, [axis]: event.target.valueAsNumber })} />
+              </div>)}
+            </div>
+            <p>{t("ext.models.editor.orientation_hint")}</p>
+            <button className="chipButton" type="submit">{t("ext.models.editor.apply_orientation")}</button>
+          </fieldset>
+          <p role="status">{orienting ? t("ext.models.editor.processing") : ""}</p>
+          {orientationError ? <p role="alert">{t("ext.models.editor.orientation_failed")}</p> : null}
+        </form>
       <div className="rowWrap">
         <div className="field" style={{ flex: 1, minWidth: 180 }}>
           <label className="label" htmlFor="model-scale">{t("ext.models.editor.scale")}</label>

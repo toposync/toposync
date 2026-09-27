@@ -92,3 +92,9 @@ python -m toposync_ext_models.install_triposr /absolute/path/to/runtime --check
 ```
 
 The check verifies asset hashes, exact dependency versions, extractor source revision, dependency compatibility, provider import and a real CPU mesh extraction. It loads no model and does not certify generation quality. Success writes `installation.json` on installation and removes the incomplete marker. Commands have bounded timeouts and their process groups are reaped on timeout/interruption; logs stay in the chosen runtime directory. Other operating systems/architectures remain unqualified by this installer.
+
+### Correct object orientation
+
+Open **Orientation and scale** in the model editor. Adjust forward/side tilt or turn, then **Apply orientation**. The original GLB/GLTF stays unchanged. The same transform is applied before computing the top-down preview and rendering the model; dimensions, footprint and base are updated together after preview upload succeeds. The rotated static geometry is recentered and rests at the selected height. A known-height reference is cleared because tilting changes the vertical dimension.
+
+Closing the editor aborts upload and discards late results; failure leaves the previously applied model intact. Already uploaded previews remain stored, as with imports. Ground contact is computed from static vertices, not guaranteed throughout animation. Orientation is manual: generation does not establish gravity or real-world dimensions.

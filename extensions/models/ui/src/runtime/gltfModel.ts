@@ -3,10 +3,10 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { resolveToposyncUrl } from "@toposync/plugin-api";
 
 import { readNumber, readScale, readString, readVector3 } from "../parsing";
-import { disposeModel, validateModel } from "../validation";
+import { disposeModel, orientModel, validateModel } from "../validation";
 import type { Vector3 } from "../types";
 
-type ModelMeta = { center: Vector3; minY: number };
+type ModelMeta = { center: Vector3; minY: number; orientation: Vector3 };
 
 export type GltfModelRuntime = {
   object: ThreeTypes.Group;
@@ -82,7 +82,7 @@ export function createGltfModelRuntime(
     }
     if (current) {
       try {
-        mixer.uncacheRoot(current);
+        mixer.uncacheRoot(mixer.getRoot());
       } catch {
         // ignore
       }
@@ -144,12 +144,13 @@ export function createGltfModelRuntime(
         }
       });
 
-      const boundingBox = validateModel(model);
+      const oriented = orientModel(model, meta?.orientation ?? { x: 0, y: 0, z: 0 });
+      const boundingBox = validateModel(oriented);
       const centerVector = boundingBox.getCenter(new THREE.Vector3());
       const minY = boundingBox.min.y;
       const center = meta?.center ?? { x: centerVector.x, y: centerVector.y, z: centerVector.z };
       const lift = meta?.minY ?? minY;
-      model.position.sub(new THREE.Vector3(center.x, lift, center.z));
+      oriented.position.sub(new THREE.Vector3(center.x, lift, center.z));
 
       if (current) {
         group.remove(current);
@@ -158,9 +159,9 @@ export function createGltfModelRuntime(
         current = null;
       }
 
-      current = model;
+      current = oriented;
       pendingModel = null;
-      group.add(model);
+      group.add(oriented);
       placeholder.visible = false;
 
       if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
@@ -194,6 +195,7 @@ export function createGltfModelRuntime(
     const size = readVector3(rec.size, { x: 1, y: 1, z: 1 });
     const center = readVector3(rec.center, { x: 0, y: 0, z: 0 });
     const minY = readNumber(rec.min_y, 0);
+    const orientation = readVector3(rec.orientation, { x: 0, y: 0, z: 0 });
 
     group.scale.setScalar(scale);
     placeholder.scale.set(
@@ -217,8 +219,9 @@ export function createGltfModelRuntime(
       }
       return;
     }
-    if (url && url !== lastUrl) {
-      lastUrl = url;
+    const modelKey = `${url}:${JSON.stringify(orientation)}`;
+    if (url && modelKey !== lastUrl) {
+      lastUrl = modelKey;
       clearErrorLabel();
       if (current) {
         group.remove(current);
@@ -227,7 +230,7 @@ export function createGltfModelRuntime(
         current = null;
       }
       placeholder.visible = true;
-      void load(url, { center, minY });
+      void load(url, { center, minY, orientation });
     }
   }
 

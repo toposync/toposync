@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import * as THREE from "three";
 import { scaleFromKnownHeight } from "./parsing";
-import { disposeModel, MAXIMUM_TEXTURE_PIXELS, MAXIMUM_MODEL_VERTICES, validateModel } from "./validation";
+import { disposeModel, orientModel, MAXIMUM_TEXTURE_PIXELS, MAXIMUM_MODEL_VERTICES, validateModel } from "./validation";
 
 test("known height preserves proportions and floor contact after serialization", () => {
   const object = new THREE.Mesh(new THREE.BoxGeometry(2, 4, 6));
@@ -66,9 +66,9 @@ test("a rejected replacement removes the previous model and displays unavailable
   try {
     runtime.updateFromProps({ dir: "test", model: "valid.gltf" });
     await new Promise(setImmediate);
-    assert.ok(runtime.object.children.includes(scene));
+    assert.ok(runtime.object.getObjectById(scene.id) !== undefined);
     runtime.updateFromProps({ dir: "test", model: "invalid.gltf" });
-    assert.ok(!runtime.object.children.includes(scene));
+    assert.ok(runtime.object.getObjectById(scene.id) === undefined);
     await new Promise(setImmediate);
     assert.deepEqual(labels, ["Modelo indisponível"]);
     assert.equal(runtime.object.children.filter((child) => child.visible).length, 1);
@@ -78,4 +78,56 @@ test("a rejected replacement removes the previous model and displays unavailable
     Object.defineProperty(globalThis, "document", { configurable: true, value: originalDocument });
     console.error = originalError;
   }
+});
+
+test("orientation preserves source transforms and updates precise floor and dimensions", () => {
+  const model = new THREE.Mesh(new THREE.BoxGeometry(2, 4, 6));
+  model.position.set(3, 5, 7);
+  const rotated = orientModel(model, { x: Math.PI / 2, y: 0, z: 0 });
+  const bounds = validateModel(rotated);
+  const size = bounds.getSize(new THREE.Vector3());
+  assert.ok(Math.abs(size.x - 2) < 1e-6 && Math.abs(size.y - 6) < 1e-6 && Math.abs(size.z - 4) < 1e-6);
+  assert.deepEqual(model.position.toArray(), [3, 5, 7]);
+  const center = bounds.getCenter(new THREE.Vector3());
+  rotated.position.set(-center.x, -bounds.min.y, -center.z);
+  rotated.scale.setScalar(1);
+  const grounded = validateModel(rotated);
+  assert.ok(Math.abs(grounded.min.y) < 1e-6);
+  assert.ok(Math.abs(grounded.getCenter(new THREE.Vector3()).x) < 1e-6);
+  disposeModel(rotated);
+});
+
+test("runtime reloads orientation for the same model and keeps its floor at zero", async () => {
+  const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+  const { createGltfModelRuntime } = await import("./runtime/gltfModel");
+  const original = GLTFLoader.prototype.loadAsync;
+  let loads = 0;
+  GLTFLoader.prototype.loadAsync = async () => {
+    loads++;
+    const scene = new THREE.Group();
+    scene.add(new THREE.Mesh(new THREE.BoxGeometry(2, 4, 6)));
+    return { scene, scenes: [scene], animations: [] } as any;
+  };
+  const runtime = createGltfModelRuntime(THREE);
+  try {
+    const props = { dir: "fixture", model: "same.glb", scale: 0.5, center: { x: 0, y: 0, z: 0 } };
+    runtime.updateFromProps({ ...props, orientation: { x: Math.PI / 2, y: 0, z: 0 }, min_y: -3 });
+    await new Promise(setImmediate);
+    let bounds = new THREE.Box3().setFromObject(runtime.object, true);
+    assert.ok(Math.abs(bounds.min.y) < 1e-6 && Math.abs(bounds.max.y - 3) < 1e-6);
+    runtime.updateFromProps({ ...props, orientation: { x: 0, y: 0, z: 0 }, min_y: -2 });
+    await new Promise(setImmediate);
+    bounds = new THREE.Box3().setFromObject(runtime.object, true);
+    assert.equal(loads, 2);
+    assert.ok(Math.abs(bounds.min.y) < 1e-6 && Math.abs(bounds.max.y - 2) < 1e-6);
+  } finally { runtime.dispose(); GLTFLoader.prototype.loadAsync = original; }
+});
+
+test("tilted sparse geometry uses vertex bounds rather than rotated bounding-box corners", () => {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0, 2, 0, 0, 0, 2, 2], 3));
+  const rotated = orientModel(new THREE.Mesh(geometry), { x: 0, y: 0, z: Math.PI / 4 });
+  const bounds = validateModel(rotated);
+  assert.ok(Math.abs(bounds.max.y - Math.SQRT2) < 1e-6);
+  disposeModel(rotated);
 });

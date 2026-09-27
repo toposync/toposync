@@ -1,5 +1,13 @@
 export const modelsTranslations = {
   en: {
+    "ext.models.editor.orientation": "Object orientation",
+    "ext.models.editor.orientation_x": "Forward tilt (degrees)",
+    "ext.models.editor.orientation_z": "Side tilt (degrees)",
+    "ext.models.editor.orientation_y": "Turn (degrees)",
+    "ext.models.editor.orientation_hint": "Adjust the object to stand correctly. Applying updates its preview, dimensions and base; enter the known height again if needed.",
+    "ext.models.editor.apply_orientation": "Apply orientation",
+    "ext.models.editor.orientation_failed": "Could not update orientation. The previous model was kept.",
+
     "ext.models.editor.generating": "Generating a 3D approximation locally… This may take a few minutes.",
     "ext.models.editor.cancel": "Cancel",
     "ext.models.editor.close": "Close",
@@ -24,7 +32,7 @@ export const modelsTranslations = {
     "ext.models.editor.known_height": "Known object height (meters)",
     "ext.models.editor.height_hint": "Uses your reference height to scale all dimensions. Geometry is not a measurement.",
     "ext.models.editor.invalid_height": "Enter a positive height within the supported scale range.",
-    "ext.models.editor.advanced": "Advanced scale",
+    "ext.models.editor.advanced": "Orientation and scale",
     "ext.models.error.too_large": "Selected model files exceed 64 MiB.",
     "ext.models.editor.play_animations": "Play model animations",
     "ext.models.editor.height": "Height",
@@ -38,6 +46,14 @@ export const modelsTranslations = {
     "ext.models.error.pick_entry": "Select a GLB/GLTF model or one object image with a transparent background.",
   },
   "pt-BR": {
+    "ext.models.editor.orientation": "Orientação do objeto",
+    "ext.models.editor.orientation_x": "Inclinação frontal (graus)",
+    "ext.models.editor.orientation_z": "Inclinação lateral (graus)",
+    "ext.models.editor.orientation_y": "Giro (graus)",
+    "ext.models.editor.orientation_hint": "Ajuste o objeto para a posição correta. Ao aplicar, prévia, dimensões e base são atualizadas; informe novamente a altura conhecida se necessário.",
+    "ext.models.editor.apply_orientation": "Aplicar orientação",
+    "ext.models.editor.orientation_failed": "Não foi possível atualizar a orientação. O modelo anterior foi mantido.",
+
     "ext.models.editor.generating": "Gerando uma aproximação 3D localmente… Pode levar alguns minutos.",
     "ext.models.editor.cancel": "Cancelar",
     "ext.models.editor.close": "Fechar",
@@ -62,7 +78,7 @@ export const modelsTranslations = {
     "ext.models.editor.known_height": "Altura conhecida do objeto (metros)",
     "ext.models.editor.height_hint": "Usa sua altura de referência para ajustar todas as dimensões. A geometria não é uma medição.",
     "ext.models.editor.invalid_height": "Informe uma altura positiva dentro do intervalo de escala permitido.",
-    "ext.models.editor.advanced": "Escala avançada",
+    "ext.models.editor.advanced": "Orientação e escala",
     "ext.models.error.too_large": "Os arquivos selecionados excedem 64 MiB.",
     "ext.models.editor.play_animations": "Reproduzir animações do modelo",
     "ext.models.editor.height": "Altura",

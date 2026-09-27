@@ -164,7 +164,14 @@ Falha do modelo conserva somente fontes atuais dentro da seleção. Respostas
 usam `Cache-Control: private, no-store`. Biometria, galeria e payload bruto nunca
 entram no modelo. A recuperação visual pode ordenar imagens, mas a resposta
 continua extrativa de títulos/descrições, sem nova interpretação visual.
-Os controles desses filtros no assistente ainda precisam de integração visual.
+Na interface, “Restringir busca e escolher modo” abre seletores de pessoa/pet,
+câmera/área e recuperação textual/visual. Opções vêm da galeria autorizada e dos
+metadados do histórico; falha de carregamento não apaga seleção ativa. Trocar
+perfil de identidade restaura confirmação humana. Mudanças de pergunta/filtro,
+curadoria e retorno de foco invalidam resultados; respostas antigas são
+ignoradas após cancelamento do consumo HTTP. Isso não certifica interrupção do
+processamento no servidor. Erros de acesso, associação alterada e seleção
+indisponível são distintos. A ação principal continua “Consultar acontecimentos”.
 
 A interface apresenta os campos como citações, liga cada um ao registro original
 e conserva horário de criação e imagem disponível. Durações só aparecem quando

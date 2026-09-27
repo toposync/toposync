@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
+  Notification,
+  NotificationRenderer,
   CompositionElement,
   CompositionElementPatch,
   EditorFileDropEvent,
@@ -24,6 +26,8 @@ import { Viewport2D } from "../Viewport2D";
 import { drawMeasurementLine2D, MEASUREMENT_LINE_ELEMENT_TYPE_ID } from "../editor/measurementLineElementType";
 
 type Props = {
+  activeNotification: Notification | null;
+  notificationRenderers: NotificationRenderer[];
   compositionName: string;
   georeference: unknown;
   onSaveGeoreference: (value: Georeference, expected: unknown) => Promise<void>;
@@ -214,6 +218,8 @@ function finiteOrder(value: number | undefined, fallback: number): number {
 
 export function CompositionEditorScreen({
   compositionName,
+  activeNotification,
+  notificationRenderers,
   georeference,
   onSaveGeoreference,
   compositions,
@@ -787,7 +793,7 @@ export function CompositionEditorScreen({
 
   return (
     <div className="screenRoot">
-      {isMapOpen && <GeoreferenceEditor value={georeference} elements={elements} elementTypesById={elementTypesById} onSave={onSaveGeoreference} onClose={() => setIsMapOpen(false)} />}
+      {isMapOpen && <GeoreferenceEditor activeNotification={activeNotification} notificationRenderers={notificationRenderers} compositionId={activeCompositionId} value={georeference} elements={elements} elementTypesById={elementTypesById} onSave={onSaveGeoreference} onClose={() => setIsMapOpen(false)} />}
       <Viewport2D
         elements={elements}
         elementTypesById={elementTypesById}

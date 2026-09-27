@@ -28,6 +28,8 @@ const translationsByLocale: Record<Locale, Translations> = {
   en: {
     "core.map.map": "Map",
     "core.map.title": "Composition on the map",
+    "core.map.event_recorded": "Recorded position of the selected occurrence (not current presence):",
+    "core.map.event_unlocated": "Selected occurrence has no location available in this composition:",
     "core.map.drag": "Drag the composition origin",
     "core.map.offline": "Background map unavailable. The local composition remains available.",
     "core.map.intro": "Find the region on the map and click to anchor the floor plan. Drag the cross to adjust its position.",
@@ -2591,6 +2593,8 @@ const translationsByLocale: Record<Locale, Translations> = {
   "pt-BR": {
     "core.map.map": "Mapa",
     "core.map.title": "Composição no mapa",
+    "core.map.event_recorded": "Posição registrada da ocorrência selecionada (não confirma presença atual):",
+    "core.map.event_unlocated": "Ocorrência selecionada sem localização disponível nesta composição:",
     "core.map.drag": "Arraste a origem da composição",
     "core.map.offline": "Mapa de fundo indisponível. A composição local continua disponível.",
     "core.map.intro": "Encontre a região no mapa e clique para ancorar a planta. Arraste a cruz para ajustar a posição.",

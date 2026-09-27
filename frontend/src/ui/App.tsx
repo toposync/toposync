@@ -1711,6 +1711,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         />
       ) : screen === "editor" ? (
         <CompositionEditorScreen
+          activeNotification={activeNotification}
+          notificationRenderers={notificationRenderers}
           georeference={composition.meta?.georeference}
           onSaveGeoreference={async (georeference, expected) => {
             const snapshot = compositionRef.current;

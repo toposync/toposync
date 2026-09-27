@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Vector2 } from "three";
-import type { CompositionElement, ElementType, Viewport2DContext } from "@toposync/plugin-api";
+import type { CompositionElement, ElementType, Notification, Notification2DOverlay, NotificationRenderer, Viewport2DContext } from "@toposync/plugin-api";
 import { localToGeographic, longitudeNear, readGeoreference, type Georeference } from "../util/georeference";
 import { Modal } from "./Modal";
 import { i18n } from "../util/i18n";
@@ -10,11 +10,12 @@ import { i18n } from "../util/i18n";
 const initial: Georeference = { version: 1, latitude: 0, longitude: 0, rotationDegrees: 0, scale: 1, axes: "x-east-z-south", units: "metres" };
 // Configuração do provedor separada da geometria da composição.
 const tiles = { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' };
-export function GeoreferenceEditor({ value, elements, elementTypesById, onSave, onClose }: {
+export function GeoreferenceEditor({ activeNotification, notificationRenderers, compositionId, value, elements, elementTypesById, onSave, onClose }: {
+  activeNotification: Notification | null; notificationRenderers: NotificationRenderer[]; compositionId: string;
   value: unknown; elements: CompositionElement[]; elementTypesById: Record<string, ElementType>;
   onSave: (value: Georeference, expected: unknown) => Promise<void>; onClose: () => void;
 }): React.ReactElement {
-  const { t } = i18n.useI18n();
+  const { t, locale } = i18n.useI18n();
   const expected = useRef(value);
   const [reference, setReference] = useState(() => readGeoreference(value) ?? initial);
   const [background, setBackground] = useState(false);
@@ -24,6 +25,17 @@ export function GeoreferenceEditor({ value, elements, elementTypesById, onSave, 
   const canvas = useRef<HTMLCanvasElement>(null);
   const map = useRef<L.Map | null>(null);
   const anchor = useRef<L.Marker | null>(null);
+  const eventPin = useMemo(() => {
+    if (!activeNotification) return null;
+    const renderer = notificationRenderers.find(item => item.type === activeNotification.type);
+    let overlay: Notification2DOverlay | null | undefined;
+    try {
+      overlay = renderer?.create2DOverlay?.({ compositionId, elements }, activeNotification, { openImage: () => undefined });
+      const pin = overlay?.pin();
+      return pin && Number.isFinite(pin.x) && Number.isFinite(pin.z) && Math.hypot(pin.x, pin.z) * reference.scale <= 20000 ? pin : null;
+    } catch { return null; }
+    finally { overlay?.dispose?.(); }
+  }, [activeNotification, notificationRenderers, compositionId, elements, reference.scale]);
   useEffect(() => {
     if (!container.current) return;
     const instance = L.map(container.current, { attributionControl: true }).setView([reference.latitude, reference.longitude], 19);
@@ -78,19 +90,24 @@ export function GeoreferenceEditor({ value, elements, elementTypesById, onSave, 
         else { context.fillStyle = "#1673c9"; context.beginPath(); context.arc(element.position.x * scale, element.position.z * scale, 5, 0, Math.PI * 2); context.fill(); }
         context.restore();
       }
+      if (eventPin) {
+        context.beginPath(); context.arc(eventPin.x * scale, eventPin.z * scale, 7, 0, Math.PI * 2);
+        context.fillStyle = "#fbbf24"; context.fill(); context.strokeStyle = "#92400e"; context.lineWidth = 2; context.stroke();
+      }
     }
     draw();
     instance.on("move zoom resize", draw);
     const output = canvas.current;
     output.addEventListener("toposync:invalidate", draw);
     return () => { instance.off("move zoom resize", draw); output.removeEventListener("toposync:invalidate", draw); };
-  }, [reference, elements, elementTypesById]);
+  }, [reference, elements, elementTypesById, eventPin]);
   return <Modal open title={t("core.map.title")} onClose={onClose} panelStyle={{ width: "min(960px, 96vw)" }}>
     <p>{t("core.map.intro")}</p>
     <div style={{ position: "relative", height: "min(52vh, 480px)", minHeight: 220 }}>
       <div ref={container} aria-label={t("core.map.aria")} style={{ height: "100%", background: "#e4e8ec" }} />
       <canvas ref={canvas} aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 450 }} />
     </div>
+    {activeNotification && <p role="status">{eventPin ? t("core.map.event_recorded") : t("core.map.event_unlocated")} {activeNotification.title}{activeNotification.createdAt && Number.isFinite(Date.parse(activeNotification.createdAt)) && <> · <time dateTime={activeNotification.createdAt}>{new Date(activeNotification.createdAt).toLocaleString(locale)}</time></>}</p>}
     <label style={{ display: "block", margin: "12px 0" }}><input type="checkbox" checked={background} onChange={event => setBackground(event.target.checked)} /> {t("core.map.background")}</label>
     <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
       <label>{t("core.map.orientation")}: {reference.rotationDegrees}°<input aria-label={t("core.map.orientation_aria")} type="range" min={-180} max={180} value={reference.rotationDegrees} onChange={event => setReference({ ...reference, rotationDegrees: Number(event.target.value) })} /></label>

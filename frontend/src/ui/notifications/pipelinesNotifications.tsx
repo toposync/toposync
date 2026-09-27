@@ -309,7 +309,7 @@ function resolveTrailEntryPoint(entry: unknown, fallbackCompositionId: string | 
   );
 }
 
-function resolveTrailPoints(notification: Notification): Array<{ x: number; z: number; compositionId: string | null }> | null {
+function resolveUnscopedTrailPoints(notification: Notification): Array<{ x: number; z: number; compositionId: string | null }> | null {
   const payload = asRecord(notification.payload);
   const data = asRecord(payload.data);
   const fallbackCompositionId = readCompositionId(payload, data);
@@ -326,6 +326,11 @@ function resolveTrailPoints(notification: Notification): Array<{ x: number; z: n
 
   const point = resolveWorldPoint(notification);
   return point ? [point] : null;
+}
+
+function resolveTrailPoints(notification: Notification, compositionId: string | undefined): WorldPoint[] | null {
+  const points = resolveUnscopedTrailPoints(notification);
+  return compositionId && points?.length && points.every(point => point.compositionId === compositionId) ? points : null;
 }
 
 function createHaloTexture(THREE: Scene3DContext["THREE"]): import("three").Texture {
@@ -355,10 +360,8 @@ function createPipelines3DOverlay(
   notification: Notification,
   actions: NotificationOverlayActions,
 ): Notification3DOverlay | null {
-  const trail = resolveTrailPoints(notification);
+  const trail = resolveTrailPoints(notification, ctx.compositionId);
   if (!trail?.length) return null;
-  const lastPoint = trail[trail.length - 1] ?? null;
-  if (ctx.compositionId && lastPoint?.compositionId && lastPoint.compositionId !== ctx.compositionId) return null;
 
   const { THREE } = ctx;
   const group = new THREE.Group();
@@ -507,23 +510,6 @@ function createPipelines3DOverlay(
     if (lastX != null && lastZ != null) markerGroup.position.set(lastX, 0, lastZ);
   }
 
-  function append(x: number, z: number): void {
-    const eps2 = 0.000_001;
-    if (lastX != null && lastZ != null) {
-      const dx = x - lastX;
-      const dz = z - lastZ;
-      if (dx * dx + dz * dz <= eps2) return;
-    }
-    lastX = x;
-    lastZ = z;
-
-    if (trailPoints.length >= maxPoints) trailPoints.shift();
-    trailPoints.push(new THREE.Vector3(x, 0.055, z));
-    rebuildTrailGeometry();
-
-    markerGroup.position.set(x, 0, z);
-  }
-
   function applyStyleFromNotification(next: Notification): void {
     const payload = asRecord(next.payload);
     const prio = notificationPriority(next);
@@ -553,6 +539,7 @@ function createPipelines3DOverlay(
   return {
     object: group,
     tick: (deltaSeconds) => {
+      if (!group.visible) return false;
       elapsed += deltaSeconds;
 
       for (const ring of pulseRings) {
@@ -569,18 +556,9 @@ function createPipelines3DOverlay(
       return true;
     },
     update: (next) => {
-      const nextTrail = resolveTrailPoints(next);
-      const nextLast = nextTrail?.length ? nextTrail[nextTrail.length - 1] ?? null : null;
-      if (nextLast && (!ctx.compositionId || !nextLast.compositionId || nextLast.compositionId === ctx.compositionId)) {
-        writeTrail(nextTrail ?? []);
-      } else {
-        const nextPoint = resolveWorldPoint(next);
-        if (nextPoint) {
-          if (!ctx.compositionId || !nextPoint.compositionId || nextPoint.compositionId === ctx.compositionId) {
-            append(nextPoint.x, nextPoint.z);
-          }
-        }
-      }
+      const nextTrail = resolveTrailPoints(next, ctx.compositionId);
+      group.visible = Boolean(nextTrail?.length);
+      if (nextTrail?.length) writeTrail(nextTrail);
       applyStyleFromNotification(next);
     },
     onPointerEvent: (event) => {
@@ -710,11 +688,10 @@ function createPipelines2DOverlay(
   let current: Notification = notification;
 
   function compute(): Notification2DPin | null {
-    const trail = resolveTrailPoints(current);
+    const trail = resolveTrailPoints(current, ctx.compositionId);
     if (!trail?.length) return null;
     const last = trail[trail.length - 1] ?? null;
     if (!last) return null;
-    if (ctx.compositionId && last.compositionId && last.compositionId !== ctx.compositionId) return null;
 
     const payload = asRecord(current.payload);
     const lifecycle = asString(payload.lifecycle, "").trim().toLowerCase();

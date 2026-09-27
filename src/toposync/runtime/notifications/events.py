@@ -87,6 +87,13 @@ class EventBroadcaster:
             try:
                 q.put_nowait(outgoing)
             except asyncio.QueueFull:
+                if subscription.notification_id is None:
+                    # Lost durable events require an authoritative history refresh.
+                    while not q.empty():
+                        q.get_nowait()
+                    q.put_nowait({"op": "resync"})
+                    q.put_nowait(outgoing)
+                    continue
                 try:
                     _ = q.get_nowait()
                 except asyncio.QueueEmpty:

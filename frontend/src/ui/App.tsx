@@ -436,6 +436,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [notificationsCursor, setNotificationsCursor] = useState<number | null>(null);
   const [notificationsHasMore, setNotificationsHasMore] = useState(true);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsSyncRevision, setNotificationsSyncRevision] = useState(0);
   const [notificationsCount, setNotificationsCount] = useState<NotificationsCount>({
     total: 0,
     by_priority: { low: 0, medium: 0, high: 0 },
@@ -945,7 +946,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     return () => {
       controller.abort();
     };
-  }, [backendAvailable]);
+  }, [backendAvailable, notificationsSyncRevision]);
 
   useEffect(() => {
     if (!backendAvailable) return;
@@ -1010,7 +1011,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     return () => {
       controller.abort();
     };
-  }, [abortNotificationListRequests, backendAvailable, mainViewportReady, notificationsRequestFilter, notificationHistoryFilters, allExtensionsLoaded]);
+  }, [abortNotificationListRequests, backendAvailable, mainViewportReady, notificationsRequestFilter, notificationHistoryFilters, allExtensionsLoaded, notificationsSyncRevision]);
 
   useEffect(() => {
     if (activeNotificationId && notificationsState.byId[activeNotificationId]) return;
@@ -1027,10 +1028,13 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     let closed = false;
     // This global stream is intentionally separate from the selected-notification stream below.
     // The list/cache must keep receiving global realtime updates while details track one item.
-    const es = new EventSource("/api/notifications/stream");
+    const es = new EventSource(resolveToposyncUrl("/api/notifications/stream"));
+    const resync = () => { if (!closed) setNotificationsSyncRevision((value) => value + 1); };
+    es.onopen = resync;
     es.onmessage = (ev) => {
       try {
         const parsed = JSON.parse(ev.data ?? "{}") as { op?: string; notification?: Notification };
+        if (parsed.op === "resync") { resync(); return; }
         const op = parsed.op === "update" ? "update" : "insert";
         const notif = parsed.notification;
         if (!notif || typeof notif.id !== "string") return;

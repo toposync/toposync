@@ -48,6 +48,16 @@ class VisionExtension(BaseExtension):
         configured_data_dir = getattr(getattr(config_store, "paths", None), "data_dir", None)
         get_default_model_install_manager(data_dir=configured_data_dir)
 
+        from .history_embeddings import SPACE, embed_history
+
+        async def history_embeddings(*, query: str, images: dict[str, bytes]):
+            if configured_data_dir is None:
+                raise ValueError("visual_embeddings_require_data_directory")
+            return await asyncio.to_thread(embed_history, data_dir=Path(configured_data_dir), query=query, images=images)
+
+        services.register("vision.history_embedding_space", lambda: SPACE)
+        services.register("vision.history_embeddings", history_embeddings)
+
         def identity_store(*, create: bool = True):
             from .identity.store import IdentityStore
 

@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 import sqlite3
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -54,6 +54,8 @@ def validated_vectors(raw: Any, count: int) -> list[list[float]]:
 
 
 class TextHistorySearch:
+    fallback_reason = "local_text_embeddings_unavailable"
+
     def __init__(self, notifications: Any, services: Any, config_store: Any = None) -> None:
         self.notifications = notifications
         self.services = services
@@ -121,7 +123,7 @@ class TextHistorySearch:
                 items, _ = await self.notifications.list(query=query, limit=limit + 1, priorities=priorities, types=types, created_after=created_after, created_before=created_before)
                 return {"notifications": items[:limit], "search": {"mode": "literal", "status": "degraded",
                     "returned_count": min(len(items), limit), "results_truncated": len(items) > limit,
-                    "reason": "local_text_embeddings_unavailable", "visual_similarity": False,
+                    "reason": self.fallback_reason, "visual_similarity": False,
                     "time_basis": "notification_created_at", "created_after": created_after, "created_before": created_before,
                     **(interpretation or {})}}
 
@@ -193,12 +195,17 @@ class TextHistorySearch:
 
 
 def install_text_history_routes(app: FastAPI, services: Any) -> None:
+    from .visual_history import VisualHistorySearch
+
     search = TextHistorySearch(app.state.notifications, services, getattr(app.state, "config_store", None))
+    visual = VisualHistorySearch(app.state.notifications, services, getattr(app.state, "config_store", None))
     services.register("ai.search_notifications", search.search)
+    services.register("ai.search_visual_notifications", visual.search)
 
     @app.get("/api/ai/history/search")
-    async def history(request: Request, query: str = Query(min_length=1, max_length=1000, pattern=r"\S"), limit: int = Query(default=10, ge=1, le=50), priority: list[str] | None = Query(default=None), notification_type: list[str] | None = Query(default=None, alias="type"), created_after: float | None = Query(default=None, ge=0, allow_inf_nan=False), created_before: float | None = Query(default=None, ge=0, allow_inf_nan=False)) -> dict[str, Any]:
+    async def history(request: Request, query: str = Query(min_length=1, max_length=1000, pattern=r"\S"), limit: int = Query(default=10, ge=1, le=50), priority: list[str] | None = Query(default=None), notification_type: list[str] | None = Query(default=None, alias="type"), created_after: float | None = Query(default=None, ge=0, allow_inf_nan=False), created_before: float | None = Query(default=None, ge=0, allow_inf_nan=False), mode: Literal["text", "visual"] = "text") -> dict[str, Any]:
         require(request, "core:notifications:read")
         if created_after is not None and created_before is not None and created_after >= created_before:
             raise HTTPException(422, "Notification time interval must have positive duration")
-        return await search.search(query=query, limit=limit, priorities=priority, types=notification_type, created_after=created_after, created_before=created_before)
+        selected = visual if mode == "visual" else search
+        return await selected.search(query=query, limit=limit, priorities=priority, types=notification_type, created_after=created_after, created_before=created_before)

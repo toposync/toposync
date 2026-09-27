@@ -108,6 +108,14 @@ The public surface is task-based, not vendor-based. The official first-party run
 - `vision.detect` events are short OPEN/CLOSE notifications; use `vision.track` when you need temporal identity, movement, and long-lived per-object lifecycle.
 - `vision.crop_objects` crops the bbox from `payload["subject"]["bbox01"]` by default and preserves event/subject identifiers. It is not instance segmentation.
 
+## Experimental visual history backend
+
+The AI history endpoint accepts `mode=visual` for multilingual text-to-image ranking of visible notification images. It reuses notification authorization, time filters and SQLite. Similarity does not confirm identity or trigger automation. The existing interface still exposes text search; visual search setup and interface are not yet delivered.
+
+This optional backend requires the `visual-search` extra and locally provisioned files listed with checksums in `history_embeddings.py`, under the installation's `vision-models` directory. It never downloads models during search. The image encoder is [Xenova CLIP ViT-B/32](https://huggingface.co/Xenova/clip-vit-base-patch32/tree/d15189d7028b43f1d3e65039190477f6af591c2a) and the aligned text encoder is [Sentence Transformers multilingual CLIP](https://huggingface.co/sentence-transformers/clip-ViT-B-32-multilingual-v1/tree/58edf8cada9e398793dca955574a48cbb7f18be2). The current quantized text export was validated on ARM64 CPU; other platforms need their own validation.
+
+Search indexes up to eight images per request from the latest 250 matching notifications, with a 64 MiB image scan budget and two inference threads. Sessions are released after each request. The response reports incomplete indexing, unavailable images, scope truncation and fallback to literal text when the optional backend is unavailable. Changed or deleted evidence is rechecked before returning cached results. Model checksums and preprocessing version isolate the vector space. This bounded backend does not certify retrieval accuracy, all historical records, or unattended safety use.
+
 ## Future runtime compatibility
 
 - Pipeline configs must stay task-oriented and model-oriented. Do not add runtime, device, delegate, or vendor-specific toggles such as `use_coral` to `vision.detect`, `vision.classify_image`, or related operators.

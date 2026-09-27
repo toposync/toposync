@@ -21,6 +21,9 @@ dependencies = [
 [project.entry-points."toposync.extensions"]
 vision = "toposync_ext_vision.plugin:VisionExtension"
 
+[project.optional-dependencies]
+visual-search = ["tokenizers>=0.22,<1", "safetensors>=0.4,<1"]
+
 [build-system]
 requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"

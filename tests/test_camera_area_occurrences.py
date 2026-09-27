@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from dataclasses import replace
 
@@ -12,6 +13,66 @@ from toposync_ext_home_assistant.pipelines import _render_template
 
 
 AREA = {"name": "piscina", "points": [{"x": 0, "z": 0}, {"x": 2, "z": 0}, {"x": 2, "z": 2}, {"x": 0, "z": 2}]}
+
+
+def test_visits_require_observed_crossings_and_do_not_survive_loss_or_reset(tmp_path):
+    async def scenario():
+        runtime = AreaOccurrenceRuntime({"area": AREA, "visit_window_seconds": 6})
+        store = NotificationStore(tmp_path / "notifications.sqlite3")
+        records = []
+
+        async def upsert(**values):
+            records.append(store.upsert(**values))
+
+        sink = NotifyRuntime({"notification_type": "pipelines.tracking", "dedupe_by_occurrence": True,
+                              "description": "{{payload.area_occurrence.description}}",
+                              "include_payload_paths": ["area_occurrence"]},
+                             PipelineRuntimeDependencies(notifications_upsert=upsert))
+        context = type("Context", (), {"pipeline_name": "visits", "node_id": "notify"})()
+        assert await runtime.process_packet(observation(0, x=3), None) == []
+        for start, expected in ((1, 1), (4, 2)):
+            assert await runtime.process_packet(observation(start), None) == []
+            opened = (await runtime.process_packet(observation(start + 1), None))[0]
+            assert opened.payload["area_occurrence"]["visits"]["count"] == expected
+            await sink.process_packet(opened, context)
+            assert await runtime.process_packet(observation(start + 1), None) == []
+            if start == 1:
+                await runtime.process_packet(observation(3, x=3), None)
+        record = records[-1][0]
+        assert "2 entradas observadas" in record.description
+        assert record.payload["data"]["area_occurrence"]["visits"]["count"] == 2
+        assert records[0][0].id != record.id
+        (tmp_path / "notification.json").write_text(json.dumps({"id": record.id, "type": record.type,
+            "description": record.description, "payload": record.payload}, ensure_ascii=False))
+        update = (await runtime.process_packet(observation(8), None))[0]
+        assert update.payload["area_occurrence"]["visits"]["count"] == 1
+        missing = observation(9)
+        missing.payload.pop("world")
+        await runtime.process_packet(missing, None)
+        await runtime.process_packet(observation(10), None)
+        resumed = (await runtime.process_packet(observation(11), None))[0]
+        assert resumed.payload["area_occurrence"]["visits"]["count"] == 0
+        await runtime.process_packet(observation(12, x=3, generation=1), None)
+        await runtime.process_packet(observation(13, generation=1), None)
+        reset = (await runtime.process_packet(observation(14, generation=1), None))[0]
+        assert reset.payload["area_occurrence"]["visits"]["count"] == 1
+
+    asyncio.run(scenario())
+
+
+def test_visit_history_has_explicit_lower_bound_at_capacity():
+    async def scenario():
+        runtime = AreaOccurrenceRuntime({"area": AREA, "minimum_duration_seconds": 0,
+                                         "visit_window_seconds": 1000})
+        for index in range(257):
+            await runtime.process_packet(observation(index * 2, x=3), None)
+            opened = (await runtime.process_packet(observation(index * 2 + 1), None))[0]
+        visits = opened.payload["area_occurrence"]["visits"]
+        assert visits["count"] == 256 and visits["count_is_lower_bound"] is True
+        assert len(next(iter(runtime.states.values())).visits) == 256
+        assert visits["scope"] == "continuous_tracking"
+
+    asyncio.run(scenario())
 
 
 def observation(timestamp, x=1, subject="cat-1", generation=0):

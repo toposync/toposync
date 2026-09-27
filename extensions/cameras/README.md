@@ -19,6 +19,14 @@ mapping still determine whether a stationary event has sufficient evidence; this
 sampling rate does not certify physical accuracy or camera availability. Existing
 saved graphs are not rewritten when a recipe changes.
 
+Area presence and entry recipes report repeated observed entries within a five-minute
+window by default (`visit_window_seconds`). Only confirmed outside-to-inside crossings
+count; updates and replay do not. Counts refer to one continuous tracking episode,
+not a recognized identity across sessions. Missing evidence, source reset, tracking
+termination or eviction clears the history. Each subject retains at most 256 entry
+timestamps; saturation is reported as a lower bound until discarded entries expire.
+The notification description and structured area evidence retain this distinction.
+
 Area presence/entry occurrences provide a deterministic Portuguese description in
 `payload.area_occurrence.description`, retained in the notification with the
 structured area, observed category and evidence duration. Entry requires an

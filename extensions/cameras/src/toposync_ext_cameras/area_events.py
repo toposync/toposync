@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import math
 import time
-from collections import OrderedDict
-from dataclasses import dataclass, replace
+from collections import OrderedDict, deque
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -26,6 +26,7 @@ class AreaOccurrenceConfig(BaseModel):
     minimum_duration_seconds: float = Field(default=1.0, ge=0, le=3600)
     evidence_timeout_seconds: float = Field(default=5.0, gt=0, le=3600)
     maximum_subjects: int = Field(default=128, ge=1, le=4096)
+    visit_window_seconds: float = Field(default=300.0, gt=0, le=86400)
 
     @field_validator("area")
     @classmethod
@@ -37,6 +38,9 @@ class AreaOccurrenceConfig(BaseModel):
 
 @dataclass
 class _AreaState:
+    observed_entry: bool = False
+    visits: deque[float] = field(default_factory=lambda: deque(maxlen=256))
+    visits_overflow_until: float = float("-inf")
     inside: bool | None = None
     started_at: float | None = None
     opened: bool = False
@@ -146,15 +150,23 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
             if self.config.mode == "entry" and previous_inside is not False:
                 return outputs
             state.started_at = timestamp
+            state.observed_entry = previous_inside is False
         state.last_packet = packet
         if timestamp - state.started_at < self.config.minimum_duration_seconds:
             return outputs
         lifecycle = Lifecycle.UPDATE if state.opened else Lifecycle.OPEN
+        if not state.opened and state.observed_entry:
+            if len(state.visits) == state.visits.maxlen:
+                state.visits_overflow_until = state.visits[0] + self.config.visit_window_seconds
+            state.visits.append(state.started_at)
         state.opened = True
         return outputs + [self._event(key, state, lifecycle, "confirmed")]
 
     def _event(self, key, state, lifecycle, status):
         packet = state.last_packet
+        timestamp = resolve_media_ts(packet)
+        while state.visits and state.visits[0] <= timestamp - self.config.visit_window_seconds:
+            state.visits.popleft()
         identity = hashlib.sha256(f"{key}:{state.capture[:2]}:{self.config.area.name}:{state.started_at}".encode()).hexdigest()[:32]
         payload = dict(packet.payload)
         payload["area_label"] = self.config.area.name
@@ -168,6 +180,10 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         category = {"person": "Pessoa", "dog": "Cão", "cat": "Gato"}[subject["category"]]
         action = "entrada observada" if self.config.mode == "entry" else "presença observada"
         description = f"{category}: {action} na área {self.config.area.name}. Evidência por {duration:.1f} segundos."
+        if len(state.visits) > 1:
+            qualifier = "Pelo menos " if timestamp < state.visits_overflow_until else ""
+            description = (f"{qualifier}{len(state.visits)} entradas observadas em "
+                           f"{self.config.visit_window_seconds:g} s de acompanhamento contínuo. " + description)
         if lifecycle == Lifecycle.CLOSE:
             description += (
                 " Saída da área observada." if status == "left_area"
@@ -177,6 +193,9 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
             "subject": subject, "correlation_id": identity,
             "area_occurrence": {"area": self.config.area.name, "mode": self.config.mode,
                 "status": status, "observed_subject": packet.payload["subject"],
+                "visits": {"count": len(state.visits), "window_seconds": self.config.visit_window_seconds,
+                           "count_is_lower_bound": timestamp < state.visits_overflow_until,
+                           "scope": "continuous_tracking", "requires_observed_entry": True},
                 "started_at": state.started_at, "last_evidence_at": resolve_media_ts(packet),
                 "duration_seconds": duration, "description": description},
         })
@@ -186,6 +205,10 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
 
     def _close(self, key, state, reason):
         outputs = [self._event(key, state, Lifecycle.CLOSE, reason)] if state.opened else []
+        if reason != "left_area":
+            state.visits.clear()
+            state.visits_overflow_until = float("-inf")
+        state.observed_entry = False
         state.started_at = None
         state.opened = False
         state.last_packet = None

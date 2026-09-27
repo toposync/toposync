@@ -95,10 +95,16 @@ def test_local_json_disables_unbounded_thinking(monkeypatch):
     from toposync_ext_ai.settings import AiProviderConfig, AiProfileConfig
 
     def respond(request):
+        if request.url.path == "/api/version":
+            return httpx.Response(200, json={"version": "0.34.4"})
         payload = json.loads(request.content)
         assert payload["think"] is False
         assert payload["format"] == "json"
-        return httpx.Response(200, json={"message": {"content": '{"question":"Qual câmera?"}'}})
+        assert payload["options"]["num_ctx"] == 32768
+        assert payload["options"]["num_predict"] == 8192
+        assert payload["truncate"] is False and payload["shift"] is False
+        assert payload["keep_alive"] == "30s"
+        return httpx.Response(200, json={"done": True, "done_reason": "stop", "message": {"content": '{"question":"Qual câmera?"}'}})
 
     original = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(
@@ -107,3 +113,25 @@ def test_local_json_disables_unbounded_thinking(monkeypatch):
     provider = OllamaProvider(AiProviderConfig(id="local"), AiProfileConfig(id="local"))
     result = asyncio.run(provider.generate_json(messages=[{"role": "user", "content": "recipe"}]))
     assert result == {"question": "Qual câmera?"}
+
+
+@pytest.mark.parametrize("version,reason", [("0.34.3", "stop"), ("unknown", "stop"), ("0.34.4", "length"), ("0.34.4", None)])
+def test_text_context_requires_supported_server_and_complete_response(monkeypatch, version, reason):
+    import httpx
+    from toposync_ext_ai.providers import AiProviderError, OllamaProvider
+    from toposync_ext_ai.settings import AiProviderConfig, AiProfileConfig
+
+    requests = []
+    def respond(request):
+        requests.append(request.url.path)
+        if request.url.path == "/api/version":
+            return httpx.Response(200, json={"version": version})
+        # Even syntactically valid JSON must not pass when generation was cut.
+        return httpx.Response(200, json={"done": True, "done_reason": reason, "message": {"content": '{"ok":true}'}})
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(**kwargs, transport=httpx.MockTransport(respond)))
+    provider = OllamaProvider(AiProviderConfig(id="local"), AiProfileConfig(id="local"))
+    with pytest.raises(AiProviderError):
+        asyncio.run(provider.generate_json(messages=[{"role": "user", "content": "recipe"}]))
+    if version != "0.34.4":
+        assert requests == ["/api/version"]

@@ -509,12 +509,22 @@ class OllamaProvider:
         if image is None:
             # Bounded, reviewed JSON proposals do not need an unbounded thinking stream.
             body["think"] = False
+            body["options"].update(num_ctx=32768, num_predict=8192)
+            body.update(truncate=False, shift=False, keep_alive="30s")
         base_url = self._provider.host.rstrip("/")
         timeout = httpx.Timeout(float(self._profile.timeout_seconds), connect=5.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
+            if image is None:
+                version_response = await client.get(f"{base_url}/api/version")
+                version_response.raise_for_status()
+                version = str(version_response.json().get("version", "")).split("-")[0].split(".")
+                if len(version) != 3 or not all(part.isdigit() for part in version) or tuple(map(int, version)) < (0, 34, 4):
+                    raise AiProviderError("Text assistant requires Ollama 0.34.4 or newer to reject context truncation")
             response = await client.post(f"{base_url}/api/chat", json=body)
             response.raise_for_status()
             payload = response.json()
+        if image is None and (not isinstance(payload, dict) or payload.get("done") is not True or payload.get("done_reason") != "stop"):
+            raise AiProviderError("Assistant response did not finish completely; simplify the request")
         message = payload.get("message") if isinstance(payload, dict) else None
         content = message.get("content") if isinstance(message, dict) else ""
         if image is None and len(str(content or "")) > 262144:

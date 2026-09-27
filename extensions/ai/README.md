@@ -137,3 +137,18 @@ pede definição de dia. A compreensão temporal permanece no vocabulário finit
 Essa síntese extrativa não equivale a uma narrativa livre validada sobre a rotina:
 precisão de seleção, casos completos de gatos/visitantes e cobertura representativa
 precisam de avaliação independente com o modelo real.
+
+
+### Limite de memória da inferência textual
+
+O assistente textual exige Ollama0.34.4 ou posterior, com suporte a `truncate`
+e `shift` no [contrato da versão](https://github.com/ollama/ollama/blob/v0.34.4/api/types.go).
+Solicita contexto32768, saída máxima8192tokens, `truncate=false`, `shift=false`
+e retenção de30segundos. Entradas que não couberem falham; não são cortadas para
+produzir uma resposta plausível. Apenas `done=true` com `done_reason=stop` é aceito,
+inclusive quando uma saída cortada ainda forma JSON válido. O limite prévio de
+64000caracteres do roteador continua sendo um teto de entrada, não uma promessa de
+que qualquer texto desse tamanho cabe no modelo. Modelo/perfil indisponível ou
+requisição excessiva preserva a alternativa manual. Chamadas visuais mantêm seu
+contrato próprio. Esses limites reduzem reserva de contexto, mas não limitam o
+tamanho dos pesos de um modelo escolhido pelo usuário.

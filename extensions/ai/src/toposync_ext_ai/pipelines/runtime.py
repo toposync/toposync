@@ -666,7 +666,9 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         if freshness.age_seconds is None or freshness.age_seconds > self._config.evidence_timeout_seconds:
             return outputs + self._close_occurrence(state, packet, "stale_evidence")
         _record_condition_confidence_telemetry(packet=packet, context=context, result=result)
-        if result.observable is False or not result.matches or result.confidence < self._config.confidence_threshold:
+        if result.observable is False:
+            return outputs + self._close_occurrence(state, packet, "evidence_unobservable")
+        if not result.matches or result.confidence < self._config.confidence_threshold:
             return outputs + self._close_occurrence(state, packet, "not_confirmed")
         if state.started_at is None:
             state.started_at = timestamp
@@ -686,6 +688,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             f"{packet.stream_id}:{self._config.condition_description}:{state.last_capture and state.last_capture[:2]}:{state.started_at}".encode()
         ).hexdigest()[:32]
         evidence = state.last_packet or packet
+        duration = max(0.0, resolve_media_ts(evidence) - (state.started_at or 0.0))
+        current = lifecycle != Lifecycle.CLOSE
         payload = dict(packet.payload)
         payload.update({
             "ai": evidence.payload.get("ai", {}),
@@ -696,7 +700,12 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                 "status": status,
                 "started_at": state.started_at,
                 "last_evidence_at": resolve_media_ts(evidence),
-                "duration_seconds": max(0.0, resolve_media_ts(evidence) - (state.started_at or 0.0)),
+                "duration_seconds": duration,
+                "current_state_verified": current,
+                "description": (
+                    f"Evidência confirmada por {duration:g} s. Revisar a imagem." if current else
+                    f"Observação encerrada; imagem anterior. Evidência confirmada por {duration:g} s."
+                ),
                 "evidence_packet_id": evidence.packet_id,
             },
         })

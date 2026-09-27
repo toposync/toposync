@@ -213,3 +213,34 @@ def test_occurrence_stream_capacity_closes_evicted_stream():
         assert set(runtime._occurrences) == retained
 
     asyncio.run(scenario())
+
+
+def test_occurrence_occlusion_closes_with_explicit_historical_evidence():
+    async def scenario():
+        class Service:
+            observable = True
+
+            async def call(self, service_id, **kwargs):
+                return {"observable": self.observable, "matches": self.observable, "confidence": .9}
+
+        service = Service()
+        runtime = AiConditionFilterRuntime(
+            {"condition_description": "visible drinking", "emit_mode": "occurrence", "minimum_duration_seconds": 0},
+            PipelineRuntimeDependencies(services=service),
+        )
+        opened = (await runtime.process_packet(frame(0), None))[0]
+        assert opened.payload["condition_occurrence"]["current_state_verified"] is True
+        positive = (await runtime.process_packet(frame(2), None))[0]
+        service.observable = False
+        closed = (await runtime.process_packet(frame(3), None))[0]
+        data = closed.payload["condition_occurrence"]
+        assert closed.lifecycle == Lifecycle.CLOSE
+        assert closed.stream_id == opened.stream_id
+        assert data["status"] == "evidence_unobservable"
+        assert data["current_state_verified"] is False
+        assert data["duration_seconds"] == 2
+        assert "imagem anterior" in data["description"]
+        assert closed.artifacts == positive.artifacts
+        assert await runtime.process_packet(frame(4), None) == []
+
+    asyncio.run(scenario())

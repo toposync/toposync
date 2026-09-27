@@ -170,6 +170,8 @@ def test_cat_activity_presets_compile_and_persist_without_detection_model(tmp_pa
         assert condition["reuse_last_decision_seconds"] == 0
         assert condition["failure_policy"] == "drop"
         assert _node_config(pipeline, "core.notify")["dedupe_by_occurrence"] is True
+        assert _node_config(pipeline, "core.notify")["description"] == "{{payload.condition_occurrence.description}}"
+        assert _node_config(pipeline, "core.notify")["include_payload_paths"] == ["condition_occurrence"]
         assert _node_config(pipeline, "ai.smart_crop")["missing_policy"] == "drop"
 
 

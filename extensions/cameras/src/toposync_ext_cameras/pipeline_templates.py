@@ -67,9 +67,10 @@ def build_cat_activity_graph(
         {"id": "store", "operator": "core.store_images", "config": {"format": "webp"}},
         {"id": "notify", "operator": "core.notify", "config": {
             "notification_type": "pipelines.tracking", "title": notification_title or recipe["title"],
-            "description": notification_description or "Evidência confirmada por {{payload.condition_occurrence.duration_seconds}} s. Revisar a imagem.",
+            "description": notification_description or "{{payload.condition_occurrence.description}}",
             "priority": notification_priority or "medium", "dedupe_key_template": "{{subject.id}}",
             "dedupe_by_occurrence": True,
+            "include_payload_paths": ["condition_occurrence"],
         }},
     ]
     edges = _linear_edges([node["id"] for node in nodes])

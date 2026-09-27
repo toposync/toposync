@@ -1559,7 +1559,9 @@ async def test_shadow_crash_keeps_audit_without_recovery_or_camera_io(tmp_path) 
         }
 
     original_services.register("cameras.views.resolve_target", resolve_shadow)
-    original_controller = PtzAttentionController(store=original, services=original_services)
+    original_controller = PtzAttentionController(
+        store=original, services=original_services, clock=lambda: 1000.0
+    )
     await original_controller.submit_intent(
         AttentionIntent(
             key="front:pipeline:attention:shadow-event",

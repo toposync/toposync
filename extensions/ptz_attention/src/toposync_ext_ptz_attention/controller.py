@@ -373,6 +373,18 @@ class PtzAttentionController:
                     }
                 )
 
+            observation_age = max(0.0, max(self._clock(), governed.received_at) - governed.event_at)
+            observed_monotonic = now - observation_age
+            if governed.lifecycle != "close" and observation_age >= profile.stale_timeout_seconds:
+                self._record(
+                    profile,
+                    runtime,
+                    action="intent_ignored",
+                    reason="observation_expired",
+                    intent=governed,
+                )
+                return
+
             existing = runtime.events.get(governed.key)
             if governed.lifecycle == "update":
                 if existing is None or not existing.open:
@@ -384,7 +396,7 @@ class PtzAttentionController:
                         intent=governed,
                     )
                     return
-                existing.last_seen_monotonic = now
+                existing.last_seen_monotonic = max(existing.last_seen_monotonic, observed_monotonic)
                 existing.intent = governed.model_copy(update={"target": existing.intent.target})
                 return
 
@@ -411,7 +423,7 @@ class PtzAttentionController:
                 return
 
             if existing is not None and existing.open:
-                existing.last_seen_monotonic = now
+                existing.last_seen_monotonic = max(existing.last_seen_monotonic, observed_monotonic)
                 return
 
             self._prune_events(runtime, now=now, stale_timeout=profile.stale_timeout_seconds)
@@ -464,7 +476,7 @@ class PtzAttentionController:
                 intent=governed,
                 resolved=resolved,
                 opened_monotonic=now,
-                last_seen_monotonic=now,
+                last_seen_monotonic=observed_monotonic,
             )
             self._record(
                 profile,
@@ -475,7 +487,7 @@ class PtzAttentionController:
                 preset_token=resolved.preset_token,
                 details={"view_id": resolved.view_id, "confidence": resolved.confidence},
             )
-            await self._evaluate(profile, runtime, now)
+            await self._evaluate(profile, runtime, self._monotonic_clock())
 
     async def pause(self, profile_id: str) -> AttentionProfile:
         profile = self._require_profile(profile_id)

@@ -1238,3 +1238,81 @@ async def test_paused_live_recovery_cannot_resume_before_explicit_return(tmp_pat
 
     await controller.shutdown()
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_expired_observations_cannot_start_or_extend_attention() -> None:
+    clock = Clock()
+    services = ServiceRegistry()
+    calls: list[dict] = []
+    register_resolver(services, calls)
+    store = AttentionStore(None)
+    store.create_profile(profile())
+    controller = PtzAttentionController(store=store, services=services, clock=clock)
+
+    delayed_open = intent("delayed", "low", "open", clock)
+    clock.advance(6)
+    await controller.submit_intent(delayed_open.model_copy(update={"received_at": clock()}))
+    assert controller.status()[0].state == "IDLE"
+    assert calls == []
+
+    await controller.submit_intent(intent("current", "low", "open", clock))
+    delayed_update = intent("current", "low", "update", clock, target=False)
+    clock.advance(5)
+    await controller.submit_intent(delayed_update.model_copy(update={"received_at": clock()}))
+    await controller.tick_once()
+    assert controller.status()[0].state == "IDLE"
+    assert [call["preferred_view_id"] for call in calls] == ["driveway", "home"]
+    decisions, _ = store.list_decisions()
+    assert sum(item.reason == "observation_expired" for item in decisions) == 2
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delay_during_resolution", [False, True])
+async def test_live_attention_rechecks_evidence_before_acquiring_control(
+    delay_during_resolution: bool,
+) -> None:
+    clock = Clock()
+    camera = LiveCamera()
+    services = live_services(camera)
+    if delay_during_resolution:
+        async def slow_resolve(**kwargs):
+            clock.advance(5)
+            return await camera.resolve(**kwargs)
+
+        services.register("cameras.views.resolve_target", slow_resolve)
+    store = AttentionStore(None)
+    store.create_profile(profile(mode="live_preset"))
+    controller = PtzAttentionController(store=store, services=services, clock=clock)
+    observation = intent("delayed", "low", "open", clock)
+    if not delay_during_resolution:
+        clock.advance(5)
+    await controller.submit_intent(observation)
+    assert controller.status()[0].state == "IDLE"
+    assert camera.acquires == 0
+    assert camera.commands == []
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_delayed_evidence_keeps_only_its_remaining_lifetime() -> None:
+    clock = Clock()
+    services = ServiceRegistry()
+    calls: list[dict] = []
+    register_resolver(services, calls)
+    store = AttentionStore(None)
+    store.create_profile(profile())
+    controller = PtzAttentionController(store=store, services=services, clock=clock)
+    observation = intent("delayed", "low", "open", clock)
+    clock.advance(4)
+    await controller.submit_intent(observation)
+    assert controller.status()[0].state == "FOCUSED"
+    clock.advance(1)
+    await controller.tick_once()
+    assert controller.status()[0].state == "IDLE"
+    assert [call["preferred_view_id"] for call in calls] == ["driveway", "home"]
+    await controller.shutdown()
+    store.close()

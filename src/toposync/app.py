@@ -1290,6 +1290,8 @@ async def _lifespan(app: FastAPI):
         priorities: list[str] | tuple[str, ...] | None = None,
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
+        created_after: float | None = None,
+        created_before: float | None = None,
         include_silent: bool = False,
     ) -> dict[str, Any]:
         items, next_cursor = await notifications.list(
@@ -1298,6 +1300,8 @@ async def _lifespan(app: FastAPI):
             priorities=priorities,
             types=types,
             query=query,
+            created_after=created_after,
+            created_before=created_before,
             include_silent=include_silent,
         )
         return {"notifications": items, "next_cursor": next_cursor}
@@ -4700,8 +4704,12 @@ def create_app() -> FastAPI:
         priority: list[str] | None = Query(default=None),
         notification_type: list[str] | None = Query(default=None, alias="type"),
         query: str | None = None,
+        created_after: float | None = Query(default=None, ge=0, allow_inf_nan=False),
+        created_before: float | None = Query(default=None, ge=0, allow_inf_nan=False),
     ) -> dict[str, Any]:
         _require(request, action="core:notifications:read")
+        if created_after is not None and created_before is not None and created_after >= created_before:
+            raise HTTPException(422, "Notification time interval must have positive duration")
         runtime: NotificationsRuntime = request.app.state.notifications
 
         def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
@@ -4711,6 +4719,8 @@ def create_app() -> FastAPI:
                 priorities=priority,
                 types=notification_type,
                 query=query,
+                created_after=created_after,
+                created_before=created_before,
                 cancel_check=check_cancelled,
             )
             return {"notifications": items, "next_cursor": next_cursor}

@@ -52,6 +52,38 @@ def test_embeddings_unavailable_returns_honest_literal_results(tmp_path: Path, m
     assert document_text({"title":"Pessoa", "payload":{"data":{"area_label":{"injected":"value"}}}}) == "Pessoa"
 
 
+def test_temporal_scope_is_applied_before_semantic_limit_and_in_fallback(tmp_path, monkeypatch):
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    expected, _ = runtime.store.upsert(type="event", title="Gato ontem", now=100)
+    for index in range(260):
+        runtime.store.upsert(type="event", title="Gato hoje", now=200 + index)
+    search = TextHistorySearch(runtime, Services())
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "qwen3-embedding:0.6b", "digest": "a" * 64}]})
+        return httpx.Response(200, json={"embeddings": [[1.0, 0.0]]})
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: client_class(**kwargs, transport=httpx.MockTransport(handler)))
+    result = asyncio.run(search.search(query="gato", created_after=100, created_before=200))
+    assert [item["id"] for item in result["notifications"]] == [expected.id]
+    assert result["search"]["indexed"] == 1
+    assert result["search"]["time_basis"] == "notification_created_at"
+    assert result["search"]["created_before"] == 200
+    assert len(requests) == 4  # Query, one in-window document and model consistency checks.
+
+    async def unavailable(*_args):
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(search, "_semantic", unavailable)
+    fallback = asyncio.run(search.search(query="gato", created_after=100, created_before=200))
+    assert fallback["search"]["status"] == "degraded"
+    assert [item["id"] for item in fallback["notifications"]] == [expected.id]
+
+
 def test_history_route_requires_notification_read(tmp_path: Path) -> None:
     from fastapi import FastAPI, HTTPException
     from fastapi.testclient import TestClient

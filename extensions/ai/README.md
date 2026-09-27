@@ -40,6 +40,23 @@ identity or consumed volume. They require a configured vision-capable AI profile
 validated on representative positive, difficult negative and occluded recordings before relying
 on their recognition. API persistence and synthetic replay tests do not establish model accuracy.
 
+## History time windows
+
+`GET /api/notifications`, the `notifications.list` service and
+`GET /api/ai/history/search` accept optional `created_after` (inclusive) and
+`created_before` (exclusive) as finite, nonnegative Unix seconds. Both bounds
+filter notification creation time before pagination or the semantic corpus limit.
+Updating an existing notification does not move it into a newer creation window.
+The semantic route also applies the window during its consistency read and literal
+fallback; its result reports `time_basis: "notification_created_at"` and the bounds.
+
+Callers must convert civil dates using an explicit time zone and each local
+midnight separately, since a daylight-saving day may differ from 24 hours. These
+parameters do not interpret natural-language dates, configure the installation's
+time zone or certify the physical capture timestamp. The semantic limit remains
+250 recent notifications within the selected interval, with resumable indexing
+in batches of 32; the result reports partial coverage while indexing remains.
+
 ## Assistente de receitas e alteração de pipelines
 
 **Criar receita** interpreta o pedido usando o catálogo atual de câmeras/fontes de vídeo

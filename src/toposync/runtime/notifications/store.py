@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import sqlite3
 import threading
 import time
@@ -309,6 +310,8 @@ class NotificationStore:
         priorities: list[str] | tuple[str, ...] | None = None,
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
+        created_after: float | None = None,
+        created_before: float | None = None,
         include_silent: bool = False,
         cancel_check: _CancelCheck | None = None,
     ) -> tuple[list[NotificationRecord], int | None]:
@@ -316,6 +319,18 @@ class NotificationStore:
         before_n = int(before) if before is not None else None
         where_sql: list[str] = []
         params: list[Any] = []
+
+        for value in (created_after, created_before):
+            if value is not None and (isinstance(value, bool) or not math.isfinite(value) or value < 0):
+                raise ValueError("Notification time bounds must be finite nonnegative Unix seconds")
+        if created_after is not None and created_before is not None and created_after >= created_before:
+            raise ValueError("Notification time interval must have positive duration")
+        if created_after is not None:
+            where_sql.append("created_at >= ?")
+            params.append(created_after)
+        if created_before is not None:
+            where_sql.append("created_at < ?")
+            params.append(created_before)
 
         if before_n is not None:
             where_sql.append("seq < ?")

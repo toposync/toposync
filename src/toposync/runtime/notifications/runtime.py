@@ -48,6 +48,8 @@ class NotificationsRuntime:
         priorities: list[str] | tuple[str, ...] | None = None,
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
+        created_after: float | None = None,
+        created_before: float | None = None,
         include_silent: bool = False,
     ) -> tuple[list[dict[str, Any]], int | None]:
         return await asyncio.to_thread(
@@ -57,6 +59,8 @@ class NotificationsRuntime:
             priorities=priorities,
             types=types,
             query=query,
+            created_after=created_after,
+            created_before=created_before,
             include_silent=include_silent,
         )
 
@@ -68,6 +72,8 @@ class NotificationsRuntime:
         priorities: list[str] | tuple[str, ...] | None = None,
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
+        created_after: float | None = None,
+        created_before: float | None = None,
         include_silent: bool = False,
         cancel_check: _CancelCheck | None = None,
     ) -> tuple[list[dict[str, Any]], int | None]:
@@ -77,6 +83,8 @@ class NotificationsRuntime:
             priorities=priorities,
             types=types,
             query=query,
+            created_after=created_after,
+            created_before=created_before,
             include_silent=include_silent,
             cancel_check=cancel_check,
         )

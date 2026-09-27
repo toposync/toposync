@@ -73,6 +73,14 @@ updates preserve the current server-selected results, including pagination.
 The semantic limit remains
 250 recent notifications within the selected interval, with resumable indexing
 in batches of 32; the result reports partial coverage while indexing remains.
+`search.returned_count` is the number of returned records. `results_truncated`
+means more matching literal records or indexed semantic candidates existed than
+fit in the requested result limit. For semantic search, `corpus_truncated`
+separately reports older notifications outside the 250-record corpus; `pending`
+counts only unindexed records inside that corpus. These flags describe the reads
+used by that response, not an atomic snapshot or physical recording coverage.
+A summary must retain these limits and must never equate a full index with a
+complete record of activity.
 
 ## Assistente de receitas e alteração de pipelines
 

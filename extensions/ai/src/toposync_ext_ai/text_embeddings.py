@@ -107,17 +107,20 @@ class TextHistorySearch:
                 created_after = interpretation["time_range"]["created_after"]
                 created_before = interpretation["time_range"]["created_before"]
             if not query:
-                items, _ = await self.notifications.list(limit=limit, priorities=priorities, types=types,
+                items, _ = await self.notifications.list(limit=limit + 1, priorities=priorities, types=types,
                                                         created_after=created_after, created_before=created_before)
-                return {"notifications": items, "search": {"mode": "literal", "status": "ready", **(interpretation or {})}}
+                return {"notifications": items[:limit], "search": {"mode": "literal", "status": "ready",
+                    "returned_count": min(len(items), limit), "results_truncated": len(items) > limit,
+                    **(interpretation or {})}}
         async with self.lock:
             try:
                 result = await self._semantic(query, limit, priorities, types, created_after, created_before)
                 result["search"].update(interpretation or {})
                 return result
             except (httpx.HTTPError, ValueError, KeyError, TypeError, sqlite3.Error):
-                items, _ = await self.notifications.list(query=query, limit=limit, priorities=priorities, types=types, created_after=created_after, created_before=created_before)
-                return {"notifications": items, "search": {"mode": "literal", "status": "degraded",
+                items, _ = await self.notifications.list(query=query, limit=limit + 1, priorities=priorities, types=types, created_after=created_after, created_before=created_before)
+                return {"notifications": items[:limit], "search": {"mode": "literal", "status": "degraded",
+                    "returned_count": min(len(items), limit), "results_truncated": len(items) > limit,
                     "reason": "local_text_embeddings_unavailable", "visual_similarity": False,
                     "time_basis": "notification_created_at", "created_after": created_after, "created_before": created_before,
                     **(interpretation or {})}}
@@ -162,7 +165,11 @@ class TextHistorySearch:
             if batch:
                 cached = await asyncio.to_thread(self.cache, space, documents, dict(zip(batch, vectors)))
         # Releitura garante que alteração, prioridade silenciosa ou exclusão não exponham evidência antiga.
-        current, _ = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before)
+        current, cursor = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before)
+        older = []
+        if len(current) == CORPUS_LIMIT and cursor is not None:
+            older, _ = await self.notifications.list(before=cursor, limit=1, priorities=priorities,
+                types=types, created_after=created_after, created_before=created_before)
         ranked = []
         for item in current:
             identifier = item["id"]
@@ -179,6 +186,8 @@ class TextHistorySearch:
         return {"notifications": ranked[:limit], "search": {"mode": "semantic_text",
             "status": "partial" if len(ranked) < len(current) else "ready", "space": space,
             "indexed": len(ranked), "pending": len(current) - len(ranked),
+            "returned_count": min(len(ranked), limit), "results_truncated": len(ranked) > limit,
+            "corpus_truncated": bool(older),
             "scope": "recent_notifications", "scope_limit": CORPUS_LIMIT, "visual_similarity": False,
             "time_basis": "notification_created_at", "created_after": created_after, "created_before": created_before}}
 

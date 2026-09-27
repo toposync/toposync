@@ -131,3 +131,53 @@ def test_history_route_requires_notification_read(tmp_path: Path) -> None:
     with TestClient(app) as client:
         assert client.get("/api/ai/history/search", params={"query":"gato"}).status_code == 403
         assert client.get("/api/ai/history/search", params={"query":"   "}).status_code == 422
+
+
+def test_literal_and_temporal_results_report_actual_truncation(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    for index in range(3):
+        runtime.store.upsert(type="event", title=f"Gato {index}", now=datetime.now(timezone.utc).timestamp())
+
+    class Settings:
+        async def get_settings(self):
+            return SimpleNamespace(core={"timezone": "UTC"})
+
+    search = TextHistorySearch(runtime, Services(), Settings())
+    async def unavailable(*args):
+        raise httpx.ConnectError("offline")
+    monkeypatch.setattr(search, "_semantic", unavailable)
+    for query in ("hoje", "gato hoje"):
+        for limit, truncated in ((2, True), (3, False), (4, False)):
+            result = asyncio.run(search.search(query=query, limit=limit))
+            assert len(result["notifications"]) == min(limit, 3)
+            assert result["search"]["returned_count"] == min(limit, 3)
+            assert result["search"]["results_truncated"] is truncated
+
+
+def test_semantic_corpus_boundary_is_separate_from_result_limit(tmp_path, monkeypatch):
+    import json
+    import toposync_ext_ai.text_embeddings as module
+
+    monkeypatch.setattr(module, "CORPUS_LIMIT", 2)
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    for index in range(3):
+        runtime.store.upsert(type="event", title=f"Gato {index}", now=100 + index)
+    search = TextHistorySearch(runtime, Services())
+
+    def handler(request):
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": module.MODEL, "digest": "a" * 64}]})
+        count = len(json.loads(request.content)["input"])
+        return httpx.Response(200, json={"embeddings": [[1.0, 0.0]] * count})
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: client_class(**kwargs, transport=httpx.MockTransport(handler)))
+    for start, corpus_truncated in ((100, True), (101, False)):
+        result = asyncio.run(search.search(query="gato", limit=1, created_after=start))
+        assert len(result["notifications"]) == 1
+        assert result["search"]["results_truncated"] is True
+        assert result["search"]["corpus_truncated"] is corpus_truncated
+        assert result["search"]["returned_count"] == 1
+        assert result["search"]["pending"] == 0

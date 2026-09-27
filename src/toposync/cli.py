@@ -9,6 +9,7 @@ import tomllib
 import zipfile
 
 import uvicorn
+from toposync.server import run as run_server
 
 from toposync.runtime.extension_management import (
     install_manual_extension,
@@ -235,7 +236,7 @@ def _run_extension_dev(args: argparse.Namespace) -> None:
         print("Frontend bundle command: npm --prefix ui run build")
         print("Run it again after UI changes, then restart Toposync if needed.")
 
-    uvicorn.run(
+    run_server(
         "toposync.app:create_app",
         factory=True,
         host=args.host,
@@ -308,7 +309,7 @@ def main(argv: list[str] | None = None) -> None:
             os.environ["TOPOSYNC_FRONTEND_DIR"] = args.frontend_dir
         if args.no_frontend:
             os.environ["TOPOSYNC_NO_FRONTEND"] = "1"
-        uvicorn.run(
+        run_server(
             "toposync.app:create_app",
             factory=True,
             host=args.host,

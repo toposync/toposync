@@ -1,5 +1,6 @@
 """Real socket reconnection and durable history recovery, without a camera or model."""
 import json
+from contextlib import ExitStack
 import os
 from pathlib import Path
 import socket
@@ -88,11 +89,30 @@ def test_http_stream_reconnect_and_disconnect_cleanup(tmp_path):
                     assert resync and latest
                     assert client.get('/api/notifications/count').json()['total'] == 403
                 disconnected()
+                with ExitStack() as streams:
+                    responses = [streams.enter_context(client.stream('GET', path)) for path in (
+                        '/api/notifications/stream',
+                        f'/api/notifications/{first}/stream?include_ephemeral_image=true',
+                    )]
+                    iterators = [response.iter_lines() for response in responses]
+                    for lines in iterators:
+                        ready(lines)
+                    assert client.get('/__test/subscriptions').json()['count'] == 2
+                    started = time.monotonic()
+                    process.terminate()
+                    for lines in iterators:
+                        list(lines)  # Clean HTTP EOF, not an abruptly cancelled chunked response.
+                    process.wait(timeout=2)
+                    shutdown_seconds = time.monotonic() - started
+                    assert shutdown_seconds < 2
+                assert json.loads((tmp_path / 'data/shutdown.json').read_text())['subscriptions'] == 0
+                assert 'timeout graceful shutdown exceeded' not in (tmp_path / 'server.log').read_text()
                 (tmp_path / 'result.json').write_text(json.dumps({
                     'http_sse_received': True, 'history_recovered': 3,
                     'missed_during_disconnect': 2, 'subscriptions_after_close': 0,
                     'network_backpressure_evaluated': True, 'burst_records': 400,
                     'overflow_resync_received': True, 'latest_received': True,
+                    'shutdown_open_streams': 2, 'shutdown_seconds': shutdown_seconds,
                 }, indent=2))
         finally:
             if process.poll() is None:

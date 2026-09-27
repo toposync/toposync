@@ -1,13 +1,30 @@
 """Loopback-only test app with real notification HTTP/SSE routes and no extensions."""
 import sys
 import uuid
-import uvicorn
+import json
+import os
+from pathlib import Path
+from contextlib import asynccontextmanager
+from toposync.server import run
 from fastapi import Query
 from toposync.app import create_app
 import toposync.extensions.manager as manager
 
 manager._iter_entry_points = lambda _: []
 app = create_app()
+original_lifespan = app.router.lifespan_context
+
+
+@asynccontextmanager
+async def lifespan(application):
+    async with original_lifespan(application):
+        yield
+        Path(os.environ['TOPOSYNC_DATA_DIR']).joinpath('shutdown.json').write_text(json.dumps({
+            'subscriptions': len(app.state.notifications.broadcaster._subscribers),
+        }))
+
+
+app.router.lifespan_context = lifespan
 
 
 @app.post('/__test/publish')
@@ -28,5 +45,5 @@ async def subscriptions():
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='127.0.0.1', port=int(sys.argv[1]), log_level='warning',
+    run(app, host='127.0.0.1', port=int(sys.argv[1]), log_level='warning',
                 access_log=False, timeout_graceful_shutdown=2)

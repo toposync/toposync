@@ -1515,7 +1515,29 @@ async def _lifespan(app: FastAPI):
 
 
 class _NotificationStreamingResponse(StreamingResponse):
+    async def stream_response(self, send: Send) -> None:
+        shutdown = getattr(self, "shutdown", None)
+        if shutdown is None:
+            await super().stream_response(send)
+            return
+        stream = asyncio.create_task(super().stream_response(send))
+        stopping = asyncio.create_task(shutdown.wait())
+        try:
+            done, _ = await asyncio.wait((stream, stopping), return_when=asyncio.FIRST_COMPLETED)
+            if stream in done:
+                await stream
+            else:
+                stream.cancel()
+                with suppress(asyncio.CancelledError):
+                    await stream
+                await send({"type": "http.response.body", "body": b"", "more_body": False})
+        finally:
+            stream.cancel()
+            stopping.cancel()
+            await asyncio.gather(stream, stopping, return_exceptions=True)
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        self.shutdown = scope.get("state", {}).get("toposync_shutdown")
         try:
             await super().__call__(scope, receive, send)
         finally:
@@ -4797,9 +4819,8 @@ def create_app() -> FastAPI:
     async def notifications_stream(request: Request) -> StreamingResponse:
         _require(request, action="core:notifications:stream")
         runtime: NotificationsRuntime = request.app.state.notifications
-        q = runtime.broadcaster.subscribe()
-
         async def gen():
+            q = runtime.broadcaster.subscribe()
             try:
                 yield "retry: 1000\n\n"
                 yield "event: ready\ndata: {}\n\n"
@@ -4817,7 +4838,7 @@ def create_app() -> FastAPI:
             finally:
                 runtime.broadcaster.unsubscribe(q)
 
-        return StreamingResponse(
+        return _NotificationStreamingResponse(
             gen(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},

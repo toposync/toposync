@@ -195,6 +195,7 @@ class _MemberState:
     first_seen_packet_ts: float | None = None
     last_seen_packet_ts: float | None = None
     recognition_occurrence_id: str | None = None
+    capture_evidence: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -514,6 +515,8 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                 "confidence": member.confidence,
                 "bbox01": list(member.bbox01),
                 "active": member.active,
+                "frame_ts": member.last_seen_packet_ts,
+                "capture_evidence": dict(member.capture_evidence) if member.capture_evidence else None,
             }
             if member.world_anchor:
                 item["world_anchor"] = dict(member.world_anchor)
@@ -668,6 +671,8 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             first_seen_packet_ts=first_seen,
             last_seen_packet_ts=packet_ts,
             recognition_occurrence_id=occurrence,
+            capture_evidence=(dict(member.packet.payload["capture_evidence"])
+                              if isinstance(member.packet.payload.get("capture_evidence"), dict) else None),
         )
         self._group_id_by_member_key[self._member_key(member.source_stream_id, member.event_id)] = (
             group.group_event_id

@@ -54,6 +54,12 @@ def _group_packet(
     bbox01: tuple[float, float, float, float] = (0.1, 0.1, 0.8, 0.9),
     center: tuple[float, float] = (2.0, 3.0),
 ) -> Packet:
+    evidence = {"capture_instance": "test-decoder", "generation": 0,
+                "sequence": next(_capture_sequence), "published_at": time.time()}
+    frame_ts = time.monotonic()
+    for member in members:
+        member["capture_evidence"] = evidence
+        member["frame_ts"] = frame_ts
     subject = {
         "type": "group_event",
         "id": "grp:camera:front:1",
@@ -70,9 +76,8 @@ def _group_packet(
         stream_id="group:camera:front:1",
         lifecycle=lifecycle,
         payload={
-            "capture_evidence": {"capture_instance": "test-decoder", "generation": 0,
-                                 "sequence": next(_capture_sequence), "published_at": time.time()},
-            "frame_ts": time.monotonic(),
+            "capture_evidence": evidence,
+            "frame_ts": frame_ts,
             "group_event_id": "grp:camera:front:1",
             "group_event_code": "1",
             "source_stream_id": "camera:front",
@@ -300,11 +305,15 @@ def test_same_frame_group_member_updates_are_accepted_without_extending_duration
         both = _group_packet(members=_near_members())
         both.payload["capture_evidence"] = dict(single.payload["capture_evidence"])
         both.payload["frame_ts"] = single.payload["frame_ts"]
+        for member in both.payload["subject"]["members"]:
+            member["frame_ts"] = single.payload["frame_ts"]
         opened = (await runtime.process_packet(both, None))[0]
         clock[0] = 4
         same_frame = _group_packet(members=_near_members())
         same_frame.payload["capture_evidence"] = dict(single.payload["capture_evidence"])
         same_frame.payload["frame_ts"] = single.payload["frame_ts"]
+        for member in same_frame.payload["subject"]["members"]:
+            member["frame_ts"] = single.payload["frame_ts"]
         update = (await runtime.process_packet(same_frame, None))[0]
         assert update.stream_id == opened.stream_id
         assert update.payload["spatial_relation_event"]["dwell_seconds"] == 0
@@ -348,7 +357,7 @@ def test_group_to_relation_preserves_capture_and_media_dwell():
                                                        "sequence": timestamp + 1, "published_at": time.time()}
                 for group in await producer.process_packet(packet, None):
                     results.extend(await runtime.process_packet(group, None))
-        assert [packet.lifecycle for packet in results] == [Lifecycle.OPEN, Lifecycle.UPDATE]
+        assert [packet.lifecycle for packet in results] == [Lifecycle.OPEN]
         assert all(packet.payload["spatial_relation_event"]["dwell_seconds"] == 1 for packet in results)
         assert len({packet.stream_id for packet in results}) == 1
 
@@ -366,7 +375,7 @@ def test_group_producer_sequences_compact_closed_history_beyond_4096():
             group = producer._next_group_state(source_stream_id="camera:front", camera_id="front")
             opened = _group_packet(members=_near_members())
             subject = producer._subject_for_group(group, lifecycle=Lifecycle.OPEN)
-            subject["members"] = _near_members()
+            subject["members"] = opened.payload["subject"]["members"]
             opened.payload["subject"] = subject
             assert (await runtime.process_packet(opened, None))[0].lifecycle == Lifecycle.OPEN
             closed = _group_packet(members=[], lifecycle=Lifecycle.CLOSE)
@@ -381,7 +390,7 @@ def test_group_producer_sequences_compact_closed_history_beyond_4096():
         group = restarted._next_group_state(source_stream_id="camera:front", camera_id="front")
         new_epoch = _group_packet(members=_near_members())
         new_epoch.payload["subject"] = {**restarted._subject_for_group(group, lifecycle=Lifecycle.OPEN),
-                                        "members": _near_members()}
+                                        "members": new_epoch.payload["subject"]["members"]}
         assert (await runtime.process_packet(new_epoch, None))[0].lifecycle == Lifecycle.OPEN
         assert await runtime.process_packet(first, None) == []
 
@@ -914,5 +923,46 @@ def test_group_producer_restart_without_close_starts_independent_relation():
         assert await relation.process_packet(groups[0], None) == []
         assert len(relation._states_by_group) == 1
         assert next(iter(relation._states_by_group.values())).relation_event_id == relations[1].payload["event_id"]
+
+    asyncio.run(scenario())
+
+
+def test_group_dwell_does_not_advance_when_only_one_member_is_observed():
+    from test_vision_group_events import _event_packet
+    from toposync_ext_vision.processing.tasks.group_events import VisionGroupEventsRuntime
+
+    async def scenario():
+        producer = VisionGroupEventsRuntime({"mode": "proximity", "categories": ["person", "car"],
+                                             "include_stationary_members": True, "update_interval_seconds": 0})
+        relation = VisionSpatialRelationEventRuntime({"dwell_seconds": 1, "update_interval_seconds": 0})
+        outputs = []
+        for timestamp, code, category, x in ((1, "1", "person", 0), (1, "2", "car", 2),
+                                             (2, "1", "person", 0), (3, "1", "person", 0)):
+            packet = _event_packet(timestamp, code, category=category, world={"x": x, "z": 0, "confidence": 0.9})
+            packet.payload["capture_evidence"] = {"capture_instance": "decoder", "generation": 0,
+                                                   "sequence": timestamp, "published_at": time.time()}
+            for group in await producer.process_packet(packet, None):
+                outputs.extend(await relation.process_packet(group, None))
+        assert outputs == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("invalid", ["missing", "stale", "generation", "media_lag"])
+def test_relation_requires_fresh_evidence_from_each_member(invalid):
+    async def scenario():
+        runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "stale_timeout_seconds": 3, "close_grace_seconds": 0})
+        packet = _group_packet(members=_near_members())
+        member = packet.payload["subject"]["members"][1]
+        member["capture_evidence"] = dict(member["capture_evidence"])
+        if invalid == "missing":
+            member.pop("capture_evidence")
+        elif invalid == "stale":
+            member["capture_evidence"]["published_at"] -= 4
+        elif invalid == "generation":
+            member["capture_evidence"]["generation"] += 1
+        else:
+            member["frame_ts"] -= 4
+        assert await runtime.process_packet(packet, None) == []
 
     asyncio.run(scenario())

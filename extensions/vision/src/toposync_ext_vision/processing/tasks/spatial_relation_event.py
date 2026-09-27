@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
@@ -114,6 +114,7 @@ class _Member:
     bbox01: tuple[float, float, float, float]
     world_anchor: dict[str, float] | None
     active: bool
+    media_ts: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +232,24 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                 confidence = 0.0
             if not math.isfinite(confidence):
                 confidence = 0.0
+            # Group publication belongs to its triggering member, not every member.
+            member_packet = replace(packet, payload=raw)
+            freshness = resolve_frame_freshness(member_packet)
+            evidence = raw.get("capture_evidence")
+            group_evidence = packet.payload.get("capture_evidence")
+            member_ts = raw.get("frame_ts")
+            if (
+                freshness.age_seconds is None
+                or freshness.age_seconds > self._config.stale_timeout_seconds
+                or not isinstance(group_evidence, dict)
+                or (evidence["capture_instance"], evidence["generation"])
+                != (group_evidence.get("capture_instance"), group_evidence.get("generation"))
+                or isinstance(member_ts, bool)
+                or not isinstance(member_ts, (int, float))
+                or not math.isfinite(member_ts)
+                or not 0 <= resolve_media_ts(packet) - member_ts <= self._config.stale_timeout_seconds
+            ):
+                continue
             members.append(
                 _Member(
                     event_id=event_id,
@@ -239,6 +258,7 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                     bbox01=bbox01,
                     world_anchor=_world_anchor(raw.get("world_anchor")),
                     active=bool(raw.get("active", True)),
+                    media_ts=float(member_ts),
                 )
             )
         bbox01 = _bbox(packet.payload.get("group_bbox01")) or _bbox(subject.get("bbox01"))
@@ -617,11 +637,12 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         state.last_world_envelope = group.world_envelope
 
         if relation_match is not None:
+            pair_media_ts = min(relation_match.left.media_ts, relation_match.right.media_ts)
             if state.last_positive_media_ts is not None and state.losing_since_monotonic is None:
                 state.observed_duration_seconds += max(
-                    0.0, media_ts - state.last_positive_media_ts
+                    0.0, pair_media_ts - state.last_positive_media_ts
                 )
-            state.last_positive_media_ts = media_ts
+            state.last_positive_media_ts = pair_media_ts
             state.last_match = relation_match
             state.losing_since_monotonic = None
             state.loss_reason = ""

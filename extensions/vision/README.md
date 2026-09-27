@@ -16,6 +16,8 @@ First-party extension focused on public task-oriented vision operators for the P
 
 The public surface is task-based, not vendor-based. The official first-party runtime is ONNX Runtime, with CPU as the default execution path.
 
+For spatial relations, `dwell_seconds` accumulates intervals between consecutive positive observations. Loss of evidence pauses this duration; recovery preserves the occurrence within its grace period without adding the missing interval. Closing grace and source timeouts never extend the observed duration. This remains an estimate from observation cadence, not proof of continuous physical presence between frames.
+
 ## Dependencies
 
 - The default `toposync` application bundle includes the first-party ONNX Runtime CPU stack.

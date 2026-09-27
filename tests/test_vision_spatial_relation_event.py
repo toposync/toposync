@@ -290,6 +290,7 @@ def test_spatial_relation_requires_both_roles_and_continuous_dwell(
 
 def test_spatial_relation_uses_exit_hysteresis_and_close_grace(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     clock = [0.0]
     monkeypatch.setattr(
@@ -331,8 +332,30 @@ def test_spatial_relation_uses_exit_hysteresis_and_close_grace(
         assert [packet.lifecycle for packet in closed] == [Lifecycle.CLOSE]
         assert closed[0].payload["event_id"] == relation_id
         assert closed[0].payload["spatial_relation_event"]["reason"] == "relation_lost"
+        assert closed[0].payload["spatial_relation_event"]["dwell_seconds"] == 1.0
         assert closed[0].payload["group_bbox01"] == [0.1, 0.1, 0.8, 0.9]
         assert closed[0].payload["world_envelope"]["center"] == {"x": 1.75, "z": 0.0}
+        store = NotificationStore(tmp_path / "notifications.sqlite3")
+        records = []
+
+        async def upsert(**values):
+            records.append(store.upsert(**values))
+
+        sink = NotifyRuntime(
+            {
+                "dedupe_by_occurrence": True,
+                "update_interval_seconds": 0,
+                "description": "Pessoa próxima de veículo por {{payload.spatial_relation_event.dwell_seconds}} s",
+                "include_payload_paths": ["area_id", "spatial_relation_event"],
+            },
+            PipelineRuntimeDependencies(notifications_upsert=upsert),
+        )
+        context = type("Context", (), {"pipeline_name": "person-vehicle", "node_id": "notify"})()
+        for event in [*opened, *within_exit, *closed]:
+            await sink.process_packet(event, context)
+        assert len({record.id for record, _ in records}) == 1
+        assert records[-1][0].description == "Pessoa próxima de veículo por 1.0 s"
+        assert records[-1][0].payload["data"]["spatial_relation_event"]["dwell_seconds"] == 1.0
 
     asyncio.run(scenario())
 
@@ -366,6 +389,10 @@ def test_spatial_relation_recovery_cancels_close_and_preserves_identity(
         assert [packet.lifecycle for packet in recovered] == [Lifecycle.UPDATE]
         assert recovered[0].payload["event_id"] == relation_id
         assert recovered[0].payload["spatial_relation_event"]["loss_seconds"] == 0.0
+        assert recovered[0].payload["spatial_relation_event"]["dwell_seconds"] == 0.0
+        clock[0] = 4.0
+        continued = await runtime.process_packet(_group_packet(members=_near_members()), None)
+        assert continued[0].payload["spatial_relation_event"]["dwell_seconds"] == 1.0
 
     asyncio.run(scenario())
 
@@ -576,6 +603,7 @@ def test_spatial_relation_stale_timeout_closes_and_reopen_gets_new_id(
         closed = runtime._flush_due(now_monotonic=clock[0])
         assert [packet.lifecycle for packet in closed] == [Lifecycle.CLOSE]
         assert closed[0].payload["spatial_relation_event"]["reason"] == "stale_timeout"
+        assert closed[0].payload["spatial_relation_event"]["dwell_seconds"] == 0.0
         assert closed[0].payload["subject"]["bbox01"] == [0.1, 0.1, 0.8, 0.9]
 
         clock[0] = 3.1

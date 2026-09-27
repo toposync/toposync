@@ -149,6 +149,8 @@ class _RelationState:
     last_members: tuple[_Member, ...] = field(default_factory=tuple)
     last_match: _RelationMatch | None = None
     candidate_since_monotonic: float | None = None
+    last_positive_monotonic: float | None = None
+    observed_duration_seconds: float = 0.0
     losing_since_monotonic: float | None = None
     loss_reason: str = ""
     opened_at_monotonic: float | None = None
@@ -356,11 +358,6 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             (match.left, match.right) if match is not None else tuple(active_members)
         )
         confidence = min((member.confidence for member in confidence_members), default=0.0)
-        dwell_seconds = (
-            max(0.0, now_monotonic - state.candidate_since_monotonic)
-            if state.candidate_since_monotonic is not None
-            else 0.0
-        )
         loss_seconds = (
             max(0.0, now_monotonic - state.losing_since_monotonic)
             if state.losing_since_monotonic is not None
@@ -391,7 +388,7 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             "coordinate_space": match.coordinate_space if match is not None else None,
             "distance": float(match.distance) if match is not None else None,
             "threshold": float(match.threshold) if match is not None else None,
-            "dwell_seconds": dwell_seconds,
+            "dwell_seconds": state.observed_duration_seconds,
             "loss_seconds": loss_seconds,
             "reason": _text(reason) or None,
         }
@@ -564,6 +561,11 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         state.last_world_envelope = group.world_envelope
 
         if relation_match is not None:
+            if state.last_positive_monotonic is not None and state.losing_since_monotonic is None:
+                state.observed_duration_seconds += max(
+                    0.0, now_monotonic - state.last_positive_monotonic
+                )
+            state.last_positive_monotonic = now_monotonic
             state.last_match = relation_match
             state.losing_since_monotonic = None
             state.loss_reason = ""
@@ -601,6 +603,8 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
 
         if not state.opened:
             state.candidate_since_monotonic = None
+            state.last_positive_monotonic = None
+            state.observed_duration_seconds = 0.0
             state.last_match = None
             if group.lifecycle == Lifecycle.CLOSE:
                 self._states_by_group_id.pop(group.group_event_id, None)

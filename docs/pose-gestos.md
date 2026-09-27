@@ -90,6 +90,21 @@ após separar as regras de postura. Os outros dois apresentaram landmarks
 inadequados ou intermitentes para a regra temporal. Isso reprova o caso completo;
 não qualifica acenos em grupos nem justifica reduzir a confiança para obter evento.
 
+No mesmo trecho, RTMPose-M Halpe26 produziu aceno para os três sujeitos, mantendo
+detector, rastreador, amostragem e configuração de gestos. A inspeção dos landmarks
+em três instantes não mostrou transferência de braço entre sujeitos. O replay
+das poses preservadas também passou com espelhamento das coordenadas e intervalos
+alternados de 0,2/0,4 segundo; poses estáticas não produziram aceno. Essas variantes
+testam as regras temporais, sem repetir inferência sobre imagens transformadas.
+O vídeo já começa e termina durante o movimento: não comprova fronteiras físicas
+do episódio, oclusões difíceis, falsos eventos por hora ou precisão geral. Esse
+resultado limitado não troca automaticamente o modelo do preset.
+
+Fonte do ensaio: [HandWaveExample.webm, NMu11er](https://commons.wikimedia.org/wiki/File:HandWaveExample.webm),
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+Foram amostrados 26 quadros do vídeo de 5,2 segundos; o arquivo original permaneceu
+inalterado e não é distribuído com o produto.
+
 Geometria métrica usa metros e eixos `x_y_up_z`. A saída tridimensional relativa ao quadril do modelo não é, sozinha, uma coordenada do mapa. Apontamento requer alinhamento geométrico, escala, translação, reprojeção compatível, apoio condicional atual e calibração correspondente. Paredes usadas como oclusores/alvos precisam de altura física explícita; a altura visual do tema não é uma medida.
 
 `CLOSE`, idade excessiva, mudança de vista/calibração, troca de geração de captura ou identidade invalidam derivados. Consumidores devem expirar o que mostram sem renovar o prazo ao renderizar, receber novamente ou abrir uma notificação antiga. Não sobreponha uma pose à última miniatura disponível sem comprovar que imagem, captura e transformações correspondem.

@@ -34,18 +34,11 @@ export function HumanObservationDetails({ notification, i18n, session }: {
     }, Math.max(0, deadline - Date.now()));
     return () => clearTimeout(timer);
   }, [notification, model.expiresAt, model.state]);
-  return <section className="card">
+  return <section className="card" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
     <div className="cardBody">
       <h3>{t("ext.cameras.human.title")}</h3>
       <p role="status">{t(`ext.cameras.human.${model.state}`)}</p>
-      <p className="cardMeta"><code>{model.reason}</code></p>
-      <dl>
-        <dt>{t("ext.cameras.human.actor")}</dt><dd>{model.actor ?? "—"}</dd>
-        <dt>{t("ext.cameras.human.camera")}</dt><dd>{model.camera ?? "—"}</dd>
-        <dt>{t("ext.cameras.human.timestamp")}</dt><dd>{model.timestamp ?? "—"}</dd>
-      </dl>
       <p>{t("ext.cameras.human.safety")}</p>
-      <p className="cardMeta">{t("ext.cameras.human.clock")}</p>
       <h4>{t("ext.cameras.human.pose_2d")}</h4>
       <HumanObservationPreview notification={notification} model={model} i18n={i18n} />
       {model.pose2D.length ? <details>
@@ -54,24 +47,8 @@ export function HumanObservationDetails({ notification, i18n, session }: {
           {landmark.name}: {landmark.position.map((value) => value.toFixed(3)).join(", ")}
         </li>)}</ul>
       </details> : <p>{t("ext.cameras.human.unavailable")}</p>}
-      <AnchorDetails anchor={model.body} label={t("ext.cameras.human.body")} i18n={i18n} />
-      <AnchorDetails anchor={model.left} label={t("ext.cameras.human.left")} i18n={i18n} />
-      <AnchorDetails anchor={model.right} label={t("ext.cameras.human.right")} i18n={i18n} />
-      <p className="cardMeta">{t("ext.cameras.human.foot_provenance_legend")}</p>
-      <p className="cardMeta">{t("ext.cameras.human.uncertainty")}</p>
       <h4>{t("ext.cameras.human.gestures")}</h4>
       <p>{t(`ext.cameras.human.gesture_status_${model.gestureEvidence.status}`)}</p>
-      {model.gestureEvidence.reason ? <p className="cardMeta"><code>{model.gestureEvidence.reason}</code></p> : null}
-      {model.gestureEvidence.side_evidence ? <>
-        <ul>{(["left", "right"] as const).map((side) => {
-          const evidence = model.gestureEvidence.side_evidence![side];
-          return <li key={side}>
-            {t(`ext.cameras.human.gesture_side_${side}`)}: {t(`ext.cameras.human.gesture_evidence_${evidence.status}`)}
-            {evidence.reason ? <> · <code>{evidence.reason}</code></> : null}
-          </li>;
-        })}</ul>
-        <p className="cardMeta">{t("ext.cameras.human.gesture_evidence_help")}</p>
-      </> : null}
       {model.gestures.length ? <ul>{model.gestures.map((gesture, index) => <li key={`${gesture.name}-${gesture.side}-${index}`}>
         {["hand_raised", "both_hands_raised", "wave", "pointing_candidate"].includes(gesture.name)
           ? t(`ext.cameras.human.gesture_name_${gesture.name}`, {}, gesture.name) : gesture.name}
@@ -79,19 +56,48 @@ export function HumanObservationDetails({ notification, i18n, session }: {
           ? t(`ext.cameras.human.gesture_side_${gesture.side}`, {}, gesture.side) : gesture.side}
         {gesture.candidate ? ` · ${t("ext.cameras.human.candidate")}` : ""}
       </li>)}</ul> : null}
-      <h4>{t("ext.cameras.human.pointing")}</h4>
-      <p><code>{model.pointing.status}</code> · <code>{model.pointing.reason}</code></p>
-      {model.pointing.selected ? <p>{t("ext.cameras.human.selected")}: {model.pointing.selected}</p> : null}
-      {model.pointing.candidates.length ? <>
-        <p>{t("ext.cameras.human.candidates")}</p>
-        <ul>{model.pointing.candidates.map((candidate, index) => <li key={`${candidate.id}-${index}`}>
-          {candidate.id} · <code>{candidate.occlusion}</code>{candidate.distance !== null ? ` · ${candidate.distance.toFixed(3)} m` : ""}
-        </li>)}</ul>
-      </> : null}
-      {!model.pointing.ray ? <p>{t("ext.cameras.human.no_ray")}</p> : null}
-      {model.mapRevision ? <p className="cardMeta">{t("ext.cameras.human.map_revision")}: <code>{model.mapRevision}</code></p> : null}
-      <p className="cardMeta">{t("ext.cameras.human.map_revision_limit")}</p>
-      <p className="cardMeta">{t("ext.cameras.human.partial_2d")}</p>
+      <details>
+        <summary>{t("ext.cameras.human.spatial_details")}</summary>
+        <AnchorDetails anchor={model.body} label={t("ext.cameras.human.body")} i18n={i18n} />
+        <AnchorDetails anchor={model.left} label={t("ext.cameras.human.left")} i18n={i18n} />
+        <AnchorDetails anchor={model.right} label={t("ext.cameras.human.right")} i18n={i18n} />
+        <p className="cardMeta">{t("ext.cameras.human.foot_provenance_legend")}</p>
+        <p className="cardMeta">{t("ext.cameras.human.uncertainty")}</p>
+        <h4>{t("ext.cameras.human.pointing")}</h4>
+        <p><code>{model.pointing.status}</code> · <code>{model.pointing.reason}</code></p>
+        {model.pointing.selected ? <p>{t("ext.cameras.human.selected")}: {model.pointing.selected}</p> : null}
+        {model.pointing.candidates.length ? <>
+          <p>{t("ext.cameras.human.candidates")}</p>
+          <ul>{model.pointing.candidates.map((candidate, index) => <li key={`${candidate.id}-${index}`}>
+            {candidate.id} · <code>{candidate.occlusion}</code>{candidate.distance !== null ? ` · ${candidate.distance.toFixed(3)} m` : ""}
+          </li>)}</ul>
+        </> : null}
+        {!model.pointing.ray ? <p>{t("ext.cameras.human.no_ray")}</p> : null}
+        {model.mapRevision ? <p className="cardMeta">{t("ext.cameras.human.map_revision")}: <code>{model.mapRevision}</code></p> : null}
+        <p className="cardMeta">{t("ext.cameras.human.map_revision_limit")}</p>
+        <p className="cardMeta">{t("ext.cameras.human.partial_2d")}</p>
+      </details>
+      <details>
+        <summary>{t("ext.cameras.human.capture_details")}</summary>
+        <p className="cardMeta"><code>{model.reason}</code></p>
+        <dl>
+          <dt>{t("ext.cameras.human.actor")}</dt><dd>{model.actor ?? "—"}</dd>
+          <dt>{t("ext.cameras.human.camera")}</dt><dd>{model.camera ?? "—"}</dd>
+          <dt>{t("ext.cameras.human.timestamp")}</dt><dd>{model.timestamp ?? "—"}</dd>
+        </dl>
+        <p className="cardMeta">{t("ext.cameras.human.clock")}</p>
+        {model.gestureEvidence.reason ? <p className="cardMeta"><code>{model.gestureEvidence.reason}</code></p> : null}
+        {model.gestureEvidence.side_evidence ? <>
+          <ul>{(["left", "right"] as const).map((side) => {
+            const evidence = model.gestureEvidence.side_evidence![side];
+            return <li key={side}>
+              {t(`ext.cameras.human.gesture_side_${side}`)}: {t(`ext.cameras.human.gesture_evidence_${evidence.status}`)}
+              {evidence.reason ? <> · <code>{evidence.reason}</code></> : null}
+            </li>;
+          })}</ul>
+          <p className="cardMeta">{t("ext.cameras.human.gesture_evidence_help")}</p>
+        </> : null}
+      </details>
     </div>
   </section>;
 }

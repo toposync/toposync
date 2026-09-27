@@ -74,3 +74,35 @@ def test_annotation_preserves_occurrence_and_never_reuses_old_visual_result():
         assert not runtime._states
 
     asyncio.run(scenario())
+
+
+def test_annotation_distinguishes_visible_negative_from_unobservable_condition():
+    from toposync_ext_ai.providers import ConditionEvaluationResult
+
+    async def scenario():
+        class Service:
+            result = {"observable": True, "matches": False, "confidence": .95}
+
+            async def call(self, service_id, **kwargs):
+                return self.result
+
+        service = Service()
+        runtime = AiConditionFilterRuntime(
+            {"emit_mode": "annotate", "condition_description": "Person facing a visible facade",
+             "evaluation_interval_seconds": 0, "confidence_threshold": 0},
+            PipelineRuntimeDependencies(services=service))
+        for sequence, expected in ((1, "not_matched"), (2, "unknown")):
+            packet = Packet.create(stream_id="person", payload={
+                "capture_evidence": {"capture_instance": "decoder", "generation": 0,
+                                     "sequence": sequence, "published_at": time.time()}},
+                artifacts={"main": Artifact(name="main", data=np.zeros((8, 8, 3), dtype=np.uint8))})
+            annotated = (await runtime.process_packet(packet, None))[0].payload["ai"]["condition_filter"]
+            assert annotated["status"] == expected
+            assert annotated["matches"] is False
+            assert annotated["observable"] is (sequence == 1)
+            service.result = {"observable": False, "matches": True, "confidence": .99, "reason": "facade occluded"}
+        invalid_positive = ConditionEvaluationResult.model_validate(service.result)
+        assert invalid_positive.matches is False and invalid_positive.confidence == 0
+        assert ConditionEvaluationResult(matches=True, confidence=.9).observable is None
+
+    asyncio.run(scenario())

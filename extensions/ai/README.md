@@ -279,3 +279,6 @@ mantém o fluxo desativado. A correlação temporal não identifica quem acionou
 indício visual de pacote não identifica profissão ou entrega. Cache desaparece
 no reinício e expira conforme o prazo do gerenciador. Suporte físico e precisão
 exigem evidência independente; testes controlados não os certificam.
+
+
+Visual condition responses include `observable`: true means the provider reports enough visible evidence to evaluate the condition; false means it cannot evaluate it (for example, an occluded subject or missing reference). False forces `matches=false` and confidence zero, and annotation emits `unknown` even with a zero confidence threshold. A visible negative remains `not_matched`. Missing `observable` is stored as null, never converted into a claim of visibility; existing decisions still follow their confidence contract. Both provider prompts request this distinction. This is a model-reported assessment, not proof of visibility or orientation accuracy. Subject/reference binding and empirical qualification remain necessary for orientation use cases.

@@ -664,7 +664,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         if freshness.age_seconds is None or freshness.age_seconds > self._config.evidence_timeout_seconds:
             return outputs + self._close_occurrence(state, packet, "stale_evidence")
         _record_condition_confidence_telemetry(packet=packet, context=context, result=result)
-        if not result.matches or result.confidence < self._config.confidence_threshold:
+        if result.observable is False or not result.matches or result.confidence < self._config.confidence_threshold:
             return outputs + self._close_occurrence(state, packet, "not_confirmed")
         if state.started_at is None:
             state.started_at = timestamp
@@ -762,7 +762,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             }:
                 state.last_result = result
 
-        passes = bool(result.matches and result.confidence >= self._config.confidence_threshold)
+        passes = bool(result.observable is not False and result.matches and result.confidence >= self._config.confidence_threshold)
         _record_condition_confidence_telemetry(packet=packet, context=context, result=result)
         if packet.lifecycle == Lifecycle.OPEN:
             state.stream_allowed = passes
@@ -822,7 +822,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             return unknown("evaluation_failed")
         unavailable = result.reason in {"ai_service_unavailable", "all_ai_profiles_failed",
             "no_ai_profile_available", "invalid_ai_service_response"}
-        status = "unknown" if unavailable or result.confidence < self._config.confidence_threshold else ("matched" if result.matches else "not_matched")
+        status = "unknown" if result.observable is False or unavailable or result.confidence < self._config.confidence_threshold else ("matched" if result.matches else "not_matched")
         return [self._annotate(packet, result=result, status=status,
                               input_artifact_name=artifact_name, input_image_key=artifact_name)]
 
@@ -948,6 +948,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         ai_payload = dict(ai) if isinstance(ai, dict) else {}
         ai_payload["condition_filter"] = {
             "status": status,
+            "observable": result.observable if result is not None else None,
             "reason": reason or (result.reason if result is not None else ""),
             "condition_description": self._config.condition_description,
             "description": self._config.annotation_labels.get(status, ""),

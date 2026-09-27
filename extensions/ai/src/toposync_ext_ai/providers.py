@@ -247,6 +247,7 @@ class RegionDetectionResult(BaseModel):
 class ConditionEvaluationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    observable: bool | None = Field(default=None, strict=True)
     matches: bool = False
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     reason: str = ""
@@ -274,6 +275,14 @@ class ConditionEvaluationResult(BaseModel):
         for key in ("match", "present", "detected", "answer", "result", "score", "probability", "certainty"):
             data.pop(key, None)
         return data
+
+    @model_validator(mode="after")
+    def _unobservable_is_not_confirmation(self) -> "ConditionEvaluationResult":
+        if self.observable is False:
+            self.matches = False
+            self.confidence = 0.0
+            self.reason = self.reason or "evidence_not_observable"
+        return self
 
     @field_validator("reason", "profile_id", "provider_id", "model", mode="before")
     @classmethod
@@ -399,8 +408,12 @@ def _build_condition_prompt(description: str) -> list[dict[str, Any]]:
             "role": "system",
             "content": (
                 "You evaluate a visual condition in an image. Return only valid JSON with keys: "
-                "matches, confidence, reason. The answer must be boolean-first: matches is true "
-                "only when the condition is clearly visible."
+                "observable, matches, confidence, reason. observable is true only when the "
+                "relevant subject and visual evidence allow evaluating the condition. "
+                "Occlusion, an ambiguous subject or a missing required reference means "
+                "observable=false, matches=false, confidence=0. A clearly visible negative "
+                "has observable=true and matches=false. matches is true only when the "
+                "condition is clearly visible. Do not infer intent or hidden actions."
             ),
         },
         {

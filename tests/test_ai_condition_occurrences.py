@@ -244,3 +244,59 @@ def test_occurrence_occlusion_closes_with_explicit_historical_evidence():
         assert await runtime.process_packet(frame(4), None) == []
 
     asyncio.run(scenario())
+
+
+def test_occurrence_notification_duration_uses_positive_evidence_interval(tmp_path):
+    from toposync.runtime.notifications.store import NotificationStore
+    from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
+    from toposync.runtime.pipelines.packet_contract import with_media_timestamp
+
+    async def scenario(reason):
+        class Service:
+            observable = True
+
+            async def call(self, *args, **kwargs):
+                return {"observable": self.observable, "matches": self.observable, "confidence": .9}
+
+        service = Service()
+        records = []
+        store = NotificationStore(tmp_path / f"{reason}.sqlite3")
+
+        async def persist(**values):
+            records.append(store.upsert(**values)[0])
+
+        dependencies = PipelineRuntimeDependencies(services=service, notifications_upsert=persist)
+        runtime = AiConditionFilterRuntime(
+            {"condition_description": "drinking", "emit_mode": "occurrence", "minimum_duration_seconds": 2}, dependencies,
+        )
+        notify = NotifyRuntime({"dedupe_by_occurrence": True}, dependencies)
+        for timestamp in (0, 2):
+            for packet in await runtime.process_packet(with_media_timestamp(frame(timestamp), ts=timestamp), None):
+                await notify.process_packet(packet, None)
+        assert records[-1].payload["event"]["duration_seconds"] == 2
+        last_capture = runtime._occurrences["camera:cat"].last_packet.payload["capture_evidence"]
+        terminal = with_media_timestamp(frame(20 if reason == "gap" else 3, visible=reason != "missing"), ts=20 if reason == "gap" else 3)
+        if reason == "occlusion":
+            service.observable = False
+        elif reason == "reset":
+            terminal.payload["capture_evidence"]["generation"] = 1
+        elif reason == "source_close":
+            terminal = replace(terminal, lifecycle=Lifecycle.CLOSE)
+        if reason == "timeout":
+            state = runtime._occurrences["camera:cat"]
+            outputs = runtime._close_occurrence(state, state.last_packet, "evidence_timeout")
+        else:
+            outputs = await runtime.process_packet(terminal, None)
+        closed = outputs[0]
+        assert closed.lifecycle == Lifecycle.CLOSE
+        assert closed.payload["capture_evidence"] == last_capture
+        for packet in outputs:
+            await notify.process_packet(packet, None)
+        assert len(records) == 2
+        assert records[0].id == records[1].id
+        assert records[-1].payload["event"]["duration_status"] == "observed"
+        assert records[-1].payload["event"]["duration_seconds"] == 2
+        assert closed.payload["condition_occurrence"]["duration_seconds"] == 2
+
+    for reason in ("occlusion", "missing", "reset", "gap", "source_close", "timeout"):
+        asyncio.run(scenario(reason))

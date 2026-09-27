@@ -690,10 +690,11 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         evidence = state.last_packet or packet
         duration = max(0.0, resolve_media_ts(evidence) - (state.started_at or 0.0))
         current = lifecycle != Lifecycle.CLOSE
-        payload = dict(packet.payload)
+        # The event describes the positive evidence, not the later packet that closes it.
+        payload = dict(evidence.payload)
         payload.update({
             "ai": evidence.payload.get("ai", {}),
-            "subject": {"type": "event", "id": identity},
+            "subject": {"type": "event", "id": identity, "started_ts": state.started_at},
             "correlation_id": identity,
             "source_stream_id": packet.stream_id,
             "condition_occurrence": {

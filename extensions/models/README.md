@@ -9,7 +9,7 @@ The editor accepts a known object height in meters and applies a uniform scale, 
 
 Import checks selected files against a combined 64 MiB limit. Before preview and scene rendering, geometry must have finite vertices and transforms, at most 2 million vertices and at most 16,777,216 decoded texture pixels in total. Decoded assets are released after preview generation and on failed or superseded loads. These checks run after the loader decodes the model; they do not impose a hard peak-memory limit on decoding or remote resources referenced by GLTF.
 
-Image-to-model generation and metric reconstruction are not provided. Import an existing GLB/GLTF asset; supplying a height reference establishes its scale, not its accuracy.
+Optional local image-to-model generation is described below. Metric reconstruction is not provided; supplying a height reference establishes scale, not geometric accuracy.
 
 Focused verification (compile output must stay outside the repository):
 
@@ -67,7 +67,7 @@ This does not establish real dimensions or observed geometry behind the object.
 
 ### Generate through the model tool
 
-Select **3D model**, choose a placement point, then select one PNG/JPEG/WebP image of an isolated object (up to 8 MiB). The same tool imports GLB/GLTF and their assets when a model file is selected. Generation uses the optional local runtime above; missing runtimes, unusable images, busy workers and failures have explicit messages. The progress dialog supports keyboard access, Cancel and Escape.
+Select **3D model**, choose a placement point, then choose a local file or expand **Stored images from history**. Search by event title, load older records if needed, select one stored image and review it before **Use this image**. Selection reads existing authorized history and files; it does not capture a new camera image. Records without a stored image are omitted. PNG/JPEG/WebP images of an isolated object are accepted (up to 8 MiB). The same tool imports GLB/GLTF and their assets when a model file is selected. Generation uses the optional local runtime above; missing runtimes, unusable images, busy workers and failures have explicit messages. The source and progress dialogs support keyboard access, Cancel and Escape. Changing the selection or closing the source dialog clears its preview and cancels pending reads. The selected history record is checked again before use; external image URLs are not accepted.
 
 Generated elements retain the generation provenance and show an approximation notice when edited. Enter a known height to scale the object; generated geometry does not supply a measured reference height. Preview, placement, floor height and advanced scale reuse the importer. Opaque photos use the optional background model described below. Runtime installation is an explicit administrator operation.
 

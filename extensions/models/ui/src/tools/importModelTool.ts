@@ -1,5 +1,6 @@
 import { requestForm, resolveToposyncUrl, type EditorTool, type HostI18n, type PlanePoint } from "@toposync/plugin-api";
 
+import { openModelSourcePicker } from "./modelSourcePicker";
 import type { UploadFileResponse } from "../types";
 
 import { MAXIMUM_MODEL_BYTES } from "../validation";
@@ -40,6 +41,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
       let lastError: string | null = null;
       let operation: AbortController | null = null;
       let disposed = false;
+      let closePicker: (() => void) | null = null;
       let lastCanvas: HTMLCanvasElement | null = null;
 
       const t = i18n.t;
@@ -68,6 +70,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
       }
 
       function cancel() {
+        closePicker?.(); closePicker = null;
         operation?.abort();
         operation = null;
         activityState = "idle";
@@ -162,10 +165,8 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
         debugLog("[models:tool] element created", { id });
       }
 
-      input.addEventListener("change", () => {
+      function startImport(files: File[]) {
         if (disposed || operation) return;
-        const files = input.files ? Array.from(input.files) : [];
-        input.value = "";
         debugLog("[models:tool] input change", { count: files.length, pendingPlacementPoint });
         if (files.length === 0) {
           activityState = "idle";
@@ -193,6 +194,11 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
             }
           }
         })();
+      }
+      input.addEventListener("change", () => {
+        const files = input.files ? Array.from(input.files) : [];
+        input.value = "";
+        startImport(files);
       });
 
       return {
@@ -230,7 +236,12 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
             if (activityState !== "idle") return;
             if (!pendingPlacementPoint) return;
             debugLog("[models:tool] pointer up -> open picker", { pendingPlacementPoint });
-            input.click();
+            closePicker?.();
+            closePicker = openModelSourcePicker(t, {
+              local: () => { closePicker?.(); closePicker = null; input.click(); },
+              stored: file => { closePicker?.(); closePicker = null; startImport([file]); },
+              cancel,
+            });
           }
         },
         onKeyDown: (event) => {

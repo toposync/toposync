@@ -336,3 +336,6 @@ backfilled by matching names.
 
 
 A receita de pessoa parada aceita uma referência visual opcional para avaliar orientação corporal, como uma fachada distinguível ao fundo. A opção preserva a cena inteira e vincula a avaliação à pessoa acompanhada; usa o perfil visual configurado e mantém a ocorrência de parada mesmo quando a orientação fica indisponível. A notificação diferencia indício positivo, negativo visível e indisponibilidade, e conserva contexto de avaliação para revisão. Não confirma olhar, atenção, intenção nem direção tridimensional. Referência oculta ou ambígua não permite confirmação. O campo é opcional e fica recolhido na configuração; sem referência, a receita de parada mantém seu fluxo normal. A API aceita `orientation_reference` (até 240 caracteres) somente em `person_stopped`. Precisão visual depende de qualificação empírica do perfil.
+
+
+Na receita com orientação, a cena armazenada conserva os pixels até a avaliação. O fluxo dispensa o debounce de parada para que mudanças entre indício, negativo e indisponível cheguem à notificação; permanece a limitação de frequência do avaliador e da notificação. Evidências positivas anteriores ficam no histórico com imagem, captura e vínculo de sujeito, explicitamente sem certificar o estado atual. O fechamento não apaga esse registro nem o apresenta como uma nova avaliação.

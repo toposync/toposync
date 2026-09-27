@@ -1016,6 +1016,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                     "image_reference": artifact.reference, "packet_id": packet.packet_id,
                     "confidence": float(result.confidence), "model": result.model,
                     "current_state_verified": False,
+                    **({"subject_context": self._subject_context(packet, input_artifact_name)}
+                       if self._config.bind_subject_context else {}),
                 }
         payload["ai"] = ai_payload
         return replace(packet, payload=payload)

@@ -5729,7 +5729,7 @@ class CamerasExtension(BaseExtension):
                             "preserve_scene": True, "output_artifact_name": "orientation_scene",
                             "fallback_to_detections": False, "missing_policy": "pass_through"}},
                         {"id": "orientation_store", "operator": "core.store_images", "config": {
-                            "input_artifact_name": "orientation_scene", "format": "webp"}},
+                            "input_artifact_name": "orientation_scene", "format": "webp", "drop_data_after_store": False}},
                         {"id": "orientation", "operator": "ai.condition_filter", "config": {
                             "emit_mode": "annotate", "bind_subject_context": True,
                             "input_artifact_name": "orientation_scene", "confidence_threshold": 0.75,
@@ -5747,7 +5747,9 @@ class CamerasExtension(BaseExtension):
                                 "closed": "Observação encerrada; consulte a cena registrada.",
                             }}},
                     ]
+                    notify_nodes = [node for node in notify_nodes if node["id"] != "notify_debounce"]
                     notify_config = notify_nodes[-1]["config"]
+                    notify_config["historical_evidence_paths"] = ["ai.condition_filter.observation"]
                     notify_config["include_payload_paths"] = ["area_id", "ai.condition_filter"]
                     if not notification_description:
                         notify_config["description"] = "{{payload.ai.condition_filter.description}} Pessoa parada por {{payload.stationary_event.stationary_seconds}} s."
@@ -5762,7 +5764,7 @@ class CamerasExtension(BaseExtension):
                             stationary_input_node,
                             "stationary_event",
                             *[node["id"] for node in orientation_nodes],
-                            "notify_debounce",
+                            *([] if orientation_nodes else ["notify_debounce"]),
                             "notify_crop",
                             "notify_store",
                             "notify",

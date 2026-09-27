@@ -5316,7 +5316,7 @@ class CamerasExtension(BaseExtension):
                         continue
                     area_name = str(getattr(element, "name", "") or "").strip() or selected_area_id
                     matches.append((comp_id, {
-                        "areas": [{"name": area_name, "points": points}],
+                        "areas": [{"id": selected_area_id, "name": area_name, "points": points}],
                         "include_area_names": [area_name],
                         "drop_when_unmapped": True,
                     }))

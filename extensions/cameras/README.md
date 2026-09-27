@@ -146,6 +146,14 @@ Camera settings offer litter-box activity, drinking, presence in an area, and en
 
 `POST /api/cameras/cameras/{camera_id}/pipelines/presets/preview` accepts the recipe request and returns a compiled, disabled `pipeline` without saving it. It requires pipeline read and compile permissions. Creation uses the same preparation path. An explicit composition confines area lookup to that composition; ambiguous area identifiers without a composition are rejected.
 
+Mapped presence, entry, group-entry and doorbell recipes preserve the selected
+area element identifier as `area.id` in their occurrence configuration. The
+occurrence emits `area_id` and `area_label`; its notification projects the identifier
+through the existing `include_payload_paths` contract so history filters can match
+it exactly. Manually configured polygons without an identifier retain their name
+but do not inherit or invent an area identifier. Existing historical records are
+not backfilled from names alone.
+
 `camera.area_occurrence` groups evidence independently per tracked subject. Entry requires a preceding observation outside the area; first sighting inside is not an entry. Duration ends at the last confirmed observation. Missing observations, source loss and tracking closure end the occurrence without claiming the physical activity ended. Stale or terminal replay cannot reopen a subject, and active state is bounded. Cat recipes use semantic occurrence filtering; descriptions are observations, not proof of ingestion or elimination.
 
 **People entering together** requires two distinct tracked people crossing into the

@@ -122,7 +122,7 @@ def add_recent_event_to_area_graph(graph, *, camera_id, topic, item_name, notifi
                 "não confirma quem acionou nem identidade ou profissão. {{payload.ai.condition_filter.description}} "
                 "{{payload.historical_evidence.ai.condition_filter.observation.description}}"
             )
-            node["config"]["include_payload_paths"] = ["area_occurrence", "onvif_context", "ai.condition_filter"]
+            node["config"]["include_payload_paths"] = ["area_occurrence", "area_id", "onvif_context", "ai.condition_filter"]
             node["config"]["historical_evidence_paths"] = ["ai.condition_filter.observation"]
     incoming = next(edge for edge in graph["edges"] if edge["to"]["node"] == "area")
     graph["edges"].append({**incoming, "uid": "event_context_to_area",

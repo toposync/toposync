@@ -181,6 +181,8 @@ def test_area_recipe_requires_explicit_area_and_compiles(tmp_path, monkeypatch, 
         pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
         occurrence = _node_config(pipeline, "camera.area_occurrence")
         assert occurrence["area"]["name"] == "Gate"
+        assert occurrence["area"]["id"] == "area-1"
+        assert "area_id" in _node_config(pipeline, "core.notify")["include_payload_paths"]
         assert occurrence["mode"] == ("entry" if preset in {"area_entry", "area_group_entry"} else "presence")
         expected_categories = ["person"] if preset == "area_group_entry" else ["person", "dog", "cat"]
         assert _node_config(pipeline, "vision.detect")["categories"] == expected_categories
@@ -1157,6 +1159,7 @@ def test_camera_pipeline_stopped_area_uses_area_composition_and_restriction(
         assert area.get("drop_when_unmapped") is True
         assert area.get("areas") == [
             {
+                "id": "area-1",
                 "name": "Gate",
                 "points": [
                     {"x": 0.0, "z": 0.0},
@@ -1201,6 +1204,8 @@ def test_doorbell_visitor_requires_discovered_signal_and_saves_disabled(tmp_path
         assert _node_config(pipeline, "camera.area_occurrence")["categories"] == ["person"]
         assert _node_config(pipeline, "camera.recent_onvif_event")["topic"] == "fixture/doorbell"
         assert "onvif_context" in _node_config(pipeline, "core.notify")["include_payload_paths"]
+        assert "area_id" in _node_config(pipeline, "core.notify")["include_payload_paths"]
+        assert _node_config(pipeline, "camera.area_occurrence")["area"]["id"] == "area-1"
         assert "quem acionou" in _node_config(pipeline, "core.notify")["description"]
         edges = pipeline["graph"]["edges"]
         assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "event_context" for edge in edges)

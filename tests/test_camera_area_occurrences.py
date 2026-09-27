@@ -27,7 +27,7 @@ def test_perimeter_description_persists_facts_and_loss_without_duplicate_alert(t
     async def scenario():
         graph = build_area_occurrence_graph(
             preset="area_entry", camera_id="one", source_id="main", detection_model_id="detector",
-            composition_id="yard", area_restriction_config={"areas": [AREA], "include_area_names": [AREA["name"]]},
+            composition_id="yard", area_restriction_config={"areas": [{**AREA, "id": "area-pool"}], "include_area_names": [AREA["name"]]},
             graph_uid="perimeter",
         )
         configurations = {node["id"]: node["config"] for node in graph["nodes"]}
@@ -57,6 +57,10 @@ def test_perimeter_description_persists_facts_and_loss_without_duplicate_alert(t
         assert record.description.endswith("Observação encerrada; presença atual não confirmada.")
         assert "Saída" not in record.description
         assert record.payload["data"]["area_occurrence"]["duration_seconds"] == 2
+        assert record.payload["data"]["area_id"] == "area-pool"
+        assert record.payload["data"]["area_label"] == "piscina"
+        assert [item.id for item in store.list(data_filter={"area_id": "area-pool"})[0]] == [record.id]
+        assert store.data_options("area_id", "area_label") == [{"value": "area-pool", "label": "piscina"}]
         assert record.payload["data"]["area_occurrence"]["observed_subject"]["category"] == "cat"
         assert len({item.id for item, _ in records}) == 1
         assert sum(created for _, created in records) == 1
@@ -240,4 +244,16 @@ def test_terminal_subject_and_stale_flood_cannot_restart_or_evict_presence():
         assert await runtime.process_packet(observation(3), None) == []
         assert not runtime.states
 
+    asyncio.run(scenario())
+
+
+def test_unnamed_area_identity_never_inherits_another_area_identifier():
+    async def scenario():
+        area = AreaOccurrenceRuntime({"area": AREA, "minimum_duration_seconds": 0})
+        packet = observation(1)
+        packet.payload["area_id"] = "different-area"
+        packet.payload["area_label"] = "Different label"
+        result = (await area.process_packet(packet, None))[0]
+        assert "area_id" not in result.payload
+        assert result.payload["area_label"] == "piscina"
     asyncio.run(scenario())

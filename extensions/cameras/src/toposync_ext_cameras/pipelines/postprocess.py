@@ -1285,6 +1285,7 @@ class AreaRestrictionPoint(BaseModel):
 
 
 class AreaRestrictionPolygon(BaseModel):
+    id: str | None = Field(default=None, min_length=1, max_length=512)
     name: str
     points: list[AreaRestrictionPoint] = Field(default_factory=list, min_length=3)
 

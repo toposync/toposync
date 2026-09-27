@@ -157,6 +157,11 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         packet = state.last_packet
         identity = hashlib.sha256(f"{key}:{state.capture[:2]}:{self.config.area.name}:{state.started_at}".encode()).hexdigest()[:32]
         payload = dict(packet.payload)
+        payload["area_label"] = self.config.area.name
+        # A name alone cannot establish a mapped identity, nor inherit another area's identifier.
+        payload.pop("area_id", None)
+        if self.config.area.id is not None:
+            payload["area_id"] = self.config.area.id
         subject = dict(packet.payload["subject"])
         subject.update({"type": "event", "id": identity, "lifecycle": lifecycle.value, "started_ts": state.started_at})
         duration = resolve_media_ts(packet) - state.started_at
@@ -227,7 +232,7 @@ def build_area_occurrence_graph(*, preset, camera_id, source_id, detection_model
         {"id": "notify", "operator": "core.notify", "config": {
             "notification_type": "pipelines.tracking", "title": notification_title or "{{camera_name}}: {{payload.area_occurrence.area}}",
             "description": notification_description or "{{payload.area_occurrence.description}}",
-            "include_payload_paths": ["area_occurrence"],
+            "include_payload_paths": ["area_occurrence", "area_id"],
             "priority": notification_priority or "high", "dedupe_key_template": "{{subject.id}}", "dedupe_by_occurrence": True}},
     ]
     if grouped:
@@ -241,5 +246,5 @@ def build_area_occurrence_graph(*, preset, camera_id, source_id, detection_model
             "{{payload.category_summary.member_count}} pessoas entraram em até cinco segundos. "
             "{{payload.group_observation.duration_seconds}} s entre a primeira entrada e a última evidência."
         )
-        nodes[-1]["config"]["include_payload_paths"] = ["group_observation", "area_occurrence"]
+        nodes[-1]["config"]["include_payload_paths"] = ["group_observation", "area_occurrence", "area_id"]
     return build_pipeline_graph_v2(graph_uid=graph_uid, nodes=nodes, edges=_linear_edges([node["id"] for node in nodes]))

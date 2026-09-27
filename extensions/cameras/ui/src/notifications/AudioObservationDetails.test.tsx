@@ -29,4 +29,10 @@ test("audio history explains closure without claiming calibrated confidence or r
   html = renderToStaticMarkup(<AudioObservationDetails notification={notification} i18n={i18n} />);
   assert.match(html, /Não foi confirmado silêncio/);
   assert.doesNotMatch(html, /NaN|Último trecho analisado/);
+  Object.assign(notification.payload as Record<string, unknown>, { status: "closed", reason: "runtime_restart" });
+  evidence.audio_occurrence.status = "above_baseline";
+  html = renderToStaticMarkup(<AudioObservationDetails notification={notification} i18n={i18n} />);
+  assert.match(html, /interrompida pelo reinício/);
+  assert.match(html, /não foram confirmados continuidade nem silêncio/);
+  assert.doesNotMatch(html, /O som superou/);
 });

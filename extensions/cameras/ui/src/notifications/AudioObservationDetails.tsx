@@ -30,7 +30,9 @@ export function AudioObservationDetails({ notification, i18n }: { notification: 
     source_capacity: "ended", stale_evidence: "missing", invalid_clock: "missing",
     invalid_window: "missing", baseline_unavailable: "missing", baseline_changed: "changed",
   };
-  const key = reasons[readString(occurrence.status)] ?? "unknown";
+  const payload = readRecord(notification.payload);
+  const key = payload.status === "closed" && payload.reason === "runtime_restart"
+    ? "restarted" : reasons[readString(occurrence.status)] ?? "unknown";
   const text = readString(transcription.text).slice(0, 4096);
   return <section className="card" aria-label={t("ext.cameras.audioHistory.title")}>
     <div className="cardBody" style={{ overflowWrap: "anywhere" }}>
@@ -62,6 +64,7 @@ export const audioHistoryTranslations = {
     "ext.cameras.audioHistory.quiet": "Observation ended after sound returned to the reference range.",
     "ext.cameras.audioHistory.missing": "Observation ended without continuous valid audio evidence. Quiet was not confirmed.",
     "ext.cameras.audioHistory.ended": "Observation ended because the source or processing stopped.",
+    "ext.cameras.audioHistory.restarted": "Observation interrupted by an app restart. Earlier evidence was preserved; continuous observation and quiet were not confirmed.",
     "ext.cameras.audioHistory.changed": "Observation ended because the normal reference changed.",
     "ext.cameras.audioHistory.unknown": "Recorded analysis; the reason for ending is unavailable.",
     "ext.cameras.audioHistory.reference": "Normal reference: {{name}}",
@@ -79,6 +82,7 @@ export const audioHistoryTranslations = {
     "ext.cameras.audioHistory.quiet": "Observação encerrada após o som voltar à faixa da referência.",
     "ext.cameras.audioHistory.missing": "Observação encerrada sem evidência contínua de áudio válido. Não foi confirmado silêncio.",
     "ext.cameras.audioHistory.ended": "Observação encerrada porque a fonte ou o processamento parou.",
+    "ext.cameras.audioHistory.restarted": "Observação interrompida pelo reinício do aplicativo. A evidência anterior foi preservada; não foram confirmados continuidade nem silêncio.",
     "ext.cameras.audioHistory.changed": "Observação encerrada porque a referência normal mudou.",
     "ext.cameras.audioHistory.unknown": "Análise registrada; motivo do encerramento indisponível.",
     "ext.cameras.audioHistory.reference": "Referência normal: {{name}}",

@@ -98,6 +98,7 @@ def test_identity_api_requires_authentication_for_every_surface(client):
         "/history",
         "/observations/missing/image",
         "/occurrences/missing",
+        "/missing/notifications",
     ]:
         assert client.get("/api/vision/identities" + path).status_code == 401
     assert client.post("/api/vision/identities/curation", json={}).status_code == 401
@@ -367,6 +368,9 @@ def test_camera_scope_survives_unassignment_and_protects_implicit_curation(
         denied = client.get("/api/vision/identities/history-scope", params={"identity_id": restricted})
         assert denied.status_code == 403
         assert "occurrences" not in denied.json()
+        history = client.get(f"/api/vision/identities/{restricted}/notifications")
+        assert history.status_code == 403
+        assert "notifications" not in history.json()
     for restricted in (standalone_id, merged_id):
         assert (
             client.post(
@@ -613,3 +617,79 @@ def test_retention_cannot_erase_unauthorized_visit_after_its_photo_expired(clien
     assert client.get("/api/vision/identities/occurrences/private").status_code == 403
     assert client.get("/api/vision/identities/retention-preview").status_code == 403
     assert client.put("/api/vision/identities/retention", json={"enabled": True, "expected_revision": revision}).status_code == 403
+
+
+def _history_fixture(client):
+    from toposync_ext_vision.identity.store import IdentityStore
+    from test_identity_store import enroll
+    gallery = IdentityStore(client.app.state.config_store.paths.data_dir / "identities", scope="installation")
+    identity, _, _ = enroll(gallery)
+    store = client.app.state.notifications.store
+    single, _ = store.upsert(type="event", title="Pessoa", dedupe_key="single", payload={"data": {
+        "camera_id": "camera", "recognition": {"occurrence_id": "enrollment"}}})
+    group, _ = store.upsert(type="event", title="Pessoa em grupo", payload={"data": {
+        "camera_id": "camera", "subject": {"type": "group_event", "members": [
+            {"recognition_occurrence_id": "enrollment", "category": "person"}]}}})
+    for index in range(260):
+        store.upsert(type="event", title="Pessoa sem vínculo", payload={"data": {
+            "camera_id": "camera", "recognition": {"occurrence_id": f"other-{index}"}}})
+    store.upsert(type="event", title="Pessoa fonte incompatível", payload={"data": {
+        "camera_id": "wrong-camera", "recognition": {"occurrence_id": "enrollment"}}})
+    store.upsert(type="event", title="Pessoa silenciosa", payload={"priority": "silent", "data": {
+        "camera_id": "camera", "recognition": {"occurrence_id": "enrollment"}}})
+    for members in ["invalid json", [{"recognition_occurrence_id": "enrollment", "category": "cat"}], ["not an object"]]:
+        store.upsert(type="event", title="Pessoa grupo inválido", payload={"data": {
+            "camera_id": "camera", "subject": {"type": "group_event", "members": members}}})
+    return gallery, identity, single, group
+
+
+def test_identity_notification_retrieval_scopes_before_limit_and_optional_ai_fallback(client):
+    gallery, identity, single, group = _history_fixture(client)
+    try:
+        path = f"/api/vision/identities/{identity}/notifications"
+        response = client.get(path, params={"query": "pessoa", "limit": 1})
+        assert response.status_code == 200, response.text
+        assert response.headers["cache-control"] == "private, no-store"
+        result = response.json()
+        assert [item["id"] for item in result["notifications"]] == [group.id]
+        page = client.get(path, params={"before": result["next_cursor"], "limit": 1}).json()
+        assert [item["id"] for item in page["notifications"]] == [single.id]
+        for mode in ("text", "visual"):
+            result = client.get(path, params={"query": "pessoa", "mode": mode}).json()
+            assert {item["id"] for item in result["notifications"]} == {single.id, group.id}
+            assert result["search"]["status"] == "degraded"
+        assert client.get(path, params={"data_filter": '{"camera_id":"other"}'}).json()["notifications"] == []
+        assert client.get(path, params={"data_filter": '{"camera_id":7}'}).status_code == 422
+        assert identity not in client.get("/api/notifications").text
+        assert client.app.state.notifications.store.list(notification_ids=[])[0] == []
+        from test_identity_store import curate
+        empty_identity = curate(gallery, "create", {"name": "Sem associação", "species": "cat"})["identity_id"]
+        empty = client.get(f"/api/vision/identities/{empty_identity}/notifications", params={"query": "pessoa", "mode": "visual"})
+        assert empty.status_code == 200
+        assert empty.json()["notifications"] == []
+        assert empty.json()["search"]["reason"] == "no_associated_notifications"
+    finally:
+        gallery.close()
+
+
+@pytest.mark.parametrize("change", ["association", "notification_reference"])
+def test_identity_retrieval_rechecks_association_and_notification_after_search(client, change):
+    from test_identity_store import curate
+    gallery, identity, single, group = _history_fixture(client)
+    try:
+        async def mutate(**parameters):
+            assert set(parameters["notification_ids"]) == {single.id, group.id}
+            result, _ = await client.app.state.notifications.list(**parameters)
+            if change == "association":
+                observation = next(item for item in gallery.observations() if item["occurrence_id"] == "enrollment")
+                curate(gallery, "unassign", {"observation_ids": [observation["id"]]})
+            else:
+                client.app.state.notifications.store.upsert(type="event", title="Pessoa", dedupe_key="single",
+                    payload={"data": {"camera_id": "camera", "recognition": {"occurrence_id": "different"}}})
+            return {"notifications": result, "search": {"mode": "semantic_visual", "status": "ready"}}
+        client.app.state.services.register("ai.search_visual_notifications", mutate)
+        response = client.get(f"/api/vision/identities/{identity}/notifications", params={"query": "pessoa", "mode": "visual"})
+        assert response.status_code == 409, response.text
+        assert "notifications" not in response.json()
+    finally:
+        gallery.close()

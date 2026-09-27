@@ -333,6 +333,7 @@ class NotificationStore:
         types: list[str] | tuple[str, ...] | None = None,
         query: str | None = None,
         data_filter: dict[str, str] | None = None,
+        notification_ids: list[str] | None = None,
         created_after: float | None = None,
         created_before: float | None = None,
         include_silent: bool = False,
@@ -378,6 +379,12 @@ class NotificationStore:
                 where_sql.append("1 = 0")
         elif not include_silent:
             where_sql.append("priority_bucket IN ('low', 'medium', 'high')")
+
+        if notification_ids is not None:
+            if not isinstance(notification_ids, list) or any(not isinstance(value, str) or not 1 <= len(value) <= 128 for value in notification_ids):
+                raise ValueError("Notification identifiers must be nonempty strings")
+            where_sql.append("id IN (SELECT value FROM json_each(?))")
+            params.append(json.dumps(notification_ids))
 
         requested_types = _clean_strings(types)
         if requested_types:

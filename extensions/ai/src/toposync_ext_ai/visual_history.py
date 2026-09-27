@@ -65,15 +65,15 @@ class VisualHistorySearch(TextHistorySearch):
             connection.executemany("DELETE FROM ai_notification_embedding WHERE space=? AND notification_id=?",
                                    [(space, identifier) for identifier in identifiers])
 
-    async def _semantic(self, query, limit, priorities=None, types=None, created_after=None, created_before=None, data_filter=None):
+    async def _semantic(self, query, limit, priorities=None, types=None, created_after=None, created_before=None, data_filter=None, notification_ids=None):
         # Optional extension failures must keep literal history usable, including unsupported runtimes.
         try:
-            return await self._visual(query, limit, priorities, types, created_after, created_before, data_filter)
+            return await self._visual(query, limit, priorities, types, created_after, created_before, data_filter, notification_ids)
         except Exception as exc:
             raise ValueError("local_visual_embeddings_unavailable") from exc
 
-    async def _visual(self, query, limit, priorities, types, created_after, created_before, data_filter=None):
-        filters = dict(priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter)
+    async def _visual(self, query, limit, priorities, types, created_after, created_before, data_filter=None, notification_ids=None):
+        filters = dict(priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids)
         items, _ = await self.notifications.list(limit=CORPUS_LIMIT, **filters)
         space = await self.services.call("vision.history_embedding_space")
         if not isinstance(space, str) or not space.startswith("clip-") or len(space) > 256:

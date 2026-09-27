@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from typing import Annotated, Callable, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -201,6 +203,79 @@ def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
                 authorize_cameras=lambda cameras: _authorize(request, cameras=cameras))
         except IdentityConflict as exc:
             raise HTTPException(status_code=409, detail="Identity changed; refresh the selection") from exc
+
+    @router.get("/{identity_id}/notifications")
+    async def identity_notifications(
+        request: Request, response: Response, identity_id: Identifier,
+        association: Literal["human", "recognized"] = "human",
+        query: str = Query("", max_length=1000), mode: Literal["literal", "text", "visual"] = "literal",
+        limit: int = Query(40, ge=1, le=50), before: int | None = Query(None, ge=0),
+        priority: list[str] | None = Query(None), notification_type: list[str] | None = Query(None, alias="type"),
+        data_filter: str | None = Query(None, max_length=8192),
+        created_after: float | None = Query(None, ge=0, allow_inf_nan=False),
+        created_before: float | None = Query(None, ge=0, allow_inf_nan=False),
+    ):
+        from toposync.runtime.notifications.store import parse_data_filter
+        from toposync.runtime.notifications.time_query import resolve_history_time
+        from .history import matching_notification_ids
+
+        _authorize(request)
+        request.app.state.auth.authorize(context=request.state.auth_context,
+            action="core:notifications:read", resource_type=None, resource_selector="*")
+        response.headers["Cache-Control"] = "private, no-store"
+        gallery = store()
+        def selection():
+            try:
+                return gallery.history_scope(identity_id, association=association,
+                    authorize_cameras=lambda cameras: _authorize(request, cameras=cameras))
+            except IdentityConflict as exc:
+                raise HTTPException(409, "Identity changed; refresh the selection") from exc
+        scope = await asyncio.to_thread(selection)
+        runtime = request.app.state.notifications
+        identifiers = await asyncio.to_thread(matching_notification_ids, runtime.store, scope)
+        try:
+            filters = parse_data_filter(data_filter)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if created_after is not None and created_before is not None and created_after >= created_before:
+            raise HTTPException(422, "Notification time interval must have positive duration")
+        interpretation = None
+        if created_after is None and created_before is None:
+            settings = await request.app.state.config_store.get_settings()
+            query, interpretation = resolve_history_time(query, settings.core.get("timezone"))
+            if interpretation and interpretation.get("time_range"):
+                created_after = interpretation["time_range"]["created_after"]
+                created_before = interpretation["time_range"]["created_before"]
+        parameters = dict(limit=limit, priorities=priority, types=notification_type, data_filter=filters,
+            notification_ids=identifiers, created_after=created_after, created_before=created_before)
+        result = None
+        if interpretation and interpretation.get("reason"):
+            result = {"notifications": [], "next_cursor": None,
+                      "search": {"mode": "literal", "status": "degraded", **interpretation}}
+        elif not identifiers:
+            result = {"notifications": [], "next_cursor": None, "search": {"mode": "literal", "status": "ready", "reason": "no_associated_notifications"}}
+        elif mode != "literal" and query.strip():
+            service = "ai.search_visual_notifications" if mode == "visual" else "ai.search_notifications"
+            try:
+                result = await request.app.state.services.call(service, query=query, **parameters)
+                result["next_cursor"] = None
+            except KeyError:
+                pass  # Optional AI extension is absent; preserve the authorized literal selection.
+        if result is None:
+            items, cursor = await runtime.list(query=query, before=before, **parameters)
+            result = {"notifications": items, "next_cursor": cursor, "search": {
+                "mode": "literal", "status": "degraded" if mode != "literal" and query.strip() else "ready",
+                **(interpretation or {})}}
+        elif interpretation:
+            result["search"].update(interpretation)
+        current = await asyncio.to_thread(selection)
+        current_ids = await asyncio.to_thread(matching_notification_ids, runtime.store, current)
+        if current != scope or not {item["id"] for item in result["notifications"]}.issubset(current_ids):
+            raise HTTPException(409, "Identity history changed; refresh the selection")
+        request.app.state.auth.authorize(context=request.state.auth_context,
+            action="core:notifications:read", resource_type=None, resource_selector="*")
+        result["identity_selection"] = {"association": association, "revision": current["revision"]}
+        return result
 
     @router.get("/observations")
     def observations(

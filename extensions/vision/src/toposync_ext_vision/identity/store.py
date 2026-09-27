@@ -531,7 +531,7 @@ class IdentityStore:
         with self._transaction() as connection:
             authorized = self.camera_ids(identity_id=identity_id)
             authorize_cameras(authorized)
-            self._identity(connection, identity_id)
+            identity = self._identity(connection, identity_id)
             occurrences = []
             for row in connection.execute("SELECT id,camera_id,decision FROM occurrence ORDER BY id"):
                 decision = RecognitionDecision.model_validate(self._open(row["decision"]))
@@ -541,9 +541,9 @@ class IdentityStore:
                 if row["camera_id"] not in authorized:
                     authorize_cameras({row["camera_id"]})
                     authorized.add(row["camera_id"])
-                occurrences.append({"occurrence_id": row["id"], "provenance": decision.provenance,
+                occurrences.append({"occurrence_id": row["id"], "camera_id": row["camera_id"], "provenance": decision.provenance,
                                     "decision_revision": decision.revision, "evidence_at": decision.evidence_at})
-            return {"identity_id": identity_id, "association": association,
+            return {"identity_id": identity_id, "species": identity["species"], "association": association,
                     "revision": self.revision, "occurrences": occurrences}
 
     def occurrence_details(self, occurrence_id: str) -> dict | None:

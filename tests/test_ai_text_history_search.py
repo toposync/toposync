@@ -96,7 +96,7 @@ def test_relative_semantic_query_and_date_only_share_configured_timezone(tmp_pat
 
     search.config_store = Settings()
     calls = []
-    async def unavailable(query, limit, priorities, types, start, end, data_filter=None):
+    async def unavailable(query, limit, priorities, types, start, end, data_filter=None, notification_ids=None):
         calls.append((query, start, end))
         raise httpx.ConnectError("offline")
     monkeypatch.setattr(search, "_semantic", unavailable)

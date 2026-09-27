@@ -96,7 +96,7 @@ class TextHistorySearch:
         return {identifier: json.loads(vector) for identifier, digest, vector in rows
                 if identifier in documents and documents[identifier][0] == digest}
 
-    async def search(self, *, query: str, limit: int = 10, priorities: list[str] | None = None, types: list[str] | None = None, created_after: float | None = None, created_before: float | None = None, data_filter: dict[str, str] | None = None) -> dict[str, Any]:
+    async def search(self, *, query: str, limit: int = 10, priorities: list[str] | None = None, types: list[str] | None = None, created_after: float | None = None, created_before: float | None = None, data_filter: dict[str, str] | None = None, notification_ids: list[str] | None = None) -> dict[str, Any]:
         data_filter = parse_data_filter(data_filter)
         query = query.strip()
         if not query or len(query) > 1000 or not 1 <= limit <= 50:
@@ -112,24 +112,24 @@ class TextHistorySearch:
                 created_before = interpretation["time_range"]["created_before"]
             if not query:
                 items, _ = await self.notifications.list(limit=limit + 1, priorities=priorities, types=types,
-                                                        created_after=created_after, created_before=created_before, data_filter=data_filter)
+                                                        created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids)
                 return {"notifications": items[:limit], "search": {"mode": "literal", "status": "ready",
                     "returned_count": min(len(items), limit), "results_truncated": len(items) > limit,
                     **(interpretation or {})}}
         async with self.lock:
             try:
-                result = await self._semantic(query, limit, priorities, types, created_after, created_before, data_filter)
+                result = await self._semantic(query, limit, priorities, types, created_after, created_before, data_filter, notification_ids)
                 result["search"].update(interpretation or {})
                 return result
             except (httpx.HTTPError, ValueError, KeyError, TypeError, sqlite3.Error):
-                items, _ = await self.notifications.list(query=query, limit=limit + 1, priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter)
+                items, _ = await self.notifications.list(query=query, limit=limit + 1, priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids)
                 return {"notifications": items[:limit], "search": {"mode": "literal", "status": "degraded",
                     "returned_count": min(len(items), limit), "results_truncated": len(items) > limit,
                     "reason": self.fallback_reason, "visual_similarity": False,
                     "time_basis": "notification_created_at", "created_after": created_after, "created_before": created_before,
                     **(interpretation or {})}}
 
-    async def _semantic(self, query: str, limit: int, priorities: list[str] | None = None, types: list[str] | None = None, created_after: float | None = None, created_before: float | None = None, data_filter: dict[str, str] | None = None) -> dict[str, Any]:
+    async def _semantic(self, query: str, limit: int, priorities: list[str] | None = None, types: list[str] | None = None, created_after: float | None = None, created_before: float | None = None, data_filter: dict[str, str] | None = None, notification_ids: list[str] | None = None) -> dict[str, Any]:
         settings = await self.services.call("ai.settings.get")
         provider = next((provider for provider in settings.providers
                          if provider.enabled and provider.kind == "ollama" and provider.local), None)
@@ -138,7 +138,7 @@ class TextHistorySearch:
         endpoint = urlsplit(provider.host)
         if endpoint.scheme not in {"http", "https"} or endpoint.hostname not in {"localhost", "127.0.0.1", "::1"} or endpoint.username or endpoint.password:
             raise ValueError("loopback_provider_required")
-        items, _ = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter)
+        items, _ = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids)
         documents = {item["id"]: (hashlib.sha256(document_text(item).encode()).hexdigest(), document_text(item)) for item in items}
         async with httpx.AsyncClient(base_url=provider.host.rstrip("/"), timeout=60, trust_env=False) as client:
             response = await client.get("/api/tags")
@@ -169,11 +169,11 @@ class TextHistorySearch:
             if batch:
                 cached = await asyncio.to_thread(self.cache, space, documents, dict(zip(batch, vectors)))
         # Releitura garante que alteração, prioridade silenciosa ou exclusão não exponham evidência antiga.
-        current, cursor = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter)
+        current, cursor = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids)
         older = []
         if len(current) == CORPUS_LIMIT and cursor is not None:
             older, _ = await self.notifications.list(before=cursor, limit=1, priorities=priorities,
-                types=types, created_after=created_after, created_before=created_before, data_filter=data_filter)
+                types=types, created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids)
         ranked = []
         for item in current:
             identifier = item["id"]

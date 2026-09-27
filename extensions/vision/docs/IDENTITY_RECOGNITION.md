@@ -171,5 +171,17 @@ Consumers must reauthorize and compare the full selection after long-running
 retrieval: an observation can change its decision without changing gallery
 revision. Do not copy this private mapping into public notification payloads.
 
-This endpoint supplies selection only. Connecting it to notification retrieval
-and person/pet filter controls remains a separate integration step.
+`GET /api/vision/identities/{identity_id}/notifications` retrieves visible
+notifications linked to that selection. It additionally requires notification
+read permission. Individual occurrence references and group members must match
+the occurrence's camera; group members must also match its species. Filtering
+happens before pagination or the semantic corpus limit, preserving camera/area,
+priority, type and time filters. `mode=literal` is the default; `text` and `visual`
+reuse the optional AI search services and fall back to the same private literal
+selection when unavailable. Visual similarity does not confirm identity.
+
+The route reauthorizes and compares the full gallery selection after retrieval,
+then checks current notification references. Changes return HTTP 409 requiring
+a fresh selection instead of stale results. The private response does not copy
+identity names or identifiers into public notifications. Association filtering
+is available through this API; person/pet history controls remain to be integrated.

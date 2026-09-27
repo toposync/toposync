@@ -279,7 +279,7 @@ export function Gallery({ i18n }: { i18n: HostI18n }) {
   const photoButton = useRef<HTMLButtonElement | null>(null);
   useEffect(() => { setInspecting(null); }, [profile, review, species]);
   const galleryChanges = useRevision();
-  useEffect(() => { setSelected([]); setEditing(false); setAction(""); setInspecting(null); }, [galleryChanges]);
+  useEffect(() => { setEditing(false); setAction(""); setInspecting(null); }, [galleryChanges]);
   const profileHeading = useRef<HTMLHeadingElement>(null);
   const pendingFocus = useRef(false);
   const actionHeading = useRef<HTMLHeadingElement>(null);
@@ -291,6 +291,9 @@ export function Gallery({ i18n }: { i18n: HostI18n }) {
   const history = useLoad<{ operations: Operation[]; revision: number }>(showHistory ? "/history" : null);
   const { busy, error, run } = useMutation();
   const current = gallery.data?.identities.find((item) => item.id === profile);
+  useEffect(() => {
+    if (profile && !gallery.loading && gallery.data && !current) setProfile(null);
+  }, [profile, gallery.loading, gallery.data, current]);
   const writable = gallery.data?.permissions.curate === true;
   const observations = (photos.data?.observations || []).filter((item) => (!review || !item.identity_id) && (!species || item.species === species));
   const reviewGroups = new Map<string, Observation[]>();

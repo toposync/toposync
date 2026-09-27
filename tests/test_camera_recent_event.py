@@ -151,3 +151,78 @@ def test_unconfigured_event_context_does_not_poll_any_topic(monkeypatch):
         raise AssertionError("Unconfigured topic must not poll camera events")
     monkeypatch.setattr(runtime.source, "produce", forbidden)
     assert asyncio.run(runtime.process_packet(frame(100), None)) == []
+
+
+def test_visitor_package_annotation_preserves_negative_and_missing_occurrences(monkeypatch, tmp_path):
+    import numpy as np
+    from toposync.runtime.pipelines.runtime import Artifact
+    from toposync_ext_ai.pipelines.runtime import AiConditionFilterRuntime
+    from toposync_ext_vision.processing.tasks.crop_objects import VisionCropObjectsRuntime
+    from toposync_ext_cameras.area_events import build_area_occurrence_graph
+    from toposync_ext_cameras.event_context import add_recent_event_to_area_graph
+
+    clock, events, admission, context = setup(monkeypatch)
+    events.append(signal(1, 100))
+    graph = build_area_occurrence_graph(preset="area_presence", camera_id="entrance", source_id="main",
+        detection_model_id="fixture", composition_id="yard", area_restriction_config={"areas": [AREA], "include_area_names": [AREA["name"]]},
+        notification_title="", notification_description="", notification_priority=None, graph_uid="visitor")
+    graph = add_recent_event_to_area_graph(graph, camera_id="entrance", topic=CONFIG["topic"], item_name="Pressed")
+    configs = {node["id"]: node["config"] for node in graph["nodes"]}
+    area = AreaOccurrenceRuntime({"area": AREA, "categories": ["person"], "minimum_duration_seconds": 0})
+    crop = VisionCropObjectsRuntime(configs["visitor_crop"])
+    from toposync.runtime.pipelines.operators_sinks import StoreImagesRuntime
+    image_store = StoreImagesRuntime(configs["store_visitor"], PipelineRuntimeDependencies(files_dir=tmp_path))
+    async def run_blocking(function, *args, **kwargs):
+        kwargs.pop("concurrency_key", None)
+        return function(*args, **kwargs)
+    context.run_blocking = run_blocking
+    outcome = [True]
+    calls = []
+    services = ServiceRegistry()
+    async def infer(**kwargs):
+        calls.append(kwargs["image"].shape)
+        return {"matches": outcome[0], "confidence": .9}
+    services.register("ai.infer.evaluate_condition", infer)
+    annotate = AiConditionFilterRuntime(configs["package"], PipelineRuntimeDependencies(services=services))
+    store = NotificationStore(tmp_path / "visitor.sqlite3")
+    records = []
+    async def upsert(**values):
+        records.append(store.upsert(**values))
+    sink = NotifyRuntime({**configs["notify"], "update_interval_seconds": 0}, PipelineRuntimeDependencies(notifications_upsert=upsert))
+
+    async def send(timestamp, visible=True, lifecycle=Lifecycle.UPDATE):
+        clock[0] = timestamp
+        packet = replace(frame(timestamp), lifecycle=lifecycle)
+        packet.payload["subject"]["bbox01"] = [.25, .25, .75, .75]
+        if visible:
+            packet = packet.with_artifact(Artifact(name="main", data=np.zeros((100, 100, 3), dtype=np.uint8)))
+        for admitted in await admission.process_packet(packet, context):
+            for occurrence in await area.process_packet(admitted, context):
+                for cropped in await crop.process_packet(occurrence, context):
+                    for annotated in await annotate.process_packet(cropped, context):
+                        for stored in await image_store.process_packet(annotated, context):
+                            await sink.process_packet(stored, context)
+
+    async def scenario():
+        await send(100)
+        assert "Indício visual de pacote" in records[-1][0].description
+        assert calls == [(66, 66, 3)]
+        assert list(tmp_path.rglob("*.webp"))
+        outcome[0] = False
+        events.extend([signal(2, 104, False), signal(3, 105)])
+        await send(105)
+        assert "Pacote não confirmado" in records[-1][0].description
+        await send(107, visible=False)
+        assert "Não foi possível confirmar pacote" in records[-1][0].description
+        assert len(calls) == 2
+        assert len({record.id for record, _ in records}) == 1
+        assert sum(created for _, created in records) == 1
+        assert records[-1][0].payload["data"]["onvif_context"]["causal_relationship_verified"] is False
+        await send(108, visible=False, lifecycle=Lifecycle.CLOSE)
+        assert "Observação encerrada" in records[-1][0].description
+        assert len(calls) == 2
+        assert len({record.id for record, _ in records}) == 1
+        before = len(records)
+        await send(100)
+        assert len(records) == before
+    asyncio.run(scenario())

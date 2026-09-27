@@ -1153,7 +1153,7 @@ def test_camera_pipeline_stopped_area_uses_area_composition_and_restriction(
 
 
 def test_doorbell_visitor_requires_discovered_signal_and_saves_disabled(tmp_path, monkeypatch):
-    with _create_client(tmp_path, monkeypatch) as client:
+    with _create_client(tmp_path, monkeypatch, include_ai=True) as client:
         _configure_camera(client)
         _add_mapped_composition(client, with_area=True)
         descriptors = []

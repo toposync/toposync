@@ -800,12 +800,13 @@ def test_ai_annotation_preserves_packets_when_concurrency_is_full() -> None:
         await asyncio.wait_for(services.primary_started.wait(), timeout=1)
         second = _image_packet("visitor-2")
         await context.put(second)
-        await _wait_until(lambda: len(context.emitted) == 1)
-        assert context.emitted[0].packet_id == second.packet_id
-        assert context.emitted[0].payload["ai"]["condition_filter"]["reason"] == "concurrency_full"
+        await _wait_until(lambda: context.metrics.processed_packets == 2)
+        assert context.emitted == []
+        services.release_primary.set()
+        await _wait_until(lambda: len(context.emitted) == 2)
+        assert [packet.packet_id for packet in context.emitted] == [first.packet_id, second.packet_id]
+        assert context.emitted[1].payload["ai"]["condition_filter"]["reason"] == "concurrency_full"
         assert context.metrics.dropped_packets == 0
         context.cancel()
-        services.release_primary.set()
         await asyncio.wait_for(task, timeout=1)
-        assert len(context.emitted) == 2
     asyncio.run(scenario())

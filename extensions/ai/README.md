@@ -170,3 +170,9 @@ O limite de streams existente também limita esse estado; entradas sem atividade
 expiram para liberar capacidade. A chamada é limitada a 30 segundos. Isso certifica
 somente o contrato de software: resultado do modelo requer validação visual própria,
 e publicação recente não certifica sincronização ou ausência de buffering na câmera.
+
+`annotation_labels` associa textos definidos pela receita aos quatro estados. Eles
+são expostos como `payload.ai.condition_filter.description`, sem copiar conclusões
+livres do modelo para a notificação. Não use o rótulo positivo quando `status` for
+`unknown`. A receita visitante utiliza recorte estrito do sujeito e preserva o
+visitante quando esse recorte não existe; imagem de outra detecção não o substitui.

@@ -78,12 +78,38 @@ def register_recent_onvif_event_operator(registry):
 
 
 def add_recent_event_to_area_graph(graph, *, camera_id, topic, item_name, notification_title="", notification_description=""):
-    """Reuse the area recipe; only insert admission and retain correlation evidence."""
+    """Reuse area lifecycle, correlate camera events and annotate visible package evidence."""
     nodes = graph["nodes"]
     area_index = next(index for index, node in enumerate(nodes) if node["id"] == "area")
     nodes.insert(area_index, {"id": "event_context", "uid": "event_context",
         "operator": "camera.recent_onvif_event", "config": {
             "camera_id": camera_id, "topic": topic, "item_name": item_name}})
+    store_index = next(index for index, node in enumerate(nodes) if node["id"] == "store")
+    nodes[store_index:store_index] = [
+        {"id": "visitor_crop", "uid": "visitor_crop", "operator": "vision.crop_objects", "config": {
+            "bbox_field": "area_occurrence.observed_subject.bbox01", "output_artifact_name": "visitor",
+            "fallback_to_detections": False, "missing_policy": "pass_through", "padding_ratio": 0.15}},
+        {"id": "package", "uid": "package", "operator": "ai.condition_filter", "config": {
+            "emit_mode": "annotate", "input_artifact_name": "visitor", "confidence_threshold": 0.75,
+            "evaluation_interval_seconds": 5, "evidence_timeout_seconds": 2,
+            "condition_description": "A pessoa central do recorte está segurando ou carregando um pacote ou caixa visível? "
+                "Não basta haver caixa no chão ou com outra pessoa. Se mãos/objeto estiverem ocluídos, não confirmar. "
+                "Não inferir profissão, identidade, entrega, conteúdo ou quem acionou a campainha.",
+            "annotation_labels": {
+                "matched": "Indício visual de pacote junto à pessoa; revise a imagem. Não confirma entrega ou profissão.",
+                "not_matched": "Pacote não confirmado nesta imagem; visitante sem identidade confirmada.",
+                "unknown": "Não foi possível confirmar pacote nesta observação; visitante sem identidade confirmada.",
+                "closed": "Observação encerrada; consulte as imagens registradas. Não confirma entrega ou profissão.",
+            }}},
+        {"id": "store_visitor", "uid": "store_visitor", "operator": "core.store_images",
+         "config": {"input_artifact_name": "visitor", "format": "webp"}},
+    ]
+    outgoing = next(edge for edge in graph["edges"] if edge["from"]["node"] == "area")
+    outgoing["to"] = {"node": "visitor_crop", "port": "in"}
+    for source, target in [("visitor_crop", "package"), ("package", "store_visitor"), ("store_visitor", "store")]:
+        graph["edges"].append({**outgoing, "uid": f"{source}_to_{target}",
+            "from": {"node": source, "port": "out"}, "to": {"node": target, "port": "in"},
+            "traffic": {"modality": "image", "semantic_class": "frame", "continuous": False}})
     for node in nodes:
         if node["id"] in {"detect", "area"}:
             node["config"]["categories"] = ["person"]
@@ -91,9 +117,9 @@ def add_recent_event_to_area_graph(graph, *, camera_id, topic, item_name, notifi
             node["config"]["title"] = notification_title or "{{camera_name}}: pessoa junto a evento da câmera"
             node["config"]["description"] = notification_description or (
                 "{{payload.area_occurrence.description}} Coincidência temporal com evento da câmera; "
-                "não confirma quem acionou nem identidade ou profissão."
+                "não confirma quem acionou nem identidade ou profissão. {{payload.ai.condition_filter.description}}"
             )
-            node["config"]["include_payload_paths"] = ["area_occurrence", "onvif_context"]
+            node["config"]["include_payload_paths"] = ["area_occurrence", "onvif_context", "ai.condition_filter"]
     incoming = next(edge for edge in graph["edges"] if edge["to"]["node"] == "area")
     graph["edges"].append({**incoming, "uid": "event_context_to_area",
         "from": {"node": "event_context", "port": "out"}, "to": {"node": "area", "port": "in"}})

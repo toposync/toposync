@@ -558,6 +558,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
 
                 if slot is None:
                     if self._config.emit_mode == "annotate":
+                        # Do not let a skipped update overtake an earlier inference/open.
+                        await drain_tasks()
                         await context.emit(self._annotate(packet, result=None, status="unknown", reason="concurrency_full"), port=self.output_port)
                     else:
                         context.metrics.dropped_packets += 1
@@ -947,6 +949,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             "status": status,
             "reason": reason or (result.reason if result is not None else ""),
             "condition_description": self._config.condition_description,
+            "description": self._config.annotation_labels.get(status, ""),
             "matches": bool(result.matches) if result is not None else False,
             "confidence": float(result.confidence) if result is not None else 0.0,
             "profile_id": result.profile_id if result is not None else "",

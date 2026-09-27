@@ -178,3 +178,26 @@ def test_vision_crop_objects_reads_group_event_subject_bbox() -> None:
         assert out.artifacts["main"].metadata["bbox_source"] == "payload:subject.bbox01"
 
     asyncio.run(scenario())
+
+
+def test_strict_optional_crop_preserves_event_without_using_neighbor_or_old_crop():
+    async def scenario():
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        packet = Packet.create(stream_id="visitor", payload={
+            "subject": {"id": "visitor"},
+            "vision": {"detections": [{"bbox01": [.2, .2, .8, .8]}]},
+        }, artifacts={"main": Artifact(name="main", data=frame),
+                      "visitor": Artifact(name="visitor", data=frame)})
+        runtime = VisionCropObjectsRuntime({"bbox_field": "subject.bbox01",
+            "output_artifact_name": "visitor", "fallback_to_detections": False,
+            "missing_policy": "pass_through", "padding_ratio": 0})
+        output = (await runtime.process_packet(packet, None))[0]
+        assert output.payload == packet.payload
+        assert output.lifecycle == packet.lifecycle
+        assert output.artifacts["main"] is packet.artifacts["main"]
+        assert "visitor" not in output.artifacts
+        packet.payload["subject"]["bbox01"] = [.1, .2, .5, .8]
+        cropped = (await runtime.process_packet(packet, None))[0]
+        assert cropped.artifacts["visitor"].data.shape == (60, 40, 3)
+        assert cropped.artifacts["main"] is packet.artifacts["main"]
+    asyncio.run(scenario())

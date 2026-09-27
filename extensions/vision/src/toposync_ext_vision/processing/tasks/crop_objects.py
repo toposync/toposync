@@ -36,11 +36,11 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
             input_artifact_name=self._config.input_artifact_name,
         )
         if image is None or isinstance(image, (bytes, bytearray, memoryview)):
-            return []
+            return self._missing_crop(packet)
 
-        bbox_result = _read_annotation_bbox01(packet, bbox_field=self._config.bbox_field)
+        bbox_result = _read_annotation_bbox01(packet, bbox_field=self._config.bbox_field, fallback_to_detections=self._config.fallback_to_detections)
         if bbox_result is None:
-            return []
+            return self._missing_crop(packet)
         bbox01, bbox_source = bbox_result
 
         bbox01_input = bbox01
@@ -50,7 +50,7 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
         if crop_bbox01 is not None:
             reproj = _project_stream_bbox01_to_crop(bbox01_selected, crop_bbox01)
             if reproj is None:
-                return []
+                return self._missing_crop(packet)
             bbox01_selected = reproj
             bbox_source = f"{bbox_source}|reproject:frame_crop"
 
@@ -58,7 +58,7 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
         if frame_warp is not None:
             reproj = _project_stream_bbox01_to_warp(bbox01_selected, frame_warp)
             if reproj is None:
-                return []
+                return self._missing_crop(packet)
             bbox01_selected = reproj
             bbox_source = f"{bbox_source}|reproject:frame_warp"
 
@@ -69,7 +69,7 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
             min_crop_size_px=int(self._config.min_crop_size_px),
         )
         if crop is None:
-            return []
+            return self._missing_crop(packet)
 
         output_artifact_name = self._config.output_artifact_name
         out = packet.with_artifact(
@@ -99,6 +99,13 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
                     pass
         return [replace(out, payload=payload)]
 
+    def _missing_crop(self, packet: Packet) -> list[Packet]:
+        if self._config.missing_policy == "drop":
+            return []
+        artifacts = dict(packet.artifacts)
+        artifacts.pop(self._config.output_artifact_name, None)
+        return [replace(packet, artifacts=artifacts)]
+
     def _close_without_crop(self, packet: Packet) -> Packet:
         return replace(packet, artifacts={})
 
@@ -107,12 +114,16 @@ def _read_annotation_bbox01(
     packet: Packet,
     *,
     bbox_field: str,
+    fallback_to_detections: bool = True,
 ) -> tuple[tuple[float, float, float, float], str] | None:
     field = str(bbox_field or "").strip()
     if field:
         bbox01 = _normalize_raw_bbox01(_deep_get(packet.payload, field))
         if bbox01 is not None:
             return bbox01, f"payload:{field}"
+
+    if not fallback_to_detections:
+        return None
 
     subject = packet.payload.get("subject")
     if isinstance(subject, dict):

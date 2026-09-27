@@ -419,6 +419,7 @@ def _diagnostic_get(value: Any, key: str, default: Any = "") -> Any:
 
 def _area_restriction_expression_hints() -> list[Any]:
     return [
+        payload_path_hint("payload.area_id", value_type="string", description="Primary matched area identifier when configured; never inferred from its label."),
         payload_path_hint(
             "payload.area_label",
             value_type="string",
@@ -4591,34 +4592,42 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = AreaRestrictionConfig.model_validate(config)
         self._areas = [
-            (area.name, [(float(point.x), float(point.z)) for point in area.points])
+            (area, [(float(point.x), float(point.z)) for point in area.points])
             for area in self._config.areas
         ]
         self._include = set(self._config.include_area_names)
         self._exclude = set(self._config.exclude_area_names)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        world = packet.payload.get(self._config.world_field)
+        payload = dict(packet.payload)
+        payload.pop("area_id", None)
+        payload[self._config.output_area_labels_field] = []
+        payload[self._config.output_area_label_field] = None
+        packet = replace(packet, payload=payload)
+        world = payload.get(self._config.world_field)
         if not isinstance(world, dict):
             return [] if self._config.drop_when_unmapped else [packet]
 
         try:
             x = float(world.get("x"))
             z = float(world.get("z"))
+            if not math.isfinite(x) or not math.isfinite(z):
+                raise ValueError("Nonfinite area position")
         except Exception:
             return [] if self._config.drop_when_unmapped else [packet]
 
         matched_areas = [
-            name for name, points in self._areas if _point_in_polygon(x=x, z=z, polygon=points)
+            area for area, points in self._areas if _point_in_polygon(x=x, z=z, polygon=points)
         ]
-        if self._include and not any(name in self._include for name in matched_areas):
+        if self._include and not any(area.name in self._include for area in matched_areas):
             return []
-        if self._exclude and any(name in self._exclude for name in matched_areas):
+        if self._exclude and any(area.name in self._exclude for area in matched_areas):
             return []
 
-        payload = dict(packet.payload)
-        payload[self._config.output_area_labels_field] = list(matched_areas)
-        payload[self._config.output_area_label_field] = matched_areas[0] if matched_areas else None
+        payload[self._config.output_area_labels_field] = [area.name for area in matched_areas]
+        payload[self._config.output_area_label_field] = matched_areas[0].name if matched_areas else None
+        if matched_areas and matched_areas[0].id is not None:
+            payload["area_id"] = matched_areas[0].id
         return [replace(packet, payload=payload)]
 
 
@@ -5189,7 +5198,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "filter", "area"],
         defaults=AreaRestrictionConfig().model_dump(),
         requires_payload_keys=["world"],
-        produces_payload_keys=["area_label", "area_labels"],
+        produces_payload_keys=["area_id", "area_label", "area_labels"],
         expression_hints=_area_restriction_expression_hints(),
         pressure_behavior="ignore",
         share_strategy="by_signature",

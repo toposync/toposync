@@ -257,3 +257,30 @@ def test_unnamed_area_identity_never_inherits_another_area_identifier():
         assert "area_id" not in result.payload
         assert result.payload["area_label"] == "piscina"
     asyncio.run(scenario())
+
+
+def test_area_restriction_primary_identifier_and_missing_mapping_never_reuse_old_area():
+    from toposync_ext_cameras.pipelines.postprocess import AreaRestrictionRuntime
+    async def scenario():
+        runtime = AreaRestrictionRuntime({"areas": [{**AREA, "id": "first"}, {**AREA, "name": "overlap", "id": "second"}]})
+        packet = observation(1)
+        packet.payload.update(area_id="stale", area_label="stale", area_labels=["stale"])
+        [mapped] = await runtime.process_packet(packet, None)
+        assert mapped.payload["area_id"] == "first"
+        assert mapped.payload["area_label"] == AREA["name"]
+        assert mapped.payload["area_labels"] == [AREA["name"], "overlap"]
+        assert packet.payload["area_id"] == "stale"  # Do not mutate a sibling branch.
+        legacy = AreaRestrictionRuntime({"areas": [AREA, {**AREA, "id": "second"}]})
+        [mapped] = await legacy.process_packet(packet, None)
+        assert "area_id" not in mapped.payload
+        for world in (None, {}, {"x": "bad", "z": 1}, {"x": float("nan"), "z": 1}, {"x": 99, "z": 99}):
+            [mapped] = await runtime.process_packet(replace(packet, payload={**packet.payload, "world": world}), None)
+            assert "area_id" not in mapped.payload
+            assert mapped.payload["area_label"] is None
+            assert mapped.payload["area_labels"] == []
+        restricted = AreaRestrictionRuntime({"areas": [{**AREA, "id": "first"}], "include_area_names": [AREA["name"]], "drop_when_unmapped": True})
+        assert await restricted.process_packet(observation(2, x=99), None) == []
+        assert await restricted.process_packet(replace(packet, payload={}), None) == []
+        excluded = AreaRestrictionRuntime({"areas": [AREA], "exclude_area_names": [AREA["name"]]})
+        assert await excluded.process_packet(packet, None) == []
+    asyncio.run(scenario())

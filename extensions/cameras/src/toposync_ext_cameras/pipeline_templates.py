@@ -203,6 +203,7 @@ def build_person_vehicle_interaction_graph(
                     or "{{camera_name}}: interação entre pessoa e veículo",
                     "description": notification_description
                     or "Pessoa próxima de veículo por {{payload.spatial_relation_event.dwell_seconds}} s",
+                    "include_payload_paths": ["area_id"],
                     "priority": notification_priority or "high",
                     "dedupe_key_template": "{{subject.id}}",
                 },

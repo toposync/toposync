@@ -5710,6 +5710,7 @@ class CamerasExtension(BaseExtension):
                             ),
                             "description": notification_description
                             or "{{subject.category}} - {{area_label}} - {{payload.velocity.speed_kmh}} km/h - {{payload.stationary_event.stationary_seconds}} s",
+                            "include_payload_paths": ["area_id"],
                             "priority": notification_priority,
                             "dedupe_key_template": "{{subject.id}}",
                         },

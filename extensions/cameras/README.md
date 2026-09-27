@@ -314,3 +314,14 @@ the person left. This operator alone does not classify a package or an occupatio
 detect a doorbell capability, or provide a complete visitor recipe. Topic discovery,
 area selection and visual assessment remain necessary. Its window compares local
 receipt with source publication and does not certify physical clock alignment.
+
+`camera.area_restriction` preserves the configured identifier of the primary
+matched area as `area_id`, paired with the existing primary `area_label`. With
+overlapping polygons, the first match remains primary. Names never substitute
+for identifiers. An area without an identifier, an outside point, or an unmapped
+packet admitted by `drop_when_unmapped=false` clears previous area identity;
+unmapped packets also clear derived labels. Inclusion/exclusion behavior is
+unchanged. New stopped-person, stopped-vehicle and person/vehicle interaction
+recipes explicitly project `area_id` into notification history. Existing manual
+graphs need the same `include_payload_paths` selection; old records are not
+backfilled by matching names.

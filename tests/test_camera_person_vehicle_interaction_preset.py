@@ -347,3 +347,4 @@ def test_person_vehicle_interaction_applies_optional_area_and_notification_overr
         notify = _node_config(pipeline, "core.notify")
         assert notify.get("priority") == "low"
         assert notify.get("title") == "Atenção ao veículo"
+        assert notify.get("include_payload_paths") == ["area_id"]

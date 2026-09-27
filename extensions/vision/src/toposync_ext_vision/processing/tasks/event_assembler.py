@@ -153,6 +153,7 @@ class TrackEventAssembler:
         self._events_by_id: dict[str, _EventState] = {}
         self._event_id_by_tracklet_key: dict[str, str] = {}
         self._next_event_number_by_source_stream: dict[str, int] = {}
+        self._lifecycle_epoch = uuid.uuid4().hex
 
     def _category_interval_seconds(self, label: str) -> float:
         key = str(label or "").strip().lower()
@@ -515,6 +516,8 @@ class TrackEventAssembler:
             object_data=object_data,
             state=state,
         )
+        subject["lifecycle_epoch"] = self._lifecycle_epoch
+        subject["lifecycle_sequence"] = int(state.event_code)
         object_world_anchor = object_data.get("world_anchor")
         if isinstance(object_world_anchor, dict):
             try:

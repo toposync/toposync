@@ -65,6 +65,9 @@ def test_track_event_keeps_same_tracklet_on_same_subject() -> None:
         assert opened[0].payload["subject"]["lifecycle"] == "open"
         assert updated[0].payload["subject"]["lifecycle"] == "update"
         assert opened[0].payload["event_code"] == "1"
+        assert opened[0].payload["subject"]["lifecycle_sequence"] == 1
+        assert updated[0].payload["subject"]["lifecycle_sequence"] == 1
+        assert opened[0].payload["subject"]["lifecycle_epoch"] == updated[0].payload["subject"]["lifecycle_epoch"]
         assert opened[0].payload["tracklet_id"] == "trk:camera:test:1"
         assert opened[0].payload["tracklet_ids"] == ["trk:camera:test:1"]
         assert opened[0].payload["raw_tracking_id"] == "1"
@@ -86,6 +89,8 @@ def test_track_event_identity_does_not_repeat_after_runtime_restart() -> None:
         assert first.payload["event_id"] != restarted.payload["event_id"]
         assert first.payload["subject"]["id"] != restarted.payload["subject"]["id"]
         assert first.stream_id != restarted.stream_id
+        assert first.payload["subject"]["lifecycle_sequence"] == restarted.payload["subject"]["lifecycle_sequence"] == 1
+        assert first.payload["subject"]["lifecycle_epoch"] != restarted.payload["subject"]["lifecycle_epoch"]
 
     asyncio.run(scenario())
 
@@ -207,5 +212,24 @@ def test_track_event_close_packet_carries_subject_lifecycle() -> None:
         assert closed[0].payload["event_id"] == opened[0].payload["event_id"]
         assert closed[0].payload["subject"]["id"] == opened[0].payload["subject"]["id"]
         assert closed[0].payload["subject"]["lifecycle"] == "close"
+
+    asyncio.run(scenario())
+
+
+def test_reconnect_closes_subject_and_preserves_producer_sequence():
+    async def scenario():
+        runtime = _runtime({"default_interval_seconds": 0.0})
+        first = (await runtime.process_packet(_packet(1.0, [_track("track:1")]), None))[0]
+        closed = runtime.close_stream(Packet.create(stream_id="camera:test", lifecycle=Lifecycle.CLOSE))
+        assert len(closed) == 1
+        resumed = (await runtime.process_packet(_packet(2.0, [_track("track:1")]), None))[0]
+        from toposync.runtime.pipelines.operators_distributed import _serialize_packet, _deserialize_packet
+        transported = _deserialize_packet(_serialize_packet(closed[0]))
+        assert transported.payload["subject"] == closed[0].payload["subject"]
+        assert closed[0].payload["subject"]["lifecycle_sequence"] == 1
+        assert resumed.payload["subject"]["lifecycle_sequence"] == 2
+        assert first.payload["subject"]["lifecycle_epoch"] == resumed.payload["subject"]["lifecycle_epoch"]
+        assert closed[0].payload["subject"]["lifecycle_epoch"] == resumed.payload["subject"]["lifecycle_epoch"]
+        assert first.payload["subject"]["id"] != resumed.payload["subject"]["id"]
 
     asyncio.run(scenario())

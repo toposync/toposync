@@ -9,17 +9,13 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from toposync.runtime.config_store import ConfigStore
+from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts, resolve_source_id
 from toposync.runtime.pipelines.runtime import Lifecycle
 from ..processing.metric_camera import MetricCamera, validate_pose_image_axes as _check_image_axes
 from ..processing.person_pointing import align_pose, pointing_ray, select_target
 from ..processing.composition_revision import composition_revision
-
-
-# Never evict terminal event identities. Beyond this bound the runtime abstains
-# until reset; persistent lifecycle storage is required for indefinite operation.
-_MAXIMUM_CLOSED_SUBJECTS = 4096
 
 
 class PointingTargetConfig(BaseModel):
@@ -73,17 +69,14 @@ class PointingTargetRuntime(TransformOperatorRuntime):
         self.config = PointingTargetConfig.model_validate(config)
         self.store = dependencies.config_store
         self.timestamps = {}
-        self.closed_subjects = set()
+        self.closed_subjects = ClosedSubjectLedger()
         self.closed_subject_capacity_reached = False
 
-    def _remember_closed_subject(self, key):
-        if key in self.closed_subjects:
-            return
-        if len(self.closed_subjects) >= _MAXIMUM_CLOSED_SUBJECTS:
-            self.closed_subject_capacity_reached = True
+    def _remember_closed_subject(self, key, subject=None):
+        self.closed_subjects.close(key, subject)
+        self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
+        if self.closed_subject_capacity_reached:
             self.timestamps.clear()
-            return
-        self.closed_subjects.add(key)
 
     async def shutdown(self):
         self.timestamps.clear()
@@ -108,6 +101,8 @@ class PointingTargetRuntime(TransformOperatorRuntime):
         camera_id = payload.get("camera_id")
         key = (source_stream, camera_id, resolve_source_id(packet), source.get("view_id"), actor)
         closed_key = (source_stream, camera_id, actor)
+        subject_closed = self.closed_subjects.observe(closed_key, payload.get("subject") or {}, retain=False)
+        self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
         spatial = dict(payload.get("spatial") or {})
         result = {
             "schema_version": 1,
@@ -124,11 +119,14 @@ class PointingTargetRuntime(TransformOperatorRuntime):
             "camera_id": camera_id,
         }
         try:
+            if self.config.enabled and actor and packet.lifecycle == Lifecycle.CLOSE and subject_closed:
+                raise ValueError("subject_closed")
             if packet.lifecycle == Lifecycle.CLOSE or not self.config.enabled:
                 if actor:
-                    if packet.lifecycle == Lifecycle.CLOSE:
-                        self._remember_closed_subject(closed_key)
+                    if packet.lifecycle == Lifecycle.CLOSE and not subject_closed:
+                        self._remember_closed_subject(closed_key, payload.get("subject") or {})
                     self.timestamps.pop(key, None)
+                    self.closed_subjects.forget_active(closed_key)
                 else:
                     if packet.lifecycle == Lifecycle.CLOSE:
                         for existing in list(self.timestamps):
@@ -142,7 +140,7 @@ class PointingTargetRuntime(TransformOperatorRuntime):
                 )
             if self.closed_subject_capacity_reached:
                 raise ValueError("closed_subject_capacity_reached")
-            if closed_key in self.closed_subjects:
+            if subject_closed:
                 raise ValueError("subject_closed")
             if (
                 not isinstance(actor, str)
@@ -168,7 +166,12 @@ class PointingTargetRuntime(TransformOperatorRuntime):
                 if epoch != previous[1] and evidence["published_at"] <= previous[3]:
                     raise ValueError("superseded_capture_epoch")
             if key not in self.timestamps and len(self.timestamps) >= 256:
-                self.timestamps.pop(next(iter(self.timestamps)))
+                oldest = next(iter(self.timestamps))
+                self.timestamps.pop(oldest)
+                self.closed_subjects.forget_active((oldest[0], oldest[1], oldest[4]))
+            if self.closed_subjects.observe(closed_key, payload.get("subject") or {}):
+                self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
+                raise ValueError("closed_subject_capacity_reached")
             self.timestamps[key] = (
                 timestamp,
                 epoch,
@@ -265,6 +268,7 @@ class PointingTargetRuntime(TransformOperatorRuntime):
             )
         except (ValueError, TypeError, KeyError, ArithmeticError, np.linalg.LinAlgError) as error:
             result.update(status="unavailable", reason=str(error))
+        self.closed_subjects.retain_active((key[0], key[1], key[4]) for key in self.timestamps)
         spatial["pointing"] = result
         return [replace(packet, payload={**payload, "spatial": spatial})]
 

@@ -15,11 +15,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 
-_MAXIMUM_CLOSED_SUBJECTS = 4096
 _SIDE_GESTURES = ("hand_raised", "wave", "pointing_candidate")
 _GESTURE_NAMES = {"both_hands_raised"} | {
     f"{name}:{side}" for name in _SIDE_GESTURES for side in ("left", "right")
@@ -100,7 +100,7 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
         # Each operator instance owns its state; no globals or shared tracker state.
         self._actors: dict[tuple[str, str, str], _Actor] = {}
         # Bounded tombstones prevent late UPDATEs from reopening a closed actor.
-        self._closed: dict[tuple[str, str, str], None] = {}
+        self._closed = ClosedSubjectLedger(source_index=1)
         self._closed_capacity_reached = False
 
     async def shutdown(self) -> None:
@@ -108,13 +108,9 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
         self._closed.clear()
         self._closed_capacity_reached = False
 
-    def _remember_closed(self, key: tuple[str, str, str]) -> None:
-        if key in self._closed:
-            return
-        if len(self._closed) >= _MAXIMUM_CLOSED_SUBJECTS:
-            self._closed_capacity_reached = True
-            return
-        self._closed[key] = None
+    def _remember_closed(self, key: tuple[str, str, str], subject=None) -> None:
+        self._closed.close(key, subject)
+        self._closed_capacity_reached = self._closed.capacity_reached
 
     async def run(self, context) -> None:
         # Same bounded read/tick mechanism as the other finite-event operators.
@@ -190,7 +186,7 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
         payload["subject"] = {
             key: value
             for key, value in _mapping(payload.get("subject")).items()
-            if key in ("id", "type", "category", "lifecycle")
+            if key in ("id", "type", "category", "lifecycle", "lifecycle_epoch", "lifecycle_sequence")
         }
         if isinstance(payload.get("source"), dict):
             payload["source"] = dict(payload["source"])
@@ -320,6 +316,7 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
         for history in actor.wrists.values():
             history.clear()
         self._actors.pop(actor.key, None)
+        self._closed.forget_active(actor.key)
         if self._config.output_mode == "annotate" and notify_annotation:
             payload = dict(actor.packet.payload)
             payload["subject"] = {**_mapping(payload.get("subject")), "lifecycle": "update"}
@@ -589,6 +586,14 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
         key = self._identity(packet)
         actor = self._actors.get(key)
         subject = _mapping(packet.payload.get("subject"))
+        subject_closed = self._closed.observe(key, subject, retain=False)
+        self._closed_capacity_reached = self._closed.capacity_reached
+        if self._config.enabled and key[2] and subject_closed and (
+            packet.lifecycle == Lifecycle.CLOSE or subject.get("lifecycle") == "close"
+        ):
+            if self._config.output_mode == "annotate":
+                outputs.append(self._annotation(packet, None, status="unknown", reason="source_closed"))
+            return outputs
         if (
             not self._config.enabled
             or packet.lifecycle == Lifecycle.CLOSE
@@ -607,16 +612,19 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
             for target in targets:
                 outputs.extend(self._retire(target, reason, notify_annotation=target.key != key))
                 if reason == "source_closed":
-                    self._remember_closed(target.key)
-            if reason == "source_closed" and key[2]:
-                self._remember_closed(key)
+                    self._remember_closed(target.key, _mapping(target.packet.payload.get("subject")))
+            if (
+                reason == "source_closed" and key[2] and not subject_closed
+                and not any(target.key == key for target in targets)
+            ):
+                self._remember_closed(key, subject)
             if self._closed_capacity_reached:
                 for remaining in list(self._actors.values()):
                     outputs.extend(self._retire(remaining, "closed_subject_capacity_reached"))
             if self._config.output_mode == "annotate":
                 outputs.append(self._annotation(packet, None, status="unknown", reason=reason))
             return outputs
-        if not key[0] or not key[2]:
+        if not key[1] or not key[2]:
             if self._config.output_mode == "annotate":
                 outputs.append(
                     self._annotation(
@@ -624,7 +632,7 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
                     )
                 )
             return outputs
-        if self._closed_capacity_reached or key in self._closed:
+        if self._closed_capacity_reached or subject_closed:
             if self._config.output_mode == "annotate":
                 outputs.append(
                     self._annotation(
@@ -683,10 +691,15 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
                     )
                 )
             return outputs
+        if actor is None and len(self._actors) >= self._config.maximum_subjects:
+            oldest = min(self._actors.values(), key=lambda value: value.last_seen)
+            outputs.extend(self._retire(oldest, "capacity_limit"))
+        if self._closed.observe(key, subject):
+            self._closed_capacity_reached = self._closed.capacity_reached
+            if self._config.output_mode == "annotate":
+                outputs.append(self._annotation(packet, None, status="unknown", reason="closed_subject_capacity_reached"))
+            return outputs
         if actor is None:
-            if len(self._actors) >= self._config.maximum_subjects:
-                oldest = min(self._actors.values(), key=lambda value: value.last_seen)
-                outputs.extend(self._retire(oldest, "capacity_limit"))
             actor = _Actor(key, fingerprint, timestamp, now, frame_id, self._snapshot(packet))
             self._actors[key] = actor
         actor.last_timestamp, actor.last_seen, actor.last_frame_id = timestamp, now, frame_id

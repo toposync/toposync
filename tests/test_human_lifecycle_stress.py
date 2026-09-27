@@ -35,9 +35,10 @@ from test_vision_gestures import packet as gesture_packet
 SUBJECT_COUNT = 1000
 
 
-def test_thousand_subjects_release_real_operator_state_and_reject_late_updates(
+def test_five_thousand_subjects_release_real_operator_state_and_reject_late_updates(
     tmp_path, monkeypatch
 ):
+    SUBJECT_COUNT = 5000
     # Source publication is frozen, not refreshed by an operator. Media timestamps
     # advance independently. This is not a real-time throughput/latency benchmark.
     monkeypatch.setattr("time.time", lambda: 1000.0)
@@ -120,6 +121,8 @@ def test_thousand_subjects_release_real_operator_state_and_reject_late_updates(
                     "source": {"source_id": "recording", "view_id": "fixed"},
                     "subject": {
                         "id": actor,
+                        "lifecycle_epoch": "replay-epoch",
+                        "lifecycle_sequence": index + 1,
                         "type": "event",
                         "category": "person",
                         "bbox01": [0.35, 0.15, 0.65, 0.6],
@@ -192,7 +195,7 @@ def test_thousand_subjects_release_real_operator_state_and_reject_late_updates(
             }
             assert len(subject_notifications) == SUBJECT_COUNT * 3
             assert set(subject_notifications.values()) == {1}
-            assert len(ground.closed_subjects) == len(pointing.closed_subjects) == SUBJECT_COUNT
+            assert len(ground.closed_subjects) == len(pointing.closed_subjects) == 1
             assert len(ground.closed_subjects) <= 4096
             assert len(gestures._closed) <= 4096
             # Person/pointing tombstones must survive the complete turnover, not

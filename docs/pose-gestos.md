@@ -94,11 +94,27 @@ para outro destino não pode substituir o pacote aguardado. A política configur
 volta a valer após esse roteamento. Isso não garante entrega de todas as atualizações
 sob saturação; os limites de fila e os timeouts continuam observáveis.
 
-Os operadores espaciais e de gestos mantêm um registro terminal limitado a 4096 identidades encerradas
-por instância. Não descartam silenciosamente esse registro para reutilizar sujeitos: ao
-exceder a capacidade, retornam `closed_subject_capacity_reached` até reinicializar a
-instância. Isso limita a disponibilidade operacional desta implementação experimental;
-não constitui validação de execução indefinida. Um novo evento deve receber nova identidade.
+Os eventos do rastreador incluem `subject.lifecycle_epoch` e
+`subject.lifecycle_sequence`: uma época aleatória por instância do produtor e
+uma sequência crescente por stream. Reconexão preserva a época enquanto o produtor
+continua vivo; reinicialização cria outra época. Esses campos não alteram a
+identidade do evento nem representam identidade biométrica ou tempo de captura.
+
+Os operadores espaciais e de gestos compactam encerramentos em intervalos exatos
+por origem, câmera e época. Mais de 4096 sujeitos consecutivos podem ser encerrados
+sem saturar o registro; pacotes atrasados desses sujeitos continuam recusados.
+Lacunas permanecem abertas, permitindo sujeitos anteriores ainda ativos e um
+OPEN atrasado que nunca foi encerrado. Uma sequência pode ser reutilizada em uma
+nova época; pacotes da época antiga continuam sujeitos ao registro antigo. Depois
+de receber esse contrato de uma origem, amostras sem época/sequência são recusadas.
+
+A memória continua limitada: até 4096 intervalos terminais ou identidades legadas,
+4096 descritores ativos e 4096 escopos de origem por instância. Encerramentos muito
+fragmentados ou muitas épocas podem alcançar `closed_subject_capacity_reached`;
+a instância então se abstém até reinicialização, sem esquecer identidades. Não há
+banco de dados crescente em disco. Produtores legados sem sequência ainda têm o
+limite de 4096 encerramentos. O replay de 5000 sujeitos verifica os operadores e
+a retenção terminal; não qualifica precisão física nem carga sustentada real.
 
 ## Campos opcionais em notificações
 

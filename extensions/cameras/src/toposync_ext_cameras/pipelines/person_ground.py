@@ -15,17 +15,13 @@ import time
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness, resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 
 from ..processing.metric_camera import MetricCamera, validate_pose_image_axes
 from .postprocess import CameraMappingConfig, CameraMappingRuntime
-
-
-# Terminal event identities must not be evicted or revived by a new decoder.
-# Saturation is an explicit availability limit, not indefinite production support.
-_MAXIMUM_CLOSED_SUBJECTS = 4096
 
 
 class PersonGroundConfig(BaseModel):
@@ -342,24 +338,20 @@ class PersonGroundRuntime(TransformOperatorRuntime):
             {**self.config.mapping.model_dump(), "attach_metric_camera": True}, dependencies
         )
         self.history: dict[tuple[str, str, str], _History] = {}
-        self.closed_subjects: set[tuple[str, str, str]] = set()
+        self.closed_subjects = ClosedSubjectLedger()
         self.closed_subject_capacity_reached = False
 
-    def _remember_closed_subject(self, key):
-        if key in self.closed_subjects:
-            return
-        if len(self.closed_subjects) >= _MAXIMUM_CLOSED_SUBJECTS:
-            self.closed_subject_capacity_reached = True
+    def _remember_closed_subject(self, key, subject=None):
+        self.closed_subjects.close(key, subject)
+        self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
+        if self.closed_subject_capacity_reached:
             self.history.clear()
-            return
-        self.closed_subjects.add(key)
 
     def _prune_idle(self, now: float) -> None:
-        self.history = {
-            k: v
-            for k, v in self.history.items()
-            if now - v.seen_monotonic <= self.config.maximum_history_seconds
-        }
+        for key, value in list(self.history.items()):
+            if now - value.seen_monotonic > self.config.maximum_history_seconds:
+                self.history.pop(key)
+                self.closed_subjects.forget_active(key)
 
     async def run(self, context):
         async def expire_history():
@@ -390,6 +382,8 @@ class PersonGroundRuntime(TransformOperatorRuntime):
         actor = str(subject.get("id") or "")
         source = str(packet.payload.get("source_stream_id") or packet.stream_id)
         key = (source, str(packet.payload.get("camera_id") or ""), actor)
+        subject_closed = self.closed_subjects.observe(key, subject, retain=False)
+        self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
         timestamp = resolve_media_ts(packet)
         base = {
             "schema_version": 1,
@@ -402,6 +396,7 @@ class PersonGroundRuntime(TransformOperatorRuntime):
         spatial = dict(packet.payload.get("spatial") or {})
 
         def unavailable(reason):
+            self.closed_subjects.retain_active(self.history)
             spatial["person_ground"] = {
                 **base,
                 "status": "unavailable",
@@ -411,11 +406,14 @@ class PersonGroundRuntime(TransformOperatorRuntime):
             }
             return [replace(packet, payload={**packet.payload, "spatial": spatial})]
 
+        if self.config.enabled and actor and packet.lifecycle == Lifecycle.CLOSE and subject_closed:
+            return unavailable("subject_closed")
         if packet.lifecycle == Lifecycle.CLOSE or not self.config.enabled:
             if actor:
-                if packet.lifecycle == Lifecycle.CLOSE:
-                    self._remember_closed_subject(key)
+                if packet.lifecycle == Lifecycle.CLOSE and not subject_closed:
+                    self._remember_closed_subject(key, subject)
                 self.history.pop(key, None)
+                self.closed_subjects.forget_active(key)
             else:
                 if packet.lifecycle == Lifecycle.CLOSE:
                     for existing in list(self.history):
@@ -427,7 +425,7 @@ class PersonGroundRuntime(TransformOperatorRuntime):
             )
         if self.closed_subject_capacity_reached:
             return unavailable("closed_subject_capacity_reached")
-        if key in self.closed_subjects:
+        if subject_closed:
             return unavailable("subject_closed")
         if not actor:
             return unavailable("tracked_subject_required")
@@ -563,6 +561,10 @@ class PersonGroundRuntime(TransformOperatorRuntime):
         if key not in self.history and len(self.history) >= self.config.maximum_subjects:
             oldest = min(self.history, key=lambda k: self.history[k].seen_monotonic)
             self.history.pop(oldest)
+            self.closed_subjects.forget_active(oldest)
+        if self.closed_subjects.observe(key, subject):
+            self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
+            return unavailable("closed_subject_capacity_reached")
         self.history[key] = _History(
             timestamp,
             now,

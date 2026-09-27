@@ -36,6 +36,8 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
       let pointerDownScreen: { x: number; y: number } | null = null;
       let activityState: "idle" | "uploading" | "processing" = "idle";
       let lastError: string | null = null;
+      let operation: AbortController | null = null;
+      let disposed = false;
       let lastCanvas: HTMLCanvasElement | null = null;
 
       const t = i18n.t;
@@ -61,7 +63,16 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
         canvas.closePath();
       }
 
-      async function handleFiles(files: File[]) {
+      function cancel() {
+        operation?.abort();
+        operation = null;
+        activityState = "idle";
+        pendingPlacementPoint = null;
+        lastError = null;
+        invalidateViewport();
+      }
+
+      async function handleFiles(files: File[], signal: AbortSignal, placement: PlanePoint | null) {
         if (files.length === 0) return;
         if (files.reduce((total, file) => total + file.size, 0) > MAXIMUM_MODEL_BYTES) {
           throw new Error(t("ext.models.error.too_large"));
@@ -71,7 +82,8 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
           files.find((file) => file.name.toLowerCase().endsWith(".glb")) ??
           files.find((file) => file.name.toLowerCase().endsWith(".gltf"));
         if (!entryFile) throw new Error(t("ext.models.error.pick_entry"));
-        if (!pendingPlacementPoint) throw new Error("No placement point selected");
+        if (!placement) throw new Error("No placement point selected");
+        signal.throwIfAborted();
 
         debugLog(
           "[models:tool] handleFiles",
@@ -83,14 +95,16 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
         invalidateViewport();
 
         debugLog("[models:tool] uploading entry", { name: entryFile.name });
-        const entryUpload = await uploadToFilesDir(entryFile, { filename: entryFile.name });
+        const entryUpload = await uploadToFilesDir(entryFile, { filename: entryFile.name, signal });
+        signal.throwIfAborted();
         const dir = entryUpload.dir;
         const entryName = entryUpload.filename;
 
         for (const file of files) {
           if (file === entryFile) continue;
           debugLog("[models:tool] uploading asset", { dir, name: file.name });
-          await uploadToFilesDir(file, { dir, filename: file.name });
+          await uploadToFilesDir(file, { dir, filename: file.name, signal });
+          signal.throwIfAborted();
         }
 
         const modelUrl = resolveToposyncUrl(`/files/${encodeURIComponent(dir)}/${encodeURIComponent(entryName)}`);
@@ -99,14 +113,17 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
         invalidateViewport();
         debugLog("[models:tool] generating preview", { modelUrl });
         const preview = await generateModelTopDownPreview(modelUrl);
-        const previewBlob = await (await fetch(preview.dataUrl)).blob();
-        const previewUpload = await uploadToFilesDir(previewBlob, { dir, filename: "preview.png" });
+        signal.throwIfAborted();
+        const previewBlob = await (await fetch(preview.dataUrl, { signal })).blob();
+        signal.throwIfAborted();
+        const previewUpload = await uploadToFilesDir(previewBlob, { dir, filename: "preview.png", signal });
+        signal.throwIfAborted();
         debugLog("[models:tool] preview uploaded", { url: previewUpload.url });
 
         const inferredName = stripFileExtension(entryName);
         const id = toolContext.createElement(MODEL_ELEMENT_TYPE_ID, {
           name: inferredName,
-          position: { x: pendingPlacementPoint.x, y: 0, z: pendingPlacementPoint.z },
+          position: { x: placement.x, y: 0, z: placement.z },
           props: {
             dir,
             model: entryName,
@@ -123,6 +140,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
       }
 
       input.addEventListener("change", () => {
+        if (disposed || operation) return;
         const files = input.files ? Array.from(input.files) : [];
         input.value = "";
         debugLog("[models:tool] input change", { count: files.length, pendingPlacementPoint });
@@ -132,17 +150,24 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
           return;
         }
 
+        const controller = new AbortController();
+        const placement = pendingPlacementPoint;
+        operation = controller;
         void (async () => {
           try {
-            await handleFiles(files);
-            activityState = "idle";
-            pendingPlacementPoint = null;
-            invalidateViewport();
+            await handleFiles(files, controller.signal, placement);
           } catch (err) {
-            activityState = "idle";
-            lastError = err instanceof Error ? err.message : String(err);
-            console.error("[models:tool] import failed", err);
-            invalidateViewport();
+            if (!controller.signal.aborted && !disposed) {
+              lastError = err instanceof Error ? err.message : String(err);
+              console.error("[models:tool] import failed", err);
+            }
+          } finally {
+            if (operation === controller) {
+              operation = null;
+              activityState = "idle";
+              pendingPlacementPoint = null;
+              invalidateViewport();
+            }
           }
         })();
       });
@@ -187,11 +212,9 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
         },
         onKeyDown: (event) => {
           if (event.key === "Escape") {
-            pendingPlacementPoint = null;
+            cancel();
             isPointerArmed = false;
             pointerDownScreen = null;
-            activityState = "idle";
-            lastError = null;
           }
         },
         renderOverlay2D: ({ ctx: canvas, viewport }) => {
@@ -235,6 +258,8 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
         getCursor: () => (activityState === "idle" ? "copy" : "wait"),
         dispose: () => {
           debugLog("[models:tool] session disposed");
+          disposed = true;
+          cancel();
           input.remove();
         },
       };

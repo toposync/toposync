@@ -17,3 +17,8 @@ Focused verification (compile output must stay outside the repository):
 npx tsc extensions/models/ui/src/validation.test.ts --module commonjs --target ES2022 --moduleResolution node --esModuleInterop --skipLibCheck --outDir "$MODEL_TEST_OUTPUT"
 NODE_PATH="$PWD/node_modules" node --test "$MODEL_TEST_OUTPUT/validation.test.js"
 ```
+
+Leaving the model tool or pressing Escape aborts pending file uploads and discards
+late import results. A cancelled operation cannot place a model or reset a newer
+operation. Already stored files are not deleted; a preview decoder that has already
+started may finish, but its result is discarded after cancellation.

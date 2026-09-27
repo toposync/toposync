@@ -792,7 +792,7 @@ export function CompositionEditorScreen({
   );
 
   return (
-    <div className="screenRoot">
+    <div className="screenRoot compositionEditorRoot">
       {isMapOpen && <GeoreferenceEditor activeNotification={activeNotification} notificationRenderers={notificationRenderers} compositionId={activeCompositionId} value={georeference} elements={elements} elementTypesById={elementTypesById} onSave={onSaveGeoreference} onClose={() => setIsMapOpen(false)} />}
       <Viewport2D
         elements={elements}

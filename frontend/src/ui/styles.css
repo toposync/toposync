@@ -8418,3 +8418,74 @@ select {
   display: grid;
   gap: 6px;
 }
+
+/* Keep editor controls in their own layout tracks on narrow screens. */
+@media (max-width: 800px) {
+  .compositionEditorRoot {
+    display: grid;
+    grid-template-columns: clamp(180px, 40vw, 240px) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .compositionEditorRoot > .overlayTopRight {
+    position: static;
+    grid-column: 1 / -1;
+    grid-row: 1;
+    max-width: none;
+    min-width: 0;
+    padding: 8px;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    background: var(--color-application-background);
+  }
+
+  .compositionEditorRoot > .overlayTopRight > button {
+    min-height: 44px;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .compositionEditorRoot > .viewportCanvas {
+    position: relative;
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .compositionEditorRoot > .overlayLeft {
+    position: relative;
+    grid-column: 1;
+    grid-row: 2;
+    width: auto;
+    min-height: 0;
+    padding: 8px;
+    background: var(--color-application-background);
+  }
+
+  .compositionEditorRoot .elementButtonGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .compositionEditorRoot .toolLabel > span {
+    overflow-wrap: normal;
+  }
+
+  .compositionEditorRoot .layerRow {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .compositionEditorRoot .layerMainButton {
+    grid-column: span 2;
+    min-width: 0;
+  }
+
+  .compositionEditorRoot .layerRow > button {
+    min-height: 44px;
+    width: auto;
+    padding: 6px;
+  }
+}

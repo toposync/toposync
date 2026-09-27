@@ -68,6 +68,7 @@ from .pipeline_templates import (
     CAT_ACTIVITY_RECIPES,
 )
 from .area_events import build_area_occurrence_graph, register_area_occurrence_operator
+from .event_context import register_recent_onvif_event_operator
 from .processing.camera_hub import get_global_camera_hub
 from .processing.mapping import build_calibration_mapper
 from .ptz_controller import PtzControlError, PtzController, PtzTransportBinding
@@ -1456,6 +1457,7 @@ class CamerasExtension(BaseExtension):
             register_camera_pipeline_operators(registry)
             register_audio_operator(registry)
             register_area_occurrence_operator(registry)
+            register_recent_onvif_event_operator(registry)
 
         def _config_store(request: Request) -> ConfigStore:
             store = getattr(request.app.state, "config_store", None)

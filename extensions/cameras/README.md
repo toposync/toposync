@@ -225,3 +225,22 @@ Topic and item filters must come from the device's discovered event capabilities
 The presence of an ONVIF event source does not prove that a particular camera
 reports a doorbell, package or visitor. Correlation with video still requires an
 explicit time window, a shared source/area association and fresh visual evidence.
+
+
+`camera.recent_onvif_event` admits fresh visual packets from the configured camera
+within five seconds of a positive boolean `Changed` event for an explicit topic
+and item. Initial state snapshots do not count as a new actuation. It reuses the
+live ONVIF source, polls at most twice per second with a bounded batch, and requires
+frame publication evidence no older than two seconds. An incomplete configuration
+is inactive and does not poll any device. Closing packets from the associated
+camera pass through so an existing occurrence can terminate.
+
+Place it before `camera.area_occurrence` to retain the existing mapped-area
+lifecycle and evidence timeout. The `onvif_context` payload records event sequence,
+local receipt, frame publication, window and an explicit unverified causal link.
+Include it in stored notification fields when building a correlated recipe.
+A timeout ends observation at the last evidence timestamp; it is not a claim that
+the person left. This operator alone does not classify a package or an occupation,
+detect a doorbell capability, or provide a complete visitor recipe. Topic discovery,
+area selection and visual assessment remain necessary. Its window compares local
+receipt with source publication and does not certify physical clock alignment.

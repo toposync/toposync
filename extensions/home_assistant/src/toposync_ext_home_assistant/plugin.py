@@ -466,6 +466,66 @@ class HomeAssistantExtension(BaseExtension):
 
             return out
 
+        async def _list_services(
+            server_id: str, domain: str = "", check_cancelled: Callable[[], None] = lambda: None,
+        ) -> list[HomeAssistantServicePublic]:
+            check_cancelled()
+            server = await get_server(server_id)
+            client = self._http
+            if client is None:
+                raise HTTPException(status_code=500, detail="HA client not ready")
+            check_cancelled()
+            try:
+                res = await client.get(
+                    f"{server.apiBase}/services",
+                    headers={"Authorization": f"Bearer {server.apiKey}"},
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=502, detail="HA services request failed") from exc
+            check_cancelled()
+            if res.status_code == 401:
+                raise HTTPException(status_code=401, detail="HA auth failed")
+            if res.status_code >= 400:
+                raise HTTPException(status_code=502, detail=f"HA services request failed: {res.status_code}")
+            try:
+                payload = res.json()
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=502, detail="HA services response invalid") from exc
+            if not isinstance(payload, list):
+                return []
+
+            domain_filter = str(domain or "").strip().lower()
+            services_out: list[HomeAssistantServicePublic] = []
+            for block in payload:
+                check_cancelled()
+                if not isinstance(block, dict):
+                    continue
+                domain_name = str(block.get("domain", "")).strip().lower()
+                if not domain_name:
+                    continue
+                if domain_filter and domain_name != domain_filter:
+                    continue
+                raw_services = block.get("services")
+                if not isinstance(raw_services, dict):
+                    continue
+                for service_name_raw, meta_raw in raw_services.items():
+                    check_cancelled()
+                    service_name = str(service_name_raw or "").strip()
+                    if not service_name:
+                        continue
+                    meta = meta_raw if isinstance(meta_raw, dict) else {}
+                    services_out.append(
+                        HomeAssistantServicePublic(
+                            domain=domain_name,
+                            service=service_name,
+                            name=str(meta.get("name", "")).strip(),
+                            description=str(meta.get("description", "")).strip(),
+                        )
+                    )
+
+            services_out.sort(key=lambda item: ((item.name or item.service).lower(), item.service.lower()))
+            return services_out
+
         @app.get("/api/home_assistant/{server_id}/services", response_model=list[HomeAssistantServicePublic])
         async def ha_services(
             request: Request,
@@ -473,62 +533,7 @@ class HomeAssistantExtension(BaseExtension):
             domain: str = "",
         ) -> list[HomeAssistantServicePublic]:
             async def _work(check_cancelled: Callable[[], None]) -> list[HomeAssistantServicePublic]:
-                check_cancelled()
-                server = await get_server(server_id)
-                client = self._http
-                if client is None:
-                    raise HTTPException(status_code=500, detail="HA client not ready")
-                check_cancelled()
-                try:
-                    res = await client.get(
-                        f"{server.apiBase}/services",
-                        headers={"Authorization": f"Bearer {server.apiKey}"},
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    raise HTTPException(status_code=502, detail="HA services request failed") from exc
-                check_cancelled()
-                if res.status_code == 401:
-                    raise HTTPException(status_code=401, detail="HA auth failed")
-                if res.status_code >= 400:
-                    raise HTTPException(status_code=502, detail=f"HA services request failed: {res.status_code}")
-                try:
-                    payload = res.json()
-                except Exception as exc:  # noqa: BLE001
-                    raise HTTPException(status_code=502, detail="HA services response invalid") from exc
-                if not isinstance(payload, list):
-                    return []
-
-                domain_filter = str(domain or "").strip().lower()
-                services_out: list[HomeAssistantServicePublic] = []
-                for block in payload:
-                    check_cancelled()
-                    if not isinstance(block, dict):
-                        continue
-                    domain_name = str(block.get("domain", "")).strip().lower()
-                    if not domain_name:
-                        continue
-                    if domain_filter and domain_name != domain_filter:
-                        continue
-                    raw_services = block.get("services")
-                    if not isinstance(raw_services, dict):
-                        continue
-                    for service_name_raw, meta_raw in raw_services.items():
-                        check_cancelled()
-                        service_name = str(service_name_raw or "").strip()
-                        if not service_name:
-                            continue
-                        meta = meta_raw if isinstance(meta_raw, dict) else {}
-                        services_out.append(
-                            HomeAssistantServicePublic(
-                                domain=domain_name,
-                                service=service_name,
-                                name=str(meta.get("name", "")).strip(),
-                                description=str(meta.get("description", "")).strip(),
-                            )
-                        )
-
-                services_out.sort(key=lambda item: ((item.name or item.service).lower(), item.service.lower()))
-                return services_out
+                return await _list_services(server_id, domain, check_cancelled)
 
             return await _run_cancelable_home_assistant_read(
                 request,
@@ -630,6 +635,27 @@ class HomeAssistantExtension(BaseExtension):
                 raise
             except Exception:  # noqa: BLE001
                 return None
+
+        async def _speech_capabilities(*, server_id: str, tts_entity_id: str, media_player_entity_id: str) -> dict[str, Any]:
+            server = await get_server(server_id)
+            available = await _list_services(server_id)
+            engine, player = await asyncio.gather(
+                _fetch_state(server, tts_entity_id), _fetch_state(server, media_player_entity_id),
+            )
+            actions = {f"{item.domain}.{item.service}" for item in available}
+            return {
+                "speak": "tts.speak" in actions,
+                "stop": "media_player.media_stop" in actions,
+                "engine": engine,
+                "player": player,
+            }
+
+        services.register("home_assistant.speech_capabilities", _speech_capabilities)
+
+        async def _entity_state(*, server_id: str, entity_id: str) -> dict[str, Any] | None:
+            return await _fetch_state(await get_server(server_id), entity_id)
+
+        services.register("home_assistant.entity_state", _entity_state)
 
         async def _fetch_state_until_changed(
             server: HomeAssistantServer,

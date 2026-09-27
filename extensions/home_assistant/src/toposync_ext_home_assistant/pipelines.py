@@ -493,6 +493,9 @@ class HomeAssistantBooleanStateRuntime(SinkRuntime):
 
 
 def register_home_assistant_pipeline_operators(registry: OperatorRegistry) -> None:
+    from .speech import register_speech_operator
+
+    register_speech_operator(registry)
     registry.register_operator(
         operator_id="home_assistant.notify",
         description="Sends mobile push notifications through a Home Assistant notify service.",

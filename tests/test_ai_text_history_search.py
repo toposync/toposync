@@ -1,0 +1,75 @@
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+
+import httpx
+import pytest
+
+from toposync.runtime.notifications.runtime import NotificationsRuntime
+from toposync_ext_ai.text_embeddings import TextHistorySearch, document_text, validated_vectors
+
+
+class Services:
+    async def call(self, _name):
+        return SimpleNamespace(providers=[SimpleNamespace(enabled=True, kind="ollama", local=True, host="http://localhost:11434")])
+
+
+def test_text_index_lifecycle_and_space_isolation(tmp_path: Path) -> None:
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    record, _ = runtime.store.upsert(type="event", title="Gato", dedupe_key="gato")
+    search = TextHistorySearch(runtime, Services())
+    documents = {record.id: ("hash-a", "Gato")}
+    assert search.cache("model-a", documents, {record.id: [1.0, 0.0]}) == {record.id: [1.0, 0.0]}
+    assert search.cache("model-a", documents, {record.id: [1.0, 0.0]}) == {record.id: [1.0, 0.0]}
+    assert search.cache("model-b", documents) == {}
+    assert search.cache("model-a", {record.id: ("hash-b", "Pessoa")}) == {}
+    runtime.store.upsert(type="event", title="Pessoa", dedupe_key="gato")
+    assert search.cache("model-a", documents) == {}
+    search.cache("model-a", documents, {record.id: [1.0, 0.0]})
+    runtime.store._conn.execute("DELETE FROM notification WHERE id=?", (record.id,))
+    assert search.cache("model-a", documents) == {}
+    assert runtime.store._conn.execute("SELECT count(*) FROM ai_notification_embedding").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("raw", [[[0, 0]], [[float("nan")]], [[True]], [[1], [1, 2]], []])
+def test_invalid_vectors_rejected(raw) -> None:
+    with pytest.raises(ValueError):
+        validated_vectors(raw, max(len(raw), 1))
+
+
+def test_embeddings_unavailable_returns_honest_literal_results(tmp_path: Path, monkeypatch) -> None:
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    record, _ = runtime.store.upsert(type="event", title="Gato")
+    search = TextHistorySearch(runtime, Services())
+    async def unavailable(*_args):
+        raise httpx.ConnectError("offline")
+    monkeypatch.setattr(search, "_semantic", unavailable)
+    result = asyncio.run(search.search(query="gato"))
+    assert result["notifications"][0]["id"] == record.id
+    assert result["search"]["mode"] == "literal"
+    assert result["search"]["status"] == "degraded"
+    assert result["search"]["visual_similarity"] is False
+    assert document_text({"title":"Pessoa", "payload":{"data":{"area_label":{"injected":"value"}}}}) == "Pessoa"
+
+
+def test_history_route_requires_notification_read(tmp_path: Path) -> None:
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    from toposync.runtime.services import ServiceRegistry
+    from toposync_ext_ai.text_embeddings import install_text_history_routes
+
+    class Denied:
+        mode = "required"
+        def requires_setup(self):
+            return False
+        def authorize(self, **kwargs):
+            assert kwargs["action"] == "core:notifications:read"
+            raise HTTPException(403, "denied")
+
+    app = FastAPI()
+    app.state.notifications = NotificationsRuntime(data_dir=tmp_path)
+    app.state.auth = Denied()
+    install_text_history_routes(app, ServiceRegistry())
+    with TestClient(app) as client:
+        assert client.get("/api/ai/history/search", params={"query":"gato"}).status_code == 403
+        assert client.get("/api/ai/history/search", params={"query":"   "}).status_code == 422

@@ -12,6 +12,9 @@ from toposync.runtime.event_bus import EventBus
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.services import ServiceRegistry
 
+from .assistant import install_assistant_routes
+from .text_embeddings import install_text_history_routes
+from .jev import evaluate_event_text
 from .catalog import list_builtin_model_catalog
 from .pipelines import register_ai_pipeline_operators
 from .providers import decode_image_base64
@@ -67,6 +70,10 @@ class AiExtension(BaseExtension):
         config_store = getattr(app.state, "config_store", None)
         data_dir = getattr(getattr(config_store, "paths", None), "data_dir", None)
         router = AiRouter(config_store=config_store, data_dir=data_dir)
+
+        install_assistant_routes(app, router)
+        install_text_history_routes(app, services)
+        services.register("ai.jev.evaluate_event_text", evaluate_event_text)
 
         services.register("ai.catalog.list", lambda: list_builtin_model_catalog())
         services.register("ai.settings.get", router.settings)

@@ -750,7 +750,9 @@ class ConfigStore:
             await self._persist_locked(cfg2)
             return pipeline
 
-    async def replace_pipeline(self, pipeline_name: str, pipeline: Pipeline) -> Pipeline:
+    async def replace_pipeline(
+        self, pipeline_name: str, pipeline: Pipeline, *, expected_pipeline: Pipeline | None = None
+    ) -> Pipeline:
         name = _normalize_pipeline_name(pipeline_name)
         await self.load()
         async with self._lock:
@@ -764,6 +766,8 @@ class ConfigStore:
                     break
             if idx < 0:
                 raise KeyError(name)
+            if expected_pipeline is not None and existing_pipeline != expected_pipeline:
+                raise PipelineAlreadyExistsError("Pipeline changed since preview; review it again")
 
             if (
                 existing_pipeline is not None

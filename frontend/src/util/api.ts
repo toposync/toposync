@@ -832,7 +832,10 @@ export type HomeAssistantRegistryResponse = {
   device_entities: Record<string, string[]>;
 };
 
+export type NotificationSearchStatus = { mode: "literal" | "semantic_text"; status: "ready" | "partial" | "degraded"; scope_limit?: number; pending?: number };
+
 export type NotificationsPage = {
+  search?: NotificationSearchStatus;
   notifications: Notification[];
   next_cursor: number | null;
 };
@@ -840,6 +843,7 @@ export type NotificationsPage = {
 export type NotificationPriority = "low" | "medium" | "high";
 
 export type NotificationsListParams = {
+  semantic?: boolean;
   before?: number | null;
   limit?: number;
   priorities?: NotificationPriority[];
@@ -1734,10 +1738,15 @@ export async function listNotifications(
   }
   const query = String(listParams.query ?? "").trim();
   if (query) params.set("query", query);
-  const res = await fetch(`/api/notifications?${params.toString()}`, { signal: listParams.signal });
+  const path = listParams.semantic && query ? "/api/ai/history/search" : "/api/notifications";
+  const res = await fetch(`${path}?${params.toString()}`, { signal: listParams.signal });
+  if (listParams.semantic && query && res.status === 404) {
+    const fallback = await listNotifications({ ...listParams, semantic: false });
+    return { ...fallback, next_cursor: null, search: { mode: "literal", status: "degraded" } };
+  }
   if (!res.ok) throw new Error(`Failed to list notifications: ${res.status}`);
-  const body = (await res.json()) as { notifications?: Notification[]; next_cursor?: number | null };
-  return { notifications: body.notifications ?? [], next_cursor: body.next_cursor ?? null };
+  const body = (await res.json()) as NotificationsPage;
+  return { notifications: body.notifications ?? [], next_cursor: body.next_cursor ?? null, search: body.search };
 }
 
 export async function getNotificationsCount(options: AbortableRequestOptions = {}): Promise<NotificationsCount> {

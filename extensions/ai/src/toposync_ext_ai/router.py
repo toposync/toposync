@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator
+from urllib.parse import urlparse
 
 from toposync.runtime.config_store import AppSettings
 
@@ -184,6 +186,26 @@ class AiRouter:
             last_result.attempts = list(attempts)
             return last_result
         return ConditionEvaluationResult(matches=False, reason="all_ai_profiles_failed", attempts=attempts)
+
+    async def generate_local_json(
+        self, *, messages: list[dict[str, Any]], profile_id: str | None = None
+    ) -> dict[str, Any]:
+        if sum(len(str(message.get("content", ""))) for message in messages) > 64000:
+            raise AiProviderError("Assistant context is too large; use the pipeline editor")
+        settings = await self.settings()
+        profiles = self._resolve_profiles(settings=settings, profile_id=profile_id, fallback_profile_ids=[])
+        if not profiles:
+            raise AiProviderError("No enabled AI profile available")
+        profile, provider = profiles[0]
+        if (provider.kind != "ollama" or not provider.local
+                or urlparse(provider.host).hostname not in {"localhost", "127.0.0.1", "::1"}):
+            raise AiProviderError("Assistant currently requires a local Ollama profile")
+        allowed, reason = await self._limiter.check_and_increment(profile_id=profile.id, limits=settings.limits)
+        if not allowed:
+            raise AiProviderError(reason)
+        async with asyncio.timeout(min(float(profile.timeout_seconds), 120.0)):
+            async with self._limiter.slot(profile_id=profile.id, limits=settings.limits):
+                return await OllamaProvider(provider, profile).generate_json(messages=messages)
 
     async def list_ollama_models(self, *, host: str | None = None) -> list[dict[str, Any]]:
         settings = await self.settings()

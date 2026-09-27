@@ -260,7 +260,7 @@ function notificationFilterFacetsEqual(left: NotificationsFilter, right: Notific
 }
 
 function notificationFiltersEqual(left: NotificationsFilter, right: NotificationsFilter): boolean {
-  return notificationFilterFacetsEqual(left, right) && left.query === right.query;
+  return notificationFilterFacetsEqual(left, right) && left.query === right.query && Boolean(left.semantic) === Boolean(right.semantic);
 }
 
 function isOpenRealtimeNotification(notification: Notification | null | undefined): boolean {
@@ -337,6 +337,7 @@ function mergeNotificationPage(
   }
 
   const pageIds = pageNotifications.map((notification) => notification.id);
+  if (options.filter.semantic && options.filter.query.trim()) return { byId, visibleIds: pageIds };
   const pageIdSet = new Set(pageIds);
   const retainedVisibleIds = options.replaceVisible
     ? prev.visibleIds.filter((id) => {
@@ -362,6 +363,8 @@ function upsertNotificationInState(
   const existing = prev.byId[next.id];
   const merged = existing ? { ...withoutEphemeralImage(existing), ...next } : next;
   const byId = { ...prev.byId, [next.id]: merged };
+  // A relevância depende do modelo; eventos novos não entram por coincidência literal.
+  if (filter.semantic && filter.query.trim()) return { byId, visibleIds: prev.visibleIds };
   const visible = new Set(prev.visibleIds);
   if (notificationMatchesFilter(merged, filter)) {
     visible.add(next.id);
@@ -392,6 +395,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   });
   const [notificationsFilter, setNotificationsFilter] = useState<NotificationsFilter>(() => loadNotificationsFilter());
   const [notificationsRequestFilter, setNotificationsRequestFilter] = useState<NotificationsFilter>(notificationsFilter);
+  const [notificationsSearchStatus, setNotificationsSearchStatus] = useState<import("../util/api").NotificationSearchStatus>();
   const [notificationsCursor, setNotificationsCursor] = useState<number | null>(null);
   const [notificationsHasMore, setNotificationsHasMore] = useState(true);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
@@ -894,6 +898,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     notificationsListRequestRef.current = requestId;
     setNotificationsLoading(true);
     setNotificationsCursor(null);
+    setNotificationsSearchStatus(undefined);
     setNotificationsHasMore(true);
     setNotificationsState((prev) => ({ ...prev, visibleIds: [] }));
 
@@ -905,6 +910,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           priorities: notificationsRequestFilter.priorities,
           types: notificationsRequestFilter.types,
           query: notificationsRequestFilter.query,
+          semantic: notificationsRequestFilter.semantic,
           signal: controller.signal,
         });
         if (controller.signal.aborted || notificationsListRequestRef.current !== requestId) return;
@@ -919,6 +925,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             filter: notificationsRequestFilter,
           }),
         );
+        setNotificationsSearchStatus(page.search);
         setNotificationsCursor(page.next_cursor ?? null);
         setNotificationsHasMore(page.next_cursor != null);
       } catch (err) {
@@ -1666,11 +1673,13 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           notificationsCount={notificationsCount}
           notificationsHasMore={notificationsHasMore}
           notificationsFilter={notificationsFilter}
+          notificationsSearchStatus={notificationsSearchStatus}
           activeNotificationId={activeNotificationId}
           activeNotification={activeNotification}
           notificationsLoading={notificationsLoading}
           renderViews={Object.values(renderViewsById)}
           onNotificationsFilterChange={setNotificationsFilter}
+          onNotificationsSearchRefresh={() => setNotificationsRequestFilter({ ...notificationsFilter })}
           onSelectNotification={selectNotification}
           onLoadMoreNotifications={loadMoreNotifications}
           onNotificationsViewed={markNotificationsAsViewed}

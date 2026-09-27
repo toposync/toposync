@@ -54,11 +54,13 @@ type Props = {
   notificationsCount: NotificationsCount;
   notificationsHasMore: boolean;
   notificationsFilter: NotificationsFilter;
+  notificationsSearchStatus?: import("../../util/api").NotificationSearchStatus;
   activeNotificationId: string | null;
   activeNotification: Notification | null;
   notificationsLoading: boolean;
   renderViews: RenderViewDefinition[];
   onNotificationsFilterChange: React.Dispatch<React.SetStateAction<NotificationsFilter>>;
+  onNotificationsSearchRefresh: () => void;
   onSelectNotification: (notificationId: string) => void;
   onLoadMoreNotifications: () => void;
   onNotificationsViewed: () => void;
@@ -199,6 +201,7 @@ export type Priority = "low" | "medium" | "high";
 const ALL_PRIORITIES: Priority[] = ["high", "medium", "low"];
 
 export type NotificationsFilter = {
+  semantic?: boolean;
   priorities: Priority[];
   types: string[]; // empty array = "all types"
   query: string;
@@ -252,6 +255,7 @@ export function loadNotificationsFilter(): NotificationsFilter {
       priorities: priorities.length > 0 ? priorities : DEFAULT_NOTIFICATIONS_FILTER.priorities,
       types,
       query,
+      semantic: parsed.semantic === true,
     };
   } catch {
     return { ...DEFAULT_NOTIFICATIONS_FILTER };
@@ -362,11 +366,13 @@ export function MainScreen({
   notificationsCount,
   notificationsHasMore,
   notificationsFilter,
+  notificationsSearchStatus,
   activeNotificationId,
   activeNotification: activeNotificationRaw,
   notificationsLoading,
   renderViews,
   onNotificationsFilterChange,
+  onNotificationsSearchRefresh,
   onSelectNotification,
   onLoadMoreNotifications,
   onNotificationsViewed,
@@ -1235,7 +1241,23 @@ export function MainScreen({
                         />
                       </div>
 
-                      <p id="notificationsSearchMode" className="muted">{t("core.ui.notifications.filter.search_mode")}</p>
+                      <label>
+                        <input type="checkbox" checked={filter.semantic === true}
+                          onChange={(event) => setFilter((previous) => ({ ...previous, semantic: event.target.checked }))} />
+                        {t("core.ui.notifications.filter.semantic")}
+                      </label>
+                      {filter.semantic && filter.query.trim() ? (
+                        <button type="button" className="chipButton" disabled={notificationsLoading} onClick={onNotificationsSearchRefresh}>
+                          {t("core.ui.notifications.filter.refresh_search")}
+                        </button>
+                      ) : null}
+                      <p id="notificationsSearchMode" className="muted" role="status">
+                        {notificationsSearchStatus?.mode === "semantic_text"
+                          ? t("core.ui.notifications.filter.semantic_scope", { limit: notificationsSearchStatus.scope_limit ?? 250, pending: notificationsSearchStatus.pending ?? 0 })
+                          : notificationsSearchStatus?.status === "degraded"
+                            ? t("core.ui.notifications.filter.semantic_fallback")
+                            : t("core.ui.notifications.filter.search_mode")}
+                      </p>
 
                       {availableTypes.length > 1 ? (
                         <div className="notificationsFilterSection">
@@ -1295,6 +1317,13 @@ export function MainScreen({
               </div>
             </div>
 
+            {notificationsSearchStatus && filter.semantic && filter.query.trim() ? (
+              <div className="cardBody" role="status">
+                {notificationsSearchStatus.mode === "semantic_text"
+                  ? t("core.ui.notifications.filter.semantic_summary", { limit: notificationsSearchStatus.scope_limit ?? 250, pending: notificationsSearchStatus.pending ?? 0 })
+                  : t("core.ui.notifications.filter.semantic_fallback")}
+              </div>
+            ) : null}
             <div
               className="railScroll"
               ref={notificationScrollRef}

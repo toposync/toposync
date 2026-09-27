@@ -419,6 +419,9 @@ class OllamaProvider:
         result = ConditionEvaluationResult.model_validate(content)
         return self._attach_condition_meta(result)
 
+    async def generate_json(self, *, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        return await self._chat_json(image=None, messages=messages)
+
     async def list_models(self) -> list[dict[str, Any]]:
         try:
             import httpx
@@ -485,13 +488,14 @@ class OllamaProvider:
         except Exception as exc:  # noqa: BLE001
             raise AiProviderError("httpx is required to call Ollama") from exc
 
-        encoded = encode_image_base64(
-            image,
-            max_side_px=self._profile.max_image_side_px,
-            jpeg_quality=self._profile.jpeg_quality,
-        )
         ollama_messages = [dict(item) for item in messages]
-        ollama_messages[-1]["images"] = [encoded.data_b64]
+        if image is not None:
+            encoded = encode_image_base64(
+                image,
+                max_side_px=self._profile.max_image_side_px,
+                jpeg_quality=self._profile.jpeg_quality,
+            )
+            ollama_messages[-1]["images"] = [encoded.data_b64]
 
         body = {
             "model": self._profile.model,
@@ -510,6 +514,8 @@ class OllamaProvider:
             payload = response.json()
         message = payload.get("message") if isinstance(payload, dict) else None
         content = message.get("content") if isinstance(message, dict) else ""
+        if image is None and len(str(content or "")) > 262144:
+            raise AiProviderError("Assistant response is too large; simplify the request")
         return _extract_json_object(str(content or ""))
 
     def _attach_region_meta(self, result: RegionDetectionResult) -> RegionDetectionResult:

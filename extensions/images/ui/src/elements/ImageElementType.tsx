@@ -240,8 +240,8 @@ export function createImageElementType(i18n: HostI18n): ElementType {
 	      const p = parseImageProps(element.props);
 
 	      const center = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
-	      const widthPx = Math.max(20, p.width_m * viewport.scale);
-	      const depthPx = Math.max(20, p.depth_m * viewport.scale);
+	      const widthPx = p.width_m * viewport.scale;
+	      const depthPx = p.depth_m * viewport.scale;
 	      const rotationY = readNumber(element.rotation.y, 0);
 
       const url = p.dir && p.file ? imageUrl(p) : "";

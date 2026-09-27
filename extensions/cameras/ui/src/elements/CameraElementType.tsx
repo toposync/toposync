@@ -814,7 +814,8 @@ export function createCameraElementType(host: ToposyncHost): ElementType {
 
       canvasContext.save();
       canvasContext.translate(center.x, center.y);
-      canvasContext.rotate(rotation);
+      // Positive Three.js Y rotation turns +Z toward +X on the x/z canvas.
+      canvasContext.rotate(-rotation);
       canvasContext.fillStyle = "rgba(56,189,248,0.12)";
       canvasContext.strokeStyle = "rgba(230,232,242,0.24)";
       canvasContext.lineWidth = 2;

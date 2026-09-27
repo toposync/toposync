@@ -210,6 +210,21 @@ avoid phase cancellation and does not perform speaker separation.
 `camera.audio_features` supports the same optional transcription, disabled by
 default for pipelines. Existing packet and occurrence identifiers are preserved.
 
+To retain an analysis in the existing notification history, connect
+`camera.audio_features` to `core.notify` with
+`historical_evidence_paths: ["audio_analysis"]`. This keeps the latest analysis
+after a terminal packet without audio. It stores structured measurements and
+optional transcription, not the PCM recording. The standalone upload analysis
+does not save a notification automatically.
+
+For replay deduplication, enable `dedupe_by_occurrence` and provide an upstream
+event subject (`subject.type: "event"`, `subject.id`), a correlation identifier
+renewed for each occurrence, and the canonical `source.source_id`. These fields
+must survive closure; audio analysis does not invent them. A closed occurrence
+cannot be reopened by replay, and different sources retain separate records.
+Temporal overlap candidates do not establish that microphones heard the same
+sound and must not be used alone to merge occurrences.
+
 
 ## Live ONVIF event sources
 

@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from io import BytesIO
 import wave
 
@@ -8,6 +9,9 @@ import numpy as np
 import pytest
 
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+from toposync.runtime.notifications.store import NotificationStore
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync_ext_cameras.audio import AudioBaseline, AudioClock, analyze_pcm, analyze_wav
 from toposync_ext_cameras.audio_api import install_audio_routes
@@ -174,5 +178,67 @@ def test_temporal_candidates_require_explicit_shared_clock_and_never_claim_same_
         for index in range(40):
             await capture("d", str(index), 30 + index * 2)
         assert len(runtime._recent) == 32
+
+    asyncio.run(scenario())
+
+
+def test_audio_history_survives_close_restart_and_replay_without_merging_sources(tmp_path):
+    class Context:
+        pipeline_name = "audio-history"
+        node_id = "notify"
+
+        async def run_blocking(self, function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+    path = tmp_path / "notifications.sqlite3"
+    store = NotificationStore(path)
+    records = []
+
+    async def upsert(**values):
+        records.append(store.upsert(**values))
+
+    def notifier():
+        return NotifyRuntime({
+            "title": "Análise de áudio sintético",
+            "dedupe_by_occurrence": True,
+            "update_interval_seconds": 0,
+            "historical_evidence_paths": ["audio_analysis"],
+        }, PipelineRuntimeDependencies(notifications_upsert=upsert))
+
+    async def scenario():
+        audio = AudioFeaturesRuntime({"baseline": {"reference": "synthetic-quiet", "rms": 0.01}}, None)
+        sink = notifier()
+        packet = Packet.create(stream_id="capture", lifecycle=Lifecycle.OPEN, payload={
+            "source": {"source_id": "microphone-a"}, "correlation_id": "capture-1",
+            "subject": {"type": "event", "id": "audio-1", "started_ts": 0},
+            "media": {"ts": 0},
+        }).with_artifact(Artifact(name="audio", data=tone(), metadata={
+            "sample_rate": 16000, "clock": {"started_at": 0, "basis": "synthetic"},
+        }))
+        analyzed = (await audio.process_packet(packet, Context()))[0]
+        await sink.process_packet(analyzed, Context())
+        terminal = replace(packet, lifecycle=Lifecycle.CLOSE, artifacts={},
+                           payload={**packet.payload, "media": {"ts": 1}})
+        closed = (await audio.process_packet(terminal, Context()))[0]
+        assert "audio_analysis" not in closed.payload
+        await sink.process_packet(closed, Context())
+        record = records[-1][0]
+        assert record.payload["status"] == "closed"
+        history = record.payload["data"]["historical_evidence"]["audio_analysis"]
+        assert history == analyzed.payload["audio_analysis"]
+        assert history["windows"][0]["anomaly"]["status"] == "above_baseline"
+        assert history["clock"]["basis"] == "synthetic"
+        assert history["localization"]["status"] == "unavailable"
+        assert history["correlation"]["status"] == "unavailable"
+        assert NotificationStore(path).get(record.id).payload == record.payload
+        # A new runtime replaying the same upstream occurrence cannot reopen it.
+        await notifier().process_packet(analyzed, Context())
+        assert records[-1][0].id == record.id
+        assert records[-1][0].payload == record.payload
+        assert sum(created for _, created in records) == 1
+        other = replace(analyzed, payload={**analyzed.payload, "source": {"source_id": "microphone-b"}})
+        await notifier().process_packet(other, Context())
+        assert records[-1][0].id != record.id
+        assert sum(created for _, created in records) == 2
 
     asyncio.run(scenario())

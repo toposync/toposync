@@ -269,6 +269,11 @@ two seconds back within baseline, and closes as uncertain when evidence stops
 for five seconds. Quiet and timeout durations are configurable. Baseline changes,
 source closure and evidence gaps end the previous occurrence. No baseline means
 no acoustic occurrence, and loudness alone does not mean danger, speech or intent.
+The detector compares one-second RMS windows, not sound classes. A short knock
+can have a high peak or clipped samples while its window remains below the
+reference threshold. Clipping is reported separately; it does not automatically
+open an occurrence. A reference from another recording, microphone or gain is
+not an environmental calibration, even when both recordings have the same label.
 Use notification occurrence deduplication and retain `audio_analysis` and
 `audio_occurrence` as historical evidence. Terminal output keeps the last positive
 analysis; quiet periods do not overwrite it or extend the positive evidence time.

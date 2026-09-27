@@ -129,6 +129,7 @@ PIPELINE_NAME_MAX_LENGTH = 120
 CAMERA_PIPELINE_PRESETS = (
     "area_presence",
     "area_entry",
+    "area_group_entry",
     "cat_litter_use",
     "cat_drinking",
     "people_simple",
@@ -142,6 +143,7 @@ CAMERA_PIPELINE_PRESETS = (
 CAMERA_MAPPING_REQUIRED_PRESETS = {
     "area_presence",
     "area_entry",
+    "area_group_entry",
     "people_individual",
     "people_quiet",
     "presence_area",
@@ -214,6 +216,7 @@ NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
 PRESET_PIPELINE_NAME_PARTS = {
     "area_presence": "presenca_em_area_definida",
     "area_entry": "entrada_em_area_definida",
+    "area_group_entry": "pessoas_entrando_juntas",
     "cat_litter_use": "atividade_caixa_de_areia",
     "cat_drinking": "gato_bebendo_agua",
     "people_simple": "deteccao_simples_de_pessoas",
@@ -691,6 +694,7 @@ class CameraPipelinePresetRequest(BaseModel):
     preset: Literal[
         "area_presence",
         "area_entry",
+        "area_group_entry",
         "cat_litter_use",
         "cat_drinking",
         "people_simple",
@@ -5371,7 +5375,7 @@ class CamerasExtension(BaseExtension):
             notification_priority: NotificationPriority | None,
             graph_uid: str = "camera_preset",
         ) -> dict[str, Any]:
-            if preset in {"area_presence", "area_entry"}:
+            if preset in {"area_presence", "area_entry", "area_group_entry"}:
                 return build_area_occurrence_graph(
                     preset=preset, camera_id=camera_id, source_id=source_id, detection_model_id=detection_model_id,
                     composition_id=composition_id, area_restriction_config=area_restriction_config,
@@ -5816,10 +5820,10 @@ class CamerasExtension(BaseExtension):
                 body.enable_ptz_attention
             )
             if requires_mapping:
-                if preset in {"area_presence", "area_entry"} and not str(body.area_id or "").strip():
+                if preset in {"area_presence", "area_entry", "area_group_entry"} and not str(body.area_id or "").strip():
                     raise HTTPException(status_code=400, detail="Choose a mapped area for this recipe")
                 if (
-                    preset in {"vehicle_stopped", "person_stopped", "person_vehicle_interaction", "area_presence", "area_entry"}
+                    preset in {"vehicle_stopped", "person_stopped", "person_vehicle_interaction", "area_presence", "area_entry", "area_group_entry"}
                     and str(body.area_id or "").strip()
                 ):
                     resolved_area = _resolve_mapped_camera_area(
@@ -6022,6 +6026,7 @@ class CamerasExtension(BaseExtension):
                 "cat_drinking": "Atividade observada de gato bebendo água; não mede ingestão",
                 "area_presence": "Pessoa, gato ou cão em área mapeada; sem inferir idade ou identidade",
                 "area_entry": "Entrada após observar o sujeito fora e dentro da área mapeada",
+                "area_group_entry": "Duas ou mais pessoas distintas entrando na mesma área em até cinco segundos; sem inferir parentesco",
                 "people_simple": "Detecção e acompanhamento de pessoas sem exigir mapa",
                 "people_individual": "Ocorrências individuais de pessoas mapeadas",
                 "people_quiet": "Presença agrupada de pessoas e pets mapeados",

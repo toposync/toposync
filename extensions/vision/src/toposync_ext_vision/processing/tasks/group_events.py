@@ -208,6 +208,7 @@ class _GroupState:
     opened: bool = False
     members: dict[str, _MemberState] = field(default_factory=dict)
     first_seen_monotonic: float = 0.0
+    first_seen_packet_ts: float | None = None
     last_seen_monotonic: float = 0.0
     last_seen_packet_ts: float | None = None
     last_emit_monotonic: float = 0.0
@@ -326,9 +327,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             return None
         if _normalize_string(subject.get("type")).lower() != "event":
             return None
-        event_id = _normalize_string(subject.get("id")) or _normalize_string(
-            packet.payload.get("event_id")
-        )
+        event_id = _normalize_string(_deep_get(packet.payload, self._config.member_identity_path))
         if not event_id:
             return None
         category = _normalize_label(subject.get("category"))
@@ -576,6 +575,13 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                 "correlation_id": group.correlation_id,
                 "camera_id": group.camera_id or payload.get("camera_id"),
                 "source_stream_id": group.source_stream_id,
+                "group_observation": {
+                    "started_at": group.first_seen_packet_ts,
+                    "last_evidence_at": group.last_seen_packet_ts,
+                    "duration_seconds": max(0.0, (group.last_seen_packet_ts or 0.0)
+                        - (group.first_seen_packet_ts or 0.0)),
+                    "join_window_seconds": self._config.join_window_seconds,
+                },
             }
         )
         if trigger is not None:
@@ -637,8 +643,10 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
     ) -> None:
         if group.first_seen_monotonic <= 0.0:
             group.first_seen_monotonic = now_monotonic
+            group.first_seen_packet_ts = packet_ts
         group.last_seen_monotonic = now_monotonic
-        group.last_seen_packet_ts = packet_ts
+        if packet_ts is not None:
+            group.last_seen_packet_ts = max(packet_ts, group.last_seen_packet_ts or packet_ts)
         group.camera_id = member.camera_id or group.camera_id
         existing = group.members.get(member.event_id)
         first_seen = existing.first_seen_packet_ts if existing else packet_ts
@@ -674,6 +682,8 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             group = self._groups_by_id.get(group_id)
             if group is None:
                 continue
+            if not self._within_join_window(group, packet_ts):
+                continue
             if self._age_seconds(group, now_monotonic=now_monotonic, packet_ts=packet_ts) < float(
                 self._config.idle_timeout_seconds
             ):
@@ -683,6 +693,14 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         )
         self._register_group(group)
         return group
+
+    def _within_join_window(self, group: _GroupState, packet_ts: float | None) -> bool:
+        window = self._config.join_window_seconds
+        if window is None:
+            return True
+        if packet_ts is None or group.first_seen_packet_ts is None:
+            return False
+        return 0 <= packet_ts - group.first_seen_packet_ts <= window
 
     def _world_matching_enabled(self, member: _MemberSnapshot, group: _GroupState) -> bool:
         if self._config.use_world_anchor == "never":
@@ -747,6 +765,8 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             group = self._groups_by_id.get(group_id)
             if group is None:
                 continue
+            if not self._within_join_window(group, packet_ts):
+                continue
             score = self._group_match_score(
                 group,
                 member,
@@ -772,6 +792,9 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         now_monotonic: float,
         packet_ts: float | None,
     ) -> _GroupState:
+        existing = self._existing_group_for_member(member)
+        if existing is not None:
+            return existing
         if self._config.mode == "proximity":
             return self._proximity_group(member, now_monotonic=now_monotonic, packet_ts=packet_ts)
         return self._session_group(member, now_monotonic=now_monotonic, packet_ts=packet_ts)
@@ -849,10 +872,12 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
 
         member = self._extract_member(packet)
         if member is None:
-            outputs.append(packet)
+            if self._config.minimum_members == 1:
+                outputs.append(packet)
             return outputs
         if not self._member_category_is_eligible(member):
-            outputs.append(packet)
+            if self._config.minimum_members == 1:
+                outputs.append(packet)
             return outputs
         if not self._member_should_be_grouped(member):
             return outputs
@@ -868,6 +893,12 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                 packet_ts=packet_ts,
             )
         was_opened = group.opened
+        previous = group.members.get(member.event_id)
+        if previous is not None and packet_ts is not None and previous.last_seen_packet_ts is not None:
+            if packet_ts < previous.last_seen_packet_ts or (
+                packet_ts == previous.last_seen_packet_ts and member.lifecycle != Lifecycle.CLOSE
+            ):
+                return outputs
         self._update_group(
             group,
             member,
@@ -876,6 +907,8 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         )
 
         if not was_opened:
+            if len(group.members) < self._config.minimum_members:
+                return outputs
             group.opened = True
             self._mark_emitted(group, now_monotonic=now_monotonic, packet_ts=packet_ts)
             outputs.append(

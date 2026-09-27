@@ -2,8 +2,12 @@ import asyncio
 import time
 from dataclasses import replace
 
+from toposync.runtime.notifications.store import NotificationStore
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from toposync_ext_cameras.area_events import AreaOccurrenceRuntime
+from toposync_ext_vision.processing.tasks.group_events import VisionGroupEventsRuntime
 
 
 AREA = {"name": "piscina", "points": [{"x": 0, "z": 0}, {"x": 2, "z": 0}, {"x": 2, "z": 2}, {"x": 0, "z": 2}]}
@@ -16,6 +20,72 @@ def observation(timestamp, x=1, subject="cat-1", generation=0):
         "capture_evidence": {"capture_instance": "decoder", "generation": generation,
                              "sequence": int(timestamp * 100) + 1, "published_at": time.time()},
     })
+
+
+def test_grouped_crossings_require_distinct_people_in_fixed_window_and_preserve_evidence_duration(tmp_path):
+    async def scenario():
+        area = AreaOccurrenceRuntime({"area": AREA, "mode": "entry", "minimum_duration_seconds": 0})
+        group = VisionGroupEventsRuntime({
+            "minimum_members": 2, "join_window_seconds": 5, "idle_timeout_seconds": 5,
+            "update_interval_seconds": 0, "include_stationary_members": True,
+            "member_identity_path": "area_occurrence.observed_subject.id",
+        })
+
+        async def send(timestamp, subject, x=1, missing=False):
+            packet = observation(timestamp, x=x, subject=subject)
+            packet.payload["subject"].update(category="person", bbox01=[0.1, 0.1, 0.3, 0.5])
+            if missing:
+                packet.payload.pop("world")
+            outputs = []
+            for event in await area.process_packet(packet, None):
+                outputs.extend(await group.process_packet(event, None))
+            return outputs
+
+        assert await send(0, "already-inside") == []
+        assert await send(0, "one", x=3) == []
+        assert await send(1, "one") == []
+        assert await send(1, "one") == []  # duplicate capture
+        assert await send(2, "one", x=3) == []
+        assert await send(3, "one") == []  # second crossing, still one person
+        assert await send(3, "two", x=3) == []
+        opened = await send(4, "two")
+        assert len(opened) == 1 and opened[0].lifecycle == Lifecycle.OPEN
+        assert opened[0].payload["member_event_ids"] == ["one", "two"]
+        updated = await send(5, "two")
+        assert updated[0].stream_id == opened[0].stream_id
+        assert updated[0].payload["group_observation"]["duration_seconds"] == 4
+        assert await send(6, "two", missing=True) == []
+        assert await send(6, "one", missing=True) == []
+        # Loss closes at last evidence, not at the later timeout clock.
+        closed = group._close_expired_groups(
+            observation(20), source_stream_id="camera:one", now_monotonic=time.monotonic(), packet_ts=20,
+        )
+        assert len(closed) == 1 and closed[0].lifecycle == Lifecycle.CLOSE
+        assert closed[0].payload["group_observation"]["duration_seconds"] == 4
+        records = []
+        store = NotificationStore(tmp_path / "notifications.sqlite3")
+
+        async def upsert(**values):
+            records.append(store.upsert(**values))
+
+        sink = NotifyRuntime({"dedupe_by_occurrence": True, "update_interval_seconds": 0},
+                             PipelineRuntimeDependencies(notifications_upsert=upsert))
+        context = type("Context", (), {"pipeline_name": "grouped-entry", "node_id": "notify"})()
+        for event in [opened[0], updated[0], updated[0], closed[0]]:
+            await sink.process_packet(event, context)
+        assert sum(created for _, created in records) == 1
+        assert len({record.id for record, _ in records}) == 1
+        assert records[-1][0].payload["lifecycle"] == "close"
+        assert await send(5, "two") == []  # delayed replay cannot reopen crossing
+
+        assert await send(21, "three", x=3) == []
+        assert await send(22, "three") == []
+        assert await send(25, "three") == []
+        assert await send(27, "four", x=3) == []
+        assert await send(28, "four") == []  # six seconds after first crossing
+        assert await send(29, "three") == []  # updates cannot move member to newer group
+
+    asyncio.run(scenario())
 
 
 def test_area_presence_duration_exit_replay_and_independent_subjects():

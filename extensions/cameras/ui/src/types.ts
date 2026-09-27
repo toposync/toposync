@@ -450,6 +450,7 @@ export type CameraContextsResponse = {
 export type CameraPipelinePreset =
   | "area_presence"
   | "area_entry"
+  | "area_group_entry"
   | "cat_litter_use"
   | "cat_drinking"
   | "people_simple"

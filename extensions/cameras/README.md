@@ -127,3 +127,13 @@ Camera settings offer litter-box activity, drinking, presence in an area, and en
 `POST /api/cameras/cameras/{camera_id}/pipelines/presets/preview` accepts the recipe request and returns a compiled, disabled `pipeline` without saving it. It requires pipeline read and compile permissions. Creation uses the same preparation path. An explicit composition confines area lookup to that composition; ambiguous area identifiers without a composition are rejected.
 
 `camera.area_occurrence` groups evidence independently per tracked subject. Entry requires a preceding observation outside the area; first sighting inside is not an entry. Duration ends at the last confirmed observation. Missing observations, source loss and tracking closure end the occurrence without claiming the physical activity ended. Stale or terminal replay cannot reopen a subject, and active state is bounded. Cat recipes use semantic occurrence filtering; descriptions are observations, not proof of ingestion or elimination.
+
+**People entering together** requires two distinct tracked people crossing into the
+selected mapped area within five seconds of the first crossing. Repeated crossings
+by the same tracked subject count once in that group. It reuses area occurrences
+and `vision.group_events`, with a fixed admission window and minimum member count;
+updates remain attached to their existing group. The reported duration ends at
+the last evidence, excluding the idle timeout. This describes observed crossings,
+not family relationships, intent or biometric identity. Tracking fragmentation
+can still overcount a physical person; validate tracking and mapping with the
+installation's footage before relying on counts.

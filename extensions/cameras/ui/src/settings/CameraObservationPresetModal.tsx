@@ -21,10 +21,10 @@ export function CameraObservationPresetModal({
     setServerId("local");
     setError(null);
   }, [open, preset, camera.id, activeSourceId]);
-  const area = preset === "area_presence" || preset === "area_entry";
+  const area = preset === "area_presence" || preset === "area_entry" || preset === "area_group_entry";
   if (!open || (!area && preset !== "cat_litter_use" && preset !== "cat_drinking")) return null;
   const selectedArea = mappedCompositions.flatMap(composition => (composition.areas ?? []).map(item => ({...item, compositionId: composition.id}))).find(item => JSON.stringify([item.compositionId, item.id]) === areaId);
-  const key = area ? `ext.cameras.area.${preset === "area_presence" ? "presence" : "entry"}` : `ext.cameras.cat.${preset === "cat_litter_use" ? "litter" : "water"}`;
+  const key = area ? `ext.cameras.area.${preset === "area_presence" ? "presence" : preset === "area_group_entry" ? "group" : "entry"}` : `ext.cameras.cat.${preset === "cat_litter_use" ? "litter" : "water"}`;
   async function save(): Promise<void> {
     if (saving || !sourceId || !preset || (area && !selectedArea)) return;
     setSaving(true);

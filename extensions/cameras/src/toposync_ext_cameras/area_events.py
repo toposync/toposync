@@ -201,19 +201,35 @@ def build_area_occurrence_graph(*, preset, camera_id, source_id, detection_model
     area = next((item for item in configuration.get("areas", []) if item["name"] in names), None)
     if area is None:
         raise ValueError("Choose a mapped area for this recipe")
-    mode = "entry" if preset == "area_entry" else "presence"
+    grouped = preset == "area_group_entry"
+    mode = "entry" if preset in {"area_entry", "area_group_entry"} else "presence"
+    categories = ["person"] if grouped else ["person", "dog", "cat"]
     nodes = [
         {"id": "source", "operator": "camera.source", "config": {"camera_id": camera_id, "source_id": source_id}},
         {"id": "fps", "operator": "core.fps_reducer", "config": {"target_fps": 4}},
         {"id": "detect", "operator": "vision.detect", "config": {
-            "model_id": detection_model_id, "categories": ["person", "dog", "cat"], "emit_mode": "annotate"}},
+            "model_id": detection_model_id, "categories": categories, "emit_mode": "annotate"}},
         {"id": "map", "operator": "camera.camera_mapping", "config": {"camera_id": camera_id, "composition_id": composition_id}},
         {"id": "track", "operator": "vision.track", "config": {"tracker_id": "byte_world", "use_world_anchor": "auto"}},
-        {"id": "area", "operator": "camera.area_occurrence", "config": {"area": area, "mode": mode}},
+        {"id": "area", "operator": "camera.area_occurrence", "config": {
+            "area": area, "mode": mode, "categories": categories,
+            "minimum_duration_seconds": 0 if grouped else 1}},
         {"id": "store", "operator": "core.store_images", "config": {"format": "webp"}},
         {"id": "notify", "operator": "core.notify", "config": {
             "notification_type": "pipelines.tracking", "title": notification_title or "{{camera_name}}: {{payload.area_occurrence.area}}",
             "description": notification_description or "{{payload.area_occurrence.observed_subject.category}}: {{payload.area_occurrence.duration_seconds}} s de evidência na área.",
             "priority": notification_priority or "high", "dedupe_key_template": "{{subject.id}}", "dedupe_by_occurrence": True}},
     ]
+    if grouped:
+        nodes.insert(6, {"id": "group", "operator": "vision.group_events", "config": {
+            "mode": "session", "categories": ["person"], "minimum_members": 2,
+            "join_window_seconds": 5, "idle_timeout_seconds": 5,
+            "member_identity_path": "area_occurrence.observed_subject.id",
+            "include_stationary_members": True, "update_interval_seconds": 1,
+        }})
+        nodes[-1]["config"]["description"] = notification_description or (
+            "{{payload.category_summary.member_count}} pessoas entraram em até cinco segundos. "
+            "{{payload.group_observation.duration_seconds}} s entre a primeira entrada e a última evidência."
+        )
+        nodes[-1]["config"]["include_payload_paths"] = ["group_observation", "area_occurrence"]
     return build_pipeline_graph_v2(graph_uid=graph_uid, nodes=nodes, edges=_linear_edges([node["id"] for node in nodes]))

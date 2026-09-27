@@ -101,7 +101,7 @@ def test_cat_activity_presets_compile_and_persist_without_detection_model(tmp_pa
         assert _node_config(pipeline, "ai.smart_crop")["missing_policy"] == "drop"
 
 
-@pytest.mark.parametrize("preset", ["area_presence", "area_entry"])
+@pytest.mark.parametrize("preset", ["area_presence", "area_entry", "area_group_entry"])
 def test_area_recipe_requires_explicit_area_and_compiles(tmp_path, monkeypatch, preset):
     with _create_client(tmp_path, monkeypatch) as client:
         _configure_camera(client)
@@ -115,8 +115,13 @@ def test_area_recipe_requires_explicit_area_and_compiles(tmp_path, monkeypatch, 
         pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
         occurrence = _node_config(pipeline, "camera.area_occurrence")
         assert occurrence["area"]["name"] == "Gate"
-        assert occurrence["mode"] == ("entry" if preset == "area_entry" else "presence")
-        assert _node_config(pipeline, "vision.detect")["categories"] == ["person", "dog", "cat"]
+        assert occurrence["mode"] == ("entry" if preset in {"area_entry", "area_group_entry"} else "presence")
+        expected_categories = ["person"] if preset == "area_group_entry" else ["person", "dog", "cat"]
+        assert _node_config(pipeline, "vision.detect")["categories"] == expected_categories
+        if preset == "area_group_entry":
+            group = _node_config(pipeline, "vision.group_events")
+            assert group["minimum_members"] == 2 and group["join_window_seconds"] == 5
+            assert occurrence["minimum_duration_seconds"] == 0
 
 
 def test_area_recipe_respects_composition_and_rejects_ambiguous_area(tmp_path, monkeypatch):

@@ -212,11 +212,11 @@ const CAMERA_PIPELINE_PRESET_CARDS: {
   stepsKey: string;
   stepsFallback: string;
 }[] = [
-  ...(["area_presence", "area_entry"] as const).map((id) => ({
+  ...(["area_presence", "area_entry", "area_group_entry"] as const).map((id) => ({
     id, requiresMapping: true,
-    titleKey: `ext.cameras.area.${id === "area_presence" ? "presence" : "entry"}.title`,
-    titleFallback: id === "area_presence" ? "Pessoas e pets em uma área" : "Entrada em uma área",
-    descriptionKey: `ext.cameras.area.${id === "area_presence" ? "presence" : "entry"}.description`,
+    titleKey: `ext.cameras.area.${id === "area_presence" ? "presence" : id === "area_group_entry" ? "group" : "entry"}.title`,
+    titleFallback: id === "area_presence" ? "Pessoas e pets em uma área" : id === "area_group_entry" ? "Pessoas entrando juntas" : "Entrada em uma área",
+    descriptionKey: `ext.cameras.area.${id === "area_presence" ? "presence" : id === "area_group_entry" ? "group" : "entry"}.description`,
     descriptionFallback: "Observações por sujeito e área, com imagem e duração.",
     stepsKey: "ext.cameras.cat.steps", stepsFallback: "Revise a imagem e o intervalo observado",
   })),
@@ -1951,13 +1951,13 @@ function CamerasSettingsPanelContent({
         ) : null}
       </SubModal>
 
-      {activeCamera && (pipelinePresetOpen === "cat_litter_use" || pipelinePresetOpen === "cat_drinking" || pipelinePresetOpen === "area_presence" || pipelinePresetOpen === "area_entry") ? (
+      {activeCamera && (pipelinePresetOpen === "cat_litter_use" || pipelinePresetOpen === "cat_drinking" || pipelinePresetOpen === "area_presence" || pipelinePresetOpen === "area_entry" || pipelinePresetOpen === "area_group_entry") ? (
         <CameraObservationPresetModal open preset={pipelinePresetOpen} camera={activeCamera}
           activeSourceId={activeSourceId} pipelineOverview={cameraPipelines} mappedCompositions={mappedCompositions}
           processingServers={processingServers} i18n={i18n} onClose={() => setPipelinePresetOpen(null)}
           onCreated={handlePipelineCreated} />
       ) : null}
-      {activeCamera && pipelinePresetOpen !== "cat_litter_use" && pipelinePresetOpen !== "cat_drinking" && pipelinePresetOpen !== "area_presence" && pipelinePresetOpen !== "area_entry" ? (
+      {activeCamera && pipelinePresetOpen !== "cat_litter_use" && pipelinePresetOpen !== "cat_drinking" && pipelinePresetOpen !== "area_presence" && pipelinePresetOpen !== "area_entry" && pipelinePresetOpen !== "area_group_entry" ? (
         <CameraPipelinePresetModal
           open={Boolean(pipelinePresetOpen)}
           preset={pipelinePresetOpen}

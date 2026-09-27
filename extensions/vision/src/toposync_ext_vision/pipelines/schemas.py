@@ -239,6 +239,9 @@ class VisionGroupEventsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: VisionGroupEventsMode = "session"
+    minimum_members: int = Field(default=1, ge=1, le=128)
+    join_window_seconds: float | None = Field(default=None, gt=0, le=3600)
+    member_identity_path: str = Field(default="subject.id", min_length=1, max_length=256)
     categories: list[str] = Field(
         default_factory=list,
         description="Eligible subject categories. Empty means every category.",

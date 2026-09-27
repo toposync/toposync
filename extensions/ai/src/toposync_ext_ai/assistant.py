@@ -179,7 +179,7 @@ def install_assistant_routes(app: FastAPI, router: AiRouter) -> None:
                     "do not approximate a different behavior. For area recipes choose an explicit area/composition. "
                     "cat_litter_use, cat_drinking and people_simple require only camera and source: leave area_id "
                     "and composition_id empty, even if mapped areas exist. The cat recipes locate their region visually. "
-                    "Only area_presence and area_entry require an explicit mapped area. Questions must use human names, "
+                    "Only area_presence, area_entry and area_group_entry require an explicit mapped area. Questions must use human names, "
                     "never ask the user for IDs, schemas or technical configuration. "
                     "Do not ask for confirmation or repeat the user's request as a question. When recipe, camera and "
                     "source are unambiguous, return their IDs and question as an empty string. Use the only available "

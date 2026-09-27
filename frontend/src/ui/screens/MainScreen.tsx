@@ -1228,11 +1228,14 @@ export function MainScreen({
                           id="notificationsFilterSearch"
                           type="search"
                           className="notificationsFilterSearch"
-                          placeholder={t("core.ui.notifications.filter.search_placeholder", {}, "Title or description")}
+                          placeholder={t("core.ui.notifications.filter.search_placeholder", {}, "Words, camera or area")}
+                          aria-describedby="notificationsSearchMode"
                           value={filter.query}
                           onChange={(e) => setFilter((prev) => ({ ...prev, query: e.target.value }))}
                         />
                       </div>
+
+                      <p id="notificationsSearchMode" className="muted">{t("core.ui.notifications.filter.search_mode")}</p>
 
                       {availableTypes.length > 1 ? (
                         <div className="notificationsFilterSection">

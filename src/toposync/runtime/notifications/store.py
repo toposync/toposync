@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +61,13 @@ _VALID_PRIORITY_BUCKETS = {*_VISIBLE_PRIORITY_BUCKETS, "silent"}
 _CancelCheck = Callable[[], None]
 
 
+def _normalize_search_text(value: Any) -> str:
+    return "".join(
+        character for character in unicodedata.normalize("NFD", str(value or "").lower())
+        if unicodedata.category(character) != "Mn"
+    )
+
+
 def _connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     if read_only:
@@ -74,6 +82,7 @@ def _connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
         conn.execute("PRAGMA temp_store=MEMORY")
     else:
         conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    conn.create_function("notification_search_text", 1, _normalize_search_text, deterministic=True)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -338,13 +347,14 @@ class NotificationStore:
             where_sql.append(f"type IN ({placeholders})")
             params.extend(requested_types)
 
-        query_value = str(query or "").strip()
-        if query_value:
-            like = f"%{_escape_like(query_value)}%"
-            where_sql.append(
-                "(title LIKE ? ESCAPE '\\' COLLATE NOCASE OR description LIKE ? ESCAPE '\\' COLLATE NOCASE)"
-            )
-            params.extend([like, like])
+        # ponytail: varredura linear; usar índice textual se a latência medida exigir.
+        searchable = "title || ' ' || description || ' ' || CASE WHEN json_valid(payload_json) THEN " + " || ' ' || ".join(
+            f"CASE WHEN json_type(payload_json, '{path}') = 'text' THEN json_extract(payload_json, '{path}') ELSE '' END"
+            for path in ("$.data.camera_name", "$.data.area_label", "$.data.source.source_name")
+        ) + " ELSE '' END"
+        for term in dict.fromkeys(_normalize_search_text(query).split()):
+            where_sql.append(f"notification_search_text({searchable}) LIKE ? ESCAPE '\\'")
+            params.append(f"%{_escape_like(term)}%")
 
         where_clause = f"WHERE {' AND '.join(where_sql)}" if where_sql else ""
         params.append(limit)

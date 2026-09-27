@@ -238,9 +238,14 @@ function sortNotificationIdsByCreatedDesc(
 function notificationMatchesFilter(notification: Notification, filter: NotificationsFilter): boolean {
   if (!filter.priorities.includes(notificationPriority(notification))) return false;
   if (filter.types.length > 0 && !filter.types.includes(notification.type)) return false;
-  const query = filter.query.trim().toLowerCase();
-  if (!query) return true;
-  return `${notification.title ?? ""}\n${notification.description ?? ""}`.toLowerCase().includes(query);
+  const normalize = (value: string) => value.toLowerCase().normalize("NFD").replace(/\p{Mn}/gu, "");
+  const terms = normalize(filter.query).trim().split(/\s+/).filter(Boolean);
+  const data = asRecord(asRecord(notification.payload).data);
+  const source = asRecord(data.source);
+  const text = normalize([notification.title, notification.description, data.camera_name, data.area_label,
+    source.source_name]
+    .filter((value): value is string => typeof value === "string").join(" "));
+  return terms.every((term) => text.includes(term));
 }
 
 function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {

@@ -175,6 +175,17 @@ class MediaPipePoseBackend(_OnnxRuntimeSessionBackend):
             xy = raw[:, :2] / 256.0 * [right - left, bottom - top] + [left, top]
             xy /= [width - 1, height - 1]
             visibility_presence = 1 / (1 + np.exp(-np.clip(raw[:, 3:5], -80, 80)))
+            # The square crop can include a neighbour. A confident torso outside
+            # the requested person cannot inherit that person's detector identity.
+            x1, y1, x2, y2 = detection.bbox01
+            torso_centers = [
+                xy[list(pair)].mean(axis=0)
+                for pair in ((11, 12), (23, 24))
+                if np.isfinite(visibility_presence[list(pair)]).all()
+                and visibility_presence[list(pair)].min() >= self._threshold
+            ]
+            if any(not (x1 <= x <= x2 and y1 <= y <= y2) for x, y in torso_centers):
+                continue
             keypoints = [
                 (float(x), float(y), float(min(visibility_presence[i])))
                 for i, (x, y) in enumerate(xy)

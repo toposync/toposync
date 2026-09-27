@@ -31,7 +31,7 @@ from toposync_ext_vision.registry.recommendations import (
 
 
 def _model(
-    path: Path, *, input_shape=None, output_shape=None, output_dtype=None, input_name="input_1"
+    path: Path, *, input_shape=None, output_shape=None, output_dtype=None, input_name="input_1", landmark_x=128
 ) -> Path:
     import onnx
     from onnx import TensorProto, helper
@@ -45,7 +45,12 @@ def _model(
     nodes, outputs = [], []
     for name, dimensions in tensors:
         dtype = output_dtype or TensorProto.FLOAT
-        values = np.full(dimensions, 0.9, dtype=np.float32).flatten().tolist()
+        values = np.full(dimensions, 0.9, dtype=np.float32)
+        if name == "Identity" and dimensions == [1, 195]:
+            points = values.reshape(39, 5)
+            points[:, 0] = landmark_x
+            points[:, 1] = 128
+        values = values.flatten().tolist()
         constant = helper.make_tensor(f"constant_{name}", dtype, dimensions, values)
         nodes.append(helper.make_node("Constant", inputs=[], outputs=[name], value=constant))
         outputs.append(helper.make_tensor_value_info(name, dtype, dimensions))
@@ -292,6 +297,16 @@ def test_backend_retains_actor_reference_without_claiming_observation(tmp_path):
     assert poses[0].metadata["source_detection_index"] == 4
     assert all(point.visibility == "unknown" for point in poses[0].landmarks)
     assert not poses[0].metadata["relative_landmarks_3d"]["metric_calibrated"]
+
+
+@pytest.mark.parametrize("landmark_x,expected", [(128, 1), (64, 0)])
+def test_mediapipe_does_not_assign_neighbour_torso_to_requested_person(tmp_path, landmark_x, expected):
+    backend = build_pose_backend(_manifest(_model(tmp_path / "pose.onnx", landmark_x=landmark_x)))
+    detection = DetectionObject(label="person", label_id=0, score=0.9,
+                                bbox01=(0.75, 0.1, 0.95, 0.9), model_id="fixture",
+                                metadata={"actor_subject_id": "right-person"})
+    poses = backend.estimate_pose(np.zeros((100, 100, 3), dtype=np.uint8), detections=[detection])
+    assert len(poses) == expected
 
 
 @pytest.mark.parametrize("detections", [None, [], [DetectionObject(

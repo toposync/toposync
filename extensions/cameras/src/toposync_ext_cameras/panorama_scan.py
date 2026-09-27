@@ -9468,11 +9468,15 @@ class _Scan:
                 verification["status"] = "budget_exhausted"
                 await self._persist()
                 return
+            # Use the scanner's reference-probe duration, not its 120 ms
+            # microcorrection floor: transport alone can exhaust that floor.
+            # The controller still deducts transport time from this budget.
+            duration = 0.3
             check = {
                 "repetition": repetition + 1,
                 "axis": axis,
                 "direction": direction,
-                "duration_seconds": 0.12,
+                "duration_seconds": duration,
                 "status": "reference_pending",
             }
             checks.append(check)
@@ -9504,7 +9508,7 @@ class _Scan:
             await self._emit("verifying_control")
             try:
                 moved = await self._pulse(
-                    axis, direction, 0.12, expected_frame=reference_frame
+                    axis, direction, duration, expected_frame=reference_frame
                 )
                 movement = moved.get("match", {})
                 check["movement"] = movement

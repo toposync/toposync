@@ -340,11 +340,11 @@ def test_control_verification_stops_at_first_unconfirmed_return(tmp_path, monkey
         result = scanner.checkpoint["control_verification"]
         if return_confirmed:
             assert result["status"] == "verified" and len(pulses) == 12
-            assert pulses == [(axis, direction, 0.12) for _ in range(3)
+            assert pulses == [(axis, direction, 0.3) for _ in range(3)
                               for axis, direction in (("pan", 1), ("pan", -1), ("tilt", 1), ("tilt", -1))]
         else:
             assert result["status"] == "return_unconfirmed"
-            assert pulses == [("pan", 1, 0.12)]
+            assert pulses == [("pan", 1, 0.3)]
         assert all(frame is not None for frame in expected_frames)
         assert not scanner.complete and not scanner.captures
 
@@ -554,7 +554,7 @@ def test_control_verification_reconstruction_continues_after_verified_checks(
     asyncio.run(scanner._verify_control())
 
     verification = scanner.checkpoint["control_verification"]
-    assert pulses[0][:3] == ("pan", -1, 0.12)
+    assert pulses[0][:3] == ("pan", -1, 0.3)
     assert len(pulses) == 5
     assert len(verification["checks"]) == 6
     assert verification["checks"][0] == checkpoint["control_verification"]["checks"][0]
@@ -742,7 +742,7 @@ def test_control_verification_uses_one_coarse_recall_per_return_epoch(
         "return_epoch": expected_epochs[-1],
         "axis": "pan",
         "direction": verification["checks"][-1]["direction"],
-        "duration_seconds": 0.12,
+        "duration_seconds": 0.3,
         "overlap": 0.95,
         "displacement": 6.0,
         "observed_shift": [6.0, 0.0],

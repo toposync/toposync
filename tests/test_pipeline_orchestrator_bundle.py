@@ -22,8 +22,10 @@ from toposync.runtime.pipelines import (
 )
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
 from toposync.runtime.pipelines.stats import PipelineStatsStore
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 from toposync_ext_vision.pipelines import DetectionObject, ModelManifest, ModelRegistry
+from toposync_ext_vision.pipelines.operators import register_vision_pipeline_operators
 
 
 def _build_registry() -> ModelRegistry:
@@ -78,9 +80,7 @@ class _FrameSourceRuntime(SourceOperatorRuntime):
             lifecycle=Lifecycle.UPDATE,
             payload={"frame_index": self._sequence},
             artifacts={
-                "main": Artifact(
-                    name="main", data=frame, mime_type="application/json"
-                ),
+                "main": Artifact(name="main", data=frame, mime_type="application/json"),
                 "aux": Artifact(
                     name="aux",
                     data=frame,
@@ -147,9 +147,9 @@ def _build_detection_sequence(
 def _tracking_pipeline_graph(
     *, source_id: str, detect_id: str, track_id: str, sink_id: str, sink_name: str
 ) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "nodes": [
+    return build_pipeline_graph_v2(
+        graph_uid=sink_name,
+        nodes=[
             {
                 "id": source_id,
                 "operator": "test.frame_source",
@@ -174,9 +174,13 @@ def _tracking_pipeline_graph(
                     "stitch_gap_seconds": 0.35,
                 },
             },
-            {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
+            {
+                "id": sink_id,
+                "operator": "test.collect_sink",
+                "config": {"sink_name": sink_name},
+            },
         ],
-        "edges": [
+        edges=[
             {
                 "from": {"node": source_id, "port": "out"},
                 "to": {"node": detect_id, "port": "in"},
@@ -196,7 +200,7 @@ def _tracking_pipeline_graph(
                 "drop_policy": "drop_oldest",
             },
         ],
-    }
+    )
 
 
 def test_orchestrator_runs_local_bundle_with_shared_detect_and_pipeline_local_tracking(
@@ -208,6 +212,7 @@ def test_orchestrator_runs_local_bundle_with_shared_detect_and_pipeline_local_tr
         registry = OperatorRegistry()
         register_builtin_operators(registry)
         register_camera_pipeline_operators(registry)
+        register_vision_pipeline_operators(registry)
 
         registry.register_operator(
             operator_id="test.frame_source",

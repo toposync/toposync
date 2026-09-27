@@ -243,13 +243,7 @@ class PipelinesOrchestrator:
             try:
                 self._reload.clear()
                 await asyncio.wait_for(
-                    asyncio.wait(
-                        [
-                            asyncio.create_task(self._stop.wait()),
-                            asyncio.create_task(self._reload.wait()),
-                        ],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    ),
+                    self._reload.wait(),
                     timeout=self._poll_interval_s,
                 )
             except TimeoutError:

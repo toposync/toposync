@@ -4783,9 +4783,7 @@ video {
   margin-top: 4px;
   font-size: 13px;
   font-weight: 650;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 .notificationPayloadDetails {

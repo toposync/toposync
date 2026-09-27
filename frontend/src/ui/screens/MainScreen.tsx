@@ -88,6 +88,7 @@ function formatDateTimeShort(locale: string, iso: string | undefined): string | 
 }
 
 type NotificationDetailField = {
+  technical?: boolean;
   label: string;
   value: string;
 };
@@ -541,15 +542,15 @@ export function MainScreen({
     const event = asRecord(payload.event);
 
     const out: NotificationDetailField[] = [];
-    const push = (label: string, valueRaw: unknown) => {
+    const push = (label: string, valueRaw: unknown, technical = false) => {
       const value = asTrimmedString(valueRaw);
       if (!value) return;
-      out.push({ label, value });
+      out.push({ label, value, technical });
     };
 
     const cameraName = asTrimmedString(data.camera_name);
     const cameraId = asTrimmedString(data.camera_id);
-    const cameraLabel = [cameraName, cameraId].filter(Boolean).join(" • ");
+    const cameraLabel = cameraName || cameraId;
     const subject = asRecord(payload.subject) || asRecord(data.subject);
     const subjectId = asTrimmedString(payload.subject_id) || asTrimmedString(subject?.id);
     const subjectType = asTrimmedString(payload.subject_type) || asTrimmedString(subject?.type);
@@ -560,18 +561,18 @@ export function MainScreen({
     const createdAt = formatDateTimeLong(locale, activeNotification.createdAt);
     const updatedAt = formatDateTimeLong(locale, activeNotification.updatedAt);
 
-    push(t("core.ui.notifications.details.meta.type", {}, "Type"), activeNotification.type);
-    push(t("core.ui.notifications.details.meta.priority", {}, "Priority"), notificationPriority(activeNotification));
-    push(t("core.ui.notifications.details.meta.status", {}, "Status"), payload.status);
-    push(t("core.ui.notifications.details.meta.lifecycle", {}, "Lifecycle"), payload.lifecycle);
-    push(t("core.ui.notifications.details.meta.pipeline", {}, "Pipeline"), payload.pipeline_name);
+    push(t("core.ui.notifications.details.meta.type", {}, "Type"), activeNotification.type, true);
+    push(t("core.ui.notifications.details.meta.priority", {}, "Priority"), t(`core.ui.notifications.filter.priority.${notificationPriority(activeNotification)}`, {}, notificationPriority(activeNotification)));
+    push(t("core.ui.notifications.details.meta.status", {}, "Status"), asTrimmedString(payload.status) ? t(`core.ui.notifications.details.status.${payload.status}`, {}, asTrimmedString(payload.status)) : "");
+    push(t("core.ui.notifications.details.meta.lifecycle", {}, "Lifecycle"), payload.lifecycle, true);
+    push(t("core.ui.notifications.details.meta.pipeline", {}, "Pipeline"), payload.pipeline_name, true);
     push(t("core.ui.notifications.details.meta.camera", {}, "Camera"), cameraLabel);
     push(t("core.ui.notifications.details.meta.area", {}, "Area"), data.area_label);
-    push(t("core.ui.notifications.details.meta.subject_id", {}, "Subject ID"), subjectId);
-    push(t("core.ui.notifications.details.meta.subject_type", {}, "Subject type"), subjectType);
-    push(t("core.ui.notifications.details.meta.event_id", {}, "Event ID"), eventId);
-    push(t("core.ui.notifications.details.meta.event_code", {}, "Event code"), eventCode);
-    push(t("core.ui.notifications.details.meta.tracking_id", {}, "Tracking ID"), trackingId);
+    push(t("core.ui.notifications.details.meta.subject_id", {}, "Subject ID"), subjectId, true);
+    push(t("core.ui.notifications.details.meta.subject_type", {}, "Subject type"), subjectType, true);
+    push(t("core.ui.notifications.details.meta.event_id", {}, "Event ID"), eventId, true);
+    push(t("core.ui.notifications.details.meta.event_code", {}, "Event code"), eventCode, true);
+    push(t("core.ui.notifications.details.meta.tracking_id", {}, "Tracking ID"), trackingId, true);
     push(payload.source === "pipelines"
       ? t("core.ui.notifications.details.meta.observed_duration", {}, "Duration through last update")
       : t("core.ui.notifications.details.meta.duration", {}, "Duration"), duration);
@@ -612,8 +613,8 @@ export function MainScreen({
     if (typeof item.confidence === "number") {
       parts.push(`${Math.round(item.confidence * 100)}%`);
     }
-    const tsLabel = formatTimestampMillis(locale, item.storedTsMs);
-    if (tsLabel) parts.push(tsLabel);
+    const tsLabel = formatTimestampMillis(locale, item.publishedAtMs);
+    if (tsLabel) parts.push(t("core.ui.notifications.details.image_published", { time: tsLabel }, `Published: ${tsLabel}`));
     return parts.join(" • ");
   }, [locale, t]);
 
@@ -1717,7 +1718,6 @@ export function MainScreen({
                 </div>
 
                 <div className="notificationGalleryCaption">
-                  <div className="notificationGalleryLabel">{activeNotificationImage.label}</div>
                   <div className="notificationGalleryCounter">
                     {t(
                       "core.ui.notifications.details.image_counter",
@@ -1736,8 +1736,8 @@ export function MainScreen({
                         type="button"
                         className={["notificationGalleryThumbButton", idx === notificationImageIndex ? "isActive" : ""].filter(Boolean).join(" ")}
                         onClick={() => setNotificationImageIndex(idx)}
-                        title={item.label}
-                        aria-label={item.label}
+                        title={t("core.ui.notifications.details.image_counter", { current: idx + 1, total: activeNotificationImages.length })}
+                        aria-label={t("core.ui.notifications.details.image_counter", { current: idx + 1, total: activeNotificationImages.length })}
                       >
                         <img
                           src={item.url}
@@ -1756,7 +1756,7 @@ export function MainScreen({
             )}
 
             <div className="notificationDetailsGrid">
-              {activeNotificationDetails.map((field) => (
+              {activeNotificationDetails.filter(field => !field.technical).map((field) => (
                 <div className="notificationDetailField" key={`${field.label}:${field.value}`}>
                   <div className="notificationDetailLabel">{field.label}</div>
                   <div className="notificationDetailValue">{field.value}</div>
@@ -1766,7 +1766,15 @@ export function MainScreen({
 
             {activeNotification.payload ? (
               <details className="notificationPayloadDetails">
-                <summary>{t("core.ui.notifications.details.payload", {}, "Payload")}</summary>
+                <summary>{t("core.ui.notifications.details.technical", {}, "Technical details")}</summary>
+                <div className="notificationDetailsGrid">
+                  {activeNotificationDetails.filter(field => field.technical).map(field => (
+                    <div className="notificationDetailField" key={field.label}>
+                      <div className="notificationDetailLabel">{field.label}</div>
+                      <div className="notificationDetailValue">{field.value}</div>
+                    </div>
+                  ))}
+                </div>
                 <pre>{JSON.stringify(activeNotification.payload, null, 2)}</pre>
               </details>
             ) : null}

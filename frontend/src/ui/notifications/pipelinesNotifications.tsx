@@ -23,6 +23,7 @@ export type NotificationImageItem = {
   label: string;
   source: NotificationImageSource;
   storedTsMs?: number;
+  publishedAtMs?: number;
   confidence?: number;
 };
 
@@ -192,6 +193,7 @@ function resolveStoredImages(payload: Record<string, unknown>): NotificationImag
         label,
         source: "stored",
         storedTsMs: parseStoredTsMs(entry.stored_ts_ms),
+        publishedAtMs: parseStoredTsMs(entry.published_at_ms),
         confidence: parseConfidence(entry.confidence),
       });
     }

@@ -217,3 +217,14 @@ def test_restart_closure_preserves_persisted_interval_without_adding_downtime(tm
         assert closed["payload"]["status"] == "closed"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("started,expected", [(8, 2), (10, 0), (11, None), (True, None), (float("nan"), None)])
+def test_event_duration_includes_evidence_before_confirmation(started, expected):
+    async def scenario():
+        runtime, emitted = sink()
+        confirmed = sample(10, Lifecycle.OPEN)
+        confirmed.payload["subject"].update(type="event", started_ts=started)
+        await runtime.process_packet(confirmed, CONTEXT)
+        assert emitted[-1]["payload"]["event"]["duration_seconds"] == expected
+    asyncio.run(scenario())

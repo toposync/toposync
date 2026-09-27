@@ -158,7 +158,7 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         identity = hashlib.sha256(f"{key}:{state.capture[:2]}:{self.config.area.name}:{state.started_at}".encode()).hexdigest()[:32]
         payload = dict(packet.payload)
         subject = dict(packet.payload["subject"])
-        subject.update({"type": "event", "id": identity, "lifecycle": lifecycle.value})
+        subject.update({"type": "event", "id": identity, "lifecycle": lifecycle.value, "started_ts": state.started_at})
         duration = resolve_media_ts(packet) - state.started_at
         category = {"person": "Pessoa", "dog": "Cão", "cat": "Gato"}[subject["category"]]
         action = "entrada observada" if self.config.mode == "entry" else "presença observada"

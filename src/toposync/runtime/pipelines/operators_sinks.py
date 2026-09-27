@@ -29,6 +29,7 @@ from .packet_contract import (
     get_media_descriptor,
     get_source_descriptor,
     resolve_media_dimensions,
+    resolve_frame_freshness,
     resolve_media_ts,
     resolve_source_device_id,
     resolve_source_name,
@@ -698,6 +699,9 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                 meta = dict(artifact.metadata)
                 meta["stored_rel_path"] = rel
                 meta["stored_ts_ms"] = ts_ms
+                meta.pop("published_at_ms", None)
+                if resolve_frame_freshness(packet).age_seconds is not None:
+                    meta["published_at_ms"] = float(packet.payload["capture_evidence"]["published_at"]) * 1000
                 meta["stored_size_bytes"] = stored_size_bytes
                 meta["storage_layer"] = stored.layer_label
                 if subject_id:
@@ -1096,8 +1100,14 @@ class NotifyRuntime(SinkRuntime):
 
         state = self._state.get(dedupe_key)
         if state is None:
+            subject = _resolve_subject(packet)
+            started_ts = subject.get("started_ts", sample_ts) if subject.get("type") in {"event", "group_event"} else sample_ts
+            valid_start = type(started_ts) in (int, float) and math.isfinite(started_ts) and started_ts <= sample_ts
+            if "started_ts" in subject and media_ts is None:
+                valid_start = False
             state = _NotifyState(
-                started_ts=sample_ts,
+                started_ts=float(started_ts) if valid_start else sample_ts,
+                duration_valid=valid_start,
                 last_ts=sample_ts,
                 time_basis=time_basis,
                 clock_scope=clock_scope,

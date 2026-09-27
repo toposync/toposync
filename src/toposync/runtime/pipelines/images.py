@@ -70,6 +70,9 @@ def add_stored_image_entry(
         "mime_type": str(artifact.mime_type or "") or None,
         "stored_ts_ms": int(stored_ts_ms),
     }
+    publication = artifact.metadata.get("published_at_ms")
+    if type(publication) in (int, float) and math.isfinite(publication) and publication >= 0:
+        entry["published_at_ms"] = publication
     if confidence is not None:
         try:
             parsed = float(confidence)

@@ -224,6 +224,7 @@ def test_visitor_package_annotation_preserves_negative_and_missing_occurrences(m
         assert "Indício visual de pacote" in records[-1][0].description
         historical = records[-1][0].payload["data"]["historical_evidence"]["ai"]["condition_filter"]["observation"]
         assert historical["published_at"] == 100
+        assert records[-1][0].payload["event"]["duration_seconds"] == 7
         assert historical["current_state_verified"] is False
         assert (tmp_path / historical["image_reference"]).is_file()
         assert records[-1][0].payload["data"]["ai"]["condition_filter"]["status"] == "closed"

@@ -1,6 +1,8 @@
 import asyncio
 from dataclasses import replace
 from io import BytesIO
+import sys
+from types import SimpleNamespace
 import wave
 
 from fastapi import FastAPI
@@ -107,6 +109,32 @@ def test_noise_short_impulse_clipping_and_explicit_baseline():
     short = analyze_pcm(noise, 16000, clock=clock, baseline=baseline)["windows"][0]
     assert short["peak"] > 0.99 and short["clipped_fraction"] == pytest.approx(0.01)
     assert short["anomaly"]["status"] == "above_baseline"
+
+
+def test_transcription_preserves_uncalibrated_scores_and_rejects_invalid_values(monkeypatch, tmp_path):
+    directory = tmp_path / MODEL_DIRECTORY
+    directory.mkdir(parents=True)
+    for name in ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"):
+        (directory / name).touch()
+    scores = [(-0.4, 0.02), (float("nan"), 1.1), (True, float("inf")), (None, None)]
+    segments = [SimpleNamespace(start=0, end=1, text="Texto de fixture", tokens=[1],
+                               avg_logprob=log, no_speech_prob=no_speech) for log, no_speech in scores]
+    class Model:
+        def __init__(self, *args, **kwargs):
+            pass
+        def transcribe(self, *args, **kwargs):
+            return iter(segments), SimpleNamespace(language="pt")
+    monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=Model))
+    result = transcribe_pcm(tone(), 16000, data_dir=tmp_path, language="pt")
+    assert result["status"] == "transcribed"
+    for index, row in enumerate(result["segments"]):
+        assert row["confidence"] is None
+        assert row["decoder_scores"] == {
+            "average_log_probability": -0.4 if index == 0 else None,
+            "no_speech_probability": 0.02 if index == 0 else None,
+            "calibrated": False,
+        }
+        assert row["text"] == "Texto de fixture" and row["duration_seconds"] == 1
 
 
 def test_wav_input_validation_and_explicit_clock():

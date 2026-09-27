@@ -204,6 +204,10 @@ for short recordings. Text and segment timings are model output for review, not
 verbatim guarantees, speaker identity or intent. Decoding is bounded to 128 new
 tokens; a partial result is labelled. Stereo uses the higher-energy channel to
 avoid phase cancellation and does not perform speaker separation.
+Each segment retains the decoder's average log probability and no-speech
+probability when valid. These are uncalibrated model scores, not a probability
+that the words are correct; segment `confidence` remains null. Missing or invalid
+scores remain null without discarding otherwise valid text and timings.
 
 `POST /api/cameras/audio/analyze` accepts `transcribe=true` and an optional
 `language` code alongside its existing explicit clock parameters.

@@ -65,7 +65,20 @@ def transcribe_pcm(samples: np.ndarray, sample_rate: int, *, data_dir: Path | No
             if text_length > 4096 or len(rows) >= 64:
                 raise ValueError("transcription_output_exceeds_budget")
             token_count += len(segment.tokens)
-            rows.append({"offset_seconds": start, "duration_seconds": end - start, "text": text})
+            log_probability = getattr(segment, "avg_logprob", None)
+            no_speech_probability = getattr(segment, "no_speech_prob", None)
+            # Decoder scores are evidence, not calibrated transcription accuracy.
+            valid_log = type(log_probability) in (int, float) and math.isfinite(log_probability) and log_probability <= 0
+            valid_no_speech = type(no_speech_probability) in (int, float) and math.isfinite(no_speech_probability) and 0 <= no_speech_probability <= 1
+            rows.append({
+                "offset_seconds": start, "duration_seconds": end - start, "text": text,
+                "confidence": None,
+                "decoder_scores": {
+                    "average_log_probability": log_probability if valid_log else None,
+                    "no_speech_probability": no_speech_probability if valid_no_speech else None,
+                    "calibrated": False,
+                },
+            })
         return {
             "status": "partial" if token_count >= 128 else "transcribed" if rows else "no_speech",
             "segments": rows, "text": " ".join(row["text"] for row in rows),

@@ -3,7 +3,7 @@ import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Vector2 } from "three";
 import type { CompositionElement, ElementType, Viewport2DContext } from "@toposync/plugin-api";
-import { localToGeographic, readGeoreference, type Georeference } from "../util/georeference";
+import { localToGeographic, longitudeNear, readGeoreference, type Georeference } from "../util/georeference";
 import { Modal } from "./Modal";
 import { i18n } from "../util/i18n";
 
@@ -60,6 +60,7 @@ export function GeoreferenceEditor({ value, elements, elementTypesById, onSave, 
       context.scale(dpr, dpr);
       const origin = instance.latLngToContainerPoint([reference.latitude, reference.longitude]);
       const east = localToGeographic({ x: 1, z: 0 }, { ...reference, rotationDegrees: 0 });
+      east.lng = longitudeNear(east.lng, reference.longitude);
       const scale = instance.project(east).distanceTo(instance.project([reference.latitude, reference.longitude]));
       context.translate(origin.x, origin.y);
       context.rotate(reference.rotationDegrees * Math.PI / 180);

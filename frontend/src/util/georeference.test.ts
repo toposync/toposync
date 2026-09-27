@@ -1,5 +1,5 @@
 declare const require: any;
-import { localToGeographic, geographicToLocal, readGeoreference, type Georeference } from "./georeference";
+import { localToGeographic, geographicToLocal, longitudeNear, readGeoreference, type Georeference } from "./georeference";
 const test = require("node:test");
 const assert = require("node:assert/strict");
 test("geographic control points, metre distances, rotation and inverse at equator, Brazil and antimeridian", () => {
@@ -17,4 +17,13 @@ test("geographic control points, metre distances, rotation and inverse at equato
   assert.ok(localToGeographic({x:10,z:0}, {...reference, rotationDegrees:90}).lat < 0);
   assert.equal(readGeoreference({...reference, scale:NaN}), null);
   assert.throws(() => localToGeographic({x:20001,z:0}, reference));
+});
+test("map scale uses the adjacent world copy across either antimeridian", () => {
+  const reference: Georeference = { version:1, latitude:0, longitude:179.999999, rotationDegrees:0, scale:1.2, axes:"x-east-z-south", units:"metres" };
+  const east = localToGeographic({ x:1, z:0 }, reference);
+  assert.ok(east.lng < 0);
+  const delta = longitudeNear(east.lng, reference.longitude) - reference.longitude;
+  assert.ok(Math.abs(delta - 1.2 * 0.000008993203637) < 1e-10);
+  assert.ok(Math.abs(longitudeNear(179.999999, -179.999999) + 180.000001) < 1e-10);
+  assert.ok(Math.abs(longitudeNear(-46.63, -46.64) + 46.63) < 1e-10);
 });

@@ -10,6 +10,10 @@ export type Georeference = {
 };
 const radius = 6371008.8;
 const radians = Math.PI / 180;
+/** Choose the adjacent world copy before projecting a geographic point. */
+export function longitudeNear(longitude: number, origin: number): number {
+  return origin + ((longitude - origin + 180) % 360 + 360) % 360 - 180;
+}
 export function readGeoreference(value: unknown): Georeference | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Georeference;

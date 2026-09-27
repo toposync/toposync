@@ -226,6 +226,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
     ) -> None:
         self._config = VisionGroupEventsConfig.model_validate(config)
         self._operator_id = str(operator_id or "").strip() or "vision.group_events"
+        self._lifecycle_epoch = uuid.uuid4().hex
         self._groups_by_id: dict[str, _GroupState] = {}
         self._group_ids_by_source_stream: dict[str, list[str]] = {}
         self._group_id_by_member_key: dict[str, str] = {}
@@ -530,6 +531,8 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         subject: dict[str, Any] = {
             "type": "group_event",
             "id": group.group_event_id,
+            "lifecycle_epoch": self._lifecycle_epoch,
+            "lifecycle_sequence": int(group.group_event_code),
             "lifecycle": lifecycle.value,
             "bbox01": list(bbox01 or (0.0, 0.0, 1.0, 1.0)),
             "member_event_ids": member_event_ids,

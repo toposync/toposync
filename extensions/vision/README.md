@@ -18,6 +18,13 @@ The public surface is task-based, not vendor-based. The official first-party run
 
 For spatial relations, `dwell_seconds` accumulates intervals between consecutive positive observations. Loss of evidence pauses this duration; recovery preserves the occurrence within its grace period without adding the missing interval. Closing grace and source timeouts never extend the observed duration. This remains an estimate from observation cadence, not proof of continuous physical presence between frames.
 
+Spatial relation state is isolated by source, camera and group. Replayed terminal
+groups cannot open another occurrence. Group producers attach a runtime epoch and
+monotonic lifecycle sequence, allowing the shared terminal-subject ledger to compact
+closed groups without dropping replay protection after 4,096 occurrences. A new
+producer epoch can reuse a closed identifier; this does not establish person identity
+across sessions or qualify recovery when the previous group never closed.
+
 ## Dependencies
 
 - The default `toposync` application bundle includes the first-party ONNX Runtime CPU stack.

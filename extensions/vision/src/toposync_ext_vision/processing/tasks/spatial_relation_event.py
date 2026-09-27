@@ -8,6 +8,7 @@ from typing import Any
 
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
+from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 
 from ...pipelines.schemas import VisionSpatialRelationEventConfig
 from ..contracts import normalize_bbox01
@@ -173,11 +174,13 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
     ) -> None:
         self._config = VisionSpatialRelationEventConfig.model_validate(config)
         self._operator_id = _text(operator_id) or "vision.spatial_relation_event"
-        self._states_by_group_id: dict[str, _RelationState] = {}
+        self._states_by_group: dict[tuple[str, str, str], _RelationState] = {}
+        self._closed_groups = ClosedSubjectLedger()
         self._next_event_number_by_source_stream: dict[str, int] = {}
 
     async def shutdown(self) -> None:
-        self._states_by_group_id.clear()
+        self._states_by_group.clear()
+        self._closed_groups.clear()
 
     async def run(self, context) -> None:  # noqa: ANN001
         while not context.is_cancelled():
@@ -476,12 +479,12 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             now_monotonic=now_monotonic,
             reason=reason,
         )
-        self._states_by_group_id.pop(state.group_event_id, None)
+        self._states_by_group.pop((state.source_stream_id, state.camera_id, state.group_event_id), None)
         return packet
 
     def _flush_due(self, *, now_monotonic: float) -> list[Packet]:
         outputs: list[Packet] = []
-        for state in list(self._states_by_group_id.values()):
+        for state in list(self._states_by_group.values()):
             stale_for = max(0.0, now_monotonic - state.last_input_monotonic)
             if stale_for >= float(self._config.stale_timeout_seconds):
                 if state.opened:
@@ -493,7 +496,7 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                         )
                     )
                 else:
-                    self._states_by_group_id.pop(state.group_event_id, None)
+                    self._states_by_group.pop((state.source_stream_id, state.camera_id, state.group_event_id), None)
                 continue
             if state.opened and state.losing_since_monotonic is not None:
                 losing_for = max(0.0, now_monotonic - state.losing_since_monotonic)
@@ -514,7 +517,15 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         if group is None:
             return outputs
 
-        state = self._states_by_group_id.get(group.group_event_id)
+        key = (group.source_stream_id, group.camera_id, group.group_event_id)
+        subject = packet.payload["subject"]
+        if self._closed_groups.capacity_reached or self._closed_groups.observe(key, subject):
+            return outputs
+        state = self._states_by_group.get(key)
+        if group.lifecycle == Lifecycle.CLOSE:
+            self._closed_groups.close(key, subject)
+            if state is None:
+                return outputs
         relation_match = None
         if group.lifecycle != Lifecycle.CLOSE:
             relation_match = self._best_match(
@@ -550,7 +561,7 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                 last_bbox01=group.bbox01,
                 last_world_envelope=group.world_envelope,
             )
-            self._states_by_group_id[group.group_event_id] = state
+            self._states_by_group[key] = state
         state.group_event_code = group.group_event_code or state.group_event_code
         state.source_stream_id = group.source_stream_id or state.source_stream_id
         state.camera_id = group.camera_id or state.camera_id
@@ -607,7 +618,7 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             state.observed_duration_seconds = 0.0
             state.last_match = None
             if group.lifecycle == Lifecycle.CLOSE:
-                self._states_by_group_id.pop(group.group_event_id, None)
+                self._states_by_group.pop(key, None)
             return outputs
 
         if state.losing_since_monotonic is None:

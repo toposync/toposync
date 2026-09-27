@@ -211,6 +211,69 @@ def test_spatial_relation_config_normalizes_roles_and_validates_hysteresis() -> 
     assert boundary.close_grace_seconds == boundary.stale_timeout_seconds
 
 
+def test_closed_group_replay_cannot_create_another_relation():
+    async def scenario():
+        runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "close_grace_seconds": 0})
+        original = _group_packet(members=_near_members(), lifecycle=Lifecycle.OPEN)
+        assert (await runtime.process_packet(original, None))[0].lifecycle == Lifecycle.OPEN
+        closed = await runtime.process_packet(_group_packet(members=[], lifecycle=Lifecycle.CLOSE), None)
+        assert [packet.lifecycle for packet in closed] == [Lifecycle.CLOSE]
+        assert await runtime.process_packet(original, None) == []
+        assert await runtime.process_packet(_group_packet(members=_near_members()), None) == []
+
+    asyncio.run(scenario())
+
+
+def test_identical_group_ids_from_different_sources_keep_separate_occurrences():
+    async def scenario():
+        runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "close_grace_seconds": 0, "update_interval_seconds": 0})
+        first = (await runtime.process_packet(_group_packet(members=_near_members()), None))[0]
+        other = _group_packet(members=_near_members())
+        other.payload.update(source_stream_id="camera:other", camera_id="other")
+        second = (await runtime.process_packet(other, None))[0]
+        assert second.lifecycle == Lifecycle.OPEN
+        assert second.payload["correlation_id"] != first.payload["correlation_id"]
+        closed = (await runtime.process_packet(_group_packet(members=[], lifecycle=Lifecycle.CLOSE), None))[0]
+        assert closed.stream_id == first.stream_id
+        updated = (await runtime.process_packet(other, None))[0]
+        assert updated.stream_id == second.stream_id and updated.lifecycle == Lifecycle.UPDATE
+
+    asyncio.run(scenario())
+
+
+def test_group_producer_sequences_compact_closed_history_beyond_4096():
+    from toposync_ext_vision.processing.tasks.group_events import VisionGroupEventsRuntime
+
+    async def scenario():
+        producer = VisionGroupEventsRuntime({})
+        runtime = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "close_grace_seconds": 0})
+        first = None
+        for _ in range(4100):
+            group = producer._next_group_state(source_stream_id="camera:front", camera_id="front")
+            opened = _group_packet(members=_near_members())
+            subject = producer._subject_for_group(group, lifecycle=Lifecycle.OPEN)
+            subject["members"] = _near_members()
+            opened.payload["subject"] = subject
+            assert (await runtime.process_packet(opened, None))[0].lifecycle == Lifecycle.OPEN
+            closed = _group_packet(members=[], lifecycle=Lifecycle.CLOSE)
+            closed.payload["subject"] = producer._subject_for_group(group, lifecycle=Lifecycle.CLOSE)
+            assert (await runtime.process_packet(closed, None))[0].lifecycle == Lifecycle.CLOSE
+            first = first or opened
+        assert len(runtime._closed_groups) == 1
+        assert not runtime._closed_groups.capacity_reached
+        assert await runtime.process_packet(first, None) == []
+        assert runtime._states_by_group == {}
+        restarted = VisionGroupEventsRuntime({})
+        group = restarted._next_group_state(source_stream_id="camera:front", camera_id="front")
+        new_epoch = _group_packet(members=_near_members())
+        new_epoch.payload["subject"] = {**restarted._subject_for_group(group, lifecycle=Lifecycle.OPEN),
+                                        "members": _near_members()}
+        assert (await runtime.process_packet(new_epoch, None))[0].lifecycle == Lifecycle.OPEN
+        assert await runtime.process_packet(first, None) == []
+
+    asyncio.run(scenario())
+
+
 def test_existing_pair_survives_a_closer_person_without_inheriting_exit_threshold(monkeypatch):
     clock = [0.0]
     monkeypatch.setattr(

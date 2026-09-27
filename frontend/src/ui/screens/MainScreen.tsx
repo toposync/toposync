@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StreamingAvailabilityContext } from "../streams/StreamingAvailability";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   CompositionElement,
@@ -449,6 +450,7 @@ export function MainScreen({
       return "3d";
     }
   });
+  const streamingAvailability = useContext(StreamingAvailabilityContext);
   const [cameraLiveViews, setCameraLiveViews] = useState<StreamingCameraLiveView[]>([]);
   const [cameraLiveViewsLoading, setCameraLiveViewsLoading] = useState(true);
   const [cameraLiveViewsError, setCameraLiveViewsError] = useState<string | null>(null);
@@ -470,9 +472,11 @@ export function MainScreen({
     streamsOverlayTimerRef.current = null;
   }, []);
 
+  const autoHideStreamsOverlay = isLiveCameraRenderMode(renderMode) && streamingAvailability !== "loading" && streamingAvailability !== "unavailable";
+
   const scheduleStreamsOverlayHide = useCallback(() => {
     clearStreamsOverlayTimer();
-    if (!isLiveCameraRenderMode(renderMode)) {
+    if (!autoHideStreamsOverlay) {
       setStreamsOverlayVisible(true);
       return;
     }
@@ -484,7 +488,7 @@ export function MainScreen({
       streamsOverlayTimerRef.current = null;
       setStreamsOverlayVisible(false);
     }, STREAMS_OVERLAY_IDLE_MS);
-  }, [clearStreamsOverlayTimer, renderMode]);
+  }, [clearStreamsOverlayTimer, autoHideStreamsOverlay]);
 
   const hasOpenRealtimeNotifications = useMemo(
     () => notifications.some(notificationIsOpenRealtime) || notificationIsOpenRealtime(activeNotificationRaw),
@@ -508,7 +512,7 @@ export function MainScreen({
   );
 
   useEffect(() => {
-    if (!isLiveCameraRenderMode(renderMode)) {
+    if (!autoHideStreamsOverlay) {
       clearStreamsOverlayTimer();
       setStreamsOverlayVisible(true);
       return;
@@ -541,7 +545,7 @@ export function MainScreen({
       document.removeEventListener("visibilitychange", onVisibilityChange);
       clearStreamsOverlayTimer();
     };
-  }, [clearStreamsOverlayTimer, renderMode, scheduleStreamsOverlayHide]);
+  }, [clearStreamsOverlayTimer, autoHideStreamsOverlay, scheduleStreamsOverlayHide]);
 
   const activeNotification = useMemo(
     () => (activeNotificationRaw ? withLiveDuration(activeNotificationRaw, notificationsNowMs) : null),
@@ -734,6 +738,12 @@ export function MainScreen({
   }, [renderMode]);
 
   useEffect(() => {
+    if (streamingAvailability === "loading" || streamingAvailability === "unavailable") {
+      setCameraLiveViews([]);
+      setCameraLiveViewsError(null);
+      setCameraLiveViewsLoading(streamingAvailability === "loading");
+      return;
+    }
     let cancelled = false;
     let requestController: AbortController | null = null;
 
@@ -764,7 +774,7 @@ export function MainScreen({
       requestController?.abort();
       window.clearInterval(intervalId);
     };
-  }, []);
+  }, [streamingAvailability]);
 
   useEffect(() => {
     const previousRouteCameraLiveViewId = previousRouteCameraLiveViewIdRef.current;
@@ -1552,6 +1562,7 @@ export function MainScreen({
               {t("core.ui.render_modal.option_vector2d.desc", {}, "Use a clean floor-plan view for spaces, icons, and states.")}
             </div>
           </div>
+          {streamingAvailability !== "loading" && streamingAvailability !== "unavailable" && <>
           <div
             className={["choiceItem", renderMode === "streams" ? "isSelected" : ""].filter(Boolean).join(" ")}
             role="button"
@@ -1592,6 +1603,7 @@ export function MainScreen({
               {t("core.ui.render_modal.option_camera_live.desc", {}, "Focus on one live camera with a shareable link.")}
             </div>
           </div>
+          </>}
           {orderedRenderViews.map((view) => {
             const title = renderViewText(view.name, view.id);
             const desc = renderViewText(view.description, "");

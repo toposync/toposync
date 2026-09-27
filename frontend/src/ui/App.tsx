@@ -1,3 +1,4 @@
+import { StreamingAvailabilityBoundary, StreamingAvailabilityContext, type StreamingAvailability } from "./streams/StreamingAvailability";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import type {
@@ -86,6 +87,7 @@ import { StreamsDashboard, type StreamsDashboardContext } from "./streams/Stream
 import { StreamTransportDebugScreen } from "./streams/StreamTransportDebugScreen";
 
 type ExtensionRecord = {
+  api_prefixes?: string[];
   id: string;
   name: string;
   version: string;
@@ -466,6 +468,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [compositionLoaded, setCompositionLoaded] = useState(false);
   const [criticalExtensionsLoaded, setCriticalExtensionsLoaded] = useState(false);
   const [allExtensionsLoaded, setAllExtensionsLoaded] = useState(false);
+  const [streamingAvailability, setStreamingAvailability] = useState<StreamingAvailability>("loading");
   const [extensionActivationDiagnostics, setExtensionActivationDiagnostics] = useState<Record<string, string>>({});
   const [mainViewportReady, setMainViewportReady] = useState(false);
   const [backendAvailable, setBackendAvailable] = useState(false);
@@ -1336,7 +1339,15 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     if (!extensionRecordsPromiseRef.current) {
       extensionRecordsPromiseRef.current = fetchExtensions();
     }
-    const exts = await extensionRecordsPromiseRef.current;
+    let exts: ExtensionRecord[];
+    try {
+      exts = await extensionRecordsPromiseRef.current;
+    } catch (error) {
+      // Catalog access is not a prerequisite for access to a streaming API.
+      setStreamingAvailability("unknown");
+      throw error;
+    }
+    setStreamingAvailability(exts.some(ext => ext.api_prefixes?.includes("/api/streams")) ? "available" : "unavailable");
     return exts.filter((ext) => ext.frontend && ext.frontend.kind === "module-federation");
   }, []);
 
@@ -1674,9 +1685,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   }, []);
 
   return (
+    <StreamingAvailabilityContext.Provider value={streamingAvailability}>
     <div className="appShell">
       {normalizedPathname.startsWith("/streams/debug") ? (
-        <StreamTransportDebugScreen />
+        <StreamingAvailabilityBoundary><StreamTransportDebugScreen /></StreamingAvailabilityBoundary>
       ) : normalizedPathname.startsWith("/settings/pipelines") ? (
         <PipelinesScreen
           onClose={closeSettingsChild}
@@ -1820,5 +1832,6 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         />
       ) : null}
     </div>
+    </StreamingAvailabilityContext.Provider>
   );
 }

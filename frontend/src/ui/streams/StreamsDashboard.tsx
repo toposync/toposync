@@ -1,3 +1,4 @@
+import { StreamingAvailabilityBoundary } from "./StreamingAvailability";
 import { playbackEndpointIdentity } from './playbackEndpointIdentity';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type Hls from "hls.js";
@@ -3863,7 +3864,11 @@ export function StreamTilePlayer({
   );
 }
 
-export function StreamsDashboard({
+export function StreamsDashboard(props: Props): React.ReactElement {
+  return <StreamingAvailabilityBoundary><AvailableStreamsDashboard {...props} /></StreamingAvailabilityBoundary>;
+}
+
+function AvailableStreamsDashboard({
   sourceId, controls = true, onFrame,
   uiVisible,
   isActive,

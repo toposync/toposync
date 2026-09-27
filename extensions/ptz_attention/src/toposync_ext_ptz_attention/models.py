@@ -144,6 +144,7 @@ class AttentionProfile(StrictModel):
     lease_ttl_seconds: float = Field(default=15.0, ge=3.0, le=300.0)
     max_movements_per_minute: int = Field(default=6, ge=1, le=120)
     minimum_target_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    follow_view_updates: bool = False
 
     @field_validator(
         "id",
@@ -190,6 +191,10 @@ class AttentionProfile(StrictModel):
     @model_validator(mode="after")
     def _mode_contract(self) -> "AttentionProfile":
         effective_mode = self.resume_mode if self.mode == "paused" else self.mode
+        if self.follow_view_updates and (
+            effective_mode == "live_preset" or self.candidate_confirm_seconds <= 0
+        ):
+            raise ValueError("following views requires shadow mode and positive confirmation time")
         if self.ptz_device_id != self.camera_id:
             raise ValueError("ptz_device_id must equal camera_id")
         if self.mode == "paused" and self.resume_mode is None:
@@ -243,6 +248,7 @@ class AttentionIntent(StrictModel):
     preferred_view_id: str = ""
     event_at: float
     received_at: float
+    capture_evidence: dict[str, Any] | None = None
 
     @field_validator(
         "key",
@@ -302,6 +308,7 @@ class ResolvedTarget(StrictModel):
 
 
 class PtzAttentionRequestConfig(StrictModel):
+    preview_follow_views: bool = False
     profile_id: str = ""
     camera_id: str = ""
     source_id: str = ""
@@ -376,6 +383,7 @@ class DecisionRecord(StrictModel):
 
 
 class DeviceStatus(StrictModel):
+    follow_view_updates: bool = False
     ptz_device_id: str
     profile_id: str
     state: ControllerState

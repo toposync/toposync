@@ -67,7 +67,7 @@ def _ptz_attention_diagnostics(
     if not parsed.camera_id:
         return []
     diagnostics: list[OperatorDiagnostic] = []
-    if not parsed.native_tracking_disabled_confirmed:
+    if not parsed.native_tracking_disabled_confirmed and not parsed.preview_follow_views:
         diagnostics.append(
             OperatorDiagnostic(
                 severity="error",
@@ -114,7 +114,7 @@ class PtzAttentionRequestRuntime(SinkRuntime):
             if direct_operator
             else self.config.profile_id
         )
-        if direct_operator and not self.config.native_tracking_disabled_confirmed:
+        if direct_operator and not self.config.native_tracking_disabled_confirmed and not self.config.preview_follow_views:
             self.controller.record_operator_rejection(
                 profile_id=profile_id,
                 pipeline_name=context.pipeline_name,
@@ -257,7 +257,9 @@ class PtzAttentionRequestRuntime(SinkRuntime):
             if event_id not in self._event_types and len(self._event_types) >= 4096:
                 self._event_types.pop(next(iter(self._event_types)))
             self._event_types[event_id] = event_type
-        target = _target_from_packet(packet, self.config) if lifecycle == "open" else None
+        target = _target_from_packet(packet, self.config) if lifecycle == "open" or (
+            lifecycle == "update" and profile.follow_view_updates
+        ) else None
         if lifecycle == "open" and target is None:
             self.controller.record_operator_rejection(
                 profile_id=profile.id,
@@ -289,6 +291,8 @@ class PtzAttentionRequestRuntime(SinkRuntime):
             preferred_view_id=preferred_view_id,
             event_at=float(packet.created_at or now),
             received_at=now,
+            capture_evidence=(packet.payload["capture_evidence"] if profile.follow_view_updates
+                              and isinstance(packet.payload.get("capture_evidence"), dict) else None),
         )
         await self.controller.submit_intent(intent)
         if lifecycle == "close":

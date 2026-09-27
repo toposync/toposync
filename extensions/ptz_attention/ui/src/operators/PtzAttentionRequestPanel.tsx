@@ -1,17 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { HostApi, PipelineOperatorPanel } from "@toposync/plugin-api";
 
-import { fetchAttentionCatalog } from "../api";
+import { fetchAttentionCatalog, fetchAttentionStatus } from "../api";
 import type {
   AttentionCameraCatalogItem,
   AttentionCatalogResponse,
   AttentionRequestOperatorConfig,
   AttentionViewCatalogItem,
+  AttentionSession,
 } from "../types";
 
 type PanelArgs = Parameters<PipelineOperatorPanel["render"]>[0];
 
 const DEFAULT_CONFIG: AttentionRequestOperatorConfig = {
+  preview_follow_views: false,
   profile_id: "",
   camera_id: "",
   source_id: "",
@@ -46,6 +48,7 @@ function PtzAttentionRequestPanel({
   const { t } = i18n.useI18n();
   const [catalog, setCatalog] = useState<AttentionCatalogResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<AttentionSession | null>(null);
   const current = useMemo<AttentionRequestOperatorConfig>(
     () => ({ ...DEFAULT_CONFIG, ...config }) as AttentionRequestOperatorConfig,
     [config],
@@ -66,6 +69,24 @@ function PtzAttentionRequestPanel({
     return () => controller.abort();
   }, [api]);
 
+  useEffect(() => {
+    setPreview(null);
+    if (!current.preview_follow_views || !current.camera_id) return;
+    const controller = new AbortController();
+    let refreshing = false;
+    const refresh = () => {
+      if (refreshing || controller.signal.aborted) return;
+      refreshing = true;
+      void fetchAttentionStatus(api, controller.signal).then((status) => {
+      if (!controller.signal.aborted) setPreview(status.devices.find((device) => device.ptz_device_id === current.camera_id && device.follow_view_updates === true) ?? null);
+      }).catch(() => { if (!controller.signal.aborted) setPreview(null); })
+        .finally(() => { refreshing = false; });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 2500);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [api, current.camera_id, current.preview_follow_views]);
+
   const selectedCamera = catalog?.cameras.find((camera) => camera.id === current.camera_id) ?? null;
   const sources = (selectedCamera?.sources ?? []).filter((source) => source.enabled && source.kind === "video" && source.has_ptz);
   const selectedSource = sources.find((source) => source.id === current.source_id) ?? null;
@@ -77,13 +98,22 @@ function PtzAttentionRequestPanel({
     ).values(),
   );
   const hasMappedComposition = Boolean(current.composition_id && compositions.some((view) => view.composition_id === current.composition_id));
-  const blocked = !selectedCamera || !current.source_id || !hasMappedComposition || !current.native_tracking_disabled_confirmed;
+  const blocked = !selectedCamera || !current.source_id || !hasMappedComposition || (!current.preview_follow_views && !current.native_tracking_disabled_confirmed);
 
   return (
     <div className="pipelinesOperatorConfigCard ptzAttentionOperator">
       <div className="pipelinesStepHint">
-        {t("ext.ptz_attention.operator.summary", {}, "Moves one calibrated PTZ head to an active mapped event. A higher numeric priority may preempt a lower one; equal priority never interrupts focus.")}
+        {current.preview_follow_views
+          ? t("ext.ptz_attention.wizard.follow_preview_help")
+          : t("ext.ptz_attention.operator.summary", {}, "Moves one calibrated PTZ head to an active mapped event. A higher numeric priority may preempt a lower one; equal priority never interrupts focus.")}
       </div>
+      <label className="pipelinesCheckbox">
+        <input type="checkbox" checked={Boolean(current.preview_follow_views)} onChange={(event) => updateConfig({ preview_follow_views: event.target.checked })} />
+        <span>{t("ext.ptz_attention.wizard.follow_preview")}</span>
+      </label>
+      {current.preview_follow_views ? <div className="pipelinesStepHint" role="status">
+        {preview ? `${t(`ext.ptz_attention.state.${preview.state.toLowerCase()}`, {}, preview.state)} · ${catalog?.cameras.flatMap((camera) => camera.views).find((view) => view.id === preview.active_view_id)?.label || t("ext.ptz_attention.operator.preview_waiting")}` : t("ext.ptz_attention.operator.preview_waiting")}
+      </div> : null}
       <label className="pipelinesLabel">
         <span>{t("ext.ptz_attention.operator.camera", {}, "PTZ camera")}</span>
         <select
@@ -122,7 +152,7 @@ function PtzAttentionRequestPanel({
         </select>
       </label>
       <div className="pipelinesStepHint">
-        {t("ext.ptz_attention.operator.home", {}, "After the event, the camera returns to the first calibrated view in this composition.")}
+        {current.preview_follow_views ? t("ext.ptz_attention.operator.preview_home") : t("ext.ptz_attention.operator.home", {}, "After the event, the camera returns to the first calibrated view in this composition.")}
       </div>
       <div className="pipelinesFieldGrid">
         <label className="pipelinesLabel">
@@ -134,15 +164,15 @@ function PtzAttentionRequestPanel({
           <input className="pipelinesInput" type="number" min="0" value={current.hold_after_close_seconds} onChange={(event) => updateConfig({ hold_after_close_seconds: Math.max(0, Number(event.target.value) || 0) })} />
         </label>
       </div>
-      <label className="pipelinesCheckbox">
+      {!current.preview_follow_views ? <label className="pipelinesCheckbox">
         <input
           type="checkbox"
           checked={current.native_tracking_disabled_confirmed}
           onChange={(event) => updateConfig({ native_tracking_disabled_confirmed: event.target.checked })}
         />
         <span>{t("ext.ptz_attention.operator.native_tracking_ack", {}, "I confirm native auto-tracking, monitor point, and automatic return are disabled for this camera.")}</span>
-      </label>
-      {blocked ? <div className="pipelinesInlineError">{t("ext.ptz_attention.operator.blocked", {}, "PTZ movement remains blocked until the camera, calibrated composition, and confirmation are complete.")}</div> : null}
+      </label> : null}
+      {blocked ? <div className="pipelinesInlineError">{current.preview_follow_views ? t("ext.ptz_attention.operator.preview_setup") : t("ext.ptz_attention.operator.blocked", {}, "PTZ movement remains blocked until the camera, calibrated composition, and confirmation are complete.")}</div> : null}
       {error ? <div className="pipelinesInlineError">{error}</div> : null}
       {showAdvanced ? (
         <>

@@ -6,11 +6,13 @@ import logging
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from toposync.runtime.notifications.events import EventBroadcaster
 from toposync.runtime.services import ServiceRegistry
+from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness
+from toposync.runtime.pipelines.runtime import Packet
 
 from .models import (
     AttentionIntent,
@@ -55,6 +57,9 @@ class _TrackedEvent:
     opened_monotonic: float
     last_seen_monotonic: float
     closed_monotonic: float | None = None
+    following_view: ResolvedTarget | None = None
+    following_since: float | None = None
+    following_confirmed: bool = False
 
     @property
     def open(self) -> bool:
@@ -101,6 +106,7 @@ class _OperatorBinding:
     composition_id: str
     priority: int
     hold_after_close_seconds: float
+    preview_follow_views: bool
 
 
 class PtzAttentionController:
@@ -150,7 +156,7 @@ class PtzAttentionController:
             config.camera_id
             and config.source_id
             and config.composition_id
-            and config.native_tracking_disabled_confirmed
+            and (config.native_tracking_disabled_confirmed or config.preview_follow_views)
         ):
             raise ValueError("operator_live_requirements_not_met")
         key = (config.camera_id, str(pipeline_name or "").strip(), str(node_id or "").strip())
@@ -163,7 +169,12 @@ class PtzAttentionController:
             composition_id=config.composition_id,
             priority=config.priority,
             hold_after_close_seconds=config.hold_after_close_seconds,
+            preview_follow_views=config.preview_follow_views,
         )
+        if any(other_key != key and other_key[0] == config.camera_id
+               and other.preview_follow_views != config.preview_follow_views
+               for other_key, other in self._operator_bindings.items()):
+            raise ValueError("camera_operator_mode_conflict")
         previous = self._operator_bindings.get(key)
         if previous is not None and previous != binding:
             runtime = self._devices.get(config.camera_id)
@@ -373,9 +384,41 @@ class PtzAttentionController:
                     }
                 )
 
+            existing = runtime.events.get(governed.key)
             observation_age = max(0.0, max(self._clock(), governed.received_at) - governed.event_at)
+            if profile.follow_view_updates and governed.lifecycle != "close":
+                freshness = resolve_frame_freshness(
+                    Packet.create(stream_id=governed.key, payload={"capture_evidence": governed.capture_evidence}),
+                    now_unix=self._clock(),
+                )
+                capture = governed.capture_evidence or {}
+                previous_capture = existing.intent.capture_evidence if existing else None
+                reason = freshness.reason if freshness.age_seconds is None else ""
+                if governed.target is None or governed.target.bbox01 is not None:
+                    reason = "mapped_target_required"
+                if existing and not existing.open:
+                    reason = "closed_tracking_event"
+                if previous_capture and (
+                    capture.get("capture_instance") != previous_capture.get("capture_instance")
+                    or capture.get("generation") != previous_capture.get("generation")
+                ):
+                    reason = "tracking_capture_epoch_changed"
+                elif previous_capture and not reason and capture["sequence"] <= previous_capture["sequence"]:
+                    reason = "non_increasing_capture_sequence"
+                elif previous_capture and not reason and capture["published_at"] <= previous_capture["published_at"]:
+                    reason = "non_increasing_capture_timestamp"
+                if reason:
+                    if existing:
+                        existing.following_view = None
+                        existing.following_confirmed = False
+                    self._record(profile, runtime, action="intent_ignored", reason=reason, intent=governed)
+                    return
+                observation_age = max(observation_age, freshness.age_seconds)
             observed_monotonic = now - observation_age
             if governed.lifecycle != "close" and observation_age >= profile.stale_timeout_seconds:
+                if existing and profile.follow_view_updates:
+                    existing.following_view = None
+                    existing.following_confirmed = False
                 self._record(
                     profile,
                     runtime,
@@ -385,7 +428,6 @@ class PtzAttentionController:
                 )
                 return
 
-            existing = runtime.events.get(governed.key)
             if governed.lifecycle == "update":
                 if existing is None or not existing.open:
                     self._record(
@@ -395,6 +437,9 @@ class PtzAttentionController:
                         reason="unknown_update",
                         intent=governed,
                     )
+                    return
+                if profile.follow_view_updates:
+                    await self._follow_update(profile, runtime, existing, governed, observed_monotonic)
                     return
                 existing.last_seen_monotonic = max(existing.last_seen_monotonic, observed_monotonic)
                 existing.intent = governed.model_copy(update={"target": existing.intent.target})
@@ -602,6 +647,7 @@ class PtzAttentionController:
             candidate = runtime.events.get(runtime.candidate_key)
             result.append(
                 DeviceStatus(
+                    follow_view_updates=profile.follow_view_updates,
                     ptz_device_id=profile.ptz_device_id,
                     profile_id=profile.id,
                     state=runtime.state,
@@ -662,7 +708,7 @@ class PtzAttentionController:
             config.camera_id
             and config.source_id
             and config.composition_id
-            and config.native_tracking_disabled_confirmed
+            and (config.native_tracking_disabled_confirmed or config.preview_follow_views)
             and governed_event_type
         ):
             raise ValueError("operator_live_requirements_not_met")
@@ -693,7 +739,7 @@ class PtzAttentionController:
             raise ValueError("operator_mapping_or_camera_not_ready") from error
         if (
             not isinstance(snapshot, dict)
-            or snapshot.get("automation_ready") is not True
+            or (not config.preview_follow_views and snapshot.get("automation_ready") is not True)
             or str(snapshot.get("ptz_device_id") or "") != config.camera_id
             or not home.eligible_view_ids
         ):
@@ -712,6 +758,8 @@ class PtzAttentionController:
                     runtime.lease_id
                     or runtime.state not in {"IDLE", "MANUAL_OVERRIDE", "FAULT"}
                 ):
+                    if existing.follow_view_updates != config.preview_follow_views:
+                        raise ValueError("camera_operator_profile_busy")
                     return existing
             if runtime is not None and (
                 runtime.lease_id
@@ -734,7 +782,8 @@ class PtzAttentionController:
             desired = AttentionProfile(
                 id=existing.id if existing is not None else operator_profile_id(config.camera_id),
                 name=f"PTZ operator {config.camera_id}",
-                mode="live_preset",
+                mode="shadow" if config.preview_follow_views else "live_preset",
+                follow_view_updates=config.preview_follow_views,
                 camera_id=config.camera_id,
                 source_id=config.source_id,
                 ptz_device_id=config.camera_id,
@@ -744,8 +793,8 @@ class PtzAttentionController:
                 home_view_id=home.view_id,
                 eligible_view_ids=home.eligible_view_ids,
                 event_policies=event_policies,
-                candidate_confirm_seconds=0.0,
-                min_focus_seconds=0.0,
+                candidate_confirm_seconds=1.0 if config.preview_follow_views else 0.0,
+                min_focus_seconds=2.0 if config.preview_follow_views else 0.0,
                 max_focus_seconds=120.0,
                 close_grace_seconds=0.0,
                 cooldown_seconds=10.0,
@@ -853,6 +902,21 @@ class PtzAttentionController:
             runtime.candidate_key = ""
             self._set_state(runtime, "IDLE", now)
             return
+        if profile.follow_view_updates:
+            try:
+                snapshot = await self.services.call(
+                    "cameras.control.snapshot", ptz_device_id=profile.ptz_device_id,
+                    refresh_physical=False,
+                )
+            except Exception:
+                await self._fault(profile, runtime, "control_snapshot_unavailable")
+                return
+            if not isinstance(snapshot, dict) or snapshot.get("ptz_device_id") != profile.ptz_device_id:
+                await self._fault(profile, runtime, "control_snapshot_invalid")
+                return
+            if snapshot.get("active_lease") is not None or snapshot.get("state") == "manual_override":
+                self._enter_manual_override(profile, runtime, "other_controller_active", now=now)
+                return
         if effective_mode(profile) == "live_preset" and runtime.lease_id:
             await self._renew_if_due(profile, runtime, now)
             if runtime.state == "FAULT":
@@ -950,6 +1014,19 @@ class PtzAttentionController:
         active = runtime.events.get(runtime.active_key)
         if active is not None and active.open and best is not None:
             if best.intent.key == active.intent.key:
+                if (
+                    active.following_view is not None and active.following_confirmed
+                    and (not runtime.movement_times or now - runtime.movement_times[-1] >= profile.min_focus_seconds)
+                ):
+                    replacement = replace(active, resolved=active.following_view,
+                        following_view=None, following_since=None, following_confirmed=False)
+                    started = runtime.focused_started_monotonic
+                    focused_since = runtime.focused_since
+                    await self._begin_focus(profile, runtime, replacement, now, reason="follow_view_confirmed")
+                    if runtime.command_preset == replacement.resolved.preset_token:
+                        runtime.events[active.intent.key] = replacement
+                        runtime.focused_started_monotonic = started
+                        runtime.focused_since = focused_since
                 runtime.candidate_key = ""
                 return
             if (
@@ -1024,6 +1101,43 @@ class PtzAttentionController:
                 self._set_state(runtime, "CANDIDATE", now)
             if now - best.opened_monotonic >= profile.candidate_confirm_seconds:
                 await self._begin_focus(profile, runtime, best, now, reason="candidate_confirmed")
+
+    async def _follow_update(
+        self, profile: AttentionProfile, runtime: _DeviceRuntime, tracked: _TrackedEvent,
+        intent: AttentionIntent, observed_monotonic: float,
+    ) -> None:
+        resolved = await self._resolve(profile, intent)
+        now = self._monotonic_clock()
+        if (
+            resolved is None or resolved.view_id not in profile.eligible_view_ids
+            or resolved.confidence < profile.minimum_target_confidence
+            or now - observed_monotonic >= profile.stale_timeout_seconds
+        ):
+            tracked.following_view = None
+            tracked.following_confirmed = False
+            self._record(profile, runtime, action="shadow_blocked", reason="following_target_unqualified", intent=intent)
+            return
+        tracked.last_seen_monotonic = max(tracked.last_seen_monotonic, observed_monotonic)
+        tracked.intent = intent
+        if runtime.active_key != intent.key:
+            if tracked.resolved is None or tracked.resolved.preset_token != resolved.preset_token:
+                tracked.opened_monotonic = now
+            tracked.resolved = resolved
+            await self._evaluate(profile, runtime, now)
+            return
+        if tracked.resolved and resolved.preset_token == tracked.resolved.preset_token:
+            tracked.following_view = None
+            tracked.following_since = None
+            tracked.following_confirmed = False
+        elif not tracked.following_view or tracked.following_view.preset_token != resolved.preset_token:
+            tracked.following_view = resolved
+            tracked.following_since = now
+            tracked.following_confirmed = False
+            self._record(profile, runtime, action="following_candidate", reason="following_view_observed", intent=intent,
+                         details={"view_id": resolved.view_id})
+        else:
+            tracked.following_confirmed = now - tracked.following_since >= profile.candidate_confirm_seconds
+        await self._evaluate(profile, runtime, now)
 
     async def _begin_focus(
         self,

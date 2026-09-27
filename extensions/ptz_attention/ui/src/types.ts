@@ -96,6 +96,7 @@ export type AttentionProfile = {
   id: string;
   name: string;
   mode: AttentionExecutionMode;
+  follow_view_updates?: boolean;
   resume_mode?: AttentionResumableMode | null;
   camera_id: string;
   source_id: string;
@@ -144,6 +145,7 @@ export type AttentionValidationResponse = {
 };
 
 export type AttentionSession = {
+  follow_view_updates?: boolean;
   ptz_device_id: string;
   profile_id: string;
   state: AttentionRuntimeState;
@@ -193,6 +195,7 @@ export type AttentionDecisionsResponse = {
 export type AttentionCommand = "pause" | "resume" | "return-home";
 
 export type AttentionRequestOperatorConfig = {
+  preview_follow_views?: boolean;
   profile_id: string;
   camera_id: string;
   source_id: string;

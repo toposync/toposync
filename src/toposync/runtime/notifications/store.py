@@ -678,6 +678,7 @@ class NotificationStore:
                 WHERE
                   type LIKE 'pipelines.%'
                   AND dedupe_key IS NOT NULL
+                  AND dedupe_key != '' AND dedupe_key = TRIM(dedupe_key)
                   AND CASE WHEN json_valid(payload_json) THEN
                     json_extract(payload_json, '$.source') = 'pipelines'
                     AND json_extract(payload_json, '$.status') = 'open'

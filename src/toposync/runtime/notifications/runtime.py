@@ -172,33 +172,33 @@ class NotificationsRuntime:
         self,
         *,
         reason: str = "runtime_restart",
-        limit: int = 5000,
+        batch_size: int = 500,
     ) -> int:
         reason = str(reason or "").strip() or "runtime_restart"
-        records = await asyncio.to_thread(self.store.list_open_pipeline_notifications, limit=int(limit))
-        if not records:
-            return 0
-
         closed = 0
-        for rec in records:
-            if not rec.dedupe_key:
-                continue
-            payload = dict(rec.payload or {})
-            payload["lifecycle"] = "close"
-            payload["status"] = "closed"
-            payload["reason"] = reason
-
-            # Restart supplies no new source sample. Preserve the recorded
-            # interval (including a valid zero origin), never add downtime or
-            # infer that an unlabelled legacy source timestamp is Unix time.
-
-            await self.upsert(
-                type=rec.type,
-                title=rec.title,
-                description=rec.description,
-                image_path=rec.image_path,
-                payload=payload,
-                dedupe_key=rec.dedupe_key,
+        while True:
+            records = await asyncio.to_thread(
+                self.store.list_open_pipeline_notifications, limit=max(1, int(batch_size))
             )
-            closed += 1
+            if not records:
+                break
+            for rec in records:
+                payload = dict(rec.payload or {})
+                payload["lifecycle"] = "close"
+                payload["status"] = "closed"
+                payload["reason"] = reason
+
+                # Restart supplies no new source sample. Preserve the recorded
+                # interval (including a valid zero origin), never add downtime or
+                # infer that an unlabelled legacy source timestamp is Unix time.
+
+                await self.upsert(
+                    type=rec.type,
+                    title=rec.title,
+                    description=rec.description,
+                    image_path=rec.image_path,
+                    payload=payload,
+                    dedupe_key=rec.dedupe_key,
+                )
+                closed += 1
         return closed

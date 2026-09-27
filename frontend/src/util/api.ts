@@ -1647,6 +1647,10 @@ export async function getSettings(): Promise<AppSettings> {
   return requestJson<AppSettings>("/api/settings", undefined, "Failed to fetch settings");
 }
 
+export async function setInstallationTimezone(timezone: string | null): Promise<{ timezone: string | null }> {
+  return requestJson("/api/settings/timezone", jsonRequest("PATCH", { timezone }), "Failed to save installation time zone");
+}
+
 export async function patchExtensionSettings(
   extensionId: string,
   patch: Record<string, unknown>,

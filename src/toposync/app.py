@@ -30,6 +30,7 @@ from toposync.runtime.event_bus import EventBus, EventOutcome
 from toposync.runtime.config_store import (
     AppConfig,
     AppSettings,
+    InstallationTimezone,
     Composition,
     ConfigStore,
     Pipeline,
@@ -2374,6 +2375,11 @@ def create_app() -> FastAPI:
         _require(request, action="core:settings:read")
         config_store: ConfigStore = request.app.state.config_store
         return await config_store.get_settings()
+
+    @app.patch("/api/settings/timezone", response_model=InstallationTimezone)
+    async def set_installation_timezone(request: Request, value: InstallationTimezone) -> InstallationTimezone:
+        _require(request, action="core:settings:write")
+        return await request.app.state.config_store.set_installation_timezone(value)
 
     @app.put("/api/settings", response_model=AppSettings)
     async def put_settings(request: Request, settings: AppSettings) -> AppSettings:

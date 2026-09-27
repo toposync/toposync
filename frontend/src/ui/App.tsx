@@ -38,6 +38,7 @@ import {
   markNotificationsViewed,
   emitEvent,
   patchExtensionSettings,
+  setInstallationTimezone,
   patchAccessUser,
   putComposition,
   patchCompositionMeta,
@@ -1227,6 +1228,11 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     setCompositionRevision((v) => v + 1);
   }, []);
 
+  const updateInstallationTimezone = useCallback(async (timezone: string | null): Promise<void> => {
+    const saved = await setInstallationTimezone(timezone);
+    setSettings((previous) => ({ ...previous, core: { ...previous.core, timezone: saved.timezone } }));
+  }, []);
+
   const updateExtensionSettings = useCallback(
     async (extensionId: string, patch: Record<string, unknown>): Promise<Record<string, unknown>> => {
       if (!backendAvailable) {
@@ -1640,6 +1646,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           onSetViewport3dBackground={setViewport3dBackground}
           settings={settings}
           onPatchExtensionSettings={updateExtensionSettings}
+          onSetInstallationTimezone={updateInstallationTimezone}
           extensionActivationDiagnostics={extensionActivationDiagnostics}
           onOpenPipelines={openPipelinesSettings}
           onOpenProcessingServers={openProcessingServersSettings}

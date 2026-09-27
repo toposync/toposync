@@ -52,8 +52,13 @@ fallback; its result reports `time_basis: "notification_created_at"` and the bou
 
 Callers must convert civil dates using an explicit time zone and each local
 midnight separately, since a daylight-saving day may differ from 24 hours. These
-parameters do not interpret natural-language dates, configure the installation's
-time zone or certify the physical capture timestamp. The semantic limit remains
+parameters do not interpret natural-language dates or certify the physical capture
+timestamp. Configure the installation time zone under **Settings → Base**; it is
+stored as `settings.core.timezone` and remains unset until selected explicitly.
+`PATCH /api/settings/timezone` saves only that validated IANA zone under the existing
+settings write permission, preserving other settings. Send `{"timezone": null}` to
+clear it. Selecting a zone does not yet enable natural-language date parsing.
+The semantic limit remains
 250 recent notifications within the selected interval, with resumable indexing
 in batches of 32; the result reports partial coverage while indexing remains.
 

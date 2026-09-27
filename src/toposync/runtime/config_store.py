@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -54,9 +55,31 @@ class Composition(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
+class InstallationTimezone(BaseModel):
+    model_config = {"extra": "forbid"}
+    timezone: str | None = Field(default=None, max_length=128)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError("Choose a valid IANA time zone") from None
+        return value
+
+
 class AppSettings(BaseModel):
     core: dict[str, Any] = Field(default_factory=dict)
     extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("core")
+    @classmethod
+    def validate_core_timezone(cls, value: dict[str, Any]) -> dict[str, Any]:
+        InstallationTimezone(timezone=value.get("timezone"))
+        return value
 
 
 class Pipeline(BaseModel):
@@ -525,6 +548,15 @@ class ConfigStore:
             cfg2 = _normalize_config(cfg2)
             await self._persist_locked(cfg2)
             return cfg2.settings
+
+    async def set_installation_timezone(self, value: InstallationTimezone) -> InstallationTimezone:
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            settings = AppSettings(core={**cfg.settings.core, "timezone": value.timezone},
+                                   extensions=cfg.settings.extensions)
+            await self._persist_locked(_build_config(cfg, settings=settings))
+        return value
 
     async def patch_extension_settings(
         self, extension_id: str, patch: dict[str, Any]

@@ -42,6 +42,7 @@ type Props = {
   viewport3dBackground: Viewport3DBackground;
   onSetViewport3dBackground: (value: Viewport3DBackground) => void;
   settings: AppSettings;
+  onSetInstallationTimezone: (timezone: string | null) => Promise<void>;
   onPatchExtensionSettings: (extensionId: string, patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
   extensionActivationDiagnostics: Record<string, string>;
   onOpenPipelines: () => void;
@@ -132,6 +133,7 @@ export function SettingsScreen({
   viewport3dBackground,
   onSetViewport3dBackground,
   settings,
+  onSetInstallationTimezone,
   onPatchExtensionSettings,
   extensionActivationDiagnostics,
   onOpenPipelines,
@@ -155,6 +157,14 @@ export function SettingsScreen({
   const [dirtyExtensions, setDirtyExtensions] = useState<Record<string, boolean>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [timezoneSaving, setTimezoneSaving] = useState(false);
+  const [timezoneError, setTimezoneError] = useState<string | null>(null);
+  const installationTimezone = typeof settings.core?.timezone === "string" ? settings.core.timezone : "";
+  const timezoneOptions = useMemo(() => {
+    const supported = Intl as typeof Intl & { supportedValuesOf?: (key: string) => string[] };
+    return [...new Set(["UTC", Intl.DateTimeFormat().resolvedOptions().timeZone, installationTimezone,
+      ...(supported.supportedValuesOf?.("timeZone") ?? [])].filter(Boolean))].sort();
+  }, [installationTimezone]);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
   const [extensionCatalog, setExtensionCatalog] = useState<ExtensionManagementCatalog | null>(null);
@@ -467,6 +477,24 @@ export function SettingsScreen({
 
           <div className="sectionDivider" />
 
+          <label className="field">
+            <span>{t("core.ui.settings.installation_timezone")}</span>
+            <select className="input" value={installationTimezone} disabled={!backendAvailable || timezoneSaving}
+              onChange={async (event) => {
+                const value = event.currentTarget.value || null;
+                setTimezoneSaving(true);
+                setTimezoneError(null);
+                try { await onSetInstallationTimezone(value); }
+                catch (error) { setTimezoneError(error instanceof Error ? error.message : String(error)); }
+                finally { setTimezoneSaving(false); }
+              }}>
+              <option value="">{t("core.ui.settings.timezone_unset")}</option>
+              {timezoneOptions.map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}
+            </select>
+          </label>
+          <p className="hint" role="status">{timezoneSaving ? t("core.ui.settings.timezone_saving") : t("core.ui.settings.timezone_help")}</p>
+          {timezoneError ? <p role="alert">{timezoneError}</p> : null}
+
           <div className="modalSectionTitle">{t("core.ui.settings.language")}</div>
           <div className="choiceList">
             {(
@@ -561,6 +589,11 @@ export function SettingsScreen({
     orderedPanels,
     onPatchRenderViewSettings,
     saving,
+    installationTimezone,
+    timezoneOptions,
+    timezoneSaving,
+    timezoneError,
+    onSetInstallationTimezone,
     renderViewSettings,
     renderViewsWithSettings,
     sortedCompositions,

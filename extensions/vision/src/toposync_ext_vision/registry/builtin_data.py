@@ -205,6 +205,7 @@ OFFICIAL_POSE_MODEL_IDS: tuple[str, ...] = (
 )
 
 OFFICIAL_VISION_MODEL_IDS: tuple[str, ...] = (
+    "clip_multilingual_history",
     "open_noodle_pet_small",
     "opencv_yunet_2023mar",
     "opencv_sface_2021dec",

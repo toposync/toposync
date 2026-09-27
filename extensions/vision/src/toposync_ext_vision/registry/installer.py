@@ -7,6 +7,7 @@ import re
 import threading
 import time
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -30,6 +31,16 @@ InstallStatus = Literal["queued", "downloading", "verifying", "installing", "can
 
 class InstallCancelledError(RuntimeError):
     pass
+
+
+@lru_cache(maxsize=16)
+def _artifact_set_matches(signature: tuple[tuple[str, int, int, int, str], ...]) -> bool:
+    # Cache verification only, never sessions; inode replacement/content changes invalidate the signature.
+    for path, _size, _modified, _changed, expected in signature:
+        with Path(path).open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
+                return False
+    return True
 
 
 def _default_data_dir() -> Path:
@@ -201,7 +212,23 @@ class VisionModelInstallManager:
             guided_upload_reason = "artifact_format_unsupported"
         local_build_reason = "local_build_info_only"
         local_build = probe_local_builder(manifest, system_info=system_info, data_dir=self._data_dir)
+        artifact_set_complete, artifact_set_reason = None, ""
+        if manifest.acquisition.auxiliary_artifacts:
+            try:
+                paths = [(manifest.resolve_artifact_path(), manifest.sha256)] + [
+                    (path, asset.sha256) for path, asset in manifest.resolve_auxiliary_artifacts(self._data_dir)
+                ]
+                signature = []
+                for path, expected in paths:
+                    stat = path.stat()
+                    signature.append((str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, expected))
+                artifact_set_complete = _artifact_set_matches(tuple(signature))
+                artifact_set_reason = "ok" if artifact_set_complete else "artifact_checksum_mismatch"
+            except (OSError, ValueError):
+                artifact_set_complete, artifact_set_reason = False, "artifact_missing"
         return {
+            "artifact_set_complete": artifact_set_complete,
+            "artifact_set_reason": artifact_set_reason,
             "acquisition_mode": acquisition_mode or "guided_upload",
             "acquisition_supported": (
                 bool(upload_supported)
@@ -301,7 +328,7 @@ class VisionModelInstallManager:
             self._cancel_flags[key] = threading.Event()
             task = asyncio.create_task(
                 self._run_install(manifest=manifest, source_kind=source_kind, source_value=source_value,
-                                  reuse_existing=existing_artifact and not force),
+                                  reuse_existing=existing_artifact and not force, force=force),
                 name=f"vision-model-install:{manifest.model_id}",
             )
             self._tasks[key] = task
@@ -459,6 +486,10 @@ class VisionModelInstallManager:
             return
         with self._lock:
             current = dict(self._jobs.get(key) or {})
+            if "progress_pct" in patch and int(current.get("files_total") or 1) > 1:
+                total = int(current["files_total"])
+                index = int(patch.get("file_index", current.get("file_index", 0)))
+                patch["progress_pct"] = min(100.0, (index * 100.0 + float(patch["progress_pct"])) / total)
             current.update(patch)
             current["updated_at"] = float(time.time())
             self._jobs[key] = current
@@ -468,52 +499,52 @@ class VisionModelInstallManager:
         if flag is not None and flag.is_set():
             raise InstallCancelledError(f"Install canceled for {model_id}")
 
-    async def _run_install(self, *, manifest: ModelManifest, source_kind: str, source_value: str, reuse_existing: bool = False) -> None:
-        target_path = manifest.resolve_artifact_path()
-        temp_path = target_path.with_name(f"{target_path.name}.{uuid.uuid4().hex}.part")
+    async def _run_install(self, *, manifest: ModelManifest, source_kind: str, source_value: str, reuse_existing: bool = False, force: bool = False) -> None:
+        temp_path = None
         try:
-            self._ensure_not_cancelled(manifest.model_id)
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            if not reuse_existing:
-                self._update_job(
-                    manifest.model_id,
-                    status="downloading" if source_kind == "download" else "installing",
-                    phase="downloading" if source_kind == "download" else "copying",
-                    progress_pct=1.0,
-                )
-                if source_kind == "download":
-                    await self._download_file(source_value, temp_path, manifest.model_id)
-                else:
-                    await asyncio.to_thread(self._copy_file, Path(source_value), temp_path, manifest.model_id)
-
-            self._ensure_not_cancelled(manifest.model_id)
-            self._update_job(manifest.model_id, status="verifying", phase="verifying", progress_pct=85.0)
-            candidate_path = target_path if reuse_existing else temp_path
-            digest = await asyncio.to_thread(self._sha256_file, candidate_path, manifest.model_id)
-            expected = str(manifest.sha256 or "").strip().lower()
-            if expected and digest.lower() != expected:
-                raise RuntimeError(
-                    f"Checksum mismatch for {manifest.model_id}: expected {expected}, got {digest.lower()}"
-                )
-
-            if manifest.task == "pose":
-                from .model_store import _validate_manifest_runtime
-
-                candidate = manifest.model_copy(update={"artifact_path": str(candidate_path.resolve())})
-                await asyncio.to_thread(_validate_manifest_runtime, candidate)
-
-            self._ensure_not_cancelled(manifest.model_id)
-            self._update_job(manifest.model_id, status="installing", phase="finalizing", progress_pct=97.0)
-            if not reuse_existing:
-                os.replace(temp_path, target_path)
-            self._update_job(
-                manifest.model_id,
-                status="completed",
-                phase="already_ready" if reuse_existing else "completed",
-                progress_pct=100.0,
-                finished_at=float(time.time()),
-                error=None,
-            )
+            artifacts = [(manifest, source_kind, source_value, reuse_existing)]
+            for target, asset in manifest.resolve_auxiliary_artifacts(self._data_dir):
+                kind, source = _coerce_source_value(asset.source_url)
+                if kind == "download" and not manifest.license.redistribution_allowed:
+                    raise ModelRegistryError("Auxiliary artifact download is license restricted")
+                candidate = manifest.model_copy(update={"artifact_path": str(target), "sha256": asset.sha256, "task": "embedding"})
+                artifacts.append((candidate, kind, source, target.is_file() and not force))
+            self._update_job(manifest.model_id, files_total=len(artifacts), files_completed=0, file_index=0)
+            all_reused = True
+            for index, (candidate, kind, source, reuse) in enumerate(artifacts):
+                all_reused = all_reused and reuse
+                self._ensure_not_cancelled(manifest.model_id)
+                target_path = candidate.resolve_artifact_path()
+                temp_path = target_path.with_name(f"{target_path.name}.{uuid.uuid4().hex}.part")
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                self._update_job(manifest.model_id, file_index=index)
+                if not reuse:
+                    self._update_job(manifest.model_id,
+                        status="downloading" if kind == "download" else "installing",
+                        phase="downloading" if kind == "download" else "copying", progress_pct=1.0)
+                    if kind == "download":
+                        await self._download_file(source, temp_path, manifest.model_id)
+                    else:
+                        await asyncio.to_thread(self._copy_file, Path(source), temp_path, manifest.model_id)
+                self._ensure_not_cancelled(manifest.model_id)
+                self._update_job(manifest.model_id, status="verifying", phase="verifying", progress_pct=85.0)
+                candidate_path = target_path if reuse else temp_path
+                digest = await asyncio.to_thread(self._sha256_file, candidate_path, manifest.model_id)
+                expected = str(candidate.sha256 or "").strip().lower()
+                if expected and digest.lower() != expected:
+                    raise RuntimeError(f"Checksum mismatch for {candidate_path.name}: expected {expected}, got {digest.lower()}")
+                if candidate.task == "pose":
+                    from .model_store import _validate_manifest_runtime
+                    await asyncio.to_thread(_validate_manifest_runtime,
+                        candidate.model_copy(update={"artifact_path": str(candidate_path.resolve())}))
+                self._ensure_not_cancelled(manifest.model_id)
+                self._update_job(manifest.model_id, status="installing", phase="finalizing", progress_pct=97.0)
+                if not reuse:
+                    os.replace(temp_path, target_path)
+                self._update_job(manifest.model_id, files_completed=index + 1, progress_pct=100.0)
+            self._update_job(manifest.model_id, status="completed",
+                phase="already_ready" if all_reused else "completed", progress_pct=100.0,
+                finished_at=float(time.time()), error=None)
         except InstallCancelledError:
             self._update_job(
                 manifest.model_id,
@@ -523,7 +554,7 @@ class VisionModelInstallManager:
                 finished_at=float(time.time()),
             )
             try:
-                if temp_path.exists():
+                if temp_path is not None and temp_path.exists():
                     temp_path.unlink()
             except Exception:
                 pass
@@ -536,7 +567,7 @@ class VisionModelInstallManager:
                 finished_at=float(time.time()),
             )
             try:
-                if temp_path.exists():
+                if temp_path is not None and temp_path.exists():
                     temp_path.unlink()
             except Exception:
                 pass

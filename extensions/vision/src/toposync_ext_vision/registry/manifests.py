@@ -151,6 +151,22 @@ class ModelHardwareProfiles(BaseModel):
         return out
 
 
+class ModelAuxiliaryArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(min_length=1, max_length=512)
+    source_url: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("path")
+    @classmethod
+    def _relative_path(cls, value: str) -> str:
+        value = value.replace("\\", "/")
+        path = Path(value)
+        if path.is_absolute() or path.drive or ".." in path.parts or ":" in value or value in {"", "."}:
+            raise ValueError("Auxiliary artifacts require a relative model-store path")
+        return value
+
+
 class ModelAcquisitionSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["guided_upload", "auto_download", "local_build_assisted"] = "guided_upload"
@@ -165,6 +181,14 @@ class ModelAcquisitionSpec(BaseModel):
     builder_backend: str = ""
     supported_platforms: list[str] = Field(default_factory=list)
     explicit_consent_required: bool = False
+    auxiliary_artifacts: list[ModelAuxiliaryArtifact] = Field(default_factory=list, max_length=8)
+
+    @field_validator("auxiliary_artifacts")
+    @classmethod
+    def _unique_artifacts(cls, values: list[ModelAuxiliaryArtifact]) -> list[ModelAuxiliaryArtifact]:
+        if len({str(Path(value.path)) for value in values}) != len(values):
+            raise ValueError("Auxiliary artifact paths must be unique")
+        return values
 
     @field_validator(
         "guide_url",
@@ -307,6 +331,18 @@ class ModelManifest(BaseModel):
 
     def resolved_adapter_family(self) -> str:
         return self.postprocess.resolved_adapter_family()
+
+    def resolve_auxiliary_artifacts(self, data_dir: Path | None = None) -> list[tuple[Path, ModelAuxiliaryArtifact]]:
+        root = (Path(data_dir) / "vision-models").resolve() if data_dir is not None else _default_official_model_store_dir()
+        result = []
+        seen = {self.resolve_artifact_path()}
+        for asset in self.acquisition.auxiliary_artifacts:
+            target = (root / asset.path).resolve()
+            if not target.is_relative_to(root) or target in seen:
+                raise ValueError("Auxiliary artifact path escapes or replaces another artifact")
+            seen.add(target)
+            result.append((target, asset))
+        return result
 
 
 class ModelRegistryError(RuntimeError):

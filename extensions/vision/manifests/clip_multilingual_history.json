@@ -1,0 +1,62 @@
+{
+  "model_id": "clip_multilingual_history",
+  "display_name": "Visual history search",
+  "task": "embedding",
+  "runtime": "onnxruntime",
+  "artifact_format": "onnx",
+  "artifact_path": "../models/clip-vit-base-patch32/onnx/vision_model_quantized.onnx",
+  "sha256": "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299",
+  "input": {
+    "width": 224,
+    "height": 224,
+    "color_order": "rgb",
+    "layout": "nchw"
+  },
+  "postprocess": {
+    "type": "clip_multilingual_history_v1"
+  },
+  "license": {
+    "code_license": "MIT (OpenAI CLIP); Apache-2.0 (Sentence Transformers)",
+    "weights_license": "MIT (CLIP base); Apache-2.0 (multilingual text)",
+    "redistribution_allowed": true,
+    "commercial_use_status": "upstream_license_notice_required",
+    "dataset_notes": "Original CLIP research limitations apply. Training-data provenance is not independently audited. ONNX export by Xenova links the OpenAI base model."
+  },
+  "hardware_profiles": {
+    "cpu": true
+  },
+  "capabilities": [
+    "history.search"
+  ],
+  "acquisition": {
+    "mode": "auto_download",
+    "source_url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/d15189d7028b43f1d3e65039190477f6af591c2a/onnx/vision_model_quantized.onnx",
+    "guide_url": "https://huggingface.co/sentence-transformers/clip-ViT-B-32-multilingual-v1",
+    "auxiliary_artifacts": [
+      {
+        "path": "clip-multilingual-text/onnx/model_qint8_arm64.onnx",
+        "sha256": "3bed77e83926519660b5c0833cb3321cfde952331edec4f7d501c7d384b8a8a7",
+        "source_url": "https://huggingface.co/sentence-transformers/clip-ViT-B-32-multilingual-v1/resolve/58edf8cada9e398793dca955574a48cbb7f18be2/onnx/model_qint8_arm64.onnx"
+      },
+      {
+        "path": "clip-multilingual-text/2_Dense/model.safetensors",
+        "sha256": "d12568dc7300970a4d3dbb49068ad16cd89b99840b74b026f8e48071e9414f74",
+        "source_url": "https://huggingface.co/sentence-transformers/clip-ViT-B-32-multilingual-v1/resolve/58edf8cada9e398793dca955574a48cbb7f18be2/2_Dense/model.safetensors"
+      },
+      {
+        "path": "clip-multilingual-text/tokenizer.json",
+        "sha256": "5b4e1a8171c81dfd666ae40265b9530c6e0b3d53923fe8ac493dcc84229adf81",
+        "source_url": "https://huggingface.co/sentence-transformers/clip-ViT-B-32-multilingual-v1/resolve/58edf8cada9e398793dca955574a48cbb7f18be2/tokenizer.json"
+      }
+    ]
+  },
+  "provenance": {
+    "origin": "upstream",
+    "source_ref": "Xenova d15189d7028b43f1d3e65039190477f6af591c2a; Sentence Transformers 58edf8cada9e398793dca955574a48cbb7f18be2"
+  },
+  "notes": [
+    "Text-to-image history ranking only; not identity confirmation or a safety trigger.",
+    "CPU ARM64 evaluated with a small public-image corpus; other platforms and field accuracy require validation.",
+    "Four pinned artifacts form one embedding space; acquisition does not start pipelines."
+  ]
+}

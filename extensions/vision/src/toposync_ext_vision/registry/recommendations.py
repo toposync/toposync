@@ -337,6 +337,9 @@ def _catalog_entry(
             "local_build_source_label": "",
         }
     )
+    if install_info.get("artifact_set_complete") is False:
+        availability_reason = str(install_info.get("artifact_set_reason") or "artifact_missing")
+        availability = "manifest_only" if availability_reason == "artifact_missing" else "incompatible"
     return {
         "model_id": manifest.model_id,
         "display_name": manifest.display_name,
@@ -346,7 +349,7 @@ def _catalog_entry(
         "capabilities": list(manifest.capabilities or []),
         "accelerator_ids": _accelerator_ids(manifest),
         "artifact_path": str(manifest.resolve_artifact_path()),
-        "artifact_exists": manifest.resolve_artifact_path().is_file(),
+        "artifact_exists": install_info.get("artifact_set_complete") if manifest.acquisition.auxiliary_artifacts else manifest.resolve_artifact_path().is_file(),
         "recommended_profiles": list(manifest.recommended_profiles or []),
         "badge_ids": _badge_ids_for_manifest(
             manifest,

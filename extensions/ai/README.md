@@ -40,6 +40,19 @@ identity or consumed volume. They require a configured vision-capable AI profile
 validated on representative positive, difficult negative and occluded recordings before relying
 on their recognition. API persistence and synthetic replay tests do not establish model accuracy.
 
+## Visual evidence and crops
+
+Visual history indexes the notification's published primary image (`imageUrl`).
+A crop selected by the existing image-storage and notification operators uses
+the same index as a full frame. Each event has one cached vector per model space;
+changing the image bytes invalidates that vector. Deleting the evidence, deleting
+the notification, or making it silent removes it from visual retrieval.
+
+Additional stored image layers and private identity-gallery crops are not
+automatically indexed. Publishing a crop does not establish identity, and visual
+similarity remains separate from confirmed person or pet associations. Text and
+metadata search remain available when the local visual model is unavailable.
+
 ## Exact history metadata filters
 
 The notification and history search endpoints accept `data_filter` as a JSON query

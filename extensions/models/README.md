@@ -71,6 +71,14 @@ Select **3D model**, choose a placement point, then choose a local file or expan
 
 Generated elements retain the generation provenance and show an approximation notice when edited. Enter a known height to scale the object; generated geometry does not supply a measured reference height. Preview, placement, floor height and advanced scale reuse the importer. Opaque photos use the optional background model described below. Runtime installation is an explicit administrator operation.
 
+### Views and dimensional references
+
+This provider uses one image. Hidden sides are inferred, not observed; extra photos are not fused into a reconstruction. If the chosen view hides the object's outline or important features, choose a clearer view before generating. Previewing a plausible hidden surface does not establish its accuracy.
+
+Rotating a panoramic camera around the same center does not supply a translational baseline. Metric reconstruction would require distinct viewpoints, calibration, a known scale and independent validation; it is unavailable in this flow. A panorama alone does not change that limit.
+
+Enter a height you actually know or measured when physical scale matters. A numerical reference rescales the mesh and can be checked after saving, but cannot validate its proportions or prove the original object's dimensions. The demonstrated one-meter reference is a test input, not a physical measurement of the photographed cup.
+
 ### Install the evaluated runtime
 
 On **macOS ARM with Python 3.12**, install `uv`, CMake and Apple Command Line Tools first. From the server Python environment, run:

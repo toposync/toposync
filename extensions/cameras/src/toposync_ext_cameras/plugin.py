@@ -68,7 +68,7 @@ from .pipeline_templates import (
     CAT_ACTIVITY_RECIPES,
 )
 from .area_events import build_area_occurrence_graph, register_area_occurrence_operator
-from .event_context import register_recent_onvif_event_operator
+from .event_context import register_recent_onvif_event_operator, add_recent_event_to_area_graph
 from .processing.camera_hub import get_global_camera_hub
 from .processing.mapping import build_calibration_mapper
 from .ptz_controller import PtzControlError, PtzController, PtzTransportBinding
@@ -131,6 +131,7 @@ CAMERA_PIPELINE_PRESETS = (
     "area_presence",
     "area_entry",
     "area_group_entry",
+    "doorbell_visitor",
     "cat_litter_use",
     "cat_drinking",
     "people_simple",
@@ -145,6 +146,7 @@ CAMERA_MAPPING_REQUIRED_PRESETS = {
     "area_presence",
     "area_entry",
     "area_group_entry",
+    "doorbell_visitor",
     "people_individual",
     "people_quiet",
     "presence_area",
@@ -218,6 +220,7 @@ PRESET_PIPELINE_NAME_PARTS = {
     "area_presence": "presenca_em_area_definida",
     "area_entry": "entrada_em_area_definida",
     "area_group_entry": "pessoas_entrando_juntas",
+    "doorbell_visitor": "visitante_evento_campainha",
     "cat_litter_use": "atividade_caixa_de_areia",
     "cat_drinking": "gato_bebendo_agua",
     "people_simple": "deteccao_simples_de_pessoas",
@@ -696,6 +699,7 @@ class CameraPipelinePresetRequest(BaseModel):
         "area_presence",
         "area_entry",
         "area_group_entry",
+        "doorbell_visitor",
         "cat_litter_use",
         "cat_drinking",
         "people_simple",
@@ -713,6 +717,8 @@ class CameraPipelinePresetRequest(BaseModel):
     model_id: str = ""
     composition_id: str = ""
     area_id: str = ""
+    event_topic: str = ""
+    event_item_name: str = ""
     stopped_speed_threshold: float | None = Field(default=None, ge=0.0, le=1000.0)
     min_stationary_seconds: float | None = Field(default=None, ge=0.0, le=3600.0)
     notification_title: str = ""
@@ -5377,7 +5383,7 @@ class CamerasExtension(BaseExtension):
             notification_priority: NotificationPriority | None,
             graph_uid: str = "camera_preset",
         ) -> dict[str, Any]:
-            if preset in {"area_presence", "area_entry", "area_group_entry"}:
+            if preset in {"area_presence", "area_entry", "area_group_entry", "doorbell_visitor"}:
                 return build_area_occurrence_graph(
                     preset=preset, camera_id=camera_id, source_id=source_id, detection_model_id=detection_model_id,
                     composition_id=composition_id, area_restriction_config=area_restriction_config,
@@ -5829,10 +5835,10 @@ class CamerasExtension(BaseExtension):
                 body.enable_ptz_attention
             )
             if requires_mapping:
-                if preset in {"area_presence", "area_entry", "area_group_entry"} and not str(body.area_id or "").strip():
+                if preset in {"area_presence", "area_entry", "area_group_entry", "doorbell_visitor"} and not str(body.area_id or "").strip():
                     raise HTTPException(status_code=400, detail="Choose a mapped area for this recipe")
                 if (
-                    preset in {"vehicle_stopped", "person_stopped", "person_vehicle_interaction", "area_presence", "area_entry", "area_group_entry"}
+                    preset in {"vehicle_stopped", "person_stopped", "person_vehicle_interaction", "area_presence", "area_entry", "area_group_entry", "doorbell_visitor"}
                     and str(body.area_id or "").strip()
                 ):
                     resolved_area = _resolve_mapped_camera_area(
@@ -5856,6 +5862,21 @@ class CamerasExtension(BaseExtension):
                         status_code=409,
                         detail="Mapping preset requires this camera to have at least four mapped points in a composition.",
                     )
+
+            if preset == "doorbell_visitor":
+                _require_auth(request, action="core:settings:read")
+                topic, item_name = body.event_topic.strip(), body.event_item_name.strip()
+                if not topic or not item_name:
+                    raise HTTPException(400, "Choose the camera event corresponding to the doorbell")
+                try:
+                    available_events = await _services(request).call("cameras.onvif_events.list", camera_id=cid)
+                except Exception as exc:
+                    raise HTTPException(409, "Camera event capabilities could not be confirmed") from exc
+                descriptors = available_events.get("boolean_states", []) if isinstance(available_events, dict) else []
+                if not any(isinstance(item, dict) and item.get("topic") == topic
+                           and item.get("item_name") == item_name and item.get("is_boolean") is True
+                           and item.get("is_property") is True for item in descriptors):
+                    raise HTTPException(409, "Selected event is not a discovered boolean camera property")
 
             if body.enable_ptz_attention:
                 if not camera_source_has_ptz(source):
@@ -5924,6 +5945,11 @@ class CamerasExtension(BaseExtension):
                     notification_priority=notification_priority,
                     graph_uid=pipeline_name,
                 )
+                if preset == "doorbell_visitor":
+                    graph = add_recent_event_to_area_graph(graph, camera_id=cid,
+                        topic=body.event_topic.strip(), item_name=body.event_item_name.strip(),
+                        notification_title=body.notification_title.strip(),
+                        notification_description=body.notification_description.strip())
                 if body.enable_ptz_attention:
                     event_node = next(
                         (
@@ -5974,7 +6000,7 @@ class CamerasExtension(BaseExtension):
 
             pipeline = Pipeline(
                 name=pipeline_name,
-                enabled=bool(body.enabled),
+                enabled=False if preset == "doorbell_visitor" else bool(body.enabled),
                 processing_server_id=processing_server_id,
                 editor_mode="interactive",
                 python_source="",

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { requestJson } from "@toposync/plugin-api";
 import { createCameraPipelinePreset } from "../api/camerasApi";
 import { SubModal } from "../ui/SubModal";
 import type { CameraPipelinePresetModal } from "./CameraPipelinePresetModal";
@@ -12,26 +13,46 @@ export function CameraObservationPresetModal({
   const [name, setName] = useState("");
   const [areaId, setAreaId] = useState("");
   const [serverId, setServerId] = useState("local");
+  const [signals, setSignals] = useState<{ topic: string; item_name: string; label: string }[]>([]);
+  const [signalId, setSignalId] = useState("");
+  const [loadingSignals, setLoadingSignals] = useState(false);
+  const [signalsUnavailable, setSignalsUnavailable] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setSourceId(sources.find((source) => source.id === activeSourceId)?.id || sources[0]?.id || "");
     setName("");
     setAreaId("");
+    setSignalId("");
     setServerId("local");
     setError(null);
   }, [open, preset, camera.id, activeSourceId]);
-  const area = preset === "area_presence" || preset === "area_entry" || preset === "area_group_entry";
+  useEffect(() => {
+    if (!open || preset !== "doorbell_visitor") return;
+    const controller = new AbortController();
+    setSignals([]); setLoadingSignals(true); setSignalsUnavailable(false);
+    requestJson<{ boolean_states: { topic: string; item_name: string; label: string; is_boolean: boolean; is_property: boolean }[] }>(
+      `/api/cameras/cameras/${encodeURIComponent(camera.id)}/onvif/events`, { signal: controller.signal },
+    ).then(value => {
+      if (!controller.signal.aborted) setSignals((value.boolean_states ?? []).filter(item => item.is_boolean && item.is_property && item.topic && item.item_name));
+    }).catch(() => { if (!controller.signal.aborted) setSignalsUnavailable(true); })
+      .finally(() => { if (!controller.signal.aborted) setLoadingSignals(false); });
+    return () => controller.abort();
+  }, [open, preset, camera.id]);
+  const visitor = preset === "doorbell_visitor";
+  const selectedSignal = signals.find(item => JSON.stringify([item.topic, item.item_name]) === signalId);
+  const area = visitor || preset === "area_presence" || preset === "area_entry" || preset === "area_group_entry";
   if (!open || (!area && preset !== "cat_litter_use" && preset !== "cat_drinking")) return null;
   const selectedArea = mappedCompositions.flatMap(composition => (composition.areas ?? []).map(item => ({...item, compositionId: composition.id}))).find(item => JSON.stringify([item.compositionId, item.id]) === areaId);
-  const key = area ? `ext.cameras.area.${preset === "area_presence" ? "presence" : preset === "area_group_entry" ? "group" : "entry"}` : `ext.cameras.cat.${preset === "cat_litter_use" ? "litter" : "water"}`;
+  const key = visitor ? "ext.cameras.visitor" : area ? `ext.cameras.area.${preset === "area_presence" ? "presence" : preset === "area_group_entry" ? "group" : "entry"}` : `ext.cameras.cat.${preset === "cat_litter_use" ? "litter" : "water"}`;
   async function save(): Promise<void> {
-    if (saving || !sourceId || !preset || (area && !selectedArea)) return;
+    if (saving || !sourceId || !preset || (area && !selectedArea) || (visitor && !selectedSignal)) return;
     setSaving(true);
     setError(null);
     try {
       const result = await createCameraPipelinePreset(camera.id, {
         preset, source_id: sourceId, pipeline_name: name.trim(), enabled: false,
+        event_topic: selectedSignal?.topic, event_item_name: selectedSignal?.item_name,
         processing_server_id: serverId, area_id: selectedArea?.id ?? "", composition_id: selectedArea?.compositionId ?? "",
       });
       onCreated(result.pipeline_name);
@@ -60,6 +81,13 @@ export function CameraObservationPresetModal({
         </optgroup>)}
       </select>
     </label> : <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.profile")}</p>}
+    {visitor && <label className="field"><span className="label">{t("ext.cameras.visitor.signal")}</span>
+      <select className="input" value={signalId} onChange={event => setSignalId(event.target.value)} disabled={saving || loadingSignals}>
+        <option value="">{t("ext.cameras.visitor.select")}</option>
+        {signals.map(item => <option key={JSON.stringify([item.topic, item.item_name])} value={JSON.stringify([item.topic, item.item_name])}>{item.label || item.item_name}</option>)}
+      </select>
+      {loadingSignals ? <span role="status">{t("ext.cameras.visitor.loading")}</span> : signalsUnavailable || !signals.length ? <span role="status">{t("ext.cameras.visitor.unavailable")}</span> : null}
+    </label>}
     <details><summary>{t("ext.cameras.cat.advanced")}</summary>
       <label className="field"><span className="label">{t("ext.cameras.pipeline_preset.processing_server", {}, "Processing server")}</span>
         <select className="input" value={serverId} onChange={event => setServerId(event.target.value)} disabled={saving}>
@@ -72,7 +100,7 @@ export function CameraObservationPresetModal({
     </details>
     <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.paused")}</p>
     {error ? <p role="alert" className="errorText">{error}</p> : null}
-    <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea)} onClick={() => void save()}>
+    <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea) || (visitor && !selectedSignal)} onClick={() => void save()}>
       {t(saving ? "ext.cameras.cat.saving" : "ext.cameras.cat.save")}
     </button>
   </SubModal>;

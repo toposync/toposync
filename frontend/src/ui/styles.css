@@ -2771,9 +2771,14 @@ video {
   background: linear-gradient(180deg, rgba(251, 191, 36, 0.26), rgba(251, 191, 36, 0.10));
 }
 
-.primaryButton:hover {
+.primaryButton:hover:not(:disabled) {
   border-color: rgba(251, 191, 36, 0.55);
   background: linear-gradient(180deg, rgba(251, 191, 36, 0.30), rgba(251, 191, 36, 0.12));
+}
+
+.primaryButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .chipButton i,
@@ -8005,7 +8010,7 @@ label.chipButton {
 
 .chipButton:active,
 .pillButton:active,
-.primaryButton:active,
+.primaryButton:active:not(:disabled),
 .dangerButton:active,
 .iconButton:active,
 .sceneIconButton:active,
@@ -8029,7 +8034,7 @@ label.chipButton {
   box-shadow: var(--shadow-elevation-2), inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
-.primaryButton:hover,
+.primaryButton:hover:not(:disabled),
 .pillButtonPrimary:hover,
 .iconButtonPrimary:hover {
   border-color: color-mix(in srgb, var(--color-accent-teal) 65%, var(--color-accent-blue) 42%);

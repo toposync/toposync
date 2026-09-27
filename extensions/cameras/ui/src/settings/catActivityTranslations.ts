@@ -1,5 +1,11 @@
 export const catActivityTranslations = {
   en: {
+    "ext.cameras.visitor.title": "Visitor and doorbell",
+    "ext.cameras.visitor.description": "Observe a person in the selected area within five seconds of the chosen camera event. Does not establish who pressed the button, identity or occupation. Package assessment is not included.",
+    "ext.cameras.visitor.signal": "Which camera event corresponds to the doorbell?",
+    "ext.cameras.visitor.select": "Select a discovered event",
+    "ext.cameras.visitor.loading": "Checking available events…",
+    "ext.cameras.visitor.unavailable": "No compatible event could be confirmed. Check this camera's event support before saving.",
     "ext.cameras.area.presence.title": "People and pets in an area",
     "ext.cameras.area.presence.description": "Observe people, cats and dogs inside a defined area, with an image and duration. Does not infer age or identity.",
     "ext.cameras.area.entry.title": "Entry into an area",
@@ -23,6 +29,12 @@ export const catActivityTranslations = {
     "ext.cameras.cat.name": "Recipe name",
   },
   "pt-BR": {
+    "ext.cameras.visitor.title": "Visitante e campainha",
+    "ext.cameras.visitor.description": "Observe uma pessoa na área escolhida em até cinco segundos do evento selecionado da câmera. Não confirma quem apertou o botão, identidade ou profissão. Avaliação de pacote não incluída.",
+    "ext.cameras.visitor.signal": "Qual evento da câmera corresponde à campainha?",
+    "ext.cameras.visitor.select": "Selecione um evento descoberto",
+    "ext.cameras.visitor.loading": "Consultando eventos disponíveis…",
+    "ext.cameras.visitor.unavailable": "Nenhum evento compatível confirmado. Confira o suporte a eventos desta câmera antes de salvar.",
     "ext.cameras.area.presence.title": "Pessoas e pets em uma área",
     "ext.cameras.area.presence.description": "Observe pessoas, gatos e cães dentro de uma área definida, com imagem e duração. Não infere idade nem identidade.",
     "ext.cameras.area.entry.title": "Entrada em uma área",

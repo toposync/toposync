@@ -74,3 +74,28 @@ def register_recent_onvif_event_operator(registry):
         state_kind="stateful_per_stream", ordering="strict", share_strategy="never", owner="com.toposync.cameras",
         runtime_factory=lambda config, dependencies: RecentOnvifEventRuntime(config, dependencies),
     )
+
+
+
+def add_recent_event_to_area_graph(graph, *, camera_id, topic, item_name, notification_title="", notification_description=""):
+    """Reuse the area recipe; only insert admission and retain correlation evidence."""
+    nodes = graph["nodes"]
+    area_index = next(index for index, node in enumerate(nodes) if node["id"] == "area")
+    nodes.insert(area_index, {"id": "event_context", "uid": "event_context",
+        "operator": "camera.recent_onvif_event", "config": {
+            "camera_id": camera_id, "topic": topic, "item_name": item_name}})
+    for node in nodes:
+        if node["id"] in {"detect", "area"}:
+            node["config"]["categories"] = ["person"]
+        if node["id"] == "notify":
+            node["config"]["title"] = notification_title or "{{camera_name}}: pessoa junto a evento da câmera"
+            node["config"]["description"] = notification_description or (
+                "{{payload.area_occurrence.description}} Coincidência temporal com evento da câmera; "
+                "não confirma quem acionou nem identidade ou profissão."
+            )
+            node["config"]["include_payload_paths"] = ["area_occurrence", "onvif_context"]
+    incoming = next(edge for edge in graph["edges"] if edge["to"]["node"] == "area")
+    graph["edges"].append({**incoming, "uid": "event_context_to_area",
+        "from": {"node": "event_context", "port": "out"}, "to": {"node": "area", "port": "in"}})
+    incoming["to"] = {"node": "event_context", "port": "in"}
+    return graph

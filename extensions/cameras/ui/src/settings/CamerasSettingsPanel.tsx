@@ -212,6 +212,9 @@ const CAMERA_PIPELINE_PRESET_CARDS: {
   stepsKey: string;
   stepsFallback: string;
 }[] = [
+  { id: "doorbell_visitor", requiresMapping: true, titleKey: "ext.cameras.visitor.title", titleFallback: "Visitante e campainha",
+    descriptionKey: "ext.cameras.visitor.description", descriptionFallback: "Pessoa em área próxima de um evento configurado da câmera.",
+    stepsKey: "ext.cameras.cat.steps", stepsFallback: "Revise a imagem e o intervalo observado" },
   ...(["area_presence", "area_entry", "area_group_entry"] as const).map((id) => ({
     id, requiresMapping: true,
     titleKey: `ext.cameras.area.${id === "area_presence" ? "presence" : id === "area_group_entry" ? "group" : "entry"}.title`,
@@ -1951,13 +1954,13 @@ function CamerasSettingsPanelContent({
         ) : null}
       </SubModal>
 
-      {activeCamera && (pipelinePresetOpen === "cat_litter_use" || pipelinePresetOpen === "cat_drinking" || pipelinePresetOpen === "area_presence" || pipelinePresetOpen === "area_entry" || pipelinePresetOpen === "area_group_entry") ? (
+      {activeCamera && (pipelinePresetOpen === "cat_litter_use" || pipelinePresetOpen === "cat_drinking" || pipelinePresetOpen === "area_presence" || pipelinePresetOpen === "area_entry" || pipelinePresetOpen === "area_group_entry" || pipelinePresetOpen === "doorbell_visitor") ? (
         <CameraObservationPresetModal open preset={pipelinePresetOpen} camera={activeCamera}
           activeSourceId={activeSourceId} pipelineOverview={cameraPipelines} mappedCompositions={mappedCompositions}
           processingServers={processingServers} i18n={i18n} onClose={() => setPipelinePresetOpen(null)}
           onCreated={handlePipelineCreated} />
       ) : null}
-      {activeCamera && pipelinePresetOpen !== "cat_litter_use" && pipelinePresetOpen !== "cat_drinking" && pipelinePresetOpen !== "area_presence" && pipelinePresetOpen !== "area_entry" && pipelinePresetOpen !== "area_group_entry" ? (
+      {activeCamera && pipelinePresetOpen !== "cat_litter_use" && pipelinePresetOpen !== "cat_drinking" && pipelinePresetOpen !== "area_presence" && pipelinePresetOpen !== "area_entry" && pipelinePresetOpen !== "area_group_entry" && pipelinePresetOpen !== "doorbell_visitor" ? (
         <CameraPipelinePresetModal
           open={Boolean(pipelinePresetOpen)}
           preset={pipelinePresetOpen}

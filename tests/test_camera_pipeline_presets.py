@@ -1149,3 +1149,38 @@ def test_camera_pipeline_stopped_area_uses_area_composition_and_restriction(
         assert res.status_code == 200, res.text
         alert_codes = {str(alert.get("code") or "") for alert in res.json().get("alerts", [])}
         assert alert_codes <= {"vision_model_artifact_missing"}
+
+
+
+def test_doorbell_visitor_requires_discovered_signal_and_saves_disabled(tmp_path, monkeypatch):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client, with_area=True)
+        descriptors = []
+        async def discovered(*, camera_id):
+            assert camera_id == "cam1"
+            return {"available": True, "boolean_states": descriptors}
+        client.app.state.services.register("cameras.onvif_events.list", discovered)
+        body = {"preset": "doorbell_visitor", "area_id": "area-1", "composition_id": "yard",
+                "enabled": True, "event_topic": "fixture/doorbell", "event_item_name": "Pressed"}
+        endpoint = "/api/cameras/cameras/cam1/pipelines/presets"
+        assert client.post(endpoint, json={**body, "event_topic": ""}).status_code == 400
+        assert client.post(endpoint, json=body).status_code == 409
+        descriptors.append({"topic": "fixture/doorbell", "item_name": "Pressed", "is_boolean": False, "is_property": True})
+        assert client.post(endpoint, json=body).status_code == 409
+        descriptors[0]["is_boolean"] = True
+        preview = client.post(endpoint + "/preview", json=body)
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["pipeline"]["enabled"] is False
+        saved = client.post(endpoint, json=body)
+        assert saved.status_code == 200, saved.text
+        pipeline = client.get("/api/pipelines/" + saved.json()["pipeline_name"]).json()
+        assert pipeline["enabled"] is False
+        assert _node_config(pipeline, "vision.detect")["categories"] == ["person"]
+        assert _node_config(pipeline, "camera.area_occurrence")["categories"] == ["person"]
+        assert _node_config(pipeline, "camera.recent_onvif_event")["topic"] == "fixture/doorbell"
+        assert "onvif_context" in _node_config(pipeline, "core.notify")["include_payload_paths"]
+        assert "quem acionou" in _node_config(pipeline, "core.notify")["description"]
+        edges = pipeline["graph"]["edges"]
+        assert any(edge["from"]["node"] == "track" and edge["to"]["node"] == "event_context" for edge in edges)
+        assert any(edge["from"]["node"] == "event_context" and edge["to"]["node"] == "area" for edge in edges)

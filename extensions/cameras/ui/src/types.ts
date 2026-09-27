@@ -451,6 +451,7 @@ export type CameraPipelinePreset =
   | "area_presence"
   | "area_entry"
   | "area_group_entry"
+  | "doorbell_visitor"
   | "cat_litter_use"
   | "cat_drinking"
   | "people_simple"
@@ -484,6 +485,8 @@ export type CameraPipelinePresetRequest = {
   model_id?: string;
   composition_id?: string;
   area_id?: string;
+  event_topic?: string;
+  event_item_name?: string;
   stopped_speed_threshold?: number;
   min_stationary_seconds?: number;
   notification_title?: string;

@@ -1,5 +1,7 @@
 export const catActivityTranslations = {
   en: {
+    "ext.cameras.cat.regionReconfirm": "Observation unavailable: the image no longer matches the selected region. Select and confirm the region again before resuming. No events does not mean no activity.",
+    "ext.cameras.cat.regionPtzUnavailable": "Observation unavailable: a fixed region cannot be used with this camera’s PTZ state. Choose a fixed view.",
     "ext.cameras.cat.regionSelect": "Select observation region",
     "ext.cameras.cat.regionChange": "Change observation region",
     "ext.cameras.cat.regionRequired": "Include the whole container and the cat’s relevant body parts.",
@@ -48,6 +50,8 @@ export const catActivityTranslations = {
     "ext.cameras.cat.name": "Recipe name",
   },
   "pt-BR": {
+    "ext.cameras.cat.regionReconfirm": "Observação indisponível: a imagem não corresponde mais à região selecionada. Selecione e confirme a região novamente antes de retomar. Ausência de eventos não significa ausência de atividade.",
+    "ext.cameras.cat.regionPtzUnavailable": "Observação indisponível: a região fixa não pode ser usada com o estado PTZ desta câmera. Escolha um enquadramento fixo.",
     "ext.cameras.cat.regionSelect": "Selecionar região de observação",
     "ext.cameras.cat.regionChange": "Alterar região de observação",
     "ext.cameras.cat.regionRequired": "Inclua o recipiente inteiro e as partes do gato necessárias para observar a ação.",

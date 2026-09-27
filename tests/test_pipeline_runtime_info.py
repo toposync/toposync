@@ -121,6 +121,18 @@ def test_graph_runtime_info_exposes_nodes_edges_resources_pressure_and_progress(
         assert edge["pressure_cause"] == "drop_policy"
         assert edge["progress"]["dropped_total"] == 1
 
+        from toposync.runtime.pipelines.runtime_info import build_graph_runtime_info
+
+        for issue in ("ext.cameras.cat.regionReconfirm", None):
+            runtime.node_metrics["detect"].unavailable_reason = issue
+            current = build_graph_runtime_info(
+                compiled=compiled, registry=registry, node_metrics=runtime.node_metrics,
+                channel_metrics={}, task_states={"detect": "running"}, running=True,
+            ).to_dict()["nodes"]["detect"]
+            assert current["unavailable_reason"] == issue
+            assert current["runtime_state"] == ("degraded" if issue else "active")
+            assert current["progress"]["error_count"] == 0
+
     asyncio.run(scenario())
 
 

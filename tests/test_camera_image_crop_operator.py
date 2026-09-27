@@ -76,10 +76,11 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
 def test_snapshot_bound_crop_rejects_changed_or_unknown_provenance() -> None:
     from copy import deepcopy
     from unittest.mock import Mock
+    from types import SimpleNamespace
 
     import numpy as np
 
-    from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+    from toposync.runtime.pipelines.execution import NodeRuntimeMetrics, PipelineRuntimeDependencies
     from toposync.runtime.pipelines.image_geometry import image_geometry
     from toposync.runtime.pipelines.runtime import Artifact, Packet
     from toposync_ext_cameras.pipelines.postprocess import ImageCropConfig, ImageCropRuntime
@@ -93,9 +94,11 @@ def test_snapshot_bound_crop_rejects_changed_or_unknown_provenance() -> None:
 
     async def scenario() -> None:
         snapshots = Mock()
+        metrics = NodeRuntimeMetrics()
+        context = SimpleNamespace(metrics=metrics)
         runtime = ImageCropRuntime(config, PipelineRuntimeDependencies(pipeline_snapshot_store=snapshots))
         for failure in (None, "camera", "source", "session", "generation", "missing", "ptz",
-                        "size", "geometry", "transform", "artifact_evidence", "boolean_generation"):
+                        "size", "geometry", "transform", "artifact_evidence", "boolean_generation", None):
             current_payload, current_metadata = deepcopy(payload), deepcopy(metadata)
             frame = np.zeros((100, 200, 3), dtype=np.uint8)
             if failure == "camera":
@@ -124,14 +127,19 @@ def test_snapshot_bound_crop_rejects_changed_or_unknown_provenance() -> None:
                                    artifacts={"main": Artifact(name="main", data=frame,
                                                                mime_type="image/raw", metadata=current_metadata)})
             snapshots.reset_mock()
-            output = await runtime.process_packet(packet, None)
+            output = await runtime.process_packet(packet, context)
             if failure is None:
                 assert output[0].artifacts["main"].data.shape == (50, 100, 3)
                 snapshots.schedule_input_snapshot.assert_called_once()
+                assert metrics.unavailable_reason is None
             else:
                 assert output == [], failure
+                assert metrics.unavailable_reason == ("ext.cameras.cat.regionPtzUnavailable" if failure == "ptz" else "ext.cameras.cat.regionReconfirm")
                 snapshots.schedule_input_snapshot.assert_not_called()
             assert "original" not in packet.artifacts
+        assert metrics.error_count == 0
+        assert metrics.dropped_packets == 11
+        assert metrics.snapshot()["unavailable_reason"] is None
 
     asyncio.run(scenario())
     for field, value in (("generation", True), ("generation", -1), ("width", 0),

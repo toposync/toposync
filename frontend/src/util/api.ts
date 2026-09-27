@@ -225,6 +225,7 @@ export type GraphRuntimeNodeInfo = {
   metrics?: Record<string, unknown>;
   last_error?: string | null;
   last_error_at?: number | null;
+  unavailable_reason?: string | null;
 };
 
 export type GraphRuntimeEdgeInfo = {

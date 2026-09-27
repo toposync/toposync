@@ -108,6 +108,7 @@ def build_graph_runtime_info(
             "metrics": metrics,
             "last_error": metrics.get("last_error"),
             "last_error_at": metrics.get("last_error_at"),
+            "unavailable_reason": metrics.get("unavailable_reason"),
         }
 
     for edge in compiled.edges:
@@ -284,7 +285,7 @@ def _edge_pressure_cause(metrics: ChannelMetricsSnapshot | None) -> str:
 def _node_runtime_state(*, task_state: str, metrics: Mapping[str, Any]) -> str:
     if task_state in {"failed", "canceled", "completed", "stopped"}:
         return task_state
-    if int(metrics.get("error_count", 0) or 0) > 0:
+    if metrics.get("unavailable_reason") or int(metrics.get("error_count", 0) or 0) > 0:
         return "degraded"
     processed = int(metrics.get("processed_packets", 0) or 0)
     emitted = int(metrics.get("emitted_packets", 0) or 0)

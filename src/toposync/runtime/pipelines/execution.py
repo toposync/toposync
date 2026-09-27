@@ -78,6 +78,7 @@ class NodeRuntimeMetrics:
     error_count: int = 0
     last_error: str | None = None
     last_error_at: float | None = None
+    unavailable_reason: str | None = None
     process_latency_ms: deque[float] = field(default_factory=lambda: deque(maxlen=4096))
     flow_limiter: FlowLimiterMetrics | None = None
 
@@ -102,6 +103,7 @@ class NodeRuntimeMetrics:
             "error_count": self.error_count,
             "last_error": self.last_error,
             "last_error_at": self.last_error_at,
+            "unavailable_reason": self.unavailable_reason,
             "avg_process_latency_ms": avg,
             "p95_process_latency_ms": p95,
             "flow_limiter": (

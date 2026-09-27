@@ -1377,25 +1377,26 @@ class ImageCropRuntime(TransformOperatorRuntime):
         self._config = ImageCropConfig.model_validate(config)
         self._dependencies = dependencies
 
-    def _matches_snapshot(self, packet: Packet, binding: ImageCropSnapshotBinding) -> bool:
+    def _snapshot_issue(self, packet: Packet, binding: ImageCropSnapshotBinding) -> str | None:
         # PTZ requires a separate, observed pose binding, not decoder continuity.
+        if "pan_tilt_zoom_state" in packet.payload:
+            return "ext.cameras.cat.regionPtzUnavailable"
         if (
-            "pan_tilt_zoom_state" in packet.payload
-            or resolve_source_device_id(packet) != binding.camera_id
+            resolve_source_device_id(packet) != binding.camera_id
             or resolve_source_id(packet) != binding.source_id
         ):
-            return False
+            return "ext.cameras.cat.regionReconfirm"
         name, frame = _resolve_input_image(
             packet, input_artifact_name=self._config.input_artifact_name
         )
         if getattr(frame, "shape", ())[:2] != (binding.height, binding.width):
-            return False
+            return "ext.cameras.cat.regionReconfirm"
         artifact = packet.artifacts.get(name)
         geometry = artifact.metadata.get("image_geometry") if artifact is not None else None
         evidence = packet.payload.get("capture_evidence")
         if not isinstance(geometry, dict) or not isinstance(evidence, dict):
-            return False
-        return (
+            return "ext.cameras.cat.regionReconfirm"
+        matches = (
             evidence.get("capture_instance") == binding.capture_instance
             and type(evidence.get("generation")) is int
             and evidence["generation"] == binding.generation
@@ -1404,11 +1405,19 @@ class ImageCropRuntime(TransformOperatorRuntime):
             and geometry.get("image_size") == [binding.width, binding.height]
             and geometry.get("to_source") == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
         )
+        return None if matches else "ext.cameras.cat.regionReconfirm"
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         binding = self._config.snapshot_binding
-        if binding is not None and not self._matches_snapshot(packet, binding):
-            return []
+        if binding is not None:
+            issue = self._snapshot_issue(packet, binding)
+            metrics = getattr(context, "metrics", None)
+            if metrics is not None:
+                metrics.unavailable_reason = issue
+                if issue is not None:
+                    metrics.dropped_packets += 1
+            if issue is not None:
+                return []
         packet = _ensure_original_artifact(packet)
         selected_name, frame = _resolve_input_image(
             packet,
@@ -1491,6 +1500,9 @@ class ImageCropRuntime(TransformOperatorRuntime):
             image=frame, bbox01=bbox01_current, min_crop_size_px=self._config.min_crop_size_px
         )
         if crop is None:
+            if binding is not None and metrics is not None:
+                metrics.unavailable_reason = "ext.cameras.cat.regionReconfirm"
+                metrics.dropped_packets += 1
             return [] if binding is not None else [packet]
 
         base_bbox01 = (0.0, 0.0, 1.0, 1.0)

@@ -316,6 +316,11 @@ function NodeInspector({
           </button>
         ) : null}
       </div>
+      {runtime?.unavailable_reason ? (
+        <div className="pipelineTopologyInspectorNotice" role="status">
+          {t(runtime.unavailable_reason, {}, runtime.unavailable_reason)}
+        </div>
+      ) : null}
       <TopologyConnectionEditor key={node.id} node={node} model={model} editable={editable} onConnect={onConnect} />
       <div className="pipelineTopologyInspectorSection">
         <div className="pipelineTopologyInspectorSectionTitle pipelineTopologyInspectorSectionTitleRow">

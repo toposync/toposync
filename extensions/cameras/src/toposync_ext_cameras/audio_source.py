@@ -61,7 +61,13 @@ class AudioSourceRuntime(SourceOperatorRuntime):
                     packet = packet.with_artifact(Artifact(name="audio", data=samples, metadata=metadata, private=True))
                 await context.emit(packet, port="out")
                 if status != "available":
-                    break
+                    messages = {
+                        "no_audio": "The selected media source has no audio track. Choose an audio-capable source.",
+                        "stream_lost": "Audio stream could not be read or ended. Check the source before restarting.",
+                        "dependency_unavailable": "Local audio decoding is unavailable. Install the optional audio dependencies.",
+                        "unsupported_channels": "Audio channel layout is unsupported. Select a mono or stereo source.",
+                    }
+                    raise RuntimeError(messages.get(status, "Audio source is unavailable."))
         finally:
             await asyncio.to_thread(reader.close)
             if packet is not None and not context.is_cancelled():

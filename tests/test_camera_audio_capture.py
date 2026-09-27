@@ -12,6 +12,7 @@ import pytest
 from toposync.runtime.pipelines.runtime import Lifecycle
 from toposync.runtime.notifications.store import NotificationStore
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+from toposync.runtime.pipelines.execution import PipelineRuntime
 from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
 from toposync_ext_cameras.audio_capture import AudioCapture
 from toposync_ext_cameras.audio_events import AudioOccurrenceRuntime
@@ -186,3 +187,49 @@ def test_loopback_audio_eof_and_stalled_transport_release_resources():
         server.server_close()
         worker.join(timeout=2)
     assert not worker.is_alive()
+
+
+@pytest.mark.parametrize("status", ["no_audio", "stream_lost", "dependency_unavailable", "unsupported_channels"])
+def test_terminal_audio_failure_is_recorded_once_in_runtime_after_close(monkeypatch, status):
+    from toposync.runtime.config_store import Pipeline
+    from toposync.runtime.pipelines.compiler import PipelineGraphCompiler
+    from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+    from toposync_ext_cameras.audio_pipeline import register_audio_operator
+    registry = OperatorRegistry()
+    register_audio_operator(registry)
+    pipeline = Pipeline(name="unavailable_audio", graph={"schema_version": 2, "uid": "audio_failure", "nodes": [
+        {"id": "source", "uid": "source", "operator": "camera.audio_source", "config": {"camera_id": "fixture"}},
+    ], "edges": []})
+    closed = []
+    packets = []
+    class Reader:
+        def __init__(self, location):
+            pass
+        def read(self):
+            return status, None, 0
+        def close(self):
+            closed.append(True)
+    async def resolve(request, dependencies):
+        return SimpleNamespace(rtsp_url="rtsp://secret:password@fixture.invalid/", camera_id="fixture", source_id="main")
+    monkeypatch.setattr("toposync_ext_cameras.audio_source.AudioCapture", Reader)
+    monkeypatch.setattr("toposync_ext_cameras.pipelines.operators.get_global_camera_capture_service",
+                        lambda: SimpleNamespace(resolve=resolve))
+    async def scenario():
+        runtime = PipelineRuntime(PipelineGraphCompiler(registry).compile_pipeline(pipeline), registry)
+        context = runtime._context_by_node["source"]
+        original_emit = type(context).emit
+        async def emit(self, packet, **kwargs):
+            packets.append(packet)
+            return await original_emit(self, packet, **kwargs)
+        monkeypatch.setattr(type(context), "emit", emit)
+        await runtime.start()
+        await asyncio.gather(*runtime._tasks, return_exceptions=True)
+        metrics = runtime.node_metrics["source"].snapshot()
+        assert metrics["error_count"] == 1
+        assert metrics["last_error"] and "secret" not in metrics["last_error"] and "password" not in metrics["last_error"]
+        assert len(packets) == 2 and packets[-1].lifecycle == Lifecycle.CLOSE
+        assert packets[0].payload["audio_capture"]["availability"] == status
+        assert closed == [True]
+        assert runtime.graph_runtime_info()["nodes"]["source"]["runtime_state"] == "failed"
+        await runtime.stop()
+    asyncio.run(scenario())

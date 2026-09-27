@@ -266,6 +266,11 @@ the baseline locally; digital silence is rejected. The recipe always starts
 disabled, including API requests that ask to enable it. Preparing it does not
 probe the camera, install a visual model, transcribe speech or move PTZ. Audio
 support remains unverified until an authorized runtime test observes the source.
+Missing audio, lost streams, unavailable decoding dependencies and unsupported
+channel layouts close the source and register one explanatory node failure in
+runtime diagnostics. They do not silently complete successfully or retry in the
+background. Check the cause before restarting; an enabled pipeline alone is not
+evidence that audio is being received.
 
 
 ## Live ONVIF event sources

@@ -537,6 +537,7 @@ class PipelineRuntime:
         except Exception as exc:
             context.metrics.record_error(exc)
             self.logger.exception("Node '%s' runtime crashed", context.node_id)
+            raise
 
     def _build_runtime(self) -> None:
         self._runtime_by_node = {}

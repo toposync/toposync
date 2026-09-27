@@ -45,6 +45,11 @@ def test_artifact_set_resumes_after_failure_and_catalog_requires_every_hash(tmp_
         registry = ModelRegistry([manifest])
         before = primary.stat().st_mtime_ns
         assert manager.acquisition_info(manifest)["artifact_set_complete"] is False
+        primary.write_bytes(b"corrupt and other files missing")
+        assert manager.acquisition_info(manifest)["artifact_set_reason"] == "artifact_checksum_mismatch"
+        primary.write_bytes(b"primary fixture")
+        assert manager.acquisition_info(manifest)["artifact_set_reason"] == "artifact_missing"
+        before = primary.stat().st_mtime_ns
         manager.start_install(model_id=manifest.model_id, model_registry=registry)
         await manager._tasks[manifest.model_id]
         failed = manager.get_job(manifest.model_id)
@@ -75,3 +80,21 @@ def test_artifact_set_resumes_after_failure_and_catalog_requires_every_hash(tmp_
         assert manager.acquisition_info(manifest)["artifact_set_complete"] is False
 
     asyncio.run(scenario())
+
+
+def test_history_preparation_exposes_only_compact_install_state(tmp_path, monkeypatch):
+    from toposync_ext_vision import history_embeddings, registry
+    manifest = build_default_model_registry().get_manifest("clip_multilingual_history")
+    class Manager:
+        def acquisition_info(self, value):
+            assert value.model_id == manifest.model_id
+            return {"artifact_set_complete": False, "acquisition_supported": True, "artifact_set_reason": "artifact_missing"}
+        def get_job(self, identifier):
+            assert identifier == manifest.model_id
+            return {"job_id": "job", "status": "downloading", "progress_pct": 42, "artifact_path": "/private/path", "source_label": "private source", "error": "private error"}
+    monkeypatch.setattr(registry, "get_default_model_install_manager", lambda **kwargs: Manager())
+    state = history_embeddings.history_setup_status(data_dir=tmp_path)
+    assert state == {"model_id": manifest.model_id, "server_id": "local", "ready": False,
+                     "install_supported": True, "reason": "artifact_missing",
+                     "job": {"job_id": "job", "status": "downloading", "progress_pct": 42}}
+    assert history_embeddings.history_setup_status(data_dir=None)["install_supported"] is False

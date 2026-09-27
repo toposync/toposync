@@ -202,6 +202,14 @@ def install_text_history_routes(app: FastAPI, services: Any) -> None:
     services.register("ai.search_notifications", search.search)
     services.register("ai.search_visual_notifications", visual.search)
 
+    @app.get("/api/ai/history/visual-setup")
+    async def visual_setup(request: Request) -> dict[str, Any]:
+        require(request, "core:notifications:read")
+        try:
+            return await services.call("vision.history_setup")
+        except (KeyError, ImportError):
+            return {"ready": False, "install_supported": False, "reason": "extension_unavailable"}
+
     @app.get("/api/ai/history/search")
     async def history(request: Request, query: str = Query(min_length=1, max_length=1000, pattern=r"\S"), limit: int = Query(default=10, ge=1, le=50), priority: list[str] | None = Query(default=None), notification_type: list[str] | None = Query(default=None, alias="type"), created_after: float | None = Query(default=None, ge=0, allow_inf_nan=False), created_before: float | None = Query(default=None, ge=0, allow_inf_nan=False), mode: Literal["text", "visual"] = "text") -> dict[str, Any]:
         require(request, "core:notifications:read")

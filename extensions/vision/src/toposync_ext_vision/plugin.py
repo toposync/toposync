@@ -58,6 +58,13 @@ class VisionExtension(BaseExtension):
         services.register("vision.history_embedding_space", lambda: SPACE)
         services.register("vision.history_embeddings", history_embeddings)
 
+        async def history_setup():
+            from .history_embeddings import history_setup_status
+
+            return await asyncio.to_thread(history_setup_status, data_dir=configured_data_dir)
+
+        services.register("vision.history_setup", history_setup)
+
         def identity_store(*, create: bool = True):
             from .identity.store import IdentityStore
 

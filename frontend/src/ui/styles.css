@@ -4515,6 +4515,10 @@ video {
     padding: 14px;
   }
 
+  .notificationsFilterPopover {
+    max-height: min(520px, calc(68vh - 80px), calc(100vh - 200px));
+  }
+
   .overlayLeft.isCollapsed {
     top: 10px;
     bottom: auto;

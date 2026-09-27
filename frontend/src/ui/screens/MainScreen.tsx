@@ -35,6 +35,7 @@ import {
   notificationThumbnailUrl,
   type NotificationImageItem,
 } from "../notifications/pipelinesNotifications";
+import { VisualHistoryPreparation } from "../notifications/VisualHistoryPreparation";
 import { StreamsDashboard } from "../streams/StreamsDashboard";
 import { navigate, replace, usePathname } from "../router";
 
@@ -1267,6 +1268,7 @@ export function MainScreen({
                           <option value="visual">{t("core.ui.notifications.filter.visual")}</option>
                         </select>
                       </label>
+                      {filter.semantic === "visual" ? <VisualHistoryPreparation onReady={onNotificationsSearchRefresh} /> : null}
                       {(filter.semantic || timeRange) && filter.query.trim() ? (
                         <button type="button" className="chipButton" disabled={notificationsLoading} onClick={onNotificationsSearchRefresh}>
                           {t("core.ui.notifications.filter.refresh_search")}

@@ -2773,3 +2773,19 @@ export async function postStreamingPlaybackEvents(payload: StreamingPlaybackEven
     "Failed to post streaming playback events",
   );
 }
+
+
+export type VisualHistorySetup = {
+  ready: boolean;
+  install_supported: boolean;
+  model_id?: string;
+  server_id?: string;
+  reason?: string;
+  job?: { job_id: string; status: string; progress_pct: number } | null;
+};
+
+export async function getVisualHistorySetup(signal?: AbortSignal): Promise<VisualHistorySetup> {
+  const response = await fetch("/api/ai/history/visual-setup", { signal });
+  if (!response.ok) throw new Error(`Visual search setup: ${response.status}`);
+  return response.json();
+}

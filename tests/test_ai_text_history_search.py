@@ -129,6 +129,7 @@ def test_history_route_requires_notification_read(tmp_path: Path) -> None:
     app.state.auth = Denied()
     install_text_history_routes(app, ServiceRegistry())
     with TestClient(app) as client:
+        assert client.get("/api/ai/history/visual-setup").status_code == 403
         assert client.get("/api/ai/history/search", params={"query":"gato"}).status_code == 403
         assert client.get("/api/ai/history/search", params={"query":"gato", "mode":"visual"}).status_code == 403
         assert client.get("/api/ai/history/search", params={"query":"   "}).status_code == 422

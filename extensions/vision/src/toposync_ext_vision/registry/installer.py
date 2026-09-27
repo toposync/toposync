@@ -219,11 +219,17 @@ class VisionModelInstallManager:
                     (path, asset.sha256) for path, asset in manifest.resolve_auxiliary_artifacts(self._data_dir)
                 ]
                 signature = []
+                missing = False
                 for path, expected in paths:
-                    stat = path.stat()
+                    try:
+                        stat = path.stat()
+                    except FileNotFoundError:
+                        missing = True
+                        continue
                     signature.append((str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, expected))
-                artifact_set_complete = _artifact_set_matches(tuple(signature))
-                artifact_set_reason = "ok" if artifact_set_complete else "artifact_checksum_mismatch"
+                intact = _artifact_set_matches(tuple(signature))
+                artifact_set_complete = intact and not missing
+                artifact_set_reason = "artifact_checksum_mismatch" if not intact else "artifact_missing" if missing else "ok"
             except (OSError, ValueError):
                 artifact_set_complete, artifact_set_reason = False, "artifact_missing"
         return {

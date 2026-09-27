@@ -106,3 +106,25 @@ def embed_history(*, data_dir: Path, query: str, images: dict[str, bytes]) -> di
             return {"space": SPACE, "query": query_vector, "images": vectors, "unavailable": unavailable}
         except (ImportError, OSError) as exc:
             raise ValueError("local_visual_embeddings_unavailable") from exc
+
+
+def history_setup_status(*, data_dir: Path | None) -> dict:
+    """Expose preparation state, without paths, source URLs or inference."""
+    from importlib.util import find_spec
+    from .registry import build_default_model_registry, get_default_model_install_manager
+
+    if data_dir is None or any(find_spec(name) is None for name in ("onnxruntime", "tokenizers", "safetensors")):
+        return {"ready": False, "install_supported": False, "reason": "dependencies_unavailable"}
+    manifest = build_default_model_registry().get_manifest("clip_multilingual_history")
+    if manifest is None:
+        return {"ready": False, "install_supported": False, "reason": "manifest_unavailable"}
+    manager = get_default_model_install_manager(data_dir=data_dir)
+    info = manager.acquisition_info(manifest)
+    job = manager.get_job(manifest.model_id)
+    return {
+        "model_id": manifest.model_id, "server_id": "local",
+        "ready": bool(info["artifact_set_complete"]),
+        "install_supported": bool(info["acquisition_supported"]),
+        "reason": info["artifact_set_reason"],
+        "job": {key: job.get(key) for key in ("job_id", "status", "progress_pct")} if job else None,
+    }

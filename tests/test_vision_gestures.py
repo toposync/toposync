@@ -185,6 +185,35 @@ def test_wave_needs_reversals_over_time_not_static_raised_hand_or_body_translati
         assert "wave" not in {item["name"] for item in result["active"]}
 
 
+@pytest.mark.parametrize("mirror", [False, True])
+@pytest.mark.parametrize("posture", ["shoulder", "lowered", "straight", "static"])
+def test_shoulder_height_wave_is_independent_of_overhead_raise(mirror, posture):
+    operator = runtime()
+    for index, x in enumerate((300, 480, 300, 480, 300, 480)):
+        source = packet(index / 10)
+        positions = {
+            "left_elbow": (330, 560),
+            "left_wrist": (300 if posture == "static" else x, 380),
+        }
+        if posture == "lowered":
+            positions["left_wrist"] = (x, 650)
+        elif posture == "straight":
+            positions = {"left_elbow": (280, 400), "left_wrist": (x - 250, 400)}
+        for landmark in source.payload["vision"]["poses"][0]["landmarks"]:
+            if landmark["name"] in positions:
+                landmark["position"] = [value / 1000 for value in positions[landmark["name"]]]
+            if mirror:
+                landmark["position"][0] = 1 - landmark["position"][0]
+        result = annotation(operator, source)
+    names = {item["name"] for item in result["active"]}
+    assert ("wave" in names) == (posture == "shoulder")
+    assert "hand_raised" not in names
+    # A lowered observed wrist ends the evidence immediately, then the episode.
+    for timestamp in (0.6, 0.9):
+        result = annotation(operator, packet(timestamp))
+    assert not any(item["name"] == "wave" for item in result["active"])
+
+
 @pytest.mark.parametrize("kind", ["rest", "scratch", "carry"])
 def test_representable_negative_postures_do_not_confirm_gestures(kind):
     operator = runtime()

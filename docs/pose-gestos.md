@@ -77,6 +77,19 @@ O estado global é `active` somente com episódio confirmado e evidência positi
 
 Um episódio cujo prazo de liberação venceu não pode ser reaberto nem emprestar seu limiar de manutenção à confirmação seguinte. Mesmo com cooldown zero, o próximo episódio exige novamente o limiar de entrada e a duração mínima.
 
+Aceno não exige o gesto separado de mão levantada acima do ombro. Também pode
+usar braço dobrado, antebraço voltado para cima e punho próximo à altura do ombro,
+com reversões laterais relativas ao tronco. Postura estática, movimento corporal
+sem movimento relativo do punho e braço abaixado não bastam. A regra continua
+heurística: movimentos semelhantes junto ao rosto não comprovam intenção de
+cumprimentar. O limiar de landmarks e a interrupção por evidência ausente permanecem.
+
+Um ensaio com vídeo público de três pessoas acenando mostrou uma limitação real:
+MediaPipe e rastreamento mantiveram três sujeitos, mas somente um produziu aceno
+após separar as regras de postura. Os outros dois apresentaram landmarks
+inadequados ou intermitentes para a regra temporal. Isso reprova o caso completo;
+não qualifica acenos em grupos nem justifica reduzir a confiança para obter evento.
+
 Geometria métrica usa metros e eixos `x_y_up_z`. A saída tridimensional relativa ao quadril do modelo não é, sozinha, uma coordenada do mapa. Apontamento requer alinhamento geométrico, escala, translação, reprojeção compatível, apoio condicional atual e calibração correspondente. Paredes usadas como oclusores/alvos precisam de altura física explícita; a altura visual do tema não é uma medida.
 
 `CLOSE`, idade excessiva, mudança de vista/calibração, troca de geração de captura ou identidade invalidam derivados. Consumidores devem expirar o que mostram sem renovar o prazo ao renderizar, receber novamente ou abrir uma notificação antiga. Não sobreponha uma pose à última miniatura disponível sem comprovar que imagem, captura e transformações correspondem.

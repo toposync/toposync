@@ -481,13 +481,20 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
                 # while an earlier bilateral episode remains in release grace.
                 actor.interrupted_gestures.discard(f"hand_raised:{side}")
             history = actor.wrists[side]
-            if raised[side] and (
+            # A wave can stay near shoulder/face height with a bent elbow;
+            # it does not require the separate overhead hand-raise posture.
+            wave_posture = raised[side] or (
+                height > -0.15
+                and _dot(forearm, up) / scale > 0.15
+                and straight < 0.85
+            )
+            if wave_posture and (
                 not history or timestamp - history[-1][0] >= self._config.wave_window_seconds / 126
             ):
                 # Keep a time window, not merely the last N frames. The bounded
                 # buffer must not shrink to milliseconds on a high-rate input.
                 history.append((timestamp, _dot(reach, across) / scale))
-            elif not raised[side]:
+            elif not wave_posture:
                 history.clear()
             while history and timestamp - history[0][0] > self._config.wave_window_seconds:
                 history.popleft()

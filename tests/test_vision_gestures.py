@@ -60,6 +60,13 @@ def packet(
         points.update(left_elbow=(280, 260), left_wrist=(480, 230))
     if kind == "carry":
         points.update(left_elbow=(350, 550), left_wrist=(350, 680))
+    if kind == "squat":
+        # Rounded image-space geometry from an independently filmed squat:
+        # hands in front, below the head; a leaning torso is not an overhead raise.
+        points.update(nose=(401, 494), left_shoulder=(435, 589), right_shoulder=(294, 577),
+                      left_hip=(324, 751), right_hip=(216, 741),
+                      left_elbow=(516, 645), right_elbow=(332, 636),
+                      left_wrist=(520, 604), right_wrist=(449, 578))
     cosine, sine = math.cos(rotation), math.sin(rotation)
     landmarks = []
     for index, (name, (x, y)) in enumerate(points.items()):
@@ -665,3 +672,9 @@ def test_run_loop_uses_idle_tick_to_close_and_clears_on_shutdown(monkeypatch):
     assert [output.lifecycle for output in context.outputs] == [Lifecycle.OPEN, Lifecycle.CLOSE]
     assert context.outputs[-1].payload["gesture_event"]["reason"] == "stale_timeout"
     assert operator._actors == {}
+
+
+def test_forward_hands_with_leaning_torso_are_not_overhead_raise():
+    operator = runtime()
+    result = open_gesture(operator, "squat", size=(721, 1281))[-1].payload["vision"]["gestures"]
+    assert not any(item["name"] in {"hand_raised", "both_hands_raised"} for item in result["active"])

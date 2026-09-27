@@ -472,6 +472,7 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
             )
             raised[side] = (
                 height > (0.25 if retained else 0.4)
+                and (retained or _dot(_subtract(wrist, head), up) > 0)
                 and _dot(forearm, up) / scale > 0.15
                 and _length(_subtract(wrist, head)) / scale > 0.3
                 and _length(reach) / scale > 0.65

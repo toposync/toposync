@@ -1,8 +1,10 @@
-import { audioTranslations } from "./settings/audioTranslations";
 import { sourcePanoramaTranslations } from "./settings/sourcePanoramaTranslations";
+import { catActivityTranslations } from "./settings/catActivityTranslations";
+import { audioTranslations } from "./settings/audioTranslations";
 
 export const camerasTranslations = {
   en: {
+    ...catActivityTranslations.en,
     ...sourcePanoramaTranslations.en,
     ...audioTranslations.en,
     "ext.cameras.editor.ground_calibration": "Calibrate ground and metric geometry",
@@ -735,6 +737,7 @@ export const camerasTranslations = {
     "ext.cameras.action.loading": "Loading...",
   },
   "pt-BR": {
+    ...catActivityTranslations["pt-BR"],
     ...sourcePanoramaTranslations["pt-BR"],
     ...audioTranslations["pt-BR"],
     "ext.cameras.editor.ground_calibration": "Calibrar chão e geometria métrica",

@@ -23,6 +23,64 @@ PERSON_VEHICLE_INTERACTION_DWELL_SECONDS = 4.0
 PERSON_VEHICLE_INTERACTION_CLOSE_GRACE_SECONDS = 6.0
 PERSON_VEHICLE_INTERACTION_STALE_TIMEOUT_SECONDS = 15.0
 
+CAT_ACTIVITY_RECIPES = {
+    "cat_litter_use": {
+        "target": "A caixa de areia inteira e o gato associado, incluindo postura e patas",
+        "condition": (
+            "Há um gato dentro da caixa de areia com postura visível de uso ou ação de escavar/cobrir? "
+            "Estar perto, passar ao lado, cheirar a borda ou evidência ocluída não confirma uso. "
+            "Não inferir eliminação, saúde ou identidade. Responder falso se a ação não estiver visível."
+        ),
+        "title": "{{camera_name}}: atividade observável na caixa de areia",
+    },
+    "cat_drinking": {
+        "target": "O bebedouro ou recipiente de água inteiro e a cabeça do gato associado",
+        "condition": (
+            "Há um gato com a boca junto à água e ação visível de beber? Proximidade, cheirar "
+            "ou cabeça ocluída não confirma que está bebendo. Não inferir volume, saúde ou identidade. "
+            "Responder falso se a ação não estiver visível."
+        ),
+        "title": "{{camera_name}}: gato com ação observável de beber",
+    },
+}
+
+
+def build_cat_activity_graph(
+    *, preset: str, camera_id: str, source_id: str, graph_uid: str,
+    notification_title: str = "", notification_description: str = "",
+    notification_priority: NotificationPriority | None = None,
+) -> dict[str, Any]:
+    recipe = CAT_ACTIVITY_RECIPES[preset]
+    nodes = [
+        {"id": "source", "operator": "camera.source", "config": {"camera_id": camera_id, "source_id": source_id}},
+        {"id": "fps", "operator": "core.fps_reducer", "config": {"target_fps": 0.5}},
+        {"id": "crop", "operator": "ai.smart_crop", "config": {
+            "target_description": recipe["target"], "refresh_interval_seconds": 0,
+            "missing_policy": "drop", "padding_ratio": 0.15,
+        }},
+        {"id": "condition", "operator": "ai.condition_filter", "config": {
+            "condition_description": recipe["condition"], "emit_mode": "occurrence",
+            "minimum_duration_seconds": 2, "evidence_timeout_seconds": 10,
+            "confidence_threshold": 0.75, "failure_policy": "drop",
+            "evaluation_interval_seconds": 0, "reuse_last_decision_seconds": 0,
+        }},
+        {"id": "store", "operator": "core.store_images", "config": {"format": "webp"}},
+        {"id": "notify", "operator": "core.notify", "config": {
+            "notification_type": "pipelines.tracking", "title": notification_title or recipe["title"],
+            "description": notification_description or "Evidência confirmada por {{payload.condition_occurrence.duration_seconds}} s. Revisar a imagem.",
+            "priority": notification_priority or "medium", "dedupe_key_template": "{{subject.id}}",
+            "dedupe_by_occurrence": True,
+        }},
+    ]
+    edges = _linear_edges([node["id"] for node in nodes])
+    for edge in edges:
+        if edge["to"]["node"] in {"crop", "condition", "store"}:
+            edge["traffic"] = {"modality": "image", "semantic_class": "frame", "continuous": False}
+        if edge["to"]["node"] == "condition":
+            edge["maxsize"] = 1
+            edge["drop_policy"] = "latest_only"
+    return build_pipeline_graph_v2(graph_uid=graph_uid, nodes=nodes, edges=edges)
+
 
 def build_person_vehicle_interaction_graph(
     *,

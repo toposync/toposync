@@ -64,7 +64,10 @@ from .pipeline_templates import (
     VEHICLE_STOPPED_OBJECT_CATEGORIES,
     build_pipeline_graph_v2,
     build_person_vehicle_interaction_graph,
+    build_cat_activity_graph,
+    CAT_ACTIVITY_RECIPES,
 )
+from .area_events import build_area_occurrence_graph, register_area_occurrence_operator
 from .processing.camera_hub import get_global_camera_hub
 from .processing.mapping import build_calibration_mapper
 from .ptz_controller import PtzControlError, PtzController, PtzTransportBinding
@@ -124,6 +127,10 @@ CLIENT_CLOSED_REQUEST_STATUS = 499
 DEFAULT_CAMERA_DETECTION_MODEL_ID = "rfdetr_det_medium"
 PIPELINE_NAME_MAX_LENGTH = 120
 CAMERA_PIPELINE_PRESETS = (
+    "area_presence",
+    "area_entry",
+    "cat_litter_use",
+    "cat_drinking",
     "people_simple",
     "people_individual",
     "people_quiet",
@@ -133,6 +140,8 @@ CAMERA_PIPELINE_PRESETS = (
     "person_vehicle_interaction",
 )
 CAMERA_MAPPING_REQUIRED_PRESETS = {
+    "area_presence",
+    "area_entry",
     "people_individual",
     "people_quiet",
     "presence_area",
@@ -203,6 +212,10 @@ async def _raise_if_request_disconnected(request: Request) -> None:
 
 NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
 PRESET_PIPELINE_NAME_PARTS = {
+    "area_presence": "presenca_em_area_definida",
+    "area_entry": "entrada_em_area_definida",
+    "cat_litter_use": "atividade_caixa_de_areia",
+    "cat_drinking": "gato_bebendo_agua",
     "people_simple": "deteccao_simples_de_pessoas",
     "people_individual": "evento_individual_de_pessoas",
     "people_quiet": "presenca_agrupada_de_pessoas",
@@ -676,6 +689,10 @@ class CameraPipelinesResponse(BaseModel):
 
 class CameraPipelinePresetRequest(BaseModel):
     preset: Literal[
+        "area_presence",
+        "area_entry",
+        "cat_litter_use",
+        "cat_drinking",
         "people_simple",
         "people_individual",
         "people_quiet",
@@ -1434,6 +1451,7 @@ class CamerasExtension(BaseExtension):
         if isinstance(registry, OperatorRegistry):
             register_camera_pipeline_operators(registry)
             register_audio_operator(registry)
+            register_area_occurrence_operator(registry)
 
         def _config_store(request: Request) -> ConfigStore:
             store = getattr(request.app.state, "config_store", None)
@@ -5349,6 +5367,19 @@ class CamerasExtension(BaseExtension):
             notification_priority: NotificationPriority | None,
             graph_uid: str = "camera_preset",
         ) -> dict[str, Any]:
+            if preset in {"area_presence", "area_entry"}:
+                return build_area_occurrence_graph(
+                    preset=preset, camera_id=camera_id, source_id=source_id, detection_model_id=detection_model_id,
+                    composition_id=composition_id, area_restriction_config=area_restriction_config,
+                    graph_uid=graph_uid, notification_title=notification_title,
+                    notification_description=notification_description, notification_priority=notification_priority,
+                )
+            if preset in CAT_ACTIVITY_RECIPES:
+                return build_cat_activity_graph(
+                    preset=preset, camera_id=camera_id, source_id=source_id, graph_uid=graph_uid,
+                    notification_title=notification_title, notification_description=notification_description,
+                    notification_priority=notification_priority,
+                )
             if preset == "vehicle_stopped":
                 detect_categories = VEHICLE_STOPPED_OBJECT_CATEGORIES
             elif preset == "person_stopped":
@@ -5786,8 +5817,10 @@ class CamerasExtension(BaseExtension):
                 body.enable_ptz_attention
             )
             if requires_mapping:
+                if preset in {"area_presence", "area_entry"} and not str(body.area_id or "").strip():
+                    raise HTTPException(status_code=400, detail="Choose a mapped area for this recipe")
                 if (
-                    preset in {"vehicle_stopped", "person_stopped", "person_vehicle_interaction"}
+                    preset in {"vehicle_stopped", "person_stopped", "person_vehicle_interaction", "area_presence", "area_entry"}
                     and str(body.area_id or "").strip()
                 ):
                     resolved_area = _resolve_mapped_camera_area(
@@ -5850,11 +5883,12 @@ class CamerasExtension(BaseExtension):
             detection_model_id = (
                 str(body.model_id or "").strip() or DEFAULT_CAMERA_DETECTION_MODEL_ID
             )
-            await _ensure_camera_preset_detection_model_ready(
-                store,
-                processing_server_id=processing_server_id,
-                model_id=detection_model_id,
-            )
+            if preset not in CAT_ACTIVITY_RECIPES:
+                await _ensure_camera_preset_detection_model_ready(
+                    store,
+                    processing_server_id=processing_server_id,
+                    model_id=detection_model_id,
+                )
 
             try:
                 notification_priority = (

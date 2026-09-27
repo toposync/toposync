@@ -70,6 +70,10 @@ class AiConditionFilterConfig(BaseModel):
     failure_policy: Literal["drop", "pass_through", "reuse_last"] = "reuse_last"
     max_concurrency: int = Field(default=1, ge=1, le=32)
     concurrency_policy: Literal["skip", "queue", "fallback"] = "skip"
+    emit_mode: Literal["filter", "occurrence"] = "filter"
+    minimum_duration_seconds: float = Field(default=2.0, ge=0.0, le=3600.0)
+    evidence_timeout_seconds: float = Field(default=10.0, gt=0.0, le=3600.0)
+    maximum_occurrence_streams: int = Field(default=128, ge=1, le=4096)
 
     @field_validator("profile_id", "condition_description", "input_artifact_name", mode="before")
     @classmethod

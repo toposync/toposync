@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, resolve_image_artifact_for_data
-from toposync.runtime.pipelines.packet_contract import resolve_media_ts
+from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness, resolve_media_ts
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync.runtime.pipelines.telemetry import METRIC_AI_CONDITION_CONFIDENCE
 
@@ -37,6 +39,17 @@ class _ConditionState:
     last_eval_at: float = 0.0
     last_result: ConditionEvaluationResult | None = None
     stream_allowed: bool | None = None
+
+
+@dataclass(slots=True)
+class _ConditionOccurrence:
+    last_timestamp: float = float("-inf")
+    started_at: float | None = None
+    last_evidence_at: float = 0.0
+    last_packet: Packet | None = None
+    opened: bool = False
+    last_capture: tuple[str, int, int] | None = None
+    last_publication_time: float = float("-inf")
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,8 +460,21 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         self._deps = dependencies
         self._states: dict[str, _ConditionState] = {}
         self._fallback_profile_ids_cache: list[str] | None = None
+        self._occurrences: OrderedDict[str, _ConditionOccurrence] = OrderedDict()
 
     async def run(self, context) -> None:  # noqa: ANN001
+        if self._config.emit_mode == "occurrence":
+            while not context.is_cancelled():
+                packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
+                if packet is not None:
+                    for output in await self._process_occurrence(packet, context):
+                        await context.emit(output, port=self.output_port)
+                for state in self._occurrences.values():
+                    if (state.last_packet is not None and state.started_at is not None
+                            and time.monotonic() - state.last_evidence_at >= self._config.evidence_timeout_seconds):
+                        for output in self._close_occurrence(state, state.last_packet, "evidence_timeout"):
+                            await context.emit(output, port=self.output_port)
+            return
         primary_slots = asyncio.Semaphore(int(self._config.max_concurrency))
         fallback_slots = asyncio.Semaphore(int(self._config.max_concurrency))
         tasks: set[asyncio.Task[None]] = set()
@@ -553,6 +579,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                 await asyncio.gather(*done, return_exceptions=True)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        if self._config.emit_mode == "occurrence":
+            return await self._process_occurrence(packet, context)
         return await self._process_packet_with_profiles(
             packet,
             context,
@@ -560,6 +588,122 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             fallback_profile_ids=None,
             concurrency_reason="",
         )
+
+    async def _process_occurrence(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        outputs: list[Packet] = []
+        if packet.stream_id not in self._occurrences:
+            freshness = resolve_frame_freshness(packet)
+            if (packet.lifecycle == Lifecycle.CLOSE or freshness.age_seconds is None
+                    or freshness.age_seconds > self._config.evidence_timeout_seconds):
+                return []
+        if packet.stream_id not in self._occurrences and len(self._occurrences) >= self._config.maximum_occurrence_streams:
+            _, expired = self._occurrences.popitem(last=False)
+            if expired.last_packet is not None:
+                outputs.extend(self._close_occurrence(expired, expired.last_packet, "stream_capacity"))
+        state = self._occurrences.setdefault(packet.stream_id, _ConditionOccurrence())
+        self._occurrences.move_to_end(packet.stream_id)
+        if packet.lifecycle == Lifecycle.CLOSE:
+            evidence = packet.payload.get("capture_evidence")
+            if isinstance(evidence, dict) and state.last_capture is not None:
+                epoch = (evidence.get("capture_instance"), evidence.get("generation"))
+                if epoch != state.last_capture[:2]:
+                    return outputs
+            return outputs + self._close_occurrence(state, packet, "source_closed")
+        freshness = resolve_frame_freshness(packet)
+        if freshness.age_seconds is None:
+            return outputs + self._close_occurrence(state, packet, "stale_evidence")
+        evidence = packet.payload["capture_evidence"]
+        capture = (evidence["capture_instance"], evidence["generation"], evidence["sequence"])
+        published_at = float(evidence["published_at"])
+        # Um pacote atrasado não pode reverter a época atual nem encerrar sua ocorrência.
+        if published_at < state.last_publication_time:
+            return outputs
+        if state.last_capture is not None:
+            previous = state.last_capture
+            if capture[0] == previous[0] and (capture[1] < previous[1] or (
+                capture[1] == previous[1] and capture[2] <= previous[2]
+            )):
+                return outputs
+        if freshness.age_seconds > self._config.evidence_timeout_seconds:
+            return outputs + self._close_occurrence(state, packet, "stale_evidence")
+        if state.last_capture is not None:
+            previous = state.last_capture
+            if capture[:2] != previous[:2]:
+                closing_packet = state.last_packet or packet
+                outputs.extend(self._close_occurrence(state, closing_packet, "source_reset"))
+                state.last_timestamp = float("-inf")
+        timestamp = resolve_media_ts(packet)
+        if timestamp <= state.last_timestamp:
+            return outputs
+        if timestamp - state.last_timestamp > self._config.evidence_timeout_seconds:
+            outputs.extend(self._close_occurrence(state, packet, "evidence_gap"))
+        state.last_timestamp = timestamp
+        state.last_capture = capture
+        state.last_publication_time = published_at
+        artifact_name, image = resolve_image_artifact_for_data(
+            packet, input_artifact_name=self._config.input_artifact_name,
+        )
+        if image is None or not self._config.condition_description:
+            return outputs + self._close_occurrence(state, packet, "missing_evidence")
+        try:
+            result = await asyncio.wait_for(
+                self._evaluate_condition(image=image, description=self._config.condition_description),
+                timeout=self._config.evidence_timeout_seconds,
+            )
+        except Exception:
+            return outputs + self._close_occurrence(state, packet, "evaluation_unavailable")
+        freshness = resolve_frame_freshness(packet)
+        if freshness.age_seconds is None or freshness.age_seconds > self._config.evidence_timeout_seconds:
+            return outputs + self._close_occurrence(state, packet, "stale_evidence")
+        _record_condition_confidence_telemetry(packet=packet, context=context, result=result)
+        if not result.matches or result.confidence < self._config.confidence_threshold:
+            return outputs + self._close_occurrence(state, packet, "not_confirmed")
+        if state.started_at is None:
+            state.started_at = timestamp
+        state.last_evidence_at = time.monotonic() - freshness.age_seconds
+        annotated = self._annotate(packet, result=result, status="matched", input_artifact_name=artifact_name)
+        state.last_packet = annotated
+        if timestamp - state.started_at < self._config.minimum_duration_seconds:
+            return outputs
+        lifecycle = Lifecycle.UPDATE if state.opened else Lifecycle.OPEN
+        state.opened = True
+        return outputs + [self._occurrence_packet(state, annotated, lifecycle, "confirmed")]
+
+    def _occurrence_packet(
+        self, state: _ConditionOccurrence, packet: Packet, lifecycle: Lifecycle, status: str,
+    ) -> Packet:
+        identity = hashlib.sha256(
+            f"{packet.stream_id}:{self._config.condition_description}:{state.last_capture and state.last_capture[:2]}:{state.started_at}".encode()
+        ).hexdigest()[:32]
+        evidence = state.last_packet or packet
+        payload = dict(packet.payload)
+        payload.update({
+            "ai": evidence.payload.get("ai", {}),
+            "subject": {"type": "event", "id": identity},
+            "correlation_id": identity,
+            "source_stream_id": packet.stream_id,
+            "condition_occurrence": {
+                "status": status,
+                "started_at": state.started_at,
+                "last_evidence_at": resolve_media_ts(evidence),
+                "duration_seconds": max(0.0, resolve_media_ts(evidence) - (state.started_at or 0.0)),
+                "evidence_packet_id": evidence.packet_id,
+            },
+        })
+        return replace(
+            packet, stream_id=f"condition:{identity}", lifecycle=lifecycle, payload=payload,
+            artifacts=evidence.artifacts, parent_packet_id=packet.packet_id,
+            packet_id=hashlib.sha256(f"{packet.packet_id}:{identity}:{lifecycle.value}".encode()).hexdigest(),
+        )
+
+    def _close_occurrence(
+        self, state: _ConditionOccurrence, packet: Packet, reason: str,
+    ) -> list[Packet]:
+        outputs = [self._occurrence_packet(state, packet, Lifecycle.CLOSE, reason)] if state.opened else []
+        state.started_at = None
+        state.opened = False
+        state.last_packet = None
+        return outputs
 
     async def _process_packet_with_profiles(
         self,
@@ -722,7 +866,9 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         policy = self._config.failure_policy
         if policy == "pass_through":
             return [self._annotate(packet, result=state.last_result, status="skipped", reason=reason)]
-        if policy == "reuse_last" and state.last_result is not None:
+        if (policy == "reuse_last" and state.last_result is not None
+                and self._config.reuse_last_decision_seconds > 0
+                and time.monotonic() - state.last_eval_at <= self._config.reuse_last_decision_seconds):
             passes = bool(
                 state.last_result.matches and state.last_result.confidence >= self._config.confidence_threshold
             )

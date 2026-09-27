@@ -89,7 +89,8 @@ def register_ai_pipeline_operators(registry: OperatorRegistry) -> None:
             operator_id="ai.condition_filter",
             description=(
                 "AI visual condition filter. Evaluates a text condition against the frame and emits only "
-                "matching packets, attaching boolean/confidence metadata."
+                "matching packets, attaching boolean/confidence metadata. Occurrence mode emits "
+                "open/update/close events from fresh observations with bounded evidence gaps."
             ),
             config_model=AiConditionFilterConfig,
             inputs=[{"name": "in", "required": True}],
@@ -99,7 +100,7 @@ def register_ai_pipeline_operators(registry: OperatorRegistry) -> None:
             execution_mode="in_event_loop",
             max_concurrency=1,
             requires_artifacts=[MAIN_ARTIFACT_NAME],
-            produces_payload_keys=["ai"],
+            produces_payload_keys=["ai", "condition_occurrence", "subject", "correlation_id"],
             input_modalities=["image"],
             output_modalities=["image"],
             expression_hints=_ai_expression_hints(task="condition_filter"),

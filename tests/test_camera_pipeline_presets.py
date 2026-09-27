@@ -51,6 +51,7 @@ def _create_client(
     *,
     patch_model_readiness: bool = True,
     include_ptz_attention: bool = False,
+    include_ai: bool = False,
 ) -> TestClient:
     monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
@@ -75,8 +76,47 @@ def _create_client(
                 "toposync_ext_ptz_attention.plugin:PtzAttentionExtension"
             )
         )
+    if include_ai:
+        entry_points.append(_ExtensionEntryPoint("toposync_ext_ai.plugin:AiExtension"))
     monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: entry_points)
     return TestClient(create_app())
+
+
+@pytest.mark.parametrize("preset", ["cat_litter_use", "cat_drinking"])
+def test_cat_activity_presets_compile_and_persist_without_detection_model(tmp_path, monkeypatch, preset):
+    with _create_client(tmp_path, monkeypatch, patch_model_readiness=False, include_ai=True) as client:
+        _configure_camera(client)
+        response = client.post("/api/cameras/cameras/cam1/pipelines/presets", json={
+            "preset": preset, "enabled": False,
+        })
+        assert response.status_code == 200, response.text
+        pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
+        assert pipeline["enabled"] is False
+        assert "vision.detect" not in _operator_ids(pipeline)
+        condition = _node_config(pipeline, "ai.condition_filter")
+        assert condition["emit_mode"] == "occurrence"
+        assert condition["reuse_last_decision_seconds"] == 0
+        assert condition["failure_policy"] == "drop"
+        assert _node_config(pipeline, "core.notify")["dedupe_by_occurrence"] is True
+        assert _node_config(pipeline, "ai.smart_crop")["missing_policy"] == "drop"
+
+
+@pytest.mark.parametrize("preset", ["area_presence", "area_entry"])
+def test_area_recipe_requires_explicit_area_and_compiles(tmp_path, monkeypatch, preset):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client, with_area=True)
+        missing = client.post("/api/cameras/cameras/cam1/pipelines/presets", json={"preset": preset, "enabled": False})
+        assert missing.status_code == 400
+        response = client.post("/api/cameras/cameras/cam1/pipelines/presets", json={
+            "preset": preset, "enabled": False, "area_id": "area-1",
+        })
+        assert response.status_code == 200, response.text
+        pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
+        occurrence = _node_config(pipeline, "camera.area_occurrence")
+        assert occurrence["area"]["name"] == "Gate"
+        assert occurrence["mode"] == ("entry" if preset == "area_entry" else "presence")
+        assert _node_config(pipeline, "vision.detect")["categories"] == ["person", "dog", "cat"]
 
 
 def _vision_detect_config(pipeline: dict[str, Any]) -> dict[str, Any]:

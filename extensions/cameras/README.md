@@ -119,3 +119,9 @@ Legacy vendor-specific YOLO/Ultralytics runtimes are not part of the official fi
 ## RTSP note
 
 Some cameras expose `/stream1` and `/stream2`. If `/stream1` is unstable for snapshots, configure `rtsp_url` with the substream (`/stream2`) explicitly.
+
+## Observation recipes
+
+Camera settings offer litter-box activity, drinking, presence in an area, and entry into an area. Recipes are saved disabled for review in the pipeline editor. Area recipes require an explicit mapped area and an available detection model; they distinguish people, cats and dogs without inferring age or identity.
+
+`camera.area_occurrence` groups evidence independently per tracked subject. Entry requires a preceding observation outside the area; first sighting inside is not an entry. Duration ends at the last confirmed observation. Missing observations, source loss and tracking closure end the occurrence without claiming the physical activity ended. Stale or terminal replay cannot reopen a subject, and active state is bounded. Cat recipes use semantic occurrence filtering; descriptions are observations, not proof of ingestion or elimination.

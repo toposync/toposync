@@ -67,7 +67,7 @@ def test_unavailable_denied_and_invalid_inputs_never_start_worker(tmp_path, monk
         marker.write_text("{}")
         assert client.post('/api/models/generate', files={'file': ('object.png', image_bytes())}).status_code == 503
         marker.unlink()
-        for data, expected in [(b'bad', 422), (image_bytes(False), 422), (b'x' * (generation.MAXIMUM_IMAGE_BYTES + 1), 413)]:
+        for data, expected in [(b'bad', 422), (b'x' * (generation.MAXIMUM_IMAGE_BYTES + 1), 413)]:
             assert client.post('/api/models/generate', files={'file': ('object.png', data)}).status_code == expected
     assert not calls
 
@@ -156,3 +156,59 @@ def test_provider_source_integrity_is_checked_before_loading_model(tmp_path):
     assert result.returncode != 0
     assert b'provider_asset_integrity_failed' in result.stderr
     assert not (tmp_path/'output').exists()
+
+
+def test_opaque_preparation_preserves_exif_orientation_and_rejects_empty_inputs(tmp_path):
+    photo = Image.new("RGB", (64, 32), "white")
+    photo.paste((120, 60, 20), (10, 10, 30, 25))
+    exif = photo.getexif()
+    exif[274] = 6
+    source = BytesIO()
+    photo.save(source, "JPEG", exif=exif)
+    target = tmp_path / "prepared.png"
+    generation.prepare_image(source.getvalue(), target)
+    with Image.open(target) as prepared:
+        assert prepared.size == (32, 64)
+        assert prepared.mode == "RGBA"
+    for image in (Image.new("RGB", (32, 32), "black"), Image.new("RGBA", (32, 32), (0, 0, 0, 0))):
+        data = BytesIO()
+        image.save(data, "PNG")
+        with pytest.raises(HTTPException) as error:
+            generation.prepare_image(data.getvalue(), target)
+        assert error.value.status_code == 422
+
+
+def test_background_checks_do_not_download_or_import_heavy_runtime(tmp_path):
+    from toposync_ext_models.generation_worker import BACKGROUND, isolate_object, validate_background_mask
+    cutout = Image.open(BytesIO(image_bytes()))
+    result, provenance = isolate_object(tmp_path, cutout)
+    assert result is cutout and provenance == {"method": "provided_alpha"}
+    opaque = Image.open(BytesIO(image_bytes(False)))
+    for corrupt in (False, True):
+        if corrupt:
+            target = tmp_path / BACKGROUND["file"]
+            target.parent.mkdir()
+            target.write_bytes(b"corrupt")
+        with pytest.raises(SystemExit) as error:
+            isolate_object(tmp_path, opaque)
+        assert error.value.code == 76
+    for color in (0, 255):
+        with pytest.raises(SystemExit) as error:
+            validate_background_mask(Image.new("L", (32, 32), color))
+        assert error.value.code == 74
+    validate_background_mask(cutout.getchannel("A"))
+    with pytest.raises(SystemExit) as error:
+        isolate_object(tmp_path, Image.new("RGBA", (32, 32), (0, 0, 0, 255)))
+    assert error.value.code == 74
+
+
+@pytest.mark.parametrize("code,status,detail", [(74, 422, "isolated_object_image_required"), (76, 503, "background_removal_not_installed")])
+def test_background_worker_exit_codes_are_explicit(tmp_path, monkeypatch, code, status, detail):
+    async def wait():
+        return code
+    async def process(*args, **kwargs):
+        return SimpleNamespace(returncode=code, wait=wait)
+    monkeypatch.setattr(generation.asyncio, "create_subprocess_exec", process)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(generation.run_worker(tmp_path, tmp_path / "input.png", tmp_path / "model.glb", None))
+    assert (error.value.status_code, error.value.detail) == (status, detail)

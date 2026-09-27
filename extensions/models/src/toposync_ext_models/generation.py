@@ -12,7 +12,7 @@ import tempfile
 import uuid
 
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from toposync.runtime.auth import AuthContext
 
 MAXIMUM_IMAGE_BYTES = 8 * 1024**2
@@ -58,9 +58,9 @@ def prepare_image(data: bytes, target: Path):
             if image.width * image.height > 16_777_216 or min(image.size) < 16:
                 raise ValueError("image_dimensions")
             image.load()
-            rgba = image.convert("RGBA")
+            rgba = ImageOps.exif_transpose(image).convert("RGBA")
             low, high = rgba.getchannel("A").getextrema()
-            if low == 255 or high == 0:
+            if high == 0 or (low == 255 and all(a == b for a, b in rgba.convert("RGB").getextrema())):
                 raise HTTPException(422, "isolated_object_image_required")
             rgba.save(target, "PNG")
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
@@ -85,6 +85,10 @@ async def run_worker(home: Path, source: Path, output: Path, request: Request):
                 if await request.is_disconnected():
                     raise HTTPException(499, "generation_cancelled")
                 await asyncio.sleep(0.1)
+            if worker.returncode == 74:
+                raise HTTPException(422, "isolated_object_image_required")
+            if worker.returncode == 76:
+                raise HTTPException(503, "background_removal_not_installed")
             if worker.returncode != 0:
                 raise HTTPException(503, "generation_memory_limit" if worker.returncode == 75 else "local_generation_failed")
     except TimeoutError as exc:

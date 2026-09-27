@@ -26,9 +26,7 @@ started may finish, but its result is discarded after cancellation.
 ## Optional local generation backend
 
 `POST /api/models/generate` accepts one multipart `file` and requires both
-`core:files:read` and `core:files:write`. The model tool uses this endpoint. It currently accepts a PNG/WebP cutout with transparency, at most
-8 MiB and 16 million pixels. Opaque photos require a separate, evaluated background
-preparation step; they receive `isolated_object_image_required` without inference.
+`core:files:read` and `core:files:write`. The model tool uses this endpoint. It accepts a PNG/JPEG/WebP image, at most 8 MiB and 16 million pixels. Existing transparency is reused. Opaque photos require the optional local background model below. EXIF orientation is normalized before processing. Empty transparent and uniform opaque images are rejected before starting a worker.
 
 The server looks for a trusted, administrator-installed TripoSR runtime under
 `<data_dir>/models/triposr`, or `TOPOSYNC_MODELS_TRIPOSR_HOME`. It never accepts
@@ -69,9 +67,9 @@ This does not establish real dimensions or observed geometry behind the object.
 
 ### Generate through the model tool
 
-Select **3D model**, choose a placement point, then select one PNG/WebP object image with a transparent background (up to 8 MiB). The same tool imports GLB/GLTF and their assets when a model file is selected. Generation uses the optional local runtime above; missing runtime, opaque images, busy workers and failures have explicit messages. The progress dialog supports keyboard access, Cancel and Escape.
+Select **3D model**, choose a placement point, then select one PNG/JPEG/WebP image of an isolated object (up to 8 MiB). The same tool imports GLB/GLTF and their assets when a model file is selected. Generation uses the optional local runtime above; missing runtimes, unusable images, busy workers and failures have explicit messages. The progress dialog supports keyboard access, Cancel and Escape.
 
-Generated elements retain the generation provenance and show an approximation notice when edited. Enter a known height to scale the object; generated geometry does not supply a measured reference height. Preview, placement, floor height and advanced scale reuse the importer. Ordinary opaque photos are not yet supported. Runtime installation is an explicit administrator operation.
+Generated elements retain the generation provenance and show an approximation notice when edited. Enter a known height to scale the object; generated geometry does not supply a measured reference height. Preview, placement, floor height and advanced scale reuse the importer. Opaque photos use the optional background model described below. Runtime installation is an explicit administrator operation.
 
 ### Install the evaluated runtime
 
@@ -98,3 +96,19 @@ The check verifies asset hashes, exact dependency versions, extractor source rev
 Open **Orientation and scale** in the model editor. Adjust forward/side tilt or turn, then **Apply orientation**. The original GLB/GLTF stays unchanged. The same transform is applied before computing the top-down preview and rendering the model; dimensions, footprint and base are updated together after preview upload succeeds. The rotated static geometry is recentered and rests at the selected height. A known-height reference is cleared because tilting changes the vertical dimension.
 
 Closing the editor aborts upload and discards late results; failure leaves the previously applied model intact. Already uploaded previews remain stored, as with imports. Ground contact is computed from static vertices, not guaranteed throughout animation. Orientation is manual: generation does not establish gravity or real-world dimensions.
+
+### Optional background removal for ordinary photographs
+
+After installing the base runtime, explicitly add the lightweight U2netp model:
+
+```sh
+python -m toposync_ext_models.install_triposr /absolute/path/to/runtime --install-background
+```
+
+This verifies the existing runtime, shares its generation lock, and adds only the 4,574,861-byte pinned ONNX weight. It does not rebuild the environment or download the 3D checkpoint again. `--asset-cache` can supply the same `weights/u2netp.onnx` layout. The original installation receipt remains intact; `background-installation.json` records the added weight. `--check` also verifies this weight when present.
+
+The worker uses the installed rembg adapter with an explicitly local weight path and CPU provider, two intra-operation threads and one inter-operation thread. It verifies SHA-256 before loading and never invokes rembg's downloader. Missing or corrupt weights yield an unavailable response; transparent cutouts remain usable without them. Source and attribution: [U2Net](https://github.com/xuebinqin/U-2-Net) and [rembg](https://github.com/danielgatis/rembg). The ONNX asset URL and SHA-256 are fixed in `generation_worker.py`.
+
+Masks whose foreground occupies less than 0.5% or more than 98% of pixels are rejected before loading the 3D model. These are degeneracy checks, **not** proof of an object, a quality score, or a reliable detector of all empty scenes. Prefer a single object against a contrasting background. Complex scenes, thin structures, occlusion and reflective/transparent objects remain unqualified. The evaluated examples are two controlled chair backgrounds and one ordinary coffee photograph; this is not a broad benchmark.
+
+Generated provenance records `background_removal.method` as `provided_alpha` or `estimated`; estimated masks also identify the provider and weight hash. The editor labels automatic background removal and asks the user to inspect outline and orientation. Approximate geometry still requires manual orientation/scale correction when necessary. Segmentation sessions are released before 3D model loading, within the existing bounded worker lifecycle.

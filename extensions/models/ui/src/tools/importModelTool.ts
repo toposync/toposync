@@ -112,7 +112,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
           } catch (error) {
             signal.throwIfAborted();
             const code = error instanceof Error ? error.message : "";
-            const known = ["local_generation_not_installed", "local_generation_busy", "isolated_object_image_required", "invalid_generation_image", "generation_image_too_large", "generation_timeout", "generation_memory_limit"];
+            const known = ["background_removal_not_installed", "local_generation_not_installed", "local_generation_busy", "isolated_object_image_required", "invalid_generation_image", "generation_image_too_large", "generation_timeout", "generation_memory_limit"];
             throw new Error(t(`ext.models.error.${known.includes(code) ? code : "local_generation_failed"}`));
           }
         } else {

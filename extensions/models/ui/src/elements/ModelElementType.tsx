@@ -238,6 +238,7 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
   return (
     <div>
       {generated ? <p>{t("ext.models.editor.generated")}</p> : null}
+      {(element.props as any).generation?.background_removal?.method === "estimated" ? <p>{t("ext.models.editor.background_estimated")}</p> : null}
       <div className="field">
         <div className="label">{t("core.element_editor.name")}</div>
         <input className="input" value={element.name} onChange={(e) => update({ name: e.target.value })} />

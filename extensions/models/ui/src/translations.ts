@@ -1,5 +1,7 @@
 export const modelsTranslations = {
   en: {
+    "ext.models.editor.background_estimated": "Background removed automatically. Check the outline and orientation; unseen surfaces remain inferred.",
+    "ext.models.error.background_removal_not_installed": "Photo background removal is unavailable on this server. Supply a transparent cutout or ask the administrator to install it.",
     "ext.models.editor.orientation": "Object orientation",
     "ext.models.editor.orientation_x": "Forward tilt (degrees)",
     "ext.models.editor.orientation_z": "Side tilt (degrees)",
@@ -14,7 +16,7 @@ export const modelsTranslations = {
     "ext.models.editor.generated": "Generated approximation · TripoSR. Unseen surfaces are inferred; this is not a metric reconstruction.",
     "ext.models.error.local_generation_not_installed": "Local 3D generation is not installed on this server. You can import a GLB/GLTF model.",
     "ext.models.error.local_generation_busy": "Another object is being generated. Wait for it to finish.",
-    "ext.models.error.isolated_object_image_required": "Use an image of one object with a transparent background.",
+    "ext.models.error.isolated_object_image_required": "Could not isolate a usable object. Use a closer image with a contrasting background or supply a transparent cutout.",
     "ext.models.error.invalid_generation_image": "Use a valid image with up to 16 million pixels and at least 16 pixels per side.",
     "ext.models.error.generation_image_too_large": "The image exceeds 8 MiB. Choose a smaller image.",
     "ext.models.error.generation_timeout": "Generation exceeded the time limit and was stopped.",
@@ -43,9 +45,11 @@ export const modelsTranslations = {
     "ext.models.editor.processing": "Processing preview…",
     "ext.models.editor.failed": "Failed to import model",
     "ext.models.editor.unavailable": "Model unavailable",
-    "ext.models.error.pick_entry": "Select a GLB/GLTF model or one object image with a transparent background.",
+    "ext.models.error.pick_entry": "Select a GLB/GLTF model or one image of an isolated object.",
   },
   "pt-BR": {
+    "ext.models.editor.background_estimated": "Fundo removido automaticamente. Confira o contorno e a orientação; superfícies não observadas continuam inferidas.",
+    "ext.models.error.background_removal_not_installed": "A remoção de fundo de fotos está indisponível neste servidor. Forneça um recorte transparente ou solicite a instalação ao administrador.",
     "ext.models.editor.orientation": "Orientação do objeto",
     "ext.models.editor.orientation_x": "Inclinação frontal (graus)",
     "ext.models.editor.orientation_z": "Inclinação lateral (graus)",
@@ -60,7 +64,7 @@ export const modelsTranslations = {
     "ext.models.editor.generated": "Aproximação gerada · TripoSR. Superfícies não observadas são inferidas; não é uma reconstrução métrica.",
     "ext.models.error.local_generation_not_installed": "A geração 3D local não está instalada neste servidor. Você pode importar um modelo GLB/GLTF.",
     "ext.models.error.local_generation_busy": "Outro objeto está sendo gerado. Aguarde a conclusão.",
-    "ext.models.error.isolated_object_image_required": "Use uma imagem de um objeto com fundo transparente.",
+    "ext.models.error.isolated_object_image_required": "Não foi possível isolar um objeto utilizável. Use uma imagem mais próxima, com fundo contrastante, ou forneça um recorte transparente.",
     "ext.models.error.invalid_generation_image": "Use uma imagem válida com até 16 milhões de pixels e pelo menos 16 pixels por lado.",
     "ext.models.error.generation_image_too_large": "A imagem excede 8 MiB. Escolha uma imagem menor.",
     "ext.models.error.generation_timeout": "A geração excedeu o limite de tempo e foi encerrada.",
@@ -89,6 +93,6 @@ export const modelsTranslations = {
     "ext.models.editor.processing": "Processando prévia...",
     "ext.models.editor.failed": "Falha ao importar modelo",
     "ext.models.editor.unavailable": "Modelo indisponível",
-    "ext.models.error.pick_entry": "Selecione um modelo GLB/GLTF ou uma imagem do objeto com fundo transparente.",
+    "ext.models.error.pick_entry": "Selecione um modelo GLB/GLTF ou uma imagem de um objeto isolado.",
   },
 } as const;

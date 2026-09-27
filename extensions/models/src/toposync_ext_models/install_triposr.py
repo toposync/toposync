@@ -12,6 +12,8 @@ import sys
 import time
 import urllib.request
 
+from .generation_worker import BACKGROUND
+
 HERE = Path(__file__).parent
 MANIFEST = HERE / "triposr_manifest.json"
 REQUIREMENTS = HERE / "triposr_requirements.txt"
@@ -60,7 +62,7 @@ def asset(target, expected, url, cache=None, content=None):
     elif content is not None:
         partial.write_bytes(content)
     else:
-        limit = 1_677_246_742 if target.name == "model.ckpt" else 1024**2
+        limit = {"model.ckpt": 1_677_246_742, "u2netp.onnx": BACKGROUND["bytes"]}.get(target.name, 1024**2)
         started = time.monotonic()
         count = 0
         with urllib.request.urlopen(url, timeout=30) as response, partial.open("wb") as stream:
@@ -126,6 +128,9 @@ def install(home, cache=None, resume=False, check=False):
             print(f"Verifying {relative}", flush=True)
             asset(target, expected, url, cache / relative if cache else None,
                   DINO.encode() if relative.endswith("refs/main") else None)
+        background_weights = home / BACKGROUND["file"]
+        if background_weights.exists() and digest(background_weights) != BACKGROUND["sha256"]:
+            raise ValueError("Background model integrity failed")
         python = home / "environment/bin/python"
         env = {**os.environ, "DEVELOPER_DIR": "/Library/Developer/CommandLineTools",
                "CC": str(compiler.with_name("clang")), "CXX": str(compiler),
@@ -151,15 +156,33 @@ def install(home, cache=None, resume=False, check=False):
     print("Runtime checks passed. Model inference/quality requires a separate generation check.")
 
 
+def install_background(home, cache=None):
+    """Supplement a verified runtime without rebuilding its environment."""
+    install(home, check=True)
+    import fcntl
+    with (home / ".generation.lock").open("a") as lease:
+        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        asset(home / BACKGROUND["file"], BACKGROUND["sha256"], BACKGROUND["url"],
+              cache / BACKGROUND["file"] if cache else None)
+        (home / "background-installation.json").write_text(json.dumps(BACKGROUND, indent=2))
+    print("Optional background model installed. No generation was started.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", type=Path)
     parser.add_argument("--asset-cache", type=Path, help="Read verified assets from an existing runtime; copied, never modified")
-    parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--check", action="store_true", help="Check existing assets, dependencies and extractor without installing")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--install-background", action="store_true", help="Install the optional pinned background model in an existing runtime")
+    mode.add_argument("--resume", action="store_true")
+    mode.add_argument("--check", action="store_true", help="Check existing assets, dependencies and extractor without installing")
     args = parser.parse_args()
-    install(args.destination.expanduser().resolve(), args.asset_cache.expanduser().resolve() if args.asset_cache else None,
-            args.resume, args.check)
+    home = args.destination.expanduser().resolve()
+    cache = args.asset_cache.expanduser().resolve() if args.asset_cache else None
+    if args.install_background:
+        install_background(home, cache)
+    else:
+        install(home, cache, args.resume, args.check)
 
 
 if __name__ == "__main__":

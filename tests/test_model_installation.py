@@ -58,3 +58,26 @@ def test_install_timeout_reaps_process(tmp_path):
     pid = int(pidfile.read_text())
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX runtime lock")
+def test_background_supplement_shares_lock_and_preserves_receipt(tmp_path, monkeypatch):
+    import fcntl
+    import json
+    calls = []
+    receipt = tmp_path / "installation.json"
+    receipt.write_text("preserve existing receipt")
+    monkeypatch.setattr(installer, "install", lambda home, **kwargs: calls.append(kwargs))
+    assets = []
+    monkeypatch.setattr(installer, "asset", lambda *args: assets.append(args))
+    with (tmp_path / ".generation.lock").open("a") as lease:
+        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(BlockingIOError):
+            installer.install_background(tmp_path)
+    assert not assets
+    installer.install_background(tmp_path)
+    assert calls == [{"check": True}, {"check": True}]
+    assert len(assets) == 1
+    assert assets[0][0] == tmp_path / installer.BACKGROUND["file"]
+    assert receipt.read_text() == "preserve existing receipt"
+    assert json.loads((tmp_path / "background-installation.json").read_text()) == installer.BACKGROUND

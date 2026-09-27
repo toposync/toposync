@@ -113,6 +113,23 @@ Use the command with `--data-dir`, `--species` and an installed `--model-id`, fo
 
 Focused software tests cover private transport, access, transactional curation, clustering, paging, restart and fault recovery. `scripts/identity/real_pipeline_smoke.py` additionally accepts three hash-pinned, public test photos and installed models, then runs the actual scheduler, both recognition operators and notification persistence in a new directory. It checks lifecycle, deduplication, retained evidence and reopen consistency. It intentionally repeats one photo per species and therefore **does not evaluate recognition accuracy or independent visits**. `scripts/identity/real_distributed_smoke.py` exercises a separate authenticated processing server with the actual models, resolution/notifications at the origin and partial replay after closure. It prepares these same photos at a maximum of 1024×1024 pixels and explicitly enables occurrence deduplication; it does not evaluate transport saturation or biometric accuracy.
 
+Prepare the smoke inputs outside the checkout with these exact filenames; the runner rejects different hashes:
+
+- `astronaut.png`: [scikit-image v0.24.0 image](https://raw.githubusercontent.com/scikit-image/scikit-image/v0.24.0/skimage/data/astronaut.png), public-domain NASA photograph, as documented in the [data catalog](https://scikit-image.org/docs/stable/api/skimage.data#skimage.data.astronaut).
+- `chelsea.png`: [scikit-image v0.24.0 image](https://raw.githubusercontent.com/scikit-image/scikit-image/v0.24.0/skimage/data/chelsea.png), Stefan van der Walt, CC0 in the [data catalog](https://scikit-image.org/docs/stable/api/skimage.data#skimage.data.chelsea).
+- `sitting-golden-retriever.jpg`: [original image](https://upload.wikimedia.org/wikipedia/commons/e/e1/Sitting_golden_retriever.jpg), Jiyoon Leee, CC0 in the [file record](https://commons.wikimedia.org/wiki/File:Sitting_golden_retriever.jpg).
+
+Install the catalog's YuNet, SFace and Open Noodle Pet Small models in the selected model data directory, then run:
+
+```sh
+python scripts/identity/real_pipeline_smoke.py \
+  --photos-dir /absolute/public-photos \
+  --model-data-dir /absolute/isolated-model-data \
+  --output-dir /absolute/new-smoke-output
+```
+
+The expected uncalibrated outcome is `calibration_required` for all three species, three notifications and six retained observations after reopening the gallery. Successful model installation alone does not establish this result.
+
 Release acceptance additionally requires independent enrollment/development/holdout sessions, unknown identities and similar pets, frozen coverage/eligibility criteria, false-identification bounds, equivalent-load latency measurements, and rendered user journeys. Those conclusions cannot be obtained from the smoke check.
 
 Use the [offline evaluation protocol](IDENTITY_EVALUATION.md) to validate a frozen, authorized dataset and report visit-level results with uncertainty. Synthetic accounting tests of that tool do not establish recognition quality.

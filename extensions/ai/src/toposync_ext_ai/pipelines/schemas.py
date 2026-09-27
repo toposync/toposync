@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME
 
@@ -71,10 +71,17 @@ class AiConditionFilterConfig(BaseModel):
     max_concurrency: int = Field(default=1, ge=1, le=32)
     concurrency_policy: Literal["skip", "queue", "fallback"] = "skip"
     emit_mode: Literal["filter", "occurrence", "annotate"] = "filter"
+    bind_subject_context: bool = False
     annotation_labels: dict[Literal["matched", "not_matched", "unknown", "closed"], str] = Field(default_factory=dict)
     minimum_duration_seconds: float = Field(default=2.0, ge=0.0, le=3600.0)
     evidence_timeout_seconds: float = Field(default=10.0, gt=0.0, le=3600.0)
     maximum_occurrence_streams: int = Field(default=128, ge=1, le=4096)
+
+    @model_validator(mode="after")
+    def _subject_context_requires_annotation(self):
+        if self.bind_subject_context and self.emit_mode != "annotate":
+            raise ValueError("bind_subject_context requires emit_mode=annotate")
+        return self
 
     @field_validator("profile_id", "condition_description", "input_artifact_name", mode="before")
     @classmethod

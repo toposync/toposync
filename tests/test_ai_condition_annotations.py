@@ -106,3 +106,67 @@ def test_annotation_distinguishes_visible_negative_from_unobservable_condition()
         assert ConditionEvaluationResult(matches=True, confidence=.9).observable is None
 
     asyncio.run(scenario())
+
+
+def test_annotation_binds_subject_to_actual_crop_and_rejects_mismatched_context():
+    import copy
+    from toposync_ext_vision.processing.tasks import VisionCropObjectsRuntime
+
+    async def scenario():
+        class Service:
+            calls = []
+            observable = True
+
+            async def call(self, service_id, **kwargs):
+                self.calls.append(kwargs)
+                return {"observable": self.observable, "matches": True, "confidence": .9}
+
+        service = Service()
+        runtime = AiConditionFilterRuntime(
+            {"emit_mode": "annotate", "bind_subject_context": True,
+             "condition_description": "Torso oriented toward the visible facade", "evaluation_interval_seconds": 0},
+            PipelineRuntimeDependencies(services=service))
+        cropper = VisionCropObjectsRuntime({"padding_ratio": .5, "min_crop_size_px": 1})
+        source = Packet.create(stream_id="person", payload={
+            "subject": {"id": "person-1", "bbox01": [.2, .3, .4, .7]},
+            "capture_evidence": {"capture_instance": "decoder", "generation": 0,
+                                 "sequence": 1, "published_at": time.time()}},
+            artifacts={"main": Artifact(name="main", data=np.zeros((100, 100, 3), dtype=np.uint8))})
+        cropped = (await cropper.process_packet(source, None))[0]
+        target = cropped.artifacts["main"].metadata["subject_context"]
+        assert target["subject_id"] == "person-1"
+        assert target["bbox01"] != source.payload["subject"]["bbox01"]
+        assert all(.2 < axis < .8 for axis in target["bbox01"])
+        output = (await runtime.process_packet(cropped, None))[0]
+        annotation = output.payload["ai"]["condition_filter"]
+        assert annotation["status"] == "matched" and annotation["subject_context"] == target
+        assert service.calls[0]["image"] is cropped.artifacts["main"].data
+        assert "Do not substitute another subject" in service.calls[0]["description"]
+        assert str(target["bbox01"]) in service.calls[0]["description"]
+        for invalid in ("subject", "capture", "bbox", "source_bbox", "missing"):
+            packet = copy.deepcopy(cropped)
+            context = packet.artifacts["main"].metadata["subject_context"]
+            if invalid == "subject":
+                packet.payload["subject"]["id"] = "person-2"
+            elif invalid == "capture":
+                packet.payload["capture_evidence"]["sequence"] = 2
+            elif invalid == "bbox":
+                context["bbox01"][0] = float("nan")
+            elif invalid == "source_bbox":
+                packet.payload["subject"]["bbox01"][0] = .1
+            else:
+                packet.artifacts["main"].metadata.pop("subject_context")
+            annotation = (await runtime.process_packet(packet, None))[0].payload["ai"]["condition_filter"]
+            assert annotation["status"] == "unknown"
+            assert annotation["reason"] == "subject_context_unavailable"
+        assert len(service.calls) == 1
+        service.observable = None
+        packet = copy.deepcopy(cropped)
+        packet.payload["capture_evidence"]["sequence"] = 2
+        packet.artifacts["main"].metadata["subject_context"]["capture_evidence"]["sequence"] = 2
+        annotation = (await runtime.process_packet(packet, None))[0].payload["ai"]["condition_filter"]
+        assert annotation["status"] == "unknown" and annotation["observable"] is None
+        assert len(service.calls) == 2
+        assert "subject_context" not in source.artifacts["main"].metadata
+
+    asyncio.run(scenario())

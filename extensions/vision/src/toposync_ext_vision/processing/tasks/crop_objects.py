@@ -63,13 +63,23 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
             bbox_source = f"{bbox_source}|reproject:frame_warp"
 
         bbox01_used = _expand_bbox01(bbox01_selected, padding_ratio=float(self._config.padding_ratio))
-        crop = _crop_bbox01(
+        cropped = _crop_bbox01(
             image=image,
             bbox01=bbox01_used,
             min_crop_size_px=int(self._config.min_crop_size_px),
         )
-        if crop is None:
+        if cropped is None:
             return self._missing_crop(packet)
+        crop, pixel_bbox01 = cropped
+        subject_context = None
+        subject = packet.payload.get("subject")
+        if isinstance(subject, dict) and subject.get("id") and bbox_source.split("|")[0] == "payload:subject.bbox01":
+            projected = _project_stream_bbox01_to_crop(bbox01_selected, pixel_bbox01)
+            capture = packet.payload.get("capture_evidence")
+            if projected is not None and isinstance(capture, dict):
+                subject_context = {"subject_id": subject["id"], "bbox01": list(projected),
+                                   "source_bbox01": list(bbox01_input),
+                                   "capture_evidence": dict(capture)}
 
         output_artifact_name = self._config.output_artifact_name
         out = packet.with_artifact(
@@ -79,6 +89,7 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
                 mime_type="image/raw",
                 metadata={
                     "source": self._operator_id,
+                    "subject_context": subject_context,
                     "source_artifact_name": selected_name or MAIN_ARTIFACT_NAME,
                     "bbox01": list(bbox01_used),
                     "bbox01_original": list(bbox01_input),
@@ -351,7 +362,8 @@ def _crop_bbox01(
         crop = image[py1:py2, px1:px2]
     except Exception:
         return None
+    pixel_bbox01 = (px1 / width, py1 / height, px2 / width, py2 / height)
     try:
-        return crop.copy()
+        return crop.copy(), pixel_bbox01
     except Exception:
-        return crop
+        return crop, pixel_bbox01

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import math
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
@@ -793,6 +795,17 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         artifact_name, image = resolve_image_artifact_for_data(packet, input_artifact_name=self._config.input_artifact_name)
         if image is None or not self._config.condition_description:
             return unknown("missing_image_or_condition")
+        description = self._config.condition_description
+        if self._config.bind_subject_context:
+            subject_context = self._subject_context(packet, artifact_name)
+            if subject_context is None:
+                return unknown("subject_context_unavailable")
+            description += (
+                " Evaluate only the subject at this bounding box in the supplied image "
+                "(normalized [left, top, right, bottom]): " + json.dumps(subject_context["bbox01"])
+                + ". Do not substitute another subject. If this subject or the required reference "
+                "cannot be distinguished, return observable=false."
+            )
         if packet.stream_id not in self._states and len(self._states) >= self._config.maximum_occurrence_streams:
             now = time.monotonic()
             self._states = {key: value for key, value in self._states.items()
@@ -815,16 +828,41 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         state.last_eval_at = time.monotonic()
         try:
             result = await asyncio.wait_for(self._evaluate_condition(
-                image=image, description=self._config.condition_description,
+                image=image, description=description,
                 profile_id=profile_id, fallback_profile_ids=fallback_profile_ids,
             ), timeout=30)
         except Exception:
             return unknown("evaluation_failed")
         unavailable = result.reason in {"ai_service_unavailable", "all_ai_profiles_failed",
             "no_ai_profile_available", "invalid_ai_service_response"}
-        status = "unknown" if result.observable is False or unavailable or result.confidence < self._config.confidence_threshold else ("matched" if result.matches else "not_matched")
+        status = "unknown" if (result.observable is False or unavailable
+                               or self._config.bind_subject_context and result.observable is not True
+                               or result.confidence < self._config.confidence_threshold) else ("matched" if result.matches else "not_matched")
         return [self._annotate(packet, result=result, status=status,
                               input_artifact_name=artifact_name, input_image_key=artifact_name)]
+
+    @staticmethod
+    def _subject_context(packet, artifact_name):
+        artifact = packet.artifacts.get(artifact_name)
+        subject = packet.payload.get("subject")
+        context = artifact.metadata.get("subject_context") if artifact else None
+        if not isinstance(context, dict) or not isinstance(subject, dict):
+            return None
+        if not isinstance(subject.get("id"), str) or not subject["id"] or context.get("subject_id") != subject["id"]:
+            return None
+        if (not isinstance(packet.payload.get("capture_evidence"), dict)
+                or context.get("capture_evidence") != packet.payload["capture_evidence"]
+                or not isinstance(subject.get("bbox01"), (list, tuple))
+                or context.get("source_bbox01") != list(subject["bbox01"])):
+            return None
+        bbox = context.get("bbox01")
+        if (not isinstance(bbox, (list, tuple)) or len(bbox) != 4
+                or any(type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1 for value in bbox)
+                or bbox[0] >= bbox[2] or bbox[1] >= bbox[3]):
+            return None
+        return {"subject_id": subject["id"], "bbox01": list(bbox),
+                "source_bbox01": list(subject["bbox01"]),
+                "capture_evidence": dict(packet.payload["capture_evidence"])}
 
     @staticmethod
     async def _acquire_condition_slot(
@@ -963,6 +1001,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             "max_concurrency": int(self._config.max_concurrency),
             "concurrency_policy": self._config.concurrency_policy,
         }
+        if self._config.bind_subject_context and input_artifact_name:
+            ai_payload["condition_filter"]["subject_context"] = self._subject_context(packet, input_artifact_name)
         if self._config.emit_mode == "annotate" and status == "matched":
             capture = packet.payload.get("capture_evidence", {})
             artifact = packet.artifacts.get(input_artifact_name or MAIN_ARTIFACT_NAME)

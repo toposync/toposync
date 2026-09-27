@@ -96,9 +96,11 @@ class AudioFeaturesRuntime(TransformOperatorRuntime):
 
 
 def register_audio_operator(registry) -> None:
+    from .audio_groups import register_audio_groups
     from .audio_correlation import register_audio_correlation
     from .audio_source import register_audio_source
     from .audio_events import register_audio_occurrence
+    register_audio_groups(registry)
     register_audio_correlation(registry)
     register_audio_source(registry)
     register_audio_occurrence(registry)

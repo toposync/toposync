@@ -152,6 +152,9 @@ class AudioCorrelationRuntime:
                 if signature is None:
                     raise ValueError("unsupported_audio_window")
                 other = self._recent.get("second" if port == "first" else "first")
+                result["reason"] = ("synchronization_reference_mismatch" if other and
+                                    other["clock"].synchronization_reference != clock.synchronization_reference
+                                    else "awaiting_peer_window")
                 if other and (other["clock"].synchronization_reference == clock.synchronization_reference
                               and abs(other["clock"].started_at - clock.started_at) <= .1):
                     match = await context.run_blocking(compare_signatures, signature, other["signature"])

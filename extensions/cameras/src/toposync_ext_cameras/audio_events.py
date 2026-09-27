@@ -46,11 +46,16 @@ class AudioOccurrenceRuntime(TransformOperatorRuntime):
         while not context.is_cancelled():
             packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
             outputs = await self.process_packet(packet, context) if packet is not None else []
-            for state in self.states.values():
-                if state.start is not None and time.monotonic() - state.last_seen > self.config.evidence_timeout_seconds:
-                    outputs.extend(self._close(state, "evidence_timeout"))
+            outputs.extend(self.expire_events())
             for output in outputs:
                 await context.emit(output, port=self.output_port)
+
+    def expire_events(self):
+        outputs = []
+        for state in self.states.values():
+            if state.start is not None and time.monotonic() - state.last_seen > self.config.evidence_timeout_seconds:
+                outputs.extend(self._close(state, "evidence_timeout"))
+        return outputs
 
     def _event(self, state, lifecycle, reason):
         packet = state.packet

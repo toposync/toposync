@@ -360,4 +360,15 @@ The evaluated input is a one-second mono PCM16 window at 16 or 48 kHz. Both sour
 
 The method compares temporal log-power envelopes across 12 frequency bands. A score of at least 0.7 is reported as `similar`, with `calibrated=false` and `same_sound_confirmed=false`. Silence, insufficient spectral variation and unsupported windows abstain. Evaluation covers a small LOCATA speech subset, including a held-out recording, not general sounds or calibrated matching accuracy. Identical playback from different locations remains ambiguous; the lag does not provide a location.
 
-Only two signatures are retained in memory, for at most five seconds; raw audio is forwarded through the existing private contract and is not stored by this operator. Source bindings cannot switch ports. Closed captures cannot resume, and 64 closed captures exhaust the session until the operator restarts. Shutdown clears all state. A lifecycle-aware grouping stage and a multi-source recipe are still required to deliver one notification per correlated occurrence.
+Only two signatures are retained in memory, for at most five seconds; raw audio is forwarded through the existing private contract and is not stored by this operator. Source bindings cannot switch ports. Closed captures cannot resume, and 64 closed captures exhaust the session until the operator restarts. Shutdown clears all state. The optional grouping stage below consumes this comparison. A multi-source recipe and its source/member interface are still pending.
+
+
+### Acoustic occurrence groups
+
+Place `camera.audio_group` after the comparison stage, followed by `core.notify` with `dedupe_by_occurrence=true` and `audio_group` in `historical_evidence_paths`. This stage reuses the existing per-source baseline occurrence detector, quiet period, timeout and opt-in private clip retention.
+
+Matching source openings share one canonical event identifier and notification. Each member retains its camera/source/capture identifiers, analysis, comparison and occurrence evidence. Closing one member updates the notification; the final member closes it. Divergent evidence splits subsequent observations into a new event, keeping the prior association in the original record. A new member cannot join a group already containing two recorded members.
+
+Packets awaiting the matching peer window can preserve an existing association for at most five seconds since the last match; this does not confirm new acoustic correspondence. Receipt clocks, unavailable comparison and distinct sources without a match open separate occurrences. The canonical timeline projects shared capture timestamps onto the first member's media clock, rather than adding unrelated per-capture offsets. Grouping does not establish a physical sound identity, position or calibrated probability.
+
+No raw audio is retained by grouping, and outgoing artifacts are empty. Private excerpts, when explicitly enabled, use the existing authorized clip store. No sources are started or camera recipes combined automatically.

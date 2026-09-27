@@ -1,9 +1,9 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 
 import { resolveToposyncUrl, type BoundsXZ, type CompositionElement, type CompositionElementPatch, type ElementType, type HostI18n } from "@toposync/plugin-api";
 
 import { MAXIMUM_MODEL_SCALE, MINIMUM_MODEL_SCALE, MODEL_ELEMENT_TYPE_ID } from "../constants";
-import { clamp, readNumber, readScale, readString, readVector3 } from "../parsing";
+import { clamp, readNumber, readScale, readString, readVector3, scaleFromKnownHeight } from "../parsing";
 import { createGltfModelRuntime } from "../runtime/gltfModel";
 import type { Vector3 } from "../types";
 
@@ -93,7 +93,7 @@ export function createModelElementType(i18n: HostI18n): ElementType {
       );
     },
     create3D: ({ THREE, requestRender }, element) => {
-      const runtime = createGltfModelRuntime(THREE, { autoplay: false, onInvalidate: requestRender });
+      const runtime = createGltfModelRuntime(THREE, { autoplay: false, onInvalidate: requestRender, unavailableLabel: i18n.t("ext.models.editor.unavailable") });
       runtime.updateFromProps(element.props);
       runtime.setAnimated(readBoolean((element.props as any).animation_enabled, false));
       return {
@@ -177,6 +177,7 @@ type ModelEditorProps = {
 
 function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps): React.ReactElement {
   const { t, locale } = i18n.useI18n();
+  const [heightError, setHeightError] = useState(false);
   const numberFormatter = useMemo(
     () => new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
     [locale],
@@ -221,13 +222,40 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
         </div>
       </div>
 
+      <div className="field">
+        <label className="label" htmlFor="model-known-height">{t("ext.models.editor.known_height")}</label>
+        <input
+          id="model-known-height"
+          className="input"
+          type="number"
+          inputMode="decimal"
+          min={size.y * MINIMUM_MODEL_SCALE}
+          max={size.y * MAXIMUM_MODEL_SCALE}
+          step="any"
+          key={scale}
+          defaultValue={Number(finalSize.y.toPrecision(8))}
+          aria-invalid={heightError}
+          aria-describedby="model-height-hint"
+          onBlur={(event) => {
+            const next = scaleFromKnownHeight(size.y, Number(event.target.value));
+            setHeightError(next === null);
+            if (next !== null) update({ props: { scale: next } });
+          }}
+        />
+        <p id="model-height-hint" role={heightError ? "alert" : undefined}>
+          {t(heightError ? "ext.models.editor.invalid_height" : "ext.models.editor.height_hint")}
+        </p>
+      </div>
+      <details>
+        <summary>{t("ext.models.editor.advanced")}</summary>
       <div className="rowWrap">
         <div className="field" style={{ flex: 1, minWidth: 180 }}>
-          <div className="label">{t("ext.models.editor.scale")}</div>
+          <label className="label" htmlFor="model-scale">{t("ext.models.editor.scale")}</label>
           <input
             className="input"
             type="number"
             inputMode="decimal"
+            id="model-scale"
             min={MINIMUM_MODEL_SCALE}
             max={MAXIMUM_MODEL_SCALE}
             step={0.01}
@@ -240,6 +268,8 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
           />
         </div>
       </div>
+
+      </details>
 
       <label className="chipButton" style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
         <input
@@ -292,7 +322,7 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
           <div className="card">
             <div className="cardHeaderRow">
               <div className="cardTitle">{t("ext.models.editor.preview")}</div>
-              <div className="cardMeta">{directory}</div>
+
             </div>
             <div className="cardBody">
               <img

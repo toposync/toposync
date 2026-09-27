@@ -2,6 +2,7 @@ import * as THREEStandalone from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 import { MAXIMUM_MODEL_SCALE, MINIMUM_MODEL_SCALE } from "../constants";
+import { disposeModel, validateModel } from "../validation";
 import { clamp } from "../parsing";
 import type { ModelPreviewResult, Vector3 } from "../types";
 
@@ -77,79 +78,70 @@ export async function generateModelTopDownPreview(
   const model = gltf.scene || gltf.scenes?.[0];
   if (!model) throw new Error("Empty model");
 
-  const workingModel = model.clone(true);
-  workingModel.updateMatrixWorld(true);
-
-  const boundingBox = new THREEStandalone.Box3().setFromObject(workingModel);
-  const sizeVector = boundingBox.getSize(new THREEStandalone.Vector3());
-  const centerVector = boundingBox.getCenter(new THREEStandalone.Vector3());
-  const minimumY = boundingBox.min.y;
-
-  if (
-    !Number.isFinite(sizeVector.x) ||
-    !Number.isFinite(sizeVector.y) ||
-    !Number.isFinite(sizeVector.z) ||
-    sizeVector.length() < 1e-6
-  ) {
-    throw new Error("Could not compute model size");
-  }
-
-  workingModel.position.sub(new THREEStandalone.Vector3(centerVector.x, minimumY, centerVector.z));
-
-  const safeX = Math.max(sizeVector.x, 1e-6);
-  const safeZ = Math.max(sizeVector.z, 1e-6);
-  const viewWidth = safeX * (1 + paddingRatio * 2);
-  const viewHeight = safeZ * (1 + paddingRatio * 2);
-
-  const renderScale = maximumRenderSize / Math.max(viewWidth, viewHeight);
-  const renderWidth = Math.max(64, Math.round(viewWidth * renderScale));
-  const renderHeight = Math.max(64, Math.round(viewHeight * renderScale));
-
-  const camera = buildCamera(viewWidth || 1, viewHeight || 1);
-  const renderer = createRenderer(renderWidth, renderHeight);
-  const scene = new THREEStandalone.Scene();
-  addLights(scene);
-  scene.add(workingModel);
-
-  renderer.render(scene, camera);
-
-  const cropScaleX = safeX / Math.max(viewWidth, 1e-9);
-  const cropScaleZ = safeZ / Math.max(viewHeight, 1e-9);
-  const cropWidth = Math.max(1, Math.min(renderWidth, Math.round(renderWidth * cropScaleX)));
-  const cropHeight = Math.max(1, Math.min(renderHeight, Math.round(renderHeight * cropScaleZ)));
-  const cropX = Math.max(0, Math.min(renderWidth - cropWidth, Math.round((renderWidth - cropWidth) / 2)));
-  const cropY = Math.max(0, Math.min(renderHeight - cropHeight, Math.round((renderHeight - cropHeight) / 2)));
-
-  let outputWidth = renderWidth;
-  let outputHeight = renderHeight;
-  let dataUrl = "";
-  if (cropWidth !== renderWidth || cropHeight !== renderHeight) {
-    const outputCanvas = document.createElement("canvas");
-    outputCanvas.width = cropWidth;
-    outputCanvas.height = cropHeight;
-    const outputContext = outputCanvas.getContext("2d");
-    if (outputContext) {
-      outputContext.drawImage(renderer.domElement, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-      dataUrl = outputCanvas.toDataURL("image/png");
-      outputWidth = cropWidth;
-      outputHeight = cropHeight;
-    }
-  }
-  if (!dataUrl) dataUrl = renderer.domElement.toDataURL("image/png");
-
+  let renderer: THREEStandalone.WebGLRenderer | undefined;
   try {
-    renderer.dispose();
-  } catch {
-    // ignore
-  }
+    const workingModel = model;
+    workingModel.updateMatrixWorld(true);
 
-  return {
-    dataUrl,
-    widthPx: outputWidth,
-    heightPx: outputHeight,
-    size: { x: sizeVector.x, y: sizeVector.y, z: sizeVector.z },
-    center: { x: centerVector.x, y: centerVector.y, z: centerVector.z },
-    minY: minimumY,
-  };
+    const boundingBox = validateModel(workingModel);
+    const sizeVector = boundingBox.getSize(new THREEStandalone.Vector3());
+    const centerVector = boundingBox.getCenter(new THREEStandalone.Vector3());
+    const minimumY = boundingBox.min.y;
+
+    workingModel.position.sub(new THREEStandalone.Vector3(centerVector.x, minimumY, centerVector.z));
+
+    const safeX = Math.max(sizeVector.x, 1e-6);
+    const safeZ = Math.max(sizeVector.z, 1e-6);
+    const viewWidth = safeX * (1 + paddingRatio * 2);
+    const viewHeight = safeZ * (1 + paddingRatio * 2);
+
+    const renderScale = maximumRenderSize / Math.max(viewWidth, viewHeight);
+    const renderWidth = Math.max(64, Math.round(viewWidth * renderScale));
+    const renderHeight = Math.max(64, Math.round(viewHeight * renderScale));
+
+    const camera = buildCamera(viewWidth || 1, viewHeight || 1);
+    renderer = createRenderer(renderWidth, renderHeight);
+    const scene = new THREEStandalone.Scene();
+    addLights(scene);
+    scene.add(workingModel);
+
+    renderer.render(scene, camera);
+
+    const cropScaleX = safeX / Math.max(viewWidth, 1e-9);
+    const cropScaleZ = safeZ / Math.max(viewHeight, 1e-9);
+    const cropWidth = Math.max(1, Math.min(renderWidth, Math.round(renderWidth * cropScaleX)));
+    const cropHeight = Math.max(1, Math.min(renderHeight, Math.round(renderHeight * cropScaleZ)));
+    const cropX = Math.max(0, Math.min(renderWidth - cropWidth, Math.round((renderWidth - cropWidth) / 2)));
+    const cropY = Math.max(0, Math.min(renderHeight - cropHeight, Math.round((renderHeight - cropHeight) / 2)));
+
+    let outputWidth = renderWidth;
+    let outputHeight = renderHeight;
+    let dataUrl = "";
+    if (cropWidth !== renderWidth || cropHeight !== renderHeight) {
+      const outputCanvas = document.createElement("canvas");
+      outputCanvas.width = cropWidth;
+      outputCanvas.height = cropHeight;
+      const outputContext = outputCanvas.getContext("2d");
+      if (outputContext) {
+        outputContext.drawImage(renderer.domElement, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+        dataUrl = outputCanvas.toDataURL("image/png");
+        outputWidth = cropWidth;
+        outputHeight = cropHeight;
+      }
+    }
+    if (!dataUrl) dataUrl = renderer.domElement.toDataURL("image/png");
+
+    return {
+      dataUrl,
+      widthPx: outputWidth,
+      heightPx: outputHeight,
+      size: { x: sizeVector.x, y: sizeVector.y, z: sizeVector.z },
+      center: { x: centerVector.x, y: centerVector.y, z: centerVector.z },
+      minY: minimumY,
+    };
+  } finally {
+    renderer?.dispose();
+    disposeModel(model);
+  }
 }
 

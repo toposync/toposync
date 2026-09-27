@@ -3,6 +3,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { resolveToposyncUrl } from "@toposync/plugin-api";
 
 import { readNumber, readScale, readString, readVector3 } from "../parsing";
+import { disposeModel, validateModel } from "../validation";
 import type { Vector3 } from "../types";
 
 type ModelMeta = { center: Vector3; minY: number };
@@ -18,7 +19,7 @@ export type GltfModelRuntime = {
 
 export function createGltfModelRuntime(
   THREE: typeof import("three"),
-  options?: { autoplay?: boolean; onInvalidate?: () => void },
+  options?: { autoplay?: boolean; onInvalidate?: () => void; unavailableLabel?: string },
 ): GltfModelRuntime {
   const group = new THREE.Group();
   const placeholderGeometry = new THREE.BoxGeometry(1, 1, 1);
@@ -38,54 +39,39 @@ export function createGltfModelRuntime(
   let token = 0;
 
   let lastUrl = "";
+  let errorLabel: ThreeTypes.Sprite | null = null;
+
+  function clearErrorLabel() {
+    if (!errorLabel) return;
+    group.remove(errorLabel);
+    errorLabel.material.map?.dispose();
+    errorLabel.material.dispose();
+    errorLabel = null;
+  }
+
+  function showUnavailable() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 64;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.fillStyle = "#251b1b";
+    context.fillRect(0, 0, 512, 64);
+    context.font = "26px sans-serif";
+    context.fillStyle = "#ffffff";
+    context.textAlign = "center";
+    context.fillText(options?.unavailableLabel ?? "Model unavailable", 256, 42, 490);
+    errorLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
+    errorLabel.scale.set(2 / group.scale.x, 0.25 / group.scale.y, 1);
+    errorLabel.position.y = 0.2 / group.scale.y;
+    group.add(errorLabel);
+  }
+
   let current: ThreeTypes.Object3D | null = null;
   let mixer: ThreeTypes.AnimationMixer | null = null;
   let actions: ThreeTypes.AnimationAction[] = [];
   let hasAnimations = false;
   let isAnimated = Boolean(options?.autoplay);
-
-  function disposeMaterial(material: ThreeTypes.Material) {
-    const materialAny = material as any;
-    const textureKeys = [
-      "map",
-      "alphaMap",
-      "aoMap",
-      "bumpMap",
-      "clearcoatMap",
-      "clearcoatNormalMap",
-      "clearcoatRoughnessMap",
-      "displacementMap",
-      "emissiveMap",
-      "envMap",
-      "iridescenceMap",
-      "iridescenceThicknessMap",
-      "lightMap",
-      "metalnessMap",
-      "normalMap",
-      "roughnessMap",
-      "sheenColorMap",
-      "sheenRoughnessMap",
-      "specularColorMap",
-      "specularIntensityMap",
-      "thicknessMap",
-      "transmissionMap",
-    ];
-    for (const key of textureKeys) {
-      const tex = materialAny[key];
-      if (tex && tex.isTexture && typeof tex.dispose === "function") tex.dispose();
-    }
-    material.dispose();
-  }
-
-  function disposeObject(obj: ThreeTypes.Object3D) {
-    obj.traverse((child) => {
-      const mesh = child as any;
-      if (mesh.geometry?.dispose) mesh.geometry.dispose();
-      const material = mesh.material;
-      if (Array.isArray(material)) material.forEach((m) => m && disposeMaterial(m));
-      else if (material) disposeMaterial(material);
-    });
-  }
 
   function disposeMixer() {
     if (!mixer) return;
@@ -142,11 +128,12 @@ export function createGltfModelRuntime(
 
   async function load(url: string, meta: ModelMeta | null) {
     const myToken = ++token;
+    let pendingModel: ThreeTypes.Object3D | null = null;
     try {
       const gltf = await loader.loadAsync(url);
-      if (disposed || myToken !== token) return;
-
       const model = gltf.scene || gltf.scenes?.[0];
+      pendingModel = model;
+      if (disposed || myToken !== token) return;
       if (!model) throw new Error("Empty model");
 
       model.traverse((obj) => {
@@ -157,7 +144,7 @@ export function createGltfModelRuntime(
         }
       });
 
-      const boundingBox = new THREE.Box3().setFromObject(model);
+      const boundingBox = validateModel(model);
       const centerVector = boundingBox.getCenter(new THREE.Vector3());
       const minY = boundingBox.min.y;
       const center = meta?.center ?? { x: centerVector.x, y: centerVector.y, z: centerVector.z };
@@ -167,11 +154,12 @@ export function createGltfModelRuntime(
       if (current) {
         group.remove(current);
         disposeMixer();
-        disposeObject(current);
+        disposeModel(current);
         current = null;
       }
 
       current = model;
+      pendingModel = null;
       group.add(model);
       placeholder.visible = false;
 
@@ -185,8 +173,14 @@ export function createGltfModelRuntime(
       }
       options?.onInvalidate?.();
     } catch (err) {
+      if (disposed || myToken !== token) return;
+      placeholder.visible = false;
+      clearErrorLabel();
+      showUnavailable();
       console.error("[models:gltfModel]", err);
       options?.onInvalidate?.();
+    } finally {
+      if (pendingModel) disposeModel(pendingModel);
     }
   }
 
@@ -211,19 +205,28 @@ export function createGltfModelRuntime(
 
     const url = dir && model ? resolveToposyncUrl(`/files/${encodeURIComponent(dir)}/${encodeURIComponent(model)}`) : "";
     if (!url) {
+      token++;
+      clearErrorLabel();
       lastUrl = "";
       placeholder.visible = false;
       if (current) {
         group.remove(current);
         disposeMixer();
-        disposeObject(current);
+        disposeModel(current);
         current = null;
       }
       return;
     }
     if (url && url !== lastUrl) {
       lastUrl = url;
-      placeholder.visible = !current;
+      clearErrorLabel();
+      if (current) {
+        group.remove(current);
+        disposeMixer();
+        disposeModel(current);
+        current = null;
+      }
+      placeholder.visible = true;
       void load(url, { center, minY });
     }
   }
@@ -245,8 +248,9 @@ export function createGltfModelRuntime(
     },
     dispose: () => {
       disposed = true;
+      clearErrorLabel();
       disposeMixer();
-      if (current) disposeObject(current);
+      if (current) disposeModel(current);
       placeholderGeometry.dispose();
       placeholderMaterial.dispose();
     },

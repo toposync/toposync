@@ -27,3 +27,10 @@ export function readScale(value: unknown, fallback = 1): number {
   return clamp(readNumber(value, fallback), MINIMUM_MODEL_SCALE, MAXIMUM_MODEL_SCALE);
 }
 
+
+/** Uma altura conhecida determina a escala uniforme, sem truncar a referência silenciosamente. */
+export function scaleFromKnownHeight(modelHeight: number, heightMeters: number): number | null {
+  const scale = heightMeters / modelHeight;
+  return modelHeight > 0 && heightMeters > 0 && Number.isFinite(scale) && scale >= MINIMUM_MODEL_SCALE && scale <= MAXIMUM_MODEL_SCALE
+    ? scale : null;
+}

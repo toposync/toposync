@@ -1,5 +1,6 @@
 import { resolveToposyncUrl, type EditorTool, type HostI18n, type PlanePoint } from "@toposync/plugin-api";
 
+import { MAXIMUM_MODEL_BYTES } from "../validation";
 import { uploadToFilesDir } from "../api/filesApi";
 import { debugLog } from "../debug";
 import { IMPORT_MODEL_TOOL_ID, MODEL_ELEMENT_TYPE_ID } from "../constants";
@@ -62,6 +63,9 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
 
       async function handleFiles(files: File[]) {
         if (files.length === 0) return;
+        if (files.reduce((total, file) => total + file.size, 0) > MAXIMUM_MODEL_BYTES) {
+          throw new Error(t("ext.models.error.too_large"));
+        }
 
         const entryFile =
           files.find((file) => file.name.toLowerCase().endsWith(".glb")) ??

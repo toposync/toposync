@@ -96,8 +96,10 @@ class AudioFeaturesRuntime(TransformOperatorRuntime):
 
 
 def register_audio_operator(registry) -> None:
+    from .audio_correlation import register_audio_correlation
     from .audio_source import register_audio_source
     from .audio_events import register_audio_occurrence
+    register_audio_correlation(registry)
     register_audio_source(registry)
     register_audio_occurrence(registry)
     if registry.get("camera.audio_features") is not None:

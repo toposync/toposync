@@ -351,3 +351,13 @@ intervals overlap after declared uncertainty, with the same verified capture-clo
 reference. Retention is bounded by arrival count, not a guaranteed time horizon.
 Receipt clocks remain ineligible. Temporal overlap does not prove the same sound
 and does not merge occurrences or suppress notifications from different cameras.
+
+### Two-source acoustic comparison
+
+`camera.audio_correlation` accepts two explicitly wired audio inputs, `first` and `second`, after per-source `camera.audio_features`. It runs at the origin and requires private artifact transport. It forwards every packet and lifecycle, adding `audio_correlation`; it does **not** merge occurrences or suppress notifications. Independent camera recipes do not automatically connect to this stage.
+
+The evaluated input is a one-second mono PCM16 window at 16 or 48 kHz. Both sources must declare the same capture-clock synchronization reference, at most 50 ms uncertainty each, and start within 100 ms. Receipt clocks remain unavailable for comparison; the current RTSP source supplies receipt time. A matching waveform cannot establish clock calibration.
+
+The method compares temporal log-power envelopes across 12 frequency bands. A score of at least 0.7 is reported as `similar`, with `calibrated=false` and `same_sound_confirmed=false`. Silence, insufficient spectral variation and unsupported windows abstain. Evaluation covers a small LOCATA speech subset, including a held-out recording, not general sounds or calibrated matching accuracy. Identical playback from different locations remains ambiguous; the lag does not provide a location.
+
+Only two signatures are retained in memory, for at most five seconds; raw audio is forwarded through the existing private contract and is not stored by this operator. Source bindings cannot switch ports. Closed captures cannot resume, and 64 closed captures exhaust the session until the operator restarts. Shutdown clears all state. A lifecycle-aware grouping stage and a multi-source recipe are still required to deliver one notification per correlated occurrence.

@@ -1478,3 +1478,58 @@ def test_cat_recipe_persists_bound_region_and_rejects_wrong_context(tmp_path, mo
             assert crop[key] == value
         assert crop.get("units", "percent") == "percent"
         assert _node_config(pipeline, "ai.condition_filter")["minimum_duration_seconds"] == 2
+
+
+def test_audio_pair_requires_two_readable_sources_and_compiles_disabled(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from fastapi import HTTPException
+    from toposync.runtime.auth import AuthRuntime
+
+    with _create_client(tmp_path, monkeypatch, patch_model_readiness=False) as client:
+        _configure_camera(client)
+        settings = client.portal.call(client.app.state.config_store.get_settings)
+        devices = deepcopy(settings.extensions["com.toposync.cameras"]["devices"])
+        peer = deepcopy(devices[0])
+        peer["id"] = "cam2"
+        peer["name"] = "Segunda câmera"
+        devices.append(peer)
+        assert client.patch("/api/settings/extensions/com.toposync.cameras", json={"devices": devices}).status_code == 200
+        path = "/api/cameras/cameras/cam1/pipelines/presets"
+        body = {"preset": "audio_anomaly", "source_id": "main", "enabled": True,
+                "audio_baseline": {"reference": "first.wav", "rms": .01},
+                "audio_peer": {"camera_id": "cam2", "source_id": "main",
+                               "baseline": {"reference": "second.wav", "rms": .02}}}
+        for change, status in [({"camera_id": "cam1"}, 400), ({"camera_id": "unknown"}, 409),
+                               ({"source_id": "missing"}, 409), ({"baseline": None}, 422)]:
+            response = client.post(path, json={**body, "audio_peer": {**body["audio_peer"], **change}})
+            assert response.status_code == status, response.text
+        assert client.post(path, json={**body, "preset": "people_simple"}).status_code == 400
+        devices[1]["sources"][0]["enabled"] = False
+        assert client.patch("/api/settings/extensions/com.toposync.cameras", json={"devices": devices}).status_code == 200
+        assert client.post(path, json=body).status_code == 409
+        devices[1]["sources"][0]["enabled"] = True
+        assert client.patch("/api/settings/extensions/com.toposync.cameras", json={"devices": devices}).status_code == 200
+        response = client.post(path, json=body)
+        assert response.status_code == 200, response.text
+        pipeline = client.get("/api/pipelines/" + response.json()["pipeline_name"]).json()
+        assert pipeline["enabled"] is False
+        assert _operator_ids(pipeline).count("camera.audio_source") == 2
+        assert _operator_ids(pipeline).count("camera.audio_features") == 2
+        assert _operator_ids(pipeline).count("camera.audio_correlation") == 1
+        assert _operator_ids(pipeline).count("camera.audio_group") == 1
+        assert _operator_ids(pipeline).count("core.notify") == 1
+        assert "audio_group" in _node_config(pipeline, "core.notify")["historical_evidence_paths"]
+        assert pipeline["graph"]["meta"]["correlation_support"] == "verified_capture_clocks_required"
+        for camera in ("cam1", "cam2"):
+            overview = client.get(f"/api/cameras/cameras/{camera}/pipelines").json()
+            assert any(item["name"] == pipeline["name"] and item["source_ids"] == ["main"]
+                       for item in overview["pipelines"])
+        authorize = AuthRuntime.authorize
+        denied_camera = "cam2"
+        def deny_peer(self, **kwargs):
+            if kwargs.get("action") == "core:camera:read" and kwargs.get("resource_selector") == denied_camera:
+                raise HTTPException(403, "Controlled peer denial")
+            return authorize(self, **kwargs)
+        monkeypatch.setattr(AuthRuntime, "authorize", deny_peer)
+        for denied_camera in ("cam1", "cam2"):
+            assert client.post(path, json=body).status_code == 403

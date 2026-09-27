@@ -9,7 +9,9 @@ function evidence(notification: Notification) {
 }
 
 export function supportsAudioObservation(notification: Notification): boolean {
-  return Object.keys(readRecord(evidence(notification).audio_analysis)).length > 0;
+  const data = evidence(notification);
+  return Object.keys(readRecord(data.audio_analysis)).length > 0
+    || Array.isArray(readRecord(data.audio_group).members);
 }
 
 export function AudioObservationDetails({ notification, i18n }: { notification: Notification; i18n: HostI18n }) {
@@ -34,6 +36,25 @@ export function AudioObservationDetails({ notification, i18n }: { notification: 
   const key = payload.status === "closed" && payload.reason === "runtime_restart"
     ? "restarted" : reasons[readString(occurrence.status)] ?? "unknown";
   const text = readString(transcription.text).slice(0, 4096);
+  const group = readRecord(data.audio_group);
+  const members = Array.isArray(group.members) ? group.members.slice(0, 2).map(readRecord) : [];
+  if (members.length) return <section className="card" aria-label={t("ext.cameras.audioHistory.group")}>
+    <div className="cardBody" style={{ overflowWrap: "anywhere" }}>
+      <strong>{t("ext.cameras.audioHistory.group")}</strong>
+      <p>{t(members.length > 1 ? "ext.cameras.audioHistory.association" : "ext.cameras.audioHistory.independent")}</p>
+      {members.map((member, index) => <details key={readString(member.event_id) || index} open={members.length === 1}
+        style={{ marginBottom: 12 }}>
+        <summary style={{ minHeight: 44 }}>
+          {(readString(member.camera_name) || readString(member.camera_id) || t("ext.cameras.audioHistory.source", { number: index + 1 })).slice(0, 200)}
+          {" · "}{t(payload.status === "closed" && payload.reason === "runtime_restart" ? "ext.cameras.audioHistory.interruptedMember" : member.active === true ? "ext.cameras.audioHistory.activeMember" : "ext.cameras.audioHistory.endedMember")}
+        </summary>
+        <AudioObservationDetails i18n={i18n} notification={{ ...notification, payload: {
+          status: payload.status, reason: payload.reason,
+          data: { historical_evidence: { audio_analysis: readRecord(member.analysis), audio_occurrence: readRecord(member.occurrence) } },
+        } }} />
+      </details>)}
+    </div>
+  </section>;
   return <section className="card" aria-label={t("ext.cameras.audioHistory.title")}>
     <div className="cardBody" style={{ overflowWrap: "anywhere" }}>
       <strong>{t("ext.cameras.audioHistory.title")}</strong>
@@ -56,6 +77,14 @@ export function AudioObservationDetails({ notification, i18n }: { notification: 
 
 export const audioHistoryTranslations = {
   en: {
+    "ext.cameras.audioHistory.group": "Audio observations by camera",
+    "ext.cameras.audioHistory.association": "These observations were associated by acoustic similarity. This does not confirm a single physical sound or its location. Review each source.",
+    "ext.cameras.audioHistory.independent": "This source has a separate occurrence; no shared sound association was established.",
+    "ext.cameras.audioHistory.source": "Source {{number}}",
+    "ext.cameras.audioHistory.activeMember": "Observing",
+    "ext.cameras.audioHistory.interruptedMember": "Observation interrupted",
+    "ext.cameras.audioHistory.endedMember": "Observation ended",
+
     "ext.cameras.audioHistory.optIn": "Keep a private excerpt of each occurrence for review, for up to 24 hours. Old excerpts may expire earlier when storage is full.",
     "ext.cameras.audioHistory.excerpt": "Retained starting excerpt: {{seconds}} s. It does not cover the full occurrence. Available for up to 24 hours.",
     "ext.cameras.audioHistory.unavailable": "Audio excerpt unavailable, expired or access denied.",
@@ -74,6 +103,14 @@ export const audioHistoryTranslations = {
     "ext.cameras.audioHistory.clock": "Intervals follow decoded samples. Receipt time does not establish synchronized camera capture time or sound location.",
   },
   "pt-BR": {
+    "ext.cameras.audioHistory.group": "Observações de áudio por câmera",
+    "ext.cameras.audioHistory.association": "Estas observações foram associadas por semelhança acústica. Isso não confirma um único som físico nem sua localização. Revise cada fonte.",
+    "ext.cameras.audioHistory.independent": "Esta fonte tem uma ocorrência separada; não foi estabelecida associação de som compartilhado.",
+    "ext.cameras.audioHistory.source": "Fonte {{number}}",
+    "ext.cameras.audioHistory.activeMember": "Observando",
+    "ext.cameras.audioHistory.interruptedMember": "Observação interrompida",
+    "ext.cameras.audioHistory.endedMember": "Observação encerrada",
+
     "ext.cameras.audioHistory.optIn": "Guardar um trecho privado de cada ocorrência para revisão por até 24 horas. Trechos antigos podem expirar antes quando o armazenamento ficar cheio.",
     "ext.cameras.audioHistory.excerpt": "Trecho inicial retido: {{seconds}} s. Não cobre toda a ocorrência. Disponível por até 24 horas.",
     "ext.cameras.audioHistory.unavailable": "Trecho de áudio indisponível, expirado ou sem permissão de acesso.",

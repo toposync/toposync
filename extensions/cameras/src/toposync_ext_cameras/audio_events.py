@@ -175,7 +175,7 @@ def register_audio_occurrence(registry):
     )
 
 
-def build_audio_recipe(*, graph_uid, camera_id, source_id, baseline, retain_audio=False, title="", description=""):
+def build_audio_recipe(*, graph_uid, camera_id, source_id, baseline, retain_audio=False, title="", description="", peer=None):
     from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
     from .audio import AudioBaseline
 
@@ -197,5 +197,25 @@ def build_audio_recipe(*, graph_uid, camera_id, source_id, baseline, retain_audi
               "queue": {"max_items": 4, "drop_policy": "block"},
               "backpressure": {"mode": "pause_upstream"}}
              for before, after in zip(nodes, nodes[1:])]
+    if peer is not None:
+        peer_baseline = AudioBaseline.model_validate(peer["baseline"]).model_dump()
+        if not peer.get("camera_id") or peer["camera_id"] == camera_id or not peer.get("source_id"):
+            raise ValueError("Choose a distinct second camera and source")
+        nodes[2]["operator"] = "camera.audio_group"
+        nodes[3]["config"]["historical_evidence_paths"].append("audio_group")
+        nodes.extend([
+            {"id": "peer_source", "operator": "camera.audio_source",
+             "config": {"camera_id": peer["camera_id"], "source_id": peer["source_id"]}},
+            {"id": "peer_analysis", "operator": "camera.audio_features", "config": {"baseline": peer_baseline}},
+            {"id": "correlation", "operator": "camera.audio_correlation", "config": {}},
+        ])
+        edges[1]["to"] = {"node": "correlation", "port": "first"}
+        for source_node, target_node, target_port in [
+            ("peer_source", "peer_analysis", "in"), ("peer_analysis", "correlation", "second"),
+            ("correlation", "occurrence", "in"),
+        ]:
+            edges.append({**edges[0], "from": {"node": source_node, "port": "out"},
+                          "to": {"node": target_node, "port": target_port}})
     return build_pipeline_graph_v2(graph_uid=graph_uid, nodes=nodes, edges=edges,
-                                   meta={"audio_support": "unverified", "requires_explicit_baseline": True})
+                                   meta={"audio_support": "unverified", "requires_explicit_baseline": True,
+                                         "correlation_support": "verified_capture_clocks_required" if peer else "not_requested"})

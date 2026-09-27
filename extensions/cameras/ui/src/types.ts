@@ -481,6 +481,7 @@ export type CameraPipelinesResponse = {
 export type CameraPipelinePresetRequest = {
   preset: CameraPipelinePreset;
   audio_baseline?: { reference: string; rms: number };
+  audio_peer?: { camera_id: string; source_id: string; baseline: { reference: string; rms: number } };
   retain_audio?: boolean;
   source_id?: string;
   pipeline_name?: string;

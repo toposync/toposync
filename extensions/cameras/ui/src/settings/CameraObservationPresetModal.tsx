@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { requestJson, resolveToposyncUrl, type HostUi } from "@toposync/plugin-api";
-import type { CameraPipelinePresetRequest } from "../types";
+import type { CameraConfig, CameraPipelinePresetRequest } from "../types";
 import { createCameraPipelinePreset } from "../api/camerasApi";
 import { SubModal } from "../ui/SubModal";
 import type { CameraPipelinePresetModal } from "./CameraPipelinePresetModal";
 
 export function CameraObservationPresetModal({
-  open, preset, camera, activeSourceId, mappedCompositions, processingServers, i18n, onClose, onCreated, ui,
-}: React.ComponentProps<typeof CameraPipelinePresetModal> & { ui?: HostUi }): React.ReactElement | null {
+  open, preset, camera, cameras = [], activeSourceId, mappedCompositions, processingServers, i18n, onClose, onCreated, ui,
+}: React.ComponentProps<typeof CameraPipelinePresetModal> & { ui?: HostUi; cameras?: CameraConfig[] }): React.ReactElement | null {
   const { t } = i18n.useI18n();
   const sources = camera.sources.filter((source) => source.enabled && source.kind === "video");
   const [sourceId, setSourceId] = useState("");
@@ -26,6 +26,13 @@ export function CameraObservationPresetModal({
   const [signalsUnavailable, setSignalsUnavailable] = useState(false);
   const [saving, setSaving] = useState(false);
   const [reference, setReference] = useState<File | null>(null);
+  const [peerId, setPeerId] = useState("");
+  const [peerReference, setPeerReference] = useState<File | null>(null);
+  const peers = cameras.filter(item => item.id !== camera.id).flatMap(item => item.sources
+    .filter(source => source.enabled && source.kind === "video")
+    .map(source => ({ id: JSON.stringify([item.id, source.id]), cameraId: item.id, sourceId: source.id,
+      label: `${item.name || item.id} · ${source.name || source.id}` })));
+  const selectedPeer = peers.find(item => item.id === peerId);
   const [retainAudio, setRetainAudio] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -37,7 +44,7 @@ export function CameraObservationPresetModal({
     setServerId("local");
     setError(null);
     setReference(null);
-    setRetainAudio(false);
+    setRetainAudio(false); setPeerId(""); setPeerReference(null);
   }, [open, preset, camera.id, activeSourceId]);
   useEffect(() => {
     if (!open || preset !== "doorbell_visitor") return;
@@ -64,25 +71,29 @@ export function CameraObservationPresetModal({
   const selectedArea = mappedCompositions.flatMap(composition => (composition.areas ?? []).map(item => ({...item, compositionId: composition.id}))).find(item => JSON.stringify([item.compositionId, item.id]) === areaId);
   const key = audio ? "ext.cameras.audioRecipe" : visitor ? "ext.cameras.visitor" : area ? `ext.cameras.area.${preset === "area_presence" ? "presence" : preset === "area_group_entry" ? "group" : "entry"}` : `ext.cameras.cat.${preset === "cat_litter_use" ? "litter" : "water"}`;
   async function save(): Promise<void> {
-    if (saving || !sourceId || !preset || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference) || (selectableCategories && categories.length === 0) || (cat && !regionReady)) return;
+    if (saving || !sourceId || !preset || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && (!reference || (peerId && (!selectedPeer || !peerReference)))) || (selectableCategories && categories.length === 0) || (cat && !regionReady)) return;
     setSaving(true);
     setError(null);
     try {
-      let audio_baseline: { reference: string; rms: number } | undefined;
-      if (audio && reference) {
-        if (reference.size > 12_000_000) throw new Error(t("ext.cameras.audioRecipe.invalid"));
+      async function analyzeReference(file: File) {
+        if (file.size > 12_000_000) throw new Error(t("ext.cameras.audioRecipe.invalid"));
         const response = await fetch(resolveToposyncUrl("/api/cameras/audio/analyze?started_at=0&clock_basis=synthetic"), {
-          method: "POST", body: reference, headers: { "Content-Type": "audio/wav" },
+          method: "POST", body: file, headers: { "Content-Type": "audio/wav" },
         });
         if (!response.ok) throw new Error(t("ext.cameras.audioRecipe.invalid"));
         const result = await response.json() as { windows: { duration_seconds: number; rms: number }[] };
         const duration = result.windows.reduce((sum, window) => sum + window.duration_seconds, 0);
         const rms = Math.sqrt(result.windows.reduce((sum, window) => sum + window.rms ** 2 * window.duration_seconds, 0) / duration);
         if (!Number.isFinite(rms) || rms <= 0) throw new Error(t("ext.cameras.audioRecipe.invalid"));
-        audio_baseline = { reference: reference.name.slice(0, 200), rms };
+        return { reference: file.name.slice(0, 200), rms };
       }
+      const audio_baseline = audio && reference ? await analyzeReference(reference) : undefined;
+      const audio_peer = audio && selectedPeer && peerReference ? {
+        camera_id: selectedPeer.cameraId, source_id: selectedPeer.sourceId,
+        baseline: await analyzeReference(peerReference),
+      } : undefined;
       const result = await createCameraPipelinePreset(camera.id, {
-        audio_baseline,
+        audio_baseline, audio_peer,
         observation_region: cat ? region : undefined,
         retain_audio: audio && retainAudio,
         area_categories: selectableCategories ? categories : undefined,
@@ -103,17 +114,34 @@ export function CameraObservationPresetModal({
     <p>{t(`${key}.description`)}</p>
     <p>{t(audio ? "ext.cameras.audioRecipe.limits" : "ext.cameras.cat.preview")}</p>
     {audio && <label className="field"><span className="label">{t("ext.cameras.audioRecipe.reference")}</span>
-      <input type="file" accept=".wav,audio/wav" disabled={saving} style={{ maxWidth: "100%" }}
+      <input key={sourceId} type="file" accept=".wav,audio/wav" disabled={saving} style={{ maxWidth: "100%" }}
         onChange={event => { setReference(event.target.files?.[0] ?? null); setError(null); }} />
       <span className="settingsDescription">{t("ext.cameras.audioRecipe.referenceHelp")}</span>
     </label>}
+    {audio && peers.length > 0 && <details style={{ marginBottom: 16 }}>
+      <summary>{t("ext.cameras.audioRecipe.compare")}</summary>
+      <label className="field"><span className="label">{t("ext.cameras.audioRecipe.peer")}</span>
+        <select className="input" aria-label={t("ext.cameras.audioRecipe.peer")} value={peerId} disabled={saving}
+          onChange={event => { setPeerId(event.target.value); setPeerReference(null); }}>
+          <option value="">{t("ext.cameras.audioRecipe.single")}</option>
+          {peers.map(peer => <option key={peer.id} value={peer.id}>{peer.label}</option>)}
+        </select>
+      </label>
+      {peerId && <>
+        <label className="field"><span className="label">{t("ext.cameras.audioRecipe.peerReference")}</span>
+          <input key={peerId} type="file" accept=".wav,audio/wav" disabled={saving} style={{ maxWidth: "100%" }}
+            onChange={event => { setPeerReference(event.target.files?.[0] ?? null); setError(null); }} />
+        </label>
+        <p className="settingsDescription">{t("ext.cameras.audioRecipe.clockLimit")}</p>
+      </>}
+    </details>}
     {audio && <label className="field" style={{ display: "flex", alignItems: "start", gap: 8 }}>
       <input type="checkbox" checked={retainAudio} disabled={saving} onChange={event => setRetainAudio(event.target.checked)} />
       <span>{t("ext.cameras.audioHistory.optIn")}</span>
     </label>}
     {sources.length > 1 ? <div className="field">
       <label className="label" htmlFor="cat-recipe-source">{t("ext.cameras.cat.source")}</label>
-      <select id="cat-recipe-source" className="input" value={sourceId} onChange={(event) => setSourceId(event.target.value)} disabled={saving}>
+      <select id="cat-recipe-source" className="input" value={sourceId} onChange={(event) => { setSourceId(event.target.value); setReference(null); }} disabled={saving}>
         {sources.map((source) => <option key={source.id} value={source.id}>{source.name || source.id}</option>)}
       </select>
     </div> : null}
@@ -161,7 +189,7 @@ export function CameraObservationPresetModal({
     </details>
     <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.paused")}</p>
     {error ? <p role="alert" className="errorText">{error}</p> : null}
-    <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference) || (selectableCategories && categories.length === 0) || (cat && !regionReady)} onClick={() => void save()}>
+    <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && (!reference || (peerId && (!selectedPeer || !peerReference)))) || (selectableCategories && categories.length === 0) || (cat && !regionReady)} onClick={() => void save()}>
       {t(saving ? "ext.cameras.cat.saving" : "ext.cameras.cat.save")}
     </button>
   </SubModal>

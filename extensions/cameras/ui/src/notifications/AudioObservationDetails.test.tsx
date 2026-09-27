@@ -35,4 +35,18 @@ test("audio history explains closure without claiming calibrated confidence or r
   assert.match(html, /interrompida pelo reinício/);
   assert.match(html, /não foram confirmados continuidade nem silêncio/);
   assert.doesNotMatch(html, /O som superou/);
+  evidence.audio_group = { members: [
+    { event_id: "first", camera_name: "<Entrada>", active: true, analysis: evidence.audio_analysis,
+      occurrence: { status: "above_baseline", clip: { status: "retained", id: "a".repeat(32), duration_seconds: 1 } } },
+    { event_id: "second", camera_name: "Lateral", active: false, analysis: evidence.audio_analysis, occurrence: { status: "source_closed" } },
+  ] };
+  html = renderToStaticMarkup(<AudioObservationDetails notification={notification} i18n={i18n} />);
+  assert.match(html, /Observações de áudio por câmera/);
+  assert.match(html, /não confirma um único som físico/);
+  assert.match(html, /&lt;Entrada&gt;/);
+  assert.match(html, /Lateral/);
+  assert.match(html, /Observação interrompida/);
+  assert.doesNotMatch(html, / · Observando/);
+  assert.match(html, /preload="none"/);
+  assert.match(html, new RegExp("/api/cameras/audio/clips/" + "a".repeat(32)));
 });

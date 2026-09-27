@@ -1,5 +1,11 @@
 export const catActivityTranslations = {
   en: {
+    "ext.cameras.audioRecipe.compare": "Compare another camera",
+    "ext.cameras.audioRecipe.peer": "Second camera and source",
+    "ext.cameras.audioRecipe.single": "Use only this camera",
+    "ext.cameras.audioRecipe.peerReference": "Normal-sound WAV for the second source",
+    "ext.cameras.audioRecipe.clockLimit": "Each source keeps its own reference. Sounds can share a notification only with comparable audio and verified capture clocks. Current RTSP sources provide receipt time, so their notifications remain separate.",
+
     "ext.cameras.cat.regionReconfirm": "Observation unavailable: the image no longer matches the selected region. Select and confirm the region again before resuming. No events does not mean no activity.",
     "ext.cameras.cat.regionPtzUnavailable": "Observation unavailable: a fixed region cannot be used with this camera’s PTZ state. Choose a fixed view.",
     "ext.cameras.cat.regionSelect": "Select observation region",
@@ -50,6 +56,12 @@ export const catActivityTranslations = {
     "ext.cameras.cat.name": "Recipe name",
   },
   "pt-BR": {
+    "ext.cameras.audioRecipe.compare": "Comparar outra câmera",
+    "ext.cameras.audioRecipe.peer": "Segunda câmera e fonte",
+    "ext.cameras.audioRecipe.single": "Usar apenas esta câmera",
+    "ext.cameras.audioRecipe.peerReference": "WAV de som normal da segunda fonte",
+    "ext.cameras.audioRecipe.clockLimit": "Cada fonte mantém sua referência. Sons só compartilham uma notificação com áudio comparável e relógios de captura verificados. As fontes RTSP atuais fornecem horário de recepção; suas notificações permanecem separadas.",
+
     "ext.cameras.cat.regionReconfirm": "Observação indisponível: a imagem não corresponde mais à região selecionada. Selecione e confirme a região novamente antes de retomar. Ausência de eventos não significa ausência de atividade.",
     "ext.cameras.cat.regionPtzUnavailable": "Observação indisponível: a região fixa não pode ser usada com o estado PTZ desta câmera. Escolha um enquadramento fixo.",
     "ext.cameras.cat.regionSelect": "Selecionar região de observação",

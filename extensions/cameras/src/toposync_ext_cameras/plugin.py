@@ -699,6 +699,13 @@ class CameraPipelinesResponse(BaseModel):
     suggested_pipeline_names: dict[str, str] = Field(default_factory=dict)
 
 
+class AudioPeerSource(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    camera_id: str = Field(min_length=1, max_length=200)
+    source_id: str = Field(min_length=1, max_length=200)
+    baseline: AudioBaseline
+
+
 class CameraPipelinePresetRequest(BaseModel):
     preset: Literal[
         "audio_anomaly",
@@ -718,6 +725,7 @@ class CameraPipelinePresetRequest(BaseModel):
     ]
     source_id: str = ""
     audio_baseline: AudioBaseline | None = None
+    audio_peer: AudioPeerSource | None = None
     retain_audio: bool = False
     pipeline_name: str = ""
     enabled: bool = True
@@ -5879,6 +5887,13 @@ class CamerasExtension(BaseExtension):
                 raise HTTPException(400, "A fixed observation region does not support PTZ attention")
             if body.orientation_reference.strip() and preset != "person_stopped":
                 raise HTTPException(status_code=400, detail="orientation_reference requires person_stopped")
+            if body.audio_peer is not None and preset != "audio_anomaly":
+                raise HTTPException(400, "A second audio source requires the audio recipe")
+            if preset == "audio_anomaly":
+                _require_auth(request, action="core:camera:read", resource_type="core:camera", resource_selector=cid)
+                if body.audio_peer is not None:
+                    _require_auth(request, action="core:camera:read", resource_type="core:camera",
+                                  resource_selector=body.audio_peer.camera_id)
             store = _config_store(request)
             compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
 
@@ -5895,6 +5910,16 @@ class CamerasExtension(BaseExtension):
             if not isinstance(source, dict):
                 raise HTTPException(status_code=409, detail="Camera source not found or disabled")
             source_id = str(source.get("id") or "").strip()
+
+            if body.audio_peer is not None:
+                peer = body.audio_peer
+                if peer.camera_id == cid:
+                    raise HTTPException(400, "Choose a distinct second camera")
+                peer_camera = get_camera_device(ext, camera_id=peer.camera_id)
+                peer_source = get_camera_source(peer_camera, source_id=peer.source_id, kind="video",
+                                                enabled_only=True) if peer_camera is not None else None
+                if not isinstance(peer_source, dict):
+                    raise HTTPException(409, "Second camera source not found or disabled")
 
             if body.observation_region is not None:
                 binding = body.observation_region.snapshot_binding
@@ -6017,6 +6042,7 @@ class CamerasExtension(BaseExtension):
                 graph = build_audio_recipe(
                     graph_uid=pipeline_name, camera_id=cid, source_id=source_id,
                     baseline=body.audio_baseline, retain_audio=body.retain_audio,
+                    peer=body.audio_peer.model_dump() if body.audio_peer else None,
                     title=body.notification_title.strip(), description=body.notification_description.strip(),
                 ) if preset == "audio_anomaly" else _build_camera_preset_graph(
                     preset=preset,

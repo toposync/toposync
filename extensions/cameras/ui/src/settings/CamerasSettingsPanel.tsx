@@ -1351,7 +1351,6 @@ function CamerasSettingsPanelContent({
                           <span className="cardBody">
                             <span className="settingsListTitle">
                               {source.name || source.id} {source.is_default ? "· padrão" : ""}
-                              {sourcePublicationEnabled(activeCamera.id, source) ? " · transmitindo" : ""}
                             </span>
                             <span className="settingsListMeta">{sourceRoleLabel(source.role, t)} · {sourceResolutionLabel(source)}</span>
                             <span className="settingsListMeta">{sourceOriginLabel(source, t)}</span>

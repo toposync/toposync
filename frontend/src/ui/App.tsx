@@ -323,12 +323,13 @@ type AppProps = {
 type NotificationsState = {
   byId: Record<string, Notification>;
   visibleIds: string[];
+  resolvedOnServer?: boolean;
 };
 
 function mergeNotificationPage(
   prev: NotificationsState,
   pageNotifications: readonly Notification[],
-  options: { replaceVisible: boolean; filter: NotificationsFilter },
+  options: { replaceVisible: boolean; filter: NotificationsFilter; resolvedOnServer?: boolean },
 ): NotificationsState {
   const byId = { ...prev.byId };
   for (const raw of pageNotifications) {
@@ -338,6 +339,11 @@ function mergeNotificationPage(
   }
 
   const pageIds = pageNotifications.map((notification) => notification.id);
+  if (options.resolvedOnServer) return {
+    byId, resolvedOnServer: true,
+    visibleIds: options.filter.semantic ? pageIds : sortNotificationIdsByCreatedDesc(
+      options.replaceVisible ? pageIds : [...prev.visibleIds, ...pageIds], byId),
+  };
   if (options.filter.semantic && options.filter.query.trim()) return { byId, visibleIds: pageIds };
   const pageIdSet = new Set(pageIds);
   const retainedVisibleIds = options.replaceVisible
@@ -365,7 +371,7 @@ function upsertNotificationInState(
   const merged = existing ? { ...withoutEphemeralImage(existing), ...next } : next;
   const byId = { ...prev.byId, [next.id]: merged };
   // A relevância depende do modelo; eventos novos não entram por coincidência literal.
-  if (filter.semantic && filter.query.trim()) return { byId, visibleIds: prev.visibleIds };
+  if (prev.resolvedOnServer || (filter.semantic && filter.query.trim())) return { ...prev, byId };
   const visible = new Set(prev.visibleIds);
   if (notificationMatchesFilter(merged, filter)) {
     visible.add(next.id);
@@ -924,6 +930,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           mergeNotificationPage(prev, page.notifications ?? [], {
             replaceVisible: true,
             filter: notificationsRequestFilter,
+            resolvedOnServer: Boolean(page.search?.time_range || page.search?.reason === "installation_timezone_required"),
           }),
         );
         setNotificationsSearchStatus(page.search);
@@ -1521,6 +1528,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         mergeNotificationPage(prev, page.notifications, {
           replaceVisible: false,
           filter,
+          resolvedOnServer: Boolean(page.search?.time_range || page.search?.reason === "installation_timezone_required"),
         }),
       );
     } catch (err) {

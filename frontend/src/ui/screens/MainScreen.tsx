@@ -388,6 +388,16 @@ export function MainScreen({
   onViewportReady,
 }: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
+  const timeRange = notificationsSearchStatus?.time_range;
+  const timezoneRequired = notificationsSearchStatus?.reason === "installation_timezone_required";
+  const timeFormatter = timeRange ? new Intl.DateTimeFormat(locale, {
+    timeZone: timeRange.timezone, dateStyle: "short", timeStyle: "short",
+  }) : null;
+  const timeSearchMessage = timezoneRequired ? t("core.ui.notifications.filter.timezone_required")
+    : timeRange && timeFormatter ? t("core.ui.notifications.filter.time_range", {
+      start: timeFormatter.format(new Date(timeRange.created_after * 1000)),
+      end: timeFormatter.format(new Date(timeRange.created_before * 1000)), timezone: timeRange.timezone,
+    }) : null;
   const pathname = usePathname();
   const normalizedPathname = normalizePathname(pathname);
   const routeCameraLiveViewId = liveViewIdFromCameraLivePath(normalizedPathname);
@@ -1246,13 +1256,13 @@ export function MainScreen({
                           onChange={(event) => setFilter((previous) => ({ ...previous, semantic: event.target.checked }))} />
                         {t("core.ui.notifications.filter.semantic")}
                       </label>
-                      {filter.semantic && filter.query.trim() ? (
+                      {(filter.semantic || timeRange) && filter.query.trim() ? (
                         <button type="button" className="chipButton" disabled={notificationsLoading} onClick={onNotificationsSearchRefresh}>
                           {t("core.ui.notifications.filter.refresh_search")}
                         </button>
                       ) : null}
                       <p id="notificationsSearchMode" className="muted" role="status">
-                        {notificationsSearchStatus?.mode === "semantic_text"
+                        {timezoneRequired ? t("core.ui.notifications.filter.timezone_required") : notificationsSearchStatus?.mode === "semantic_text"
                           ? t("core.ui.notifications.filter.semantic_scope", { limit: notificationsSearchStatus.scope_limit ?? 250, pending: notificationsSearchStatus.pending ?? 0 })
                           : notificationsSearchStatus?.status === "degraded"
                             ? t("core.ui.notifications.filter.semantic_fallback")
@@ -1317,11 +1327,13 @@ export function MainScreen({
               </div>
             </div>
 
-            {notificationsSearchStatus && filter.semantic && filter.query.trim() ? (
+            {timeSearchMessage && filter.query.trim() ? <div className="cardBody" role="status">{timeSearchMessage}</div> : null}
+            {notificationsSearchStatus && filter.semantic && filter.query.trim() && !timezoneRequired ? (
               <div className="cardBody" role="status">
                 {notificationsSearchStatus.mode === "semantic_text"
                   ? t("core.ui.notifications.filter.semantic_summary", { limit: notificationsSearchStatus.scope_limit ?? 250, pending: notificationsSearchStatus.pending ?? 0 })
-                  : t("core.ui.notifications.filter.semantic_fallback")}
+                  : notificationsSearchStatus.status === "degraded" ? t("core.ui.notifications.filter.semantic_fallback")
+                    : t("core.ui.notifications.filter.search_mode")}
               </div>
             ) : null}
             <div

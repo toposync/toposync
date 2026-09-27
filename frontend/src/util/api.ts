@@ -832,7 +832,11 @@ export type HomeAssistantRegistryResponse = {
   device_entities: Record<string, string[]>;
 };
 
-export type NotificationSearchStatus = { mode: "literal" | "semantic_text"; status: "ready" | "partial" | "degraded"; scope_limit?: number; pending?: number };
+export type NotificationSearchStatus = {
+  mode: "literal" | "semantic_text"; status: "ready" | "partial" | "degraded"; scope_limit?: number; pending?: number;
+  reason?: string;
+  time_range?: { timezone: string; created_after: number; created_before: number; basis: "notification_created_at"; expression: string };
+};
 
 export type NotificationsPage = {
   search?: NotificationSearchStatus;

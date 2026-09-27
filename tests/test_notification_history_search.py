@@ -89,3 +89,12 @@ def test_history_http_time_bounds_are_validated(tmp_path, monkeypatch):
         for bounds in ({"created_after": "nan"}, {"created_before": "inf"}, {"created_after": -1},
                        {"created_after": 200, "created_before": 100}):
             assert client.get("/api/notifications", params=bounds).status_code == 422
+        missing_zone = client.get("/api/notifications", params={"query": "gato ontem à tarde"}).json()
+        assert missing_zone["notifications"] == []
+        assert missing_zone["search"]["reason"] == "installation_timezone_required"
+        assert client.patch("/api/settings/timezone", json={"timezone": "America/Sao_Paulo"}).status_code == 200
+        window = client.get("/api/notifications", params={"query": "gato no bebedouro ontem à tarde"}).json()["search"]["time_range"]
+        cat, _ = client.app.state.notifications.store.upsert(type="event", title="Gato no bebedouro", now=window["created_after"])
+        client.app.state.notifications.store.upsert(type="event", title="Gato no bebedouro", now=window["created_before"])
+        result = client.get("/api/notifications", params={"query": "gato no bebedouro ontem à tarde"}).json()
+        assert [item["id"] for item in result["notifications"]] == [cat.id]

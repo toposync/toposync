@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
+from toposync.runtime.notifications.time_query import resolve_history_time
 
 from .assistant import require
 
@@ -53,9 +54,10 @@ def validated_vectors(raw: Any, count: int) -> list[list[float]]:
 
 
 class TextHistorySearch:
-    def __init__(self, notifications: Any, services: Any) -> None:
+    def __init__(self, notifications: Any, services: Any, config_store: Any = None) -> None:
         self.notifications = notifications
         self.services = services
+        self.config_store = config_store
         # ponytail: uma indexação por processo; particionar somente se a concorrência medida exigir.
         self.lock = asyncio.Lock()
 
@@ -95,14 +97,30 @@ class TextHistorySearch:
         query = query.strip()
         if not query or len(query) > 1000 or not 1 <= limit <= 50:
             raise ValueError("invalid_history_query")
+        interpretation = None
+        if created_after is None and created_before is None:
+            settings = await self.config_store.get_settings() if self.config_store is not None else None
+            query, interpretation = resolve_history_time(query, settings.core.get("timezone") if settings else None)
+            if interpretation and interpretation.get("reason"):
+                return {"notifications": [], "search": {"mode": "literal", "status": "degraded", **interpretation}}
+            if interpretation:
+                created_after = interpretation["time_range"]["created_after"]
+                created_before = interpretation["time_range"]["created_before"]
+            if not query:
+                items, _ = await self.notifications.list(limit=limit, priorities=priorities, types=types,
+                                                        created_after=created_after, created_before=created_before)
+                return {"notifications": items, "search": {"mode": "literal", "status": "ready", **(interpretation or {})}}
         async with self.lock:
             try:
-                return await self._semantic(query, limit, priorities, types, created_after, created_before)
+                result = await self._semantic(query, limit, priorities, types, created_after, created_before)
+                result["search"].update(interpretation or {})
+                return result
             except (httpx.HTTPError, ValueError, KeyError, TypeError, sqlite3.Error):
                 items, _ = await self.notifications.list(query=query, limit=limit, priorities=priorities, types=types, created_after=created_after, created_before=created_before)
                 return {"notifications": items, "search": {"mode": "literal", "status": "degraded",
                     "reason": "local_text_embeddings_unavailable", "visual_similarity": False,
-                    "time_basis": "notification_created_at", "created_after": created_after, "created_before": created_before}}
+                    "time_basis": "notification_created_at", "created_after": created_after, "created_before": created_before,
+                    **(interpretation or {})}}
 
     async def _semantic(self, query: str, limit: int, priorities: list[str] | None = None, types: list[str] | None = None, created_after: float | None = None, created_before: float | None = None) -> dict[str, Any]:
         settings = await self.services.call("ai.settings.get")
@@ -166,7 +184,7 @@ class TextHistorySearch:
 
 
 def install_text_history_routes(app: FastAPI, services: Any) -> None:
-    search = TextHistorySearch(app.state.notifications, services)
+    search = TextHistorySearch(app.state.notifications, services, getattr(app.state, "config_store", None))
     services.register("ai.search_notifications", search.search)
 
     @app.get("/api/ai/history/search")

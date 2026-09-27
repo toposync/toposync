@@ -84,6 +84,32 @@ def test_temporal_scope_is_applied_before_semantic_limit_and_in_fallback(tmp_pat
     assert [item["id"] for item in fallback["notifications"]] == [expected.id]
 
 
+def test_relative_semantic_query_and_date_only_share_configured_timezone(tmp_path, monkeypatch):
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    search = TextHistorySearch(runtime, Services())
+    missing = asyncio.run(search.search(query="gato ontem"))
+    assert missing["search"]["reason"] == "installation_timezone_required"
+
+    class Settings:
+        async def get_settings(self):
+            return SimpleNamespace(core={"timezone": "America/Sao_Paulo"})
+
+    search.config_store = Settings()
+    calls = []
+    async def unavailable(query, limit, priorities, types, start, end):
+        calls.append((query, start, end))
+        raise httpx.ConnectError("offline")
+    monkeypatch.setattr(search, "_semantic", unavailable)
+    result = asyncio.run(search.search(query="gato no bebedouro ontem à tarde"))
+    assert calls[0][0] == "gato bebedouro"
+    assert calls[0][2] - calls[0][1] == 6 * 3600
+    assert result["search"]["time_range"]["timezone"] == "America/Sao_Paulo"
+    assert result["search"]["status"] == "degraded"
+    day = asyncio.run(search.search(query="ontem"))
+    assert day["search"]["status"] == "ready"
+    assert len(calls) == 1  # A date-only filter does not load or call an embedding model.
+
+
 def test_history_route_requires_notification_read(tmp_path: Path) -> None:
     from fastapi import FastAPI, HTTPException
     from fastapi.testclient import TestClient

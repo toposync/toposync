@@ -40,3 +40,20 @@ test("semantic results preserve ranking and realtime never applies a lexical fil
   const added = context.upsertNotificationInState(updated,{id:"new",title:filter.query},filter);
   assert.equal(added.visibleIds.join(","),"z,a");
 });
+
+test("temporal results replace stale history, append pages and retain updates until refresh", () => {
+  const filter = {priorities:["medium"],types:[],query:"gato ontem à tarde",semantic:false};
+  const old = {byId:{old:{id:"old",title:"gato ontem à tarde"}},visibleIds:["old"]};
+  const first = context.mergeNotificationPage(old,[{id:"one",title:"Gato"}],
+    {replaceVisible:true,filter,resolvedOnServer:true});
+  assert.equal(first.visibleIds.join(","),"one");
+  const second = context.mergeNotificationPage(first,[{id:"two",title:"Gato"}],
+    {replaceVisible:false,filter,resolvedOnServer:true});
+  assert.equal(second.visibleIds.join(","),"one,two");
+  const updated = context.upsertNotificationInState(second,{id:"one",title:"Evidência atualizada"},filter);
+  assert.equal(updated.visibleIds.join(","),"one,two");
+  const added = context.upsertNotificationInState(updated,{id:"new",title:filter.query},filter);
+  assert.equal(added.visibleIds.join(","),"one,two");
+  const cleared = context.mergeNotificationPage(added,[],{replaceVisible:true,filter,resolvedOnServer:true});
+  assert.equal(cleared.visibleIds.length,0);
+});

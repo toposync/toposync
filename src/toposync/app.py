@@ -26,6 +26,7 @@ from toposync.extensions import run_extension_shutdown_callbacks
 from toposync.extensions.manager import ExtensionManager
 from toposync.runtime.auth import AuthContext, AuthRuntime
 from toposync.runtime.device_store import DeviceStore
+from toposync.runtime.notifications.time_query import resolve_history_time
 from toposync.runtime.event_bus import EventBus, EventOutcome
 from toposync.runtime.config_store import (
     AppConfig,
@@ -4717,6 +4718,16 @@ def create_app() -> FastAPI:
         if created_after is not None and created_before is not None and created_after >= created_before:
             raise HTTPException(422, "Notification time interval must have positive duration")
         runtime: NotificationsRuntime = request.app.state.notifications
+        interpretation = None
+        if query and created_after is None and created_before is None:
+            settings = await request.app.state.config_store.get_settings()
+            query, interpretation = resolve_history_time(query, settings.core.get("timezone"))
+            if interpretation and interpretation.get("reason"):
+                return {"notifications": [], "next_cursor": None,
+                        "search": {"mode": "literal", "status": "degraded", **interpretation}}
+            if interpretation:
+                created_after = interpretation["time_range"]["created_after"]
+                created_before = interpretation["time_range"]["created_before"]
 
         def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
             items, next_cursor = runtime.list_sync(
@@ -4729,7 +4740,8 @@ def create_app() -> FastAPI:
                 created_before=created_before,
                 cancel_check=check_cancelled,
             )
-            return {"notifications": items, "next_cursor": next_cursor}
+            return {"notifications": items, "next_cursor": next_cursor,
+                    **({"search": {"mode": "literal", "status": "ready", **interpretation}} if interpretation else {})}
 
         return await _run_cancelable_request_work(
             request,

@@ -57,7 +57,19 @@ timestamp. Configure the installation time zone under **Settings → Base**; it 
 stored as `settings.core.timezone` and remains unset until selected explicitly.
 `PATCH /api/settings/timezone` saves only that validated IANA zone under the existing
 settings write permission, preserving other settings. Send `{"timezone": null}` to
-clear it. Selecting a zone does not yet enable natural-language date parsing.
+clear it.
+
+With no explicit numeric bounds, both history endpoints recognize a finite date
+suffix: `hoje`/`ontem`, `today`/`yesterday`, optionally followed by morning (06–12),
+afternoon (12–18), evening/night (18–24), or Portuguese `de madrugada` (00–06).
+For example, `gato no bebedouro ontem à tarde` selects yesterday's 12–18 interval
+in the installation zone, then searches the remaining terms. The interface shows
+the exact half-open interval and its notification-creation basis. A query containing
+only the date filters history without invoking an embedding model. Missing zone
+returns a configuration request and no results; unsupported expressions remain
+literal text. This is not unrestricted natural-language date understanding.
+Refresh the search to include new events or recalculate a relative day; live
+updates preserve the current server-selected results, including pagination.
 The semantic limit remains
 250 recent notifications within the selected interval, with resumable indexing
 in batches of 32; the result reports partial coverage while indexing remains.

@@ -678,7 +678,10 @@ class NotificationStore:
                 WHERE
                   type LIKE 'pipelines.%'
                   AND dedupe_key IS NOT NULL
-                  AND payload_json LIKE '%"status":"open"%'
+                  AND CASE WHEN json_valid(payload_json) THEN
+                    json_extract(payload_json, '$.source') = 'pipelines'
+                    AND json_extract(payload_json, '$.status') = 'open'
+                    ELSE 0 END
                 ORDER BY updated_at DESC
                 LIMIT ?
                 """,

@@ -1,8 +1,10 @@
+import { audioTranslations } from "./settings/audioTranslations";
 import { sourcePanoramaTranslations } from "./settings/sourcePanoramaTranslations";
 
 export const camerasTranslations = {
   en: {
     ...sourcePanoramaTranslations.en,
+    ...audioTranslations.en,
     "ext.cameras.editor.ground_calibration": "Calibrate ground and metric geometry",
     "ext.cameras.editor.ground_calibration_hint": "Manual mapping using points. To locate people and estimate three-dimensional pointing, also enter measured lens parameters.",
     "ext.cameras.ground_lens.title": "Measured lens parameters",
@@ -734,6 +736,7 @@ export const camerasTranslations = {
   },
   "pt-BR": {
     ...sourcePanoramaTranslations["pt-BR"],
+    ...audioTranslations["pt-BR"],
     "ext.cameras.editor.ground_calibration": "Calibrar chão e geometria métrica",
     "ext.cameras.editor.ground_calibration_hint": "Mapeamento manual por pontos. Para localizar pessoas e apontamento tridimensional, informe também os parâmetros medidos da lente.",
     "ext.cameras.ground_lens.title": "Parâmetros medidos da lente",

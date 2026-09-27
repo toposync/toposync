@@ -1426,9 +1426,14 @@ class CamerasExtension(BaseExtension):
         ]
 
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
+        from .audio_api import install_audio_routes
+        from .audio_pipeline import register_audio_operator
+
+        install_audio_routes(app)
         registry = getattr(app.state, "pipeline_operator_registry", None)
         if isinstance(registry, OperatorRegistry):
             register_camera_pipeline_operators(registry)
+            register_audio_operator(registry)
 
         def _config_store(request: Request) -> ConfigStore:
             store = getattr(request.app.state, "config_store", None)

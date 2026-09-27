@@ -61,6 +61,7 @@ import {
 } from "./visionModelCatalog";
 import { SubModal } from "../ui/SubModal";
 import { CameraSourcePanoramaSection } from "./CameraSourcePanoramaSection";
+import { AudioFileAnalysis } from "./AudioFileAnalysis";
 
 type TranslateFn = ReturnType<HostI18n["useI18n"]>["t"];
 
@@ -1067,6 +1068,7 @@ function CamerasSettingsPanelContent({
         </div>
       </div>
 
+      <AudioFileAnalysis i18n={i18n} />
       <div className="card">
         <div className="cardBody">
           <div className="settingsSectionHeader">

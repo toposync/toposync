@@ -26,7 +26,7 @@ import {
 } from "./ImageDrawModals";
 import { FilterExpressionEditor } from "./FilterExpressionEditor";
 import { buildFilterExpressionUpstreamContext } from "./filterExpressionContext";
-import { buildPipelineStepPreviewRequest } from "./pipelineStepSnapshots";
+import { buildPipelineStepPreviewRequest, resolveBoundCropCameraSource } from "./pipelineStepSnapshots";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -2034,6 +2034,29 @@ export function ImageCropConfigCard({ config, pipelineName, steps, operatorsById
     [steps, index, pipelineName, nodeId, operatorsById],
   );
   const [isDrawOpen, setIsDrawOpen] = React.useState(false);
+  const [draftRegion, setDraftRegion] = React.useState({ left, top, right, bottom });
+  const boundSource = resolveBoundCropCameraSource(steps, index);
+  const binding = config.snapshot_binding;
+  const bindingContext = JSON.stringify([nodeId, binding, boundSource]);
+  React.useEffect(() => setIsDrawOpen(false), [bindingContext]);
+
+  if (binding && typeof binding === "object") {
+    return <div className="pipelinesOperatorConfigCard">
+      <p className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_crop.bound_hint")}</p>
+      <button className="chipButton" type="button" disabled={!boundSource} onClick={() => {
+        setDraftRegion({ left, top, right, bottom }); setIsDrawOpen(true);
+      }}>{t("core.ui.pipelines.panels.image_crop.reconfirm")}</button>
+      {!boundSource && <p role="status">{t("core.ui.pipelines.panels.image_crop.bound_source_required")}</p>}
+      <CropRectangleDrawModal open={isDrawOpen} onClose={() => setIsDrawOpen(false)} units={units}
+        snapshotSource={boundSource ? { kind: "camera", ...boundSource } : null}
+        values={draftRegion} onChange={setDraftRegion}
+        onConfirm={(values, snapshotBinding) => {
+          if (!boundSource || snapshotBinding.camera_id !== boundSource.cameraId || snapshotBinding.source_id !== boundSource.sourceId) return;
+          onUpdateConfig(previous => ({ ...previous, ...values, snapshot_binding: snapshotBinding }));
+          setIsDrawOpen(false);
+        }} />
+    </div>;
+  }
 
   return (
     <div className="pipelinesOperatorConfigCard">

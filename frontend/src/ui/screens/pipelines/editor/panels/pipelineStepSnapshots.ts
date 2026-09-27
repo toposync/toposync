@@ -132,3 +132,17 @@ export function buildPipelineStepPreviewRequest(
     },
   };
 }
+
+/** Bound regions apply to original camera pixels; only cadence may precede them. */
+export function resolveBoundCropCameraSource(steps: InteractiveStep[], currentIndex: number): { cameraId: string; sourceId: string } | null {
+  for (let index = currentIndex - 1; index >= 0; index -= 1) {
+    const step = steps[index]!;
+    if (step.operatorId === "core.fps_reducer") continue;
+    if (step.operatorId !== "camera.source") return null;
+    const config = parseInteractiveStepConfig(step);
+    const cameraId = String(config.camera_id ?? "").trim();
+    const sourceId = String(config.source_id ?? "").trim();
+    return cameraId && sourceId ? { cameraId, sourceId } : null;
+  }
+  return null;
+}

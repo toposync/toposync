@@ -116,3 +116,18 @@ def decode_wav_pcm(data: bytes) -> tuple[np.ndarray, int]:
 def analyze_wav(data: bytes, *, clock: AudioClock, baseline: AudioBaseline | None = None) -> dict:
     samples, rate = decode_wav_pcm(data)
     return analyze_pcm(samples, rate, clock=clock, baseline=baseline)
+
+
+def encode_wav_pcm(samples: np.ndarray, sample_rate: int) -> bytes:
+    if (type(samples) is not np.ndarray or samples.dtype != np.int16
+            or samples.ndim not in (1, 2) or (samples.ndim == 2 and samples.shape[1] not in (1, 2))
+            or type(sample_rate) is not int or not 8000 <= sample_rate <= 96000
+            or not 0 < len(samples) <= sample_rate * 30):
+        raise ValueError("expected_up_to_30_seconds_of_mono_or_stereo_pcm16")
+    output = BytesIO()
+    with wave.open(output, "wb") as stream:
+        stream.setnchannels(1 if samples.ndim == 1 else samples.shape[1])
+        stream.setsampwidth(2)
+        stream.setframerate(sample_rate)
+        stream.writeframes(samples.astype("<i2", copy=False).tobytes())
+    return output.getvalue()

@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.runtime import Lifecycle
 
-from .audio import AudioBaseline, AudioClock, analyze_pcm
+from .audio import AudioBaseline, AudioClock, analyze_pcm, decode_wav_pcm, encode_wav_pcm
 from .audio_transcription import transcribe_pcm
 
 
@@ -32,15 +32,20 @@ class AudioFeaturesRuntime(TransformOperatorRuntime):
         artifact = packet.artifacts.get("audio")
         try:
             metadata = artifact.metadata if artifact else packet.payload.get("audio_capture", {})
+            samples = artifact.data if artifact else None
+            if artifact and metadata.get("encoding") == "wav_pcm16":
+                samples, decoded_rate = decode_wav_pcm(samples)
+                if decoded_rate != metadata.get("sample_rate"):
+                    raise ValueError("audio sample rate mismatch")
             clock = AudioClock.model_validate(metadata.get("clock"))
             result = await context.run_blocking(
-                analyze_pcm, artifact.data if artifact else None, metadata.get("sample_rate"),
+                analyze_pcm, samples, metadata.get("sample_rate"),
                 clock=clock, baseline=self.config.baseline,
                 availability=metadata.get("availability", "available"),
             )
             if self.config.transcribe and result["status"] in {"audible", "silent"}:
                 result["transcription"] = await context.run_blocking(
-                    transcribe_pcm, artifact.data, metadata.get("sample_rate"),
+                    transcribe_pcm, samples, metadata.get("sample_rate"),
                     data_dir=self._data_dir, language=self.config.language,
                 )
             source_id, capture_id = metadata.get("source_id"), metadata.get("capture_id")
@@ -75,7 +80,16 @@ class AudioFeaturesRuntime(TransformOperatorRuntime):
             result["correlation"] = correlation
         except (ValueError, TypeError, AttributeError):
             result = {"status": "unavailable", "reason": "invalid_audio_capture_contract", "windows": []}
-        return [replace(packet, payload={**packet.payload, "audio_analysis": result})]
+        artifacts = dict(packet.artifacts)
+        if artifact is not None:
+            if result["status"] in {"audible", "silent"}:
+                # Private transport accepts bounded bytes, never ndarray/pickle.
+                wav = await context.run_blocking(encode_wav_pcm, samples, metadata.get("sample_rate"))
+                artifacts["audio"] = replace(artifact, data=wav, mime_type="audio/wav", private=True,
+                                             metadata={**metadata, "encoding": "wav_pcm16"})
+            else:
+                artifacts.pop("audio", None)
+        return [replace(packet, payload={**packet.payload, "audio_analysis": result}, artifacts=artifacts)]
 
 
 def register_audio_operator(registry) -> None:
@@ -90,7 +104,7 @@ def register_audio_operator(registry) -> None:
         description="Características de PCM com relógio declarado e baseline explícito; não localiza som.",
         config_model=AudioFeaturesConfig,
         inputs=[{"name": "in", "required": True}], outputs=[{"name": "out"}],
-        capabilities=["audio"], defaults=AudioFeaturesConfig().model_dump(),
+        capabilities=["audio", "private_data"], defaults=AudioFeaturesConfig().model_dump(),
         produces_payload_keys=["audio_analysis"],
         input_modalities=["audio"], output_modalities=["audio"],
         execution_mode="thread_pool", max_concurrency=1,

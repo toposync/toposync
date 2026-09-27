@@ -717,6 +717,7 @@ class CameraPipelinePresetRequest(BaseModel):
     ]
     source_id: str = ""
     audio_baseline: AudioBaseline | None = None
+    retain_audio: bool = False
     pipeline_name: str = ""
     enabled: bool = True
     processing_server_id: str = "local"
@@ -1460,10 +1461,11 @@ class CamerasExtension(BaseExtension):
         ]
 
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
-        from .audio_api import install_audio_routes
+        from .audio_api import install_audio_routes, install_audio_clip_routes
         from .audio_pipeline import register_audio_operator
 
         install_audio_routes(app)
+        install_audio_clip_routes(app)
         registry = getattr(app.state, "pipeline_operator_registry", None)
         if isinstance(registry, OperatorRegistry):
             register_camera_pipeline_operators(registry)
@@ -5947,7 +5949,7 @@ class CamerasExtension(BaseExtension):
                 )
                 graph = build_audio_recipe(
                     graph_uid=pipeline_name, camera_id=cid, source_id=source_id,
-                    baseline=body.audio_baseline,
+                    baseline=body.audio_baseline, retain_audio=body.retain_audio,
                     title=body.notification_title.strip(), description=body.notification_description.strip(),
                 ) if preset == "audio_anomaly" else _build_camera_preset_graph(
                     preset=preset,

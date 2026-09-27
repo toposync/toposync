@@ -44,7 +44,7 @@ def required_transport_capabilities(
             if (
                 registered is not None
                 and "private_data" in registered.definition.capabilities
-                and node.get("config", {}).get("enabled", False)
+                and node.get("config", {}).get("enabled", registered.definition.defaults.get("enabled", True))
             ):
                 required.add("private_artifacts_v1")
     return required

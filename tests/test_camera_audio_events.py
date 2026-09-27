@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -9,6 +10,7 @@ from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync_ext_cameras.audio_events import AudioOccurrenceRuntime
 from toposync_ext_cameras.audio_pipeline import AudioFeaturesRuntime
+from toposync_ext_cameras.audio_clips import AudioClipStore
 
 
 class Context:
@@ -16,6 +18,46 @@ class Context:
     node_id = "notify"
     async def run_blocking(self, function, *args, **kwargs):
         return function(*args, **kwargs)
+
+
+def test_audio_retention_is_explicit_and_stable_for_the_occurrence(tmp_path):
+    dependencies = SimpleNamespace(config_store=SimpleNamespace(paths=SimpleNamespace(data_dir=tmp_path)))
+    analysis = AudioFeaturesRuntime({"baseline": {"reference": "quiet", "rms": 0.01}}, None)
+    async def scenario():
+        original = packet(1)
+        original = replace(original, payload={**original.payload, "camera_id": "camera-one"})
+        analyzed = (await analysis.process_packet(original, Context()))[0]
+        from toposync.runtime.pipelines.operators_distributed import _serialize_packet, _deserialize_packet
+        analyzed = _deserialize_packet(_serialize_packet(analyzed))
+        assert analyzed.artifacts["audio"].private
+        disabled = AudioOccurrenceRuntime({}, dependencies)
+        assert (await disabled.process_packet(analyzed, Context()))[0].payload["audio_occurrence"]["clip"] is None
+        assert not (tmp_path / "private-camera-audio").exists()
+        enabled = AudioOccurrenceRuntime({"retain_audio": True}, dependencies)
+        opened = (await enabled.process_packet(analyzed, Context()))[0]
+        clip = opened.payload["audio_occurrence"]["clip"]
+        assert clip["status"] == "retained" and clip["duration_seconds"] == 1
+        assert opened.artifacts == {}
+        closed = (await enabled.process_packet(replace(analyzed, lifecycle=Lifecycle.CLOSE), Context()))[0]
+        assert closed.payload["audio_occurrence"]["clip"] == clip
+        assert AudioClipStore(tmp_path).read(clip["id"], authorize=lambda camera: None) is not None
+    asyncio.run(scenario())
+
+
+def test_audio_review_storage_stays_at_origin_and_requires_private_transport():
+    from toposync.runtime.config_store import Pipeline
+    from toposync.runtime.pipelines import OperatorRegistry, register_builtin_operators
+    from toposync.runtime.pipelines.distributed.plan import build_distributed_graphs, required_transport_capabilities
+    from toposync_ext_cameras.audio_events import build_audio_recipe
+    from toposync_ext_cameras.audio_pipeline import register_audio_operator
+    registry = OperatorRegistry()
+    register_builtin_operators(registry)
+    register_audio_operator(registry)
+    pipeline = Pipeline(name="audio", enabled=True, graph=build_audio_recipe(
+        graph_uid="audio", camera_id="camera", source_id="source", baseline={"reference": "quiet", "rms": 0.01}, retain_audio=True))
+    graphs = build_distributed_graphs(pipeline, registry)
+    assert "occurrence" in {node["id"] for node in graphs.origin_graph["nodes"]}
+    assert required_transport_capabilities([pipeline], registry) == {"private_artifacts_v1"}
 
 
 def packet(timestamp, loud=True, source="microphone-a"):

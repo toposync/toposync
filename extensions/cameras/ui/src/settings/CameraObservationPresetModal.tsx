@@ -19,6 +19,7 @@ export function CameraObservationPresetModal({
   const [signalsUnavailable, setSignalsUnavailable] = useState(false);
   const [saving, setSaving] = useState(false);
   const [reference, setReference] = useState<File | null>(null);
+  const [retainAudio, setRetainAudio] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setSourceId(sources.find((source) => source.id === activeSourceId)?.id || sources[0]?.id || "");
@@ -28,6 +29,7 @@ export function CameraObservationPresetModal({
     setServerId("local");
     setError(null);
     setReference(null);
+    setRetainAudio(false);
   }, [open, preset, camera.id, activeSourceId]);
   useEffect(() => {
     if (!open || preset !== "doorbell_visitor") return;
@@ -68,6 +70,7 @@ export function CameraObservationPresetModal({
       }
       const result = await createCameraPipelinePreset(camera.id, {
         audio_baseline,
+        retain_audio: audio && retainAudio,
         preset, source_id: sourceId, pipeline_name: name.trim(), enabled: false,
         event_topic: selectedSignal?.topic, event_item_name: selectedSignal?.item_name,
         processing_server_id: serverId, area_id: selectedArea?.id ?? "", composition_id: selectedArea?.compositionId ?? "",
@@ -88,6 +91,10 @@ export function CameraObservationPresetModal({
       <input type="file" accept=".wav,audio/wav" disabled={saving} style={{ maxWidth: "100%" }}
         onChange={event => { setReference(event.target.files?.[0] ?? null); setError(null); }} />
       <span className="settingsDescription">{t("ext.cameras.audioRecipe.referenceHelp")}</span>
+    </label>}
+    {audio && <label className="field" style={{ display: "flex", alignItems: "start", gap: 8 }}>
+      <input type="checkbox" checked={retainAudio} disabled={saving} onChange={event => setRetainAudio(event.target.checked)} />
+      <span>{t("ext.cameras.audioHistory.optIn")}</span>
     </label>}
     {sources.length > 1 ? <div className="field">
       <label className="label" htmlFor="cat-recipe-source">{t("ext.cameras.cat.source")}</label>

@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useState } from "react";
 import type { HostI18n, Notification } from "@toposync/plugin-api";
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 import { readRecord, readString } from "../parsing";
 
 function evidence(notification: Notification) {
@@ -16,6 +17,10 @@ export function AudioObservationDetails({ notification, i18n }: { notification: 
   const data = evidence(notification);
   const analysis = readRecord(data.audio_analysis);
   const occurrence = readRecord(data.audio_occurrence);
+  const clip = readRecord(occurrence.clip);
+  const clipId = readString(clip.id);
+  const [failedClip, setFailedClip] = useState<string | null>(null);
+  const retained = clip.status === "retained" && /^[a-f0-9]{32}$/.test(clipId);
   const baseline = readRecord(analysis.baseline);
   const transcription = readRecord(analysis.transcription);
   const duration = analysis.duration_seconds;
@@ -34,7 +39,13 @@ export function AudioObservationDetails({ notification, i18n }: { notification: 
       {readString(baseline.reference) && <p>{t("ext.cameras.audioHistory.reference", { name: readString(baseline.reference) })}</p>}
       {typeof duration === "number" && Number.isFinite(duration) && duration > 0 &&
         <p>{t("ext.cameras.audioHistory.window", { seconds: duration.toLocaleString(locale, { maximumFractionDigits: 2 }) })}</p>}
-      <p>{t("ext.cameras.audioHistory.retention")}</p>
+      {retained ? <>
+        <p>{t("ext.cameras.audioHistory.excerpt", { seconds: Number(clip.duration_seconds).toLocaleString(locale, { maximumFractionDigits: 2 }) })}</p>
+        {failedClip === clipId ? <p role="status">{t("ext.cameras.audioHistory.unavailable")}</p> :
+          <audio key={clipId} controls preload="none" style={{ width: "100%", maxWidth: 420 }}
+            aria-label={t("ext.cameras.audioHistory.title")} onError={() => setFailedClip(clipId)}
+            src={resolveToposyncUrl(`/api/cameras/audio/clips/${clipId}`)} />}
+      </> : <p>{t("ext.cameras.audioHistory.retention")}</p>}
       {text && <><p>{t("ext.cameras.audioHistory.transcription")}</p><blockquote>{text}</blockquote></>}
       <p className="cardMeta">{t("ext.cameras.audioHistory.clock")}</p>
     </div>
@@ -43,6 +54,9 @@ export function AudioObservationDetails({ notification, i18n }: { notification: 
 
 export const audioHistoryTranslations = {
   en: {
+    "ext.cameras.audioHistory.optIn": "Keep a private excerpt of each occurrence for review, for up to 24 hours. Old excerpts may expire earlier when storage is full.",
+    "ext.cameras.audioHistory.excerpt": "Retained starting excerpt: {{seconds}} s. It does not cover the full occurrence. Available for up to 24 hours.",
+    "ext.cameras.audioHistory.unavailable": "Audio excerpt unavailable, expired or access denied.",
     "ext.cameras.audioHistory.title": "Recorded audio evidence",
     "ext.cameras.audioHistory.above": "Sound exceeded the supplied normal reference. This does not classify its cause or danger.",
     "ext.cameras.audioHistory.quiet": "Observation ended after sound returned to the reference range.",
@@ -57,6 +71,9 @@ export const audioHistoryTranslations = {
     "ext.cameras.audioHistory.clock": "Intervals follow decoded samples. Receipt time does not establish synchronized camera capture time or sound location.",
   },
   "pt-BR": {
+    "ext.cameras.audioHistory.optIn": "Guardar um trecho privado de cada ocorrência para revisão por até 24 horas. Trechos antigos podem expirar antes quando o armazenamento ficar cheio.",
+    "ext.cameras.audioHistory.excerpt": "Trecho inicial retido: {{seconds}} s. Não cobre toda a ocorrência. Disponível por até 24 horas.",
+    "ext.cameras.audioHistory.unavailable": "Trecho de áudio indisponível, expirado ou sem permissão de acesso.",
     "ext.cameras.audioHistory.title": "Evidência de áudio registrada",
     "ext.cameras.audioHistory.above": "O som superou a referência normal informada. Isso não classifica sua causa nem perigo.",
     "ext.cameras.audioHistory.quiet": "Observação encerrada após o som voltar à faixa da referência.",

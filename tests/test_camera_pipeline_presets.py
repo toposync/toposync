@@ -55,6 +55,12 @@ def test_audio_recipe_requires_baseline_and_saves_disabled_without_vision(tmp_pa
         assert _node_config(pipeline, "camera.audio_features").get("transcribe", False) is False
         assert _node_config(pipeline, "core.notify")["dedupe_by_occurrence"] is True
         assert pipeline["graph"]["meta"]["audio_support"] == "unverified"
+        assert _node_config(pipeline, "camera.audio_occurrence")["retain_audio"] is False
+        response = client.post(path, json={**body, "retain_audio": True})
+        assert response.status_code == 200
+        retained = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
+        assert _node_config(retained, "camera.audio_occurrence")["retain_audio"] is True
+        assert retained["enabled"] is False
 
 
 @pytest.mark.parametrize("preset", ["person_stopped", "vehicle_stopped"])

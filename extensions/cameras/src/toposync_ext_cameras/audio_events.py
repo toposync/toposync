@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import time
+import sqlite3
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,6 +19,7 @@ class AudioOccurrenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     quiet_seconds: float = Field(default=2, ge=0, le=30)
     evidence_timeout_seconds: float = Field(default=5, ge=1, le=60)
+    retain_audio: bool = False
 
 
 @dataclass
@@ -30,12 +32,15 @@ class _Occurrence:
     identifier: str = ""
     closed: bool = False
     baseline: str = ""
+    clip: dict | None = None
 
 
 class AudioOccurrenceRuntime(TransformOperatorRuntime):
-    def __init__(self, config):
+    def __init__(self, config, dependencies=None):
         self.config = AudioOccurrenceConfig.model_validate(config)
         self.states = OrderedDict()
+        store = getattr(dependencies, "config_store", None)
+        self.data_dir = store.paths.data_dir if store is not None else None
 
     async def run(self, context):
         while not context.is_cancelled():
@@ -55,7 +60,8 @@ class AudioOccurrenceRuntime(TransformOperatorRuntime):
             "correlation_id": state.identifier,
             "media": {**packet.payload.get("media", {}), "ts": state.end},
             "audio_occurrence": {"status": reason, "started_seconds": state.start,
-                                 "last_positive_seconds": state.end, "confidence": None},
+                                 "last_positive_seconds": state.end, "confidence": None,
+                                 "clip": state.clip},
         }, artifacts={})
 
     def _close(self, state, reason):
@@ -119,6 +125,9 @@ class AudioOccurrenceRuntime(TransformOperatorRuntime):
                 if state.start is None:
                     state.start = start
                     state.identifier = hashlib.sha256(json.dumps([*key, start], separators=(",", ":")).encode()).hexdigest()
+                    state.clip = None
+                    if self.config.retain_audio:
+                        state.clip = await context.run_blocking(self._retain_clip, packet)
                 state.end = end
                 state.packet = replace(packet, artifacts={})
                 outputs.append(self._event(state, lifecycle, "above_baseline"))
@@ -129,6 +138,25 @@ class AudioOccurrenceRuntime(TransformOperatorRuntime):
                 outputs.extend(self._close(state, "baseline_unavailable"))
         return outputs
 
+    def _retain_clip(self, packet):
+        from .audio_clips import AudioClipStore
+        from .audio import decode_wav_pcm
+
+        artifact = packet.artifacts.get("audio")
+        if self.data_dir is None or artifact is None:
+            return {"status": "unavailable"}
+        try:
+            metadata = artifact.metadata
+            samples, sample_rate = (decode_wav_pcm(artifact.data) if metadata.get("encoding") == "wav_pcm16"
+                                    else (artifact.data, metadata.get("sample_rate")))
+            clip = AudioClipStore(self.data_dir).retain(
+                camera_id=packet.payload.get("camera_id"), samples=samples,
+                sample_rate=sample_rate, clock=metadata.get("clock"),
+            )
+            return {"status": "retained", **clip}
+        except (ValueError, TypeError, AttributeError, OSError, sqlite3.Error):
+            return {"status": "unavailable"}
+
 
 def register_audio_occurrence(registry):
     if registry.get("camera.audio_occurrence") is not None:
@@ -136,13 +164,13 @@ def register_audio_occurrence(registry):
     registry.register_operator(
         operator_id="camera.audio_occurrence", description="Ocorrência acima de baseline explícito, sem inferir ameaça.",
         config_model=AudioOccurrenceConfig, inputs=[{"name": "in", "required": True}], outputs=[{"name": "out"}],
-        capabilities=["audio"], defaults=AudioOccurrenceConfig().model_dump(),
+        capabilities=["audio", "origin_only", "private_data"], defaults=AudioOccurrenceConfig().model_dump(),
         input_modalities=["audio"], output_modalities=["audio"], owner="com.toposync.cameras",
-        runtime_factory=lambda config, deps: AudioOccurrenceRuntime(config),
+        runtime_factory=lambda config, deps: AudioOccurrenceRuntime(config, deps),
     )
 
 
-def build_audio_recipe(*, graph_uid, camera_id, source_id, baseline, title="", description=""):
+def build_audio_recipe(*, graph_uid, camera_id, source_id, baseline, retain_audio=False, title="", description=""):
     from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
     from .audio import AudioBaseline
 
@@ -150,7 +178,7 @@ def build_audio_recipe(*, graph_uid, camera_id, source_id, baseline, title="", d
     nodes = [
         {"id": "source", "operator": "camera.audio_source", "config": {"camera_id": camera_id, "source_id": source_id}},
         {"id": "analysis", "operator": "camera.audio_features", "config": {"baseline": baseline}},
-        {"id": "occurrence", "operator": "camera.audio_occurrence", "config": {}},
+        {"id": "occurrence", "operator": "camera.audio_occurrence", "config": {"retain_audio": retain_audio}},
         {"id": "notify", "operator": "core.notify", "config": {
             "title": title or "Som acima da referência",
             "description": description or "Intensidade acima do som normal informado. Não confirma perigo, fala ou intenção.",

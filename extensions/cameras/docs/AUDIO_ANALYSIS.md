@@ -67,8 +67,42 @@ o arquivo não é armazenado nem enviado para serviço remoto.
 ruído normal declarado, impulso curto, saturação, estéreo em oposição de fase,
 relógio, baseline, arquivos inválidos e passagem pelo operador.
 
-Continuam abertos: captura real por câmera, retenção de trechos autorizados,
-eventos persistentes e correlação semântica/deduplicação entre fontes,
-fala/vento reais, transcrição e localização calibrada. Não existe modelo
-de transcrição configurado neste fluxo. Frequência e relógio declarado não
-resolvem a geometria ou sincronização exigidas para localização sonora.
+## Trechos privados para revisão
+
+A receita **Som acima da referência** oferece uma opção, inicialmente desligada,
+para guardar um trecho por ocorrência. O operador `camera.audio_occurrence`
+aceita `retain_audio=true`. A receita continua sendo criada desativada.
+A amostra usada para calcular a referência normal não é guardada.
+
+O trecho é o primeiro bloco analisado que contém a anomalia, com no máximo
+30 segundos. Não representa toda a ocorrência nem garante cobertura anterior
+ou posterior ao som. O relógio original acompanha a referência do trecho.
+O histórico usa um player nativo sem reprodução automática e informa quando
+o trecho está indisponível, expirou ou teve acesso negado.
+
+As gravações ficam fora de `files`, em `private-camera-audio/clips.sqlite3`,
+com acesso restrito ao usuário do processo. Não são criptografadas em repouso;
+proteja o diretório de dados e seus backups. Há limites globais de64MiB e1024
+arquivos lógicos, com remoção dos mais antigos quando necessário. Cada trecho
+expira em24 horas. A leitura recusa trechos expirados; limpeza física ocorre
+na abertura, em operações de armazenamento/leitura e a cada60 segundos enquanto
+a extensão está carregada. Ao parar o servidor, a próxima abertura efetua a
+limpeza pendente. SQLite usa `secure_delete` para limpar páginas liberadas.
+
+`GET /api/cameras/audio/clips/{id}` exige acesso à extensão e leitura da câmera
+registrada na gravação, verificados em cada requisição; retorna WAV com
+`Cache-Control: private, no-store`. `DELETE` exige configuração dessa câmera.
+Exclusão ou expiração não apagam as medidas e transcrições da notificação.
+Não há URL pública nem reprodução automática. O limite pode remover um trecho
+antes de24 horas; a retenção não promete disponibilidade durante todo o prazo.
+
+A análise produz bytes WAV em artefato privado para o transporte existente.
+Ocorrências e armazenamento ficam na origem; processamento remoto exige a
+capacidade negociada `private_artifacts_v1`. O envelope privado continua limitado
+a2MiB por pacote: blocos maiores não são transportáveis por esse contrato.
+O teste de contrato não certifica uma implantação remota nem sincronização física.
+
+Continuam abertos: qualificação por câmera, correlação semântica e deduplicação
+entre fontes, corpus independente de fala/vento e localização calibrada.
+Transcrição requer modelo local instalado e ativação explícita. Frequência e
+relógio declarado não resolvem geometria ou sincronização sonora.

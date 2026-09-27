@@ -272,46 +272,12 @@ class VisionModelInstallManager:
 
         key = manifest.model_id
         existing_artifact = manifest.resolve_artifact_path().is_file()
-        if existing_artifact and not force and manifest.task == "pose":
-            from .model_store import _validate_manifest_runtime
-
-            try:
-                _validate_manifest_runtime(manifest)
-            except Exception as exc:
-                raise ModelRegistryError(
-                    f"Installed pose model is invalid; reinstall it with force=true: {exc}"
-                ) from exc
         active_statuses = {"queued", "downloading", "verifying", "installing", "canceling"}
 
         with self._lock:
             existing = self._jobs.get(key)
             if existing is not None and str(existing.get("status") or "") in active_statuses:
                 return dict(existing)
-            if existing_artifact and not force:
-                ready = self._jobs.get(key) or {}
-                ready.update(
-                    {
-                        "job_id": str(ready.get("job_id") or uuid.uuid4().hex),
-                        "model_id": manifest.model_id,
-                        "display_name": manifest.display_name,
-                        "artifact_path": str(manifest.resolve_artifact_path()),
-                        "status": "completed",
-                        "phase": "already_ready",
-                        "progress_pct": 100.0,
-                        "bytes_completed": int(ready.get("bytes_completed") or 0),
-                        "bytes_total": int(ready.get("bytes_total") or 0),
-                        "source_kind": source_kind,
-                        "source_label": source_value,
-                        "requested_by": dict(ready.get("requested_by") or requested_by_payload),
-                        "error": None,
-                        "started_at": float(ready.get("started_at") or time.time()),
-                        "updated_at": float(time.time()),
-                        "finished_at": float(time.time()),
-                    }
-                )
-                self._jobs[key] = ready
-                return dict(ready)
-
             now = time.time()
             job = {
                 "job_id": uuid.uuid4().hex,
@@ -334,7 +300,8 @@ class VisionModelInstallManager:
             self._jobs[key] = job
             self._cancel_flags[key] = threading.Event()
             task = asyncio.create_task(
-                self._run_install(manifest=manifest, source_kind=source_kind, source_value=source_value),
+                self._run_install(manifest=manifest, source_kind=source_kind, source_value=source_value,
+                                  reuse_existing=existing_artifact and not force),
                 name=f"vision-model-install:{manifest.model_id}",
             )
             self._tasks[key] = task
@@ -501,26 +468,28 @@ class VisionModelInstallManager:
         if flag is not None and flag.is_set():
             raise InstallCancelledError(f"Install canceled for {model_id}")
 
-    async def _run_install(self, *, manifest: ModelManifest, source_kind: str, source_value: str) -> None:
+    async def _run_install(self, *, manifest: ModelManifest, source_kind: str, source_value: str, reuse_existing: bool = False) -> None:
         target_path = manifest.resolve_artifact_path()
         temp_path = target_path.with_name(f"{target_path.name}.{uuid.uuid4().hex}.part")
         try:
             self._ensure_not_cancelled(manifest.model_id)
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            self._update_job(
-                manifest.model_id,
-                status="downloading" if source_kind == "download" else "installing",
-                phase="downloading" if source_kind == "download" else "copying",
-                progress_pct=1.0,
-            )
-            if source_kind == "download":
-                await self._download_file(source_value, temp_path, manifest.model_id)
-            else:
-                await asyncio.to_thread(self._copy_file, Path(source_value), temp_path, manifest.model_id)
+            if not reuse_existing:
+                self._update_job(
+                    manifest.model_id,
+                    status="downloading" if source_kind == "download" else "installing",
+                    phase="downloading" if source_kind == "download" else "copying",
+                    progress_pct=1.0,
+                )
+                if source_kind == "download":
+                    await self._download_file(source_value, temp_path, manifest.model_id)
+                else:
+                    await asyncio.to_thread(self._copy_file, Path(source_value), temp_path, manifest.model_id)
 
             self._ensure_not_cancelled(manifest.model_id)
             self._update_job(manifest.model_id, status="verifying", phase="verifying", progress_pct=85.0)
-            digest = await asyncio.to_thread(self._sha256_file, temp_path, manifest.model_id)
+            candidate_path = target_path if reuse_existing else temp_path
+            digest = await asyncio.to_thread(self._sha256_file, candidate_path, manifest.model_id)
             expected = str(manifest.sha256 or "").strip().lower()
             if expected and digest.lower() != expected:
                 raise RuntimeError(
@@ -530,16 +499,17 @@ class VisionModelInstallManager:
             if manifest.task == "pose":
                 from .model_store import _validate_manifest_runtime
 
-                candidate = manifest.model_copy(update={"artifact_path": str(temp_path.resolve())})
+                candidate = manifest.model_copy(update={"artifact_path": str(candidate_path.resolve())})
                 await asyncio.to_thread(_validate_manifest_runtime, candidate)
 
             self._ensure_not_cancelled(manifest.model_id)
             self._update_job(manifest.model_id, status="installing", phase="finalizing", progress_pct=97.0)
-            os.replace(temp_path, target_path)
+            if not reuse_existing:
+                os.replace(temp_path, target_path)
             self._update_job(
                 manifest.model_id,
                 status="completed",
-                phase="completed",
+                phase="already_ready" if reuse_existing else "completed",
                 progress_pct=100.0,
                 finished_at=float(time.time()),
                 error=None,

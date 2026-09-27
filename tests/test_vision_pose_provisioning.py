@@ -246,10 +246,15 @@ def test_existing_corrupt_pose_is_not_reported_already_ready(tmp_path, monkeypat
     target.write_bytes(b"corrupt")
     manifest.artifact_path = str(target)
     monkeypatch.setenv("TOPOSYNC_VISION_MODEL_SOURCE_CUSTOM_POSE_TEST", str(source))
-    with pytest.raises(ModelRegistryError, match="reinstall it with force=true"):
-        VisionModelInstallManager(data_dir=tmp_path).start_install(
-            model_id=manifest.model_id, model_registry=ModelRegistry([manifest])
-        )
+    async def scenario():
+        manager = VisionModelInstallManager(data_dir=tmp_path)
+        job = manager.start_install(model_id=manifest.model_id, model_registry=ModelRegistry([manifest]))
+        assert job["status"] == "queued"
+        await manager._tasks[manifest.model_id]
+        assert manager.get_job(manifest.model_id)["status"] == "failed"
+        assert "Checksum mismatch" in manager.get_job(manifest.model_id)["error"]
+        assert target.read_bytes() == b"corrupt"
+    asyncio.run(scenario())
 
 
 def test_pose_upload_validates_before_replacing_and_recovers(tmp_path):

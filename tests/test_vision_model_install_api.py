@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -12,6 +13,82 @@ from toposync.app import create_app
 from toposync_ext_vision.plugin import VisionExtension
 from toposync_ext_vision.registry.local_build import BuildCancelledError
 import toposync.extensions.manager as ext_manager_mod
+
+
+def test_existing_artifact_is_verified_without_copy_and_corruption_requires_reinstall(tmp_path, monkeypatch):
+    from toposync_ext_vision.registry.installer import VisionModelInstallManager
+    from toposync_ext_vision.registry.manifests import ModelRegistry, load_manifest_file
+
+    source = _write_constant_detection_model(tmp_path / "source.onnx")
+    target = tmp_path / "target.onnx"
+    target.write_bytes(source.read_bytes())
+    manifest = load_manifest_file(_write_manifest(tmp_path / "manifest.json", artifact_path=target, sha256=_sha256(source)))
+    registry = ModelRegistry([manifest])
+    monkeypatch.setenv("TOPOSYNC_VISION_MODEL_PATH_CUSTOM_DETECTOR_INSTALLABLE", str(source))
+
+    async def scenario():
+        manager = VisionModelInstallManager(data_dir=tmp_path)
+        copy_file = manager._copy_file
+        def reject_copy(*args):
+            raise AssertionError("Reusing an existing artifact must not copy it")
+        monkeypatch.setattr(manager, "_copy_file", reject_copy)
+        before = target.stat()
+        job = manager.start_install(model_id=manifest.model_id, model_registry=registry)
+        assert job["status"] == "queued"
+        assert manager.start_install(model_id=manifest.model_id, model_registry=registry)["job_id"] == job["job_id"]
+        await manager._tasks[manifest.model_id]
+        ready = manager.get_job(manifest.model_id)
+        assert ready["status"] == "completed" and ready["phase"] == "already_ready"
+        assert ready["bytes_completed"] == source.stat().st_size
+        assert (target.stat().st_ino, target.stat().st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+        target.write_bytes(b"corrupt")
+        manager.start_install(model_id=manifest.model_id, model_registry=registry)
+        await manager._tasks[manifest.model_id]
+        failed = manager.get_job(manifest.model_id)
+        assert failed["status"] == "failed" and "Checksum mismatch" in failed["error"]
+        assert target.read_bytes() == b"corrupt"
+        monkeypatch.setattr(manager, "_copy_file", copy_file)
+        manager.start_install(model_id=manifest.model_id, model_registry=registry, force=True)
+        await manager._tasks[manifest.model_id]
+        assert manager.get_job(manifest.model_id)["status"] == "completed"
+        assert target.read_bytes() == source.read_bytes()
+        assert not list(tmp_path.glob("*.part"))
+
+    asyncio.run(scenario())
+
+
+def test_existing_artifact_verification_can_be_canceled(tmp_path, monkeypatch):
+    import threading
+    from toposync_ext_vision.registry.installer import VisionModelInstallManager
+    from toposync_ext_vision.registry.manifests import ModelRegistry, load_manifest_file
+
+    target = _write_constant_detection_model(tmp_path / "existing.onnx")
+    original = target.read_bytes()
+    manifest = load_manifest_file(_write_manifest(tmp_path / "manifest.json", artifact_path=target, sha256=_sha256(target)))
+    monkeypatch.setenv("TOPOSYNC_VISION_MODEL_PATH_CUSTOM_DETECTOR_INSTALLABLE", str(target))
+
+    async def scenario():
+        manager = VisionModelInstallManager(data_dir=tmp_path)
+        entered, release = threading.Event(), threading.Event()
+        hash_file = manager._sha256_file
+        def held_hash(*args):
+            entered.set()
+            assert release.wait(2)
+            return hash_file(*args)
+        monkeypatch.setattr(manager, "_sha256_file", held_hash)
+        manager.start_install(model_id=manifest.model_id, model_registry=ModelRegistry([manifest]))
+        task = manager._tasks[manifest.model_id]
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            assert manager.get_job(manifest.model_id)["status"] == "verifying"
+            manager.cancel_install(model_id=manifest.model_id)
+        finally:
+            release.set()
+        await task
+        assert manager.get_job(manifest.model_id)["status"] == "canceled"
+        assert target.read_bytes() == original
+
+    asyncio.run(scenario())
 
 
 class _VisionEntryPoint:

@@ -390,7 +390,11 @@ def _build_region_prompt(description: str) -> list[dict[str, Any]]:
                 "found, detections, confidence, bbox01, label, reason. detections must be an "
                 "array of objects with bbox01, confidence, label, reason. Each bbox01 must be "
                 "normalized as [left, top, right, bottom] from 0 to 1. bbox01/confidence may "
-                "repeat the best detection for compatibility. If the target is absent, set "
+                "repeat the best detection for compatibility. Match the complete requested target: "
+                "when multiple objects or parts are required together, all must be visibly present "
+                "in the same region. If the description requires an entire object, a cropped or "
+                "occluded fragment is insufficient. Do not infer an unseen object from related "
+                "objects, actions, or context. If any required part is absent or unverifiable, set "
                 "found=false, detections=[], confidence=0, bbox01=null."
             ),
         },

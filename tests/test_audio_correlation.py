@@ -142,6 +142,10 @@ def test_compiler_accepts_two_ports_and_private_origin_boundary():
         graph_uid="two_microphones", nodes=nodes, edges=edges))
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
     assert len(compiled.edges) == 4
+    from toposync.runtime.pipelines.execution import PipelineRuntime
+    runtime = PipelineRuntime(compiled=compiled, registry=registry)
+    assert set(runtime._runtime_by_node) == {"first", "second", "first_analysis", "second_analysis", "correlate"}
+    asyncio.run(runtime.stop())
     graphs = build_distributed_graphs(pipeline, registry)
     assert "correlate" in {node["id"] for node in graphs.origin_graph["nodes"]}
     assert required_transport_capabilities([pipeline], registry) == {"private_artifacts_v1"}

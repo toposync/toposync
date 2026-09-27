@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from scipy.signal import spectrogram
 
 from toposync.runtime.pipelines.runtime import Lifecycle
+from toposync.runtime.pipelines.execution import BaseOperatorRuntime
 
 from .audio import AudioClock, decode_wav_pcm
 
@@ -56,7 +57,7 @@ def compare_signatures(first, second):
     return best
 
 
-class AudioCorrelationRuntime:
+class AudioCorrelationRuntime(BaseOperatorRuntime):
     def __init__(self, config, dependencies=None):
         AudioCorrelationConfig.model_validate(config)
         self._recent = {}

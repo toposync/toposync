@@ -12,6 +12,7 @@ export function CameraObservationPresetModal({
   const [sourceId, setSourceId] = useState("");
   const [name, setName] = useState("");
   const [areaId, setAreaId] = useState("");
+  const [categories, setCategories] = useState<Array<"person" | "cat" | "dog">>(["person", "cat", "dog"]);
   const [serverId, setServerId] = useState("local");
   const [signals, setSignals] = useState<{ topic: string; item_name: string; label: string }[]>([]);
   const [signalId, setSignalId] = useState("");
@@ -25,6 +26,7 @@ export function CameraObservationPresetModal({
     setSourceId(sources.find((source) => source.id === activeSourceId)?.id || sources[0]?.id || "");
     setName("");
     setAreaId("");
+    setCategories(["person", "cat", "dog"]);
     setSignalId("");
     setServerId("local");
     setError(null);
@@ -43,6 +45,7 @@ export function CameraObservationPresetModal({
       .finally(() => { if (!controller.signal.aborted) setLoadingSignals(false); });
     return () => controller.abort();
   }, [open, preset, camera.id]);
+  const selectableCategories = preset === "area_presence" || preset === "area_entry";
   const visitor = preset === "doorbell_visitor";
   const audio = preset === "audio_anomaly";
   const selectedSignal = signals.find(item => JSON.stringify([item.topic, item.item_name]) === signalId);
@@ -51,7 +54,7 @@ export function CameraObservationPresetModal({
   const selectedArea = mappedCompositions.flatMap(composition => (composition.areas ?? []).map(item => ({...item, compositionId: composition.id}))).find(item => JSON.stringify([item.compositionId, item.id]) === areaId);
   const key = audio ? "ext.cameras.audioRecipe" : visitor ? "ext.cameras.visitor" : area ? `ext.cameras.area.${preset === "area_presence" ? "presence" : preset === "area_group_entry" ? "group" : "entry"}` : `ext.cameras.cat.${preset === "cat_litter_use" ? "litter" : "water"}`;
   async function save(): Promise<void> {
-    if (saving || !sourceId || !preset || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference)) return;
+    if (saving || !sourceId || !preset || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference) || (selectableCategories && categories.length === 0)) return;
     setSaving(true);
     setError(null);
     try {
@@ -71,6 +74,7 @@ export function CameraObservationPresetModal({
       const result = await createCameraPipelinePreset(camera.id, {
         audio_baseline,
         retain_audio: audio && retainAudio,
+        area_categories: selectableCategories ? categories : undefined,
         preset, source_id: sourceId, pipeline_name: name.trim(), enabled: false,
         event_topic: selectedSignal?.topic, event_item_name: selectedSignal?.item_name,
         processing_server_id: serverId, area_id: selectedArea?.id ?? "", composition_id: selectedArea?.compositionId ?? "",
@@ -110,6 +114,15 @@ export function CameraObservationPresetModal({
         </optgroup>)}
       </select>
     </label> : !audio ? <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.profile")}</p> : null}
+    {selectableCategories && <fieldset disabled={saving} style={{ margin: "0 0 16px", minWidth: 0 }}>
+      <legend>{t("ext.cameras.area.categories")}</legend>
+      {(["person", "cat", "dog"] as const).map(category => <label key={category} style={{ display: "inline-flex", alignItems: "center", gap: 8, minHeight: 44, marginRight: 16 }}>
+        <input type="checkbox" checked={categories.includes(category)} onChange={event => setCategories(previous => event.target.checked ? [...previous, category] : previous.filter(value => value !== category))} />
+        {t(`ext.cameras.area.category.${category}`)}
+      </label>)}
+      <p className="settingsDescription">{t("ext.cameras.area.categoriesHelp")}</p>
+      {categories.length === 0 && <p role="alert">{t("ext.cameras.area.categoriesRequired")}</p>}
+    </fieldset>}
     {visitor && <label className="field"><span className="label">{t("ext.cameras.visitor.signal")}</span>
       <select className="input" value={signalId} onChange={event => setSignalId(event.target.value)} disabled={saving || loadingSignals}>
         <option value="">{t("ext.cameras.visitor.select")}</option>
@@ -129,7 +142,7 @@ export function CameraObservationPresetModal({
     </details>
     <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.paused")}</p>
     {error ? <p role="alert" className="errorText">{error}</p> : null}
-    <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference)} onClick={() => void save()}>
+    <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && !reference) || (selectableCategories && categories.length === 0)} onClick={() => void save()}>
       {t(saving ? "ext.cameras.cat.saving" : "ext.cameras.cat.save")}
     </button>
   </SubModal>;

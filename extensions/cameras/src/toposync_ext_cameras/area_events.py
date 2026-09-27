@@ -207,7 +207,7 @@ def register_area_occurrence_operator(registry):
 
 def build_area_occurrence_graph(*, preset, camera_id, source_id, detection_model_id,
                                 composition_id, area_restriction_config, graph_uid,
-                                notification_title="", notification_description="", notification_priority=None):
+                                notification_title="", notification_description="", notification_priority=None, categories=None):
     from .pipeline_templates import _linear_edges
 
     configuration = area_restriction_config or {}
@@ -217,7 +217,7 @@ def build_area_occurrence_graph(*, preset, camera_id, source_id, detection_model
         raise ValueError("Choose a mapped area for this recipe")
     grouped = preset == "area_group_entry"
     mode = "entry" if preset in {"area_entry", "area_group_entry"} else "presence"
-    categories = ["person"] if grouped else ["person", "dog", "cat"]
+    categories = ["person"] if grouped else list(dict.fromkeys(categories or ["person", "dog", "cat"]))
     nodes = [
         {"id": "source", "operator": "camera.source", "config": {"camera_id": camera_id, "source_id": source_id}},
         {"id": "fps", "operator": "core.fps_reducer", "config": {"target_fps": 4}},

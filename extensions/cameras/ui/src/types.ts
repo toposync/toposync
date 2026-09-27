@@ -488,6 +488,7 @@ export type CameraPipelinePresetRequest = {
   model_id?: string;
   composition_id?: string;
   area_id?: string;
+  area_categories?: Array<"person" | "cat" | "dog">;
   event_topic?: string;
   event_item_name?: string;
   stopped_speed_threshold?: number;

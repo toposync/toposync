@@ -1,5 +1,11 @@
 export const catActivityTranslations = {
   en: {
+    "ext.cameras.area.categories": "Who to observe",
+    "ext.cameras.area.category.person": "People",
+    "ext.cameras.area.category.cat": "Cats",
+    "ext.cameras.area.category.dog": "Dogs",
+    "ext.cameras.area.categoriesHelp": "People includes adults and children; age is not estimated.",
+    "ext.cameras.area.categoriesRequired": "Select at least one category.",
     "ext.cameras.audioRecipe.title": "Sound above reference",
     "ext.cameras.audioRecipe.description": "Group periods louder than the normal sound reference for this source. Does not identify danger, speech or intent.",
     "ext.cameras.audioRecipe.steps": "Choose a normal recording and save disabled",
@@ -36,6 +42,12 @@ export const catActivityTranslations = {
     "ext.cameras.cat.name": "Recipe name",
   },
   "pt-BR": {
+    "ext.cameras.area.categories": "Quem observar",
+    "ext.cameras.area.category.person": "Pessoas",
+    "ext.cameras.area.category.cat": "Gatos",
+    "ext.cameras.area.category.dog": "Cães",
+    "ext.cameras.area.categoriesHelp": "Pessoas inclui adultos e crianças; a idade não é estimada.",
+    "ext.cameras.area.categoriesRequired": "Selecione pelo menos uma categoria.",
     "ext.cameras.audioRecipe.title": "Som acima da referência",
     "ext.cameras.audioRecipe.description": "Agrupe períodos mais intensos que o som normal desta fonte. Não identifica perigo, fala ou intenção.",
     "ext.cameras.audioRecipe.steps": "Escolha uma gravação normal e salve desativado",

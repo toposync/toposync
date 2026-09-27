@@ -198,6 +198,44 @@ def test_area_recipe_requires_explicit_area_and_compiles(tmp_path, monkeypatch, 
             assert occurrence["minimum_duration_seconds"] == 0
 
 
+@pytest.mark.parametrize("categories", [["cat"], ["person", "dog"]])
+def test_area_recipe_preserves_selected_categories(tmp_path, monkeypatch, categories):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client, with_area=True)
+        body = {"preset": "area_presence", "enabled": False, "area_id": "area-1",
+                "area_categories": categories}
+        response = client.post("/api/cameras/cameras/cam1/pipelines/presets", json=body)
+        assert response.status_code == 200, response.text
+        pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
+        assert pipeline["enabled"] is False
+        assert _node_config(pipeline, "vision.detect")["categories"] == categories
+        assert _node_config(pipeline, "camera.area_occurrence")["categories"] == categories
+        from test_camera_area_occurrences import observation
+        from toposync_ext_cameras.area_events import AreaOccurrenceRuntime
+
+        async def replay():
+            runtime = AreaOccurrenceRuntime(_node_config(pipeline, "camera.area_occurrence"))
+            excluded = next(value for value in ("cat", "person", "dog") if value not in categories)
+            for timestamp in (0, 1):
+                packet = observation(timestamp, subject="excluded")
+                packet.payload["subject"]["category"] = excluded
+                assert await runtime.process_packet(packet, None) == []
+            for timestamp in (2, 3):
+                packet = observation(timestamp, subject="selected")
+                packet.payload["subject"]["category"] = categories[0]
+                outputs = await runtime.process_packet(packet, None)
+            assert [packet.lifecycle for packet in outputs] == [Lifecycle.OPEN]
+            assert outputs[0].payload["area_occurrence"]["observed_subject"]["category"] == categories[0]
+
+        asyncio.run(replay())
+        for invalid in ([], ["child"], ["car"]):
+            response = client.post("/api/cameras/cameras/cam1/pipelines/presets", json={**body, "area_categories": invalid})
+            assert response.status_code == 422
+        response = client.post("/api/cameras/cameras/cam1/pipelines/presets", json={**body, "preset": "area_group_entry"})
+        assert response.status_code == 400
+
+
 def test_area_recipe_respects_composition_and_rejects_ambiguous_area(tmp_path, monkeypatch):
     with _create_client(tmp_path, monkeypatch) as client:
         _configure_camera(client)

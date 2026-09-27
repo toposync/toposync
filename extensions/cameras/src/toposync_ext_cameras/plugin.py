@@ -724,6 +724,7 @@ class CameraPipelinePresetRequest(BaseModel):
     model_id: str = ""
     composition_id: str = ""
     area_id: str = ""
+    area_categories: list[Literal["person", "cat", "dog"]] | None = Field(default=None, min_length=1, max_length=3)
     event_topic: str = ""
     event_item_name: str = ""
     stopped_speed_threshold: float | None = Field(default=None, ge=0.0, le=1000.0)
@@ -5390,12 +5391,13 @@ class CamerasExtension(BaseExtension):
             notification_description: str,
             notification_priority: NotificationPriority | None,
             graph_uid: str = "camera_preset",
+            area_categories: list[str] | None = None,
         ) -> dict[str, Any]:
             if preset in {"area_presence", "area_entry", "area_group_entry", "doorbell_visitor"}:
                 return build_area_occurrence_graph(
                     preset=preset, camera_id=camera_id, source_id=source_id, detection_model_id=detection_model_id,
                     composition_id=composition_id, area_restriction_config=area_restriction_config,
-                    graph_uid=graph_uid, notification_title=notification_title,
+                    graph_uid=graph_uid, categories=area_categories, notification_title=notification_title,
                     notification_description=notification_description, notification_priority=notification_priority,
                 )
             if preset in CAT_ACTIVITY_RECIPES:
@@ -5929,6 +5931,9 @@ class CamerasExtension(BaseExtension):
                     existing_names=existing_names,
                 )
 
+            if body.area_categories is not None and preset not in {"area_presence", "area_entry"}:
+                raise HTTPException(status_code=400, detail="Category selection applies only to area presence or entry")
+
             processing_server_id = str(body.processing_server_id or "").strip() or "local"
             detection_model_id = (
                 str(body.model_id or "").strip() or DEFAULT_CAMERA_DETECTION_MODEL_ID
@@ -5963,7 +5968,7 @@ class CamerasExtension(BaseExtension):
                     notification_title=str(body.notification_title or "").strip(),
                     notification_description=str(body.notification_description or "").strip(),
                     notification_priority=notification_priority,
-                    graph_uid=pipeline_name,
+                    graph_uid=pipeline_name, area_categories=body.area_categories,
                 )
                 if preset == "doorbell_visitor":
                     graph = add_recent_event_to_area_graph(graph, camera_id=cid,

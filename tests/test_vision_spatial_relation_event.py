@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+from dataclasses import replace
 import itertools
 import time
 
@@ -876,3 +878,41 @@ def test_spatial_relation_compiles_in_graph_v2_with_lifecycle_safe_queues() -> N
         "vision.spatial_relation_event",
         "test.relation_sink",
     ]
+
+
+def test_group_producer_restart_without_close_starts_independent_relation():
+    from test_vision_group_events import _event_packet
+    from toposync_ext_vision.processing.tasks.group_events import VisionGroupEventsRuntime
+
+    async def scenario():
+        relation = VisionSpatialRelationEventRuntime({"dwell_seconds": 0, "close_grace_seconds": 0,
+                                                       "update_interval_seconds": 0})
+        groups, relations = [], []
+        for timestamp in (1, 2):
+            producer = VisionGroupEventsRuntime({"mode": "proximity", "categories": ["person", "car"],
+                                                 "include_stationary_members": True, "update_interval_seconds": 0})
+            for code, category, x in (("1", "person", 0), ("2", "car", 2)):
+                packet = _event_packet(timestamp, code, category=category,
+                                      world={"x": x, "z": 0, "confidence": 0.9})
+                packet.payload["capture_evidence"] = {"capture_instance": "decoder", "generation": 0,
+                                                       "sequence": timestamp, "published_at": time.time()}
+                for group in await producer.process_packet(packet, None):
+                    results = await relation.process_packet(group, None)
+                    if results:
+                        groups.append(group)
+                        relations.append(results[0])
+        assert len(relations) == 2
+        assert all(packet.lifecycle == Lifecycle.OPEN for packet in relations)
+        assert relations[0].stream_id != relations[1].stream_id
+        assert groups[0].stream_id != groups[1].stream_id
+        assert groups[0].payload["group_event_code"] == groups[1].payload["group_event_code"] == "1"
+        assert all(packet.payload["spatial_relation_event"]["dwell_seconds"] == 0 for packet in relations)
+        old_close = replace(copy.deepcopy(groups[0]), lifecycle=Lifecycle.CLOSE)
+        old_close.payload["subject"]["lifecycle"] = "close"
+        closed = await relation.process_packet(old_close, None)
+        assert len(closed) == 1 and closed[0].stream_id == relations[0].stream_id
+        assert await relation.process_packet(groups[0], None) == []
+        assert len(relation._states_by_group) == 1
+        assert next(iter(relation._states_by_group.values())).relation_event_id == relations[1].payload["event_id"]
+
+    asyncio.run(scenario())

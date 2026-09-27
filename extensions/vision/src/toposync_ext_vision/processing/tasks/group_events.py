@@ -305,12 +305,12 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         self._next_group_number_by_source_stream[source_stream_id] = next_number
         group_event_code = str(next_number)
         group_event_id = (
-            f"{self._config.group_event_id_prefix}:{source_stream_id}:{group_event_code}"
+            f"{self._config.group_event_id_prefix}:{source_stream_id}:{self._lifecycle_epoch}:{group_event_code}"
         )
         return _GroupState(
             group_event_id=group_event_id,
             group_event_code=group_event_code,
-            stream_id=f"group:{source_stream_id}:{group_event_code}",
+            stream_id=f"group:{source_stream_id}:{self._lifecycle_epoch}:{group_event_code}",
             source_stream_id=source_stream_id,
             camera_id=camera_id,
             correlation_id=uuid.uuid4().hex,

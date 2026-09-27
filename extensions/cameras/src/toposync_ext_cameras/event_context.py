@@ -43,10 +43,7 @@ class RecentOnvifEventRuntime(TransformOperatorRuntime):
         if now >= self.next_poll:
             self.next_poll = now + 0.5
             # One bounded manager batch; no camera snapshot, extra watcher or model.
-            for _ in range(64):
-                event_packet = await self.source.produce(context)
-                if event_packet is None:
-                    break
+            for event_packet in await self.source.produce_batch(context):
                 event = event_packet.payload["onvif_event"]
                 if event.get("boolean_value") is True and str(event.get("operation", "")).lower() == "changed":
                     self.last_event = event

@@ -1366,6 +1366,13 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
             return self._pending.pop(0)
         return None
 
+    async def produce_batch(self, context) -> list[Packet]:
+        """Drain one manager batch without issuing another poll after its last event."""
+        first = await self.produce(context)
+        packets = ([first] if first is not None else []) + self._pending
+        self._pending = []
+        return packets
+
     async def idle_sleep(self, context) -> None:  # noqa: ANN001
         await context.sleep(max(0.1, float(self._config.poll_interval_ms) / 1000.0))
 

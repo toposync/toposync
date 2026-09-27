@@ -33,11 +33,13 @@ def setup(monkeypatch):
     monkeypatch.setattr("time.time", lambda: clock[0])
     monkeypatch.setattr("time.monotonic", lambda: clock[0])
     services = ServiceRegistry()
+    polls = []
     async def recent_events(**kwargs):
+        polls.append(kwargs)
         return {"events": [event for event in events if event["sequence"] > kwargs["after_sequence"]]}
     services.register("cameras.onvif_events.recent_events", recent_events)
     runtime = RecentOnvifEventRuntime(CONFIG, PipelineRuntimeDependencies(services=services))
-    context = type("Context", (), {"pipeline_name": "visitor", "node_id": "correlate"})()
+    context = type("Context", (), {"pipeline_name": "visitor", "node_id": "correlate", "polls": polls})()
     return clock, events, runtime, context
 
 
@@ -58,7 +60,9 @@ def test_recent_signal_requires_fresh_matching_visual_evidence(monkeypatch):
         missing = frame(102)
         missing.payload.pop("capture_evidence")
         assert await runtime.process_packet(missing, context) == []
+        previous_polls = len(context.polls)
         accepted = await runtime.process_packet(frame(102), context)
+        assert len(context.polls) == previous_polls + 1
         assert len(accepted) == 1
         assert accepted[0].payload["onvif_context"]["sequence"] == 4
         assert accepted[0].payload["onvif_context"]["causal_relationship_verified"] is False

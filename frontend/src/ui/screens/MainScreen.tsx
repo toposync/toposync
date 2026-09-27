@@ -8,6 +8,7 @@ import type {
   Notification,
   NotificationRenderer,
   NotificationDetailPanel,
+  NotificationHistoryFilter,
   RenderViewDefinition,
   ViewSettings,
 } from "@toposync/plugin-api";
@@ -52,6 +53,8 @@ type Props = {
   viewSettings: ViewSettings;
   notificationRenderers: NotificationRenderer[];
   notificationDetailPanels?: NotificationDetailPanel[];
+  notificationHistoryFilters?: NotificationHistoryFilter[];
+  notificationsError?: boolean;
   notifications: Notification[];
   notificationsCount: NotificationsCount;
   notificationsHasMore: boolean;
@@ -204,6 +207,7 @@ export type Priority = "low" | "medium" | "high";
 const ALL_PRIORITIES: Priority[] = ["high", "medium", "low"];
 
 export type NotificationsFilter = {
+  extension?: { id: string; value: string };
   dataFilter?: Record<string, string>;
   semantic?: boolean | "visual";
   priorities: Priority[];
@@ -259,6 +263,7 @@ export function loadNotificationsFilter(): NotificationsFilter {
       priorities: priorities.length > 0 ? priorities : DEFAULT_NOTIFICATIONS_FILTER.priorities,
       types,
       query,
+      extension: parsed.extension && typeof parsed.extension.id === "string" && parsed.extension.id.length <= 256 && typeof parsed.extension.value === "string" && parsed.extension.value.length <= 1024 ? parsed.extension : undefined,
       semantic: parsed.semantic === "visual" ? "visual" : parsed.semantic === true,
       dataFilter: Object.fromEntries(Object.entries(parsed.dataFilter ?? {}).filter(([key, value]) =>
         (key === "camera_id" || key === "area_id") && typeof value === "string" && value.length > 0 && value.length <= 512)),
@@ -270,6 +275,7 @@ export function loadNotificationsFilter(): NotificationsFilter {
 
 function isFilterRestrictive(filter: NotificationsFilter): boolean {
   if (filter.priorities.length < ALL_PRIORITIES.length) return true;
+  if (filter.extension) return true;
   if (filter.types.length > 0) return true;
   if (Object.keys(filter.dataFilter ?? {}).length > 0) return true;
   if (filter.query.trim().length > 0) return true;
@@ -369,6 +375,8 @@ export function MainScreen({
   viewSettings,
   notificationRenderers,
   notificationDetailPanels = [],
+  notificationHistoryFilters = [],
+  notificationsError = false,
   notifications,
   notificationsCount,
   notificationsHasMore,
@@ -1250,6 +1258,11 @@ export function MainScreen({
                       </div>
 
                       <span className="muted">{t("core.ui.notifications.location.global_totals")}</span>
+                      {notificationHistoryFilters.map(provider => <React.Fragment key={provider.id}>{provider.render({
+                        value: filter.extension?.id === provider.id ? filter.extension.value : null,
+                        onChange: value => setFilter(previous => ({ ...previous, extension: value ? { id: provider.id, value } : undefined })),
+                      })}</React.Fragment>)}
+                      {filter.extension && !notificationHistoryFilters.some(provider => provider.id === filter.extension?.id) ? <button type="button" className="chipButton" onClick={() => setFilter(previous => ({ ...previous, extension: undefined }))}>{t("core.ui.notifications.filter.unavailable_selection")}</button> : null}
                       <HistoryLocationFilter filter={filter} setFilter={setFilter} />
 
                       <div className="notificationsFilterSection">
@@ -1277,7 +1290,7 @@ export function MainScreen({
                         </select>
                       </label>
                       {filter.semantic === "visual" ? <VisualHistoryPreparation onReady={onNotificationsSearchRefresh} /> : null}
-                      {(filter.semantic || timeRange) && filter.query.trim() ? (
+                      {(filter.extension || ((filter.semantic || timeRange) && filter.query.trim())) ? (
                         <button type="button" className="chipButton" disabled={notificationsLoading} onClick={onNotificationsSearchRefresh}>
                           {t("core.ui.notifications.filter.refresh_search")}
                         </button>
@@ -1350,8 +1363,9 @@ export function MainScreen({
               </div>
             </div>
 
+            {notificationsError ? <div className="cardBody" role="alert">{t("core.ui.notifications.filter.load_error")} <button type="button" className="chipButton" onClick={onNotificationsSearchRefresh}>{t("core.ui.notifications.location.retry")}</button></div> : null}
             {timeSearchMessage && filter.query.trim() ? <div className="cardBody" role="status">{timeSearchMessage}</div> : null}
-            {notificationsSearchStatus && filter.semantic && filter.query.trim() && !timezoneRequired ? (
+            {notificationsSearchStatus && !notificationsError && filter.semantic && filter.query.trim() && !timezoneRequired ? (
               <div className="cardBody" role="status">
                 {notificationsSearchStatus.mode === "semantic_visual"
                   ? visualSearchMessage
@@ -1368,7 +1382,7 @@ export function MainScreen({
               onTouchStart={noteNotificationPaginationUserEngagement}
               onWheel={noteNotificationPaginationUserEngagement}
             >
-              {visibleNotifications.length === 0 && !notificationsLoading ? (
+              {visibleNotifications.length === 0 && !notificationsLoading && !notificationsError ? (
                 <div className="card">
                   <div className="cardBody">
                     {t(filter.query.trim() ? "core.ui.notifications.search_empty" : "core.ui.notifications_empty")}

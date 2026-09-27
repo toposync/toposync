@@ -1,10 +1,19 @@
 import React from "react";
 import type { ToposyncHost } from "@toposync/plugin-api";
 import { Gallery, NotificationIdentity, supportsRecognition } from "./Gallery";
+import { HistoryFilter, historyEndpoint } from "./HistoryFilter";
 import { ModelSetup } from "./ModelSetup";
 import { translations } from "./translations";
 export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(translations);
+  host.registerNotificationHistoryFilter?.({
+    id: "com.toposync.vision.identities", endpoint: historyEndpoint,
+    render: context => <HistoryFilter {...context} i18n={host.i18n} />,
+    subscribe: invalidate => {
+      window.addEventListener("toposync:identity-gallery-changed", invalidate);
+      return () => window.removeEventListener("toposync:identity-gallery-changed", invalidate);
+    },
+  });
   host.registerSettingsPanel({ id: "com.toposync.vision.identities", name: { key: "ext.vision.identity.title" }, description: { key: "ext.vision.identity.description" }, icon: "users", render: ({ i18n }) => <Gallery i18n={i18n} /> });
   host.registerNotificationDetailPanel?.({ id: "com.toposync.vision.identities", supports: supportsRecognition, render: (notification) => <NotificationIdentity key={notification.id} notification={notification} i18n={host.i18n} />, renderSummary: (notification) => <NotificationIdentity key={notification.id} notification={notification} i18n={host.i18n} summary /> });
   for (const operatorId of ["vision.identity_context", "vision.identity_evidence", "vision.recognize_identity"]) {

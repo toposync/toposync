@@ -9,6 +9,7 @@ import type {
   Notification,
   NotificationRenderer,
   NotificationDetailPanel,
+  NotificationHistoryFilter,
   PipelineOperatorPanel,
   RenderViewDefinition,
   SettingsPanel,
@@ -270,7 +271,8 @@ function stringArraysEqual(left: readonly string[], right: readonly string[]): b
 }
 
 function notificationFilterFacetsEqual(left: NotificationsFilter, right: NotificationsFilter): boolean {
-  return stringArraysEqual(left.priorities, right.priorities) && stringArraysEqual(left.types, right.types)
+  return left.extension?.id === right.extension?.id && left.extension?.value === right.extension?.value
+    && stringArraysEqual(left.priorities, right.priorities) && stringArraysEqual(left.types, right.types)
     && Object.keys(left.dataFilter ?? {}).length === Object.keys(right.dataFilter ?? {}).length
     && Object.entries(left.dataFilter ?? {}).every(([key, value]) => right.dataFilter?.[key] === value);
 }
@@ -344,7 +346,7 @@ type NotificationsState = {
 function mergeNotificationPage(
   prev: NotificationsState,
   pageNotifications: readonly Notification[],
-  options: { replaceVisible: boolean; filter: NotificationsFilter; resolvedOnServer?: boolean },
+  options: { replaceVisible: boolean; filter: NotificationsFilter; resolvedOnServer?: boolean; ranked?: boolean },
 ): NotificationsState {
   const byId = { ...prev.byId };
   for (const raw of pageNotifications) {
@@ -354,12 +356,13 @@ function mergeNotificationPage(
   }
 
   const pageIds = pageNotifications.map((notification) => notification.id);
-  if (options.resolvedOnServer) return {
+  const ranked = options.ranked ?? Boolean(options.filter.semantic && options.filter.query.trim());
+  if (options.resolvedOnServer || options.filter.extension) return {
     byId, resolvedOnServer: true,
-    visibleIds: options.filter.semantic ? pageIds : sortNotificationIdsByCreatedDesc(
+    visibleIds: ranked ? pageIds : sortNotificationIdsByCreatedDesc(
       options.replaceVisible ? pageIds : [...prev.visibleIds, ...pageIds], byId),
   };
-  if (options.filter.semantic && options.filter.query.trim()) return { byId, visibleIds: pageIds };
+  if (ranked) return { byId, visibleIds: pageIds };
   const pageIdSet = new Set(pageIds);
   const retainedVisibleIds = options.replaceVisible
     ? prev.visibleIds.filter((id) => {
@@ -382,6 +385,13 @@ function upsertNotificationInState(
   filter: NotificationsFilter,
 ): NotificationsState {
   next = withoutEphemeralImage(next);
+  if (filter.extension) {
+    const previous = prev.byId[next.id];
+    if (previous && Object.keys({ ...previous, ...next }).every(key => JSON.stringify((previous as unknown as Record<string, unknown>)[key]) === JSON.stringify((next as unknown as Record<string, unknown>)[key]))) return prev;
+    const byId = { ...prev.byId };
+    delete byId[next.id];
+    return { ...prev, byId, visibleIds: prev.visibleIds.filter(id => id !== next.id) };
+  }
   const existing = prev.byId[next.id];
   const merged = existing ? { ...withoutEphemeralImage(existing), ...next } : next;
   const byId = { ...prev.byId, [next.id]: merged };
@@ -404,6 +414,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const pathname = usePathname();
   const [screen, setScreen] = useState<Screen>("main");
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
+  const [notificationHistoryFilters, setNotificationHistoryFilters] = useState<Record<string, NotificationHistoryFilter>>({});
+  const [notificationsError, setNotificationsError] = useState(false);
   const [notificationDetailPanelsById, setNotificationDetailPanelsById] = useState<Record<string, NotificationDetailPanel>>({});
   const [notificationRenderersById, setNotificationRenderersById] = useState<Record<string, NotificationRenderer>>({});
   const [editorToolsById, setEditorToolsById] = useState<Record<string, EditorTool>>({});
@@ -695,6 +707,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       registerElementType(elementType) {
         setElementTypesById((prev) => ({ ...prev, [elementType.type]: elementType }));
       },
+      registerNotificationHistoryFilter(filter) {
+        setNotificationHistoryFilters(previous => ({ ...previous, [filter.id]: filter }));
+      },
       registerNotificationDetailPanel(panel) {
         setNotificationDetailPanelsById((prev) => ({ ...prev, [panel.id]: panel }));
       },
@@ -881,6 +896,28 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     setNotificationsState((prev) => upsertNotificationInState(prev, persistable, notificationsFilterRef.current));
   }, []);
 
+  const historyEndpoint = (filter: NotificationsFilter): string | undefined => {
+    if (!filter.extension) return undefined;
+    const provider = notificationHistoryFilters[filter.extension.id];
+    if (!provider) throw new Error("Notification selection unavailable");
+    const endpoint = provider.endpoint(filter.extension.value);
+    if (!endpoint) throw new Error("Notification selection unavailable");
+    return endpoint;
+  };
+
+  useEffect(() => {
+    const provider = notificationsRequestFilter.extension && notificationHistoryFilters[notificationsRequestFilter.extension.id];
+    if (!provider) return;
+    const invalidate = () => {
+      abortNotificationListRequests();
+      setNotificationsState({ byId: {}, visibleIds: [] });
+      setNotificationsRequestFilter(previous => ({ ...previous }));
+    };
+    const unsubscribe = provider.subscribe?.(invalidate);
+    window.addEventListener("focus", invalidate);
+    return () => { unsubscribe?.(); window.removeEventListener("focus", invalidate); };
+  }, [notificationHistoryFilters, notificationsRequestFilter.extension, abortNotificationListRequests]);
+
   const activeNotificationIsOpenRealtime = useMemo(() => {
     return isOpenRealtimeNotification(activeNotification);
   }, [activeNotification]);
@@ -909,7 +946,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
 
   useEffect(() => {
     if (!backendAvailable) return;
-    if (!mainViewportReady) {
+    if (!mainViewportReady || (notificationsRequestFilter.extension && !notificationHistoryFilters[notificationsRequestFilter.extension.id] && !allExtensionsLoaded)) {
       setNotificationsLoading(true);
       return;
     }
@@ -922,8 +959,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     setNotificationsLoading(true);
     setNotificationsCursor(null);
     setNotificationsSearchStatus(undefined);
+    setNotificationsError(false);
     setNotificationsHasMore(true);
-    setNotificationsState((prev) => ({ ...prev, visibleIds: [] }));
+    setNotificationsState((prev) => notificationsRequestFilter.extension ? { byId: {}, visibleIds: [] } : ({ ...prev, visibleIds: [] }));
 
     void (async () => {
       try {
@@ -935,6 +973,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           query: notificationsRequestFilter.query,
           semantic: notificationsRequestFilter.semantic,
           dataFilter: notificationsRequestFilter.dataFilter,
+          historyEndpoint: historyEndpoint(notificationsRequestFilter),
           signal: controller.signal,
         });
         if (controller.signal.aborted || notificationsListRequestRef.current !== requestId) return;
@@ -947,6 +986,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           mergeNotificationPage(prev, page.notifications ?? [], {
             replaceVisible: true,
             filter: notificationsRequestFilter,
+            ranked: page.search?.mode === "semantic_visual" || page.search?.mode === "semantic_text",
             resolvedOnServer: Boolean(page.search?.time_range || page.search?.reason === "installation_timezone_required"),
           }),
         );
@@ -954,7 +994,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         setNotificationsCursor(page.next_cursor ?? null);
         setNotificationsHasMore(page.next_cursor != null);
       } catch (err) {
-        if (isAbortError(err)) return;
+        if (isAbortError(err) || controller.signal.aborted || notificationsListRequestRef.current !== requestId) return;
+        setNotificationsError(true);
+        setNotificationsHasMore(false);
         console.error("Failed to load notifications", err);
       } finally {
         if (notificationsListAbortRef.current === controller) notificationsListAbortRef.current = null;
@@ -965,7 +1007,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     return () => {
       controller.abort();
     };
-  }, [abortNotificationListRequests, backendAvailable, mainViewportReady, notificationsRequestFilter]);
+  }, [abortNotificationListRequests, backendAvailable, mainViewportReady, notificationsRequestFilter, notificationHistoryFilters, allExtensionsLoaded]);
 
   useEffect(() => {
     if (activeNotificationId && notificationsState.byId[activeNotificationId]) return;
@@ -1531,6 +1573,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         types: filter.types,
         query: filter.query,
         dataFilter: filter.dataFilter,
+        historyEndpoint: historyEndpoint(filter),
+        semantic: filter.semantic,
         signal: controller.signal,
       });
       if (controller.signal.aborted || notificationsListRequestRef.current !== requestId) return;
@@ -1546,17 +1590,22 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         mergeNotificationPage(prev, page.notifications, {
           replaceVisible: false,
           filter,
+          ranked: page.search?.mode === "semantic_visual" || page.search?.mode === "semantic_text",
           resolvedOnServer: Boolean(page.search?.time_range || page.search?.reason === "installation_timezone_required"),
         }),
       );
     } catch (err) {
-      if (isAbortError(err)) return;
+      if (isAbortError(err) || controller.signal.aborted || notificationsListRequestRef.current !== requestId) return;
+      setNotificationsState(previous => filter.extension ? { byId: {}, visibleIds: [] } : ({ ...previous, visibleIds: [] }));
+      setNotificationsHasMore(false);
+      setNotificationsCursor(null);
+      setNotificationsError(true);
       console.error("Failed to load more notifications", err);
     } finally {
       if (notificationsMoreAbortRef.current === controller) notificationsMoreAbortRef.current = null;
       if (!controller.signal.aborted && notificationsListRequestRef.current === requestId) setNotificationsLoading(false);
     }
-  }, [backendAvailable, notificationsCursor, notificationsHasMore, notificationsLoading]);
+  }, [backendAvailable, notificationsCursor, notificationsHasMore, notificationsLoading, notificationHistoryFilters]);
 
   const markNotificationsAsViewed = useCallback(() => {
     if (!backendAvailable) return;
@@ -1701,6 +1750,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           elementTypesById={elementTypesById}
           viewSettings={viewSettings}
           notificationRenderers={notificationRenderers}
+          notificationHistoryFilters={Object.values(notificationHistoryFilters)}
+          notificationsError={notificationsError}
           notificationDetailPanels={Object.values(notificationDetailPanelsById)}
           notifications={notifications}
           notificationsCount={notificationsCount}

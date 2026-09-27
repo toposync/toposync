@@ -554,9 +554,20 @@ export type EditorTool = {
   createSession: (ctx: EditorToolContext) => EditorToolSession;
 };
 
+/** Extension-owned selection; endpoint returns an authorized NotificationsPage.
+ * Selection is opaque to the host. Missing providers must never fall back globally.
+ */
+export type NotificationHistoryFilter = {
+  id: string;
+  render: (context: { value: string | null; onChange: (value: string | null) => void }) => import("react").ReactNode;
+  endpoint: (value: string) => string;
+  subscribe?: (invalidate: () => void) => () => void;
+};
+
 export type ToposyncHost = {
   registerElementType: (elementType: ElementType) => void;
   registerNotificationRenderer: (renderer: NotificationRenderer) => void;
+  registerNotificationHistoryFilter?: (filter: NotificationHistoryFilter) => void;
   registerNotificationDetailPanel?: (panel: NotificationDetailPanel) => void;
   registerEditorTool: (tool: EditorTool) => void;
   registerFileDropHandler: (handler: FileDropHandler) => void;

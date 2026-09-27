@@ -80,3 +80,54 @@ test("location selection scopes literal updates and removes mismatches from sema
   assert.equal(context.notificationFiltersEqual(filter,{...filter,dataFilter:{area_id:"water",camera_id:"patio"}}),true);
   assert.equal(context.notificationFiltersEqual(filter,{...filter,dataFilter:{camera_id:"garage"}}),false);
 });
+
+test("private extension selection replaces stale results and never admits realtime data", () => {
+  const filter = {priorities:["medium"],types:[],query:"",extension:{id:"vision",value:"human:person"}};
+  assert.equal(context.notificationFiltersEqual(filter, {...filter,extension:{id:"vision",value:"recognized:person"}}),false);
+  assert.equal(context.notificationFiltersEqual(filter, {...filter,extension:undefined}),false);
+  const old = {byId:{old:{id:"old",title:"Old"}},visibleIds:["old"]};
+  const selected = context.mergeNotificationPage(old,[{id:"linked",title:"Person"}],{replaceVisible:true,filter});
+  assert.equal(selected.visibleIds.join(","),"linked");
+  assert.equal(context.upsertNotificationInState(selected,{id:"linked",title:"Person"},filter).visibleIds.join(","),"linked");
+  const added = context.upsertNotificationInState(selected,{id:"unlinked",title:"Person"},filter);
+  assert.equal(added.visibleIds.join(","),"linked");
+  const changed = context.upsertNotificationInState(added,{id:"linked",title:"Changed association"},filter);
+  assert.equal(changed.visibleIds.length,0);
+  assert.equal(changed.byId.linked,undefined);
+});
+
+
+test("private selection with empty semantic query retains literal pagination", () => {
+  const filter = {priorities:["medium"],types:[],query:"",semantic:"visual",extension:{id:"vision",value:"human:person"}};
+  const first = context.mergeNotificationPage({byId:{},visibleIds:[]},[{id:"one"}],{replaceVisible:true,filter});
+  const second = context.mergeNotificationPage(first,[{id:"two"}],{replaceVisible:false,filter});
+  assert.equal(second.visibleIds.join(","),"one,two");
+});
+
+const apiFilename = path.resolve(__dirname, "../src/util/api.ts");
+const apiAst = ts.createSourceFile(apiFilename, fs.readFileSync(apiFilename,"utf8"), ts.ScriptTarget.Latest, true);
+const listFunction = apiAst.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "listNotifications");
+function listContext(fetch) {
+  const value = {fetch,URLSearchParams}; vm.createContext(value);
+  vm.runInContext(ts.transpileModule(listFunction.getText(apiAst).replace("export ",""), {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,value);
+  return value;
+}
+test("private endpoint preserves filters and never falls through to public history on error", async () => {
+  const calls = [];
+  const privateApi = listContext(async (url,options) => {calls.push({url,options}); return {ok:false,status:404};});
+  await assert.rejects(privateApi.listNotifications({historyEndpoint:"/api/vision/identities/person/notifications?association=human",semantic:"visual",query:"cat",before:12,dataFilter:{camera_id:"patio"}}), /404/);
+  assert.equal(calls.length,1);
+  const query = new URL(calls[0].url,"http://local").searchParams;
+  assert.equal(query.get("association"),"human");assert.equal(query.get("mode"),"visual");assert.equal(query.get("before"),"12");
+  assert.equal(query.get("data_filter"),'{"camera_id":"patio"}');
+  await assert.rejects(privateApi.listNotifications({historyEndpoint:"https://remote.invalid/api/history"}), /Invalid/);
+  assert.equal(calls.length,1);
+});
+
+
+test("date-only server results append pages even when semantic mode is selected", () => {
+  const filter = {priorities:["medium"],types:[],query:"ontem",semantic:"visual",extension:{id:"vision",value:"human:person"}};
+  const first = context.mergeNotificationPage({byId:{},visibleIds:[]},[{id:"one"}],{replaceVisible:true,filter,ranked:false});
+  const second = context.mergeNotificationPage(first,[{id:"two"}],{replaceVisible:false,filter,ranked:false});
+  assert.equal(second.visibleIds.join(","),"one,two");
+});

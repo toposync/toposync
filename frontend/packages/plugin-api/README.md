@@ -71,3 +71,21 @@ Editor tools may optionally declare `group` and `order` metadata. Hosts use thos
 ## Versioning
 
 The package version follows the Toposync frontend/host release line. Third-party extensions should target the same minor line as the host they expect to run against.
+
+
+### Private notification history selections
+
+`host.registerNotificationHistoryFilter?.({ id, render, endpoint, subscribe })`
+adds an extension-owned selector to the history filter panel. `render` receives
+an opaque string `value` (or null) and `onChange`. `endpoint(value)` must return
+a local `/api/` notification-page endpoint; existing query, mode, priority,
+type, location and pagination parameters are appended. The backend must enforce
+all permissions and return `{ notifications, next_cursor, search? }`.
+
+The host persists the provider ID and value, so do not place names, secrets or
+biometric evidence in the value. Only one extension selection is active at a
+time. An unavailable provider or failed request never falls back to global
+history. Optional `subscribe(invalidate)` returns its unsubscribe callback;
+use it for local changes that invalidate associations. Results are snapshots:
+focus and explicit refresh requery, changed realtime records are removed,
+and new public notifications cannot enter a private selection automatically.

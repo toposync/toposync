@@ -1,5 +1,14 @@
 import type { TranslationBundle } from "@toposync/plugin-api";
 const messages: Record<string, [string, string]> = {
+  historyPeople: ["People and pets", "Pessoas e pets"],
+  historyIdentity: ["Whose events?", "Eventos de quem?"],
+  historyUnavailable: ["Identity selection unavailable or access denied.", "Seleção de identidades indisponível ou sem acesso."],
+  historyMissing: ["Selection unavailable", "Seleção indisponível"],
+  historyAssociation: ["Association", "Associação"],
+  historyHuman: ["Human-confirmed only", "Somente confirmação humana"],
+  historyRecognized: ["Human and automatic", "Humanas e automáticas"],
+  historyAssociationHelp: ["Recorded associations, not current presence or guaranteed identity. Refresh to check new events and corrections.", "Associações registradas, não presença atual ou identidade garantida. Atualize para consultar novos eventos e correções."],
+  historyClear: ["Clear person or pet", "Limpar pessoa ou pet"],
   retention: ["Photo retention", "Retenção de fotos"],
   retentionActive: ["Automatic expiration is active.", "A expiração automática está ativa."],
   retentionInactive: ["Automatic expiration is off.", "A expiração automática está desativada."],

@@ -849,6 +849,7 @@ export type NotificationsPage = {
 export type NotificationPriority = "low" | "medium" | "high";
 
 export type NotificationsListParams = {
+  historyEndpoint?: string;
   dataFilter?: Record<string, string>;
   semantic?: boolean | "visual";
   before?: number | null;
@@ -1738,7 +1739,11 @@ export async function listNotifications(
     typeof paramsOrBefore === "object" && paramsOrBefore !== null
       ? paramsOrBefore
       : { before: paramsOrBefore, limit };
-  const params = new URLSearchParams();
+  const endpoint = listParams.historyEndpoint;
+  if (endpoint && (!endpoint.startsWith("/api/") || endpoint.includes("\\") || endpoint.includes("#") || endpoint.includes(".."))) throw new Error("Invalid notification history endpoint");
+  const [scopedPath, scopedQuery] = (endpoint ?? "").split("?", 2);
+  const params = new URLSearchParams(scopedQuery);
+  if (endpoint) params.set("mode", listParams.semantic === "visual" ? "visual" : listParams.semantic ? "text" : "literal");
   if (listParams.before != null) params.set("before", String(listParams.before));
   params.set("limit", String(listParams.limit ?? limit));
   for (const priority of listParams.priorities ?? []) {
@@ -1751,9 +1756,9 @@ export async function listNotifications(
   const query = String(listParams.query ?? "").trim();
   if (query) params.set("query", query);
   if (listParams.semantic === "visual" && query) params.set("mode", "visual");
-  const path = listParams.semantic && query ? "/api/ai/history/search" : "/api/notifications";
+  const path = scopedPath || (listParams.semantic && query ? "/api/ai/history/search" : "/api/notifications");
   const res = await fetch(`${path}?${params.toString()}`, { signal: listParams.signal });
-  if (listParams.semantic && query && res.status === 404) {
+  if (!endpoint && listParams.semantic && query && res.status === 404) {
     const fallback = await listNotifications({ ...listParams, semantic: false });
     return { ...fallback, next_cursor: null, search: { mode: "literal", status: "degraded" } };
   }

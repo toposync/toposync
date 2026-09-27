@@ -183,5 +183,15 @@ selection when unavailable. Visual similarity does not confirm identity.
 The route reauthorizes and compares the full gallery selection after retrieval,
 then checks current notification references. Changes return HTTP 409 requiring
 a fresh selection instead of stale results. The private response does not copy
-identity names or identifiers into public notifications. Association filtering
-is available through this API; person/pet history controls remain to be integrated.
+identity names or identifiers into public notifications. The notification filter panel exposes **People and pets** through the vision
+extension. Select a profile; human confirmation is the default. Including
+automatic recognition is explicit and resets to human-only when selecting
+another profile. Camera/area and search modes remain available. Names come from
+the authorized gallery, not notification payloads.
+
+Selections survive reload. Removed or inaccessible selections show an error and
+can be cleared; missing extensions never silently broaden retrieval. Results
+are a snapshot: refresh or returning focus rechecks access, and local gallery
+curation invalidates them. Identical realtime repeats preserve results; changed
+records are removed pending an authorized refresh. New public events are not
+admitted by client-side identity guesses.

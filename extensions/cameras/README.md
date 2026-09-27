@@ -229,6 +229,23 @@ cannot be reopened by replay, and different sources retain separate records.
 Temporal overlap candidates do not establish that microphones heard the same
 sound and must not be used alone to merge occurrences.
 
+`camera.audio_source` reads the first audio track of an enabled, configured
+camera media source using the existing source resolver. It requires the optional
+audio dependencies and can feed `camera.audio_features`. It uses one connection
+per running node, CPU decoding, five-second open/read timeouts and no automatic
+reconnection. Keep it disabled when unused; it does not share the video decoder.
+The source emits at most one second of PCM16 at 16 kHz per packet, preserving
+mono or stereo, and releases the decoder on completion or cancellation. Other
+channel layouts are explicitly unsupported. A stream with no audio track differs
+from silent samples or a lost stream. Network end-of-stream counts as stream loss.
+
+Packet media time is decoded sample order; it does not certify uninterrupted
+capture or preserve gaps in source presentation timestamps. Audio clock metadata
+is local receipt time with unknown uncertainty, never synchronized camera capture
+time. Consequently it cannot establish multi-camera time-of-arrival localization.
+The source does not infer acoustic occurrences or enable notifications by itself.
+Local-file decoder tests do not certify physical camera audio support.
+
 
 ## Live ONVIF event sources
 

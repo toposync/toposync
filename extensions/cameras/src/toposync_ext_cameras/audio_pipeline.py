@@ -79,6 +79,8 @@ class AudioFeaturesRuntime(TransformOperatorRuntime):
 
 
 def register_audio_operator(registry) -> None:
+    from .audio_source import register_audio_source
+    register_audio_source(registry)
     if registry.get("camera.audio_features") is not None:
         return
     registry.register_operator(

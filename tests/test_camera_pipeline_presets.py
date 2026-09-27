@@ -119,6 +119,46 @@ def test_area_recipe_requires_explicit_area_and_compiles(tmp_path, monkeypatch, 
         assert _node_config(pipeline, "vision.detect")["categories"] == ["person", "dog", "cat"]
 
 
+def test_area_recipe_respects_composition_and_rejects_ambiguous_area(tmp_path, monkeypatch):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client, with_area=True)
+        first = client.get("/api/composition").json()
+        second = client.post("/api/compositions", json={"name": "Other yard"}).json()
+        assert client.post(f"/api/compositions/{second['id']}/activate").status_code == 200
+        first["id"] = second["id"]
+        first["name"] = "Other yard"
+        first["elements"][-1]["name"] = "Pool"
+        assert client.put("/api/composition", json=first).status_code == 200
+        route = "/api/cameras/cameras/cam1/pipelines/presets"
+        body = {"preset": "area_presence", "enabled": False, "area_id": "area-1"}
+        assert client.post(route, json=body).status_code == 409
+        assert client.post(route, json={**body, "composition_id": "missing"}).status_code == 409
+        result = client.post(route, json={**body, "composition_id": second["id"]})
+        assert result.status_code == 200, result.text
+        pipeline = client.get(f"/api/pipelines/{result.json()['pipeline_name']}").json()
+        assert _node_config(pipeline, "camera.area_occurrence")["area"]["name"] == "Pool"
+        assert _node_config(pipeline, "camera.camera_mapping")["composition_id"] == second["id"]
+
+
+def test_recipe_preview_compiles_without_persisting_or_enabling(tmp_path, monkeypatch):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client, with_area=True)
+        before = client.get("/api/pipelines").json()
+        route = "/api/cameras/cameras/cam1/pipelines/presets"
+        body = {"preset": "area_entry", "area_id": "area-1", "composition_id": "yard", "enabled": True}
+        preview = client.post(f"{route}/preview", json=body)
+        assert preview.status_code == 200, preview.text
+        proposed = preview.json()["pipeline"]
+        assert proposed["enabled"] is False
+        assert client.get("/api/pipelines").json() == before
+        created = client.post(route, json={**body, "enabled": False})
+        assert created.status_code == 200, created.text
+        saved = client.get(f"/api/pipelines/{created.json()['pipeline_name']}").json()
+        assert saved["graph"] == proposed["graph"]
+
+
 def _vision_detect_config(pipeline: dict[str, Any]) -> dict[str, Any]:
     graph = pipeline.get("graph") if isinstance(pipeline.get("graph"), dict) else {}
     nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []

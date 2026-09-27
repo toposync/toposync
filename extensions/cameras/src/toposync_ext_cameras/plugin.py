@@ -5269,14 +5269,18 @@ class CamerasExtension(BaseExtension):
             return points if len(points) >= 3 else []
 
         def _resolve_mapped_camera_area(
-            cfg: Any, *, camera_id: str, area_id: str
+            cfg: Any, *, camera_id: str, area_id: str, composition_id: str = ""
         ) -> tuple[str, dict[str, Any]] | None:
             cid = str(camera_id or "").strip()
             selected_area_id = str(area_id or "").strip()
+            selected_composition_id = str(composition_id or "").strip()
             if not cid or not selected_area_id:
                 return None
+            matches: list[tuple[str, dict[str, Any]]] = []
             for composition in getattr(cfg, "compositions", []):
                 comp_id = str(getattr(composition, "id", "") or "").strip()
+                if selected_composition_id and comp_id != selected_composition_id:
+                    continue
                 if not comp_id or not _composition_has_camera_mapping(
                     cfg, camera_id=cid, composition_id=comp_id
                 ):
@@ -5293,12 +5297,12 @@ class CamerasExtension(BaseExtension):
                     if not points:
                         continue
                     area_name = str(getattr(element, "name", "") or "").strip() or selected_area_id
-                    return comp_id, {
+                    matches.append((comp_id, {
                         "areas": [{"name": area_name, "points": points}],
                         "include_area_names": [area_name],
                         "drop_when_unmapped": True,
-                    }
-            return None
+                    }))
+            return matches[0] if len(matches) == 1 else None
 
         def _pipeline_source_ids_for_camera(
             pipeline: Pipeline, *, camera_id: str
@@ -5771,16 +5775,11 @@ class CamerasExtension(BaseExtension):
                 suggested_pipeline_names=suggested,
             )
 
-        @app.post(
-            "/api/cameras/cameras/{camera_id}/pipelines/presets",
-            response_model=CameraPipelinePresetResponse,
-        )
-        async def create_camera_pipeline_from_preset(
+        async def prepare_camera_pipeline_from_preset(
             request: Request,
             camera_id: str,
             body: CameraPipelinePresetRequest,
-        ) -> CameraPipelinePresetResponse:
-            _require_auth(request, action="core:pipelines:write")
+        ) -> Pipeline:
             cid = str(camera_id or "").strip()
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
@@ -5827,6 +5826,7 @@ class CamerasExtension(BaseExtension):
                         cfg,
                         camera_id=cid,
                         area_id=str(body.area_id or "").strip(),
+                        composition_id=composition_id,
                     )
                     if resolved_area is None:
                         raise HTTPException(
@@ -5972,6 +5972,40 @@ class CamerasExtension(BaseExtension):
                 compiler.compile_pipeline(pipeline)
             except GraphCompileError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            return pipeline
+
+        @app.post("/api/cameras/cameras/{camera_id}/pipelines/presets/preview")
+        async def preview_camera_pipeline_from_preset(
+            request: Request, camera_id: str, body: CameraPipelinePresetRequest,
+        ) -> dict[str, Any]:
+            _require_auth(request, action="core:pipelines:read")
+            _require_auth(request, action="core:pipelines:compile")
+            pipeline = await prepare_camera_pipeline_from_preset(
+                request, camera_id, body.model_copy(update={"enabled": False})
+            )
+            return {"pipeline": pipeline.model_dump(mode="json")}
+
+        async def preview_camera_recipe_service(
+            *, request: Request, camera_id: str, recipe: dict[str, Any],
+        ) -> dict[str, Any]:
+            return await preview_camera_pipeline_from_preset(
+                request, camera_id, CameraPipelinePresetRequest.model_validate(recipe)
+            )
+
+        services.register("cameras.pipelines.preview", preview_camera_recipe_service)
+
+        @app.post(
+            "/api/cameras/cameras/{camera_id}/pipelines/presets",
+            response_model=CameraPipelinePresetResponse,
+        )
+        async def create_camera_pipeline_from_preset(
+            request: Request, camera_id: str, body: CameraPipelinePresetRequest,
+        ) -> CameraPipelinePresetResponse:
+            _require_auth(request, action="core:pipelines:write")
+            pipeline = await prepare_camera_pipeline_from_preset(request, camera_id, body)
+            pipeline_name = pipeline.name
+            store = _config_store(request)
 
             try:
                 await store.create_pipeline(pipeline)

@@ -13,6 +13,12 @@ First-party extension focused on camera integration for the global Pipelines run
 
 The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tracking`, and `toposync_ext_cameras.processor_server`) is no longer part of this extension.
 
+The person/vehicle stopped recipes sample continuously at four frames per second:
+motion gating would stop supplying evidence after the subject stops. Detection and
+mapping still determine whether a stationary event has sufficient evidence; this
+sampling rate does not certify physical accuracy or camera availability. Existing
+saved graphs are not rewritten when a recipe changes.
+
 ## APIs
 
 - `GET /api/cameras/index`

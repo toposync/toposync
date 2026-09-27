@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,8 @@ import pytest
 from toposync.app import create_app
 import toposync.extensions.manager as ext_manager_mod
 import toposync_ext_cameras.plugin as cameras_plugin_mod
+from toposync.runtime.pipelines import Lifecycle, Packet
+from toposync.runtime.pipelines.operators_core import FPSReducerRuntime, StationaryEventRuntime
 
 
 CAMERA_PIPELINE_PRESETS = (
@@ -31,6 +34,48 @@ CAMERA_PIPELINE_PRESETS_REQUIRING_MAPPING = {
     "person_stopped",
     "person_vehicle_interaction",
 }
+
+
+@pytest.mark.parametrize("preset", ["person_stopped", "vehicle_stopped"])
+def test_stopped_recipe_keeps_observing_beyond_motion_hold(tmp_path, monkeypatch, preset):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client)
+        response = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={"preset": preset, "min_stationary_seconds": 10.0, "enabled": False},
+        )
+        assert response.status_code == 200, response.text
+        pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
+        assert "camera.motion_gate" not in _operator_ids(pipeline)
+        assert pipeline["enabled"] is False
+        limiter = FPSReducerRuntime(_node_config(pipeline, "core.fps_reducer"))
+        stationary = StationaryEventRuntime(_node_config(pipeline, "core.stationary_event"))
+
+        async def replay():
+            outputs = []
+            admitted = 0
+            for index in range(241):
+                timestamp = index * 0.05
+                # Controlled replay clock; detector/world evidence is synthetic here.
+                monkeypatch.setattr("toposync.runtime.pipelines.operators_core.time.monotonic", lambda: timestamp + 100)
+                packet = Packet.create(stream_id="camera", lifecycle=Lifecycle.UPDATE, payload={
+                    "frame_ts": timestamp,
+                    "subject": {"id": "observed-1"},
+                    "world": {"x": min(timestamp, 1.0), "z": 0.0},
+                    "velocity": {"valid": True, "stopped": timestamp >= 1.0,
+                                 "speed_mps": 0.0 if timestamp >= 1.0 else 1.0},
+                })
+                for sample in await limiter.process_packet(packet, None):
+                    admitted += 1
+                    outputs.extend(await stationary.process_packet(sample, None))
+            assert admitted == 49  # Four samples/second, including the initial sample.
+            assert outputs[0].lifecycle == Lifecycle.OPEN
+            assert outputs[0].payload["stationary_event"]["stationary_seconds"] == 10.0
+            assert outputs[-1].lifecycle == Lifecycle.UPDATE
+            assert outputs[-1].payload["stationary_event"]["stationary_seconds"] == 11.0
+
+        asyncio.run(replay())
 
 
 class _ExtensionEntryPoint:
@@ -926,7 +971,7 @@ def test_camera_pipeline_vehicle_stopped_builds_confirmed_stop_notification(
 
         assert _operator_ids(pipeline) == [
             "camera.source",
-            "camera.motion_gate",
+            "core.fps_reducer",
             "vision.detect",
             "camera.camera_mapping",
             "vision.track",
@@ -937,6 +982,7 @@ def test_camera_pipeline_vehicle_stopped_builds_confirmed_stop_notification(
             "core.store_images",
             "core.notify",
         ]
+        assert _node_config(pipeline, "core.fps_reducer") == {"target_fps": 4.0}
         detect = _vision_detect_config(pipeline)
         assert detect.get("categories") == ["car", "truck", "bus", "motorcycle"]
         assert detect.get("confidence_threshold") == 0.25
@@ -998,7 +1044,7 @@ def test_camera_pipeline_person_stopped_builds_confirmed_stop_notification(
 
         assert _operator_ids(pipeline) == [
             "camera.source",
-            "camera.motion_gate",
+            "core.fps_reducer",
             "vision.detect",
             "camera.camera_mapping",
             "vision.track",
@@ -1009,6 +1055,7 @@ def test_camera_pipeline_person_stopped_builds_confirmed_stop_notification(
             "core.store_images",
             "core.notify",
         ]
+        assert _node_config(pipeline, "core.fps_reducer") == {"target_fps": 4.0}
         detect = _vision_detect_config(pipeline)
         assert detect.get("categories") == ["person"]
         assert detect.get("confidence_threshold") == 0.25

@@ -5425,6 +5425,13 @@ class CamerasExtension(BaseExtension):
                     },
                 },
             ]
+            if preset in {"person_stopped", "vehicle_stopped"}:
+                # A motion gate stops observing precisely when this recipe needs evidence.
+                base_nodes[1] = {
+                    "id": "fps",
+                    "operator": "core.fps_reducer",
+                    "config": {"target_fps": 4.0},
+                }
             if preset in CAMERA_MAPPING_REQUIRED_PRESETS:
                 base_nodes.append(
                     {

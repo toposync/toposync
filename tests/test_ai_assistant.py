@@ -88,7 +88,8 @@ def test_assistant_validates_existing_operator_and_reference_changes():
         validate_proposal(before, {"graph": {**graph, "nodes": [{**graph["nodes"][0], "config": {"frames": "invalid"}}]}}, compiler)
 
 
-def test_local_json_disables_unbounded_thinking(monkeypatch):
+@pytest.mark.parametrize("visual", [False, True])
+def test_local_json_disables_unbounded_thinking(monkeypatch, visual):
     import json
     import httpx
     from toposync_ext_ai.providers import OllamaProvider
@@ -104,6 +105,7 @@ def test_local_json_disables_unbounded_thinking(monkeypatch):
         assert payload["options"]["num_predict"] == 8192
         assert payload["truncate"] is False and payload["shift"] is False
         assert payload["keep_alive"] == "30s"
+        assert bool(payload["messages"][-1].get("images")) is visual
         return httpx.Response(200, json={"done": True, "done_reason": "stop", "message": {"content": '{"question":"Qual câmera?"}'}})
 
     original = httpx.AsyncClient
@@ -111,12 +113,15 @@ def test_local_json_disables_unbounded_thinking(monkeypatch):
         **kwargs, transport=httpx.MockTransport(respond)
     ))
     provider = OllamaProvider(AiProviderConfig(id="local"), AiProfileConfig(id="local"))
-    result = asyncio.run(provider.generate_json(messages=[{"role": "user", "content": "recipe"}]))
+    import numpy as np
+    result = asyncio.run(provider._chat_json(image=np.zeros((8, 8, 3), dtype=np.uint8) if visual else None,
+        messages=[{"role": "user", "content": "recipe"}]))
     assert result == {"question": "Qual câmera?"}
 
 
 @pytest.mark.parametrize("version,reason", [("0.34.3", "stop"), ("unknown", "stop"), ("0.34.4", "length"), ("0.34.4", None)])
-def test_text_context_requires_supported_server_and_complete_response(monkeypatch, version, reason):
+@pytest.mark.parametrize("visual", [False, True])
+def test_text_context_requires_supported_server_and_complete_response(monkeypatch, version, reason, visual):
     import httpx
     from toposync_ext_ai.providers import AiProviderError, OllamaProvider
     from toposync_ext_ai.settings import AiProviderConfig, AiProfileConfig
@@ -132,6 +137,8 @@ def test_text_context_requires_supported_server_and_complete_response(monkeypatc
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(**kwargs, transport=httpx.MockTransport(respond)))
     provider = OllamaProvider(AiProviderConfig(id="local"), AiProfileConfig(id="local"))
     with pytest.raises(AiProviderError):
-        asyncio.run(provider.generate_json(messages=[{"role": "user", "content": "recipe"}]))
+        import numpy as np
+        asyncio.run(provider._chat_json(image=np.zeros((8, 8, 3), dtype=np.uint8) if visual else None,
+            messages=[{"role": "user", "content": "recipe"}]))
     if version != "0.34.4":
         assert requests == ["/api/version"]

@@ -192,3 +192,12 @@ inválidos não substituem a evidência anterior. Atualizações limitadas por i
 ainda alimentam o histórico. CLOSE normal ou sintetizado no desligamento conserva
 a evidência; outra ocorrência começa sem herdá-la. É a última evidência por caminho,
 não um arquivo completo de todas as avaliações ou de todas as imagens.
+
+### Imagens e orçamento de inferência Ollama
+
+Arrays de frames seguem a convenção BGR/BGRA do pipeline; a codificação converte
+para RGB/RGBA. Imagens PIL e arquivos já codificados mantêm suas cores originais.
+Ollama usa contexto32768, saída limitada a8192tokens e retenção30s tanto para texto
+como para visão. Respostas incompletas e truncamento de contexto são recusados;
+essa garantia exige Ollama0.34.4 ou posterior. Os limites não constituem garantia
+de latência ou precisão; valide o modelo e as cenas do ambiente de implantação.

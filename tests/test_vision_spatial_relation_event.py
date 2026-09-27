@@ -1033,7 +1033,8 @@ def test_proximity_counts_only_observed_returns_and_resets_on_member_loss(monkey
         (tmp_path / "notification.json").write_text(json.dumps(asdict(record), ensure_ascii=False), encoding="utf-8")
         assert await runtime.process_packet(runtime._states_by_group[next(iter(runtime._states_by_group))].last_packet, None) == []
         clock[0] = 4
-        await runtime.process_packet(_group_packet(members=[]), None)
+        closed = await runtime.process_packet(_group_packet(members=[]), None)
+        assert closed[0].payload["spatial_relation_event"]["visits"]["count"] == 2
         clock[0] = 5
         after_loss = await runtime.process_packet(_group_packet(members=_near_members()), None)
         assert after_loss[0].payload["spatial_relation_event"]["visits"]["count"] == 0

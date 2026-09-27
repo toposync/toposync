@@ -675,8 +675,10 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         )
         pair_ids = (observed_pair.left.event_id, observed_pair.right.event_id) if observed_pair else None
         if pair_ids is None or pair_ids != state.visit_pair:
-            state.visits.clear()
-            state.visits_overflow_until = float("-inf")
+            # Closing evidence retains observed history; recovery starts a new count.
+            if not state.opened or pair_ids is not None:
+                state.visits.clear()
+                state.visits_overflow_until = float("-inf")
             state.observed_outside = False
             state.visit_pair = pair_ids
         if observed_pair is not None and relation_match is None and observed_pair.distance > observed_pair.threshold:

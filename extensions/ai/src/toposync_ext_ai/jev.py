@@ -1,4 +1,4 @@
-"""Optional text-only review via https://docs.typesafe.ai/api.
+"""Optional text-only review through TypeSafe or experimental local Ollaya.
 
 This service classifies text for review; it never authorizes an action or confirms
 what happened. Trusted callers must obtain consent for this exact text before
@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import re
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -50,7 +52,7 @@ class Usage(BaseModel):
 
 class EvaluationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    model: Literal["jev-1.13.0"]
+    model: str = Field(strict=True, min_length=1, max_length=256)
     answers: dict[str, ChoiceAnswer] = Field(min_length=1, max_length=1)
     usage: Usage
 
@@ -60,7 +62,10 @@ async def evaluate_event_text(text: str, *, remote_authorized: bool = False) -> 
     fallback = {"status": "unavailable", "review_required": True, "evaluation": None}
     if os.environ.get("TOPOSYNC_JEV_ENABLED") != "1":
         return {**fallback, "reason": "disabled"}
-    if remote_authorized is not True:
+    backend = os.environ.get("TOPOSYNC_JEV_BACKEND", "typesafe")
+    if backend not in {"typesafe", "ollaya"}:
+        return {**fallback, "reason": "invalid_backend"}
+    if backend == "typesafe" and remote_authorized is not True:
         return {**fallback, "reason": "remote_processing_not_authorized"}
     if not isinstance(text, str) or not text.strip() or len(text) > 16_384:
         return {**fallback, "reason": "invalid_text"}
@@ -70,11 +75,31 @@ async def evaluate_event_text(text: str, *, remote_authorized: bool = False) -> 
         return {**fallback, "reason": "invalid_text"}
     if encoded_length > 16_384:
         return {**fallback, "reason": "invalid_text"}
-    key = os.environ.get("TYPESAFE_API_KEY", "").strip()
-    if not key:
-        return {**fallback, "reason": "credentials_unavailable"}
+    model = MODEL
+    endpoint = "https://api.typesafe.ai/v1/systemone"
+    if backend == "ollaya":
+        host = os.environ.get("TOPOSYNC_OLLAYA_URL", "http://127.0.0.1:11435")
+        try:
+            url = urlsplit(host)
+            if (url.scheme not in {"http", "https"}
+                    or url.hostname not in {"127.0.0.1", "::1"}
+                    or url.username or url.password or url.query or url.fragment
+                    or url.path not in {"", "/"} or url.port == 0):
+                raise ValueError("invalid local endpoint")
+        except ValueError:
+            return {**fallback, "reason": "loopback_provider_required"}
+        model = os.environ.get("TOPOSYNC_OLLAYA_MODEL", "laya:multilingual")
+        # Exigir nome e tag explícitos evita roteamento implícito para outro modelo.
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*", model):
+            return {**fallback, "reason": "invalid_model"}
+        endpoint = host.rstrip("/") + "/v1/systemone"
+        key = os.environ.get("OLLAYA_API_KEY", "").strip()
+    else:
+        key = os.environ.get("TYPESAFE_API_KEY", "").strip()
+        if not key:
+            return {**fallback, "reason": "credentials_unavailable"}
     request = {
-        "model": MODEL,
+        "model": model,
         "state": {"untrusted_event_text": text},
         "questions": {
             "text_kind": {
@@ -90,10 +115,11 @@ async def evaluate_event_text(text: str, *, remote_authorized: bool = False) -> 
     }
     try:
         async with asyncio.timeout(10):
-            async with httpx.AsyncClient(timeout=httpx.Timeout(8, connect=3), trust_env=False) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(8, connect=3), trust_env=False,
+                                         follow_redirects=False) as client:
                 async with client.stream(
-                    "POST", "https://api.typesafe.ai/v1/systemone",
-                    headers={"Authorization": f"Bearer {key}"}, json=request,
+                    "POST", endpoint,
+                    headers={"Authorization": f"Bearer {key}"} if key else {}, json=request,
                 ) as response:
                     if response.status_code != 200:
                         return {**fallback, "reason": "service_rejected_request"}
@@ -103,6 +129,8 @@ async def evaluate_event_text(text: str, *, remote_authorized: bool = False) -> 
                         if len(body) > 65_536:
                             return {**fallback, "reason": "response_exceeds_budget"}
         parsed = EvaluationResponse.model_validate_json(bytes(body))
+        if parsed.model != model:
+            return {**fallback, "reason": "unexpected_model"}
         answer = parsed.answers["text_kind"]
     except (httpx.HTTPError, TimeoutError):
         return {**fallback, "reason": "service_unavailable"}
@@ -111,4 +139,6 @@ async def evaluate_event_text(text: str, *, remote_authorized: bool = False) -> 
     return {
         "status": "evaluated", "reason": "semantic_review_only", "review_required": True,
         "model": parsed.model, "evaluation": answer.model_dump(),
+        "backend": backend, "experimental": backend == "ollaya",
+        "probabilities_calibrated_for_task": False,
     }

@@ -23,6 +23,10 @@ def response_body():
 def setup_transport(monkeypatch, handler):
     original = httpx.AsyncClient
     monkeypatch.setenv("TOPOSYNC_JEV_ENABLED", "1")
+    monkeypatch.delenv("TOPOSYNC_JEV_BACKEND", raising=False)
+    monkeypatch.delenv("TOPOSYNC_OLLAYA_URL", raising=False)
+    monkeypatch.delenv("TOPOSYNC_OLLAYA_MODEL", raising=False)
+    monkeypatch.delenv("OLLAYA_API_KEY", raising=False)
     monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic-test-key")
     monkeypatch.setattr(jev.httpx, "AsyncClient", lambda **kwargs: original(
         transport=httpx.MockTransport(handler), **kwargs,
@@ -97,3 +101,86 @@ def test_jev_failure_abstains_without_retry_or_exposing_response(monkeypatch, fa
     assert result["review_required"] is True and result["evaluation"] is None
     assert len(calls) == 1
     assert "sensitive" not in json.dumps(result)
+
+
+def test_ollaya_uses_local_contract_without_remote_consent_or_key(monkeypatch):
+    def handler(request):
+        assert str(request.url) == "http://127.0.0.1:11435/v1/systemone"
+        assert "authorization" not in request.headers
+        assert json.loads(request.content)["model"] == "laya:multilingual"
+        body = response_body()
+        body["model"] = "laya:multilingual"
+        body["usage"]["output_tokens"] = 0
+        return httpx.Response(200, json=body)
+
+    setup_transport(monkeypatch, handler)
+    monkeypatch.setenv("TOPOSYNC_JEV_BACKEND", "ollaya")
+    monkeypatch.delenv("OLLAYA_API_KEY", raising=False)
+    result = asyncio.run(jev.evaluate_event_text("A pessoa disse que chegou."))
+    assert result["status"] == "evaluated"
+    assert result["experimental"] and result["review_required"]
+    assert not result["probabilities_calibrated_for_task"]
+
+
+@pytest.mark.parametrize("url", [
+    "https://example.com", "http://127.0.0.1.example.com", "http://user:password@127.0.0.1",
+    "http://127.0.0.1:0", "http://127.0.0.1:99999", "http://127.0.0.1/proxy",
+    "http://127.0.0.1?target=remote", "http://127.0.0.1#fragment", "file:///etc/passwd",
+])
+def test_ollaya_rejects_nonlocal_or_ambiguous_endpoint_before_request(monkeypatch, url):
+    calls = []
+    setup_transport(monkeypatch, lambda request: calls.append(request))
+    monkeypatch.setenv("TOPOSYNC_JEV_BACKEND", "ollaya")
+    monkeypatch.setenv("TOPOSYNC_OLLAYA_URL", url)
+    assert asyncio.run(jev.evaluate_event_text("test"))["reason"] == "loopback_provider_required"
+    assert not calls
+
+
+@pytest.mark.parametrize("failure", ["redirect", "different_model", "missing_model", "oversize", "timeout"])
+def test_ollaya_abstains_without_remote_fallback(monkeypatch, failure):
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if failure == "redirect":
+            return httpx.Response(307, headers={"location": "https://example.com/private"})
+        if failure == "timeout":
+            raise httpx.ReadTimeout("private")
+        if failure == "missing_model":
+            return httpx.Response(404, json={"error": "MODEL_NOT_FOUND"})
+        if failure == "oversize":
+            return httpx.Response(200, content=b"x" * 65_537)
+        return httpx.Response(200, json=response_body())
+
+    setup_transport(monkeypatch, handler)
+    monkeypatch.setenv("TOPOSYNC_JEV_BACKEND", "ollaya")
+    result = asyncio.run(jev.evaluate_event_text("test"))
+    assert result["status"] == "unavailable" and result["evaluation"] is None
+    assert calls == ["http://127.0.0.1:11435/v1/systemone"]
+
+
+@pytest.mark.parametrize("model", ["auto", "laya", "../model:latest", "laya:latest?remote=true"])
+def test_ollaya_requires_explicit_model_tag(monkeypatch, model):
+    calls = []
+    setup_transport(monkeypatch, lambda request: calls.append(request))
+    monkeypatch.setenv("TOPOSYNC_JEV_BACKEND", "ollaya")
+    monkeypatch.setenv("TOPOSYNC_OLLAYA_MODEL", model)
+    assert asyncio.run(jev.evaluate_event_text("test"))["reason"] == "invalid_model"
+    assert not calls
+
+
+def test_ollaya_uses_only_its_own_optional_credentials_and_ipv6(monkeypatch):
+    def handler(request):
+        assert str(request.url) == "http://[::1]:11435/v1/systemone"
+        assert request.headers["authorization"] == "Bearer local-test-key"
+        body = response_body()
+        body["model"] = "decider:0.8b"
+        assert json.loads(request.content)["model"] == body["model"]
+        return httpx.Response(200, json=body)
+
+    setup_transport(monkeypatch, handler)
+    monkeypatch.setenv("TOPOSYNC_JEV_BACKEND", "ollaya")
+    monkeypatch.setenv("TOPOSYNC_OLLAYA_URL", "http://[::1]:11435/")
+    monkeypatch.setenv("TOPOSYNC_OLLAYA_MODEL", "decider:0.8b")
+    monkeypatch.setenv("OLLAYA_API_KEY", "local-test-key")
+    assert asyncio.run(jev.evaluate_event_text("test"))["status"] == "evaluated"

@@ -11,6 +11,66 @@ The extension is designed around local-first usage. Ollama is the default provid
 `qwen3.8:27b-mlx` as the initial high-quality local vision recommendation. Cloud providers can be
 added through provider profiles and explicit fallback chains.
 
+## Experimental JEV-compatible text review
+
+The internal service `ai.jev.evaluate_event_text` optionally classifies a description
+as an observation, attributed speech, or unclear text. Its output always requires
+human review: it does not establish identity, intent, danger, or truth and must not
+authorize actions. No pipeline, chat provider, or frontend enables this service
+implicitly. It is disabled unless `TOPOSYNC_JEV_ENABLED=1`.
+
+`TOPOSYNC_JEV_BACKEND=typesafe` (the default) uses TypeSafe's `jev-1.13.0`.
+It requires `TYPESAFE_API_KEY` and the caller's `remote_authorized=True` for the
+specific text. There is no automatic cloud fallback.
+
+`TOPOSYNC_JEV_BACKEND=ollaya` selects an **experimental local alternative**.
+[Ollaya](https://github.com/ollaya-dev/ollaya) is a separate runtime from Ollama:
+it implements the compatible `/v1/systemone` API with open models, **not proprietary
+Jev weights**. Install an official release, verify its published checksum, and pull
+a model explicitly; inference does not install missing models. For example:
+
+```sh
+OLLAYA_HOST=127.0.0.1:11435 OLLAYA_DEVICE=cpu OLLAYA_KEEP_ALIVE=30s \
+  OLLAYA_MAX_LOADED_MODELS=1 OLLAYA_MAX_QUEUE=2 ollaya serve
+# In another terminal, while the daemon is running:
+ollaya pull laya:multilingual
+```
+
+Set these variables in the Toposync backend process:
+
+```sh
+export TOPOSYNC_JEV_ENABLED=1
+export TOPOSYNC_JEV_BACKEND=ollaya
+export TOPOSYNC_OLLAYA_URL=http://127.0.0.1:11435
+export TOPOSYNC_OLLAYA_MODEL=laya:multilingual
+```
+
+The URL accepts only literal `127.0.0.1` or `[::1]`, with no credentials, path,
+query, or fragment. Redirects and environment proxies are disabled. If the daemon
+uses `OLLAYA_API_KEY`, provide that same variable to Toposync; the TypeSafe key is
+never forwarded to Ollaya. Use an explicit `name:tag`, not a router alias. The
+returned model must match. Model names do not certify model quality.
+
+Requests have a ten-second total budget, no retry, a 16 KiB input limit and a
+64 KiB response limit. A cold model may require explicit preloading through
+Ollaya's native `/api/decide` API before evaluation. Missing models, invalid
+distributions, timeouts and unavailable daemons return `status: unavailable`
+with `review_required: true`. Stop the daemon when the experiment is over;
+`keep_alive` bounds residency, not the daemon lifetime.
+
+The result identifies `backend`, `experimental` and
+`probabilities_calibrated_for_task: false`. Model confidence is not measured
+accuracy. Local processing and a valid API response do not qualify semantic
+decisions, prompt-injection resistance, audio classification, or camera control.
+Qualify representative independent examples before integrating a consumer.
+
+A bounded local check on Ollaya 0.7.5 used eight fixed Portuguese/English texts:
+`laya:multilingual` matched 4/8 expected classes and `decider:0.8b` matched 6/8.
+Both failed the all-cases acceptance gate; neither is qualified for automatic
+semantic decisions. These small authored examples test the integration, not
+general accuracy. Choice, Score and Noul responded through the runtime, but this
+Toposync service consumes only Choice. Score and Noul are not exposed features.
+
 ## Visual occurrences
 
 `ai.condition_filter` supports `emit_mode: "occurrence"`. Each new captured frame is evaluated;

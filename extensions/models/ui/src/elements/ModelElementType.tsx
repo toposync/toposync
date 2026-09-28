@@ -181,7 +181,7 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
   const { t, locale } = i18n.useI18n();
   const [heightError, setHeightError] = useState(false);
   const numberFormatter = useMemo(
-    () => new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    () => new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 4 }),
     [locale],
   );
 

@@ -468,6 +468,8 @@ function CamerasSettingsPanelContent({
   const [cameraPipelinesLoading, setCameraPipelinesLoading] = useState(false);
   const [cameraPipelinesError, setCameraPipelinesError] = useState<string | null>(null);
   const [pipelinePresetOpen, setPipelinePresetOpen] = useState<CameraPipelinePreset | null>(null);
+  const mappingHeading = useRef<HTMLDivElement>(null);
+  const [activePanoramaId, setActivePanoramaId] = useState<string | null>(null);
   const [createdPipeline, setCreatedPipeline] = useState<string | null>(null);
   const reviewButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -558,7 +560,9 @@ function CamerasSettingsPanelContent({
     const controller = new AbortController();
     void fetchProcessingServers(controller.signal).then(setProcessingServers).catch(() => undefined);
     const loadHealth = () => {
-      void fetchCameraSourceHealth(controller.signal).then(setSourceHealth).catch(() => undefined);
+      void fetchCameraSourceHealth(controller.signal).then(setSourceHealth).catch(() => {
+        if (!controller.signal.aborted) setSourceHealth(null);
+      });
     };
     loadHealth();
     const timer = window.setInterval(loadHealth, 5000);
@@ -621,6 +625,7 @@ function CamerasSettingsPanelContent({
     activeCamera?.sources[0]?.id ||
     "";
   const activeSource = activeCamera?.sources.find((source) => source.id === activeSourceId) ?? activeCamera?.sources[0] ?? null;
+  useEffect(() => setActivePanoramaId(null), [activeCameraId, activeSourceId]);
   useEffect(() => {
     if (!activeCamera || !activeSource) return;
     // A draft toggle can change the default source. Keep the operator's selected
@@ -1638,11 +1643,24 @@ function CamerasSettingsPanelContent({
                 enabled={activeCameraPersisted && activeSource.enabled && activeSource.kind === "video"}
                 persisted={activeCameraPersisted}
                 i18n={i18n}
+                onActiveArtifactChange={artifact => setActivePanoramaId(artifact?.id ?? null)}
               /></div> : null}
+
+              {activePanoramaId ? <div className="card"><div className="cardBody" style={{ display: "grid", gap: 16 }}>
+                <p>{t("ext.cameras.recipe.panorama_next")}</p>
+                <div className="rowWrap">
+                  <button type="button" className="primaryButton" onClick={() => { mappingHeading.current?.scrollIntoView({ block: "center" }); mappingHeading.current?.focus(); }}>{t("ext.cameras.recipe.panorama_mapping")}</button>
+                  <button type="button" className="chipButton" onClick={() => {
+                    localStorage.setItem("toposync.livePanorama.reference", activePanoramaId);
+                    localStorage.setItem("toposync.render_mode.v1", "com.toposync.cameras.live-panorama");
+                    navigateInApp("/");
+                  }}>{t("ext.cameras.recipe.panorama_live")}</button>
+                </div>
+              </div></div> : null}
 
               <div className="settingsSectionHeader">
                 <div>
-                  <div className="modalSectionTitle">{t("ext.cameras.mapping.title", {}, "Mapeamento")}</div>
+                  <div ref={mappingHeading} tabIndex={-1} className="modalSectionTitle">{t("ext.cameras.mapping.title", {}, "Mapeamento")}</div>
                   <div className="settingsDescription">
                     {t("ext.cameras.mapping.help", {}, "Composições onde esta câmera aparece e se os pontos de controle estão mapeados.")}
                   </div>
@@ -1793,6 +1811,7 @@ function CamerasSettingsPanelContent({
                       <div className="modalSectionTitle">
                         {t("ext.cameras.pipelines.add_title", {}, "Adicionar fluxo")}
                       </div>
+                      <button type="button" className="chipButton" style={{ margin: "12px 0" }} onClick={() => navigateInApp(`/settings?${new URLSearchParams({ panel: "toposync.ai.assistant", camera_id: activeCamera.id, camera_name: activeCamera.name || activeCamera.id, ...(activeSource ? { source_id: activeSource.id, source_name: activeSource.name || activeSource.id } : {}) })}`)}>{t("ext.cameras.recipe.assistant")}</button>
                       {showPresetDefaultModelNotice ? (
                         <div
                           className={`cameraPipelineModelNotice${presetDefaultModelChecking ? "" : " isAttention"}`}

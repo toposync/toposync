@@ -9,22 +9,26 @@ export function openModelSourcePicker(t: HostI18n["t"], actions: { local: () => 
     const element = document.createElement("button"); element.type = "button"; element.className = "chipButton";
     element.textContent = t(label); element.style.minHeight = "44px"; element.addEventListener("click", action); return element;
   };
-  const heading = document.createElement("h3"); heading.textContent = t("ext.models.source.title");
+  const heading = document.createElement("h3"); heading.textContent = t("ext.models.source.title"); heading.style.margin = "0 0 16px";
   const details = document.createElement("details"); details.style.margin = "16px 0";
-  const summary = document.createElement("summary"); summary.textContent = t("ext.models.source.history");
+  const summary = document.createElement("summary"); summary.textContent = t("ext.models.source.history"); summary.style.cssText = "min-height:44px;box-sizing:border-box;padding:12px 0;cursor:pointer";
   const status = document.createElement("p"); status.setAttribute("role", "status");
   const search = document.createElement("input"); search.className = "input"; search.type = "search"; search.setAttribute("aria-label", t("ext.models.source.search")); search.placeholder = t("ext.models.source.search");
   const form = document.createElement("form"); form.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;margin:12px 0";
   search.style.cssText = "flex:1;min-width:0";
   const find = button("ext.models.source.find", () => {}); find.type = "submit"; form.append(search, find);
   const select = document.createElement("select"); select.className = "input"; select.setAttribute("aria-label", t("ext.models.source.image")); select.style.cssText = "width:100%;min-width:0;height:44px";
-  const preview = document.createElement("img"); preview.alt = t("ext.models.editor.preview"); preview.hidden = true; preview.style.cssText = "max-width:100%;max-height:240px;margin:12px auto;object-fit:contain";
+  const preview = document.createElement("img"); preview.alt = t("ext.models.editor.preview"); preview.hidden = true; preview.style.cssText = "width:100%;max-height:240px;margin:12px auto;object-fit:contain";
   let disposed = false, listOperation: AbortController | null = null, imageOperation: AbortController | null = null;
   let items: Notification[] = [], cursor: number | null = null, objectUrl = "", selectedFile: File | null = null, selected: Notification | null = null;
   const use = button("ext.models.source.use", () => { void useSelected(); }); use.disabled = true;
+  use.className = "primaryButton";
   const more = button("ext.models.source.more", () => { void load(true); }); more.hidden = true;
-  details.append(summary, form, select, status, preview, more, use);
-  dialog.append(heading, button("ext.models.source.local", actions.local), details, button("ext.models.editor.cancel", actions.cancel));
+  const pagination = document.createElement("div"); pagination.style.marginTop = "12px"; pagination.append(more);
+  const footer = document.createElement("div"); footer.style.cssText = "display:flex;justify-content:flex-end;flex-wrap:wrap;gap:12px;margin-top:16px;padding-top:16px;border-top:1px solid var(--color-border-strong,#64748b)";
+  footer.append(button("ext.models.editor.cancel", actions.cancel), use);
+  details.append(summary, form, select, status, preview, pagination);
+  dialog.append(heading, button("ext.models.source.local", actions.local), details, footer);
 
   function localImage(value: unknown): string {
     if (typeof value !== "string" || !value.startsWith("/files/") || value.includes("\\")) throw new Error("image unavailable");

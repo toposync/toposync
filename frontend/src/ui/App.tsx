@@ -11,7 +11,9 @@ import type {
   NotificationRenderer,
   NotificationDetailPanel,
   NotificationHistoryFilter,
+  NotificationHistoryAssistant,
   PipelineOperatorPanel,
+  PipelineReviewPanel,
   RenderViewDefinition,
   SettingsPanel,
   ThemeDefinition,
@@ -417,6 +419,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const pathname = usePathname();
   const [screen, setScreen] = useState<Screen>("main");
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
+  const [historyRequest, setHistoryRequest] = useState<{ selection: { id: string; value: string }; returnToNotification?: string } | null>(null);
+  const [historyAssistants, setHistoryAssistants] = useState<Record<string, NotificationHistoryAssistant>>({});
   const [notificationHistoryFilters, setNotificationHistoryFilters] = useState<Record<string, NotificationHistoryFilter>>({});
   const [notificationsError, setNotificationsError] = useState(false);
   const [notificationDetailPanelsById, setNotificationDetailPanelsById] = useState<Record<string, NotificationDetailPanel>>({});
@@ -424,6 +428,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [editorToolsById, setEditorToolsById] = useState<Record<string, EditorTool>>({});
   const [fileDropHandlers, setFileDropHandlers] = useState<FileDropHandler[]>([]);
   const [settingsPanelsById, setSettingsPanelsById] = useState<Record<string, SettingsPanel>>({});
+  const [pipelineReviewPanels, setPipelineReviewPanels] = useState<Record<string, PipelineReviewPanel>>({});
   const [pipelineOperatorPanelsByOperatorId, setPipelineOperatorPanelsByOperatorId] = useState<Record<string, PipelineOperatorPanel>>({});
   const [renderViewsById, setRenderViewsById] = useState<Record<string, RenderViewDefinition>>({});
   const [themesById, setThemesById] = useState<Record<string, ThemeDefinition>>({});
@@ -445,6 +450,11 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     unread_by_priority: { low: 0, medium: 0, high: 0 },
   });
   const [activeNotificationId, setActiveNotificationId] = useState<string | null>(null);
+  const [historySource, setHistorySource] = useState<{ id: string; notification: Notification | null } | null>(null);
+  const historySourceRef = useRef(historySource);
+  const historySourceRead = useRef<AbortController | null>(null);
+  useLayoutEffect(() => { historySourceRef.current = historySource; }, [historySource]);
+  useEffect(() => () => historySourceRead.current?.abort(), []);
   // Pixels exist only in this selected-detail lease, never notificationsState.
   const [activeImageLease, setActiveImageLease] = useState<EphemeralImageLease | null>(null);
   const activeImageSessionRef = useRef<ReturnType<typeof createEphemeralImageSession> | null>(null);
@@ -528,7 +538,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     [notificationsState],
   );
 
-  const selectedNotification = activeNotificationId ? notificationsState.byId[activeNotificationId] ?? null : null;
+  const selectedNotification = activeNotificationId && historySource?.id === activeNotificationId ? historySource.notification : activeNotificationId ? notificationsState.byId[activeNotificationId] ?? null : null;
   const activeNotification = useMemo(() => attachEphemeralImage(
     selectedNotification, backendAvailable ? activeImageLease : null,
   ), [selectedNotification, backendAvailable, activeImageLease]);
@@ -712,6 +722,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       registerElementType(elementType) {
         setElementTypesById((prev) => ({ ...prev, [elementType.type]: elementType }));
       },
+      registerNotificationHistoryAssistant(assistant) {
+        setHistoryAssistants(previous => ({ ...previous, [assistant.id]: assistant }));
+      },
       registerNotificationHistoryFilter(filter) {
         setNotificationHistoryFilters(previous => ({ ...previous, [filter.id]: filter }));
       },
@@ -736,6 +749,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       registerSettingsPanel(panel) {
         setSettingsPanelsById((prev) => ({ ...prev, [panel.id]: panel }));
       },
+      registerPipelineReviewPanel(panel) {
+        setPipelineReviewPanels(previous => ({ ...previous, [panel.id]: panel }));
+      },
       registerPipelineOperatorPanel(panel) {
         setPipelineOperatorPanelsByOperatorId((prev) => ({ ...prev, [panel.operatorId]: panel }));
       },
@@ -753,6 +769,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       },
       i18n,
       ui: {
+        openNotificationHistory: (selection, returnToNotification) => {
+          setHistoryRequest({ selection, returnToNotification });
+          navigate("/");
+        },
         NavigableViewport,
         CameraRegionEditor: ({ open, cameraId, sourceId, values, onChange, onClose, onSnapshotBindingChange, onConfirm }) => sourceId ? (
           <CropRectangleDrawModal open={open} onClose={onClose} units="percent" values={values} onChange={onChange}
@@ -902,6 +922,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const upsertNotification = useCallback((next: Notification, _op: "insert" | "update") => {
     activeImageSessionRef.current?.observe(next);
     const persistable = withoutEphemeralImage(next);
+    setHistorySource(previous => previous?.id === next.id && previous.notification ? { id: next.id, notification: persistable } : previous);
     setNotificationsState((prev) => upsertNotificationInState(prev, persistable, notificationsFilterRef.current));
   }, []);
 
@@ -913,6 +934,35 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     if (!endpoint) throw new Error("Notification selection unavailable");
     return endpoint;
   };
+
+  const refreshHistorySource = useCallback(async () => {
+    const id = historySourceRef.current?.id;
+    if (!id) return;
+    historySourceRead.current?.abort();
+    const controller = new AbortController(); historySourceRead.current = controller;
+    setHistorySource(previous => previous?.id === id ? { id, notification: null } : previous);
+    try {
+      const notification = await getNotification(id, { signal: controller.signal });
+      if (notification.id !== id) throw new Error("Unexpected notification response");
+      if (!controller.signal.aborted) setHistorySource(previous => previous?.id === id ? { id, notification: withoutEphemeralImage(notification) } : previous);
+    } catch {
+      if (!controller.signal.aborted) {
+        setHistorySource(previous => previous?.id === id ? null : previous);
+        setActiveNotificationId(previous => previous === id ? null : previous);
+        setNotificationsState(previous => {
+          const { [id]: removed, ...byId } = previous.byId;
+          return { byId, visibleIds: previous.visibleIds.filter(value => value !== id) };
+        });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => { void refreshHistorySource(); };
+    const subscriptions = Object.values(notificationHistoryFilters).map(provider => provider.subscribe?.(refresh));
+    window.addEventListener("focus", refresh);
+    return () => { subscriptions.forEach(unsubscribe => unsubscribe?.()); window.removeEventListener("focus", refresh); };
+  }, [notificationHistoryFilters, refreshHistorySource]);
 
   useEffect(() => {
     const provider = notificationsRequestFilter.extension && notificationHistoryFilters[notificationsRequestFilter.extension.id];
@@ -1019,13 +1069,13 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   }, [abortNotificationListRequests, backendAvailable, mainViewportReady, notificationsRequestFilter, notificationHistoryFilters, allExtensionsLoaded, notificationsSyncRevision]);
 
   useEffect(() => {
-    if (activeNotificationId && notificationsState.byId[activeNotificationId]) return;
+    if (activeNotificationId && (notificationsState.byId[activeNotificationId] || historySource?.id === activeNotificationId)) return;
     if (notifications.length > 0) {
       setActiveNotificationId(notifications[0].id);
       return;
     }
     if (activeNotificationId) setActiveNotificationId(null);
-  }, [activeNotificationId, notifications, notificationsState.byId]);
+  }, [activeNotificationId, historySource, notifications, notificationsState.byId]);
 
   useEffect(() => {
     if (!backendAvailable) return;
@@ -1646,10 +1696,21 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   }, [backendAvailable]);
 
   const selectNotification = useCallback((notificationId: string) => {
+    setHistorySource(previous => previous?.id === notificationId ? previous : null);
     setActiveNotificationId(notificationId);
     hasManualNotificationSelectionRef.current = true;
     lastUserInteractionTsRef.current = Date.now();
   }, []);
+
+  const openHistoryNotification = useCallback(async (id: string) => {
+    const notification = await getNotification(id);
+    if (notification.id !== id) throw new Error("Unexpected notification response");
+    setNotificationsState(previous => ({ ...previous,
+      byId: { ...previous.byId, [id]: withoutEphemeralImage(notification) },
+    }));
+    selectNotification(id);
+    setHistorySource({ id, notification: withoutEphemeralImage(notification) });
+  }, [selectNotification]);
 
   const markMainViewportReady = useCallback(() => {
     if (!mainViewportReadyMarkedRef.current) {
@@ -1703,6 +1764,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           onClose={closeSettingsChild}
           onOpenProcessingServers={openProcessingServersSettings}
           operatorPanels={pipelineOperatorPanelsByOperatorId}
+          reviewPanels={Object.values(pipelineReviewPanels)}
+          assistants={Object.values(settingsPanelsById).filter(panel => panel.pipelineAssistant)}
         />
       ) : normalizedPathname.startsWith("/settings/processing-servers") ? (
         <ProcessingServersScreen
@@ -1772,6 +1835,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           viewSettings={viewSettings}
           notificationRenderers={notificationRenderers}
           notificationHistoryFilters={Object.values(notificationHistoryFilters)}
+          historyAssistants={Object.values(historyAssistants)}
+          historyRequest={historyRequest}
+          onHistoryRequestHandled={() => setHistoryRequest(null)}
+          onOpenHistoryNotification={openHistoryNotification}
           notificationsError={notificationsError}
           notificationDetailPanels={Object.values(notificationDetailPanelsById)}
           notifications={notifications}

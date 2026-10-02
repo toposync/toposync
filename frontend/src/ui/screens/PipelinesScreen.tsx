@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import type { PipelineOperatorPanel } from "@toposync/plugin-api";
+import type { PipelineOperatorPanel, PipelineReviewPanel, SettingsPanel } from "@toposync/plugin-api";
 
-import { i18n } from "../../util/i18n";
-import { replace, usePathname } from "../router";
+import { i18n, resolveLocalizedString } from "../../util/i18n";
+import { navigate, replace, usePathname } from "../router";
 import type {
   CamerasIndexResponse,
   Pipeline,
@@ -57,6 +57,8 @@ type Props = {
   onClose: () => void;
   onOpenProcessingServers?: () => void;
   operatorPanels?: Record<string, PipelineOperatorPanel>;
+  reviewPanels?: PipelineReviewPanel[];
+  assistants?: SettingsPanel[];
 };
 
 type PollingEffectOptions = {
@@ -202,7 +204,7 @@ function sortPipelinesForDisplay(items: Pipeline[]): Pipeline[] {
   });
 }
 
-export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPanels = {} }: Props): React.ReactElement {
+export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPanels = {}, reviewPanels = [], assistants = [] }: Props): React.ReactElement {
   const { t } = i18n.useI18n();
   const pathname = usePathname();
   const routePipelineName = pipelineNameFromPipelinesPath(pathname);
@@ -1140,6 +1142,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                 </div>
               </div>
 
+              {!isDraftReadOnly && assistants.map(assistant => <button key={assistant.id} type="button" className="pillButton" onClick={() => navigate(`/settings?${new URLSearchParams({ panel: assistant.id, pipeline: draft.name })}`)}>{resolveLocalizedString(assistant.name)}</button>)}
+
               {isDraftReadOnly ? (
                 <div className="pipelinesAlertRow isInfo">
                   <div className="pipelinesAlertBadge">{t("core.ui.pipelines.read_only.badge", {}, "Read-only")}</div>
@@ -1231,6 +1235,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                 <div className="pipelinesHint">{t("core.ui.pipelines.processing_server_status.checking")}</div>
               ) : null}
 
+              {reviewPanels.filter(panel => panel.supports(topologyGraph)).map(panel => <React.Fragment key={panel.id}>{panel.render(topologyGraph)}</React.Fragment>)}
+              {draft.enabled !== false ? <p className="pipelinesHint" role="status">{t("core.ui.pipelines.execution_unknown")}</p> : null}
               <div className="pipelinesEditorControls">
                 <label className="pipelinesInlineToggle">
                   <input
@@ -1243,7 +1249,19 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   />
                   <span>{t("core.ui.pipelines.form.enabled")}</span>
                 </label>
+              </div>
 
+              {pipelineIngestNotices.map((message) => (
+                <div className="pipelinesAlertRow isInfo" key={message}>
+                  <div className="pipelinesAlertBadge">{t("core.ui.pipelines.ingest.badge", {}, "INGEST")}</div>
+                  <div className="pipelinesAlertText">
+                    <div className="pipelinesAlertMessage">{message}</div>
+                  </div>
+                </div>
+              ))}
+
+              <details key={draft.name} open={reviewPanels.some(panel => panel.supports(topologyGraph)) ? undefined : true}>
+                <summary>{t("core.ui.pipelines.advanced_editor")}</summary>
                 <label className="pipelinesControlField pipelinesProcessingServerField">
                   <span>{t("core.ui.pipelines.form.processing_server")}</span>
                   <div className="pipelinesControlRow">
@@ -1265,18 +1283,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                     </select>
                   </div>
                 </label>
-
-              </div>
-
-              {pipelineIngestNotices.map((message) => (
-                <div className="pipelinesAlertRow isInfo" key={message}>
-                  <div className="pipelinesAlertBadge">{t("core.ui.pipelines.ingest.badge", {}, "INGEST")}</div>
-                  <div className="pipelinesAlertText">
-                    <div className="pipelinesAlertMessage">{message}</div>
-                  </div>
-                </div>
-              ))}
-
               <div className="pipelinesEditorPanel">
                 <TopologyView
                   pipelineName={draft.name}
@@ -1318,6 +1324,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                 steps={interactiveSteps}
                 readOnly={isDraftReadOnly}
               />
+              </details>
             </div>
             )}
         </div>

@@ -185,6 +185,8 @@ export type NotificationDetailPanel = {
 
 export type SettingsPanel = {
   id: string;
+  managesOwnPersistence?: boolean;
+  pipelineAssistant?: boolean;
   name: LocalizedString;
   description?: LocalizedString;
   icon?: string;
@@ -194,6 +196,13 @@ export type SettingsPanel = {
     settings: Record<string, unknown>;
     updateSettings: (patch: Record<string, unknown>) => void;
   }) => import("react").ReactNode;
+};
+
+/** Read-only review of a graph owned by an extension; editing stays with the host. */
+export type PipelineReviewPanel = {
+  id: string;
+  supports: (graph: unknown) => boolean;
+  render: (graph: unknown) => import("react").ReactNode;
 };
 
 export type PipelineOperatorPanel = {
@@ -519,6 +528,7 @@ export type CameraRegionEditorProps = {
 };
 
 export type HostUi = {
+  openNotificationHistory?: (selection: { id: string; value: string }, returnToNotification?: string) => void;
   /** Draw a region in percent on a snapshot of the explicitly selected source. */
   CameraRegionEditor?: (props: CameraRegionEditorProps) => import("react").ReactNode;
   NavigableViewport: (props: NavigableViewportProps) => import("react").ReactNode;
@@ -588,14 +598,31 @@ export type NotificationHistoryFilter = {
   subscribe?: (invalidate: () => void) => () => void;
 };
 
+/** Optional extension-owned history consultation. Opening a source loads its authorized details. */
+export type NotificationHistoryAssistant = {
+  id: string;
+  name: LocalizedString;
+  render: (context: {
+    query: string;
+    dataFilter?: Record<string, string>;
+    selection?: { id: string; value: string };
+    priorities: string[];
+    types: string[];
+    visual: boolean;
+    onOpenNotification: (id: string) => Promise<void>;
+  }) => import("react").ReactNode;
+};
+
 export type ToposyncHost = {
   registerElementType: (elementType: ElementType) => void;
   registerNotificationRenderer: (renderer: NotificationRenderer) => void;
   registerNotificationHistoryFilter?: (filter: NotificationHistoryFilter) => void;
+  registerNotificationHistoryAssistant?: (assistant: NotificationHistoryAssistant) => void;
   registerNotificationDetailPanel?: (panel: NotificationDetailPanel) => void;
   registerEditorTool: (tool: EditorTool) => void;
   registerFileDropHandler: (handler: FileDropHandler) => void;
   registerSettingsPanel: (panel: SettingsPanel) => void;
+  registerPipelineReviewPanel?: (panel: PipelineReviewPanel) => void;
   registerPipelineOperatorPanel: (panel: PipelineOperatorPanel) => void;
   registerRenderView: (view: RenderViewDefinition) => void;
   registerTheme: (theme: ThemeDefinition) => void;

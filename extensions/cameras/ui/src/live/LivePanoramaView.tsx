@@ -126,6 +126,9 @@ const reasonLabel: Record<string, string> = { motion_automation_unqualified: 'Ra
     visual_response_unavailable: 'Não foi possível medir a resposta da câmera ao movimento. O apontamento foi interrompido.',
     panorama_frame_unavailable: 'Não há uma imagem atual disponível para confirmar o apontamento. Aguarde a transmissão ou use Reconectar.',
     return_optical_state_mismatch: 'O estado óptico mudou em relação ao ponto salvo. Revise os pontos de aproximação antes de tentar novamente.',
+    source_panorama_unavailable: 'A imagem salva não está disponível. Revise a panorâmica nas configurações da câmera.',
+    source_panorama_revision_conflict: 'A imagem salva mudou. Atualize a seleção antes de abrir.',
+    source_panorama_geometry_incompatible: 'A geometria salva não é compatível com a visualização ao vivo. Revise a panorâmica da câmera.',
     return_preset_changed: 'O ponto salvo na câmera foi alterado. Prepare novamente a referência nas configurações da panorâmica.' };
 const phaseLabel: Record<string, string> = { localizing: 'Localizando', unlocalized: 'Alinhamento não confirmado', aligned: 'Localizando', moving: 'Movendo', stopping: 'Parando', stabilizing: 'Estabilizando', error: 'Controle indisponível' };
 function captureDate(value: unknown): string {
@@ -167,6 +170,10 @@ export function LivePanoramaSelectorContent({ close }: { close: () => void }): R
       {error ? <div className="errorText">{error}</div> : null}
       {loading && choices.length === 0 ? <div className="choiceItem" aria-disabled="true"><div className="choiceTitle">Carregando…</div></div> : null}
       {!loading && selectable.length === 0 ? <div className="choiceItem" aria-disabled="true"><div className="choiceTitle">Nenhuma câmera panorâmica disponível</div><div className="choiceDesc">Configure ou selecione um panorama compatível nas configurações da câmera.</div></div> : null}
+      {choices.filter(item => item.reason).map(item => <div className="choiceItem" key={`${item.camera_id}:${item.source_id}:${item.artifact.id}`} aria-disabled="true">
+        <div className="choiceTitle">{item.camera_name} · {item.source_name}</div>
+        <div className="choiceDesc">{reasonLabel[item.reason!] || 'Panorâmica indisponível. Revise a imagem nas configurações da câmera.'}</div>
+      </div>)}
       {selectable.map(item => {
         const select = () => { chooseArtifact(item.artifact.id); close(); };
         return <div key={item.camera_id} className={["choiceItem", selected === item.artifact.id ? "isSelected" : ""].filter(Boolean).join(" ")} role="button" tabIndex={0} onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}>

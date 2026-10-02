@@ -142,7 +142,7 @@ test("real JPEG and WebP encoded dimensions are accepted without changing bytes"
 
 test("actual App list/page reducers strip pixels even if a server includes them", () => {
   const source = ts.createSourceFile("App.tsx", fs.readFileSync(path.resolve(__dirname, "../src/ui/App.tsx"), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const functions = ["upsertNotificationInState", "mergeNotificationPage"].map(name => source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(source));
+  const functions = ["asRecord", "notificationMatchesDataFilter", "upsertNotificationInState", "mergeNotificationPage"].map(name => source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(source));
   const app = { withoutEphemeralImage, notificationMatchesFilter: () => true,
     sortNotificationIdsByCreatedDesc: ids => [...ids] };
   vm.runInNewContext(ts.transpileModule(functions.join("\n"), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, app);
@@ -163,13 +163,14 @@ function selectedStreamHarness() {
     ts.forEachChild(node, visit);
   }
   visit(source); assert.ok(effect); assert.ok(upsert);
-  const reducer = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "upsertNotificationInState").getText(source);
+  const reducer = ["asRecord", "notificationMatchesDataFilter", "upsertNotificationInState"].map(name => source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(source)).join("\n");
   let state = { byId: {}, visibleIds: [] }, lease = null, resolveHistory, eventSource, timerId = 0;
   const timers = new Map();
   const app = { AbortController, console: { warn() {} }, backendAvailable: true, activeNotificationId: "selected",
     withoutEphemeralImage, notificationMatchesFilter: () => true, sortNotificationIdsByCreatedDesc: ids => [...ids],
     notificationsFilterRef: { current: {} }, activeImageSessionRef: { current: null }, activeNotificationFetchAbortRef: { current: null },
     setNotificationsState: updater => { state = updater(state); },
+    setHistorySource: () => {},
     setActiveImageLease: next => { lease = typeof next === "function" ? next(lease) : next; },
     createEphemeralImageSession: (id, changed) => createEphemeralImageSession(id, changed, {
       wallNow: () => 1000000, monotonicNow: () => 0,

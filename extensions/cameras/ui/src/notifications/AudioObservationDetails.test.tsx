@@ -35,6 +35,16 @@ test("audio history explains closure without claiming calibrated confidence or r
   assert.match(html, /interrompida pelo reinício/);
   assert.match(html, /não foram confirmados continuidade nem silêncio/);
   assert.doesNotMatch(html, /O som superou/);
+  evidence.audio_occurrence.clip = { status: "retained", id: "a".repeat(32), duration_seconds: 1, expires_at: Date.now() / 1000 + 3600 };
+  html = renderToStaticMarkup(<AudioObservationDetails notification={notification} i18n={i18n} />);
+  assert.match(html, /<audio/);
+  assert.match(html, /preload="none"/);
+  assert.doesNotMatch(html, /autoPlay|autoplay/);
+  evidence.audio_occurrence.clip.expires_at = Date.now() / 1000 - 1;
+  html = renderToStaticMarkup(<AudioObservationDetails notification={notification} i18n={i18n} />);
+  assert.match(html, /prazo de retenção.*expirou/);
+  assert.doesNotMatch(html, /<audio/);
+  assert.match(html, /&lt;texto&gt;/);
   evidence.audio_group = { members: [
     { event_id: "first", camera_name: "<Entrada>", active: true, analysis: evidence.audio_analysis,
       occurrence: { status: "above_baseline", clip: { status: "retained", id: "a".repeat(32), duration_seconds: 1 } } },

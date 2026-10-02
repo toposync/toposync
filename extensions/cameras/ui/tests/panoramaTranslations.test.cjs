@@ -6,7 +6,7 @@ const path = require("node:path");
 const typescript = require("typescript");
 
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "toposync-panorama-translations-"));
-for (const relative of ["translations.ts", "settings/sourcePanoramaTranslations.ts"]) {
+for (const relative of ["translations.ts", "settings/sourcePanoramaTranslations.ts", "settings/catActivityTranslations.ts", "settings/audioTranslations.ts"]) {
   const target = path.join(temporaryDirectory, relative.replace(/\.ts$/, ".js"));
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, typescript.transpileModule(fs.readFileSync(path.resolve(__dirname, "../src", relative), "utf8"), {

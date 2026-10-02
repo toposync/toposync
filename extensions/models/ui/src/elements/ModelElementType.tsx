@@ -236,22 +236,23 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
   );
 
   return (
-    <div>
+    <div style={{ display: "grid", gap: 16 }}>
       {generated ? <p>{t("ext.models.editor.generated")}</p> : null}
       {(element.props as any).generation?.background_removal?.method === "estimated" ? <p>{t("ext.models.editor.background_estimated")}</p> : null}
       <div className="field">
-        <div className="label">{t("core.element_editor.name")}</div>
-        <input className="input" value={element.name} onChange={(e) => update({ name: e.target.value })} />
+        <label className="label" htmlFor="model-name">{t("core.element_editor.name")}</label>
+        <input id="model-name" className="input" value={element.name} onChange={(e) => update({ name: e.target.value })} />
       </div>
 
       <div className="rowWrap">
         <div className="field" style={{ flex: 1, minWidth: 180 }}>
-          <div className="label">{t("ext.models.editor.file")}</div>
-          <input className="input" value={modelFilename || "-"} readOnly />
+          <label className="label" htmlFor="model-file">{t("ext.models.editor.file")}</label>
+          <input id="model-file" className="input" value={modelFilename || "-"} readOnly />
         </div>
         <div className="field" style={{ flex: 1, minWidth: 180 }}>
-          <div className="label">{t("ext.models.editor.size")}</div>
+          <label className="label" htmlFor="model-size">{t("ext.models.editor.size")}</label>
           <input
+            id="model-size"
             className="input"
             value={`${numberFormatter.format(finalSize.x)} × ${numberFormatter.format(finalSize.y)} × ${numberFormatter.format(finalSize.z)} m`}
             readOnly
@@ -285,7 +286,7 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
         </p>
       </div>
       <details>
-        <summary>{t("ext.models.editor.advanced")}</summary>
+        <summary style={{ minHeight: 44, padding: "12px 0", boxSizing: "border-box", cursor: "pointer" }}>{t("ext.models.editor.advanced")}</summary>
         <form onSubmit={(event) => { event.preventDefault(); void applyOrientation(); }}>
           <fieldset disabled={orienting} style={{ border: 0, padding: 0, margin: 0 }}>
             <legend>{t("ext.models.editor.orientation")}</legend>
@@ -335,9 +336,9 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
       </label>
 
       <div className="field">
-        <div className="label">
+        <label className="label" htmlFor="model-height">
           {t("ext.models.editor.height")}: {numberFormatter.format(heightMeters)} m
-        </div>
+        </label>
         <div className="rowWrap">
           {(
             [
@@ -360,6 +361,7 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
           })}
         </div>
         <input
+          id="model-height"
           className="input"
           type="range"
           min={0}

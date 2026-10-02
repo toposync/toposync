@@ -585,6 +585,9 @@ export function CameraPipelinePresetModal({
               ))}
             </select>
           </div>
+        </div>
+
+        <details open={showModelReadinessNotice || undefined}><summary>{t("ext.cameras.cat.advanced")}</summary>
           <div className="field">
             <label className="label" htmlFor={`${formId}-processing-server`}>{t("ext.cameras.pipeline_preset.processing_server", {}, "Processing server")}</label>
             <select id={`${formId}-processing-server`} className="input" value={processingServerId} onChange={(event) => setProcessingServerId(event.target.value)} disabled={creating}>
@@ -601,8 +604,6 @@ export function CameraPipelinePresetModal({
                 })}
             </select>
           </div>
-        </div>
-
         <div className="field">
           <label className="label" htmlFor={`${formId}-model-label`}>{t("ext.cameras.pipeline_preset.model.label", {}, "Detection model")}</label>
           <div className="cameraPipelineModelSelectRow">
@@ -757,6 +758,8 @@ export function CameraPipelinePresetModal({
             </div>
           ) : null}
         </div>
+
+        </details>
 
         {isMappingPreset ? (
           <div className="field">

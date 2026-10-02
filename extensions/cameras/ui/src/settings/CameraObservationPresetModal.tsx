@@ -113,6 +113,12 @@ export function CameraObservationPresetModal({
     panelStyle={{ width: "min(540px, calc(100vw - 28px))" }}>
     <p>{t(`${key}.description`)}</p>
     <p>{t(audio ? "ext.cameras.audioRecipe.limits" : "ext.cameras.cat.preview")}</p>
+    {sources.length > 1 ? <div className="field">
+      <label className="label" htmlFor="cat-recipe-source">{t("ext.cameras.cat.source")}</label>
+      <select id="cat-recipe-source" className="input" value={sourceId} onChange={(event) => { setSourceId(event.target.value); setReference(null); }} disabled={saving}>
+        {sources.map((source) => <option key={source.id} value={source.id}>{source.name || source.id}</option>)}
+      </select>
+    </div> : audio && sources.length === 1 ? <p><strong>{t("ext.cameras.cat.source")}: </strong>{camera.name || camera.id} · {sources[0].name || sources[0].id}</p> : null}
     {audio && <label className="field"><span className="label">{t("ext.cameras.audioRecipe.reference")}</span>
       <input key={sourceId} type="file" accept=".wav,audio/wav" disabled={saving} style={{ maxWidth: "100%" }}
         onChange={event => { setReference(event.target.files?.[0] ?? null); setError(null); }} />
@@ -139,12 +145,6 @@ export function CameraObservationPresetModal({
       <input type="checkbox" checked={retainAudio} disabled={saving} onChange={event => setRetainAudio(event.target.checked)} />
       <span>{t("ext.cameras.audioHistory.optIn")}</span>
     </label>}
-    {sources.length > 1 ? <div className="field">
-      <label className="label" htmlFor="cat-recipe-source">{t("ext.cameras.cat.source")}</label>
-      <select id="cat-recipe-source" className="input" value={sourceId} onChange={(event) => { setSourceId(event.target.value); setReference(null); }} disabled={saving}>
-        {sources.map((source) => <option key={source.id} value={source.id}>{source.name || source.id}</option>)}
-      </select>
-    </div> : null}
     {cat && <div className="field">
       <button className="chipButton" type="button" disabled={saving || !sourceId || !regionAvailable}
         onClick={() => { setDraftRegion(region ?? { left: 0, top: 0, right: 100, bottom: 100 }); setRegionEditorOpen(true); }}>

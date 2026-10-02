@@ -7,6 +7,7 @@ import {
 import type { ToposyncHost } from "@toposync/plugin-api";
 
 import { createCameraElementType } from "./elements/CameraElementType";
+import { createCameraRecipeReview } from "./settings/CameraRecipeReview";
 import { createCamerasSettingsPanel } from "./settings/CamerasSettingsPanel";
 import { createAddCameraTool } from "./tools/addCameraTool";
 import { camerasTranslations } from "./translations";
@@ -34,6 +35,7 @@ export function activate(host: ToposyncHost): void {
     render: () => <LivePanoramaView host={host} />,
   });
   host.registerSettingsPanel(createCamerasSettingsPanel(host.ui));
+  host.registerPipelineReviewPanel?.(createCameraRecipeReview(host.i18n));
   host.registerElementType(createCameraElementType(host));
   host.registerEditorTool(createAddCameraTool(host.i18n));
 }

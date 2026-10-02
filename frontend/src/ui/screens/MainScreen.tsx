@@ -10,6 +10,7 @@ import type {
   NotificationRenderer,
   NotificationDetailPanel,
   NotificationHistoryFilter,
+  NotificationHistoryAssistant,
   RenderViewDefinition,
   ViewSettings,
 } from "@toposync/plugin-api";
@@ -22,7 +23,7 @@ import {
   type NotificationsCount,
   type StreamingCameraLiveView,
 } from "../../util/api";
-import { i18n } from "../../util/i18n";
+import { i18n, resolveLocalizedString } from "../../util/i18n";
 
 import { Modal } from "../Modal";
 import { CompositionSelectorModal } from "../CompositionSelectorModal";
@@ -55,6 +56,10 @@ type Props = {
   notificationRenderers: NotificationRenderer[];
   notificationDetailPanels?: NotificationDetailPanel[];
   notificationHistoryFilters?: NotificationHistoryFilter[];
+  historyAssistants?: NotificationHistoryAssistant[];
+  historyRequest?: { selection: { id: string; value: string }; returnToNotification?: string } | null;
+  onHistoryRequestHandled: () => void;
+  onOpenHistoryNotification: (id: string) => Promise<void>;
   notificationsError?: boolean;
   notifications: Notification[];
   notificationsCount: NotificationsCount;
@@ -377,6 +382,10 @@ export function MainScreen({
   notificationRenderers,
   notificationDetailPanels = [],
   notificationHistoryFilters = [],
+  historyAssistants = [],
+  historyRequest,
+  onHistoryRequestHandled,
+  onOpenHistoryNotification,
   notificationsError = false,
   notifications,
   notificationsCount,
@@ -429,6 +438,8 @@ export function MainScreen({
   const [isCameraLiveModalOpen, setIsCameraLiveModalOpen] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [imageModal, setImageModal] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
+  const [historyAssistantId, setHistoryAssistantId] = useState<string | null>(null);
+  const previousHistorySelection = useRef<string | null>(null);
   const [isNotificationDetailsOpen, setIsNotificationDetailsOpen] = useState(false);
   const [notificationImageIndex, setNotificationImageIndex] = useState(0);
   const [failedNotificationImageUrls, setFailedNotificationImageUrls] = useState<Set<string>>(() => new Set());
@@ -438,8 +449,23 @@ export function MainScreen({
   const filter = notificationsFilter;
   const setFilter = onNotificationsFilterChange;
   const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
+  const [historyReturnId, setHistoryReturnId] = useState<string | null>(null);
+  const [historyReturnError, setHistoryReturnError] = useState(false);
+  useEffect(() => {
+    if (!historyRequest) return;
+    setHistoryReturnId(historyRequest.returnToNotification ?? null);
+    setHistoryReturnError(false);
+    setFilter({ priorities: ALL_PRIORITIES, types: [], query: "", extension: historyRequest.selection });
+    setNotificationsOpen(true); setIsNotificationDetailsOpen(false); setIsFilterPopoverOpen(false);
+    onHistoryRequestHandled();
+  }, [historyRequest]);
+  const returnToHistoryOrigin = async () => {
+    if (!historyReturnId) return;
+    try { await onOpenHistoryNotification(historyReturnId); setIsNotificationDetailsOpen(true); setHistoryReturnId(null); }
+    catch { setHistoryReturnError(true); }
+  };
+
   const [notificationsNowMs, setNotificationsNowMs] = useState(() => Date.now());
-  const filterPopoverRef = useRef<HTMLDivElement | null>(null);
   const filterButtonRef = useRef<HTMLButtonElement | null>(null);
   const [renderMode, setRenderMode] = useState<RenderMode>(() => {
     if (routeCameraLiveViewId !== null) return "camera-live";
@@ -832,12 +858,12 @@ export function MainScreen({
   }, [filter]);
 
   useEffect(() => {
-    if (activeNotification) return;
+    if (activeNotificationId) return;
     setIsNotificationDetailsOpen(false);
     setNotificationImageIndex(0);
     setFullscreenNotificationImageOpen(false);
     setFullscreenNotificationImageIndex(0);
-  }, [activeNotification]);
+  }, [activeNotificationId]);
 
   useEffect(() => {
     setNotificationImageIndex(0);
@@ -934,27 +960,6 @@ export function MainScreen({
     if (unreadCount <= 0) return null;
     return unreadCount > 999 ? "999+" : String(unreadCount);
   }, [filter, notificationsCount]);
-
-  // Close the filter popover when clicking outside.
-  useEffect(() => {
-    if (!isFilterPopoverOpen) return;
-    function onPointerDown(event: MouseEvent | TouchEvent): void {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (filterPopoverRef.current?.contains(target)) return;
-      if (filterButtonRef.current?.contains(target)) return;
-      setIsFilterPopoverOpen(false);
-    }
-    function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === "Escape") setIsFilterPopoverOpen(false);
-    }
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [isFilterPopoverOpen]);
 
   const togglePriorityFilter = useCallback((prio: Priority) => {
     setFilter((prev) => {
@@ -1226,55 +1231,36 @@ export function MainScreen({
                   <Icon name="circle-info" />
                 </button>
 
-                <div className="notificationsFilterAnchor">
+
+
+                <button
+                  className="iconButton notificationsCollapseButton"
+                  type="button"
+                  aria-label={t("core.ui.notifications.aria_close", {}, "Close notifications")}
+                  title={t("core.ui.notifications.aria_close", {}, "Close notifications")}
+                  onClick={() => setNotificationsOpen(false)}
+                >
+                  <Icon name="chevron-left" />
+                </button>
+              </div>
+            </div>
+
+                <div className="notificationsSearchEntry">
+                  {historyReturnId && <button type="button" className="chipButton" disabled={notificationsLoading} onClick={() => void returnToHistoryOrigin()}>{t("core.ui.notifications.return_to_original")}</button>}
                   <button
                     ref={filterButtonRef}
-                    className={["iconButton", filterRestrictive ? "iconButtonPrimary" : ""].filter(Boolean).join(" ")}
+                    className={["pillButton", filterRestrictive ? "pillButtonPrimary" : ""].filter(Boolean).join(" ")}
                     type="button"
-                    aria-label={t("core.ui.notifications.filter.aria", {}, "Filter notifications")}
-                    title={t("core.ui.notifications.filter.aria", {}, "Filter notifications")}
+                    aria-label={t("core.ui.notifications.search_entry")}
+                    title={t("core.ui.notifications.search_entry")}
                     aria-expanded={isFilterPopoverOpen}
                     onClick={() => setIsFilterPopoverOpen((prev) => !prev)}
                   >
-                    <Icon name="filter" />
+                    <Icon name="magnifying-glass" /> {t("core.ui.notifications.search_entry")}
                   </button>
 
                   {isFilterPopoverOpen ? (
-                    <div className="notificationsFilterPopover" ref={filterPopoverRef} role="dialog">
-                      <div className="notificationsFilterSection">
-                        <div className="notificationsFilterSectionTitle">
-                          {t("core.ui.notifications.filter.priority", {}, "Priority")}
-                        </div>
-                        <div className="notificationsFilterChips">
-                          {ALL_PRIORITIES.map((prio) => {
-                            const enabled = filter.priorities.includes(prio);
-                            const count = notificationsCount.by_priority[prio] ?? 0;
-                            const label = t(`core.ui.notifications.filter.priority.${prio}`, {}, prio);
-                            return (
-                              <button
-                                key={prio}
-                                type="button"
-                                className={["notificationsFilterChip", `prio_${prio}`, enabled ? "isEnabled" : ""].filter(Boolean).join(" ")}
-                                onClick={() => togglePriorityFilter(prio)}
-                                aria-pressed={enabled}
-                              >
-                                <span className={["notificationPriorityDot", prio === "high" ? "isHigh" : prio === "low" ? "isLow" : "isMedium"].join(" ")} aria-hidden="true" />
-                                <span>{label}</span>
-                                <span className="notificationsFilterChipCount">{count > 999 ? "999+" : count}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <span className="muted">{t("core.ui.notifications.location.global_totals")}</span>
-                      {notificationHistoryFilters.map(provider => <React.Fragment key={provider.id}>{provider.render({
-                        value: filter.extension?.id === provider.id ? filter.extension.value : null,
-                        onChange: value => setFilter(previous => ({ ...previous, extension: value ? { id: provider.id, value } : undefined })),
-                      })}</React.Fragment>)}
-                      {filter.extension && !notificationHistoryFilters.some(provider => provider.id === filter.extension?.id) ? <button type="button" className="chipButton" onClick={() => setFilter(previous => ({ ...previous, extension: undefined }))}>{t("core.ui.notifications.filter.unavailable_selection")}</button> : null}
-                      <HistoryLocationFilter filter={filter} setFilter={setFilter} />
-
+                    <Modal open title={t("core.ui.notifications.search_entry")} onClose={() => setIsFilterPopoverOpen(false)} panelStyle={{ width: "min(560px, calc(100vw - 28px))" }}><div className="notificationsSearchContent">
                       <div className="notificationsFilterSection">
                         <label className="notificationsFilterSectionTitle" htmlFor="notificationsFilterSearch">
                           {t("core.ui.notifications.filter.search", {}, "Search")}
@@ -1314,6 +1300,44 @@ export function MainScreen({
                             ? t("core.ui.notifications.filter.semantic_fallback")
                             : t("core.ui.notifications.filter.search_mode")}
                       </p>
+
+
+                      <div className="notificationsFilterSection">
+                        <div className="notificationsFilterSectionTitle">
+                          {t("core.ui.notifications.filter.priority", {}, "Priority")}
+                        </div>
+                        <div className="notificationsFilterChips">
+                          {ALL_PRIORITIES.map((prio) => {
+                            const enabled = filter.priorities.includes(prio);
+                            const count = notificationsCount.by_priority[prio] ?? 0;
+                            const label = t(`core.ui.notifications.filter.priority.${prio}`, {}, prio);
+                            return (
+                              <button
+                                key={prio}
+                                type="button"
+                                className={["notificationsFilterChip", `prio_${prio}`, enabled ? "isEnabled" : ""].filter(Boolean).join(" ")}
+                                onClick={() => togglePriorityFilter(prio)}
+                                aria-pressed={enabled}
+                              >
+                                <span className={["notificationPriorityDot", prio === "high" ? "isHigh" : prio === "low" ? "isLow" : "isMedium"].join(" ")} aria-hidden="true" />
+                                <span>{label}</span>
+                                <span className="notificationsFilterChipCount">{count > 999 ? "999+" : count}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <span className="muted">{t("core.ui.notifications.location.global_totals")}</span>
+                      {notificationHistoryFilters.map(provider => <React.Fragment key={provider.id}>{provider.render({
+                        value: filter.extension?.id === provider.id ? filter.extension.value : null,
+                        onChange: value => setFilter(previous => ({ ...previous, extension: value ? { id: provider.id, value } : undefined })),
+                      })}</React.Fragment>)}
+                      {filter.extension && !notificationHistoryFilters.some(provider => provider.id === filter.extension?.id) ? <button type="button" className="chipButton" onClick={() => setFilter(previous => ({ ...previous, extension: undefined }))}>{t("core.ui.notifications.filter.unavailable_selection")}</button> : null}
+                      <HistoryLocationFilter filter={filter} setFilter={setFilter} />
+
+                      {historyAssistants.map(assistant => <button type="button" className="chipButton" key={assistant.id} onClick={() => setHistoryAssistantId(assistant.id)}>{resolveLocalizedString(assistant.name)}</button>)}
+                      {!historyAssistants.length ? <p className="muted">{t("core.ui.notifications.assistant_unavailable")}</p> : null}
 
                       {availableTypes.length > 1 ? (
                         <div className="notificationsFilterSection">
@@ -1357,22 +1381,11 @@ export function MainScreen({
                           {t("core.ui.notifications.filter.reset", {}, "Reset to defaults")}
                         </button>
                       </div>
-                    </div>
+                    </div></Modal>
                   ) : null}
                 </div>
 
-                <button
-                  className="iconButton notificationsCollapseButton"
-                  type="button"
-                  aria-label={t("core.ui.notifications.aria_close", {}, "Close notifications")}
-                  title={t("core.ui.notifications.aria_close", {}, "Close notifications")}
-                  onClick={() => setNotificationsOpen(false)}
-                >
-                  <Icon name="chevron-left" />
-                </button>
-              </div>
-            </div>
-
+            {historyReturnError ? <p role="alert" className="cardBody">{t("core.ui.notifications.original_unavailable")}</p> : null}
             {notificationsError ? <div className="cardBody" role="alert">{t("core.ui.notifications.filter.load_error")} <button type="button" className="chipButton" onClick={onNotificationsSearchRefresh}>{t("core.ui.notifications.location.retry")}</button></div> : null}
             {timeSearchMessage && filter.query.trim() ? <div className="cardBody" role="status">{timeSearchMessage}</div> : null}
             {notificationsSearchStatus && !notificationsError && filter.semantic && filter.query.trim() && !timezoneRequired ? (
@@ -1421,7 +1434,11 @@ export function MainScreen({
                     key={n.id}
                     onClick={() => {
                       onSelectNotification(n.id);
-                      if (shouldAutoCloseNotificationsAfterSelect()) setNotificationsOpen(false);
+                      if (shouldAutoCloseNotificationsAfterSelect()) {
+                        setNotificationsOpen(false);
+                        setNotificationImageIndex(0);
+                        setIsNotificationDetailsOpen(true);
+                      }
                     }}
                     onDoubleClick={() => {
                       onSelectNotification(n.id);
@@ -1702,10 +1719,26 @@ export function MainScreen({
         </div>
       </Modal>
 
+      {historyAssistantId ? <Modal open title={t("core.ui.notifications.assistant_title")} onClose={() => setHistoryAssistantId(null)} panelStyle={{ width: "min(760px, calc(100vw - 28px))" }}>
+        {historyAssistants.find(item => item.id === historyAssistantId)?.render({
+          query: filter.query, dataFilter: filter.dataFilter, selection: filter.extension,
+          priorities: filter.priorities, types: filter.types, visual: filter.semantic === "visual",
+          onOpenNotification: async id => {
+            previousHistorySelection.current = activeNotificationId;
+            await onOpenHistoryNotification(id);
+            setIsNotificationDetailsOpen(true);
+          },
+        }) ?? <p role="status">{t("core.ui.notifications.assistant_unavailable")}</p>}
+      </Modal> : null}
+
       <Modal
         open={isNotificationDetailsOpen}
         title={t("core.ui.notifications.details.title", {}, "Notification details")}
-        onClose={() => setIsNotificationDetailsOpen(false)}
+        onClose={() => {
+          setIsNotificationDetailsOpen(false);
+          if (historyAssistantId && previousHistorySelection.current) onSelectNotification(previousHistorySelection.current);
+          previousHistorySelection.current = null;
+        }}
         panelClassName="notificationDetailsModalPanel"
         bodyClassName="notificationDetailsModalBody"
       >
@@ -1828,7 +1861,7 @@ export function MainScreen({
             ) : null}
           </div>
         ) : (
-          <div className="cardBody">{t("core.ui.notifications.details.no_selection", {}, "Select a notification to inspect it.")}</div>
+          <div className="cardBody" role="status">{activeNotificationId ? t("core.ui.loading") : t("core.ui.notifications.details.no_selection", {}, "Select a notification to inspect it.")}</div>
         )}
       </Modal>
 

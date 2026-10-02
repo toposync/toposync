@@ -1,87 +1,105 @@
 import React, { useEffect, useState } from "react";
-import { AiHistorySearch } from "./AiHistorySearch";
-import { requestJson, type SettingsPanel } from "@toposync/plugin-api";
+import { requestJson, resolveToposyncUrl, type HostI18n, type SettingsPanel } from "@toposync/plugin-api";
 
 type Catalog = { pipelines: string[]; pipeline_labels?: Record<string, string>; profiles: { id: string; name: string; model: string }[] };
 type Preview = { proposal_id: string; difference: string; changes: string[]; pipeline_name: string };
+type SavedChange = { undo_id: string; pipeline_name: string; savedAt: number };
 
 export function createAiAssistantPanel(): SettingsPanel {
   return {
-    id: "toposync.ai.assistant",
-    name: "Assistente de pipelines",
-    description: "Revisar alterações com inteligência artificial local",
-    icon: "brain",
-    render: () => <Assistant />,
+    id: "toposync.ai.assistant", name: { key: "ext.ai.assistant.title" }, description: { key: "ext.ai.assistant.description" },
+    icon: "brain", managesOwnPersistence: true, pipelineAssistant: true,
+    render: ({ i18n }) => <Assistant i18n={i18n} />,
   };
 }
-
-function Assistant(): React.ReactElement {
-  const [mode, setMode] = useState("create");
+function Assistant({ i18n }: { i18n: HostI18n }): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const params = new URLSearchParams(window.location.search);
+  const [mode, setMode] = useState(params.get("pipeline") ? "pipeline" : "create");
   return <div style={{ display: "grid", gap: 20, minWidth: 0 }}>
-    <label className="field">Tarefa<select className="input" value={mode} onChange={(event) => setMode(event.target.value)}>
-      <option value="create">Criar receita</option><option value="pipeline">Alterar pipeline</option><option value="history">Consultar acontecimentos</option>
+    <label className="field">{t("ext.ai.assistant.task")}<select className="input" value={mode} onChange={event => setMode(event.target.value)}>
+      <option value="create">{t("ext.ai.assistant.create")}</option><option value="pipeline">{t("ext.ai.assistant.change")}</option>
     </select></label>
-    {mode === "history" ? <AiHistorySearch /> : <PipelineEditor key={mode} create={mode === "create"} />}
+    <PipelineEditor key={mode} create={mode === "create"} i18n={i18n} />
   </div>;
 }
-
-function PipelineEditor({ create }: { create: boolean }): React.ReactElement {
+function PipelineEditor({ create, i18n }: { create: boolean; i18n: HostI18n }): React.ReactElement {
+  const { t: translate } = i18n.useI18n();
+  const t = (key: string) => translate(`ext.ai.assistant.${key}`);
+  const params = new URLSearchParams(window.location.search);
+  const cameraId = create ? params.get("camera_id") : null;
+  const sourceId = cameraId ? params.get("source_id") : null;
+  const initialPipeline = create ? "" : params.get("pipeline") || "";
+  const storageKey = `toposync.ai.last-change:${create ? cameraId || "create" : initialPipeline}`;
+  const [saved, setSaved] = useState<SavedChange | null>(() => {
+    try { const value = JSON.parse(sessionStorage.getItem(storageKey) || "null");
+      return value && typeof value.undo_id === "string" && typeof value.pipeline_name === "string" && Date.now() - value.savedAt < 3600000 ? value : null;
+    } catch { return null; }
+  });
   const [catalog, setCatalog] = useState<Catalog>({ pipelines: [], profiles: [] });
-  const [pipeline, setPipeline] = useState("");
+  const [pipeline, setPipeline] = useState(initialPipeline);
   const [profile, setProfile] = useState("");
   const [instruction, setInstruction] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [undo, setUndo] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   useEffect(() => {
     const controller = new AbortController();
-    requestJson<Catalog>("/api/ai/assistant/pipelines", { signal: controller.signal }).then((value) => {
-      setCatalog(value); setPipeline(value.pipelines[0] || ""); setProfile(value.profiles[0]?.id || "");
-    }).catch((reason) => { if (!controller.signal.aborted) setError(String(reason)); });
+    requestJson<Catalog>("/api/ai/assistant/pipelines", { signal: controller.signal }).then(value => {
+      if (controller.signal.aborted) return;
+      setCatalog(value); setPipeline(initialPipeline || (value.pipelines.length === 1 ? value.pipelines[0] : "")); setProfile(value.profiles[0]?.id || "");
+    }).catch(() => { if (!controller.signal.aborted) setError(t("unavailable")); });
     return () => controller.abort();
   }, []);
   async function run(action: "preview" | "apply" | "undo") {
+    if (busy) return;
     setBusy(true); setError(""); setMessage("");
     try {
       if (action === "preview") {
         setPreview(null);
         const proposal = await requestJson<Preview & { question?: string }>(create ? "/api/ai/assistant/recipes/preview" : "/api/ai/assistant/preview", {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ ...(create ? {} : { pipeline_name: pipeline }), profile_id: profile, instruction }),
+          body: JSON.stringify({ ...(create ? { camera_id: cameraId, source_id: sourceId } : { pipeline_name: pipeline }), profile_id: profile, instruction }),
         });
-        if (proposal.question) setMessage(proposal.question);
-        else setPreview(proposal);
+        if (proposal.question) setMessage(proposal.question); else setPreview(proposal);
       } else {
-        const result = await requestJson<{ undo_id: string }>(`/api/ai/assistant/apply/${action === "undo" ? undo : preview?.proposal_id}`, { method: "POST" });
-        setUndo(action === "apply" ? result.undo_id : ""); setPreview(null);
-        setMessage(action === "undo" ? "Estado anterior restaurado." : "Alteração salva. Pipeline permanece desativado.");
+        const result = await requestJson<{ undo_id: string }>(`/api/ai/assistant/apply/${action === "undo" ? saved?.undo_id : preview?.proposal_id}`, { method: "POST" });
+        const change = action === "apply" && preview ? { undo_id: result.undo_id, pipeline_name: preview.pipeline_name, savedAt: Date.now() } : null;
+        setSaved(change); setPreview(null);
+        try { if (change) sessionStorage.setItem(storageKey, JSON.stringify(change)); else sessionStorage.removeItem(storageKey); } catch { /* Undo remains available in this view. */ }
+        setMessage(t(action === "undo" ? "undone" : "saved"));
       }
-    } catch (reason) { setError(String(reason)); }
+    } catch (reason) { setError((reason as { status?: number })?.status === 409 ? t("conflict") : t("unavailable")); }
     finally { setBusy(false); }
   }
-  return <section aria-label="Assistente de pipelines" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16, maxWidth: 900, minWidth: 0, overflowWrap: "anywhere" }}>
-    <p>{create ? "Descreva o que deseja observar. O assistente usa as receitas e câmeras disponíveis e pergunta quando faltar uma escolha. Revise antes de salvar; a receita começa desativada." : "Descreva uma alteração nas etapas existentes de um pipeline desativado. Revise a proposta antes de salvar. O assistente não ativa dispositivos."}</p>
-    {!create && !catalog.pipelines.length && <p>Não há pipelines desativados disponíveis. Crie ou desative um pipeline no editor para começar.</p>}
-    {!catalog.profiles.length && <p>Nenhum perfil com modelo Ollama instalado foi encontrado. Verifique o servidor e os perfis nas configurações de inteligência artificial.</p>}
-    {!create && <label className="field">Pipeline<select className="input" style={{ minWidth: 0, width: "100%" }} value={pipeline} disabled={busy} onChange={(event) => { setPipeline(event.target.value); setPreview(null); }}>
-      {catalog.pipelines.map((name) => <option key={name} value={name}>{catalog.pipeline_labels?.[name] || name}</option>)}
+  return <section aria-label={t("title")} style={{ display: "grid", gap: 16, maxWidth: 900, minWidth: 0, overflowWrap: "anywhere" }}>
+    <p style={{ margin: 0 }}>{t(create ? "createHelp" : "changeHelp")}</p>
+    {cameraId && <p style={{ margin: 0 }}>{t("cameraContext")}: <strong>{params.get("camera_name") || cameraId}</strong>{sourceId ? ` · ${params.get("source_name") || sourceId}` : ""}</p>}
+    {!create && !catalog.pipelines.length && <p style={{ margin: 0 }}>{t("noPipelines")}</p>}
+    {!catalog.profiles.length && <p style={{ margin: 0 }}>{t("noProfiles")} <a href={resolveToposyncUrl("/settings?panel=com.toposync.ai")}>{t("configure")}</a></p>}
+    {!create && <label className="field">{t("pipeline")}<select className="input" style={{ minWidth: 0, width: "100%" }} value={pipeline} disabled={busy} onChange={event => { setPipeline(event.target.value); setPreview(null); }}>
+      <option value="">{t("choose")}</option>
+      {pipeline && !catalog.pipelines.includes(pipeline) && <option value={pipeline}>{t("pipelineUnavailable")}</option>}
+      {catalog.pipelines.map(name => <option key={name} value={name}>{catalog.pipeline_labels?.[name] || name}</option>)}
     </select></label>}
-    <details><summary>Modelo local</summary><label className="field">Perfil<select className="input" style={{ minWidth: 0, width: "100%" }} value={profile} disabled={busy} onChange={(event) => { setProfile(event.target.value); setPreview(null); }}>
-      {catalog.profiles.map((item) => <option key={item.id} value={item.id}>{item.name} — {item.model}</option>)}
+    <details><summary>{t("localModel")}</summary><label className="field">{t("profile")}<select className="input" value={profile} disabled={busy} onChange={event => { setProfile(event.target.value); setPreview(null); }}>
+      {catalog.profiles.map(item => <option key={item.id} value={item.id}>{item.name} — {item.model}</option>)}
     </select></label></details>
-    <label className="field">{create ? "O que deseja observar?" : "O que deseja alterar?"}<textarea className="input" style={{ height: "auto", padding: 10, resize: "vertical" }} rows={4} maxLength={4000} value={instruction} disabled={busy} onChange={(event) => { setInstruction(event.target.value); setPreview(null); }} placeholder={create ? "Por exemplo: avise quando um gato usar a caixa na câmera da lavanderia" : "Por exemplo: aumentar a duração mínima de presença para 30 segundos"} /></label>
-    {error && <p role="alert">{error} Você também pode usar o editor de pipelines.</p>}
-    <div aria-live="polite">{busy ? "Preparando alteração…" : message}</div>
+    <label className="field">{t(create ? "observe" : "instruction")}<textarea className="input" style={{ height: "auto", padding: 12, resize: "vertical" }} rows={4} maxLength={4000} value={instruction} disabled={busy} onChange={event => { setInstruction(event.target.value); setPreview(null); setMessage(""); }} placeholder={t(create ? "createExample" : "changeExample")} /></label>
+    {error && <p role="alert" style={{ margin: 0 }}>{error}</p>}
+    <div role="status">{busy ? t("busy") : message}</div>
     {preview ? <>
-      <h3>Revisar: {catalog.pipeline_labels?.[preview.pipeline_name] || preview.pipeline_name}</h3>
-      <p>{create ? "Ao aplicar, a receita será criada desativada." : "Ao aplicar, somente o grafo será salvo. O pipeline permanece desativado."} Revise configurações e efeitos antes de ativá-lo no editor.</p>
+      <h3 style={{ margin: 0 }}>{t("review")}: {catalog.pipeline_labels?.[preview.pipeline_name] || preview.pipeline_name}</h3>
+      <p style={{ margin: 0 }}>{t("reviewHelp")}</p>
       <ul>{preview.changes.map((change, index) => <li key={index}>{change}</li>)}</ul>
-      <details><summary>Detalhes técnicos</summary><pre tabIndex={0} aria-label="Diferenças propostas" style={{ overflow: "auto", maxHeight: 360, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{preview.difference}</pre></details>
-      <button className="primaryButton" disabled={busy} onClick={() => void run("apply")}>{create ? "Salvar receita" : "Aplicar alteração"}</button>
-      <button className="chipButton" disabled={busy} onClick={() => setPreview(null)}>Descartar proposta</button>
-    </> : <button className="primaryButton" disabled={busy || (!create && !pipeline) || !profile || !instruction.trim()} onClick={() => void run("preview")}>Preparar prévia</button>}
-    {undo && <><button className="chipButton" disabled={busy} onClick={() => void run("undo")}>Desfazer última alteração</button><small>Disponível por uma hora, enquanto este servidor estiver em execução. Alterações concorrentes impedem a restauração.</small></>}
+      <details><summary>{t("technical")}</summary><pre tabIndex={0} aria-label={t("difference")} style={{ overflow: "auto", maxHeight: 360, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{preview.difference}</pre></details>
+      <button className="primaryButton" disabled={busy} onClick={() => void run("apply")}>{t(create ? "saveRecipe" : "apply")}</button>
+      <button className="chipButton" disabled={busy} onClick={() => setPreview(null)}>{t("discard")}</button>
+    </> : <button className={saved ? "chipButton" : "primaryButton"} disabled={busy || (!create && !catalog.pipelines.includes(pipeline)) || !profile || !instruction.trim()} onClick={() => void run("preview")}>{t("prepare")}</button>}
+    {saved && <>
+      <a className={preview ? "chipButton" : "primaryButton"} href={resolveToposyncUrl(`/settings/pipelines/${encodeURIComponent(saved.pipeline_name)}`)}>{t("reviewSaved")}: {saved.pipeline_name}</a>
+      <button className="chipButton" disabled={busy} onClick={() => void run("undo")}>{t("undo")}</button><small>{t("undoHelp")}</small>
+    </>}
   </section>;
 }

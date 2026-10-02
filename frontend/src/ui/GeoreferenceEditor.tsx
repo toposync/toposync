@@ -101,25 +101,30 @@ export function GeoreferenceEditor({ activeNotification, notificationRenderers, 
     output.addEventListener("toposync:invalidate", draw);
     return () => { instance.off("move zoom resize", draw); output.removeEventListener("toposync:invalidate", draw); };
   }, [reference, elements, elementTypesById, eventPin]);
-  return <Modal open title={t("core.map.title")} onClose={onClose} panelStyle={{ width: "min(960px, 96vw)" }}>
+  return <Modal open title={t("core.map.title")} onClose={onClose} panelStyle={{ width: "min(960px, 96vw)" }} bodyClassName="georeferenceEditor">
     <p>{t("core.map.intro")}</p>
-    <div style={{ position: "relative", height: "min(52vh, 480px)", minHeight: 220 }}>
+    <div className="georeferenceMap">
       <div ref={container} aria-label={t("core.map.aria")} style={{ height: "100%", background: "#e4e8ec" }} />
       <canvas ref={canvas} aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 450 }} />
     </div>
     {activeNotification && <p role="status">{eventPin ? t("core.map.event_recorded") : t("core.map.event_unlocated")} {activeNotification.title}{activeNotification.createdAt && Number.isFinite(Date.parse(activeNotification.createdAt)) && <> · <time dateTime={activeNotification.createdAt}>{new Date(activeNotification.createdAt).toLocaleString(locale)}</time></>}</p>}
-    <label style={{ display: "block", margin: "12px 0" }}><input type="checkbox" checked={background} onChange={event => setBackground(event.target.checked)} /> {t("core.map.background")}</label>
-    <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-      <label>{t("core.map.orientation")}: {reference.rotationDegrees}°<input aria-label={t("core.map.orientation_aria")} type="range" min={-180} max={180} value={reference.rotationDegrees} onChange={event => setReference({ ...reference, rotationDegrees: Number(event.target.value) })} /></label>
-      <label>{t("core.map.scale")}: {reference.scale.toFixed(2)}×<input aria-label={t("core.map.scale_aria")} type="range" min={0.1} max={5} step={0.01} value={reference.scale} onChange={event => setReference({ ...reference, scale: Number(event.target.value) })} /></label>
+    <label className="georeferenceConsent"><input type="checkbox" checked={background} onChange={event => setBackground(event.target.checked)} /> <span>{t("core.map.background")}</span></label>
+    <div className="georeferenceControls">
+      <label className="field"><span>{t("core.map.orientation")}: {reference.rotationDegrees}°</span><input aria-label={t("core.map.orientation_aria")} type="range" min={-180} max={180} value={reference.rotationDegrees} onChange={event => setReference({ ...reference, rotationDegrees: Number(event.target.value) })} /></label>
+      <label className="field"><span>{t("core.map.scale")}: {reference.scale.toFixed(2)}×</span><input aria-label={t("core.map.scale_aria")} type="range" min={0.1} max={5} step={0.01} value={reference.scale} onChange={event => setReference({ ...reference, scale: Number(event.target.value) })} /></label>
     </div>
-    <details><summary>{t("core.map.advanced")}</summary>
+    <details className="georeferenceAdvanced"><summary>{t("core.map.advanced")}</summary>
       <p>{t("core.map.precision")}</p>
-      <label>{t("core.map.latitude")}<input aria-label={t("core.map.latitude")} type="number" min={-85} max={85} step="any" value={reference.latitude} onChange={event => { const latitude = Number(event.target.value); if (Number.isFinite(latitude) && Math.abs(latitude) <= 85) setReference({ ...reference, latitude }); }} /></label>
-      <label>{t("core.map.longitude")}<input aria-label={t("core.map.longitude")} type="number" min={-180} max={180} step="any" value={reference.longitude} onChange={event => { const longitude = Number(event.target.value); if (Number.isFinite(longitude) && Math.abs(longitude) <= 180) setReference({ ...reference, longitude }); }} /></label>
-      <button type="button" onClick={() => map.current?.setView([reference.latitude, reference.longitude], 19)}>{t("core.map.anchor")}</button>
+      <div className="georeferenceControls">
+        <label className="field"><span>{t("core.map.latitude")}</span><input className="input" aria-label={t("core.map.latitude")} type="number" min={-85} max={85} step="any" value={reference.latitude} onChange={event => { const latitude = Number(event.target.value); if (Number.isFinite(latitude) && Math.abs(latitude) <= 85) setReference({ ...reference, latitude }); }} /></label>
+        <label className="field"><span>{t("core.map.longitude")}</span><input className="input" aria-label={t("core.map.longitude")} type="number" min={-180} max={180} step="any" value={reference.longitude} onChange={event => { const longitude = Number(event.target.value); if (Number.isFinite(longitude) && Math.abs(longitude) <= 180) setReference({ ...reference, longitude }); }} /></label>
+      </div>
+      <button className="chipButton" type="button" onClick={() => map.current?.setView([reference.latitude, reference.longitude], 19)}>{t("core.map.anchor")}</button>
     </details>
     {error && <p role="alert">{t(error)}</p>}
-    <button className="primaryButton" disabled={saving} type="button" onClick={async () => { setSaving(true); setError(""); try { await onSave(reference, expected.current); onClose(); } catch { setError("core.map.save_failed"); } finally { setSaving(false); } }}>{saving ? t("core.map.saving") : t("core.map.save")}</button>
+    <div className="georeferenceActions">
+      <button className="chipButton" type="button" onClick={onClose}>{t("core.actions.cancel")}</button>
+      <button className="primaryButton" disabled={saving} type="button" onClick={async () => { setSaving(true); setError(""); try { await onSave(reference, expected.current); onClose(); } catch { setError("core.map.save_failed"); } finally { setSaving(false); } }}>{saving ? t("core.map.saving") : t("core.map.save")}</button>
+    </div>
   </Modal>;
 }

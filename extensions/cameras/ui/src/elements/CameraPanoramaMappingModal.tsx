@@ -577,7 +577,7 @@ export function CameraPanoramaMappingModal({ open, onClose, onOpenSettings, onAc
           {(context?.sources.length ?? 0) > 1 ? <label className="label">{text("source")}<select className="input" value={sourceId} onChange={(event) => setSourceId(event.target.value)}>{context?.sources.map((source) => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label> : null}
           {availableSource?.panorama?.compatible ? <button className="primaryButton" disabled={Boolean(busy || recoveryDraft)} onClick={() => void beginMapping()}>{text("continue_calibration")}</button> : availableSource ? <>
             {availableSource.panorama ? <p role="status">{text("source_geometry_unavailable")}</p> : null}
-            <CameraSourcePanoramaSection key={sourceId} ui={host.ui} cameraId={cameraId} sourceId={sourceId} cameraName={element.name || cameraId} sourceName={availableSource.label} enabled persisted i18n={i18n} onActiveArtifactChange={(artifact, changed) => { if (changed || availableSource.panorama?.id !== artifact.id) setPreparationRevision((value) => value + 1); }} />
+            <CameraSourcePanoramaSection key={sourceId} ui={host.ui} cameraId={cameraId} sourceId={sourceId} cameraName={element.name || cameraId} sourceName={availableSource.label} enabled persisted i18n={i18n} onActiveArtifactChange={(artifact, changed) => { if (changed || availableSource.panorama?.id !== artifact?.id) setPreparationRevision((value) => value + 1); }} />
           </> : <p role="status">{text("error_video_source_required")}</p>}
           {outdated ? <p className="cameraPanoramaError">{text("setup_required")}</p> : null}
         </div></section>}

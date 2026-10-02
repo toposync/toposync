@@ -605,6 +605,7 @@ export function SettingsScreen({
     setLocale,
   ]);
 
+  const panelUnavailable = !entries.some(entry => entry.id === activePanelId);
   const activeEntry = useMemo(
     () => entries.find((entry) => entry.id === activePanelId) ?? entries[0],
     [activePanelId, entries],
@@ -1524,6 +1525,7 @@ export function SettingsScreen({
           </div>
 
           <div className="settingsContent">
+            {panelUnavailable && <p role="status">{t("core.ui.settings.panel_unavailable")}</p>}
             {activeEntry.id === EXTENSIONS_PANEL_ID ? (
               renderExtensionsManagementPanel()
             ) : activeEntry.kind === "core" ? (
@@ -1545,7 +1547,7 @@ export function SettingsScreen({
                     ? t("core.ui.settings.unsaved_changes_in", { sections: unsavedSectionsLabel }, `Unsaved: ${unsavedSectionsLabel}`)
                     : t("core.ui.settings.unsaved_changes")}
                 </span>
-              ) : (
+              ) : activeEntry?.kind === "extension" && activeEntry.panel.managesOwnPersistence ? null : (
                 <span className="settingsStatusMuted">{t("core.ui.settings.changes_saved")}</span>
               )}
             </div>

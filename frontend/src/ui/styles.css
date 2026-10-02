@@ -849,6 +849,7 @@ video {
 }
 
 .pipelinesEditor {
+  min-width: 0;
   padding: 14px;
   overflow: auto;
   display: grid;
@@ -863,6 +864,7 @@ video {
 }
 
 .pipelinesEditorInner {
+  min-width: 0;
   display: grid;
   gap: 12px;
 }
@@ -875,6 +877,8 @@ video {
 }
 
 .pipelinesEditorTitle {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-weight: 800;
   font-size: 18px;
 }
@@ -8489,4 +8493,97 @@ select {
     width: auto;
     padding: 6px;
   }
+}
+
+.notificationsSearchEntry { padding: 0 var(--space-3) var(--space-3); pointer-events: auto; }
+.notificationsSearchEntry > button { width: 100%; justify-content: center; }
+.notificationsSearchContent { display: grid; gap: var(--space-4); min-width: 0; }
+
+/* Append after the existing composition editor mobile rules. */
+.compositionEditorRoot > .overlayLeft[hidden] {
+  display: none;
+}
+
+.compositionControlsToggle {
+  min-height: 44px;
+}
+
+@media (max-width: 800px) {
+  .compositionEditorRoot.isControlsCollapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .compositionEditorRoot.isControlsCollapsed > .viewportCanvas {
+    grid-column: 1;
+  }
+}
+
+.georeferenceEditor {
+  display: grid;
+  gap: 20px;
+}
+
+.georeferenceMap { position: relative; height: min(52vh, 480px); min-height: 220px; }
+@media (max-width: 800px) {
+  .georeferenceMap { height: min(30vh, 260px); min-height: 180px; }
+}
+
+.georeferenceEditor > p,
+.georeferenceEditor .field {
+  margin: 0;
+}
+
+.georeferenceConsent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+}
+
+.georeferenceConsent input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+
+.georeferenceControls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 20px;
+}
+
+.georeferenceControls input {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+}
+
+.georeferenceAdvanced,
+.georeferenceActions {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.georeferenceAdvanced summary {
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 12px 0;
+  cursor: pointer;
+}
+
+.georeferenceAdvanced .georeferenceControls {
+  margin: 16px 0;
+}
+
+.georeferenceEditor button {
+  min-height: 44px;
+}
+
+.georeferenceActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
 }

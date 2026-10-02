@@ -376,6 +376,14 @@ function AiSettingsPanelContent({ i18n, settings, updateSettings }: Props): Reac
       {activeSection === "limits" ? (
         <LimitsSection t={t} limits={normalized.limits} usage={usage} onChange={updateLimits} />
       ) : null}
+      <details className="card" style={{ marginTop: 20 }}>
+        <summary style={{ padding: 16, cursor: "pointer" }}>{t("ext.ai.jev.title")}</summary>
+        <div className="cardBody" style={{ display: "grid", gap: 12 }}>
+          <p style={{ margin: 0 }}>{t("ext.ai.jev.scope")}</p>
+          <p style={{ margin: 0 }}>{t("ext.ai.jev.configuration")}</p>
+          <p style={{ margin: 0 }}>{t("ext.ai.jev.validation")}</p>
+        </div>
+      </details>
     </div>
   );
 }

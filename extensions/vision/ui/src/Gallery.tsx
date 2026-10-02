@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from "react";
-import type { HostI18n, Notification } from "@toposync/plugin-api";
+import type { HostI18n, HostUi, Notification } from "@toposync/plugin-api";
 import { changed, photoUrl, read, write, type GalleryData, type Identity, type Observation, type Occurrence, type Operation, type Species } from "./api";
 import { styles } from "./styles";
 
@@ -213,13 +213,13 @@ function MemberChoice({ member, selected, choose, t, index, refreshKey, deadline
     {visit.error && <span>{t("memberUnavailable")}</span>}
   </button>;
 }
-export function NotificationIdentity({ notification, i18n, summary = false }: { notification: Notification; i18n: HostI18n; summary?: boolean }) {
+export function NotificationIdentity({ notification, i18n, ui, summary = false }: { notification: Notification; i18n: HostI18n; ui?: HostUi; summary?: boolean }) {
   const t = useText(i18n);
   const members = groupMembers(notification);
   const [selected, setSelected] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const individual = occurrenceId(notification);
-  if (individual) return <IndividualIdentity notification={notification} i18n={i18n} summary={summary} />;
+  if (individual) return <IndividualIdentity notification={notification} i18n={i18n} ui={ui} summary={summary} />;
   if (!members.length || summary) return null;
   const selectedMember = members.find((member) => member.recognition_occurrence_id === selected);
   const start = Math.min(page, Math.floor((members.length - 1) / 12)) * 12;
@@ -227,10 +227,10 @@ export function NotificationIdentity({ notification, i18n, summary = false }: { 
     <h3>{t("groupMembers")}</h3><p className="identityMuted">{t("groupHelp")}</p>
     <div className="identityGrid">{members.slice(start, start + 12).map((member, index) => <MemberChoice key={member.recognition_occurrence_id} member={member} refreshKey={notification.updatedAt ?? ""} deadline={occurrenceDeadline(notification)} selected={member.recognition_occurrence_id === selected} choose={() => setSelected(member.recognition_occurrence_id)} t={t} index={start + index} />)}</div>
     {members.length > 12 && <div className="identityActions"><button type="button" className="chipButton" disabled={start === 0} onClick={() => setPage(Math.max(0, page - 1))}>{t("previousMembers")}</button><button type="button" className="chipButton" disabled={start + 12 >= members.length} onClick={() => setPage(page + 1)}>{t("nextMembers")}</button></div>}
-    {selectedMember && <IndividualIdentity key={selectedMember.recognition_occurrence_id} notification={notification} i18n={i18n} selectedOccurrence={selectedMember.recognition_occurrence_id} />}
+    {selectedMember && <IndividualIdentity key={selectedMember.recognition_occurrence_id} notification={notification} i18n={i18n} ui={ui} selectedOccurrence={selectedMember.recognition_occurrence_id} />}
   </section>;
 }
-function IndividualIdentity({ notification, i18n, summary = false, selectedOccurrence }: { notification: Notification; i18n: HostI18n; summary?: boolean; selectedOccurrence?: string }) {
+function IndividualIdentity({ notification, i18n, ui, summary = false, selectedOccurrence }: { notification: Notification; i18n: HostI18n; ui?: HostUi; summary?: boolean; selectedOccurrence?: string }) {
   const t = useText(i18n);
   const key = selectedOccurrence ?? occurrenceId(notification);
   const visit = useLoad<Occurrence>(key ? `/occurrences/${encodeURIComponent(key)}` : null, notification.updatedAt ?? "", occurrenceDeadline(notification));
@@ -243,6 +243,8 @@ function IndividualIdentity({ notification, i18n, summary = false, selectedOccur
   const { busy, error, run } = useMutation();
   const close = () => { setEditing(false); requestAnimationFrame(() => button.current?.focus()); };
   const current = visit.data?.identities.find((item) => item.id === visit.data?.decision.identity_id);
+  const [photosOpen, setPhotosOpen] = useState(false);
+  const photos = usePhotos(photosOpen && current ? `/observations?identity_id=${encodeURIComponent(current.id)}` : null);
   if (summary) return current ? <span className="notificationCardDesc">{current.name}</span> : null;
   if (visit.loading && !visit.data) return <p role="status">{t("loading")}</p>;
   if (visit.waiting) return <section className="identityGallery"><p role="status">{t("pending")}</p><button type="button" className="chipButton" onClick={changed}>{t("retry")}</button></section>;
@@ -252,18 +254,28 @@ function IndividualIdentity({ notification, i18n, summary = false, selectedOccur
   const writable = detail.editable;
   const candidates = detail.identities.filter((item) => detail.decision.candidate_ids.includes(item.id));
   return <section className="identityGallery" aria-label={t("title")}><style>{styles}</style>
-    <div className="identityToolbar">{detail.observations[0] && <button type="button" className="identityPhotoButton" aria-label={t("viewPhoto")} ref={photoButton} onClick={() => setInspecting(detail.observations[0].id)}><Photo observation={detail.observations[0]} portrait t={t} /></button>}<div><h3>{current?.name || t(detail.decision.status)}</h3>{detail.decision.reason === "calibration_required" && <p className="identityMuted">{t("calibration_required")}</p>}</div></div>
+    <div className="identityToolbar">{detail.observations[0] && <button type="button" className="identityPhotoButton" aria-label={t("viewPhoto")} ref={photoButton} onClick={() => setInspecting(detail.observations[0].id)}><Photo observation={detail.observations[0]} portrait t={t} /></button>}<div><h3>{current?.name || t(detail.decision.status)}</h3>{current && <p className="identityMuted">{t(detail.decision.reason === "confirmed" ? "identifiedBadge" : "automaticAssociation")}</p>}{detail.decision.reason === "calibration_required" && <p className="identityMuted">{t("calibration_required")}</p>}</div></div>
     {inspecting && <PhotoInspector observation={{ id: inspecting }} t={t} onClose={() => { setInspecting(null); requestAnimationFrame(() => photoButton.current?.focus()); }} />}
     {error && <ErrorMessage t={t} message={error} />}
     {!writable && detail.observations.length > 0 && <p className="identityMuted">{t("readOnly")}</p>}
     {editing && writable ? gallery.error ? <ErrorMessage t={t} /> : !gallery.data ? <p role="status">{t("loading")}</p> : <Editor species={detail.species} observations={detail.observations} identities={gallery.data.identities} revision={detail.revision} t={t} onClose={close} initialIdentity={current?.id} /> : <>
       {candidates.length > 0 && <div><p className="identityMuted">{t("suggestions")}</p>{candidates.map((item) => <div className="identityToolbar" key={item.id}><span>{item.name}</span><button type="button" className="chipButton" disabled={busy || !writable} onClick={(event) => { const trigger = event.currentTarget; void run("/curation", { action: "reject", expected_revision: detail.revision, values: { identity_id: item.id, observation_ids: detail.observations.map((sample) => sample.id) } }).then((saved) => { requestAnimationFrame(() => { if (document.activeElement === trigger || document.activeElement === document.body) (saved ? button.current : trigger)?.focus(); }); }); }}>{t("reject")}</button></div>)}</div>}
       {detail.observations.length > 0 && <div className="identityActions"><button className="chipButton" type="button" ref={button} disabled={!writable || busy} onClick={() => setEditing(true)}>{t(current ? "correct" : "identify")}</button></div>}
+      {current && <>
+        {ui?.openNotificationHistory && <button className="chipButton" type="button" onClick={() => ui.openNotificationHistory!({ id: "com.toposync.vision.identities", value: `recognized:${current.id}` }, notification.id)}>{t("viewEvents")}</button>}
+        <details open={photosOpen} onToggle={event => setPhotosOpen(event.currentTarget.open)}><summary>{t("associatedPhotos")}</summary>
+          {photosOpen && (photos.error ? <ErrorMessage t={t} /> : photos.loading && !photos.data ? <p role="status">{t("loading")}</p> : <>
+            <div className="identityGrid">{photos.data?.observations.map(photo => <div className="identityTile" key={photo.id}><Photo observation={photo} t={t} /><span>{t(photo.reference ? "referenceBadge" : photo.confirmed ? "identifiedBadge" : "review")}</span></div>)}</div>
+            {!photos.data?.observations.length && <p>{t("missing")}</p>}
+            {photos.data?.next_cursor && <button className="chipButton" type="button" disabled={photos.loading} onClick={() => void photos.more()}>{t("morePhotos")}</button>}
+          </>)}
+        </details>
+      </>}
       {!detail.observations.length && <p className="identityMuted">{t(detail.decision.reason === "identity_deleted" ? "deletedPhotos" : "missing")}</p>}
     </>}
   </section>;
 }
-export function Gallery({ i18n }: { i18n: HostI18n }) {
+export function Gallery({ i18n, ui }: { i18n: HostI18n; ui?: HostUi }) {
   const t = useText(i18n);
   const [search, setSearch] = useState("");
   const [species, setSpecies] = useState("");
@@ -331,6 +343,7 @@ export function Gallery({ i18n }: { i18n: HostI18n }) {
       {!profile && !review && <div className="identityGrid">{identities.map((item) => <button className="identityTile" type="button" key={item.id} onClick={() => { setProfile(item.id); setReview(false); resetAfterSave(); }}>{item.representative_id && <Photo observation={{id:item.representative_id}} t={t} />}<span className="identityName">{item.name}</span><span className="identityMuted">{t(item.species)} · {t("references", { count: item.references })}</span></button>)}</div>}
       {!profile && !review && !identities.length && <p className="identityMuted">{t(gallery.data?.identities.length ? "noSearchResults" : "empty")}</p>}
       {!writable && <p className="identityMuted">{t("readOnly")}</p>}
+      {current && ui?.openNotificationHistory && <button type="button" className="chipButton" onClick={() => ui.openNotificationHistory!({ id: "com.toposync.vision.identities", value: `recognized:${current.id}` })}>{t("viewEvents")}</button>}
       {current && writable && <div className="identityActions">{["rename", "merge", "delete"].map((item) => <button className="chipButton" type="button" key={item} onClick={() => { setAction(item); setName(current.name); setEditing(false); }}>{t(item)}</button>)}</div>}
       {action && current && writable && <form className="identityForm" onSubmit={(event) => { event.preventDefault(); void saveAction(); }}><h3 ref={actionHeading} tabIndex={-1}>{t(action)}</h3><fieldset disabled={busy}>{action === "rename" ? <label className="identityField">{t("name")}<input required maxLength={120} value={name} onChange={(event) => setName(event.target.value)} /></label> : <><p>{t(action === "merge" ? "mergeHelp" : "deleteHelp")}</p><div className="identityToolbar">{[current, ...(action === "merge" ? gallery.data!.identities.filter((item) => item.id === target) : [])].map((item) => <div className="identityTile" key={item.id}>{item.representative_id && <Photo observation={{id:item.representative_id}} portrait t={t} />}<span className="identityName">{item.name}</span><span>{t("visits",{count:item.occurrences})} · {t("references",{count:item.references})}</span></div>)}</div>{action === "merge" && <label className="identityField">{t("existing")}<select required value={target} onChange={(event) => setTarget(event.target.value)}><option value="">{t("choose")}</option>{gallery.data?.identities.filter((item) => item.species === current.species && item.id !== profile).map((item) => <option key={item.id} value={item.id}>{item.name} · {t("references", { count: item.references })}</option>)}</select></label>}</>}<div className="identityActions"><button className="chipButton" type="button" onClick={resetAfterSave}>{t("cancel")}</button><button className="chipButton" type="submit" disabled={action === "merge" && !target}>{t(busy ? "saving" : action === "delete" ? "confirmDelete" : action === "merge" ? "confirmMerge" : "save")}</button></div></fieldset></form>}
       {inspecting && <PhotoInspector observation={{ id: inspecting }} t={t} onClose={() => {

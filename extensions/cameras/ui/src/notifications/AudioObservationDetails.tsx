@@ -23,6 +23,7 @@ export function AudioObservationDetails({ notification, i18n }: { notification: 
   const clipId = readString(clip.id);
   const [failedClip, setFailedClip] = useState<string | null>(null);
   const retained = clip.status === "retained" && /^[a-f0-9]{32}$/.test(clipId);
+  const expired = retained && typeof clip.expires_at === "number" && Number.isFinite(clip.expires_at) && clip.expires_at <= Date.now() / 1000;
   const baseline = readRecord(analysis.baseline);
   const transcription = readRecord(analysis.transcription);
   const duration = analysis.duration_seconds;
@@ -62,7 +63,7 @@ export function AudioObservationDetails({ notification, i18n }: { notification: 
       {readString(baseline.reference) && <p>{t("ext.cameras.audioHistory.reference", { name: readString(baseline.reference) })}</p>}
       {typeof duration === "number" && Number.isFinite(duration) && duration > 0 &&
         <p>{t("ext.cameras.audioHistory.window", { seconds: duration.toLocaleString(locale, { maximumFractionDigits: 2 }) })}</p>}
-      {retained ? <>
+      {expired ? <p role="status">{t("ext.cameras.audioHistory.expired")}</p> : retained ? <>
         <p>{t("ext.cameras.audioHistory.excerpt", { seconds: Number(clip.duration_seconds).toLocaleString(locale, { maximumFractionDigits: 2 }) })}</p>
         {failedClip === clipId ? <p role="status">{t("ext.cameras.audioHistory.unavailable")}</p> :
           <audio key={clipId} controls preload="none" style={{ width: "100%", maxWidth: 420 }}
@@ -88,6 +89,7 @@ export const audioHistoryTranslations = {
     "ext.cameras.audioHistory.optIn": "Keep a private excerpt of each occurrence for review, for up to 24 hours. Old excerpts may expire earlier when storage is full.",
     "ext.cameras.audioHistory.excerpt": "Retained starting excerpt: {{seconds}} s. It does not cover the full occurrence. Available for up to 24 hours.",
     "ext.cameras.audioHistory.unavailable": "Audio excerpt unavailable, expired or access denied.",
+    "ext.cameras.audioHistory.expired": "The audio excerpt's retention period has expired. Saved measurements and any transcription remain available.",
     "ext.cameras.audioHistory.title": "Recorded audio evidence",
     "ext.cameras.audioHistory.above": "Sound exceeded the supplied normal reference. This does not classify its cause or danger.",
     "ext.cameras.audioHistory.quiet": "Observation ended after sound returned to the reference range.",
@@ -114,6 +116,7 @@ export const audioHistoryTranslations = {
     "ext.cameras.audioHistory.optIn": "Guardar um trecho privado de cada ocorrência para revisão por até 24 horas. Trechos antigos podem expirar antes quando o armazenamento ficar cheio.",
     "ext.cameras.audioHistory.excerpt": "Trecho inicial retido: {{seconds}} s. Não cobre toda a ocorrência. Disponível por até 24 horas.",
     "ext.cameras.audioHistory.unavailable": "Trecho de áudio indisponível, expirado ou sem permissão de acesso.",
+    "ext.cameras.audioHistory.expired": "O prazo de retenção do trecho de áudio expirou. As medidas e eventual transcrição salvas continuam disponíveis.",
     "ext.cameras.audioHistory.title": "Evidência de áudio registrada",
     "ext.cameras.audioHistory.above": "O som superou a referência normal informada. Isso não classifica sua causa nem perigo.",
     "ext.cameras.audioHistory.quiet": "Observação encerrada após o som voltar à faixa da referência.",

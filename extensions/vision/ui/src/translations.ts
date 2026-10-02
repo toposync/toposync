@@ -1,5 +1,8 @@
 import type { TranslationBundle } from "@toposync/plugin-api";
 const messages: Record<string, [string, string]> = {
+  viewEvents: ["View associated events", "Ver acontecimentos associados"],
+  associatedPhotos: ["Associated photos", "Fotos associadas"],
+  automaticAssociation: ["Automatic association; review the photos before confirming.", "Associação automática; confira as fotos antes de confirmar."],
   historyPeople: ["People and pets", "Pessoas e pets"],
   historyIdentity: ["Whose events?", "Eventos de quem?"],
   historyUnavailable: ["Identity selection unavailable or access denied.", "Seleção de identidades indisponível ou sem acesso."],

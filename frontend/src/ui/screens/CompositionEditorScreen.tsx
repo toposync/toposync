@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   Notification,
@@ -251,6 +251,23 @@ export function CompositionEditorScreen({
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [selectedToolId, setSelectedToolId] = useState<string>(CORE_TOOL_NAVIGATE_ID);
+  const [isControlsOpen, setIsControlsOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 800px)").matches);
+  const controlsToggle = useRef<HTMLButtonElement>(null);
+  const controlsPanel = useRef<HTMLDivElement>(null);
+  const closeControls = useCallback(() => {
+    setIsControlsOpen(false);
+    controlsToggle.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 800px)");
+    const change = () => {
+      if (query.matches && controlsPanel.current?.contains(document.activeElement)) closeControls();
+      else setIsControlsOpen(!query.matches);
+    };
+    query.addEventListener("change", change);
+    return () => query.removeEventListener("change", change);
+  }, [closeControls]);
 	  const [activeToolSession, setActiveToolSession] = useState<EditorToolSession | null>(null);
 	  const [isBackgroundOpen, setIsBackgroundOpen] = useState(true);
 	  const [isWallsOpen, setIsWallsOpen] = useState(true);
@@ -792,7 +809,7 @@ export function CompositionEditorScreen({
   );
 
   return (
-    <div className="screenRoot compositionEditorRoot">
+    <div className={`screenRoot compositionEditorRoot${isControlsOpen ? "" : " isControlsCollapsed"}`}>
       {isMapOpen && <GeoreferenceEditor activeNotification={activeNotification} notificationRenderers={notificationRenderers} compositionId={activeCompositionId} value={georeference} elements={elements} elementTypesById={elementTypesById} onSave={onSaveGeoreference} onClose={() => setIsMapOpen(false)} />}
       <Viewport2D
         elements={elements}
@@ -817,7 +834,16 @@ export function CompositionEditorScreen({
         onRedo={onRedo}
       />
 
-      <div className="overlayTopRight" style={{ zIndex: "calc(var(--z-viewport-overlay) + 1)" }}>
+      <div className="overlayTopRight" style={{ zIndex: "calc(var(--z-viewport-overlay) + 1)" }}
+        onKeyDown={event => { if (event.key === " ") event.stopPropagation(); }}
+        onKeyUp={event => { if (event.key === " ") event.stopPropagation(); }}>
+        <button ref={controlsToggle} className="chipButton compositionControlsToggle" type="button"
+          aria-expanded={isControlsOpen} aria-controls="composition-editor-controls"
+          title={t(isControlsOpen ? "core.ui.editor.hide_controls" : "core.ui.editor.show_controls")}
+          onClick={() => isControlsOpen ? closeControls() : setIsControlsOpen(true)}>
+          <Icon name={isControlsOpen ? "chevron-left" : "chevron-right"} />
+          {t("core.ui.tools")}: {resolveLocalizedString(toolsById[selectedToolId]?.name)}
+        </button>
         <button className="chipButton" type="button" onClick={() => setIsMapOpen(true)}>{t("core.map.map")}</button>
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
           {t("core.ui.rendering")}: 2D
@@ -833,7 +859,12 @@ export function CompositionEditorScreen({
         </button>
       </div>
 
-      <div className="overlayLeft">
+      <div className="overlayLeft" id="composition-editor-controls" ref={controlsPanel} hidden={!isControlsOpen}
+        onKeyDown={event => {
+          event.stopPropagation();
+          if (event.key === "Escape") { event.preventDefault(); closeControls(); }
+        }}
+        onKeyUp={event => event.stopPropagation()}>
         <div className="rail">
           <div className="railTitle">{t("core.ui.tools")}</div>
           {tools.length === 0 ? (
@@ -857,6 +888,7 @@ export function CompositionEditorScreen({
                             className={["elementTypeButton", isSelected ? "isSelected" : ""].join(" ")}
                             key={tool.id}
                             type="button"
+                            aria-pressed={isSelected}
                             title={toolTitle}
                             onClick={() => {
                               setSelectedToolId((prev) => {
@@ -864,6 +896,7 @@ export function CompositionEditorScreen({
                                 if (tool.id === CORE_TOOL_SELECT_ID) return CORE_TOOL_SELECT_ID;
                                 return prev === tool.id ? CORE_TOOL_NAVIGATE_ID : tool.id;
                               });
+                              if (window.matchMedia("(max-width: 800px)").matches) closeControls();
                             }}
                           >
                             <span className="toolLabel">

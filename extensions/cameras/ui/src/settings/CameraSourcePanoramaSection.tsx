@@ -60,7 +60,7 @@ function failureHelp(job: CameraSourcePanoramaJob): string {
 
 export function CameraSourcePanoramaSection({ ui, cameraId, sourceId, cameraName, sourceName, enabled, persisted, i18n, onActiveArtifactChange }: {
   ui: HostUi; cameraId: string; sourceId: string; cameraName: string; sourceName: string; enabled: boolean; persisted: boolean; i18n: HostI18n;
-  onActiveArtifactChange?: (artifact: CameraSourcePanoramaArtifact, changed: boolean) => void;
+  onActiveArtifactChange?: (artifact: CameraSourcePanoramaArtifact | null, changed: boolean) => void;
 }): React.ReactElement {
   const { t, locale } = i18n.useI18n();
   const text = useCallback((key: string, parameters?: Record<string, unknown>) => t(`ext.cameras.source_panorama.${key}`, parameters), [t]);
@@ -87,7 +87,7 @@ export function CameraSourcePanoramaSection({ ui, cameraId, sourceId, cameraName
   useEffect(() => {
     if (!data) return;
     const identity = data.active ? `${data.active.id}:${data.active.revision}` : "none";
-    if (initialArtifact.current !== identity && data.active) notifyArtifact.current?.(data.active, initialArtifact.current !== null);
+    if (initialArtifact.current !== identity) notifyArtifact.current?.(data.active, initialArtifact.current !== null);
     initialArtifact.current = identity;
   }, [data?.active?.id, data?.active?.revision, Boolean(data)]);
   const running = isPanoramaJobRunning(job);

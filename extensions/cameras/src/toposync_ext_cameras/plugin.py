@@ -728,7 +728,7 @@ class CameraPipelinePresetRequest(BaseModel):
     audio_peer: AudioPeerSource | None = None
     retain_audio: bool = False
     pipeline_name: str = ""
-    enabled: bool = True
+    enabled: bool = False
     processing_server_id: str = "local"
     model_id: str = ""
     composition_id: str = ""
@@ -6115,7 +6115,7 @@ class CamerasExtension(BaseExtension):
 
             pipeline = Pipeline(
                 name=pipeline_name,
-                enabled=False if preset in {"doorbell_visitor", "audio_anomaly"} else bool(body.enabled),
+                enabled=False,
                 processing_server_id=processing_server_id,
                 editor_mode="interactive",
                 python_source="",

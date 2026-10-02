@@ -36,6 +36,22 @@ CAMERA_PIPELINE_PRESETS_REQUIRING_MAPPING = {
 }
 
 
+@pytest.mark.parametrize("preset", CAMERA_PIPELINE_PRESETS)
+def test_recipe_creation_never_activates_processing(tmp_path, monkeypatch, preset):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _prepare_preset_prerequisites(client, preset)
+        response = client.post(
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={"preset": preset, "enabled": True},
+        )
+        assert response.status_code == 200, response.text
+        name = response.json()["pipeline_name"]
+        saved = client.get(f"/api/pipelines/{name}").json()
+        assert saved["enabled"] is False
+        listed = client.get("/api/cameras/cameras/cam1/pipelines").json()
+        assert next(item for item in listed["pipelines"] if item["name"] == name)["enabled"] is False
+
+
 def test_audio_recipe_requires_baseline_and_saves_disabled_without_vision(tmp_path, monkeypatch):
     with _create_client(tmp_path, monkeypatch, patch_model_readiness=False) as client:
         _configure_camera(client)

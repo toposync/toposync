@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { HostI18n, HostUi, SettingsPanel } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type HostI18n, type HostUi, type SettingsPanel } from "@toposync/plugin-api";
 
 import {
   discoverOnvifDevices,
@@ -320,7 +320,7 @@ function sourceHealthFor(
 
 function navigateInApp(pathname: string): void {
   if (typeof window === "undefined") return;
-  const next = String(pathname || "/");
+  const next = resolveToposyncUrl(String(pathname || "/"));
   if (window.location.pathname !== next) window.history.pushState(null, "", next);
   try {
     window.dispatchEvent(new PopStateEvent("popstate"));
@@ -468,6 +468,13 @@ function CamerasSettingsPanelContent({
   const [cameraPipelinesLoading, setCameraPipelinesLoading] = useState(false);
   const [cameraPipelinesError, setCameraPipelinesError] = useState<string | null>(null);
   const [pipelinePresetOpen, setPipelinePresetOpen] = useState<CameraPipelinePreset | null>(null);
+  const [createdPipeline, setCreatedPipeline] = useState<string | null>(null);
+  const reviewButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!createdPipeline) return;
+    reviewButton.current?.focus();
+    reviewButton.current?.scrollIntoView({ block: "center" });
+  }, [createdPipeline]);
   const [pipelineNotice, setPipelineNotice] = useState<string | null>(null);
   const [presetModelStatusPayload, setPresetModelStatusPayload] = useState<unknown>(null);
   const [presetModelStatusLoading, setPresetModelStatusLoading] = useState(false);
@@ -598,6 +605,7 @@ function CamerasSettingsPanelContent({
     setProbeResult(null);
     setProbeError(null);
     setPipelineNotice(null);
+    setCreatedPipeline(null);
   }, [activeCameraId]);
 
   useEffect(() => {
@@ -1068,6 +1076,7 @@ function CamerasSettingsPanelContent({
   }
 
   function handlePipelineCreated(pipelineName: string): void {
+    setCreatedPipeline(pipelineName);
     setPipelineNotice(t("ext.cameras.pipelines.created", { name: pipelineName }, "Pipeline created: {{name}}"));
     void reloadActiveCameraPipelines();
   }
@@ -1741,7 +1750,8 @@ function CamerasSettingsPanelContent({
               ) : (
                 <div className="card">
                   <div className="cardBody">
-                    {pipelineNotice ? <div className="settingsStatusMuted">{pipelineNotice}</div> : null}
+                    {pipelineNotice ? <div role="status" className="settingsDescription">{pipelineNotice}</div> : null}
+                    {createdPipeline ? <button ref={reviewButton} className="primaryButton" style={{ marginBottom: 16 }} type="button" onClick={() => openPipelineEditor(createdPipeline)}>{t("ext.cameras.recipe.review")}</button> : null}
                     {cameraPipelinesError ? <div className="errorText">{cameraPipelinesError}</div> : null}
                     {cameraPipelinesLoading ? <div>{t("core.ui.loading", {}, "Carregando...")}</div> : null}
 
@@ -1762,11 +1772,18 @@ function CamerasSettingsPanelContent({
                             <span className="settingsListMeta">
                               {pipeline.enabled === false
                                 ? t("ext.cameras.pipelines.disabled", {}, "Desativado")
-                                : t("ext.cameras.pipelines.enabled", {}, "Ativo")}
+                                : t("ext.cameras.pipelines.enabled", {}, "Enabled")}
                               {" · "}
                               {pipeline.processing_server_id || "local"}
                               {pipeline.source_ids?.length ? ` · ${pipeline.source_ids.join(", ")}` : ""}
+                              {pipeline.enabled !== false ? ` · ${t("ext.cameras.recipe.execution_unknown")}` : ""}
                             </span>
+                            {pipeline.enabled !== false ? (sourceHealth?.sources ?? []).filter(source => source.pipeline_name === pipeline.name && source.camera_id === activeCamera.id).map(source => (
+                              <span className="settingsDescription" key={source.source_id}>
+                                {source.camera_source_name || source.camera_source_id}: {t(`ext.cameras.settings.source_health.status.${source.status}`)}
+                                {source.last_frame_at_unix ? ` · ${t("ext.cameras.settings.source_health.last_frame")}: ${new Date(source.last_frame_at_unix * 1000).toLocaleString()}` : ""}
+                              </span>
+                            )) : null}
                           </button>
                         ))}
                       </div>

@@ -13,7 +13,6 @@ import type {
   CameraNotificationPriority,
   CameraPipelinePreset,
   CameraPipelinesResponse,
-  CameraSourceConfig,
   ProcessingServer,
 } from "../types";
 import { SubModal } from "../ui/SubModal";
@@ -120,11 +119,6 @@ function presetSupportsArea(preset: CameraPipelinePreset): boolean {
   return presetConfirmsStop(preset) || preset === "person_vehicle_interaction";
 }
 
-function sourceHasVideoOrigin(camera: CameraConfig, source: CameraSourceConfig | null): boolean {
-  if (!source) return false;
-  if (String(source.origin.rtsp_url || "").trim()) return true;
-  return source.origin.type === "onvif_profile" && Boolean(String(camera.onvif?.xaddr || "").trim());
-}
 
 function normalizeServerId(value: string | null | undefined): string {
   return String(value || "local").trim().toLowerCase() || "local";
@@ -269,7 +263,6 @@ export function CameraPipelinePresetModal({
   const [notificationPriority, setNotificationPriority] = useState<CameraNotificationPriority>("medium");
   const [enablePtzAttention, setEnablePtzAttention] = useState(false);
   const [nativeTrackingDisabledConfirmed, setNativeTrackingDisabledConfirmed] = useState(false);
-  const [enabled, setEnabled] = useState(true);
   const [processingServerId, setProcessingServerId] = useState("local");
   const [modelId, setModelId] = useState(DEFAULT_DETECTION_MODEL_ID);
   const [modelStatusPayload, setModelStatusPayload] = useState<unknown>(null);
@@ -311,7 +304,6 @@ export function CameraPipelinePresetModal({
     setNotificationPriority(defaultNotificationPriority(preset));
     setEnablePtzAttention(false);
     setNativeTrackingDisabledConfirmed(false);
-    setEnabled(sourceHasVideoOrigin(camera, nextSource));
     setProcessingServerId("local");
     setModelId(DEFAULT_DETECTION_MODEL_ID);
     setModelStatusPayload(null);
@@ -369,7 +361,6 @@ export function CameraPipelinePresetModal({
       setEnablePtzAttention(false);
       setNativeTrackingDisabledConfirmed(false);
     }
-    setEnabled(sourceHasVideoOrigin(camera, nextSource));
     setSuggestedName(nextSuggested);
     if (!pipelineName.trim() || pipelineName === previousSuggested) setPipelineName(nextSuggested);
   }
@@ -399,7 +390,7 @@ export function CameraPipelinePresetModal({
         preset,
         source_id: sourceId,
         pipeline_name: pipelineName.trim() && pipelineName.trim() !== suggestedName ? pipelineName.trim() : "",
-        enabled,
+        enabled: false,
         processing_server_id: processingServerId,
         model_id: modelId,
         composition_id: presetRequiresMapping(preset) ? compositionId : "",
@@ -908,10 +899,7 @@ export function CameraPipelinePresetModal({
           </select>
         </div>
 
-        <label className="chipButton" style={{ justifyContent: "flex-start" }}>
-          <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} disabled={creating || !selectedSource} />
-          {t("ext.cameras.pipeline_preset.enabled", {}, "Enable after creation")}
-        </label>
+        <p className="settingsDescription">{t("ext.cameras.recipe.saved_disabled")}</p>
 
         <div className="settingsStatusMuted">
           {preset === "people_simple"

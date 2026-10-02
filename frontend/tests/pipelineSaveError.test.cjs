@@ -36,12 +36,13 @@ function harness({ validationFailure = false, saveFailure = false, draftPresent 
   const context = {
     React, Date, isAggregateHome: false, loading: false, error: null,
     draft: draftPresent ? { name: "unsaved-pose", enabled: true, processing_server_id: "local", graph: { nodes: [], edges: [] } } : null,
+    selected: { enabled: true },
     mode: "json", graphText: JSON.stringify(graph), topologyGraph: graph, topologyDirty: true,
     isDraftReadOnly: false, isPythonLocked: false, pythonText: "", interactiveWarning: null,
     recommendations: [], recommendationsError: null, recommendationsLoading: false,
     selectedServerStatus: null, selectedServerIssues: [], selectedServerStatusLoading: false,
     servers: [{ id: "local" }], pipelineIngestNotices: [], operatorsById: {}, camerasIndex: { cameras: [] },
-    operatorPanels: {}, selectedRuntimeGraphInfo: null, topologyRuntimeStatus: {},
+    operatorPanels: {}, reviewPanels: [], assistants: [], selectedRuntimeGraphInfo: null, topologyRuntimeStatus: {},
     topologyValidationLoading: false, topologyValidationError: null, topologyValidationSuccessAt: null,
     interactiveSteps: [], telemetryResetNonce: 0, telemetryResetting: false, pipelineStorageLimitBytes: 0,
     onOpenProcessingServers: noop, openTelemetryFieldInspector: noop, applyTopologyGraphChange: noop,
@@ -140,4 +141,35 @@ test("negative control: the former unconditional error branch loses controls", (
   const formerBranch = editorExpression.replace("error && !draft", "error");
   assert.throws(() => assertEditorPreserved(render(formerBranch), context));
   assertEditorPreserved(render(), context);
+});
+
+test("Python save respects existing diagnostics without compiling twice or losing the source", async () => {
+  for (const severity of ["error", "warning"]) {
+    const { context } = harness();
+    context.mode = "python";
+    context.pythonText = 'PIPELINE = vision.detect(model_id="unavailable")';
+    const originalSource = context.pythonText;
+    let compilations = 0;
+    context.compilePipelinePython = async () => {
+      compilations += 1;
+      return { graph, alerts: [{ severity, code: "model_missing", message: "Model file is missing" }] };
+    };
+    context.compilePipeline = async () => { throw new Error("Already compiled Python graph"); };
+    await context.handleSave();
+    assert.equal(compilations, 1);
+    assert.equal(context.pythonText, originalSource);
+    assert.equal(context.putCalls.length, severity === "error" ? 0 : 1);
+    if (severity === "error") assert.equal(context.error, "Model file is missing");
+  }
+});
+
+test("unsaved enable and disable choices retain an explicit statement of the stored state", () => {
+  const { context, render } = harness();
+  for (const enabled of [true, false]) {
+    context.selected.enabled = !enabled;
+    context.draft.enabled = enabled;
+    const html = renderToStaticMarkup(render());
+    assert.match(html, new RegExp(enabled ? "activation_pending" : "deactivation_pending"));
+    assert.doesNotMatch(html, /execution_unknown/);
+  }
 });

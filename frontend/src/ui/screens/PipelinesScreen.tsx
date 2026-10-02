@@ -597,14 +597,14 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setError(null);
   }, [draft]);
 
-  const validateResolvedGraph = async (graph: Record<string, unknown>): Promise<{ ok: true } | { ok: false; message: string }> => {
+  const validateResolvedGraph = async (graph: Record<string, unknown>, compiledAlerts?: PipelineAlert[]): Promise<{ ok: true } | { ok: false; message: string }> => {
     if (!draft) return { ok: false, message: t("core.ui.pipelines.error.no_selection") };
 
     setTopologyValidationLoading(true);
     setTopologyValidationError(null);
     setTopologyValidationSuccessAt(null);
     try {
-      const output = await compilePipeline({ ...draft, graph });
+      const output = compiledAlerts === undefined ? await compilePipeline({ ...draft, graph }) : { alerts: compiledAlerts };
       const nextAlerts = Array.isArray(output.alerts) ? output.alerts : [];
       setRecommendations(nextAlerts);
       setRecommendationsError(null);
@@ -866,6 +866,11 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
           editor_mode: "python",
           python_source: pythonText,
         });
+        const validation = await validateResolvedGraph(compiled.graph, compiled.alerts ?? []);
+        if (!validation.ok) {
+          setError(validation.message);
+          return;
+        }
         setGraphText(jsonPretty(compiled.graph ?? emptyGraph()));
         updated = {
           ...draft,
@@ -1236,7 +1241,9 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               ) : null}
 
               {reviewPanels.filter(panel => panel.supports(topologyGraph)).map(panel => <React.Fragment key={panel.id}>{panel.render(topologyGraph)}</React.Fragment>)}
-              {draft.enabled !== false ? <p className="pipelinesHint" role="status">{t("core.ui.pipelines.execution_unknown")}</p> : null}
+              {selected && draft.enabled !== selected.enabled ? (
+                <p className="pipelinesHint" role="status">{t(draft.enabled ? "core.ui.pipelines.activation_pending" : "core.ui.pipelines.deactivation_pending")}</p>
+              ) : selected?.enabled ? <p className="pipelinesHint" role="status">{t("core.ui.pipelines.execution_unknown")}</p> : null}
               <div className="pipelinesEditorControls">
                 <label className="pipelinesInlineToggle">
                   <input

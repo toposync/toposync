@@ -92,6 +92,7 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
   function addServer(): void {
     const id = createUniqueId();
     updateSettings({ servers: [{ id, name: "", host: "", apiKey: "" }, ...servers] });
+    setServerQuery("");
     setActiveServerId(id);
     setConfirmDeleteServerId(null);
   }
@@ -146,10 +147,11 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
 
       <div className="settingsSplit">
         <div className="settingsSplitSidebar">
-          <div className="settingsSplitToolbar">
+          {servers.length > 0 && !supervisorManaged ? <div className="settingsSplitToolbar">
             <input
               className="input"
               placeholder={t("ext.home_assistant.settings.search_servers", {}, "Search servers…")}
+              aria-label={t("ext.home_assistant.settings.search_servers")}
               value={serverQuery}
               onChange={(event) => setServerQuery(event.target.value)}
             />
@@ -171,7 +173,7 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
             >
               <i className="fa-solid fa-plus" aria-hidden="true" />
             </button>
-          </div>
+          </div> : null}
 
           {supervisorManaged ? (
             <div className="card" style={{ marginTop: 10 }}>
@@ -204,10 +206,10 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
           ) : filteredServers.length === 0 ? (
             <div className="card" style={{ marginTop: 10 }}>
               <div className="cardBody">
-                <div style={{ marginBottom: 10 }}>{t("ext.home_assistant.settings.empty")}</div>
-                <button className="primaryButton" type="button" onClick={addServer}>
+                <div style={{ marginBottom: 10 }}>{t(servers.length === 0 ? "ext.home_assistant.settings.empty" : "ext.home_assistant.settings.no_results")}</div>
+                {servers.length === 0 ? <button className="primaryButton" type="button" onClick={addServer}>
                   <i className="fa-solid fa-plus" aria-hidden="true" /> {t("ext.home_assistant.settings.add")}
-                </button>
+                </button> : null}
               </div>
             </div>
           ) : (
@@ -254,18 +256,15 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
                 )}
               </div>
             </div>
-          ) : !activeServer ? (
+          ) : !activeServer ? (servers.length > 0 ? (
             <div className="card">
               <div className="cardBody">
                 <div style={{ marginBottom: 10 }}>
                   {t("ext.home_assistant.settings.select_server", {}, "Select a server to edit.")}
                 </div>
-                <button className="primaryButton" type="button" onClick={addServer}>
-                  <i className="fa-solid fa-plus" aria-hidden="true" /> {t("ext.home_assistant.settings.add")}
-                </button>
               </div>
             </div>
-          ) : (
+          ) : null) : (
             <div className="settingsDetail">
               <div className="settingsDetailHeader">
                 <div>

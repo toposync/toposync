@@ -20,7 +20,16 @@ class HistoryQuestion(BaseModel):
     identity_id: str | None = Field(default=None, min_length=1, max_length=128, strict=True)
     association: Literal["human", "recognized"] = "human"
     mode: Literal["text", "visual"] = "text"
+    priorities: list[Literal["low", "medium", "high"]] | None = Field(default=None, max_length=3)
+    types: list[str] = Field(default_factory=list, max_length=128)
     data_filter: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("types")
+    @classmethod
+    def validate_types(cls, value):
+        if any(not item.strip() or len(item) > 128 for item in value):
+            raise ValueError("Invalid notification type")
+        return value
 
     @field_validator("data_filter")
     @classmethod
@@ -51,6 +60,9 @@ def install_history_answer_routes(app: FastAPI, services: Any, router: Any) -> N
         require(request, "core:notifications:read")
         response.headers["Cache-Control"] = "private, no-store"
         question = body.question.strip().rstrip("?.! ")
+        if body.priorities == []:
+            return {"answer": {"status": "no_evidence", "citations": []}, "notifications": [],
+                    "search": {"mode": "literal", "status": "ready", "reason": "no_priority_selected"}}
         if re.search(r"\b(tarde|manhã|manha|noite|madrugada)\b", question, re.I) and not re.search(r"\b(hoje|ontem)\b", question, re.I):
             return {"answer": {"status": "needs_date", "message": "De qual dia? Indique hoje ou ontem e o período na consulta."}, "notifications": [], "search": {}}
         async def selection():
@@ -60,7 +72,8 @@ def install_history_answer_routes(app: FastAPI, services: Any, router: Any) -> N
             except KeyError as exc:
                 raise HTTPException(503, "Identity history unavailable") from exc
         identity_selection = await selection() if body.identity_id else None
-        parameters = {"query": question, "limit": 10, "data_filter": body.data_filter}
+        parameters = {"query": question, "limit": 10, "data_filter": body.data_filter,
+                      "priorities": body.priorities, "types": body.types}
         if identity_selection is not None:
             parameters["notification_ids"] = identity_selection["notification_ids"]
         service = "ai.search_visual_notifications" if body.mode == "visual" else "ai.search_notifications"
@@ -78,7 +91,8 @@ def install_history_answer_routes(app: FastAPI, services: Any, router: Any) -> N
 
         async def current_sources():
             items, _ = await app.state.notifications.list(limit=10,
-                notification_ids=[item["id"] for item in result["notifications"]], data_filter=body.data_filter)
+                notification_ids=[item["id"] for item in result["notifications"]], data_filter=body.data_filter,
+                priorities=body.priorities, types=body.types)
             by_id = {item["id"]: item for item in items}
             return [by_id[item["id"]] for item in result["notifications"] if item["id"] in by_id]
         result["answer"] = {"status": "no_evidence", "citations": []}

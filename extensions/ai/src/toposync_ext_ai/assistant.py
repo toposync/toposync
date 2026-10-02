@@ -32,6 +32,8 @@ class RecipeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     instruction: str = Field(min_length=1, max_length=4000)
     profile_id: str | None = None
+    camera_id: str | None = Field(default=None, min_length=1, max_length=128)
+    source_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class RecipeSelection(BaseModel):
@@ -175,6 +177,13 @@ def install_assistant_routes(app: FastAPI, router: AiRouter) -> None:
             catalog = await services.call("cameras.pipelines.catalog", request=request)
         except KeyError as exc:
             raise HTTPException(409, "A extensão de câmeras está indisponível.") from exc
+        if body.source_id and not body.camera_id:
+            raise HTTPException(422, "A source requires its camera context.")
+        if body.camera_id:
+            catalog = {**catalog, "cameras": [camera for camera in catalog["cameras"] if camera["id"] == body.camera_id]}
+            if body.source_id:
+                catalog["cameras"] = [{**camera, "sources": [source for source in camera["sources"] if source["id"] == body.source_id]} for camera in catalog["cameras"]]
+                catalog["cameras"] = [camera for camera in catalog["cameras"] if camera["sources"]]
         if not catalog["cameras"]:
             raise HTTPException(409, "Nenhuma fonte de vídeo habilitada está disponível. Configure uma câmera primeiro.")
         try:

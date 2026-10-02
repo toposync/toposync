@@ -24,7 +24,7 @@ def client_for(tmp_path, raw, *, mutate=None, denied=False):
         async def call(self, name, **kwargs):
             assert name == "ai.search_notifications"
             calls.append(kwargs)
-            items, _ = await runtime.list()
+            items, _ = await runtime.list(priorities=kwargs.get("priorities"), types=kwargs.get("types"))
             return {"notifications": items, "search": {"results_truncated": True}}
 
     class Router:
@@ -125,3 +125,18 @@ def test_notification_permission_is_checked_again_after_inference(tmp_path):
     response = client.post("/api/ai/history/answer", json={"question": "gato"})
     assert response.status_code == 403
     assert "notifications" not in response.json()
+
+
+def test_history_context_preserves_priority_and_type_filters(tmp_path):
+    client, calls, _ = client_for(tmp_path, lambda identifier: {})
+    result = client.post("/api/ai/history/answer", json={"question": "gato", "priorities": ["high"], "types": ["event"]}).json()
+    assert result["notifications"] == []
+    assert calls[0]["priorities"] == ["high"]
+    assert calls[0]["types"] == ["event"]
+    assert len(calls) == 1
+    calls.clear()
+    result = client.post("/api/ai/history/answer", json={"question": "gato", "priorities": []}).json()
+    assert result["notifications"] == []
+    assert calls == []
+    for fields in ({"priorities": ["unknown"]}, {"types": [""]}, {"types": ["a" * 129]}):
+        assert client.post("/api/ai/history/answer", json={"question": "gato", **fields}).status_code == 422

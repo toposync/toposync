@@ -310,7 +310,10 @@ def test_assistant_creates_reviewed_recipe_and_undo_preserves_concurrent_changes
         _configure_camera(client)
         _add_mapped_composition(client, with_area=True)
         route = "/api/ai/assistant/recipes/preview"
-        body = {"instruction": "Avise quando alguém entrar na área Gate"}
+        body = {"instruction": "Avise quando alguém entrar na área Gate", "camera_id": "cam1", "source_id": "main"}
+        assert client.post(route, json={**body, "camera_id": "missing"}).status_code == 409
+        assert client.post(route, json={**body, "source_id": "missing"}).status_code == 409
+        assert client.post(route, json={"instruction": body["instruction"], "source_id": "main"}).status_code == 422
         response = client.post(route, json=body)
         assert response.status_code == 200, response.text
         proposed = response.json()

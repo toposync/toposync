@@ -89,6 +89,17 @@ semantic decisions. These small authored examples test the integration, not
 general accuracy. Choice, Score and Noul responded through the runtime, but this
 Toposync service consumes only Choice. Score and Noul are not exposed features.
 
+A separate five-class transcript-context experiment on the same Ollaya version
+used `laya:multilingual` with short Portuguese descriptions. It matched 10/15
+development labels; reversing option order changed all three probed answers.
+The reserved set was not evaluated after those failures, and no transcript
+consumer was connected. The original eight-case results remain unchanged.
+The installed Laya token budgets fit both questions without truncation;
+truncation does not explain these failures. The installed `decider:0.8b`
+manifest declares English, so it is not a qualified substitute for Portuguese
+transcript review. These results do not justify adjusting a confidence threshold
+or treating a successful connection as semantic acceptance.
+
 ## Visual occurrences
 
 `ai.condition_filter` supports `emit_mode: "occurrence"`. Each new captured frame is evaluated;

@@ -391,7 +391,7 @@ export function CameraPipelinePresetModal({
   }
   if (noMapping) {
     createBlockedReasons.push(
-      t("ext.cameras.pipeline_preset.blocked.mapping_required", {}, "Map this camera in a composition before using this preset."),
+      t("ext.cameras.pipeline_preset.blocked.mapping_required", {}, "Map this camera in a composition before using this recipe."),
     );
   }
   if (enablePtzAttention && !nativeTrackingDisabledConfirmed) {
@@ -473,7 +473,7 @@ export function CameraPipelinePresetModal({
             ? t(
                 "ext.cameras.pipeline_preset.model.missing_actionable",
                 { model: selectedModelName, server: selectedServerLabel },
-                "{{model}} needs preparation on {{server}} before this preset can create a pipeline.",
+                "{{model}} needs preparation on {{server}} before this recipe can create a pipeline.",
               )
             : t(
                 "ext.cameras.pipeline_preset.model.missing_manual",
@@ -487,7 +487,7 @@ export function CameraPipelinePresetModal({
         <div className="settingsPanel">
           {error ? <div className="errorText">{error}</div> : null}
           {noSource ? <div className="settingsStatusMuted">{t("ext.cameras.pipelines.no_video_source", {}, "Add an active video source before creating a pipeline.")}</div> : null}
-          {noMapping ? <div className="settingsStatusMuted">{t("ext.cameras.pipelines.mapping_required", {}, "Map this camera in a composition before using this preset.")}</div> : null}
+          {noMapping ? <div className="settingsStatusMuted">{t("ext.cameras.pipelines.mapping_required", {}, "Map this camera in a composition before using this recipe.")}</div> : null}
 
         <div className="rowWrap">
           <div className="field">

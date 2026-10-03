@@ -1111,7 +1111,7 @@ function CamerasSettingsPanelContent({
 
   function handlePipelineCreated(pipelineName: string): void {
     setCreatedPipeline(pipelineName);
-    setPipelineNotice(t("ext.cameras.pipelines.created", {}, "Recipe saved and disabled"));
+    setPipelineNotice(t("ext.cameras.pipelines.created", {}, "Pipeline created and disabled"));
     void reloadActiveCameraPipelines();
   }
 
@@ -1775,7 +1775,7 @@ function CamerasSettingsPanelContent({
                 <div>
                   <div className="modalSectionTitle">{t("ext.cameras.pipelines.title", {}, "Fluxos")}</div>
                   <div className="settingsDescription">
-                    {t("ext.cameras.pipelines.help", {}, "Atalhos para fluxos que usam esta câmera e presets para criar novos.")}
+                    {t("ext.cameras.pipelines.help", {}, "Gerencie os fluxos desta câmera. Escolha uma receita para criar um novo fluxo.")}
                   </div>
                 </div>
               </div>
@@ -1850,7 +1850,7 @@ function CamerasSettingsPanelContent({
 
                     <div className="sectionDivider">
                       <div className="modalSectionTitle">
-                        {t("ext.cameras.pipelines.add_title", {}, "Adicionar fluxo")}
+                        {t("ext.cameras.pipelines.add_title", {}, "Criar a partir de uma receita")}
                       </div>
                       <button type="button" className="chipButton" style={{ margin: "12px 0" }} onClick={() => navigateInApp(`/settings?${new URLSearchParams({ panel: "toposync.ai.assistant", camera_id: activeCamera.id, camera_name: activeCamera.name || activeCamera.id, ...(activeSource ? { source_id: activeSource.id, source_name: activeSource.name || activeSource.id } : {}) })}`)}>{t("ext.cameras.recipe.assistant")}</button>
                       {showPresetDefaultModelNotice ? (
@@ -1891,7 +1891,7 @@ function CamerasSettingsPanelContent({
                                   ? t(
                                       "ext.cameras.pipeline_preset.model.default_checking",
                                       {},
-                                      "Checking the detection model used by these presets.",
+                                      "Checking the detection model used by these recipes.",
                                     )
                                   : presetDefaultModelStatusUnavailable
                                     ? t(
@@ -1912,7 +1912,7 @@ function CamerasSettingsPanelContent({
                                         ? t(
                                             "ext.cameras.pipeline_preset.model.default_missing_actionable",
                                             { model: presetDefaultDetectionModel?.displayName || DEFAULT_DETECTION_MODEL_NAME },
-                                            "{{model}} is recommended for these presets and needs to be prepared before pipeline creation.",
+                                            "{{model}} is recommended for these recipes and needs to be prepared before pipeline creation.",
                                           )
                                         : t(
                                             "ext.cameras.pipeline_preset.model.default_missing_manual",
@@ -1975,7 +1975,7 @@ function CamerasSettingsPanelContent({
                               ? t(
                                   "ext.cameras.pipelines.mapping_required_for_preset",
                                   {},
-                                  "Mapeie esta câmera em uma composição para usar este preset.",
+                                  "Mapeie esta câmera em uma composição para usar esta receita.",
                                 )
                               : "";
                           const disabled = Boolean(disabledReason);

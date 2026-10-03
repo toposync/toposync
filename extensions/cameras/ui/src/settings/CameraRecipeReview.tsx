@@ -77,8 +77,8 @@ function CameraRecipeReview({ graph, i18n }: { graph: unknown; i18n: HostI18n })
     }
     return current?.name || text("Área indisponível ou sem acesso", "Area unavailable or inaccessible");
   }
-  return <section className="card" aria-label={text("Revisar receita", "Review recipe")}><div className="cardBody" style={{ display: "grid", gap: 16 }}>
-    <strong>{text("Revisar receita", "Review recipe")}</strong>
+  return <section className="card" aria-label={text("Revisar fluxo", "Review pipeline")}><div className="cardBody" style={{ display: "grid", gap: 16 }}>
+    <strong>{text("Revisar fluxo", "Review pipeline")}</strong>
     {sources.map(node => { const camera = cameras?.find(item => item.id === node.config.camera_id); const source = camera?.sources?.find(item => item.id === node.config.source_id);
       return <div key={node.id}><strong>{text("Fonte", "Source")}</strong><div>{cameras === null && !failed ? text("Conferindo fonte…", "Checking source…") : camera?.name || text("Câmera indisponível ou sem nome", "Camera unavailable or unnamed")} · {source?.name || text("Fonte indisponível ou sem nome", "Source unavailable or unnamed")}</div></div>;
     })}

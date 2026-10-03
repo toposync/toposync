@@ -111,9 +111,15 @@ Semantic PTZ attention; panoramic mapping does not redefine those consumers.
 See [implementation and validation](../../docs/ptz-panorama-mapping.md) for the
 profile contract, geometry, recovery, automated tests and physical validation.
 
-## Camera pipeline presets
+## Camera recipes
 
-Preset graphs should keep product identity on `payload.subject.id`. Raw tracker
+A recipe is a ready-made configuration in the camera's existing catalog. Configuring
+one creates a disabled pipeline, which is then reviewed and managed under Pipelines.
+Both creation forms follow this same path; they do not create a second recipe catalog.
+`preset` remains the internal request field and API route terminology. It is not a
+separate user-facing category. Camera position presets are a different device feature.
+
+Recipe graphs should keep product identity on `payload.subject.id`. Raw tracker
 ids are diagnostic only.
 
 - `people_simple`: no mapping requirement, for a first people-detection smoke test.
@@ -155,9 +161,9 @@ Legacy vendor-specific YOLO/Ultralytics runtimes are not part of the official fi
 
 Some cameras expose `/stream1` and `/stream2`. If `/stream1` is unstable for snapshots, configure `rtsp_url` with the substream (`/stream2`) explicitly.
 
-## Observation recipes
+## Area and activity recipes
 
-Camera settings offer litter-box activity, drinking, presence in an area, and entry into an area. Recipes are saved disabled for review in the pipeline editor. Area recipes require an explicit mapped area and an available detection model; they distinguish people, cats and dogs without inferring age or identity.
+Camera settings offer litter-box activity, drinking, presence in an area, and entry into an area in the same recipe catalog. Created pipelines are saved disabled for review in the pipeline editor. Area recipes require an explicit mapped area and an available detection model; they distinguish people, cats and dogs without inferring age or identity.
 
 `POST /api/cameras/cameras/{camera_id}/pipelines/presets/preview` accepts the recipe request and returns a compiled, disabled `pipeline` without saving it. It requires pipeline read and compile permissions. Creation uses the same preparation path. An explicit composition confines area lookup to that composition; ambiguous area identifiers without a composition are rejected.
 

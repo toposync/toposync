@@ -2,9 +2,9 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
-import resource
 import struct
 import sys
 import threading
@@ -42,6 +42,53 @@ def validate_background_mask(mask):
         raise SystemExit(74)
 
 
+def parse_foreground_polygon(value):
+    """Accept one bounded simple contour in oriented image coordinates."""
+    if value is None:
+        return None
+    if len(value) > 8192:
+        raise ValueError("invalid_foreground_polygon")
+    points = json.loads(value)
+    if not isinstance(points, list) or not 3 <= len(points) <= 64:
+        raise ValueError("invalid_foreground_polygon")
+    for point in points:
+        if (not isinstance(point, list) or len(point) != 2
+                or any(type(v) not in (int, float) or not math.isfinite(v) or not 0 <= v <= 1 for v in point)):
+            raise ValueError("invalid_foreground_polygon")
+    if len({tuple(point) for point in points}) != len(points):
+        raise ValueError("invalid_foreground_polygon")
+    edges = list(zip(points, points[1:] + points[:1]))
+    area = abs(sum(a[0] * b[1] - a[1] * b[0] for a, b in edges)) / 2
+    if area < 0.000001:
+        raise ValueError("invalid_foreground_polygon")
+
+    def cross(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    def touches(a, b, c):
+        return abs(cross(a, b, c)) <= 1e-12 and all(min(a[k], b[k]) <= c[k] <= max(a[k], b[k]) for k in (0, 1))
+
+    for i, (a, b) in enumerate(edges):
+        for j in range(i + 1, len(edges)):
+            if j == i + 1 or (i == 0 and j == len(edges) - 1):
+                continue
+            c, d = edges[j]
+            if (cross(a, b, c) * cross(a, b, d) < 0 and cross(c, d, a) * cross(c, d, b) < 0
+                    or touches(a, b, c) or touches(a, b, d) or touches(c, d, a) or touches(c, d, b)):
+                raise ValueError("invalid_foreground_polygon")
+    return points
+
+
+def apply_foreground_polygon(image, points):
+    from PIL import Image, ImageChops, ImageDraw
+
+    mask = Image.new("L", image.size)
+    ImageDraw.Draw(mask).polygon([(round(x * (image.width - 1)), round(y * (image.height - 1))) for x, y in points], fill=255)
+    image.putalpha(ImageChops.darker(mask, image.getchannel("A")))
+    validate_background_mask(image.getchannel("A"))
+    return image, {"method": "manual_contour", "points": points}
+
+
 def isolate_object(home, image):
     low, high = image.getchannel("A").getextrema()
     if high == 0:
@@ -75,12 +122,15 @@ def isolate_object(home, image):
 
 
 def main():
+    import resource
+
     parser = argparse.ArgumentParser()
     parser.add_argument("home", type=Path)
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--expected-prepared-sha256")
+    parser.add_argument("--foreground-polygon")
     options = parser.parse_args()
     home, source, output = options.home, options.source, options.output
 
@@ -98,7 +148,9 @@ def main():
     # It must not read the 3D checkpoint or import its heavy runtime.
     from PIL import Image
 
-    image, background = isolate_object(home, Image.open(source).convert("RGBA"))
+    image = Image.open(source).convert("RGBA")
+    polygon = parse_foreground_polygon(options.foreground_polygon)
+    image, background = apply_foreground_polygon(image, polygon) if polygon else isolate_object(home, image)
     canonicalize_transparent_pixels(image)
     prepared_sha256 = prepared_image_digest(image)
     if options.expected_prepared_sha256 and options.expected_prepared_sha256 != prepared_sha256:

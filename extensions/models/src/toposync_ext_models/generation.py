@@ -16,10 +16,18 @@ import uuid
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
 from toposync.runtime.auth import AuthContext
+from .generation_worker import parse_foreground_polygon
 
 MAXIMUM_IMAGE_BYTES = 8 * 1024**2
 GENERATION_TIMEOUT_SECONDS = 300
 PREPARATION_TIMEOUT_SECONDS = 30
+
+
+def checked_foreground_polygon(value):
+    try:
+        return parse_foreground_polygon(value)
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise HTTPException(422, "invalid_foreground_polygon") from exc
 
 
 def authorize(request: Request):
@@ -73,6 +81,7 @@ def prepare_image(data: bytes, target: Path):
 async def run_worker(
     home: Path, source: Path, output: Path, request: Request, *,
     prepare_only: bool = False, expected_prepared_sha256: str | None = None,
+    foreground_polygon: list | None = None,
 ):
     env = {**os.environ, "OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2", "MKL_NUM_THREADS": "2",
            "TOKENIZERS_PARALLELISM": "false", "HF_HOME": str(home / "huggingface"),
@@ -85,6 +94,8 @@ async def run_worker(
         arguments.append("--prepare-only")
     if expected_prepared_sha256 is not None:
         arguments.extend(["--expected-prepared-sha256", expected_prepared_sha256])
+    if foreground_polygon is not None:
+        arguments.extend(["--foreground-polygon", json.dumps(foreground_polygon)])
     worker = await asyncio.create_subprocess_exec(
         str(home / "environment/bin/python"), str(Path(__file__).with_name("generation_worker.py")),
         *arguments, env=env, start_new_session=True,
@@ -126,9 +137,10 @@ async def run_worker(
 
 def install_generation_routes(app: FastAPI):
     @app.post("/api/models/prepare-image")
-    async def prepare(request: Request, file: UploadFile = File(...)):
+    async def prepare(request: Request, file: UploadFile = File(...), foreground_polygon: str | None = Form(None)):
         authorize(request)
         try:
+            polygon = checked_foreground_polygon(foreground_polygon)
             home = provider_home(app)
             data = await file.read(MAXIMUM_IMAGE_BYTES + 1)
             if len(data) > MAXIMUM_IMAGE_BYTES:
@@ -138,7 +150,7 @@ def install_generation_routes(app: FastAPI):
             with provider_lease(home), tempfile.TemporaryDirectory(dir=runtime) as folder:
                 source, output = Path(folder) / "input.png", Path(folder) / "prepared.png"
                 await asyncio.to_thread(prepare_image, data, source)
-                await run_worker(home, source, output, request, prepare_only=True)
+                await run_worker(home, source, output, request, prepare_only=True, **({"foreground_polygon": polygon} if polygon else {}))
                 authorize(request)
                 if await request.is_disconnected():
                     raise HTTPException(499, "generation_cancelled")
@@ -156,7 +168,8 @@ def install_generation_routes(app: FastAPI):
                     if (provenance.get("kind") != "image_preparation"
                             or provenance.get("prepared_sha256") != digest
                             or provenance.get("input_sha256") != hashlib.sha256(source.read_bytes()).hexdigest()
-                            or background.get("method") not in {"estimated", "provided_alpha"}):
+                            or background.get("method") not in {"estimated", "provided_alpha", "manual_contour"}
+                            or (polygon is not None and background != {"method": "manual_contour", "points": polygon})):
                         raise ValueError("invalid_preparation_provenance")
                 except (OSError, ValueError, AttributeError, Image.DecompressionBombError) as exc:
                     raise HTTPException(503, "invalid_prepared_image") from exc
@@ -172,10 +185,12 @@ def install_generation_routes(app: FastAPI):
     async def generate(
         request: Request, response: Response, file: UploadFile = File(...),
         expected_prepared_sha256: str | None = Form(None),
+        foreground_polygon: str | None = Form(None),
     ):
         authorize(request)
         response.headers["Cache-Control"] = "private, no-store"
         try:
+            polygon = checked_foreground_polygon(foreground_polygon)
             if expected_prepared_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", expected_prepared_sha256):
                 raise HTTPException(422, "invalid_preparation_digest")
             home = provider_home(app)
@@ -187,10 +202,12 @@ def install_generation_routes(app: FastAPI):
             with provider_lease(home), tempfile.TemporaryDirectory(dir=runtime) as folder:
                 source, output = Path(folder) / "input.png", Path(folder) / "model.glb"
                 await asyncio.to_thread(prepare_image, data, source)
-                if expected_prepared_sha256 is None:
-                    await run_worker(home, source, output, request)
-                else:
-                    await run_worker(home, source, output, request, expected_prepared_sha256=expected_prepared_sha256)
+                arguments = {}
+                if polygon is not None:
+                    arguments["foreground_polygon"] = polygon
+                if expected_prepared_sha256 is not None:
+                    arguments["expected_prepared_sha256"] = expected_prepared_sha256
+                await run_worker(home, source, output, request, **arguments)
                 authorize(request)
                 if await request.is_disconnected():
                     raise HTTPException(499, "generation_cancelled")
@@ -203,6 +220,11 @@ def install_generation_routes(app: FastAPI):
                     provenance = json.loads(output.with_suffix(".json").read_text())
                     if provenance.get("kind") != "generated_approximation" or provenance.get("metric_reconstruction") is not False:
                         raise ValueError("invalid_provenance")
+                    if polygon is not None and (
+                        provenance.get("background_removal") != {"method": "manual_contour", "points": polygon}
+                        or provenance.get("input_sha256") != hashlib.sha256(source.read_bytes()).hexdigest()
+                    ):
+                        raise ValueError("invalid_manual_contour_provenance")
                     if expected_prepared_sha256 is not None and (
                         provenance.get("prepared_sha256") != expected_prepared_sha256
                         or provenance.get("preparation_review_verified") is not True

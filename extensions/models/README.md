@@ -38,8 +38,17 @@ Fully transparent pixels have their invisible RGB values cleared before PNG
 encoding and review hashing. Dimensions, alpha and every visible pixel remain
 unchanged; this avoids retaining photographic background noise in the cutout.
 
+Both endpoints accept optional `foreground_polygon`: a JSON array of 3–64
+distinct `[x, y]` points normalized to the EXIF-oriented original image. Coordinates
+must be finite and within `[0, 1]`; crossing, touching or degenerate contours are
+rejected. An explicit contour keeps the original pixels and alpha inside it and
+clears everything outside, without segmentation inference. It does not recover
+pixels already missing from a transparent source. Preparation and generation
+must submit the same contour; the receipt records `manual_contour` and its points,
+while the input digest still identifies the original normalized image.
+
 `X-Toposync-Prepared-Sha256` binds the preview's dimensions and exact RGBA pixels;
-`X-Toposync-Background-Method` identifies `estimated` or `provided_alpha`.
+`X-Toposync-Background-Method` identifies `estimated`, `provided_alpha` or `manual_contour`.
 After review, a caller can send the **original image** to `/api/models/generate`
 with multipart `expected_prepared_sha256`. The worker prepares the image again
 and rejects a mismatch with `409 generation_preparation_changed` before reading

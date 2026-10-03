@@ -305,6 +305,75 @@ def test_transparent_pixel_normalization_preserves_alpha_and_visible_composites(
         assert Image.alpha_composite(background, normalized).tobytes() == Image.alpha_composite(background, source).tobytes()
 
 
+@pytest.mark.parametrize('value', [
+    'bad', '{}', 'null', '[]', '[[0,0],[1,1]]',
+    '[[0,0],[1,1],[0,1],[1,0]]',  # crossing
+    '[[0,0],[1,0],[0.5,0]]',  # no area
+    '[[0,0],[1,0],[1,1],[0,0]]',  # repeated vertex
+    '[[0,0],[1,0],[1,1],[0.5,0],[0,1]]',  # touches earlier edge
+    '[[false,0],[1,0],[1,1]]', '[[0,0],[1,0],[NaN,1]]',
+    '[[0,0],[1,0],[1,Infinity]]', '[[0,0],[1,0],[1,1.01]]',
+    '[[0,0,0],[1,0],[1,1]]', '[[0,0],[1,0],"x"]',
+    json.dumps([[i / 65, i / 65] for i in range(65)]), '[' * 9000,
+])
+def test_invalid_contour_rejected_before_worker(tmp_path, monkeypatch, value):
+    app, _ = app_for(tmp_path, monkeypatch)
+    async def unexpected(*args, **kwargs):
+        raise AssertionError('Invalid contour started a worker')
+    monkeypatch.setattr(generation, 'run_worker', unexpected)
+    with TestClient(app) as client:
+        for endpoint in ['prepare-image', 'generate']:
+            response = client.post('/api/models/' + endpoint, data={'foreground_polygon': value}, files={'file': ('object.png', image_bytes())})
+            assert response.status_code == 422
+            assert response.json()['detail'] == 'invalid_foreground_polygon'
+
+
+def test_manual_contour_preparation_uses_original_pixels_without_segmentation_or_3d(tmp_path):
+    import subprocess
+    from toposync_ext_models.generation_worker import prepared_image_digest
+    source, output = tmp_path / 'source.png', tmp_path / 'prepared.png'
+    image = Image.new('RGBA', (32, 32), (30, 50, 70, 255))
+    image.putpixel((12, 12), (11, 22, 33, 128))
+    image.save(source)
+    polygon = [[8/31, 8/31], [23/31, 8/31], [23/31, 23/31], [8/31, 23/31]]
+    launcher = "import sys,runpy; sys.modules.update({name:None for name in ['numpy','onnxruntime','rembg','torch','trimesh','tsr']}); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')"
+    command = [sys.executable, '-c', launcher, str(generation.Path(generation.__file__).with_name('generation_worker.py')), str(tmp_path), str(source), str(output), '--foreground-polygon', json.dumps(polygon)]
+    result = subprocess.run([*command, '--prepare-only'], capture_output=True, timeout=5)
+    assert result.returncode == 0, result.stderr.decode()
+    prepared = Image.open(output)
+    assert prepared.size == image.size
+    assert prepared.getchannel('A').getbbox() == (8, 8, 24, 24)
+    assert prepared.crop((8, 8, 24, 24)).tobytes() == image.crop((8, 8, 24, 24)).tobytes()
+    assert prepared.getpixel((0, 0)) == (0, 0, 0, 0)
+    receipt = json.loads(output.with_suffix('.json').read_text())
+    assert receipt['background_removal'] == {'method': 'manual_contour', 'points': polygon}
+    assert receipt['input_sha256'] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert receipt['prepared_sha256'] == prepared_image_digest(prepared)
+    result = subprocess.run([*command, '--expected-prepared-sha256', '0'*64], capture_output=True, timeout=5)
+    assert result.returncode == 77, result.stderr.decode()
+
+
+@pytest.mark.parametrize('valid_receipt', [True, False])
+def test_manual_contour_must_survive_generation_receipt(tmp_path, monkeypatch, valid_receipt):
+    app, _ = app_for(tmp_path, monkeypatch)
+    polygon = [[.1, .1], [.8, .1], [.8, .8]]
+    async def worker(home, source, output, request, *, foreground_polygon, expected_prepared_sha256):
+        assert foreground_polygon == polygon
+        assert expected_prepared_sha256 == 'a'*64
+        output.write_bytes(struct.pack('<4sII', b'glTF', 2, 12))
+        output.with_suffix('.json').write_text(json.dumps({
+            'kind': 'generated_approximation', 'metric_reconstruction': False,
+            'prepared_sha256': expected_prepared_sha256, 'preparation_review_verified': True,
+            'input_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
+            'background_removal': {'method': 'manual_contour', 'points': polygon if valid_receipt else []},
+        }))
+    monkeypatch.setattr(generation, 'run_worker', worker)
+    with TestClient(app) as client:
+        response = client.post('/api/models/generate', data={'foreground_polygon': json.dumps(polygon), 'expected_prepared_sha256': 'a'*64}, files={'file': ('object.png', image_bytes())})
+    assert response.status_code == (200 if valid_receipt else 503)
+    assert len(list((tmp_path / 'files').glob('*/model.glb'))) == int(valid_receipt)
+
+
 def test_preparation_and_mismatched_review_do_not_need_3d_assets_or_imports(tmp_path):
     import subprocess
     from toposync_ext_models.generation_worker import prepared_image_digest

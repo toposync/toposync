@@ -11,6 +11,7 @@ from toposync.runtime.config_store import (
     EXTENSION_MANAGEMENT_KEY,
     PROCESSING_SERVERS_KEY,
     AppSettings,
+    Composition,
     ConfigStore,
     Pipeline,
     PipelineValidationError,
@@ -129,6 +130,7 @@ class PipelinesOrchestrator:
         self._last_error: str | None = None
         self._activation_errors: dict[str, str] = {}
         self._activation_retry_requested = False
+        self._last_activation_compositions: list[Composition] = []
 
     def start(self) -> None:
         if self._task is not None:
@@ -277,7 +279,10 @@ class PipelinesOrchestrator:
         preflight_required = (
             desired_sig != self._last_sig
             or self._activation_retry_requested
-            or (bool(self._activation_errors) and settings_sig != self._last_settings_sig)
+            or (bool(self._activation_errors) and (
+                settings_sig != self._last_settings_sig
+                or config.compositions != self._last_activation_compositions
+            ))
         )
         if preflight_required:
             self._activation_retry_requested = False
@@ -295,6 +300,7 @@ class PipelinesOrchestrator:
                 # Reconcile the new snapshot before starting any of its predecessors.
                 self._activation_retry_requested = True
                 return
+            self._last_activation_compositions = [item.model_copy(deep=True) for item in config.compositions]
         # Keep rejected configurations out of both origins and remote config sync.
         # Failed preflight is retried only after a relevant edit or explicit reload.
         desired = [pipeline for pipeline in desired if pipeline.name not in self._activation_errors]

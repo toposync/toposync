@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from toposync.runtime.config_store import (
-    ConfigStore, Pipeline, PipelineValidationError, ProcessingServer, UserDataPaths,
+    Composition, CompositionElement, ConfigStore, Pipeline, PipelineValidationError, ProcessingServer, UserDataPaths,
 )
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.pipelines import OperatorRegistry, PipelineGraphCompiler
@@ -123,6 +123,56 @@ def test_disabling_during_preflight_cannot_start_the_previous_configuration(tmp_
             await pending
             await orchestrator._reconcile()
             assert orchestrator.status()["pipelines"] == []
+        finally:
+            await orchestrator.stop()
+
+    asyncio.run(run())
+
+
+def test_composition_changes_retry_blocked_activation_without_repeating_polls(tmp_path, monkeypatch):
+    async def run():
+        paths = UserDataPaths(data_dir=tmp_path, config_path=tmp_path / "config.json", files_dir=tmp_path / "files")
+        store = ConfigStore(paths=paths)
+        await store.create_pipeline(Pipeline(name="mapping", graph=build_pipeline_graph_v2(
+            graph_uid="mapping", nodes=[], edges=[]
+        )))
+        checks, starts = [], []
+
+        async def validate(pipeline, config):
+            checks.append(pipeline.name)
+            if not any(element.id == "camera" for composition in config.compositions for element in composition.elements):
+                raise PipelineValidationError("Camera missing from composition")
+
+        store.register_pipeline_activation_validator(validate)
+        registry = OperatorRegistry()
+        orchestrator = PipelinesOrchestrator(
+            config_store=store, operator_registry=registry, compiler=PipelineGraphCompiler(registry),
+            notifications=NotificationsRuntime(data_dir=tmp_path), files_dir=paths.files_dir,
+        )
+
+        async def start(pipeline):
+            starts.append(pipeline.name)
+
+        monkeypatch.setattr(orchestrator, "_start_local_pipeline", start)
+        try:
+            await orchestrator._reconcile()
+            assert len(checks) == 1 and starts == []
+            await store.set_active_composition(Composition(id="map", name="Map"))
+            await orchestrator._reconcile()
+            assert len(checks) == 2 and starts == []
+            await orchestrator._reconcile()
+            assert len(checks) == 2, "An insufficient edit must not cause repeated retries"
+
+            await store.set_active_composition(Composition(id="map", name="Map", elements=[
+                CompositionElement(id="camera", type="camera")
+            ]))
+            await orchestrator._reconcile()
+            assert len(checks) == 3 and starts == ["mapping"]
+            assert orchestrator.status()["activation_errors"] == {}
+            await orchestrator._reconcile()
+            await store.rename_composition("map", name="Renamed map")
+            await orchestrator._reconcile()
+            assert len(checks) == 3 and starts == ["mapping"], "Healthy pipelines must not restart on map edits"
         finally:
             await orchestrator.stop()
 

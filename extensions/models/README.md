@@ -102,6 +102,16 @@ Select **3D model**, choose a placement point, then choose a local file or expan
 
 Image selection first prepares a foreground preview without loading the 3D model. Compare **Original image** and **Cutout used for generation**: the entire object must remain visible. **Choose another image** keeps the placement point and opens the file picker; a transparent image prepared elsewhere can replace an inaccurate automatic cutout. **Generate approximation** is available after both images load and submits the original image together with the reviewed pixel digest. Closing the review, Escape or leaving the tool cancels the operation. A changed preparation is rejected before loading the 3D model. This review exposes mask failures; it does not repair them automatically or certify geometry.
 
+**Adjust cutout** lets you explicitly outline the object on its original photo.
+Click or tap the edge in order, undo individual points or start over, then select
+**Review cutout**. The shared image viewport supports dragging, zoom and touch;
+keyboard instructions are available in the editor. Invalid outlines remain
+editable. Returning or pressing Escape cancels pending preparation and keeps the
+previous review. The comparison initially fits the corrected object; zoom or
+**Show full image** can inspect the surrounding photograph. Generation retains
+the original image digest and the reviewed contour. Manual selection is not
+automatic segmentation, metric reconstruction or evidence about unseen surfaces.
+
 Generated elements retain the generation provenance and show an approximation notice when edited. Enter a known height to scale the object; generated geometry does not supply a measured reference height. Preview, placement, floor height and advanced scale reuse the importer. Opaque photos use the optional background model described below. Runtime installation is an explicit administrator operation.
 
 ### Views and dimensional references

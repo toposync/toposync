@@ -1,7 +1,8 @@
-import { requestForm, resolveToposyncUrl, type EditorTool, type HostI18n, type PlanePoint } from "@toposync/plugin-api";
+import { requestForm, resolveToposyncUrl, type EditorTool, type HostI18n, type HostUi, type PlanePoint } from "@toposync/plugin-api";
 
 import { openModelSourcePicker } from "./modelSourcePicker";
 import { prepareObjectImage, reviewObjectImage } from "./imagePreparation";
+import { editObjectContour, type ObjectContour } from "./objectContour";
 import type { UploadFileResponse } from "../types";
 
 import { MAXIMUM_MODEL_BYTES } from "../validation";
@@ -16,7 +17,7 @@ const TOOL_GROUP_REFERENCES: NonNullable<EditorTool["group"]> = {
   order: 10,
 };
 
-export function createImportModelTool(i18n: HostI18n): EditorTool {
+export function createImportModelTool(i18n: HostI18n, ui: HostUi): EditorTool {
   return {
     id: IMPORT_MODEL_TOOL_ID,
     name: { key: "ext.models.tool.import", fallback: "3D model" },
@@ -108,15 +109,24 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
         let entryUpload: UploadFileResponse;
         if (imageFile) {
           try {
-            const prepared = await prepareObjectImage(imageFile, signal);
+            let prepared = await prepareObjectImage(imageFile, signal);
+            let contour: ObjectContour | undefined;
             signal.throwIfAborted();
             activityState = "reviewing";
             invalidateViewport();
-            if (await reviewObjectImage(imageFile, prepared.image, t, signal, cancel) === "replace") return "choose_another_image";
+            while (true) {
+              const choice = await reviewObjectImage(imageFile, prepared.image, t, signal, cancel, ui, contour);
+              if (choice === "replace") return "choose_another_image";
+              if (choice === "generate") break;
+              const edited = await editObjectContour(imageFile, ui, t, signal, contour);
+              if (edited) { prepared = edited.prepared; contour = edited.points; }
+              signal.throwIfAborted();
+            }
             signal.throwIfAborted();
             const form = new FormData();
             form.append("file", imageFile);
             form.append("expected_prepared_sha256", prepared.digest);
+            if (contour) form.append("foreground_polygon", JSON.stringify(contour));
             activityState = "generating";
             invalidateViewport();
             const result = await requestForm<UploadFileResponse & { generation: Record<string, unknown> }>("/api/models/generate", form, { signal });

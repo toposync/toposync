@@ -1,8 +1,12 @@
-import { resolveToposyncUrl, type HostI18n } from "@toposync/plugin-api";
+import { createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { resolveToposyncUrl, type HostI18n, type HostUi, type NavigableViewportController } from "@toposync/plugin-api";
+import type { ObjectContour } from "./objectContour";
 
-export async function prepareObjectImage(file: File, signal: AbortSignal) {
+export async function prepareObjectImage(file: File, signal: AbortSignal, contour?: ObjectContour) {
   const form = new FormData();
   form.append("file", file);
+  if (contour) form.append("foreground_polygon", JSON.stringify(contour));
   const response = await fetch(resolveToposyncUrl("/api/models/prepare-image"), { method: "POST", body: form, signal });
   signal.throwIfAborted();
   if (!response.ok) {
@@ -21,11 +25,14 @@ export async function prepareObjectImage(file: File, signal: AbortSignal) {
 
 export function reviewObjectImage(
   original: File, prepared: Blob, t: HostI18n["t"], signal: AbortSignal, cancel: () => void,
-): Promise<"generate" | "replace"> {
+  ui: HostUi, contour?: ObjectContour,
+): Promise<"generate" | "replace" | "adjust"> {
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
     let settled = false;
     const urls = [URL.createObjectURL(original), URL.createObjectURL(prepared)];
+    const roots: Root[] = [];
+    const navigation = urls.map(() => ({ current: null as NavigableViewportController | null }));
     const dialog = document.createElement("dialog");
     dialog.setAttribute("aria-label", t("ext.models.prepare.title"));
     dialog.style.cssText = "width:min(760px,calc(100vw - 28px));max-height:90dvh;overflow:hidden;box-sizing:border-box;padding:24px;border:1px solid var(--color-border-strong,#64748b);border-radius:18px;background:var(--color-surface-solid,#fff);color:var(--color-text-primary,#101418);flex-direction:column";
@@ -72,6 +79,28 @@ export function reviewObjectImage(
     status.setAttribute("role", "status");
     status.style.cssText = "margin:16px 0 0;line-height:1.5";
     status.textContent = t("ext.models.source.loading");
+    const inspection = document.createElement("div");
+    inspection.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;margin-top:12px";
+    inspection.setAttribute("role", "group");
+    inspection.setAttribute("aria-label", t("ext.models.prepare.comparison"));
+    for (const [label, text, action] of [
+      ["ext.models.contour.zoom_out", "−", () => navigation.forEach(reference => reference.current?.zoomBy(1 / 1.5))],
+      ["ext.models.contour.zoom_in", "+", () => navigation.forEach(reference => reference.current?.zoomBy(1.5))],
+      ["ext.models.prepare.full_image", t("ext.models.prepare.full_image"), () => navigation.forEach((reference, index) => reference.current?.fit({ x: 0, y: 0, width: pictures[index].naturalWidth, height: pictures[index].naturalHeight }))],
+    ] as const) {
+      const button = document.createElement("button");
+      button.type = "button"; button.className = text.length === 1 ? "iconButton" : "chipButton";
+      button.style.cssText = "min-height:44px;min-width:44px";
+      button.setAttribute("aria-label", t(label)); button.textContent = text;
+      button.disabled = true; button.addEventListener("click", action); inspection.append(button);
+    }
+    const adjust = document.createElement("button");
+    adjust.type = "button";
+    adjust.className = "chipButton";
+    adjust.style.cssText = "min-height:44px;margin-top:16px";
+    adjust.textContent = t("ext.models.contour.adjust");
+    adjust.disabled = true;
+    adjust.addEventListener("click", () => finish("adjust"));
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;flex-wrap:wrap;justify-content:flex-end;gap:12px;flex-shrink:0;margin-top:16px;padding-top:16px;border-top:1px solid var(--color-border-subtle,#64748b)";
     const replace = document.createElement("button"), generate = document.createElement("button");
@@ -85,15 +114,16 @@ export function reviewObjectImage(
     replace.addEventListener("click", () => finish("replace"));
     generate.addEventListener("click", () => finish("generate"));
     actions.append(replace, generate);
-    content.append(hint, images, status);
+    content.append(hint, images, inspection, adjust, status);
     dialog.append(headingRow, content, actions);
     function cleanup() {
       signal.removeEventListener("abort", abort);
+      roots.forEach(root => root.unmount());
       dialog.close();
       dialog.remove();
       urls.forEach(url => URL.revokeObjectURL(url));
     }
-    function finish(choice: "generate" | "replace") {
+    function finish(choice: "generate" | "replace" | "adjust") {
       if (settled) return;
       settled = true;
       cleanup();
@@ -113,8 +143,26 @@ export function reviewObjectImage(
     title.focus();
     void Promise.all(pictures.map(image => image.decode())).then(() => {
       if (settled) return;
+      pictures.forEach((image, index) => {
+        const container = document.createElement("div"), width = image.naturalWidth, height = image.naturalHeight;
+        const root = createRoot(container); roots.push(root); image.replaceWith(container);
+        const bounds = contour ? {
+          x: Math.min(...contour.map(point => point[0])) * width,
+          y: Math.min(...contour.map(point => point[1])) * height,
+          width: (Math.max(...contour.map(point => point[0])) - Math.min(...contour.map(point => point[0]))) * width,
+          height: (Math.max(...contour.map(point => point[1])) - Math.min(...contour.map(point => point[1]))) * height,
+        } : undefined;
+        if (bounds) { const margin = Math.max(bounds.width, bounds.height) * .1; bounds.x -= margin; bounds.y -= margin; bounds.width += margin * 2; bounds.height += margin * 2; }
+        root.render(createElement(ui.NavigableViewport, {
+          contentSize: { width, height }, initialBounds: bounds, controllerRef: navigation[index], label: image.alt,
+          style: { height: "min(20vh,200px)", borderRadius: 12, background: "repeating-conic-gradient(#e2e8f0 0% 25%,#f8fafc 0% 50%) 50% / 24px 24px" },
+          children: createElement("img", { src: urls[index], alt: image.alt, draggable: false, style: { width, height, display: "block", pointerEvents: "none" } }),
+        }));
+      });
+      inspection.querySelectorAll("button").forEach(button => { button.disabled = false; });
       status.textContent = t("ext.models.prepare.limit");
       generate.disabled = false;
+      adjust.disabled = false;
     }).catch(() => {
       if (!settled) status.textContent = t("ext.models.error.invalid_prepared_image");
     });

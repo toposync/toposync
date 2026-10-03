@@ -7,5 +7,5 @@ import { modelsTranslations } from "./translations";
 export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(modelsTranslations);
   host.registerElementType(createModelElementType(host.i18n));
-  host.registerEditorTool(createImportModelTool(host.i18n));
+  host.registerEditorTool(createImportModelTool(host.i18n, host.ui));
 }

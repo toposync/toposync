@@ -1,7 +1,8 @@
 import { createImportModelTool } from "./importModelTool";
+import type { HostUi } from "@toposync/plugin-api";
 
 /** Browser check: delayed requests deliberately resolve even after abort. */
-export async function checkImportCancellation() {
+export async function checkImportCancellation(ui: HostUi) {
   const originalFetch = window.fetch;
   const pending: { url: string; signal: AbortSignal; form: FormData; finish: (response?: Response) => void }[] = [];
   const created: unknown[] = [];
@@ -26,7 +27,7 @@ export async function checkImportCancellation() {
     }), { headers: { "content-type": "application/json" } })) });
   })) as typeof fetch;
   function begin() {
-    session = createImportModelTool({ t: (key: string) => key } as any).createSession({
+    session = createImportModelTool({ t: (key: string) => key } as any, ui).createSession({
       createElement: (...args: unknown[]) => { created.push(args); return "created"; },
       openEditor: () => { throw new Error("Cancelled import opened editor"); },
     } as any);
@@ -66,11 +67,13 @@ export async function checkImportCancellation() {
 
     begin(); select("original.png"); pending[5].finish(prepared());
     await until(() => !!generate() && !generate()!.disabled);
+    await until(() => document.querySelectorAll('dialog[open] [data-navigable-viewport]').length === 2);
+    assert(!(document.querySelector('button[aria-label="ext.models.contour.zoom_in"]') as HTMLButtonElement).disabled, 'Review zoom remained disabled after decode');
     assert(pending.length === 6, "Review started generation before confirmation");
     assert(document.querySelectorAll("dialog[open] img").length === 2, "Original and prepared images missing");
     let pickerOpened = false;
     document.querySelector('input[type="file"]')!.addEventListener("click", event => { event.preventDefault(); pickerOpened = true; });
-    (document.querySelector("dialog[open] .chipButton") as HTMLButtonElement).click(); await settle();
+    (Array.from(document.querySelectorAll("dialog[open] .chipButton")).find(button => button.textContent?.includes("prepare.replace")) as HTMLButtonElement).click(); await settle();
     assert(pickerOpened && !document.querySelector("dialog[open]"), "Replacing image did not reopen the picker");
     select("replacement.png", false); pending[6].finish(prepared());
     await until(() => !!generate() && !generate()!.disabled);
@@ -94,9 +97,43 @@ export async function checkImportCancellation() {
     pending[10].finish(new Response("invalid PNG", { headers: { "content-type": "image/png", "X-Toposync-Prepared-Sha256": digest } }));
     await until(() => !!document.querySelector("dialog[open] [role=status]")?.textContent?.includes("invalid_prepared_image"));
     assert(generate()?.disabled && pending.length === 11, "Undecodable image enabled generation"); session.dispose();
+
+    const press = (label: string) => (Array.from(document.querySelectorAll('dialog[open] button')).find(button => button.textContent === label) as HTMLButtonElement).click();
+    begin(); select('contour.png'); pending[11].finish(prepared());
+    await until(() => !!generate() && !generate()!.disabled);
+    press('ext.models.contour.adjust');
+    await until(() => !!document.querySelector('[data-navigable-viewport]'));
+    const surface = document.querySelector('[data-navigable-viewport]') as HTMLElement;
+    for (const key of ['Enter', 'ArrowRight', 'Enter', 'ArrowDown', 'Enter']) {
+      surface.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); await settle();
+    }
+    press('ext.models.contour.apply'); await until(() => pending.length === 13);
+    assert(pending[12].form.get('foreground_polygon') === '[[0.5,0.5],[1,0.5],[1,1]]', 'Keyboard contour not sent to preparation');
+    pending[12].finish(new Response(JSON.stringify({ detail: 'invalid_foreground_polygon' }), { status: 422, headers: { 'content-type': 'application/json' } }));
+    await until(() => !!document.querySelector('dialog[open] [role=status]')?.textContent?.includes('invalid_foreground_polygon'));
+    assert(!generate()!.disabled && document.querySelectorAll('dialog[open] circle').length === 3, 'Rejected contour lost edit state');
+    press('ext.models.contour.apply'); await until(() => pending.length === 14);
+    pending[13].finish(prepared()); await until(() => generate()?.textContent === 'ext.models.prepare.generate' && !generate()?.disabled);
+    assert(pending.length === 14, 'Contour preparation generated before review');
+    generate()!.click(); await until(() => pending.length === 15);
+    assert(pending[14].form.get('foreground_polygon') === pending[13].form.get('foreground_polygon'), 'Generation lost contour');
+    assert(pending[14].form.get('expected_prepared_sha256') === digest && (pending[14].form.get('file') as File).name === 'contour.png', 'Contour lost original source or review digest');
+    session.dispose(); assert(pending[14].signal.aborted, 'Contour generation not cancelled'); pending[14].finish(); await settle();
+
+    begin(); select('cancel-contour.png'); pending[15].finish(prepared());
+    await until(() => generate()?.textContent === 'ext.models.prepare.generate' && !generate()?.disabled);
+    press('ext.models.contour.adjust'); await until(() => !!document.querySelector('[data-navigable-viewport]'));
+    const cancelling = document.querySelector('[data-navigable-viewport]') as HTMLElement;
+    for (const key of ['Enter', 'ArrowRight', 'Enter', 'ArrowDown', 'Enter']) { cancelling.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); await settle(); }
+    press('ext.models.contour.apply'); await until(() => pending.length === 17);
+    press('ext.models.contour.back'); await until(() => generate()?.textContent === 'ext.models.prepare.generate');
+    assert(pending[16].signal.aborted, 'Back did not abort contour preparation');
+    pending[16].finish(prepared()); await settle();
+    assert(generate()?.textContent === 'ext.models.prepare.generate' && pending.length === 17, 'Stale contour response replaced review');
+    session.dispose();
     assert(!document.querySelector("dialog"), "Progress dialog leaked");
     assert(created.length === 0, "Abandoned import created an element");
     assert(document.querySelector('input[type="file"]') === null, "File input leaked");
-    return { preparationCancellation: true, generationCancellation: true, reviewEscape: true, reviewDisposal: true, replaceRetainsPlacement: true, reviewedDigest: true, decodeFailureClosed: true, escape: true, disposal: true, staleCompletion: true, newOperationPreserved: true };
+    return { manualContourKeyboard: true, rejectedContourPreserved: true, contourGenerationBinding: true, contourCancellation: true, preparationCancellation: true, generationCancellation: true, reviewEscape: true, reviewDisposal: true, replaceRetainsPlacement: true, reviewedDigest: true, decodeFailureClosed: true, escape: true, disposal: true, staleCompletion: true, newOperationPreserved: true };
   } finally { session?.dispose(); window.fetch = originalFetch; }
 }

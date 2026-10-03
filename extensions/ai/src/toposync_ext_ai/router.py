@@ -314,8 +314,8 @@ class AiRouter:
         settings = await self.settings()
         return await self._limiter.snapshot(profile_ids=[profile.id for profile in settings.profiles])
 
+    @staticmethod
     def _resolve_profiles(
-        self,
         *,
         settings: AiExtensionSettings,
         profile_id: str | None,

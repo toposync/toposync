@@ -182,6 +182,74 @@ def test_ai_extension_registers_initial_operators() -> None:
     assert "ai" in condition_filter.definition.produces_payload_keys
 
 
+@pytest.mark.parametrize("operator,description_field", [
+    ("ai.smart_crop", "target_description"),
+    ("ai.condition_filter", "condition_description"),
+])
+@pytest.mark.parametrize("scenario,expected", [
+    ("missing_description", "ai_description_missing"),
+    ("missing_context", "ai_settings_unavailable"),
+    ("invalid_settings", "ai_settings_unavailable"),
+    ("missing_profile", "ai_profile_unavailable"),
+    ("disabled_profile", "ai_profile_unavailable"),
+    ("disabled_provider", "ai_profile_unavailable"),
+    ("images_forbidden", "ai_images_not_allowed"),
+    ("profile_fallback", "ai_configuration_checked"),
+    ("operator_fallback", "ai_configuration_checked"),
+    ("configured", "ai_configuration_checked"),
+])
+def test_ai_diagnostics_reuse_profile_selection_without_inference_or_secret_disclosure(
+    monkeypatch, operator, description_field, scenario, expected
+):
+    import copy
+
+    def forbid_provider(*_args, **_kwargs):
+        pytest.fail("Configuration diagnostics must not construct or contact an AI provider")
+
+    monkeypatch.setattr("toposync_ext_ai.router.build_provider", forbid_provider)
+    registry = OperatorRegistry()
+    register_ai_pipeline_operators(registry)
+    settings = {
+        "default_profile_id": "primary",
+        "providers": [
+            {"id": "cloud", "kind": "openai", "api_key": "secret-never-returned", "allow_image_upload": True},
+            {"id": "local", "kind": "ollama"},
+        ],
+        "profiles": [
+            {"id": "primary", "provider_id": "cloud", "model": "example"},
+            {"id": "backup", "provider_id": "local", "model": "example"},
+        ],
+    }
+    config = {description_field: "Observe an object", "profile_id": "primary"}
+    context = {"extension_settings": {EXTENSION_ID: settings}}
+    if scenario == "missing_description":
+        config[description_field] = " "
+    elif scenario == "missing_context":
+        context = {}
+    elif scenario == "invalid_settings":
+        settings["limits"] = {"max_concurrency": "secret-never-returned"}
+    elif scenario == "missing_profile":
+        config["profile_id"] = "absent"
+    elif scenario == "disabled_profile":
+        settings["profiles"][0]["enabled"] = False
+    elif scenario == "disabled_provider":
+        settings["providers"][0]["enabled"] = False
+    elif scenario == "images_forbidden":
+        settings["providers"][0]["allow_image_upload"] = False
+    elif scenario == "profile_fallback":
+        settings["providers"][0]["allow_image_upload"] = False
+        settings["profiles"][0]["fallback_profile_ids"] = ["backup"]
+    elif scenario == "operator_fallback":
+        config["profile_id"] = "absent"
+        config["fallback_profile_ids"] = ["backup", "backup"]
+    before = copy.deepcopy(settings)
+    diagnostics = registry.collect_diagnostics(operator, config, context)
+    assert [item.code for item in diagnostics] == [expected]
+    assert diagnostics[0].severity == ("info" if expected == "ai_configuration_checked" else "error")
+    assert "secret-never-returned" not in str([item.model_dump() for item in diagnostics])
+    assert settings == before, "Preflight must not modify image permissions or configuration"
+
+
 def test_ai_result_parsers_accept_common_model_aliases() -> None:
     region = RegionDetectionResult.model_validate(
         {"bbox": [200, 100, 800, 900], "score": 0.7, "category": "pool"}

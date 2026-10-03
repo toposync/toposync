@@ -793,6 +793,7 @@ async def _build_pipeline_diagnostics_context(
         "data_dir": str(config_store.paths.data_dir),
         "compositions": [composition.model_dump(mode="json") for composition in cfg.compositions],
         "processing_server_id": processing_server_id,
+        "extension_settings": cfg.settings.model_dump(mode="json")["extensions"],
     }
     if processing_server_id == "local":
         return context

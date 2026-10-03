@@ -602,7 +602,9 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setError(null);
   }, [draft]);
 
-  const validateResolvedGraph = async (graph: Record<string, unknown>, compiledAlerts?: PipelineAlert[]): Promise<{ ok: true } | { ok: false; message: string }> => {
+  const validateResolvedGraph = async (
+    graph: Record<string, unknown>, compiledAlerts?: PipelineAlert[], allowDisabledDraft = false,
+  ): Promise<{ ok: true; diagnosticError?: string } | { ok: false; message: string }> => {
     if (!draft) return { ok: false, message: t("core.ui.pipelines.error.no_selection") };
 
     setTopologyValidationLoading(true);
@@ -613,12 +615,13 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       const nextAlerts = Array.isArray(output.alerts) ? output.alerts : [];
       setRecommendations(nextAlerts);
       setRecommendationsError(null);
-      const blocking = nextAlerts.find((alert) => alert.severity === "error") ?? null;
+      const blocking = nextAlerts.find((alert) => alert.severity === "error" || alert.code === "operator_diagnostics_failed") ?? null;
       if (blocking) {
         const localized = localizePipelineAlert(blocking, t);
         const message = localized.message || blocking.message || blocking.code;
         setTopologyValidationError(message);
         setTopologyValidationSuccessAt(null);
+        if (allowDisabledDraft && draft.enabled === false) return { ok: true, diagnosticError: message };
         return { ok: false, message };
       }
       setTopologyValidationSuccessAt(Date.now());
@@ -659,13 +662,14 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     const handle = window.setTimeout(() => {
       const run = async () => {
         try {
+          let output: { alerts?: PipelineAlert[] };
           if (mode === "python") {
             if (!pythonText.trim()) {
               setRecommendations([]);
               setRecommendationsError(null);
               return;
             }
-            const output = await compilePipelinePython(
+            output = await compilePipelinePython(
               {
                 ...draft,
                 editor_mode: "python",
@@ -673,31 +677,27 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               },
               { signal: controller.signal },
             );
-            if (cancelled) return;
-            setRecommendations(Array.isArray(output.alerts) ? output.alerts : []);
-            setRecommendationsError(null);
-            return;
+          } else {
+            const resolved =
+              mode === "interactive" && interactiveWarning && isRecord(draft.graph)
+                ? { ok: true as const, graph: draft.graph }
+                : resolveGraphFromActiveMode();
+            if (!resolved.ok) {
+              if (cancelled) return;
+              setRecommendations([]);
+              setRecommendationsError(resolved.message);
+              return;
+            }
+            output = await compilePipeline(
+              { ...draft, graph: resolved.graph },
+              { signal: controller.signal },
+            );
           }
-
-          const resolved =
-            mode === "interactive" && interactiveWarning && isRecord(draft.graph)
-              ? { ok: true as const, graph: draft.graph }
-              : resolveGraphFromActiveMode();
-          if (!resolved.ok) {
-            if (cancelled) return;
-            setRecommendations([]);
-            setRecommendationsError(resolved.message);
-            return;
-          }
-          const output = await compilePipeline(
-            { ...draft, graph: resolved.graph },
-            { signal: controller.signal },
-          );
           if (cancelled) return;
           const nextAlerts = Array.isArray(output.alerts) ? output.alerts : [];
           setRecommendations(nextAlerts);
           setRecommendationsError(null);
-          const blocking = nextAlerts.find((alert) => alert.severity === "error") ?? null;
+          const blocking = nextAlerts.find((alert) => alert.severity === "error" || alert.code === "operator_diagnostics_failed") ?? null;
           if (blocking) {
             const localized = localizePipelineAlert(blocking, t);
             setTopologyValidationError(localized.message || blocking.message || blocking.code);
@@ -859,6 +859,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setError(null);
 
     let updated: Pipeline;
+    let diagnosticError: string | null = null;
 
     if (mode === "python") {
       if (!pythonText.trim()) {
@@ -871,11 +872,12 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
           editor_mode: "python",
           python_source: pythonText,
         });
-        const validation = await validateResolvedGraph(compiled.graph, compiled.alerts ?? []);
+        const validation = await validateResolvedGraph(compiled.graph, compiled.alerts ?? [], true);
         if (!validation.ok) {
           setError(validation.message);
           return;
         }
+        diagnosticError = validation.diagnosticError ?? null;
         setGraphText(jsonPretty(compiled.graph ?? emptyGraph()));
         updated = {
           ...draft,
@@ -893,11 +895,12 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
         setError(resolved.message);
         return;
       }
-      const validation = await validateResolvedGraph(resolved.graph);
+      const validation = await validateResolvedGraph(resolved.graph, undefined, true);
       if (!validation.ok) {
         setError(validation.message);
         return;
       }
+      diagnosticError = validation.diagnosticError ?? null;
       updated = {
         ...draft,
         graph: resolved.graph,
@@ -914,8 +917,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       setDraft(saved);
       setGraphText(jsonPretty(saved.graph ?? emptyGraph()));
       setTopologyDirty(false);
-      setTopologyValidationError(null);
-      setTopologyValidationSuccessAt(Date.now());
+      setTopologyValidationError(diagnosticError);
+      setTopologyValidationSuccessAt(diagnosticError ? null : Date.now());
     } catch (err: any) {
       setError(String(err?.message ?? err));
     }
@@ -1212,7 +1215,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                 </section>
               ) : null}
 
-              {selectedServerStatus && !selectedServerStatus.ok ? (
+              {selectedServerStatus && !selectedServerStatus.ok && !recommendations.some(alert => alert.code === "processing_server_unavailable") ? (
                 <div className="pipelinesAlertRow isError">
                   <div className="pipelinesAlertBadge">{t("core.ui.processing_servers.status.offline")}</div>
                   <div className="pipelinesAlertText">
@@ -1251,7 +1254,9 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               {reviewPanels.filter(panel => panel.supports(topologyGraph)).map(panel => <React.Fragment key={panel.id}>{panel.render(topologyGraph)}</React.Fragment>)}
               {selected && draft.enabled !== selected.enabled ? (
                 <p className="pipelinesHint" role="status">{t(draft.enabled ? "core.ui.pipelines.activation_pending" : "core.ui.pipelines.deactivation_pending")}</p>
-              ) : selected?.enabled ? <p className="pipelinesHint" role="status">{t("core.ui.pipelines.execution_unknown")}</p> : null}
+              ) : selected?.enabled ? <p className="pipelinesHint" role="status">{t("core.ui.pipelines.execution_unknown")}</p>
+                : recommendations.some(alert => alert.severity === "error" || alert.code === "operator_diagnostics_failed")
+                  ? <p className="pipelinesHint" role="status">{t("core.ui.pipelines.disabled_with_issues")}</p> : null}
               <div className="pipelinesEditorControls">
                 <label className="pipelinesInlineToggle">
                   <input

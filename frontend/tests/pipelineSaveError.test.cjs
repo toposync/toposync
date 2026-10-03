@@ -173,3 +173,40 @@ test("unsaved enable and disable choices retain an explicit statement of the sto
     assert.doesNotMatch(html, /execution_unknown/);
   }
 });
+
+for (const mode of ["json", "python"]) {
+  for (const code of ["model_missing", "processing_server_unavailable", "operator_diagnostics_failed"]) {
+    test(`${mode}: ${code} allows a disabled draft without approving validation`, async () => {
+      const { context, render } = harness();
+      context.mode = mode;
+      context.draft.enabled = false;
+      context.selected.enabled = false;
+      context.pythonText = 'PIPELINE = core.synthetic_source() | vision.detect(model_id="absent")';
+      const alert = { code, severity: code === "operator_diagnostics_failed" ? "warning" : "error", message: "Prerequisite unavailable" };
+      context.compilePipeline = async () => ({ graph, alerts: [alert] });
+      context.compilePipelinePython = context.compilePipeline;
+      await context.handleSave();
+      assert.equal(context.putCalls.length, 1);
+      assert.equal(context.putCalls[0].updated.enabled, false);
+      assert.equal(context.topologyDirty, false);
+      assert.equal(context.topologyValidationError, alert.message);
+      assert.equal(context.topologyValidationSuccessAt, null);
+      assert.equal(context.error, null);
+      assert.match(renderToStaticMarkup(render()), /disabled_with_issues/);
+
+      context.draft.enabled = true;
+      await context.handleSave();
+      assert.equal(context.putCalls.length, 1, "The same prerequisite must prevent activation");
+      assert.equal(context.error, alert.message);
+    });
+  }
+}
+
+test("a disabled draft still requires a structurally compilable graph", async () => {
+  const { context } = harness();
+  context.draft.enabled = false;
+  context.compilePipeline = async () => { throw new Error("Missing input port"); };
+  await context.handleSave();
+  assert.equal(context.putCalls.length, 0);
+  assert.equal(context.error, "Missing input port");
+});

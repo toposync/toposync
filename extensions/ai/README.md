@@ -406,6 +406,13 @@ autorais não qualificam transcrição real em português, falas espontâneas, a
 reais ou desempenho geral. A narrativa anterior com oráculo insuficiente continua
 inconclusiva.
 
+Um piloto posterior com três áudios humanos portugueses do FLEURS não qualificou
+o fluxo completo: o transcritor tiny passou no critério de erro de palavras de
+um áudio, mas falhou nos outros dois. No primeiro, o Qwen3.5 9B confundiu negação
+de participação em um incidente com negação de ameaça e omitiu a atribuição
+explícita da fala. A revisão contextual em português permanece reprovada nesse
+caso; validação de substrings e testes de código não corrigem essa falha semântica.
+
 Resultados são temporários e descartados ao mudar a evidência ou voltar à janela.
 A revisão diferencia negação, citação/ficção, fala potencialmente ameaçadora,
 ausência de palavras ameaçadoras no trecho e contexto insuficiente. Essas classes

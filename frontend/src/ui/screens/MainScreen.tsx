@@ -1407,14 +1407,16 @@ export function MainScreen({
             >
               {visibleNotifications.length === 0 && !notificationsLoading && !notificationsError ? (
                 <div className="card">
-                  <div className="cardBody">
-                    {t(filter.query.trim() ? "core.ui.notifications.search_empty" : "core.ui.notifications_empty")}
+                  <div className="cardBody" style={{ display: "grid", gap: 12 }}>
+                    <p role="status" style={{ margin: 0 }}>{t(filter.query.trim() ? "core.ui.notifications.search_empty"
+                      : filterRestrictive ? "core.ui.notifications.filtered_empty" : "core.ui.notifications_empty")}</p>
+                    {filterRestrictive ? (
+                      <button type="button" className="chipButton" style={{ justifySelf: "start", minHeight: 44 }}
+                        onClick={() => setFilter({ priorities: [...ALL_PRIORITIES], types: [], query: "" })}>
+                        {t("core.ui.notifications.show_all_events")}
+                      </button>
+                    ) : null}
                   </div>
-                  {filterRestrictive ? (
-                    <button type="button" className="notificationsFilterLink" onClick={clearFilter}>
-                      {t("core.ui.notifications.filter.reset", {}, "Reset to defaults")}
-                    </button>
-                  ) : null}
                 </div>
               ) : null}
               {visibleNotifications.map((n) => {

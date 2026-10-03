@@ -161,8 +161,8 @@ export function CameraObservationPresetModal({
         </optgroup>)}
       </select>
     </label> : !audio ? <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.profile")}</p> : null}
-    {selectableCategories && <fieldset disabled={saving} style={{ margin: "0 0 16px", minWidth: 0 }}>
-      <legend>{t("ext.cameras.area.categories")}</legend>
+    {selectableCategories && <fieldset disabled={saving} style={{ margin: "0 0 16px", padding: 0, border: 0, minWidth: 0 }}>
+      <legend className="label" style={{ padding: 0 }}>{t("ext.cameras.area.categories")}</legend>
       {(["person", "cat", "dog"] as const).map(category => <label key={category} style={{ display: "inline-flex", alignItems: "center", gap: 8, minHeight: 44, marginRight: 16 }}>
         <input type="checkbox" checked={categories.includes(category)} onChange={event => setCategories(previous => event.target.checked ? [...previous, category] : previous.filter(value => value !== category))} />
         {t(`ext.cameras.area.category.${category}`)}
@@ -178,13 +178,15 @@ export function CameraObservationPresetModal({
       {loadingSignals ? <span role="status">{t("ext.cameras.visitor.loading")}</span> : signalsUnavailable || !signals.length ? <span role="status">{t("ext.cameras.visitor.unavailable")}</span> : null}
     </label>}
     <details><summary>{t("ext.cameras.cat.advanced")}</summary>
+      <div style={{ display: "grid", gap: "var(--space-4)", paddingTop: "var(--space-3)" }}>
       <label className="field"><span className="label">{t("ext.cameras.pipeline_preset.processing_server", {}, "Processing server")}</span>
         <select className="input" value={serverId} onChange={event => setServerId(event.target.value)} disabled={saving}>
           {processingServers.map(server => <option key={server.id} value={server.id}>{server.name || server.id}</option>)}
         </select>
       </label>
       <div className="field"><label className="label" htmlFor="cat-recipe-name">{t("ext.cameras.cat.name")}</label>
-        <input id="cat-recipe-name" className="input" value={name} onChange={(event) => setName(event.target.value)} disabled={saving} />
+        <input id="cat-recipe-name" className="input" maxLength={160} placeholder={t("ext.cameras.recipe.automatic_name")} value={name} onChange={(event) => setName(event.target.value)} disabled={saving} />
+      </div>
       </div>
     </details>
     <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.paused")}</p>

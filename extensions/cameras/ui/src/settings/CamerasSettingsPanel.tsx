@@ -1111,7 +1111,7 @@ function CamerasSettingsPanelContent({
 
   function handlePipelineCreated(pipelineName: string): void {
     setCreatedPipeline(pipelineName);
-    setPipelineNotice(t("ext.cameras.pipelines.created", { name: pipelineName }, "Pipeline created: {{name}}"));
+    setPipelineNotice(t("ext.cameras.pipelines.created", {}, "Recipe saved and disabled"));
     void reloadActiveCameraPipelines();
   }
 
@@ -2035,7 +2035,7 @@ function CamerasSettingsPanelContent({
 
       {activeCamera && (pipelinePresetOpen === "audio_anomaly" || pipelinePresetOpen === "cat_litter_use" || pipelinePresetOpen === "cat_drinking" || pipelinePresetOpen === "area_presence" || pipelinePresetOpen === "area_entry" || pipelinePresetOpen === "area_group_entry" || pipelinePresetOpen === "doorbell_visitor") ? (
         <CameraObservationPresetModal ui={ui} cameras={cameras} open preset={pipelinePresetOpen} camera={activeCamera}
-          activeSourceId={activeSourceId} pipelineOverview={cameraPipelines} mappedCompositions={mappedCompositions}
+          activeSourceId={activeSourceId} mappedCompositions={mappedCompositions}
           processingServers={processingServers} i18n={i18n} onClose={() => setPipelinePresetOpen(null)}
           onCreated={handlePipelineCreated} />
       ) : null}
@@ -2045,7 +2045,6 @@ function CamerasSettingsPanelContent({
           preset={pipelinePresetOpen}
           camera={activeCamera}
           activeSourceId={activeSourceId}
-          pipelineOverview={cameraPipelines}
           mappedCompositions={mappedCompositions}
           processingServers={processingServers}
           i18n={i18n}

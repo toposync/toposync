@@ -358,6 +358,49 @@ def test_recipe_preview_compiles_without_persisting_or_enabling(tmp_path, monkey
         assert created.status_code == 200, created.text
         saved = client.get(f"/api/pipelines/{created.json()['pipeline_name']}").json()
         assert saved["graph"] == proposed["graph"]
+        assert saved["display_name"] == proposed["display_name"] == "Entrada em área · Entrada Principal"
+
+
+@pytest.mark.parametrize("camera_name", ["Entrada Principal", "Câmera " + "á" * 180])
+def test_recipe_default_names_distinguish_siblings_without_changing_existing_names(
+    tmp_path, monkeypatch, camera_name
+):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client, name=camera_name)
+        route = "/api/cameras/cameras/cam1/pipelines/presets"
+        saved = []
+        for _ in range(2):
+            preview = client.post(route + "/preview", json={"preset": "people_simple"})
+            assert preview.status_code == 200, preview.text
+            created = client.post(route, json={"preset": "people_simple"})
+            assert created.status_code == 200, created.text
+            pipeline = client.get("/api/pipelines/" + created.json()["pipeline_name"]).json()
+            assert pipeline["display_name"] == preview.json()["pipeline"]["display_name"]
+            assert pipeline["name"].isidentifier() and len(pipeline["name"]) <= 120
+            assert len(pipeline["display_name"]) <= 160
+            assert pipeline["enabled"] is False
+            saved.append(pipeline)
+        assert saved[0]["display_name"] == f"Detecção de pessoas · {camera_name}"[:160]
+        assert saved[1]["display_name"].endswith(" (2)")
+        assert saved[1]["name"] != saved[0]["name"]
+        assert client.get("/api/pipelines/" + saved[0]["name"]).json() == saved[0]
+
+
+@pytest.mark.parametrize("name", ["  Atenção à entrada  ", "Á" * 160])
+def test_recipe_custom_name_keeps_spaces_and_accents(tmp_path, monkeypatch, name):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        route = "/api/cameras/cameras/cam1/pipelines/presets"
+        body = {"preset": "people_simple", "pipeline_name": name}
+        preview = client.post(route + "/preview", json=body)
+        assert preview.status_code == 200, preview.text
+        created = client.post(route, json=body)
+        assert created.status_code == 200, created.text
+        pipeline = client.get("/api/pipelines/" + created.json()["pipeline_name"]).json()
+        assert pipeline["display_name"] == preview.json()["pipeline"]["display_name"] == name.strip()
+        assert pipeline["name"].isidentifier() and len(pipeline["name"]) <= 120
+        assert client.post(route, json=body).status_code == 409
+        assert client.post(route, json={**body, "pipeline_name": "a" * 161}).status_code == 422
 
 
 def test_assistant_creates_reviewed_recipe_and_undo_preserves_concurrent_changes(tmp_path, monkeypatch):
@@ -385,8 +428,12 @@ def test_assistant_creates_reviewed_recipe_and_undo_preserves_concurrent_changes
         proposed = response.json()
         name = proposed["pipeline_name"]
         assert client.get(f"/api/pipelines/{name}").status_code == 404
+        _configure_camera(client, name="Entrada renomeada")
+        assert client.post(f"/api/ai/assistant/apply/{proposed['proposal_id']}").status_code == 409
+        _configure_camera(client)
         applied = client.post(f"/api/ai/assistant/apply/{proposed['proposal_id']}")
         assert applied.status_code == 200, applied.text
+        assert applied.json()["pipeline"]["display_name"] == "Entrada em área · Entrada Principal"
         saved = applied.json()["pipeline"]
         assert saved["enabled"] is False
         assert _node_config(saved, "camera.area_occurrence")["mode"] == "entry"
@@ -478,14 +525,14 @@ def _normalized_edge(edge: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _configure_camera(client: TestClient) -> None:
+def _configure_camera(client: TestClient, *, name: str = "Entrada Principal") -> None:
     res = client.patch(
         "/api/settings/extensions/com.toposync.cameras",
         json={
             "devices": [
                 {
                     "id": "cam1",
-                    "name": "Entrada Principal",
+                    "name": name,
                     "control": {"type": "none"},
                     "sources": [
                         {

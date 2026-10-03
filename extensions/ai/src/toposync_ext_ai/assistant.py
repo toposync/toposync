@@ -244,7 +244,6 @@ def install_assistant_routes(app: FastAPI, router: AiRouter) -> None:
         specification = {"camera_id": selected.camera_id, "recipe": recipe}
         result = await services.call("cameras.pipelines.preview", request=request, **specification)
         after = Pipeline.model_validate(result["pipeline"])
-        recipe["pipeline_name"] = after.name
         source = next(s for s in camera["sources"] if s["id"] == selected.source_id)
         changes = [catalog["recipes"][selected.preset], f"Câmera: {camera['name']} · fonte: {source['name']}"]
         if selected.area_id:

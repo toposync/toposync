@@ -54,6 +54,7 @@ export const catActivityTranslations = {
     "ext.cameras.cat.paused": "Saved disabled. Review it in the pipeline editor before activating.",
     "ext.cameras.cat.advanced": "More options",
     "ext.cameras.cat.name": "Recipe name",
+    "ext.cameras.recipe.automatic_name": "Automatic name from the recipe and camera",
   },
   "pt-BR": {
     "ext.cameras.audioRecipe.compare": "Comparar outra câmera",
@@ -110,5 +111,6 @@ export const catActivityTranslations = {
     "ext.cameras.cat.paused": "Salva desativada. Revise pelo editor de fluxos antes de ativar.",
     "ext.cameras.cat.advanced": "Mais opções",
     "ext.cameras.cat.name": "Nome da receita",
+    "ext.cameras.recipe.automatic_name": "Nome automático pela receita e câmera",
   },
 };

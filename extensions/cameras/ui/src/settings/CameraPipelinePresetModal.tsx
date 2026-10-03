@@ -12,7 +12,6 @@ import type {
   CameraContextComposition,
   CameraNotificationPriority,
   CameraPipelinePreset,
-  CameraPipelinesResponse,
   ProcessingServer,
 } from "../types";
 import { SubModal } from "../ui/SubModal";
@@ -30,81 +29,8 @@ import {
 
 type TranslateFn = ReturnType<HostI18n["useI18n"]>["t"];
 
-const PYTHON_KEYWORDS = new Set([
-  "False",
-  "None",
-  "True",
-  "and",
-  "as",
-  "assert",
-  "async",
-  "await",
-  "break",
-  "class",
-  "continue",
-  "def",
-  "del",
-  "elif",
-  "else",
-  "except",
-  "finally",
-  "for",
-  "from",
-  "global",
-  "if",
-  "import",
-  "in",
-  "is",
-  "lambda",
-  "nonlocal",
-  "not",
-  "or",
-  "pass",
-  "raise",
-  "return",
-  "try",
-  "while",
-  "with",
-  "yield",
-]);
-
-function safePipelineName(value: string): string {
-  const cleaned = String(value || "")
-    .replace(/[^A-Za-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  let out = cleaned || "pipeline";
-  if (!/^[A-Za-z_]/.test(out)) out = `_${out}`;
-  if (PYTHON_KEYWORDS.has(out)) out = `${out}_`;
-  return out.slice(0, 120);
-}
-
-function pipelineNamePart(value: string, fallback: string): string {
-  const cleaned = String(value || "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^A-Za-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toLowerCase();
-  return cleaned || fallback;
-}
-
-function presetNamePart(preset: CameraPipelinePreset): string {
-  if (preset === "people_simple") return "deteccao_simples_de_pessoas";
-  if (preset === "people_quiet") return "presenca_agrupada_de_pessoas";
-  if (preset === "presence_area") return "presenca_agrupada_em_area";
-  if (preset === "vehicle_stopped") return "veiculo_parou";
-  if (preset === "person_stopped") return "pessoa_parou";
-  if (preset === "person_vehicle_interaction") return "interacao_pessoa_veiculo";
-  return "evento_individual_de_pessoas";
-}
-
 function presetRequiresMapping(preset: CameraPipelinePreset): boolean {
   return preset !== "people_simple";
-}
-
-function defaultPipelineName(camera: CameraConfig, preset: CameraPipelinePreset): string {
-  const cameraPart = pipelineNamePart(camera.name || camera.id, "camera");
-  return safePipelineName(`${cameraPart}_${presetNamePart(preset)}`);
 }
 
 function defaultNotificationPriority(preset: CameraPipelinePreset): CameraNotificationPriority {
@@ -232,7 +158,6 @@ export function CameraPipelinePresetModal({
   preset,
   camera,
   activeSourceId,
-  pipelineOverview,
   mappedCompositions,
   processingServers,
   i18n,
@@ -243,7 +168,6 @@ export function CameraPipelinePresetModal({
   preset: CameraPipelinePreset | null;
   camera: CameraConfig;
   activeSourceId: string;
-  pipelineOverview: CameraPipelinesResponse | null;
   mappedCompositions: CameraContextComposition[];
   processingServers: ProcessingServer[];
   i18n: HostI18n;
@@ -254,7 +178,6 @@ export function CameraPipelinePresetModal({
   const formId = React.useId();
   const [sourceId, setSourceId] = useState("");
   const [pipelineName, setPipelineName] = useState("");
-  const [suggestedName, setSuggestedName] = useState("");
   const [compositionId, setCompositionId] = useState("");
   const [areaId, setAreaId] = useState("");
   const [orientationReference, setOrientationReference] = useState("");
@@ -290,12 +213,8 @@ export function CameraPipelinePresetModal({
       videoSources[0] ??
       null;
     const nextSourceId = nextSource?.id ?? "";
-    const nextSuggested =
-      pipelineOverview?.suggested_pipeline_names?.[preset] ??
-      defaultPipelineName(camera, preset);
     setSourceId(nextSourceId);
-    setSuggestedName(nextSuggested);
-    setPipelineName(nextSuggested);
+    setPipelineName("");
     setCompositionId(mappedCompositions[0]?.id ?? "");
     setAreaId("");
     setOrientationReference("");
@@ -316,7 +235,7 @@ export function CameraPipelinePresetModal({
     setModelInstallError(null);
     setCreating(false);
     setError(null);
-  }, [activeSourceId, camera, mappedCompositions, open, pipelineOverview, preset, videoSources]);
+  }, [activeSourceId, camera, mappedCompositions, open, preset, videoSources]);
 
   const normalizedProcessingServerId = normalizeServerId(processingServerId);
   const detectionModels = useMemo(() => readDetectionModelCatalog(modelStatusPayload), [modelStatusPayload]);
@@ -354,15 +273,11 @@ export function CameraPipelinePresetModal({
 
   function updateSource(nextSourceId: string): void {
     const nextSource = videoSources.find((source) => source.id === nextSourceId) ?? null;
-    const nextSuggested = preset ? defaultPipelineName(camera, preset) : "";
-    const previousSuggested = suggestedName;
     setSourceId(nextSourceId);
     if (nextSource?.origin.has_ptz !== true) {
       setEnablePtzAttention(false);
       setNativeTrackingDisabledConfirmed(false);
     }
-    setSuggestedName(nextSuggested);
-    if (!pipelineName.trim() || pipelineName === previousSuggested) setPipelineName(nextSuggested);
   }
 
   function updateArea(nextAreaId: string): void {
@@ -389,7 +304,7 @@ export function CameraPipelinePresetModal({
       const response = await createCameraPipelinePreset(camera.id, {
         preset,
         source_id: sourceId,
-        pipeline_name: pipelineName.trim() && pipelineName.trim() !== suggestedName ? pipelineName.trim() : "",
+        pipeline_name: pipelineName.trim(),
         enabled: false,
         processing_server_id: processingServerId,
         model_id: modelId,
@@ -588,6 +503,11 @@ export function CameraPipelinePresetModal({
         </div>
 
         <details open={showModelReadinessNotice || undefined}><summary>{t("ext.cameras.cat.advanced")}</summary>
+        <div style={{ display: "grid", gap: "var(--space-4)", paddingTop: "var(--space-3)" }}>
+        <div className="field">
+          <label className="label" htmlFor={`${formId}-pipeline-name`}>{t("ext.cameras.pipeline_preset.pipeline_name", {}, "Pipeline name")}</label>
+          <input id={`${formId}-pipeline-name`} className="input" value={pipelineName} maxLength={160} placeholder={t("ext.cameras.recipe.automatic_name")} onChange={(event) => setPipelineName(event.target.value)} disabled={creating} />
+        </div>
           <div className="field">
             <label className="label" htmlFor={`${formId}-processing-server`}>{t("ext.cameras.pipeline_preset.processing_server", {}, "Processing server")}</label>
             <select id={`${formId}-processing-server`} className="input" value={processingServerId} onChange={(event) => setProcessingServerId(event.target.value)} disabled={creating}>
@@ -759,6 +679,7 @@ export function CameraPipelinePresetModal({
           ) : null}
         </div>
 
+        </div>
         </details>
 
         {isMappingPreset ? (
@@ -880,11 +801,6 @@ export function CameraPipelinePresetModal({
             {t("ext.cameras.pipeline_preset.orientation.help", {}, "Describe a visible reference, such as the white facade in the background. Uses the configured visual AI profile. Hidden or ambiguous references remain unavailable; does not infer gaze or intent.")}
           </p>
         </details> : null}
-
-        <div className="field">
-          <label className="label" htmlFor={`${formId}-pipeline-name`}>{t("ext.cameras.pipeline_preset.pipeline_name", {}, "Pipeline name")}</label>
-          <input id={`${formId}-pipeline-name`} className="input" value={pipelineName} onChange={(event) => setPipelineName(safePipelineName(event.target.value))} disabled={creating} />
-        </div>
 
         <div className="field">
           <label className="label" htmlFor={`${formId}-notification-priority`}>{t("ext.cameras.pipeline_preset.notification_priority", {}, "Notification priority")}</label>

@@ -91,7 +91,7 @@ function CameraRecipeReview({ graph, i18n }: { graph: unknown; i18n: HostI18n })
           : node.operator === "camera.area_occurrence" ? `${node.config.mode === "entry" ? text("Entrada", "Entry") : text("Presença", "Presence")} · ${areaName(node)}`
           : text("Detecção visual", "Visual detection")}
         {Array.isArray(node.config.categories) ? ` · ${node.config.categories.map(category => ({ person: text("pessoa", "person"), cat: text("gato", "cat"), dog: text("cão", "dog") })[String(category)] || String(category)).join(", ")}` : ""}
-        {typeof (node.config.minimum_duration_seconds ?? node.config.min_stationary_seconds) === "number" ? ` · ${text("duração mínima", "minimum duration")}: ${node.config.minimum_duration_seconds ?? node.config.min_stationary_seconds} s` : ""}
+        {typeof (node.config.minimum_duration_seconds ?? node.config.min_stationary_seconds) === "number" ? ` · ${text("duração mínima", "minimum duration")}: ${new Intl.NumberFormat(locale, { maximumFractionDigits: 3 }).format((node.config.minimum_duration_seconds ?? node.config.min_stationary_seconds) as number)} s` : ""}
       </p>)}
       {nodes.filter(node => node.operator === "camera.area_restriction").map(node => <p key={node.id} style={{ margin: "8px 0 0" }}>{text("Área", "Area")}: {node.config.composition_id
         ? areasOf(node).map(area => areaName(node, area)).join(", ")

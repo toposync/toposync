@@ -237,6 +237,22 @@ PRESET_PIPELINE_NAME_PARTS = {
     "person_stopped": "pessoa_parou",
     "person_vehicle_interaction": "interacao_pessoa_veiculo",
 }
+PRESET_PIPELINE_LABELS = {
+    "audio_anomaly": "Som acima da referência",
+    "area_presence": "Presença em área",
+    "area_entry": "Entrada em área",
+    "area_group_entry": "Pessoas entrando juntas",
+    "doorbell_visitor": "Visitante e sinal de campainha",
+    "cat_litter_use": "Atividade na caixa de areia",
+    "cat_drinking": "Gato bebendo água",
+    "people_simple": "Detecção de pessoas",
+    "people_individual": "Ocorrências individuais de pessoas",
+    "people_quiet": "Presença agrupada de pessoas e pets",
+    "presence_area": "Presença agrupada por proximidade",
+    "vehicle_stopped": "Veículo parado",
+    "person_stopped": "Pessoa parada",
+    "person_vehicle_interaction": "Pessoa próxima de veículo",
+}
 
 
 class RtspSnapshotRequest(BaseModel):
@@ -737,7 +753,7 @@ class CameraPipelinePresetRequest(BaseModel):
     audio_baseline: AudioBaseline | None = None
     audio_peer: AudioPeerSource | None = None
     retain_audio: bool = False
-    pipeline_name: str = ""
+    pipeline_name: str = Field(default="", max_length=160)
     enabled: bool = False
     processing_server_id: str = "local"
     model_id: str = ""
@@ -5279,6 +5295,18 @@ class CamerasExtension(BaseExtension):
                     return candidate
                 suffix += 1
 
+        def _preset_display_name(camera: dict[str, Any], preset: str, pipelines: list[Pipeline]) -> str:
+            camera_label = str(camera.get("name") or "").strip() or "Câmera"
+            base = f"{PRESET_PIPELINE_LABELS[preset]} · {camera_label}"[:160]
+            existing_labels = {pipeline.display_name or pipeline.name for pipeline in pipelines}
+            candidate = base
+            suffix = 2
+            while candidate in existing_labels:
+                ending = f" ({suffix})"
+                candidate = f"{base[:160 - len(ending)].rstrip()}{ending}"
+                suffix += 1
+            return candidate
+
         def _default_mapped_composition_id(cfg: Any, *, camera_id: str) -> str | None:
             cid = str(camera_id or "").strip()
             if not cid:
@@ -6054,7 +6082,8 @@ class CamerasExtension(BaseExtension):
                     )
 
             requested_name = str(body.pipeline_name or "").strip()
-            existing_names = {p.name for p in await store.list_pipelines()}
+            existing_pipelines = await store.list_pipelines()
+            existing_names = {p.name for p in existing_pipelines}
 
             if requested_name:
                 pipeline_name = safe_pipeline_name(requested_name)
@@ -6165,6 +6194,7 @@ class CamerasExtension(BaseExtension):
 
             pipeline = Pipeline(
                 name=pipeline_name,
+                display_name=requested_name or _preset_display_name(camera, preset, existing_pipelines),
                 enabled=False,
                 processing_server_id=processing_server_id,
                 editor_mode="interactive",

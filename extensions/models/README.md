@@ -162,4 +162,16 @@ The worker uses the installed rembg adapter with an explicitly local weight path
 
 Masks whose foreground occupies less than 0.5% or more than 98% of pixels are rejected before loading the 3D model. These are degeneracy checks, **not** proof of an object, a quality score, or a reliable detector of all empty scenes. Prefer a single object against a contrasting background. Complex scenes, thin structures, occlusion and reflective/transparent objects remain unqualified. The evaluated examples are two controlled chair backgrounds and one ordinary coffee photograph; this is not a broad benchmark.
 
+A separate single-image evaluation used the [YCB 004 sugar box](https://ycb-benchmarks.s3.amazonaws.com/index.html)
+with an explicit six-point contour. The automatic cutout retained the calibration
+board; the manual contour removed it before generation. After rigid alignment
+and one uniform scale using the nominal 175 mm height, the two smaller oriented
+dimensions differed from the scanned reference by 2.1% and 3.0%. Orthographic
+silhouette overlap was 0.932–0.942. The existing orientation and height controls
+preserved the generated model and its provenance after reopening. These results
+qualify this outlined box as an approximation: surfaces remain rough, texture
+details are distorted, hidden surfaces are inferred, and the imposed height is
+not a measurement. They do not overturn the earlier brick's dimensional failure
+or qualify automatic segmentation, other objects or metric reconstruction.
+
 Generated provenance records `background_removal.method` as `provided_alpha` or `estimated`; estimated masks also identify the provider and weight hash. The editor labels automatic background removal and asks the user to inspect outline and orientation. Approximate geometry still requires manual orientation/scale correction when necessary. Segmentation sessions are released before 3D model loading, within the existing bounded worker lifecycle.

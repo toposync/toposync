@@ -73,10 +73,14 @@ class AiExtension(BaseExtension):
         data_dir = getattr(getattr(config_store, "paths", None), "data_dir", None)
         router = AiRouter(config_store=config_store, data_dir=data_dir)
 
-        install_assistant_routes(app, router)
-        install_text_history_routes(app, services)
-        install_history_answer_routes(app, services, router)
-        install_transcription_review_routes(app, router)
+        # Processing workers share inference services but do not own the host's
+        # application authorization or notification history.
+        if getattr(app.state, "auth", None) is not None:
+            install_assistant_routes(app, router)
+        if getattr(app.state, "notifications", None) is not None:
+            install_text_history_routes(app, services)
+            install_history_answer_routes(app, services, router)
+            install_transcription_review_routes(app, router)
         services.register("ai.jev.evaluate_event_text", evaluate_event_text)
 
         services.register("ai.catalog.list", lambda: list_builtin_model_catalog())

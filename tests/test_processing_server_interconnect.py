@@ -40,6 +40,61 @@ from toposync.runtime.pipelines.distributed import processing_server as processi
 _PROCESSING_TEST_METRIC_ID = "test.processing.score"
 
 
+def test_ai_inventory_is_checked_by_the_worker_over_http_without_configuration_changes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import toposync.extensions.manager as extension_manager
+    from toposync_ext_ai.plugin import AiExtension
+    from toposync_ext_ai.pipelines import register_ai_pipeline_operators
+
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "worker"))
+    monkeypatch.setenv("TOPOSYNC_PROCESSING_USERNAME", "fixture")
+    monkeypatch.setenv("TOPOSYNC_PROCESSING_PASSWORD", "fixture-password")
+    monkeypatch.setenv("TOPOSYNC_ROLE", "processing")
+    monkeypatch.setattr(extension_manager, "_iter_entry_points", lambda _group: [
+        SimpleNamespace(name="ai", value="toposync_ext_ai.plugin:AiExtension", load=lambda: AiExtension)
+    ])
+    calls = []
+
+    async def list_models(provider):
+        calls.append(threading.current_thread().name)
+        assert calls[-1] == "test-toposync-processing-server", "The origin must not query the provider"
+        assert provider._provider.host == "http://worker-provider.invalid:11434"
+        return [{"name": "worker-model"}]
+
+    def must_not_infer(*_args, **_kwargs):
+        pytest.fail("Inventory validation must not construct an inference provider")
+
+    monkeypatch.setattr("toposync_ext_ai.router.OllamaProvider.list_models", list_models)
+    monkeypatch.setattr("toposync_ext_ai.router.build_provider", must_not_infer)
+    app = create_processing_app()
+    server = _LiveProcessingServer(app)
+    server.start()
+    try:
+        assert "ai.infer.locate_region" in app.state.services._services
+        assert "ai.infer.evaluate_condition" in app.state.services._services
+        assert not any(route.path.startswith(("/api/ai/history/", "/api/ai/assistant/")) for route in app.routes)
+        config_path = app.state.config_store.paths.config_path
+        before = config_path.read_bytes()
+        registry = OperatorRegistry()
+        register_ai_pipeline_operators(registry)
+        diagnostics = registry.collect_diagnostics("ai.smart_crop", {
+            "profile_id": "selected", "target_description": "Observe an object",
+        }, {
+            "processing_server_id": "worker", "check_runtime_prerequisites": True,
+            "processing_server": {"url": server.base_url, "username": "fixture", "password": "fixture-password"},
+            "extension_settings": {"com.toposync.ai": {
+                "providers": [{"id": "worker-provider", "host": "http://worker-provider.invalid:11434"}],
+                "profiles": [{"id": "selected", "provider_id": "worker-provider", "model": "worker-model"}],
+            }},
+        })
+        assert [item.code for item in diagnostics] == ["ai_model_inventory_checked"]
+        assert calls == ["test-toposync-processing-server"]
+        assert config_path.read_bytes() == before, "Checking a proposed provider must not persist its settings"
+    finally:
+        server.stop()
+    assert server._thread is not None and not server._thread.is_alive()
+
+
 def test_http_open_subscription_rotates_epoch_without_frames_and_rejects_old_ack(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

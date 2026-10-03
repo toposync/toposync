@@ -767,12 +767,49 @@ def _serialize_compiled_pipeline(pipeline: CompiledPipeline) -> dict[str, Any]:
     }
 
 
-async def _build_pipeline_diagnostics_context(config_store: ConfigStore) -> dict[str, Any]:
+def _http_processing_transport(
+    server: ProcessingServer, *, timeout_s: float
+) -> HttpProcessingTransport:
+    return HttpProcessingTransport(
+        base_url=server.url,
+        username=getattr(server, "username", ""),
+        password=getattr(server, "password", ""),
+        timeout_s=timeout_s,
+    )
+
+
+async def _close_processing_transport(transport: HttpProcessingTransport) -> None:
+    with suppress(Exception):
+        await transport.close()
+
+
+async def _build_pipeline_diagnostics_context(
+    config_store: ConfigStore, *, processing_server_id: str = "local"
+) -> dict[str, Any]:
     cfg = await config_store.get_config()
-    return {
+    context: dict[str, Any] = {
         "data_dir": str(config_store.paths.data_dir),
         "compositions": [composition.model_dump(mode="json") for composition in cfg.compositions],
+        "processing_server_id": processing_server_id,
     }
+    if processing_server_id == "local":
+        return context
+    servers = await config_store.list_processing_servers()
+    server = next((item for item in servers if item.id == processing_server_id), None)
+    if server is None:
+        raise HTTPException(status_code=400, detail="Unknown processing server")
+    if server.kind != "http":
+        raise HTTPException(status_code=400, detail="Unsupported processing server kind")
+    transport = _http_processing_transport(server, timeout_s=5.0)
+    try:
+        context["processing_server_status"] = await transport.status()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="Processing server diagnostics unavailable"
+        ) from exc
+    finally:
+        await _close_processing_transport(transport)
+    return context
 
 
 class PipelinePreviewFallbackSnapshotRequest(BaseModel):
@@ -1618,20 +1655,6 @@ def create_app() -> FastAPI:
             "role": str(principal.role or "").strip(),
             "bypass": bool(principal.bypass),
         }
-
-    def _http_processing_transport(
-        server: ProcessingServer, *, timeout_s: float
-    ) -> HttpProcessingTransport:
-        return HttpProcessingTransport(
-            base_url=server.url,
-            username=getattr(server, "username", ""),
-            password=getattr(server, "password", ""),
-            timeout_s=timeout_s,
-        )
-
-    async def _close_processing_transport(transport: HttpProcessingTransport) -> None:
-        with suppress(Exception):
-            await transport.close()
 
     @app.middleware("http")
     async def auth_and_extension_guard(
@@ -3449,7 +3472,9 @@ def create_app() -> FastAPI:
                 for signature, occurrences in compiled.shared_signatures.items()
             }
             check_cancelled()
-            context = await _build_pipeline_diagnostics_context(config_store)
+            context = await _build_pipeline_diagnostics_context(
+                config_store, processing_server_id=body.pipeline.processing_server_id
+            )
             check_cancelled()
             alerts = await asyncio.to_thread(
                 analyze_compiled_pipeline,
@@ -3526,7 +3551,9 @@ def create_app() -> FastAPI:
                 for signature, occurrences in compiled.shared_signatures.items()
             }
             check_cancelled()
-            context = await _build_pipeline_diagnostics_context(config_store)
+            context = await _build_pipeline_diagnostics_context(
+                config_store, processing_server_id=body.pipeline.processing_server_id
+            )
             check_cancelled()
             alerts = await asyncio.to_thread(
                 analyze_compiled_pipeline,

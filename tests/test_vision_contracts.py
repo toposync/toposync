@@ -460,6 +460,43 @@ def test_vision_operator_diagnostics_report_missing_model_artifact(
     )
 
 
+@pytest.mark.parametrize("task,operator", [
+    ("detection", "vision.detect"),
+    ("pose", "vision.pose_estimate"),
+    ("segmentation", "vision.segment_instances"),
+    ("classification", "vision.classify_image"),
+])
+def test_vision_diagnostics_use_selected_server_inventory(task, operator, monkeypatch) -> None:
+    import toposync_ext_vision.pipelines.operators as operators
+
+    def forbid_local_registry(_context):
+        pytest.fail("Remote model diagnostics must not inspect the local registry")
+
+    monkeypatch.setattr(operators, "_vision_registry_from_context", forbid_local_registry)
+    registry = OperatorRegistry()
+    register_vision_pipeline_operators(registry)
+    model = {"model_id": "remote_only", "task": task, "artifact_exists": True}
+    context = {
+        "processing_server_id": "remote",
+        "processing_server_status": {"vision": {"models_installed": [model]}},
+    }
+    assert registry.collect_diagnostics(operator, {"model_id": "remote_only"}, context) == []
+    assert registry.collect_diagnostics(operator, {"model_id": ""}, context) == []
+    model["artifact_exists"] = False
+    missing = registry.collect_diagnostics(operator, {"model_id": "remote_only"}, context)
+    assert missing[0].code == "vision_model_artifact_missing"
+    assert missing[0].details["model_id"] == "remote_only"
+    model["task"] = "wrong_task"
+    unresolved = registry.collect_diagnostics(operator, {"model_id": "remote_only"}, context)
+    assert unresolved[0].code == "vision_model_unresolved"
+    model["task"] = task
+    context["processing_server_status"]["vision"]["models_installed"].append(dict(model))
+    ambiguous = registry.collect_diagnostics(operator, {"model_id": ""}, context)
+    assert ambiguous[0].code == "vision_model_unresolved"
+    context["processing_server_status"] = {}
+    assert registry.collect_diagnostics(operator, {"model_id": "remote_only"}, context)[0].severity == "error"
+
+
 def test_register_vision_pipeline_operators_exposes_classification() -> None:
     registry = OperatorRegistry()
 

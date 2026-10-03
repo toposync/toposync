@@ -608,6 +608,72 @@ def test_pipeline_payload_validation(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert res.status_code == 422
 
 
+@pytest.mark.parametrize("editor_mode", ["json", "python"])
+def test_compile_checks_selected_server_and_closes_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, editor_mode: str
+) -> None:
+    import httpx
+    from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport
+
+    clients = []
+    requests = []
+    remote_status = {"vision": {"models_installed": [
+        {"model_id": "remote_only", "task": "detection", "artifact_exists": True},
+    ]}}
+    unavailable = False
+
+    def respond(request):
+        requests.append((request.method, str(request.url)))
+        assert request.url.path == "/api/processing/status"
+        return httpx.Response(503 if unavailable else 200, json=remote_status)
+
+    async def ensure_client(transport):
+        if transport._client is None:
+            transport._client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+            clients.append(transport._client)
+        return transport._client
+
+    monkeypatch.setattr(HttpProcessingTransport, "_ensure_client", ensure_client)
+    with _create_client(tmp_path, monkeypatch) as client:
+        _register_preview_test_operators(client)
+        response = client.put("/api/processing-servers/remote", json={
+            "id": "remote", "name": "Remote fixture", "kind": "http", "url": "http://remote.invalid",
+        })
+        assert response.status_code == 200
+        pipeline = {
+            "name": "remote_diagnostic", "enabled": False, "processing_server_id": "remote",
+            "editor_mode": editor_mode,
+            "graph": _v2_graph("remote_diagnostic", nodes=[
+                {"id": "source", "operator": "core.synthetic_source", "config": {}},
+                {"id": "detect", "operator": "vision.detect", "config": {"model_id": "remote_only"}},
+            ], edges=[{
+                "from": {"node": "source", "port": "out"},
+                "to": {"node": "detect", "port": "in"},
+            }]),
+            "python_source": (
+                'PIPELINE = core.synthetic_source(_id="source") '
+                '| vision.detect(_id="detect", model_id="remote_only")'
+            ),
+        }
+        endpoint = "/api/pipelines/compile-python" if editor_mode == "python" else "/api/pipelines/compile"
+        response = client.post(endpoint, json={"pipeline": pipeline})
+        assert response.status_code == 200, response.text
+        assert not any(a["code"].startswith("vision_model_") for a in response.json()["alerts"])
+        pipeline["processing_server_id"] = "local"
+        response = client.post(endpoint, json={"pipeline": pipeline})
+        assert response.status_code == 200
+        assert any(a["code"] == "vision_model_unresolved" for a in response.json()["alerts"])
+        assert len(requests) == 1, "Local compilation must not contact a remote server"
+        pipeline["processing_server_id"] = "remote"
+        unavailable = True
+        response = client.post(endpoint, json={"pipeline": pipeline})
+        assert response.status_code == 503
+        assert response.json()["detail"] == "Processing server diagnostics unavailable"
+        assert requests == [("GET", "http://remote.invalid/api/processing/status")] * 2
+        assert all(item.is_closed for item in clients)
+        assert client.get("/api/pipelines").json()["pipelines"] == []
+
+
 def test_pipeline_rejects_edges_from_sink_operators(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

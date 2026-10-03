@@ -263,9 +263,29 @@ def _vision_model_diagnostics(task: str) -> Any:
     def collect(config: dict[str, Any], context: dict[str, Any]) -> list[OperatorDiagnostic]:
         model_id = str(config.get("model_id") or "").strip().lower()
         try:
-            manifest = _resolve_task_manifest(
-                _vision_registry_from_context(context), task, model_id
-            )
+            if context.get("processing_server_id", "local") != "local":
+                status = context.get("processing_server_status")
+                vision = status.get("vision") if isinstance(status, dict) else None
+                models = vision.get("models_installed") if isinstance(vision, dict) else None
+                if not isinstance(models, list):
+                    raise ValueError("The selected processing server did not provide a model inventory")
+                matches = [
+                    item for item in models
+                    if isinstance(item, dict) and item.get("task") == task
+                    and (not model_id or item.get("model_id") == model_id)
+                ]
+                if len(matches) != 1:
+                    raise ValueError(f"No unambiguous {task} model on the selected processing server: {model_id}")
+                artifact_exists = matches[0].get("artifact_exists") is True
+                resolved_model_id = str(matches[0].get("model_id") or model_id)
+                display_name = resolved_model_id
+            else:
+                manifest = _resolve_task_manifest(
+                    _vision_registry_from_context(context), task, model_id
+                )
+                artifact_exists = manifest.resolve_artifact_path().is_file()
+                resolved_model_id = manifest.model_id
+                display_name = str(getattr(manifest, "display_name", "") or "").strip() or manifest.model_id
         except Exception as exc:  # noqa: BLE001
             return [
                 OperatorDiagnostic(
@@ -280,11 +300,9 @@ def _vision_model_diagnostics(task: str) -> Any:
                 )
             ]
 
-        artifact_path = manifest.resolve_artifact_path()
-        if artifact_path.is_file():
+        if artifact_exists:
             return []
 
-        display_name = str(getattr(manifest, "display_name", "") or "").strip() or manifest.model_id
         return [
             OperatorDiagnostic(
                 severity="error",
@@ -294,7 +312,7 @@ def _vision_model_diagnostics(task: str) -> Any:
                     "Open this step and prepare or upload the model artifact, "
                     "or choose another model that is already available."
                 ),
-                details={"task": task, "model_id": manifest.model_id, "model": display_name},
+                details={"task": task, "model_id": resolved_model_id, "model": display_name},
             )
         ]
 

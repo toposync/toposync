@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
+from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME
 from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, OperatorRegistry, payload_path_hint
 
 from toposync_ext_ai.constants import EXTENSION_ID
+from toposync_ext_ai.catalog import normalize_model_ref
 from toposync_ext_ai.router import AiRouter
 from toposync_ext_ai.settings import parse_ai_settings
 
@@ -56,6 +60,51 @@ def _ai_expression_hints(*, task: str) -> list[Any]:
     return hints
 
 
+async def _check_ollama_inventory(profiles: list[Any], context: dict[str, Any]) -> str:
+    cache = context.setdefault("ai_provider_inventory", {})
+    unchecked_provider = False
+    unavailable_provider = False
+    for profile, provider in profiles:
+        if provider.kind != "ollama":
+            unchecked_provider = True
+            continue
+        if provider.id not in cache:
+            transport = None
+            cache[provider.id] = None
+            try:
+                payload = {"provider": provider.model_dump(), "model": profile.model}
+                if context.get("processing_server_id", "local") == "local":
+                    result = await AiRouter().test_provider(**payload)
+                else:
+                    server = context["processing_server"]
+                    transport = HttpProcessingTransport(
+                        base_url=server["url"], username=server.get("username", ""),
+                        password=server.get("password", ""), timeout_s=5.0,
+                    )
+                    result = await transport.post_extension_json("/api/ai/providers/test", payload)
+                if result.get("ok") is not True or not isinstance(result.get("models"), list):
+                    raise ValueError("Provider inventory unavailable")
+                cache[provider.id] = {
+                    normalize_model_ref(item.get(key))
+                    for item in result["models"] if isinstance(item, dict)
+                    for key in ("name", "model") if item.get(key)
+                }
+            except Exception:
+                # Provider/transport exceptions can contain credentials or response bodies.
+                cache[provider.id] = None
+            finally:
+                if transport is not None:
+                    await transport.close()
+        models = cache[provider.id]
+        if models is None:
+            unavailable_provider = True
+        elif normalize_model_ref(profile.model) in models:
+            return "ai_model_inventory_checked"
+    if unchecked_provider:
+        return "ai_configuration_checked"
+    return "ai_provider_unavailable" if unavailable_provider else "ai_model_unavailable"
+
+
 def _ai_configuration_diagnostics(description_field: str):
     def collect(config: dict[str, Any], context: dict[str, Any]) -> list[OperatorDiagnostic]:
         if not str(config.get(description_field) or "").strip():
@@ -86,12 +135,43 @@ def _ai_configuration_diagnostics(description_field: str):
                 message="No enabled AI profile and provider are available for this step.",
                 suggestion="Select an available profile in this step or review the AI settings.",
             )]
-        if not any(AiRouter._provider_allows_image(provider) for _, provider in profiles):
+        profiles = [(profile, provider) for profile, provider in profiles if AiRouter._provider_allows_image(provider)]
+        if not profiles:
             return [OperatorDiagnostic(
                 severity="error", code="ai_images_not_allowed",
                 message="None of the selected AI profiles may receive images.",
                 suggestion="Select a profile whose existing image permissions allow this task.",
             )]
+        if context.get("check_runtime_prerequisites"):
+            deadline = context.setdefault("ai_inventory_deadline", time.monotonic() + 5.0)
+
+            async def probe():
+                async with asyncio.timeout(max(0.0, deadline - time.monotonic())):
+                    return await _check_ollama_inventory(profiles, context)
+
+            try:
+                # Pipeline diagnostics run in the analyzer's worker thread.
+                code = asyncio.run(probe())
+            except Exception:
+                code = "ai_provider_unavailable"
+            if code == "ai_provider_unavailable":
+                return [OperatorDiagnostic(
+                    severity="error", code=code,
+                    message="Ollama could not be checked from the selected processing server.",
+                    suggestion="Check the configured Ollama connection from that server before enabling this pipeline.",
+                )]
+            if code == "ai_model_unavailable":
+                return [OperatorDiagnostic(
+                    severity="error", code=code,
+                    message="None of the selected models are listed by Ollama on the selected processing server.",
+                    suggestion="Select an installed model or prepare the model on that server before enabling this pipeline.",
+                )]
+            if code == "ai_model_inventory_checked":
+                return [OperatorDiagnostic(
+                    severity="info", code=code,
+                    message="A selected model is listed by Ollama; loading, vision support and inference quality are not verified.",
+                    suggestion="Validate this task with representative evidence before relying on this pipeline.",
+                )]
         return [OperatorDiagnostic(
             severity="info", code="ai_configuration_checked",
             message="AI profile configuration checked; model availability and inference are not verified.",

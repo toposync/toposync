@@ -750,16 +750,28 @@ def test_pipeline_writes_require_models_only_when_enabling(tmp_path, monkeypatch
     ("ai.smart_crop", "target_description"),
     ("ai.condition_filter", "condition_description"),
 ])
+@pytest.mark.parametrize("scenario,code", [
+    ("disabled", "ai_profile_unavailable"),
+    ("missing", "ai_model_unavailable"),
+    ("unavailable", "ai_provider_unavailable"),
+    ("listed", "ai_model_inventory_checked"),
+])
 def test_pipeline_activation_checks_ai_configuration_and_preserves_disabled_drafts(
-    tmp_path, monkeypatch, operator, description_field
+    tmp_path, monkeypatch, operator, description_field, scenario, code
 ):
     from toposync_ext_ai.pipelines import register_ai_pipeline_operators
 
+    async def list_models(_self):
+        if scenario == "unavailable":
+            raise RuntimeError("secret-never-returned")
+        return [{"name": "fixture-model"}] if scenario == "listed" else []
+
+    monkeypatch.setattr("toposync_ext_ai.router.OllamaProvider.list_models", list_models)
     with _create_client(tmp_path, monkeypatch) as client:
         client.portal.call(client.app.state.pipelines_orchestrator.stop)
         register_ai_pipeline_operators(client.app.state.pipeline_operator_registry)
         configured = client.patch("/api/settings/extensions/com.toposync.ai", json={
-            "profiles": [{"id": "disabled", "enabled": False}],
+            "profiles": [{"id": "selected", "model": "fixture-model", "enabled": scenario != "disabled"}],
         })
         assert configured.status_code == 200, configured.text
         pipeline = {
@@ -768,7 +780,7 @@ def test_pipeline_activation_checks_ai_configuration_and_preserves_disabled_draf
                 {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
                 {"id": "fps", "operator": "core.fps_reducer", "config": {"target_fps": 0.5}},
                 {"id": "ai", "operator": operator, "config": {
-                    "profile_id": "disabled", description_field: "Observe the doorway",
+                    "profile_id": "selected", description_field: "Observe the doorway",
                 }},
             ], edges=[{
                 "from": {"node": "source", "port": "out"},
@@ -781,12 +793,14 @@ def test_pipeline_activation_checks_ai_configuration_and_preserves_disabled_draf
         }
         compiled = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert compiled.status_code == 200, compiled.text
-        assert any(a["code"] == "ai_profile_unavailable" for a in compiled.json()["alerts"])
+        assert any(a["code"] == code for a in compiled.json()["alerts"])
+        assert "secret-never-returned" not in compiled.text
         assert client.post("/api/pipelines", json=pipeline).status_code == 201
         pipeline["enabled"] = True
         rejected = client.put("/api/pipelines/ai_preflight", json=pipeline)
-        assert rejected.status_code == 400, rejected.text
-        assert client.get("/api/pipelines/ai_preflight").json()["enabled"] is False
+        assert rejected.status_code == (200 if scenario == "listed" else 400), rejected.text
+        assert "secret-never-returned" not in rejected.text
+        assert client.get("/api/pipelines/ai_preflight").json()["enabled"] is (scenario == "listed")
         assert client.app.state.pipelines_orchestrator.status()["pipelines"] == []
 
 

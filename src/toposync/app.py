@@ -794,6 +794,7 @@ async def _build_pipeline_diagnostics_context(
         "compositions": [composition.model_dump(mode="json") for composition in cfg.compositions],
         "processing_server_id": processing_server_id,
         "extension_settings": cfg.settings.model_dump(mode="json")["extensions"],
+        "check_runtime_prerequisites": True,
     }
     if processing_server_id == "local":
         return context
@@ -808,6 +809,7 @@ async def _build_pipeline_diagnostics_context(
     if server.kind != "http":
         context["processing_server_error"] = "Unsupported processing server kind"
         return context
+    context["processing_server"] = server.model_dump(mode="json")
     transport = _http_processing_transport(server, timeout_s=5.0)
     try:
         context["processing_server_status"] = await transport.status()

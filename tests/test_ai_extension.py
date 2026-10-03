@@ -250,6 +250,91 @@ def test_ai_diagnostics_reuse_profile_selection_without_inference_or_secret_disc
     assert settings == before, "Preflight must not modify image permissions or configuration"
 
 
+@pytest.mark.parametrize("scenario,expected", [
+    ("available", "ai_model_inventory_checked"),
+    ("fallback", "ai_model_inventory_checked"),
+    ("missing", "ai_model_unavailable"),
+    ("provider_error", "ai_provider_unavailable"),
+    ("timeout", "ai_provider_unavailable"),
+    ("other_provider", "ai_configuration_checked"),
+])
+def test_ai_inventory_checks_are_bounded_deduplicated_and_do_not_claim_inference(monkeypatch, scenario, expected):
+    calls = []
+
+    async def provider_test(_self, **payload):
+        calls.append(payload)
+        if scenario == "provider_error":
+            raise RuntimeError("secret-never-returned")
+        await asyncio.sleep(0)
+        model = "alternate" if scenario == "fallback" else "chosen"
+        return {"ok": True, "models": [] if scenario == "missing" else [{"name": model}]}
+
+    monkeypatch.setattr(AiRouter, "test_provider", provider_test)
+    context = {"check_runtime_prerequisites": True, "extension_settings": {EXTENSION_ID: {
+        "providers": [{"id": "provider", "kind": "openai" if scenario == "other_provider" else "ollama",
+                       "allow_image_upload": True}],
+        "profiles": [
+            {"id": "main", "provider_id": "provider", "model": "chosen", "fallback_profile_ids": ["backup"]},
+            {"id": "backup", "provider_id": "provider", "model": "alternate"},
+        ],
+    }}}
+    if scenario == "timeout":
+        context["ai_inventory_deadline"] = time.monotonic() - 1
+    registry = OperatorRegistry()
+    register_ai_pipeline_operators(registry)
+    for operator, field in [("ai.smart_crop", "target_description"), ("ai.condition_filter", "condition_description")]:
+        diagnostics = registry.collect_diagnostics(operator, {field: "Observe the doorway", "profile_id": "main"}, context)
+        assert [item.code for item in diagnostics] == [expected]
+        assert "secret-never-returned" not in str([item.model_dump() for item in diagnostics])
+    assert len(calls) == (0 if scenario == "other_provider" else 1), "Alternatives and steps share one provider inventory"
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_ai_inventory_uses_selected_processing_server_and_closes_transport(monkeypatch, failure):
+    import httpx
+    import json
+
+    clients, requests = [], []
+    original_client = httpx.AsyncClient
+
+    async def request_handler(request):
+        requests.append(request)
+        assert request.url == "http://worker.invalid/prefix/api/ai/providers/test"
+        assert request.headers.get("authorization", "").startswith("Basic ")
+        payload = json.loads(request.content)
+        assert payload["provider"]["host"] == "http://127.0.0.1:11434"
+        assert payload["model"] == "remote-only"
+        return httpx.Response(502, text="secret-never-returned") if failure else httpx.Response(
+            200, json={"ok": True, "models": [{"name": "remote-only"}]}
+        )
+
+    def client_factory(**kwargs):
+        assert kwargs["trust_env"] is False
+        client = original_client(**kwargs, transport=httpx.MockTransport(request_handler))
+        clients.append(client)
+        return client
+
+    async def must_not_probe_local(*_args, **_kwargs):
+        pytest.fail("Remote inventory must not be checked from the origin")
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+    monkeypatch.setattr(AiRouter, "test_provider", must_not_probe_local)
+    context = {
+        "check_runtime_prerequisites": True, "processing_server_id": "remote",
+        "processing_server": {"url": "http://worker.invalid/prefix", "username": "fixture", "password": "secret-never-returned"},
+        "extension_settings": {EXTENSION_ID: {
+            "providers": [{"id": "provider", "host": "http://127.0.0.1:11434"}],
+            "profiles": [{"id": "main", "provider_id": "provider", "model": "remote-only"}],
+        }},
+    }
+    registry = OperatorRegistry()
+    register_ai_pipeline_operators(registry)
+    diagnostics = registry.collect_diagnostics("ai.smart_crop", {"profile_id": "main", "target_description": "Observe"}, context)
+    assert [item.code for item in diagnostics] == ["ai_provider_unavailable" if failure else "ai_model_inventory_checked"]
+    assert len(requests) == 1 and all(client.is_closed for client in clients)
+    assert "secret-never-returned" not in str([item.model_dump() for item in diagnostics])
+
+
 def test_ai_result_parsers_accept_common_model_aliases() -> None:
     region = RegionDetectionResult.model_validate(
         {"bbox": [200, 100, 800, 900], "score": 0.7, "category": "pool"}

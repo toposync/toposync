@@ -207,6 +207,12 @@ class HttpProcessingTransport:
         res = await client.get(url, timeout=self._timeout_s)
         return self._json_response(res, "Processing status failed")
 
+    async def post_extension_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Call an extension route on this processing server using its existing transport."""
+        if not path.startswith("/api/"):
+            raise ValueError("Extension routes must be under /api/")
+        return await self._post_json(path, payload, error_prefix="Processing extension request failed")
+
     async def import_vision_manifest(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._post_json(
             "/api/processing/vision/manifests/import",

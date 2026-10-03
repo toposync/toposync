@@ -12,7 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Awaitable, Callable, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator
@@ -441,6 +441,31 @@ class ConfigStore:
         self._extension_patch_filters: dict[
             str, Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
         ] = {}
+        self._pipeline_activation_validator: Callable[[Pipeline, AppConfig], Awaitable[None]] | None = None
+
+    def register_pipeline_activation_validator(
+        self, callback: Callable[[Pipeline, AppConfig], Awaitable[None]]
+    ) -> None:
+        """Install application-owned preflight without coupling storage to operators."""
+        self._pipeline_activation_validator = callback
+
+    async def validate_pipeline_activation(
+        self, pipeline: Pipeline, *, config: AppConfig | None = None
+    ) -> None:
+        if not pipeline.enabled or self._pipeline_activation_validator is None:
+            return
+        snapshot = config if config is not None else await self.load()
+        # Validators can perform bounded I/O, so they run outside the write lock.
+        # Copies prevent extension diagnostics from mutating stored configuration.
+        await self._pipeline_activation_validator(
+            pipeline.model_copy(deep=True), snapshot.model_copy(deep=True)
+        )
+
+    def _check_validated_revision(self, snapshot: AppConfig) -> None:
+        if self._config is not snapshot:
+            raise PipelineAlreadyExistsError(
+                "Configuration changed during pipeline validation; review it again"
+            )
 
     def register_extension_settings_patch_filter(
         self,
@@ -524,9 +549,18 @@ class ConfigStore:
         return await self.load()
 
     async def save_config(self, config: AppConfig) -> AppConfig:
+        snapshot = await self.load()
+        cfg = _normalize_config(config)
+        existing = {pipeline.name: pipeline for pipeline in snapshot.pipelines}
+        dependencies_changed = (
+            cfg.settings != snapshot.settings or cfg.compositions != snapshot.compositions
+        )
+        for pipeline in cfg.pipelines:
+            if dependencies_changed or pipeline != existing.get(pipeline.name):
+                await self.validate_pipeline_activation(pipeline, config=cfg)
         await self.load()
         async with self._lock:
-            cfg = _normalize_config(config)
+            self._check_validated_revision(snapshot)
             await self._persist_locked(cfg)
             return cfg
 
@@ -780,8 +814,11 @@ class ConfigStore:
         return next((p for p in cfg.pipelines if p.name == name), None)
 
     async def create_pipeline(self, pipeline: Pipeline) -> Pipeline:
+        snapshot = await self.load()
+        await self.validate_pipeline_activation(pipeline, config=snapshot)
         await self.load()
         async with self._lock:
+            self._check_validated_revision(snapshot)
             cfg = self._config or _default_config()
             if any(existing.name == pipeline.name for existing in cfg.pipelines):
                 raise PipelineAlreadyExistsError(f"Pipeline already exists: {pipeline.name}")
@@ -799,8 +836,11 @@ class ConfigStore:
         self, pipeline_name: str, pipeline: Pipeline, *, expected_pipeline: Pipeline | None = None
     ) -> Pipeline:
         name = _normalize_pipeline_name(pipeline_name)
+        snapshot = await self.load()
+        await self.validate_pipeline_activation(pipeline, config=snapshot)
         await self.load()
         async with self._lock:
+            self._check_validated_revision(snapshot)
             cfg = self._config or _default_config()
             idx = -1
             existing_pipeline: Pipeline | None = None

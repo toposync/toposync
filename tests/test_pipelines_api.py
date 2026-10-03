@@ -635,6 +635,7 @@ def test_compile_checks_selected_server_and_closes_transport(
 
     monkeypatch.setattr(HttpProcessingTransport, "_ensure_client", ensure_client)
     with _create_client(tmp_path, monkeypatch) as client:
+        client.portal.call(client.app.state.pipelines_orchestrator.stop)
         _register_preview_test_operators(client)
         response = client.put("/api/processing-servers/remote", json={
             "id": "remote", "name": "Remote fixture", "kind": "http", "url": "http://remote.invalid",
@@ -672,6 +673,72 @@ def test_compile_checks_selected_server_and_closes_transport(
         assert requests == [("GET", "http://remote.invalid/api/processing/status")] * 2
         assert all(item.is_closed for item in clients)
         assert client.get("/api/pipelines").json()["pipelines"] == []
+        saved = client.post("/api/pipelines", json=pipeline)
+        assert saved.status_code == 201, saved.text
+        assert len(requests) == 2, "An offline server must not prevent saving a disabled draft"
+        pipeline["enabled"] = True
+        rejected = client.put("/api/pipelines/remote_diagnostic", json=pipeline)
+        assert rejected.status_code == 400
+        assert client.get("/api/pipelines/remote_diagnostic").json()["enabled"] is False
+        unavailable = False
+        enabled = client.put("/api/pipelines/remote_diagnostic", json=pipeline)
+        assert enabled.status_code == 200, enabled.text
+        remote_status["vision"]["models_installed"][0]["artifact_exists"] = False
+        assert client.put("/api/pipelines/remote_diagnostic", json=pipeline).status_code == 400
+        pipeline["enabled"] = False
+        assert client.put("/api/pipelines/remote_diagnostic", json=pipeline).status_code == 200
+        assert len(requests) == 5, "Disabling must not contact the processing server"
+        assert all(item.is_closed for item in clients)
+
+
+@pytest.mark.parametrize("editor_mode", ["json", "python"])
+def test_pipeline_writes_require_models_only_when_enabling(tmp_path, monkeypatch, editor_mode):
+    import json
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        # Exercise persistence and diagnostics without starting any runtime.
+        client.portal.call(client.app.state.pipelines_orchestrator.stop)
+        _register_preview_test_operators(client)
+        pipeline = {
+            "name": "missing_model", "enabled": True, "editor_mode": editor_mode,
+            "graph": _v2_graph("missing_model", nodes=[
+                {"id": "source", "operator": "core.synthetic_source", "config": {}},
+                {"id": "detect", "operator": "vision.detect", "config": {"model_id": "absent"}},
+            ], edges=[{
+                "from": {"node": "source", "port": "out"},
+                "to": {"node": "detect", "port": "in"},
+            }]),
+            "python_source": (
+                'PIPELINE = core.synthetic_source(_id="source") '
+                '| vision.detect(_id="detect", model_id="absent")'
+            ),
+        }
+        rejected = client.post("/api/pipelines", json=pipeline)
+        assert rejected.status_code == 400, rejected.text
+        assert "Pipeline cannot be enabled" in rejected.json()["detail"]
+        assert client.get("/api/pipelines").json()["pipelines"] == []
+
+        pipeline["enabled"] = False
+        saved = client.post("/api/pipelines", json=pipeline)
+        assert saved.status_code == 201, saved.text
+        pipeline = saved.json()
+        pipeline["enabled"] = True
+        rejected = client.put("/api/pipelines/missing_model", json=pipeline)
+        assert rejected.status_code == 400
+        assert client.get("/api/pipelines/missing_model").json()["enabled"] is False
+
+        # A previously enabled/manual configuration must still be possible to stop.
+        path = client.app.state.config_store.paths.config_path
+        config = json.loads(path.read_text())
+        config["pipelines"][0]["enabled"] = True
+        path.write_text(json.dumps(config))
+        duplicate = client.post("/api/pipelines/missing_model/duplicate")
+        assert duplicate.status_code == 400, duplicate.text
+        pipeline["enabled"] = False
+        stopped = client.put("/api/pipelines/missing_model", json=pipeline)
+        assert stopped.status_code == 200, stopped.text
+        assert stopped.json()["enabled"] is False
+        assert len(client.get("/api/pipelines").json()["pipelines"]) == 1
 
 
 def test_pipeline_rejects_edges_from_sink_operators(

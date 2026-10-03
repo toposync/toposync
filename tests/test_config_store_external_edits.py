@@ -4,7 +4,11 @@ import asyncio
 import json
 from pathlib import Path
 
-from toposync.runtime.config_store import ConfigStore, Pipeline, UserDataPaths
+import pytest
+
+from toposync.runtime.config_store import (
+    ConfigStore, Pipeline, PipelineAlreadyExistsError, PipelineValidationError, UserDataPaths,
+)
 
 
 def _create_store(tmp_path: Path) -> ConfigStore:
@@ -72,6 +76,75 @@ def _external_append_pipeline(config_path: Path, name: str) -> None:
     config_path.write_text(
         json.dumps(raw, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+@pytest.mark.parametrize("operation", ["create", "replace", "save_config"])
+def test_activation_validation_is_atomic_and_allows_disabled_writes(tmp_path, operation):
+    async def run():
+        store = _create_store(tmp_path)
+        draft = Pipeline(name="draft", enabled=False, graph=_graph())
+        await store.create_pipeline(draft)
+        await store.create_pipeline(draft.model_copy(update={"name": "legacy", "enabled": True}))
+        calls = []
+
+        async def reject(pipeline, config):
+            calls.append(pipeline.name)
+            config.pipelines.clear()
+            raise PipelineValidationError("Model is unavailable")
+
+        store.register_pipeline_activation_validator(reject)
+        before = store.paths.config_path.read_bytes()
+        enabled = draft.model_copy(update={"enabled": True})
+        with pytest.raises(PipelineValidationError, match="Model is unavailable"):
+            if operation == "create":
+                await store.create_pipeline(enabled.model_copy(update={"name": "new"}))
+            elif operation == "replace":
+                await store.replace_pipeline(draft.name, enabled, expected_pipeline=draft)
+            else:
+                config = (await store.get_config()).model_copy(update={"pipelines": [enabled]})
+                await store.save_config(config)
+        assert len(calls) == 1
+        assert store.paths.config_path.read_bytes() == before
+        assert await store.get_pipeline("draft") == draft
+        await store.create_pipeline(draft.model_copy(update={"name": "another"}))
+        await store.replace_pipeline("draft", draft)
+        await store.save_config(await store.get_config())
+        assert len(calls) == 1, "Disabled writes must never invoke activation preflight"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("external_edit", [False, True])
+def test_activation_validation_preserves_concurrent_changes(tmp_path, external_edit):
+    async def run():
+        store = _create_store(tmp_path)
+        draft = Pipeline(name="draft", enabled=False, graph=_graph())
+        await store.create_pipeline(draft)
+        entered, finish = asyncio.Event(), asyncio.Event()
+
+        async def validate(_pipeline, _config):
+            entered.set()
+            await finish.wait()
+
+        store.register_pipeline_activation_validator(validate)
+        pending = asyncio.create_task(store.replace_pipeline(
+            "draft", draft.model_copy(update={"enabled": True}), expected_pipeline=draft
+        ))
+        await entered.wait()
+        if external_edit:
+            _external_append_pipeline(store.paths.config_path, "concurrent")
+        else:
+            # A second writer must not be blocked by a remote preflight in progress.
+            await asyncio.wait_for(store.create_pipeline(
+                draft.model_copy(update={"name": "concurrent"})
+            ), timeout=1)
+        finish.set()
+        with pytest.raises(PipelineAlreadyExistsError, match="Configuration changed"):
+            await pending
+        assert await store.get_pipeline("draft") == draft
+        assert await store.get_pipeline("concurrent") is not None
+
+    asyncio.run(run())
 
 
 def test_config_store_reloads_after_external_config_json_change(tmp_path: Path) -> None:

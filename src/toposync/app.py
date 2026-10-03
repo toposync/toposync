@@ -37,6 +37,7 @@ from toposync.runtime.config_store import (
     Pipeline,
     PipelineAlreadyExistsError,
     PipelineValidationError,
+    PROCESSING_SERVERS_KEY,
     ProcessingServer,
     UserDataPaths,
 )
@@ -784,9 +785,10 @@ async def _close_processing_transport(transport: HttpProcessingTransport) -> Non
 
 
 async def _build_pipeline_diagnostics_context(
-    config_store: ConfigStore, *, processing_server_id: str = "local"
+    config_store: ConfigStore, *, processing_server_id: str = "local",
+    config: AppConfig | None = None,
 ) -> dict[str, Any]:
-    cfg = await config_store.get_config()
+    cfg = config if config is not None else await config_store.get_config()
     context: dict[str, Any] = {
         "data_dir": str(config_store.paths.data_dir),
         "compositions": [composition.model_dump(mode="json") for composition in cfg.compositions],
@@ -794,7 +796,10 @@ async def _build_pipeline_diagnostics_context(
     }
     if processing_server_id == "local":
         return context
-    servers = await config_store.list_processing_servers()
+    servers = [
+        ProcessingServer.model_validate(item)
+        for item in cfg.settings.core.get(PROCESSING_SERVERS_KEY, [])
+    ]
     server = next((item for item in servers if item.id == processing_server_id), None)
     if server is None:
         raise HTTPException(status_code=400, detail="Unknown processing server")
@@ -1495,6 +1500,28 @@ async def _lifespan(app: FastAPI):
     await ext_manager.load(app=app, bus=bus, services=services)
     app.state.extensions = ext_manager
 
+    async def validate_pipeline_activation(pipeline: Pipeline, config: AppConfig) -> None:
+        try:
+            compiled = pipeline_compiler.compile_pipeline(pipeline)
+            context = await _build_pipeline_diagnostics_context(
+                config_store, processing_server_id=pipeline.processing_server_id, config=config
+            )
+            alerts = await asyncio.to_thread(
+                analyze_compiled_pipeline, pipeline=compiled,
+                registry=operator_registry, context=context
+            )
+        except GraphCompileError as exc:
+            raise PipelineValidationError(str(exc)) from exc
+        except HTTPException as exc:
+            raise PipelineValidationError(str(exc.detail)) from exc
+        blocking = [alert for alert in alerts if alert.severity == "error"
+                    or alert.code == "operator_diagnostics_failed"]
+        if blocking:
+            details = "; ".join(f"{alert.node_id}: {alert.message}" for alert in blocking)
+            raise PipelineValidationError(f"Pipeline cannot be enabled: {details}")
+
+    config_store.register_pipeline_activation_validator(validate_pipeline_activation)
+
     orchestrator = PipelinesOrchestrator(
         config_store=config_store,
         operator_registry=operator_registry,
@@ -1587,6 +1614,10 @@ class _NotificationStreamingResponse(StreamingResponse):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Toposync", version="0.1.0", lifespan=_lifespan)
+
+    @app.exception_handler(PipelineValidationError)
+    async def pipeline_validation_error(_request: Request, exc: PipelineValidationError):
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
 
     def _auth_context(request: Request) -> AuthContext:
         context = getattr(request.state, "auth_context", None)

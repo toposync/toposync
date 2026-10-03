@@ -668,8 +668,9 @@ def test_compile_checks_selected_server_and_closes_transport(
         pipeline["processing_server_id"] = "remote"
         unavailable = True
         response = client.post(endpoint, json={"pipeline": pipeline})
-        assert response.status_code == 503
-        assert response.json()["detail"] == "Processing server diagnostics unavailable"
+        assert response.status_code == 200
+        assert response.json()["alerts"][0]["code"] == "processing_server_unavailable"
+        assert response.json()["alerts"][0]["severity"] == "error"
         assert requests == [("GET", "http://remote.invalid/api/processing/status")] * 2
         assert all(item.is_closed for item in clients)
         assert client.get("/api/pipelines").json()["pipelines"] == []

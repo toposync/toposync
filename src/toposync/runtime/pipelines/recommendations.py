@@ -26,6 +26,14 @@ def analyze_compiled_pipeline(
     cancel_check: CancelCheck | None = None,
 ) -> list[PipelineAlert]:
     _check_cancelled(cancel_check)
+    if context and context.get("processing_server_error"):
+        return [PipelineAlert(
+            severity="error",
+            code="processing_server_unavailable",
+            message="The selected processing server could not be checked.",
+            suggestion="Save disabled, or check the processing server before enabling this pipeline.",
+            details={"reason": context["processing_server_error"]},
+        )]
     nodes_by_id = {node.node_id: node for node in pipeline.nodes}
     edges = list(pipeline.edges)
 

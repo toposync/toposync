@@ -802,16 +802,16 @@ async def _build_pipeline_diagnostics_context(
     ]
     server = next((item for item in servers if item.id == processing_server_id), None)
     if server is None:
-        raise HTTPException(status_code=400, detail="Unknown processing server")
+        context["processing_server_error"] = "Unknown processing server"
+        return context
     if server.kind != "http":
-        raise HTTPException(status_code=400, detail="Unsupported processing server kind")
+        context["processing_server_error"] = "Unsupported processing server kind"
+        return context
     transport = _http_processing_transport(server, timeout_s=5.0)
     try:
         context["processing_server_status"] = await transport.status()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503, detail="Processing server diagnostics unavailable"
-        ) from exc
+    except Exception:
+        context["processing_server_error"] = "Processing server diagnostics unavailable"
     finally:
         await _close_processing_transport(transport)
     return context

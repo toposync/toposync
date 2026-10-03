@@ -26,6 +26,7 @@ export function PipelineDuplicateModal({ open, pipeline, existingNames, onClose,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const initializedForName = useRef<string | null>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) {
@@ -42,6 +43,7 @@ export function PipelineDuplicateModal({ open, pipeline, existingNames, onClose,
     }
     const existing = new Set((existingNames ?? []).map((name) => String(name || "").trim()).filter(Boolean));
     setNewName(suggestDuplicateName(pipeline.display_name || pipeline.name, existing));
+    nameInput.current?.focus();
   }, [open, pipeline, existingNames]);
 
   const canDuplicate = useMemo(() => {
@@ -88,6 +90,7 @@ export function PipelineDuplicateModal({ open, pipeline, existingNames, onClose,
         <label className="pipelinesLabel">
           <span>{t("core.ui.pipelines.duplicate.new_name")}</span>
           <input
+            ref={nameInput}
             className="pipelinesInput"
             value={newName}
             maxLength={160}
@@ -97,7 +100,6 @@ export function PipelineDuplicateModal({ open, pipeline, existingNames, onClose,
               if (event.key === "Enter") void doDuplicate();
             }}
             disabled={busy || !pipeline}
-            autoFocus
           />
         </label>
         <div className="pipelinesStepHint">{t("core.ui.pipelines.duplicate.hint")}</div>

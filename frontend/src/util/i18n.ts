@@ -710,6 +710,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.sidebar.processing_servers.manage": "Manage servers",
     "core.ui.pipelines.empty": "Select or create a pipeline.",
     "core.ui.pipelines.actions.duplicate": "Duplicate",
+    "core.ui.pipelines.actions.more": "More actions",
     "core.ui.pipelines.stats.title": "Step stats",
     "core.ui.pipelines.stats.window_hint": "Rolling window: last ~{{days}} days.",
     "core.ui.pipelines.stats.reset": "Reset stats",
@@ -2653,7 +2654,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.processing_server_status.checking": "Checking processing server health…",
     "core.ui.pipelines.processing_server_status.unreachable": "Processing server '{{server}}' is unreachable.",
     "core.ui.pipelines.processing_server_status.runtime_errors": "Processing server '{{server}}' is online, but this pipeline has {{count}} runtime node issue(s).",
-    "core.ui.pipelines.ingest.badge": "INGEST",
+    "core.ui.pipelines.ingest.badge": "Connection",
     "core.ui.pipelines.ingest.direct": "This flow will open a direct connection to the camera source for {{camera}}.",
     "core.ui.pipelines.ingest.centralizer_mismatch":
       "This pipeline runs on {{pipelineHost}} and will read camera {{camera}} through ingest on {{ingestHost}}.",
@@ -3344,6 +3345,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.sidebar.processing_servers.manage": "Gerenciar servidores",
     "core.ui.pipelines.empty": "Selecione ou crie um fluxo.",
     "core.ui.pipelines.actions.duplicate": "Duplicar",
+    "core.ui.pipelines.actions.more": "Mais ações",
     "core.ui.pipelines.stats.title": "Estatísticas por etapa",
     "core.ui.pipelines.stats.window_hint": "Janela móvel: últimos ~{{days}} dias.",
     "core.ui.pipelines.stats.reset": "Resetar estatísticas",
@@ -5308,7 +5310,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.processing_server_status.checking": "Verificando o servidor de processamento…",
     "core.ui.pipelines.processing_server_status.unreachable": "O servidor de processamento '{{server}}' está inacessível.",
     "core.ui.pipelines.processing_server_status.runtime_errors": "O servidor de processamento '{{server}}' está conectado, mas este fluxo apresenta {{count}} problema(s) de execução.",
-    "core.ui.pipelines.ingest.badge": "INGEST",
+    "core.ui.pipelines.ingest.badge": "Conexão",
     "core.ui.pipelines.ingest.direct": "Este fluxo abrirá conexão direta com a origem da câmera {{camera}}.",
     "core.ui.pipelines.ingest.centralizer_mismatch":
       "Este fluxo roda em {{pipelineHost}} e lerá a câmera {{camera}} pelo ingest em {{ingestHost}}.",

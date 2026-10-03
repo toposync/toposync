@@ -871,13 +871,14 @@ video {
 
 .pipelinesEditorHeader {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   flex-wrap: wrap;
 }
 
 .pipelinesEditorTitle {
   min-width: 0;
+  padding-top: var(--space-2);
   overflow-wrap: anywhere;
   font-weight: 800;
   font-size: 18px;
@@ -886,9 +887,29 @@ video {
 .pipelinesEditorActions {
   margin-left: auto;
   display: flex;
+  align-items: flex-start;
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.pipelinesMoreActions > summary {
+  list-style: none;
+}
+
+.pipelinesMoreActions > summary::-webkit-details-marker {
+  display: none;
+}
+
+.pipelinesMoreActionsContent {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+}
+
+.pipelinesMoreActionsContent .pillButton {
+  width: 100%;
+  white-space: normal;
 }
 
 .pipelinesEditorControls {

@@ -1145,30 +1145,48 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                     <i className="fa-solid fa-floppy-disk" aria-hidden="true" />
                     {t("core.actions.save")}
                   </button>
-                  <button
-                    className="pillButton"
-                    type="button"
-                    onClick={() => setDuplicateOpen(true)}
-                    disabled={isDraftReadOnly}
-                    title={isDraftReadOnly ? t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here.") : undefined}
+                  <details
+                    key={draft.name}
+                    className="pipelinesMoreActions"
+                    onKeyDown={(event) => {
+                      if (event.key !== "Escape" || !event.currentTarget.open) return;
+                      event.preventDefault();
+                      event.currentTarget.open = false;
+                      event.currentTarget.querySelector("summary")?.focus();
+                    }}
                   >
-                    <i className="fa-solid fa-copy" aria-hidden="true" />
-                    {t("core.ui.pipelines.actions.duplicate")}
-                  </button>
-                  <button
-                    className="pillButton pillButtonDanger"
-                    type="button"
-                    onClick={() => void handleDelete()}
-                    disabled={isDraftReadOnly}
-                    title={isDraftReadOnly ? t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here.") : undefined}
-                  >
-                    <i className="fa-solid fa-trash" aria-hidden="true" />
-                    {t("core.actions.delete")}
-                  </button>
+                    <summary className="pillButton" onKeyDown={(event) => {
+                      if (event.key === " ") event.stopPropagation();
+                    }}>
+                      <i className="fa-solid fa-ellipsis" aria-hidden="true" />
+                      {t("core.ui.pipelines.actions.more")}
+                    </summary>
+                    <div className="pipelinesMoreActionsContent">
+                      {!isDraftReadOnly && assistants.map(assistant => <button key={assistant.id} type="button" className="pillButton" onClick={() => navigate(`/settings?${new URLSearchParams({ panel: assistant.id, pipeline: draft.name })}`)}>{resolveLocalizedString(assistant.name)}</button>)}
+                      <button
+                        className="pillButton"
+                        type="button"
+                        onClick={() => setDuplicateOpen(true)}
+                        disabled={isDraftReadOnly}
+                        title={isDraftReadOnly ? t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here.") : undefined}
+                      >
+                        <i className="fa-solid fa-copy" aria-hidden="true" />
+                        {t("core.ui.pipelines.actions.duplicate")}
+                      </button>
+                      <button
+                        className="pillButton pillButtonDanger"
+                        type="button"
+                        onClick={() => void handleDelete()}
+                        disabled={isDraftReadOnly}
+                        title={isDraftReadOnly ? t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here.") : undefined}
+                      >
+                        <i className="fa-solid fa-trash" aria-hidden="true" />
+                        {t("core.actions.delete")}
+                      </button>
+                    </div>
+                  </details>
                 </div>
               </div>
-
-              {!isDraftReadOnly && assistants.map(assistant => <button key={assistant.id} type="button" className="pillButton" onClick={() => navigate(`/settings?${new URLSearchParams({ panel: assistant.id, pipeline: draft.name })}`)}>{resolveLocalizedString(assistant.name)}</button>)}
 
               {isDraftReadOnly ? (
                 <div className="pipelinesAlertRow isInfo">
@@ -1290,17 +1308,18 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                 </label>
               </div>
 
-              {pipelineIngestNotices.map((message) => (
-                <div className="pipelinesAlertRow isInfo" key={message}>
-                  <div className="pipelinesAlertBadge">{t("core.ui.pipelines.ingest.badge", {}, "INGEST")}</div>
-                  <div className="pipelinesAlertText">
-                    <div className="pipelinesAlertMessage">{message}</div>
-                  </div>
-                </div>
-              ))}
-
               <details key={draft.name} open={reviewPanels.some(panel => panel.supports(topologyGraph)) ? undefined : true}>
-                <summary>{t("core.ui.pipelines.advanced_editor")}</summary>
+                <summary onKeyDown={(event) => {
+                  if (event.key === " ") event.stopPropagation();
+                }}>{t("core.ui.pipelines.advanced_editor")}</summary>
+                {pipelineIngestNotices.map((message) => (
+                  <div className="pipelinesAlertRow isInfo" key={message}>
+                    <div className="pipelinesAlertBadge">{t("core.ui.pipelines.ingest.badge")}</div>
+                    <div className="pipelinesAlertText">
+                      <div className="pipelinesAlertMessage">{message}</div>
+                    </div>
+                  </div>
+                ))}
                 <label className="pipelinesControlField pipelinesProcessingServerField">
                   <span>{t("core.ui.pipelines.form.processing_server")}</span>
                   <div className="pipelinesControlRow">

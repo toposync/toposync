@@ -11,6 +11,24 @@ The extension is designed around local-first usage. Ollama is the default provid
 `qwen3.8:27b-mlx` as the initial high-quality local vision recommendation. Cloud providers can be
 added through provider profiles and explicit fallback chains.
 
+## Pipeline activation checks
+
+Both image operators check the task description, enabled profiles/providers and existing
+image permissions before activation. The same checks protect saved and manually enabled
+pipelines. A disabled draft can still be saved when these prerequisites are missing.
+
+For Ollama, validation queries the model inventory from the selected processing server,
+using the proposed provider settings without saving them on the worker. Each analysis
+shares one inventory per provider and a five-second inventory budget across its AI steps.
+An unreachable provider or absent model blocks activation unless another eligible profile
+remains available. Checks never run inference, install models or change image permissions.
+For other providers, operational availability remains unverified.
+
+A listed model does not prove that it loads, understands images or produces accurate
+results for the task. Representative evidence is still required. Processing workers load
+AI services and provider routes; the recipe assistant and notification history remain on
+the application host with their required application services.
+
 ## Experimental JEV-compatible text review
 
 The internal service `ai.jev.evaluate_event_text` optionally classifies a description

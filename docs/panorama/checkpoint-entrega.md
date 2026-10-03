@@ -1,5 +1,22 @@
 # Panorâmica ao vivo — aceleração e recuperação em validação, 25/09/2026
 
+## Trajetória de retorno observada — 03/10/2026
+
+Ensaio pontual na Frente, com revisão carregada `ce0b2e87`, referência nova e
+presets anteriores preservados: retorno reprovado em 9,23 pixels contra o limite
+existente de três, no espaço de análise 960×540. O par final estático apresentou
+0,038 pixel. A posição nativa voltou ao mesmo valor inicial; isso não comprovou
+igualdade do enquadramento.
+
+O desvio já estava estável em quatro observações antes do Stop, solicitado
+6,108 segundos após o início do retorno. A espera fixa de dois segundos não é,
+portanto, explicação suficiente para esta falha. Folga, quantização e posição
+do eixo não reportado permanecem hipóteses. Nenhuma correção ou repetição foi
+executada; Stop foi confirmado e a configuração nativa restaurada exatamente.
+Cobertura e acompanhamento físico dependentes do retorno preciso continuam
+sem aprovação. Novo ensaio exige diagnóstico ou variável relevante nova,
+preservando os critérios e limites.
+
 ## Integridade da referência de retorno — 03/10/2026
 
 A atualização do catálogo invalida a indicação de preset pendente ou ativo quando

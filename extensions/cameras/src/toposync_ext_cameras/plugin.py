@@ -691,6 +691,7 @@ class CameraPipelineSummary(BaseModel):
     enabled: bool = True
     processing_server_id: str = "local"
     source_ids: list[str] = Field(default_factory=list)
+    activation_blocked: bool | None = None
 
 
 class CameraPipelinesResponse(BaseModel):
@@ -5833,6 +5834,16 @@ class CamerasExtension(BaseExtension):
             store = _config_store(request)
             pipelines_out: list[CameraPipelineSummary] = []
             pipelines = await store.list_pipelines()
+            activation_errors: dict[str, Any] | None = None
+            if _is_allowed(request, action="core:pipelines:runtime:read"):
+                orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+                try:
+                    status = orchestrator.status() if orchestrator is not None else {}
+                    errors = status.get("activation_errors")
+                    if isinstance(errors, dict):
+                        activation_errors = errors
+                except Exception:
+                    pass
             for pipeline in pipelines:
                 involved, source_ids = _pipeline_source_ids_for_camera(pipeline, camera_id=cid)
                 if not involved:
@@ -5844,6 +5855,10 @@ class CamerasExtension(BaseExtension):
                         processing_server_id=str(pipeline.processing_server_id or "local").strip()
                         or "local",
                         source_ids=source_ids,
+                        activation_blocked=(
+                            bool(activation_errors.get(pipeline.name))
+                            if pipeline.enabled and activation_errors is not None else None
+                        ),
                     )
                 )
 

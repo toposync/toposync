@@ -52,6 +52,53 @@ def test_recipe_creation_never_activates_processing(tmp_path, monkeypatch, prese
         assert next(item for item in listed["pipelines"] if item["name"] == name)["enabled"] is False
 
 
+@pytest.mark.parametrize("runtime_access", [True, False])
+def test_camera_pipeline_activation_state_preserves_runtime_authorization(
+    tmp_path, monkeypatch, runtime_access
+):
+    import json
+    from fastapi import HTTPException
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        orchestrator = client.app.state.pipelines_orchestrator
+        client.portal.call(orchestrator.stop)
+        _prepare_preset_prerequisites(client, "people_simple")
+        created = client.post("/api/cameras/cameras/cam1/pipelines/presets", json={
+            "preset": "people_simple",
+        })
+        assert created.status_code == 200, created.text
+        name = created.json()["pipeline_name"]
+        path = client.app.state.config_store.paths.config_path
+        config = json.loads(path.read_text())
+        next(p for p in config["pipelines"] if p["name"] == name)["enabled"] = True
+        path.write_text(json.dumps(config))
+        monkeypatch.setattr(orchestrator, "status", lambda: {
+            "activation_errors": {name: "Private diagnostic text"},
+        })
+        authorize = client.app.state.auth.authorize
+
+        def authorize_runtime(*args, **kwargs):
+            if not runtime_access and kwargs.get("action") == "core:pipelines:runtime:read":
+                raise HTTPException(403, "Runtime read denied")
+            return authorize(*args, **kwargs)
+
+        monkeypatch.setattr(client.app.state.auth, "authorize", authorize_runtime)
+        response = client.get("/api/cameras/cameras/cam1/pipelines")
+        assert response.status_code == 200
+        assert "Private diagnostic" not in response.text
+        listed = next(p for p in response.json()["pipelines"] if p["name"] == name)
+        assert listed["activation_blocked"] is (True if runtime_access else None)
+
+        monkeypatch.setattr(orchestrator, "status", lambda: {})
+        listed = client.get("/api/cameras/cameras/cam1/pipelines").json()["pipelines"][0]
+        assert listed["activation_blocked"] is None
+        monkeypatch.setattr(orchestrator, "status", lambda: {"activation_errors": {name: "old"}})
+        config["pipelines"][0]["enabled"] = False
+        path.write_text(json.dumps(config))
+        listed = client.get("/api/cameras/cameras/cam1/pipelines").json()["pipelines"][0]
+        assert listed["activation_blocked"] is None
+
+
 def test_audio_recipe_requires_baseline_and_saves_disabled_without_vision(tmp_path, monkeypatch):
     with _create_client(tmp_path, monkeypatch, patch_model_readiness=False) as client:
         _configure_camera(client)

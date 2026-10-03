@@ -444,7 +444,7 @@ function CamerasSettingsPanelContent({
   settings: Record<string, unknown>;
   updateSettings: (patch: Record<string, unknown>) => void;
 }): React.ReactElement {
-  const { t } = i18n.useI18n();
+  const { t, locale } = i18n.useI18n();
   const cameras = useMemo(() => parseCameras(settings), [settings]);
   const readLocation = () => {
     const parameters = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
@@ -694,21 +694,50 @@ function CamerasSettingsPanelContent({
       });
 
     setCameraPipelinesLoading(true);
+    setCameraPipelines(null);
     setCameraPipelinesError(null);
-    void fetchCameraPipelines(activeCamera.id, controller.signal)
-      .then((pipelines) => {
-        if (!controller.signal.aborted) setCameraPipelines(pipelines);
-      })
-      .catch((error) => {
-        if (controller.signal.aborted) return;
-        setCameraPipelines(null);
-        setCameraPipelinesError(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setCameraPipelinesLoading(false);
-      });
+    let timer: number | undefined;
+    let loading = false;
+    const loadPipelines = async () => {
+      if (loading || controller.signal.aborted) return;
+      window.clearTimeout(timer);
+      if (document.visibilityState === "hidden") {
+        timer = window.setTimeout(loadPipelines, 5000);
+        return;
+      }
+      loading = true;
+      try {
+        const pipelines = await fetchCameraPipelines(activeCamera.id, controller.signal);
+        if (!controller.signal.aborted) {
+          setCameraPipelines(pipelines);
+          setCameraPipelinesError(null);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          // Keep the navigation target and focus, but discard old runtime claims.
+          setCameraPipelines(previous => previous ? {
+            ...previous,
+            pipelines: previous.pipelines.map(pipeline => ({ ...pipeline, activation_blocked: null, execution: null })),
+          } : null);
+          setCameraPipelinesError(t("ext.cameras.pipelines.read_unavailable"));
+        }
+      } finally {
+        loading = false;
+        if (!controller.signal.aborted) {
+          setCameraPipelinesLoading(false);
+          timer = window.setTimeout(loadPipelines, 5000);
+        }
+      }
+    };
+    const onVisibility = () => { if (document.visibilityState === "visible") void loadPipelines(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    void loadPipelines();
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [activeCamera?.id, activeCameraPersisted]);
 
   async function loadPresetModelStatus(showLoading: boolean, signal?: AbortSignal): Promise<void> {
@@ -1770,10 +1799,10 @@ function CamerasSettingsPanelContent({
                   <div className="cardBody">
                     {pipelineNotice ? <div role="status" className="settingsDescription">{pipelineNotice}</div> : null}
                     {createdPipeline ? <button ref={reviewButton} className="primaryButton" style={{ marginBottom: 16 }} type="button" onClick={() => openPipelineEditor(createdPipeline)}>{t("ext.cameras.recipe.review")}</button> : null}
-                    {cameraPipelinesError ? <div className="errorText">{cameraPipelinesError}</div> : null}
+                    {cameraPipelinesError ? <div className="errorText" role="status">{cameraPipelinesError}</div> : null}
                     {cameraPipelinesLoading ? <div>{t("core.ui.loading", {}, "Carregando...")}</div> : null}
 
-                    {!cameraPipelinesLoading && (cameraPipelines?.pipelines ?? []).length === 0 ? (
+                    {!cameraPipelinesLoading && !cameraPipelinesError && (cameraPipelines?.pipelines ?? []).length === 0 ? (
                       <div className="settingsStatusMuted">{t("ext.cameras.pipelines.empty", {}, "Nenhum fluxo usa esta câmera ainda.")}</div>
                     ) : null}
 
@@ -1782,6 +1811,7 @@ function CamerasSettingsPanelContent({
                         {(cameraPipelines?.pipelines ?? []).map((pipeline) => (
                           <button
                             className="settingsListItem"
+                            style={{ display: "grid", gap: 6, padding: 12 }}
                             key={pipeline.name}
                             type="button"
                             onClick={() => openPipelineEditor(pipeline.name)}
@@ -1791,12 +1821,22 @@ function CamerasSettingsPanelContent({
                               {pipeline.enabled === false
                                 ? t("ext.cameras.pipelines.disabled", {}, "Desativado")
                                 : t("ext.cameras.pipelines.enabled", {}, "Enabled")}
-                              {" · "}
-                              {pipeline.processing_server_id || "local"}
-                              {pipeline.source_ids?.length ? ` · ${pipeline.source_ids.join(", ")}` : ""}
                               {pipeline.enabled !== false ? ` · ${t(pipeline.activation_blocked
-                                ? "ext.cameras.recipe.execution_blocked" : "ext.cameras.recipe.execution_unknown")}` : ""}
+                                ? "ext.cameras.recipe.execution_blocked"
+                                : pipeline.execution ? `ext.cameras.pipelines.execution.${pipeline.execution.state}`
+                                  : "ext.cameras.recipe.execution_unknown")}` : ""}
                             </span>
+                            {pipeline.enabled !== false && pipeline.execution?.last_completed_at ? (
+                              <span className="settingsListMeta">
+                                {t("ext.cameras.pipelines.last_processed")}{" "}
+                                <time dateTime={new Date(pipeline.execution.last_completed_at * 1000).toISOString()}>{new Date(pipeline.execution.last_completed_at * 1000).toLocaleString(locale)}</time>
+                              </span>
+                            ) : pipeline.enabled !== false && pipeline.execution?.last_received_at ? (
+                              <span className="settingsListMeta">
+                                {t("ext.cameras.pipelines.last_received")}{" "}
+                                <time dateTime={new Date(pipeline.execution.last_received_at * 1000).toISOString()}>{new Date(pipeline.execution.last_received_at * 1000).toLocaleString(locale)}</time>
+                              </span>
+                            ) : null}
                             {pipeline.enabled !== false && !pipeline.activation_blocked ? (sourceHealth?.sources ?? []).filter(source => source.pipeline_name === pipeline.name && source.camera_id === activeCamera.id).map(source => (
                               <span className="settingsDescription" key={source.source_id}>
                                 {source.camera_source_name || source.camera_source_id}: {t(`ext.cameras.settings.source_health.status.${source.status}`)}

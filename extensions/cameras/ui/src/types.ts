@@ -472,6 +472,11 @@ export type CameraPipelineSummary = {
   processing_server_id?: string;
   source_ids?: string[];
   activation_blocked?: boolean | null;
+  execution?: {
+    state: "not_running" | "waiting" | "observed" | "interrupted" | "unavailable";
+    last_received_at?: number | null;
+    last_completed_at?: number | null;
+  } | null;
 };
 
 export type CameraPipelinesResponse = {

@@ -71,6 +71,7 @@ from .pipeline_templates import (
 from .area_events import build_area_occurrence_graph, register_area_occurrence_operator
 from .audio import AudioBaseline
 from .audio_events import build_audio_recipe
+from .pipeline_observation import pipeline_execution_observation
 from .event_context import register_recent_onvif_event_operator, add_recent_event_to_area_graph
 from .processing.camera_hub import get_global_camera_hub
 from .processing.mapping import build_calibration_mapper
@@ -686,6 +687,12 @@ class CameraPtzStopRequest(BaseModel):
     zoom: bool = True
 
 
+class CameraPipelineExecutionObservation(BaseModel):
+    state: Literal["not_running", "waiting", "observed", "interrupted", "unavailable"]
+    last_received_at: float | None = None
+    last_completed_at: float | None = None
+
+
 class CameraPipelineSummary(BaseModel):
     name: str
     display_name: str = ""
@@ -693,6 +700,7 @@ class CameraPipelineSummary(BaseModel):
     processing_server_id: str = "local"
     source_ids: list[str] = Field(default_factory=list)
     activation_blocked: bool | None = None
+    execution: CameraPipelineExecutionObservation | None = None
 
 
 class CameraPipelinesResponse(BaseModel):
@@ -5854,10 +5862,12 @@ class CamerasExtension(BaseExtension):
             pipelines_out: list[CameraPipelineSummary] = []
             pipelines = await store.list_pipelines()
             activation_errors: dict[str, Any] | None = None
+            runtime_status: dict[str, Any] | None = None
             if _is_allowed(request, action="core:pipelines:runtime:read"):
                 orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
                 try:
                     status = orchestrator.status() if orchestrator is not None else {}
+                    runtime_status = status if isinstance(status, dict) else None
                     errors = status.get("activation_errors")
                     if isinstance(errors, dict):
                         activation_errors = errors
@@ -5879,6 +5889,10 @@ class CamerasExtension(BaseExtension):
                             bool(activation_errors.get(pipeline.name))
                             if pipeline.enabled and activation_errors is not None else None
                         ),
+                        execution=(pipeline_execution_observation(
+                            runtime_status, pipeline_name=pipeline.name,
+                            processing_server_id=str(pipeline.processing_server_id or "local"),
+                        ) if pipeline.enabled else None),
                     )
                 )
 

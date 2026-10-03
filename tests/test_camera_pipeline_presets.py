@@ -76,6 +76,11 @@ def test_camera_pipeline_activation_state_preserves_runtime_authorization(
         path.write_text(json.dumps(config))
         monkeypatch.setattr(orchestrator, "status", lambda: {
             "activation_errors": {name: "Private diagnostic text"},
+            "running": True,
+            "graph_info": {"graphs": [{
+                "graph_id": name, "running": True,
+                "nodes": {"processor": {"last_received_at": 10, "last_completed_at": 11}},
+            }]},
         })
         authorize = client.app.state.auth.authorize
 
@@ -91,10 +96,15 @@ def test_camera_pipeline_activation_state_preserves_runtime_authorization(
         listed = next(p for p in response.json()["pipelines"] if p["name"] == name)
         assert listed["display_name"] == "Fluxo da entrada"
         assert listed["activation_blocked"] is (True if runtime_access else None)
+        if runtime_access:
+            assert listed["execution"]["last_completed_at"] == 11
+        else:
+            assert listed["execution"] is None
 
         monkeypatch.setattr(orchestrator, "status", lambda: {})
         listed = client.get("/api/cameras/cameras/cam1/pipelines").json()["pipelines"][0]
         assert listed["activation_blocked"] is None
+        assert listed["execution"] is None
         monkeypatch.setattr(orchestrator, "status", lambda: {"activation_errors": {name: "old"}})
         config["pipelines"][0]["enabled"] = False
         path.write_text(json.dumps(config))

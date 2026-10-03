@@ -19,6 +19,13 @@ mapping still determine whether a stationary event has sufficient evidence; this
 sampling rate does not certify physical accuracy or camera availability. Existing
 saved graphs are not rewritten when a recipe changes.
 
+Before enabling a pipeline, `camera.source` rechecks that its saved camera and
+selected (or default) video source still exist and are enabled. A removed or
+disabled source blocks activation with a review message; disabled drafts remain
+editable. Explicit stream URLs retain their independent configuration path.
+This check does not open a camera or certify stream health, calibration, or
+recognition quality; those require current runtime evidence.
+
 Area presence and entry recipes report repeated observed entries within a five-minute
 window by default (`visit_window_seconds`). Only confirmed outside-to-inside crossings
 count; updates and replay do not. Counts refer to one continuous tracking episode,

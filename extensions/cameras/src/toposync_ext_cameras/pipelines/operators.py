@@ -30,6 +30,7 @@ from toposync.runtime.pipelines.packet_contract import (
     resolve_source_device_id,
 )
 from toposync.runtime.pipelines.operator_registry import (
+    OperatorDiagnostic,
     OperatorRegistry,
     artifact_name_hint,
     metadata_path_hint,
@@ -3437,6 +3438,33 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
         return outputs
 
 
+def _camera_source_diagnostics(config: dict[str, Any], context: dict[str, Any]) -> list[OperatorDiagnostic]:
+    if not context.get("check_runtime_prerequisites") or str(config.get("rtsp_url") or "").strip():
+        # An explicit stream does not depend on a saved camera. Reachability is runtime evidence.
+        return []
+    extension_settings = context.get("extension_settings")
+    if not isinstance(extension_settings, dict):
+        return [OperatorDiagnostic(
+            severity="error", code="camera_source_settings_unavailable",
+            message="The camera source configuration could not be checked.",
+            suggestion="Check the camera settings before enabling this pipeline.",
+        )]
+    camera = get_camera_device(
+        extension_settings.get("com.toposync.cameras", {}),
+        camera_id=str(config.get("camera_id") or "").strip(),
+    )
+    source = get_camera_source(
+        camera, source_id=str(config.get("source_id") or "").strip(), kind="video", enabled_only=True,
+    ) if camera is not None and camera.get("enabled") is True else None
+    if source is None:
+        return [OperatorDiagnostic(
+            severity="error", code="camera_source_unavailable",
+            message="The configured camera or video source is missing or disabled.",
+            suggestion="Review the camera and select an enabled video source before enabling this pipeline.",
+        )]
+    return []
+
+
 def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
     registry.register_operator(
         operator_id="camera.onvif_state_gate",
@@ -3480,6 +3508,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         operator_id="camera.source",
         description="Camera frame source using the existing camera extension frame grabber.",
         config_model=CameraSourceConfig,
+        diagnostics_factory=_camera_source_diagnostics,
         inputs=[{"name": "gate", "required": False}],
         outputs=[{"name": "out"}],
         capabilities=["source", "camera", "realtime"],

@@ -1295,11 +1295,12 @@ def test_camera_pipeline_stopped_area_uses_area_composition_and_restriction(
         async def persist(**values):
             storage.upsert(**values)
         async def replay_area_history():
-            runtime = AreaRestrictionRuntime(area)
+            runtime = AreaRestrictionRuntime(area, PipelineRuntimeDependencies(config_store=client.app.state.config_store))
             sink = NotifyRuntime(_node_config(pipeline, "core.notify"), PipelineRuntimeDependencies(notifications_upsert=persist))
             packet = Packet.create(stream_id="camera", lifecycle=Lifecycle.OPEN, payload={
                 "subject": {"id": "confirmed-stop", "category": "person" if preset == "person_stopped" else "car"},
                 "world": {"x": 1, "z": 1}, "area_id": "unrelated",
+                "mapping": {"composition_id": area["composition_id"]},
                 "velocity": {"speed_kmh": 0}, "stationary_event": {"stationary_seconds": 2},
             })
             [mapped] = await runtime.process_packet(packet, None)

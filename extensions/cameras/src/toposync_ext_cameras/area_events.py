@@ -17,7 +17,7 @@ from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 
-from .pipelines.postprocess import AreaRestrictionPolygon, _diagnostic_get, _point_in_polygon
+from .pipelines.postprocess import AreaRestrictionPolygon, _point_in_polygon, resolve_composition_area
 
 
 class AreaOccurrenceConfig(BaseModel):
@@ -44,30 +44,6 @@ class AreaOccurrenceConfig(BaseModel):
         if self.composition_id and (self.area is None or self.area.id is None):
             raise ValueError("A mapped area reference requires an area identifier")
         return self
-
-
-def resolve_composition_area(compositions, *, composition_id, area_id):
-    """Resolve the selected structural area, never a same-named replacement."""
-    matches = []
-    for composition in compositions:
-        if _diagnostic_get(composition, "id") != composition_id:
-            continue
-        for element in _diagnostic_get(composition, "elements", []):
-            if (_diagnostic_get(element, "id") != area_id
-                    or _diagnostic_get(element, "type") != "com.toposync.structural.area"):
-                continue
-            props = _diagnostic_get(element, "props", {})
-            try:
-                area = AreaRestrictionPolygon.model_validate({
-                    "id": area_id, "name": _diagnostic_get(element, "name") or area_id,
-                    "points": props.get("vertices"),
-                })
-                if not all(math.isfinite(axis) for point in area.points for axis in (point.x, point.z)):
-                    return None
-                matches.append(area)
-            except (ValueError, TypeError, AttributeError):
-                return None
-    return matches[0] if len(matches) == 1 else None
 
 
 def _area_reference_diagnostics(config, context):

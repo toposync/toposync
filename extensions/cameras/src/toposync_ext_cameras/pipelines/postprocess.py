@@ -1321,15 +1321,47 @@ class AreaRestrictionPolygon(BaseModel):
         return name
 
 
+def resolve_composition_area(compositions, *, composition_id, area_id):
+    """Resolve the selected structural area, never a same-named replacement."""
+    matches = []
+    for composition in compositions:
+        if _diagnostic_get(composition, "id") != composition_id:
+            continue
+        for element in _diagnostic_get(composition, "elements", []):
+            if (_diagnostic_get(element, "id") != area_id
+                    or _diagnostic_get(element, "type") != "com.toposync.structural.area"):
+                continue
+            props = _diagnostic_get(element, "props", {})
+            try:
+                area = AreaRestrictionPolygon.model_validate({
+                    "id": area_id, "name": _diagnostic_get(element, "name") or area_id,
+                    "points": props.get("vertices"),
+                })
+                if not all(math.isfinite(axis) for point in area.points for axis in (point.x, point.z)):
+                    return None
+                matches.append(area)
+            except (ValueError, TypeError, AttributeError):
+                return None
+    return matches[0] if len(matches) == 1 else None
+
+
 class AreaRestrictionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     areas: list[AreaRestrictionPolygon] = Field(default_factory=list)
+    composition_id: str = ""
     include_area_names: list[str] = Field(default_factory=list)
     exclude_area_names: list[str] = Field(default_factory=list)
     world_field: str = "world"
     output_area_label_field: str = "area_label"
     output_area_labels_field: str = "area_labels"
     drop_when_unmapped: bool = False
+
+    @model_validator(mode="after")
+    def _validate_map_reference(self):
+        self.composition_id = self.composition_id.strip()
+        if self.composition_id and (not self.areas or any(area.id is None for area in self.areas)):
+            raise ValueError("A mapped area restriction requires area identifiers")
+        return self
 
     @field_validator("include_area_names", "exclude_area_names", mode="after")
     @classmethod
@@ -1348,6 +1380,36 @@ class AreaRestrictionConfig(BaseModel):
     @classmethod
     def _trim(cls, value: str) -> str:
         return str(value or "").strip()
+
+
+def _area_restriction_reference_code(config, compositions):
+    if not isinstance(compositions, list):
+        return "camera_area_unavailable"
+    changed = False
+    for area in config.areas:
+        current = resolve_composition_area(compositions, composition_id=config.composition_id, area_id=area.id)
+        if current is None:
+            return "camera_area_unavailable"
+        changed = changed or current != area
+    return "camera_area_changed" if changed else None
+
+
+def _area_restriction_diagnostics(config, context):
+    parsed = AreaRestrictionConfig.model_validate(config)
+    if not parsed.composition_id:
+        return []
+    compositions = context.get("compositions")
+    if compositions is None and not context.get("check_runtime_prerequisites"):
+        return []
+    code = _area_restriction_reference_code(parsed, compositions)
+    if code is None:
+        return []
+    return [OperatorDiagnostic(
+        severity="error", code=code,
+        message=("The selected map area has changed since this recipe was created."
+                 if code == "camera_area_changed" else "The selected map area is missing or no longer has a valid boundary."),
+        suggestion="Create a new recipe using the current map area before enabling it.",
+    )]
 
 
 class VelocityEstimationConfig(BaseModel):
@@ -4654,8 +4716,11 @@ class CameraMappingRuntime(TransformOperatorRuntime):
 
 
 class AreaRestrictionRuntime(TransformOperatorRuntime):
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], dependencies=None) -> None:
         self._config = AreaRestrictionConfig.model_validate(config)
+        self._dependencies = dependencies
+        self._area_config_snapshot = None
+        self._unavailable_code = None
         self._areas = [
             (area, [(float(point.x), float(point.z)) for point in area.points])
             for area in self._config.areas
@@ -4663,7 +4728,34 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
         self._include = set(self._config.include_area_names)
         self._exclude = set(self._config.exclude_area_names)
 
-    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+    async def _reference_available(self, context):
+        if not self._config.composition_id:
+            return True
+        store = getattr(self._dependencies, "config_store", None)
+        try:
+            configuration = await store.get_config() if isinstance(store, ConfigStore) else None
+        except Exception:
+            configuration = None
+        if configuration is None or configuration is not self._area_config_snapshot:
+            self._area_config_snapshot = configuration
+            self._unavailable_code = _area_restriction_reference_code(
+                self._config, configuration.compositions if configuration is not None else None,
+            )
+        metrics = getattr(context, "metrics", None)
+        if metrics is not None:
+            metrics.unavailable_reason = (
+                f"core.ui.pipelines.alerts.{self._unavailable_code}.message" if self._unavailable_code else None
+            )
+        return self._unavailable_code is None
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        if not await self._reference_available(context):
+            return []
+        mapping = packet.payload.get("mapping")
+        if self._config.composition_id and (
+            not isinstance(mapping, dict) or mapping.get("composition_id") != self._config.composition_id
+        ):
+            return []
         payload = dict(packet.payload)
         payload.pop("area_id", None)
         payload[self._config.output_area_labels_field] = []
@@ -5268,7 +5360,8 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         pressure_behavior="ignore",
         share_strategy="by_signature",
         owner="com.toposync.cameras",
-        runtime_factory=lambda config, _deps: AreaRestrictionRuntime(config),
+        diagnostics_factory=_area_restriction_diagnostics,
+        runtime_factory=lambda config, deps: AreaRestrictionRuntime(config, deps),
     )
     registry.register_operator(
         operator_id="camera.velocity_estimation",

@@ -13,6 +13,7 @@ from toposync.runtime.config_store import (
     AppSettings,
     ConfigStore,
     Pipeline,
+    PipelineValidationError,
     ProcessingServer,
 )
 from toposync.runtime.notifications import NotificationsRuntime
@@ -126,6 +127,8 @@ class PipelinesOrchestrator:
         self._last_sig: str = ""
         self._last_settings_sig: str = ""
         self._last_error: str | None = None
+        self._activation_errors: dict[str, str] = {}
+        self._activation_retry_requested = False
 
     def start(self) -> None:
         if self._task is not None:
@@ -145,6 +148,7 @@ class PipelinesOrchestrator:
         await self._runtime_deps_base.execution_scheduler.shutdown()
 
     def trigger_reload(self) -> None:
+        self._activation_retry_requested = bool(self._activation_errors)
         self._reload.set()
 
     def status(self) -> dict[str, Any]:
@@ -205,6 +209,7 @@ class PipelinesOrchestrator:
             "servers": servers,
             "graph_info": {"graphs": graph_info},
             "last_error": self._last_error,
+            "activation_errors": dict(self._activation_errors),
             "last_signature": self._last_sig,
             "last_settings_signature": self._last_settings_sig,
         }
@@ -252,9 +257,10 @@ class PipelinesOrchestrator:
                 raise
 
     async def _reconcile(self) -> None:
-        pipelines = await self._config_store.list_pipelines()
+        config = await self._config_store.get_config()
+        pipelines = config.pipelines
         servers = await self._config_store.list_processing_servers()
-        settings = await self._config_store.get_settings()
+        settings = config.settings
         settings_payload = _processing_settings_payload(settings)
         settings_sig = json.dumps(settings_payload, sort_keys=True, separators=(",", ":"))
 
@@ -268,6 +274,31 @@ class PipelinesOrchestrator:
             separators=(",", ":"),
         )
 
+        preflight_required = (
+            desired_sig != self._last_sig
+            or self._activation_retry_requested
+            or (bool(self._activation_errors) and settings_sig != self._last_settings_sig)
+        )
+        if preflight_required:
+            self._activation_retry_requested = False
+            activation_errors: dict[str, str] = {}
+            for pipeline in desired:
+                try:
+                    await self._config_store.validate_pipeline_activation(pipeline, config=config)
+                except Exception as exc:  # noqa: BLE001
+                    message = str(exc) if isinstance(exc, PipelineValidationError) else "Activation checks unavailable"
+                    activation_errors[pipeline.name] = message
+                    logger.warning("pipeline activation blocked name=%s: %s", pipeline.name, message)
+            self._activation_errors = activation_errors
+            if await self._config_store.get_config() != config:
+                # A user may disable or edit a pipeline while remote preflight waits.
+                # Reconcile the new snapshot before starting any of its predecessors.
+                self._activation_retry_requested = True
+                return
+        # Keep rejected configurations out of both origins and remote config sync.
+        # Failed preflight is retried only after a relevant edit or explicit reload.
+        desired = [pipeline for pipeline in desired if pipeline.name not in self._activation_errors]
+
         servers_by_id = {s.id: s for s in servers}
         local: list[Pipeline] = []
         remote_groups: dict[str, list[Pipeline]] = {}
@@ -278,7 +309,7 @@ class PipelinesOrchestrator:
             else:
                 remote_groups.setdefault(sid, []).append(p)
 
-        if desired_sig == self._last_sig:
+        if desired_sig == self._last_sig and not preflight_required:
             if settings_sig != self._last_settings_sig:
                 synced = await self._sync_remote_settings(
                     remote_groups=remote_groups,

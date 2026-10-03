@@ -3,6 +3,8 @@ import json
 import time
 from dataclasses import replace
 
+import pytest
+
 from toposync.runtime.config_store import AppConfig, ConfigStore, UserDataPaths
 from toposync.runtime.notifications.store import NotificationStore
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
@@ -83,6 +85,62 @@ def observation(timestamp, x=1, subject="cat-1", generation=0):
         "capture_evidence": {"capture_instance": "decoder", "generation": generation,
                              "sequence": int(timestamp * 100) + 1, "published_at": time.time()},
     })
+
+
+@pytest.mark.parametrize("frames_per_second", [4, 30])
+def test_area_update_rate_preserves_subjects_and_latest_evidence(frames_per_second):
+    async def scenario():
+        runtime = AreaOccurrenceRuntime({"area": AREA, "update_interval_seconds": 1})
+        emissions = {subject: [] for subject in ("first", "second")}
+        for index in range(frames_per_second * 3):
+            timestamp = index / frames_per_second
+            for subject, outputs in emissions.items():
+                outputs.extend(await runtime.process_packet(observation(timestamp, subject=subject), None))
+        for subject, outputs in emissions.items():
+            assert [packet.lifecycle for packet in outputs] == [Lifecycle.OPEN, Lifecycle.UPDATE]
+            assert [packet.payload["frame_ts"] for packet in outputs] == [1, 2]
+            [closed] = await runtime.process_packet(observation(3, x=3, subject=subject), None)
+            assert closed.lifecycle == Lifecycle.CLOSE
+            assert closed.payload["subject"]["id"] == outputs[0].payload["subject"]["id"]
+            assert closed.payload["area_occurrence"]["last_evidence_at"] == 3 - 1 / frames_per_second
+            assert closed.payload["area_occurrence"]["duration_seconds"] == 3 - 1 / frames_per_second
+            assert closed.payload["area_occurrence"]["status"] == "left_area"
+        assert emissions["first"][0].stream_id != emissions["second"][0].stream_id
+    asyncio.run(scenario())
+
+
+def test_area_suppressed_update_keeps_latest_evidence_for_idle_close():
+    async def scenario():
+        first, latest = observation(0), observation(0.005)
+        latest.payload["capture_evidence"]["sequence"] = 2
+        packets = iter([first, latest])
+
+        class Context:
+            emitted = []
+
+            def is_cancelled(self):
+                return len(self.emitted) == 2
+
+            async def read(self, **kwargs):
+                packet = next(packets, None)
+                if packet is None:
+                    await asyncio.sleep(0.02)
+                return packet
+
+            async def emit(self, packet, **kwargs):
+                self.emitted.append(packet)
+
+        context = Context()
+        runtime = AreaOccurrenceRuntime({"area": AREA, "minimum_duration_seconds": 0,
+            "update_interval_seconds": 1, "evidence_timeout_seconds": 0.01})
+        await asyncio.wait_for(runtime.run(context), timeout=1)
+        assert [packet.lifecycle for packet in context.emitted] == [Lifecycle.OPEN, Lifecycle.CLOSE]
+        closed = context.emitted[-1]
+        assert closed.parent_packet_id == latest.packet_id
+        assert closed.payload["area_occurrence"]["last_evidence_at"] == 0.005
+        assert closed.payload["area_occurrence"]["duration_seconds"] == 0.005
+        assert closed.payload["area_occurrence"]["status"] == "evidence_timeout"
+    asyncio.run(scenario())
 
 
 def test_perimeter_description_persists_facts_and_loss_without_duplicate_alert(tmp_path):
@@ -292,7 +350,8 @@ def test_area_offline_closes_at_last_observation():
 
 def test_area_reset_closes_old_visit_and_subject_capacity_is_bounded():
     async def scenario():
-        runtime = AreaOccurrenceRuntime({"area": AREA, "minimum_duration_seconds": 0, "maximum_subjects": 2})
+        runtime = AreaOccurrenceRuntime({"area": AREA, "minimum_duration_seconds": 0, "maximum_subjects": 2,
+                                         "update_interval_seconds": 1})
         old = observation(100)
         opened = (await runtime.process_packet(old, None))[0]
         outputs = await runtime.process_packet(observation(0, generation=1), None)

@@ -342,6 +342,26 @@ def test_area_recipe_respects_composition_and_rejects_ambiguous_area(tmp_path, m
         assert _node_config(pipeline, "camera.camera_mapping")["composition_id"] == second["id"]
 
 
+@pytest.mark.parametrize("preset", ["area_presence", "area_entry"])
+def test_area_recipe_bounds_storage_updates_and_diagnoses_unlimited_override(tmp_path, monkeypatch, preset):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client, with_area=True)
+        response = client.post("/api/cameras/cameras/cam1/pipelines/presets/preview", json={
+            "preset": preset, "area_id": "area-1", "composition_id": "yard",
+        })
+        assert response.status_code == 200, response.text
+        pipeline = response.json()["pipeline"]
+        area = _node_config(pipeline, "camera.area_occurrence")
+        assert area["update_interval_seconds"] == 1
+        for interval, expected in [(1, False), (0, True)]:
+            area["update_interval_seconds"] = interval
+            compiled = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+            assert compiled.status_code == 200, compiled.text
+            codes = {alert["code"] for alert in compiled.json()["alerts"]}
+            assert ("store_images_without_rate_control" in codes) is expected
+
+
 def test_recipe_preview_compiles_without_persisting_or_enabling(tmp_path, monkeypatch):
     with _create_client(tmp_path, monkeypatch) as client:
         _configure_camera(client)

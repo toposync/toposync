@@ -27,6 +27,7 @@ class AreaOccurrenceConfig(BaseModel):
     categories: list[Literal["person", "dog", "cat"]] = Field(default_factory=lambda: ["person", "dog", "cat"])
     mode: Literal["presence", "entry"] = "presence"
     minimum_duration_seconds: float = Field(default=1.0, ge=0, le=3600)
+    update_interval_seconds: float = Field(default=0.0, ge=0, le=3600)
     evidence_timeout_seconds: float = Field(default=5.0, gt=0, le=3600)
     maximum_subjects: int = Field(default=128, ge=1, le=4096)
     visit_window_seconds: float = Field(default=300.0, gt=0, le=86400)
@@ -73,6 +74,7 @@ class _AreaState:
     started_at: float | None = None
     opened: bool = False
     last_timestamp: float = float("-inf")
+    last_emitted_at: float = float("-inf")
     last_seen: float = 0
     last_packet: Packet | None = None
     capture: tuple[str, int, int] | None = None
@@ -224,12 +226,15 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         state.last_packet = packet
         if timestamp - state.started_at < self.config.minimum_duration_seconds:
             return outputs
+        if state.opened and timestamp - state.last_emitted_at < self.config.update_interval_seconds:
+            return outputs
         lifecycle = Lifecycle.UPDATE if state.opened else Lifecycle.OPEN
         if not state.opened and state.observed_entry:
             if len(state.visits) == state.visits.maxlen:
                 state.visits_overflow_until = state.visits[0] + self.config.visit_window_seconds
             state.visits.append(state.started_at)
         state.opened = True
+        state.last_emitted_at = timestamp
         return outputs + [self._event(key, state, lifecycle, "confirmed")]
 
     def _event(self, key, state, lifecycle, status):
@@ -291,7 +296,7 @@ def register_area_occurrence_operator(registry):
         description="Observed presence or outside-to-inside crossing of a mapped area, with per-subject lifecycle.",
         config_model=AreaOccurrenceConfig,
         inputs=[{"name": "in", "required": True}], outputs=[{"name": "out"}],
-        capabilities=["camera", "tracking"], execution_mode="in_event_loop", max_concurrency=1,
+        capabilities=["camera", "tracking", "rate_limited_emission"], execution_mode="in_event_loop", max_concurrency=1,
         requires_payload_keys=["subject"], produces_payload_keys=["subject", "area_occurrence", "correlation_id"],
         state_kind="stateful_per_stream", ordering="strict", share_strategy="never", owner="com.toposync.cameras",
         diagnostics_factory=_area_reference_diagnostics,
@@ -321,7 +326,8 @@ def build_area_occurrence_graph(*, preset, camera_id, source_id, detection_model
         {"id": "track", "operator": "vision.track", "config": {"tracker_id": "byte_world", "use_world_anchor": "auto"}},
         {"id": "area", "operator": "camera.area_occurrence", "config": {
             "area": area, "composition_id": composition_id, "mode": mode, "categories": categories,
-            "minimum_duration_seconds": 0 if grouped else 1}},
+            "minimum_duration_seconds": 0 if grouped else 1,
+            "update_interval_seconds": 1 if preset in {"area_presence", "area_entry"} else 0}},
         {"id": "store", "operator": "core.store_images", "config": {"format": "webp"}},
         {"id": "notify", "operator": "core.notify", "config": {
             "notification_type": "pipelines.tracking", "title": notification_title or "{{camera_name}}: {{payload.area_occurrence.area}}",

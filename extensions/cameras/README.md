@@ -183,6 +183,14 @@ Stopped-person and stopped-vehicle observations expire after five seconds withou
 
 `camera.area_occurrence` groups evidence independently per tracked subject. Entry requires a preceding observation outside the area; first sighting inside is not an entry. Duration ends at the last confirmed observation. Missing observations, source loss and tracking closure end the occurrence without claiming the physical activity ended. Stale or terminal replay cannot reopen a subject, and active state is bounded. Cat recipes use semantic occurrence filtering; descriptions are observations, not proof of ingestion or elimination.
 
+New presence and entry recipes emit at most one regular update per second of the
+observed media timeline per occurrence before image storage. Every accepted observation still refreshes the
+state and last evidence; opening and closing events bypass this interval, and a
+close retains the latest confirmed frame and duration. This limits repeated writes,
+not the number of subjects or detection work. The operator's
+`update_interval_seconds=0` leaves updates unlimited and preserves the storage
+advisory. Grouped-entry and doorbell correlation keep their separate contracts.
+
 **People entering together** requires two distinct tracked people crossing into the
 selected mapped area within five seconds of the first crossing. Repeated crossings
 by the same tracked subject count once in that group. It reuses area occurrences

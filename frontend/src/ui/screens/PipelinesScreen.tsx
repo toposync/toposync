@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PipelineOperatorPanel, PipelineReviewPanel, SettingsPanel } from "@toposync/plugin-api";
 
 import { i18n, resolveLocalizedString } from "../../util/i18n";
@@ -222,6 +222,11 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     }
   });
   const [sidebarOpen, setSidebarOpen] = useState(() => !compactLayout);
+  const sidebarToggleRef = useRef<HTMLButtonElement>(null);
+  const closeSidebar = useCallback(() => {
+    setSidebarOpen(false);
+    sidebarToggleRef.current?.focus();
+  }, []);
   const [showGeneratedPipelines, setShowGeneratedPipelines] = useState(false);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
@@ -372,11 +377,11 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   useEffect(() => {
     if (!compactLayout || !sidebarOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSidebarOpen(false);
+      if (event.key === "Escape") closeSidebar();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [compactLayout, sidebarOpen]);
+  }, [compactLayout, sidebarOpen, closeSidebar]);
 
   useEffect(() => {
     if (!selected) {
@@ -838,7 +843,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       const created = await createPipeline({ ...defaultPipeline(newPipelineIdentifier()), display_name: name });
       setPipelines((prev) => sortPipelinesForDisplay([...prev, created]));
       setSelectedName(created.name);
-      if (compactLayout) setSidebarOpen(false);
+      if (compactLayout) closeSidebar();
       setCreateName("");
     } catch (err: any) {
       setError(String(err?.message ?? err));
@@ -923,9 +928,9 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       const created = await duplicatePipeline(draft.name, newPipelineIdentifier(), newName);
       setPipelines((prev) => sortPipelinesForDisplay([...prev, created]));
       setSelectedName(created.name);
-      if (compactLayout) setSidebarOpen(false);
+      if (compactLayout) closeSidebar();
     },
-    [draft, compactLayout],
+    [draft, compactLayout, closeSidebar],
   );
 
   const handleDelete = async () => {
@@ -965,7 +970,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
           .join(" ")}
         onClick={() => {
           setSelectedName(pipeline.name);
-          if (compactLayout) setSidebarOpen(false);
+          if (compactLayout) closeSidebar();
         }}
       >
         <div className="pipelinesListItemName">{pipeline.display_name || pipeline.name}</div>
@@ -989,9 +994,12 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
           ) : null}
           {compactLayout ? (
             <button
+              ref={sidebarToggleRef}
               className={["iconButton", sidebarOpen ? "isActive" : ""].filter(Boolean).join(" ")}
               type="button"
-              onClick={() => setSidebarOpen((prev) => !prev)}
+              onClick={() => sidebarOpen ? closeSidebar() : setSidebarOpen(true)}
+              aria-expanded={sidebarOpen}
+              aria-controls="pipeline-list"
               aria-label={t("core.ui.pipelines.aria.toggle_list")}
               title={t("core.ui.pipelines.aria.toggle_list")}
             >
@@ -1016,10 +1024,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
             type="button"
             aria-label={t("core.ui.pipelines.aria.close_list")}
             tabIndex={-1}
-            onClick={() => setSidebarOpen(false)}
+            onClick={closeSidebar}
           />
         ) : null}
-        <div className="pipelinesSidebar">
+        <div className="pipelinesSidebar" id="pipeline-list">
           <div className="pipelinesSidebarHeader">
             <div className="pipelinesSidebarTitle">{t("core.ui.pipelines.title")}</div>
           </div>

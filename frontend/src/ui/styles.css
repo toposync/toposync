@@ -2394,6 +2394,7 @@ video {
     left: 0;
     width: min(380px, calc(100vw - 44px));
     border-right: 1px solid rgba(255, 255, 255, 0.18);
+    visibility: hidden;
     transform: translateX(-102%);
     transition: transform 160ms ease;
     z-index: 4;
@@ -2401,6 +2402,7 @@ video {
   }
 
   .pipelinesBody.isSidebarOpen .pipelinesSidebar {
+    visibility: visible;
     transform: translateX(0);
   }
 

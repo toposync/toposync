@@ -70,7 +70,9 @@ def test_camera_pipeline_activation_state_preserves_runtime_authorization(
         name = created.json()["pipeline_name"]
         path = client.app.state.config_store.paths.config_path
         config = json.loads(path.read_text())
-        next(p for p in config["pipelines"] if p["name"] == name)["enabled"] = True
+        configured = next(p for p in config["pipelines"] if p["name"] == name)
+        configured["enabled"] = True
+        configured["display_name"] = "Fluxo da entrada"
         path.write_text(json.dumps(config))
         monkeypatch.setattr(orchestrator, "status", lambda: {
             "activation_errors": {name: "Private diagnostic text"},
@@ -87,6 +89,7 @@ def test_camera_pipeline_activation_state_preserves_runtime_authorization(
         assert response.status_code == 200
         assert "Private diagnostic" not in response.text
         listed = next(p for p in response.json()["pipelines"] if p["name"] == name)
+        assert listed["display_name"] == "Fluxo da entrada"
         assert listed["activation_blocked"] is (True if runtime_access else None)
 
         monkeypatch.setattr(orchestrator, "status", lambda: {})

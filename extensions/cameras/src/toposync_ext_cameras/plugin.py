@@ -688,6 +688,7 @@ class CameraPtzStopRequest(BaseModel):
 
 class CameraPipelineSummary(BaseModel):
     name: str
+    display_name: str = ""
     enabled: bool = True
     processing_server_id: str = "local"
     source_ids: list[str] = Field(default_factory=list)
@@ -5851,6 +5852,7 @@ class CamerasExtension(BaseExtension):
                 pipelines_out.append(
                     CameraPipelineSummary(
                         name=pipeline.name,
+                        display_name=pipeline.display_name or pipeline.name,
                         enabled=bool(pipeline.enabled),
                         processing_server_id=str(pipeline.processing_server_id or "local").strip()
                         or "local",

@@ -1786,7 +1786,7 @@ function CamerasSettingsPanelContent({
                             type="button"
                             onClick={() => openPipelineEditor(pipeline.name)}
                           >
-                            <span className="settingsListTitle">{pipeline.name}</span>
+                            <span className="settingsListTitle">{pipeline.display_name || pipeline.name}</span>
                             <span className="settingsListMeta">
                               {pipeline.enabled === false
                                 ? t("ext.cameras.pipelines.disabled", {}, "Desativado")
@@ -1794,9 +1794,10 @@ function CamerasSettingsPanelContent({
                               {" · "}
                               {pipeline.processing_server_id || "local"}
                               {pipeline.source_ids?.length ? ` · ${pipeline.source_ids.join(", ")}` : ""}
-                              {pipeline.enabled !== false ? ` · ${t("ext.cameras.recipe.execution_unknown")}` : ""}
+                              {pipeline.enabled !== false ? ` · ${t(pipeline.activation_blocked
+                                ? "ext.cameras.recipe.execution_blocked" : "ext.cameras.recipe.execution_unknown")}` : ""}
                             </span>
-                            {pipeline.enabled !== false ? (sourceHealth?.sources ?? []).filter(source => source.pipeline_name === pipeline.name && source.camera_id === activeCamera.id).map(source => (
+                            {pipeline.enabled !== false && !pipeline.activation_blocked ? (sourceHealth?.sources ?? []).filter(source => source.pipeline_name === pipeline.name && source.camera_id === activeCamera.id).map(source => (
                               <span className="settingsDescription" key={source.source_id}>
                                 {source.camera_source_name || source.camera_source_id}: {t(`ext.cameras.settings.source_health.status.${source.status}`)}
                                 {source.last_frame_at_unix ? ` · ${t("ext.cameras.settings.source_health.last_frame")}: ${new Date(source.last_frame_at_unix * 1000).toLocaleString()}` : ""}

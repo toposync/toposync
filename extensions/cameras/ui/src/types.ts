@@ -467,9 +467,11 @@ export type CameraNotificationPriority = "low" | "medium" | "high";
 
 export type CameraPipelineSummary = {
   name: string;
+  display_name?: string;
   enabled: boolean;
   processing_server_id?: string;
   source_ids?: string[];
+  activation_blocked?: boolean | null;
 };
 
 export type CameraPipelinesResponse = {

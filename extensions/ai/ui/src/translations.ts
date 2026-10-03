@@ -2,6 +2,12 @@ import type { TranslationBundle } from "@toposync/plugin-api";
 
 export const aiTranslations: TranslationBundle = {
   en: {
+    "core.ui.pipelines.alerts.ai_provider_unavailable.message": "Ollama could not be checked from the selected processing server.",
+    "core.ui.pipelines.alerts.ai_provider_unavailable.suggestion": "Review that server's Ollama connection before enabling this pipeline.",
+    "core.ui.pipelines.alerts.ai_model_unavailable.message": "None of the selected models were found in the Ollama inventory queried by the processing server.",
+    "core.ui.pipelines.alerts.ai_model_unavailable.suggestion": "Choose an installed model or install it in the Ollama instance configured for that server.",
+    "core.ui.pipelines.alerts.ai_model_inventory_checked.message": "A selected model is listed by Ollama; this does not yet confirm it works for this task.",
+    "core.ui.pipelines.alerts.ai_model_inventory_checked.suggestion": "Validate this task with representative evidence before relying on this pipeline.",
     "core.ui.pipelines.alerts.ai_description_missing.message": "Describe what this AI step should observe before enabling it.",
     "core.ui.pipelines.alerts.ai_description_missing.suggestion": "Open this step and enter the condition or target to observe.",
     "core.ui.pipelines.alerts.ai_settings_unavailable.message": "AI profile configuration could not be checked.",
@@ -211,6 +217,12 @@ export const aiTranslations: TranslationBundle = {
     "ext.ai.operator.condition.failure.pass": "Pass through",
   },
   "pt-BR": {
+    "core.ui.pipelines.alerts.ai_provider_unavailable.message": "Não foi possível consultar o Ollama a partir do servidor de processamento selecionado.",
+    "core.ui.pipelines.alerts.ai_provider_unavailable.suggestion": "Revise a conexão com o Ollama usada por esse servidor antes de habilitar o fluxo.",
+    "core.ui.pipelines.alerts.ai_model_unavailable.message": "Nenhum modelo selecionado foi encontrado no Ollama consultado pelo servidor de processamento.",
+    "core.ui.pipelines.alerts.ai_model_unavailable.suggestion": "Escolha um modelo instalado ou instale o modelo no Ollama configurado para esse servidor.",
+    "core.ui.pipelines.alerts.ai_model_inventory_checked.message": "Um modelo selecionado aparece no Ollama; isso ainda não comprova que ele funciona nesta tarefa.",
+    "core.ui.pipelines.alerts.ai_model_inventory_checked.suggestion": "Valide esta tarefa com evidências representativas antes de depender deste fluxo.",
     "core.ui.pipelines.alerts.ai_description_missing.message": "Descreva o que esta etapa de inteligência artificial deve observar antes de habilitar o fluxo.",
     "core.ui.pipelines.alerts.ai_description_missing.suggestion": "Abra esta etapa e informe a condição ou o alvo a observar.",
     "core.ui.pipelines.alerts.ai_settings_unavailable.message": "Não foi possível verificar a configuração dos perfis de inteligência artificial.",

@@ -1254,7 +1254,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               {reviewPanels.filter(panel => panel.supports(topologyGraph)).map(panel => <React.Fragment key={panel.id}>{panel.render(topologyGraph)}</React.Fragment>)}
               {selected && draft.enabled !== selected.enabled ? (
                 <p className="pipelinesHint" role="status">{t(draft.enabled ? "core.ui.pipelines.activation_pending" : "core.ui.pipelines.deactivation_pending")}</p>
-              ) : selected?.enabled ? <p className="pipelinesHint" role="status">{t("core.ui.pipelines.execution_unknown")}</p>
+              ) : selected?.enabled ? <p className="pipelinesHint" role="status">{t(runtimeGraphInfo?.status?.activation_errors?.[draft.name]
+                ? "core.ui.pipelines.execution_blocked" : "core.ui.pipelines.execution_unknown")}</p>
                 : recommendations.some(alert => alert.severity === "error" || alert.code === "operator_diagnostics_failed")
                   ? <p className="pipelinesHint" role="status">{t("core.ui.pipelines.disabled_with_issues")}</p> : null}
               <div className="pipelinesEditorControls">

@@ -264,7 +264,7 @@ export type GraphRuntimeInfo = {
 
 export type PipelineRuntimeGraphInfoResponse = {
   graphs: GraphRuntimeInfo[];
-  status: Record<string, unknown>;
+  status: Record<string, unknown> & { activation_errors?: Record<string, string> };
 };
 
 export type PipelineStorageLayer = {

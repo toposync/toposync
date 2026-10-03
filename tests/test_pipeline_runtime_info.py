@@ -205,6 +205,7 @@ def test_runtime_graph_info_endpoint_returns_graphs(
         def status(self) -> dict[str, Any]:
             return {
                 "running": True,
+                "activation_errors": {"blocked": "Model unavailable"},
                 "graph_info": {"graphs": [{"graph_id": "g", "pressure": {"active": False}}]},
             }
 
@@ -215,5 +216,6 @@ def test_runtime_graph_info_endpoint_returns_graphs(
 
     assert response.status_code == 200
     assert response.json()["graphs"][0]["graph_id"] == "g"
+    assert response.json()["status"]["activation_errors"] == {"blocked": "Model unavailable"}
     assert status_response.status_code == 200
     assert status_response.json()["status"]["graph_info"]["graphs"][0]["graph_id"] == "g"

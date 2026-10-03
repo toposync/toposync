@@ -42,7 +42,7 @@ function harness({ validationFailure = false, saveFailure = false, draftPresent 
     recommendations: [], recommendationsError: null, recommendationsLoading: false,
     selectedServerStatus: null, selectedServerIssues: [], selectedServerStatusLoading: false,
     servers: [{ id: "local" }], pipelineIngestNotices: [], operatorsById: {}, camerasIndex: { cameras: [] },
-    operatorPanels: {}, reviewPanels: [], assistants: [], selectedRuntimeGraphInfo: null, topologyRuntimeStatus: {},
+    operatorPanels: {}, reviewPanels: [], assistants: [], runtimeGraphInfo: null, selectedRuntimeGraphInfo: null, topologyRuntimeStatus: {},
     topologyValidationLoading: false, topologyValidationError: null, topologyValidationSuccessAt: null,
     interactiveSteps: [], telemetryResetNonce: 0, telemetryResetting: false, pipelineStorageLimitBytes: 0,
     onOpenProcessingServers: noop, openTelemetryFieldInspector: noop, applyTopologyGraphChange: noop,
@@ -209,4 +209,23 @@ test("a disabled draft still requires a structurally compilable graph", async ()
   await context.handleSave();
   assert.equal(context.putCalls.length, 0);
   assert.equal(context.error, "Missing input port");
+});
+
+test("only the selected enabled pipeline's current activation error proves blocked execution", () => {
+  const { context, render } = harness();
+  const state = () => renderToStaticMarkup(render());
+  context.runtimeGraphInfo = { status: { activation_errors: { "other-flow": "Unavailable" } } };
+  assert.match(state(), /execution_unknown/);
+  assert.doesNotMatch(state(), /execution_blocked/);
+  context.runtimeGraphInfo.status.activation_errors[context.draft.name] = "Unavailable";
+  assert.match(state(), /execution_blocked/);
+  assert.doesNotMatch(state(), /execution_unknown/);
+  context.runtimeGraphInfo = null;
+  assert.match(state(), /execution_unknown/);
+  context.runtimeGraphInfo = { status: { activation_errors: { [context.draft.name]: "Unavailable" } } };
+  context.draft.enabled = false;
+  assert.match(state(), /deactivation_pending/);
+  assert.doesNotMatch(state(), /execution_blocked/);
+  context.selected.enabled = false;
+  assert.doesNotMatch(state(), /execution_blocked|execution_unknown/);
 });

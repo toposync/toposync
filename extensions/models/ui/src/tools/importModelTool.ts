@@ -1,6 +1,7 @@
 import { requestForm, resolveToposyncUrl, type EditorTool, type HostI18n, type PlanePoint } from "@toposync/plugin-api";
 
 import { openModelSourcePicker } from "./modelSourcePicker";
+import { prepareObjectImage, reviewObjectImage } from "./imagePreparation";
 import type { UploadFileResponse } from "../types";
 
 import { MAXIMUM_MODEL_BYTES } from "../validation";
@@ -37,7 +38,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
       let pendingPlacementPoint: PlanePoint | null = null;
       let isPointerArmed = false;
       let pointerDownScreen: { x: number; y: number } | null = null;
-      let activityState: "idle" | "uploading" | "generating" | "processing" = "idle";
+      let activityState: "idle" | "uploading" | "preparing" | "reviewing" | "generating" | "processing" = "idle";
       let lastError: string | null = null;
       let operation: AbortController | null = null;
       let disposed = false;
@@ -61,7 +62,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
       document.body.appendChild(progress);
 
       function invalidateViewport() {
-        const message = lastError ?? (activityState === "idle" ? "" : t(`ext.models.editor.${activityState}`));
+        const message = lastError ?? (["idle", "reviewing"].includes(activityState) ? "" : t(`ext.models.editor.${activityState}`));
         status.textContent = message;
         dismiss.textContent = t(lastError ? "ext.models.editor.close" : "ext.models.editor.cancel");
         if (message && !progress.open && !disposed) progress.showModal();
@@ -99,23 +100,32 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
           files.map((file) => ({ name: file.name, size: file.size, type: file.type })),
         );
 
-        activityState = imageFile ? "generating" : "uploading";
+        activityState = imageFile ? "preparing" : "uploading";
         lastError = null;
         invalidateViewport();
 
         let generation: Record<string, unknown> | undefined;
         let entryUpload: UploadFileResponse;
         if (imageFile) {
-          const form = new FormData();
-          form.append("file", imageFile);
           try {
+            const prepared = await prepareObjectImage(imageFile, signal);
+            signal.throwIfAborted();
+            activityState = "reviewing";
+            invalidateViewport();
+            if (await reviewObjectImage(imageFile, prepared.image, t, signal, cancel) === "replace") return "choose_another_image";
+            signal.throwIfAborted();
+            const form = new FormData();
+            form.append("file", imageFile);
+            form.append("expected_prepared_sha256", prepared.digest);
+            activityState = "generating";
+            invalidateViewport();
             const result = await requestForm<UploadFileResponse & { generation: Record<string, unknown> }>("/api/models/generate", form, { signal });
             entryUpload = result;
             generation = result.generation;
           } catch (error) {
             signal.throwIfAborted();
             const code = error instanceof Error ? error.message : "";
-            const known = ["background_removal_not_installed", "local_generation_not_installed", "local_generation_busy", "isolated_object_image_required", "invalid_generation_image", "generation_image_too_large", "generation_timeout", "generation_memory_limit"];
+            const known = ["invalid_prepared_image", "generation_preparation_changed", "background_removal_not_installed", "local_generation_not_installed", "local_generation_busy", "isolated_object_image_required", "invalid_generation_image", "generation_image_too_large", "generation_timeout", "generation_memory_limit"];
             throw new Error(t(`ext.models.error.${known.includes(code) ? code : "local_generation_failed"}`));
           }
         } else {
@@ -178,8 +188,9 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
         const placement = pendingPlacementPoint;
         operation = controller;
         void (async () => {
+          let chooseAnother = false;
           try {
-            await handleFiles(files, controller.signal, placement);
+            chooseAnother = await handleFiles(files, controller.signal, placement) === "choose_another_image";
           } catch (err) {
             if (!controller.signal.aborted && !disposed) {
               lastError = err instanceof Error ? err.message : String(err);
@@ -189,8 +200,9 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
             if (operation === controller) {
               operation = null;
               activityState = "idle";
-              pendingPlacementPoint = null;
+              pendingPlacementPoint = chooseAnother ? placement : null;
               invalidateViewport();
+              if (chooseAnother && !disposed && !controller.signal.aborted) input.click();
             }
           }
         })();

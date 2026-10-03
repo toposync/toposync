@@ -1,22 +1,25 @@
 """Optional local image-to-mesh generation, published through the existing file store."""
 import asyncio
 from contextlib import contextmanager
+import hashlib
 from io import BytesIO
 import json
 import os
 from pathlib import Path
 import shutil
+import re
 import signal
 import struct
 import tempfile
 import uuid
 
-from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
 from toposync.runtime.auth import AuthContext
 
 MAXIMUM_IMAGE_BYTES = 8 * 1024**2
 GENERATION_TIMEOUT_SECONDS = 300
+PREPARATION_TIMEOUT_SECONDS = 30
 
 
 def authorize(request: Request):
@@ -67,20 +70,28 @@ def prepare_image(data: bytes, target: Path):
         raise HTTPException(422, "invalid_generation_image") from exc
 
 
-async def run_worker(home: Path, source: Path, output: Path, request: Request):
+async def run_worker(
+    home: Path, source: Path, output: Path, request: Request, *,
+    prepare_only: bool = False, expected_prepared_sha256: str | None = None,
+):
     env = {**os.environ, "OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2", "MKL_NUM_THREADS": "2",
            "TOKENIZERS_PARALLELISM": "false", "HF_HOME": str(home / "huggingface"),
            "HF_HUB_CACHE": str(home / "huggingface/hub"),
            "HUGGINGFACE_HUB_CACHE": str(home / "huggingface/hub"),
            "TRANSFORMERS_CACHE": str(home / "huggingface/hub"),
            "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
+    arguments = [str(home), str(source), str(output)]
+    if prepare_only:
+        arguments.append("--prepare-only")
+    if expected_prepared_sha256 is not None:
+        arguments.extend(["--expected-prepared-sha256", expected_prepared_sha256])
     worker = await asyncio.create_subprocess_exec(
         str(home / "environment/bin/python"), str(Path(__file__).with_name("generation_worker.py")),
-        str(home), str(source), str(output), env=env, start_new_session=True,
+        *arguments, env=env, start_new_session=True,
         stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
     )
     try:
-        async with asyncio.timeout(GENERATION_TIMEOUT_SECONDS):
+        async with asyncio.timeout(PREPARATION_TIMEOUT_SECONDS if prepare_only else GENERATION_TIMEOUT_SECONDS):
             while worker.returncode is None:
                 if await request.is_disconnected():
                     raise HTTPException(499, "generation_cancelled")
@@ -89,6 +100,8 @@ async def run_worker(home: Path, source: Path, output: Path, request: Request):
                 raise HTTPException(422, "isolated_object_image_required")
             if worker.returncode == 76:
                 raise HTTPException(503, "background_removal_not_installed")
+            if worker.returncode == 77:
+                raise HTTPException(409, "generation_preparation_changed")
             if worker.returncode != 0:
                 raise HTTPException(503, "generation_memory_limit" if worker.returncode == 75 else "local_generation_failed")
     except TimeoutError as exc:
@@ -112,11 +125,59 @@ async def run_worker(home: Path, source: Path, output: Path, request: Request):
 
 
 def install_generation_routes(app: FastAPI):
+    @app.post("/api/models/prepare-image")
+    async def prepare(request: Request, file: UploadFile = File(...)):
+        authorize(request)
+        try:
+            home = provider_home(app)
+            data = await file.read(MAXIMUM_IMAGE_BYTES + 1)
+            if len(data) > MAXIMUM_IMAGE_BYTES:
+                raise HTTPException(413, "generation_image_too_large")
+            runtime = app.state.config_store.paths.data_dir / "runtime" / "model-generation"
+            runtime.mkdir(parents=True, exist_ok=True)
+            with provider_lease(home), tempfile.TemporaryDirectory(dir=runtime) as folder:
+                source, output = Path(folder) / "input.png", Path(folder) / "prepared.png"
+                await asyncio.to_thread(prepare_image, data, source)
+                await run_worker(home, source, output, request, prepare_only=True)
+                authorize(request)
+                if await request.is_disconnected():
+                    raise HTTPException(499, "generation_cancelled")
+                from .generation_worker import prepared_image_digest
+
+                try:
+                    if not 0 < output.stat().st_size <= MAXIMUM_IMAGE_BYTES:
+                        raise HTTPException(413, "generation_image_too_large")
+                    provenance = json.loads(output.with_suffix(".json").read_text())
+                    with Image.open(output) as image:
+                        if image.format != "PNG" or image.width * image.height > 16_777_216:
+                            raise ValueError("invalid_preparation_image")
+                        digest = prepared_image_digest(image)
+                    background = provenance.get("background_removal", {})
+                    if (provenance.get("kind") != "image_preparation"
+                            or provenance.get("prepared_sha256") != digest
+                            or provenance.get("input_sha256") != hashlib.sha256(source.read_bytes()).hexdigest()
+                            or background.get("method") not in {"estimated", "provided_alpha"}):
+                        raise ValueError("invalid_preparation_provenance")
+                except (OSError, ValueError, AttributeError, Image.DecompressionBombError) as exc:
+                    raise HTTPException(503, "invalid_prepared_image") from exc
+                return Response(output.read_bytes(), media_type="image/png", headers={
+                    "Cache-Control": "private, no-store",
+                    "X-Toposync-Prepared-Sha256": digest,
+                    "X-Toposync-Background-Method": background["method"],
+                })
+        finally:
+            await file.close()
+
     @app.post("/api/models/generate")
-    async def generate(request: Request, response: Response, file: UploadFile = File(...)):
+    async def generate(
+        request: Request, response: Response, file: UploadFile = File(...),
+        expected_prepared_sha256: str | None = Form(None),
+    ):
         authorize(request)
         response.headers["Cache-Control"] = "private, no-store"
         try:
+            if expected_prepared_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", expected_prepared_sha256):
+                raise HTTPException(422, "invalid_preparation_digest")
             home = provider_home(app)
             data = await file.read(MAXIMUM_IMAGE_BYTES + 1)
             if len(data) > MAXIMUM_IMAGE_BYTES:
@@ -126,7 +187,10 @@ def install_generation_routes(app: FastAPI):
             with provider_lease(home), tempfile.TemporaryDirectory(dir=runtime) as folder:
                 source, output = Path(folder) / "input.png", Path(folder) / "model.glb"
                 await asyncio.to_thread(prepare_image, data, source)
-                await run_worker(home, source, output, request)
+                if expected_prepared_sha256 is None:
+                    await run_worker(home, source, output, request)
+                else:
+                    await run_worker(home, source, output, request, expected_prepared_sha256=expected_prepared_sha256)
                 authorize(request)
                 if await request.is_disconnected():
                     raise HTTPException(499, "generation_cancelled")
@@ -139,6 +203,11 @@ def install_generation_routes(app: FastAPI):
                     provenance = json.loads(output.with_suffix(".json").read_text())
                     if provenance.get("kind") != "generated_approximation" or provenance.get("metric_reconstruction") is not False:
                         raise ValueError("invalid_provenance")
+                    if expected_prepared_sha256 is not None and (
+                        provenance.get("prepared_sha256") != expected_prepared_sha256
+                        or provenance.get("preparation_review_verified") is not True
+                    ):
+                        raise ValueError("preparation_review_not_verified")
                 except (OSError, ValueError, AttributeError) as exc:
                     raise HTTPException(503, "invalid_generated_model") from exc
                 identifier = uuid.uuid4().hex

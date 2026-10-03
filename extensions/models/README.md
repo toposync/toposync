@@ -28,6 +28,25 @@ started may finish, but its result is discarded after cancellation.
 `POST /api/models/generate` accepts one multipart `file` and requires both
 `core:files:read` and `core:files:write`. The model tool uses this endpoint. It accepts a PNG/JPEG/WebP image, at most 8 MiB and 16 million pixels. Existing transparency is reused. Opaque photos require the optional local background model below. EXIF orientation is normalized before processing. Empty transparent and uniform opaque images are rejected before starting a worker.
 
+`POST /api/models/prepare-image` accepts the same `file` and permissions and
+returns a temporary foreground preview as `image/png`, with `Cache-Control:
+private, no-store`. It does not publish files, load TripoSR or read its checkpoint.
+The preparation worker shares the generation lease, has a 30-second timeout and
+a sampled 2 GiB memory guard, and is reaped on cancellation. Its optional U2netp
+weights are still verified before use. The output must fit the same 8 MiB limit.
+
+`X-Toposync-Prepared-Sha256` binds the preview's dimensions and exact RGBA pixels;
+`X-Toposync-Background-Method` identifies `estimated` or `provided_alpha`.
+After review, a caller can send the **original image** to `/api/models/generate`
+with multipart `expected_prepared_sha256`. The worker prepares the image again
+and rejects a mismatch with `409 generation_preparation_changed` before reading
+the 3D assets or importing the generator. No persistent preparation token or
+image store is created. Successful generation records `prepared_sha256` and
+`preparation_review_verified`; the original normalized input remains its source.
+The digest verifies content consistency, not whether the outline is correct or
+whether a person actually reviewed it. Without the optional digest, generation
+does not claim a verified preparation review.
+
 The server looks for a trusted, administrator-installed TripoSR runtime under
 `<data_dir>/models/triposr`, or `TOPOSYNC_MODELS_TRIPOSR_HOME`. It never accepts
 runtime paths, commands, model downloads or cloud fallbacks from the request.
@@ -39,7 +58,7 @@ Required layout:
 - `huggingface/hub/`: offline cache for the `facebook/dino-vitb16` configuration, revision `f205d5d8e640a89a2b8ef0369670dfc37cc07fc2`, including its `refs/main` pointer. Additional DINO weights are not needed.
 
 `triposr_manifest.json` pins source/configuration/weight SHA-256 hashes, checked
-inside every worker before importing provider code. Preserve the upstream MIT
+inside every generation worker before importing provider code. Preserve the upstream MIT
 license and attribution with an installation. The application does not infer
 readiness from the presence of files alone.
 Missing runtime returns 503; a conflicting generation returns 409. The evaluated

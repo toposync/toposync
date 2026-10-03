@@ -1,9 +1,11 @@
 """Offline, bounded TripoSR subprocess. Heavy dependencies stay outside the server."""
+import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
 import resource
+import struct
 import sys
 import threading
 import time
@@ -15,6 +17,15 @@ BACKGROUND = {
     "sha256": "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8",
     "bytes": 4_574_861,
 }
+
+
+def prepared_image_digest(image):
+    """Bind a review to dimensions and exact RGBA pixels, not PNG encoding."""
+    rgba = image.convert("RGBA")
+    digest = hashlib.sha256(b"toposync-prepared-rgba-v1\0")
+    digest.update(struct.pack("<II", *rgba.size))
+    digest.update(rgba.tobytes())
+    return digest.hexdigest()
 
 
 def validate_background_mask(mask):
@@ -58,18 +69,43 @@ def isolate_object(home, image):
 
 
 def main():
-    home, source, output = map(Path, sys.argv[1:4])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("home", type=Path)
+    parser.add_argument("source", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--expected-prepared-sha256")
+    options = parser.parse_args()
+    home, source, output = options.home, options.source, options.output
 
     def guard():
         while True:
             peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             if sys.platform != "darwin":
                 peak *= 1024
-            if peak > 12 * 1024**3:
+            if peak > (2 if options.prepare_only else 12) * 1024**3:
                 os._exit(75)
             time.sleep(0.1)
 
     threading.Thread(target=guard, daemon=True).start()
+    # Preparation only needs Pillow and the optional pinned segmentation model.
+    # It must not read the 3D checkpoint or import its heavy runtime.
+    from PIL import Image
+
+    image, background = isolate_object(home, Image.open(source).convert("RGBA"))
+    prepared_sha256 = prepared_image_digest(image)
+    if options.expected_prepared_sha256 and options.expected_prepared_sha256 != prepared_sha256:
+        raise SystemExit(77)
+    if options.prepare_only:
+        image.save(output, "PNG")
+        output.with_suffix(".json").write_text(json.dumps({
+            "kind": "image_preparation",
+            "prepared_sha256": prepared_sha256,
+            "input_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "background_removal": background,
+        }))
+        return
+
     manifest = json.loads(Path(__file__).with_name("triposr_manifest.json").read_text())
     for relative, expected in manifest["files"].items():
         with (home / relative).open("rb") as handle:
@@ -79,13 +115,11 @@ def main():
     import numpy as np
     import torch
     import trimesh
-    from PIL import Image
     from tsr.system import TSR
     from tsr.utils import resize_foreground
 
     torch.set_num_threads(2)
     torch.set_num_interop_threads(1)
-    image, background = isolate_object(home, Image.open(source).convert("RGBA"))
     image = resize_foreground(image, 0.85)
     model = TSR.from_pretrained(str(home / "weights"), config_name="config.yaml", weight_name="model.ckpt")
     model.eval()
@@ -112,6 +146,8 @@ def main():
         "model_revision": manifest["model_revision"], "source_revision": manifest["source_revision"],
         "license": manifest["license"], "metric_reconstruction": False,
         "background_removal": background,
+        "prepared_sha256": prepared_sha256,
+        "preparation_review_verified": options.expected_prepared_sha256 is not None,
         "input_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "vertices": len(mesh.vertices), "faces": len(mesh.faces), "bounds": mesh.bounds.tolist(),
     }))

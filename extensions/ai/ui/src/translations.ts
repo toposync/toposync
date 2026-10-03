@@ -2,6 +2,16 @@ import type { TranslationBundle } from "@toposync/plugin-api";
 
 export const aiTranslations: TranslationBundle = {
   en: {
+    "core.ui.pipelines.alerts.ai_description_missing.message": "Describe what this AI step should observe before enabling it.",
+    "core.ui.pipelines.alerts.ai_description_missing.suggestion": "Open this step and enter the condition or target to observe.",
+    "core.ui.pipelines.alerts.ai_settings_unavailable.message": "AI profile configuration could not be checked.",
+    "core.ui.pipelines.alerts.ai_settings_unavailable.suggestion": "Review the AI settings before enabling this pipeline.",
+    "core.ui.pipelines.alerts.ai_profile_unavailable.message": "No enabled AI profile and provider are available for this step.",
+    "core.ui.pipelines.alerts.ai_profile_unavailable.suggestion": "Select an available profile in this step or review the AI settings.",
+    "core.ui.pipelines.alerts.ai_images_not_allowed.message": "None of the selected AI profiles may receive images.",
+    "core.ui.pipelines.alerts.ai_images_not_allowed.suggestion": "Select a profile whose existing image permissions allow this task.",
+    "core.ui.pipelines.alerts.ai_configuration_checked.message": "AI profile configuration checked; model availability and inference are not verified.",
+    "core.ui.pipelines.alerts.ai_configuration_checked.suggestion": "Check the selected provider and model before relying on this pipeline.",
     "ext.ai.jev.title": "JEV with local Ollaya — experimental",
     "ext.ai.jev.scope": "An experimental alternative for classifying short texts as a description, attributed speech or uncertain. Results require human review and do not authorize actions.",
     "ext.ai.jev.configuration": "Setup is performed on the Toposync server, with a separately installed Ollaya runtime and model. It is disabled by default. This screen cannot configure, test or confirm the connection; Ollama settings above do not apply to it.",
@@ -201,6 +211,16 @@ export const aiTranslations: TranslationBundle = {
     "ext.ai.operator.condition.failure.pass": "Pass through",
   },
   "pt-BR": {
+    "core.ui.pipelines.alerts.ai_description_missing.message": "Descreva o que esta etapa de inteligência artificial deve observar antes de habilitar o fluxo.",
+    "core.ui.pipelines.alerts.ai_description_missing.suggestion": "Abra esta etapa e informe a condição ou o alvo a observar.",
+    "core.ui.pipelines.alerts.ai_settings_unavailable.message": "Não foi possível verificar a configuração dos perfis de inteligência artificial.",
+    "core.ui.pipelines.alerts.ai_settings_unavailable.suggestion": "Revise as configurações de inteligência artificial antes de habilitar este fluxo.",
+    "core.ui.pipelines.alerts.ai_profile_unavailable.message": "Nenhum perfil e provedor de inteligência artificial habilitados estão disponíveis para esta etapa.",
+    "core.ui.pipelines.alerts.ai_profile_unavailable.suggestion": "Selecione um perfil disponível nesta etapa ou revise as configurações de inteligência artificial.",
+    "core.ui.pipelines.alerts.ai_images_not_allowed.message": "Nenhum dos perfis de inteligência artificial selecionados tem permissão para receber imagens.",
+    "core.ui.pipelines.alerts.ai_images_not_allowed.suggestion": "Selecione um perfil cuja permissão existente para imagens permita esta tarefa.",
+    "core.ui.pipelines.alerts.ai_configuration_checked.message": "Configuração dos perfis de inteligência artificial verificada; disponibilidade do modelo e inferência não verificadas.",
+    "core.ui.pipelines.alerts.ai_configuration_checked.suggestion": "Verifique o provedor e o modelo selecionados antes de depender deste fluxo.",
     "ext.ai.jev.title": "JEV com Ollaya local — experimental",
     "ext.ai.jev.scope": "Alternativa experimental para classificar textos curtos como descrição, fala atribuída ou incerto. O resultado exige revisão humana e não autoriza ações.",
     "ext.ai.jev.configuration": "A preparação é feita no servidor Toposync, com Ollaya e modelo instalados separadamente. Vem desativado por padrão. Esta tela não configura, testa nem confirma a conexão; as configurações de Ollama acima não se aplicam a ela.",

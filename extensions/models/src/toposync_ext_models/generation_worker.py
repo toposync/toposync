@@ -19,6 +19,12 @@ BACKGROUND = {
 }
 
 
+def canonicalize_transparent_pixels(image):
+    """Discard invisible RGB noise without changing any visible pixel or alpha."""
+    transparent = image.getchannel("A").point(lambda alpha: 255 if alpha == 0 else 0)
+    image.paste((0, 0, 0, 0), mask=transparent)
+
+
 def prepared_image_digest(image):
     """Bind a review to dimensions and exact RGBA pixels, not PNG encoding."""
     rgba = image.convert("RGBA")
@@ -93,6 +99,7 @@ def main():
     from PIL import Image
 
     image, background = isolate_object(home, Image.open(source).convert("RGBA"))
+    canonicalize_transparent_pixels(image)
     prepared_sha256 = prepared_image_digest(image)
     if options.expected_prepared_sha256 and options.expected_prepared_sha256 != prepared_sha256:
         raise SystemExit(77)

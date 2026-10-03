@@ -285,6 +285,26 @@ def test_reviewed_generation_requires_matching_worker_receipt(tmp_path, monkeypa
     assert len(list((tmp_path/'files').glob('*/model.glb'))) == int(verified)
 
 
+def test_transparent_pixel_normalization_preserves_alpha_and_visible_composites():
+    import random
+    from toposync_ext_models.generation_worker import canonicalize_transparent_pixels
+
+    randomizer = random.Random(0)
+    source = Image.frombytes('RGBA', (32, 32), randomizer.randbytes(32 * 32 * 4))
+    source.putalpha(Image.frombytes('L', source.size, bytes([0, 1, 128, 255]) * 256))
+    normalized = source.copy()
+    canonicalize_transparent_pixels(normalized)
+    assert normalized.size == source.size
+    assert normalized.getchannel('A').tobytes() == source.getchannel('A').tobytes()
+    before, after = source.tobytes(), normalized.tobytes()
+    for offset in range(0, len(before), 4):
+        original, actual = before[offset:offset + 4], after[offset:offset + 4]
+        assert actual == (original if original[3] else bytes(4))
+    for color in [(0, 0, 0, 255), (255, 255, 255, 255), (17, 53, 201, 128)]:
+        background = Image.new('RGBA', source.size, color)
+        assert Image.alpha_composite(background, normalized).tobytes() == Image.alpha_composite(background, source).tobytes()
+
+
 def test_preparation_and_mismatched_review_do_not_need_3d_assets_or_imports(tmp_path):
     import subprocess
     from toposync_ext_models.generation_worker import prepared_image_digest
@@ -293,17 +313,20 @@ def test_preparation_and_mismatched_review_do_not_need_3d_assets_or_imports(tmp_
     source.write_bytes(image_bytes())
     output = tmp_path/'prepared.png'
     # Any attempted heavy import fails, even if the developer environment has it.
-    launcher = "import sys, runpy; sys.modules.update({name: None for name in ['torch', 'trimesh', 'tsr']}); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
+    launcher = "import sys, runpy; sys.modules.update({name: None for name in ['numpy', 'torch', 'trimesh', 'tsr']}); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
     result = subprocess.run([sys.executable, '-c', launcher, str(worker), str(tmp_path), str(source), str(output), '--prepare-only'], capture_output=True, timeout=5)
     assert result.returncode == 0, result.stderr.decode()
-    assert Image.open(output).tobytes() == Image.open(source).tobytes()
+    original = Image.open(source).convert('RGBA')
+    expected = Image.new('RGBA', original.size, (0, 0, 0, 0))
+    expected.paste((100, 80, 60, 255), (8, 8, 24, 24))
+    assert Image.open(output).tobytes() == expected.tobytes()
     receipt = json.loads(output.with_suffix('.json').read_text())
-    assert receipt['prepared_sha256'] == prepared_image_digest(Image.open(source))
+    assert receipt['prepared_sha256'] == prepared_image_digest(expected)
+    assert receipt['input_sha256'] == hashlib.sha256(source.read_bytes()).hexdigest()
     rejected = tmp_path/'rejected.glb'
     result = subprocess.run([sys.executable, '-c', launcher, str(worker), str(tmp_path), str(source), str(rejected), '--expected-prepared-sha256', '0'*64], capture_output=True, timeout=5)
     assert result.returncode == 77, result.stderr.decode()
     assert not rejected.exists()
-    original = Image.open(source).convert('RGBA')
     reshaped = Image.frombytes('RGBA', (16, 64), original.tobytes())
     assert prepared_image_digest(original) != prepared_image_digest(reshaped)
     original.putpixel((0, 0), (0, 0, 0, 1))

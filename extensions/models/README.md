@@ -34,6 +34,9 @@ private, no-store`. It does not publish files, load TripoSR or read its checkpoi
 The preparation worker shares the generation lease, has a 30-second timeout and
 a sampled 2 GiB memory guard, and is reaped on cancellation. Its optional U2netp
 weights are still verified before use. The output must fit the same 8 MiB limit.
+Fully transparent pixels have their invisible RGB values cleared before PNG
+encoding and review hashing. Dimensions, alpha and every visible pixel remain
+unchanged; this avoids retaining photographic background noise in the cutout.
 
 `X-Toposync-Prepared-Sha256` binds the preview's dimensions and exact RGBA pixels;
 `X-Toposync-Background-Method` identifies `estimated` or `provided_alpha`.

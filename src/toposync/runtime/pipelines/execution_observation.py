@@ -1,4 +1,4 @@
-"""Conservative observations for the camera's existing pipeline list."""
+"""Conservative execution evidence shared by pipeline consumers."""
 
 from __future__ import annotations
 

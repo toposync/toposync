@@ -317,7 +317,16 @@ def test_runtime_graph_info_endpoint_returns_graphs(
             return {
                 "running": True,
                 "activation_errors": {"blocked": "Model unavailable"},
-                "graph_info": {"graphs": [{"graph_id": "g", "pressure": {"active": False}}]},
+                "pipelines": [
+                    {"name": "entrance", "processing_server_id": "local"},
+                    {"name": "remote", "processing_server_id": "worker"},
+                    {"name": "legacy", "processing_server_id": "local"},
+                ],
+                "graph_info": {"graphs": [{
+                    "graph_id": "g", "pipeline_name": "entrance", "running": True,
+                    "pressure": {"active": False},
+                    "nodes": {"detect": {"last_received_at": 90, "last_completed_at": 91}},
+                }]},
             }
 
     with TestClient(create_app()) as client:
@@ -328,5 +337,10 @@ def test_runtime_graph_info_endpoint_returns_graphs(
     assert response.status_code == 200
     assert response.json()["graphs"][0]["graph_id"] == "g"
     assert response.json()["status"]["activation_errors"] == {"blocked": "Model unavailable"}
+    assert response.json()["execution_observations"] == {
+        "entrance": {"state": "observed", "last_received_at": 90, "last_completed_at": 91},
+        "remote": None,
+        "legacy": None,
+    }
     assert status_response.status_code == 200
     assert status_response.json()["status"]["graph_info"]["graphs"][0]["graph_id"] == "g"

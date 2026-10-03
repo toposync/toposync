@@ -864,6 +864,7 @@ class PipelineRuntimeStatusResponse(BaseModel):
 class PipelineRuntimeGraphInfoResponse(BaseModel):
     graphs: list[dict[str, Any]] = Field(default_factory=list)
     status: dict[str, Any] = Field(default_factory=dict)
+    execution_observations: dict[str, dict[str, Any] | None] = Field(default_factory=dict)
 
 
 class PipelineStatsResponse(BaseModel):
@@ -2538,7 +2539,19 @@ def create_app() -> FastAPI:
             graphs = graph_info.get("graphs", []) if isinstance(graph_info, dict) else []
         except Exception as exc:  # noqa: BLE001
             return PipelineRuntimeGraphInfoResponse(status={"running": False, "error": str(exc)})
-        return PipelineRuntimeGraphInfoResponse(graphs=list(graphs), status=status)
+        from toposync.runtime.pipelines.execution_observation import pipeline_execution_observation
+
+        observations = {
+            pipeline["name"]: pipeline_execution_observation(
+                status, pipeline_name=pipeline["name"],
+                processing_server_id=pipeline.get("processing_server_id", "local"),
+            )
+            for pipeline in status.get("pipelines", [])
+            if isinstance(pipeline, dict) and isinstance(pipeline.get("name"), str)
+        }
+        return PipelineRuntimeGraphInfoResponse(
+            graphs=list(graphs), status=status, execution_observations=observations,
+        )
 
     @app.post("/api/pipelines/runtime/reload", response_model=PipelineRuntimeStatusResponse)
     async def pipelines_runtime_reload(request: Request) -> PipelineRuntimeStatusResponse:

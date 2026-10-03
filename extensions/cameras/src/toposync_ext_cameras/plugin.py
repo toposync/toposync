@@ -71,7 +71,7 @@ from .pipeline_templates import (
 from .area_events import build_area_occurrence_graph, register_area_occurrence_operator
 from .audio import AudioBaseline
 from .audio_events import build_audio_recipe
-from .pipeline_observation import pipeline_execution_observation
+from toposync.runtime.pipelines.execution_observation import pipeline_execution_observation
 from .event_context import register_recent_onvif_event_operator, add_recent_event_to_area_graph
 from .processing.camera_hub import get_global_camera_hub
 from .processing.mapping import build_calibration_mapper

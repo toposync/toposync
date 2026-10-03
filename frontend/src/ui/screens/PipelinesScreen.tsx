@@ -205,7 +205,7 @@ function sortPipelinesForDisplay(items: Pipeline[]): Pipeline[] {
 }
 
 export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPanels = {}, reviewPanels = [], assistants = [] }: Props): React.ReactElement {
-  const { t } = i18n.useI18n();
+  const { t, locale } = i18n.useI18n();
   const pathname = usePathname();
   const routePipelineName = pipelineNameFromPipelinesPath(pathname);
   const isAggregateHome = routePipelineName == null;
@@ -479,6 +479,16 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     if (!draft) return null;
     return projectRuntimeGraphInfoForPipeline(runtimeGraphInfo?.graphs ?? [], draft.name);
   }, [draft?.name, runtimeGraphInfo]);
+  const executionObservation = useMemo(() => {
+    if (!selected || normalizeServerId(selected.processing_server_id) !== "local"
+      || !runtimeGraphInfo?.execution_observations || runtimeGraphInfo.status.error) return null;
+    const observations = runtimeGraphInfo.execution_observations;
+    if (Object.prototype.hasOwnProperty.call(observations, selected.name)) return observations[selected.name];
+    // An absent local pipeline has not started. Legacy/failed reads above
+    // cannot establish this, and remote continuity remains unverified.
+    return typeof runtimeGraphInfo.status.running === "boolean"
+      ? { state: "not_running" as const, last_received_at: null, last_completed_at: null } : null;
+  }, [selected, runtimeGraphInfo]);
   const topologyRuntimeStatus = useMemo(() => {
     const generatedAt = Number(selectedRuntimeGraphInfo?.generated_at ?? 0);
     const stale = Boolean(
@@ -1254,8 +1264,16 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               {reviewPanels.filter(panel => panel.supports(topologyGraph)).map(panel => <React.Fragment key={panel.id}>{panel.render(topologyGraph)}</React.Fragment>)}
               {selected && draft.enabled !== selected.enabled ? (
                 <p className="pipelinesHint" role="status">{t(draft.enabled ? "core.ui.pipelines.activation_pending" : "core.ui.pipelines.deactivation_pending")}</p>
-              ) : selected?.enabled ? <p className="pipelinesHint" role="status">{t(runtimeGraphInfo?.status?.activation_errors?.[draft.name]
-                ? "core.ui.pipelines.execution_blocked" : "core.ui.pipelines.execution_unknown")}</p>
+              ) : selected?.enabled ? <div className="pipelinesHint" role="status" style={{ display: "grid", gap: 6 }}>
+                <span>{t(runtimeGraphInfo?.status?.activation_errors?.[draft.name]
+                  ? "core.ui.pipelines.execution_blocked" : executionObservation
+                    ? `core.ui.pipelines.execution.${executionObservation.state}` : "core.ui.pipelines.execution_unknown")}</span>
+                {executionObservation?.last_completed_at ? <span>{t("core.ui.pipelines.last_processed")}{" "}
+                  <time dateTime={new Date(executionObservation.last_completed_at * 1000).toISOString()}>{new Date(executionObservation.last_completed_at * 1000).toLocaleString(locale)}</time>
+                </span> : executionObservation?.last_received_at ? <span>{t("core.ui.pipelines.last_received")}{" "}
+                  <time dateTime={new Date(executionObservation.last_received_at * 1000).toISOString()}>{new Date(executionObservation.last_received_at * 1000).toLocaleString(locale)}</time>
+                </span> : null}
+              </div>
                 : recommendations.some(alert => alert.severity === "error" || alert.code === "operator_diagnostics_failed")
                   ? <p className="pipelinesHint" role="status">{t("core.ui.pipelines.disabled_with_issues")}</p> : null}
               <div className="pipelinesEditorControls">

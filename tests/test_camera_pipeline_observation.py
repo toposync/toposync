@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import pytest
 
-from toposync_ext_cameras.pipeline_observation import pipeline_execution_observation
+from toposync.runtime.pipelines.execution_observation import pipeline_execution_observation
 
 
 def snapshot():

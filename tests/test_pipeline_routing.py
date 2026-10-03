@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from toposync.runtime.config_store import Pipeline
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.pipelines import (
     Lifecycle,
     OperatorRegistry,
@@ -156,10 +157,14 @@ def test_route_by_category_uses_static_match_other_ports_and_preserves_close() -
                 },
             ],
         }
-        pipeline = Pipeline(name="route_by_category_test", graph=graph)
+        pipeline = Pipeline(name="route_by_category_test", graph=build_pipeline_graph_v2(
+            graph_uid="route_by_category_test", nodes=graph["nodes"], edges=graph["edges"],
+        ))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
-        await runtime.run_for(0.25)
+        snapshot = await runtime.run_for(0.25)
+        assert snapshot["nodes"]["people"]["completed_packets"] == len(packets)
+        assert snapshot["nodes"]["people"]["last_completed_at"] is not None
         return person_packets, vehicle_packets, other_packets
 
     person_packets, vehicle_packets, other_packets = asyncio.run(scenario())
@@ -244,7 +249,9 @@ def test_boolean_gates_filter_lifecycle_streams_and_report_progress() -> None:
                 },
             ],
         }
-        pipeline = Pipeline(name=f"{operator_id.replace('.', '_')}_test", graph=graph)
+        pipeline = Pipeline(name=f"{operator_id.replace('.', '_')}_test", graph=build_pipeline_graph_v2(
+            graph_uid="boolean_gate_test", nodes=graph["nodes"], edges=graph["edges"],
+        ))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         snapshot = await runtime.run_for(0.25)
@@ -313,7 +320,9 @@ def test_core_filter_reports_filtered_progress() -> None:
                 },
             ],
         }
-        pipeline = Pipeline(name="core_filter_progress", graph=graph)
+        pipeline = Pipeline(name="core_filter_progress", graph=build_pipeline_graph_v2(
+            graph_uid="core_filter_progress", nodes=graph["nodes"], edges=graph["edges"],
+        ))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         return await runtime.run_for(0.25)

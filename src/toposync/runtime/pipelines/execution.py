@@ -71,7 +71,11 @@ class PipelineRuntimeDependencies:
 @dataclass(slots=True)
 class NodeRuntimeMetrics:
     processed_packets: int = 0
+    completed_packets: int = 0
     emitted_packets: int = 0
+    last_received_at: float | None = None
+    last_completed_at: float | None = None
+    last_emitted_at: float | None = None
     dropped_packets: int = 0
     timeout_count: int = 0
     canceled_count: int = 0
@@ -85,6 +89,12 @@ class NodeRuntimeMetrics:
     def record_latency(self, latency_ms: float) -> None:
         self.process_latency_ms.append(max(0.0, float(latency_ms)))
 
+    def record_completion(self) -> None:
+        # Normal processor return, including an empty filter result. Availability
+        # and semantic quality remain separate from execution completion.
+        self.completed_packets += 1
+        self.last_completed_at = time.time()
+
     def record_error(self, exc: BaseException) -> None:
         self.error_count += 1
         self.last_error = f"{exc.__class__.__name__}: {exc}"
@@ -96,7 +106,11 @@ class NodeRuntimeMetrics:
         p95 = _percentile(samples, 95.0)
         return {
             "processed_packets": self.processed_packets,
+            "completed_packets": self.completed_packets,
             "emitted_packets": self.emitted_packets,
+            "last_received_at": self.last_received_at,
+            "last_completed_at": self.last_completed_at,
+            "last_emitted_at": self.last_emitted_at,
             "dropped_packets": self.dropped_packets,
             "timeout_count": self.timeout_count,
             "canceled_count": self.canceled_count,
@@ -174,6 +188,7 @@ class NodeExecutionContext:
         result = await channel.get(timeout_s=timeout_s, cancel_event=self.cancel_event)
         if result.status == QueueOperationStatus.ACCEPTED:
             self.metrics.processed_packets += 1
+            self.metrics.last_received_at = time.time()
             if self.stats_count_outputs_on_read and self.stats_node_occurrences:
                 now_s = time.time()
                 for pipeline_name, node_id in self.stats_node_occurrences:
@@ -202,6 +217,7 @@ class NodeExecutionContext:
             if result.status == QueueOperationStatus.ACCEPTED:
                 accepted += 1
                 self.metrics.emitted_packets += 1
+                self.metrics.last_emitted_at = time.time()
             elif result.status == QueueOperationStatus.DROPPED:
                 self.metrics.dropped_packets += 1
             elif result.status == QueueOperationStatus.TIMEOUT:
@@ -378,6 +394,7 @@ class SourceOperatorRuntime(BaseOperatorRuntime):
             if packet is None:
                 await self.idle_sleep(context)
                 continue
+            context.metrics.record_completion()
             await context.emit(packet, port="out")
 
 
@@ -406,6 +423,7 @@ class TransformOperatorRuntime(BaseOperatorRuntime):
             try:
                 out_packets = await self.process_packet(packet, context)
                 context.metrics.record_latency(_elapsed_ms(started_ns))
+                context.metrics.record_completion()
                 for out_packet in out_packets:
                     await context.emit(out_packet, port=self.output_port)
             except asyncio.CancelledError:

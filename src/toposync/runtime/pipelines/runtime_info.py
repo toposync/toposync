@@ -99,6 +99,7 @@ def build_graph_runtime_info(
             "pressure_behavior": definition.pressure_behavior if definition is not None else "ignore",
             "progress": {
                 "processed_packets": processed,
+                "completed_packets": int(metrics.get("completed_packets", 0) or 0),
                 "emitted_packets": emitted,
                 "dropped_packets": dropped,
                 "error_count": errors,
@@ -106,6 +107,9 @@ def build_graph_runtime_info(
                 "canceled_count": int(metrics.get("canceled_count", 0) or 0),
             },
             "metrics": metrics,
+            "last_received_at": metrics.get("last_received_at"),
+            "last_completed_at": metrics.get("last_completed_at"),
+            "last_emitted_at": metrics.get("last_emitted_at"),
             "last_error": metrics.get("last_error"),
             "last_error_at": metrics.get("last_error_at"),
             "unavailable_reason": metrics.get("unavailable_reason"),
@@ -213,6 +217,10 @@ def _metrics_snapshot(metrics: Any) -> dict[str, Any]:
     if metrics is None:
         return {
             "processed_packets": 0,
+            "completed_packets": 0,
+            "last_received_at": None,
+            "last_completed_at": None,
+            "last_emitted_at": None,
             "emitted_packets": 0,
             "dropped_packets": 0,
             "timeout_count": 0,

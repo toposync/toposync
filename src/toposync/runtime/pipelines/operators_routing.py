@@ -137,6 +137,7 @@ class RouteByCategoryRuntime(TransformOperatorRuntime):
             try:
                 port = self._port_for_packet(packet)
                 context.metrics.record_latency(_elapsed_ms(started_ns))
+                context.metrics.record_completion()
                 await context.emit(packet, port=port)
             except asyncio.CancelledError:
                 if permit is not None:

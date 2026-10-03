@@ -5,6 +5,7 @@ import time
 from dataclasses import replace
 
 from toposync.runtime.config_store import Pipeline
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.pipelines import (
     FlowLimiter,
     Lifecycle,
@@ -145,13 +146,13 @@ def _registry_with_probe_operators(
 def _pipeline() -> Pipeline:
     return Pipeline(
         name="flow_limiter_runtime_probe",
-        graph={
-            "schema_version": 1,
-            "nodes": [
+        graph=build_pipeline_graph_v2(
+            graph_uid="flow_limiter_runtime_probe",
+            nodes=[
                 {"id": "source", "operator": "test.source", "config": {}},
                 {"id": "heavy", "operator": "test.heavy", "config": {}},
             ],
-            "edges": [
+            edges=[
                 {
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "heavy", "port": "in"},
@@ -159,7 +160,7 @@ def _pipeline() -> Pipeline:
                     "drop_policy": "drop_oldest",
                 }
             ],
-        },
+        ),
     )
 
 
@@ -182,6 +183,9 @@ def test_runtime_applies_flow_limiter_to_skip_before_compute_operator() -> None:
         flow_metrics = snapshot["nodes"]["heavy"]["flow_limiter"]
         assert transform.processed == 0
         assert snapshot["nodes"]["heavy"]["dropped_packets"] == 1
+        assert snapshot["nodes"]["heavy"]["completed_packets"] == 0
+        assert snapshot["nodes"]["heavy"]["last_received_at"] is not None
+        assert snapshot["nodes"]["heavy"]["last_completed_at"] is None
         assert flow_metrics["profile"] == "low_latency_ai"
         assert flow_metrics["skipped_stale"] == 1
         assert flow_metrics["in_flight"] == 0

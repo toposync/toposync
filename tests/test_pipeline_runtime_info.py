@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,13 @@ from toposync.runtime.pipelines import (
     TransformOperatorRuntime,
 )
 import toposync.extensions.manager as ext_manager_mod
+from toposync.runtime.pipelines.execution import (
+    NodeExecutionContext,
+    NodeRuntimeMetrics,
+    SourceOperatorRuntime,
+)
+from toposync.runtime.pipelines.execution_scheduler import ExecutionScheduler
+from toposync.runtime.pipelines.runtime import BoundedChannel
 
 
 def _runtime_factory(_config: dict[str, Any], _deps: Any) -> TransformOperatorRuntime:
@@ -102,6 +110,7 @@ def test_graph_runtime_info_exposes_nodes_edges_resources_pressure_and_progress(
 
         runtime.node_metrics["detect"].processed_packets = 2
         runtime.node_metrics["detect"].emitted_packets = 1
+        runtime.node_metrics["detect"].record_completion()
         info = runtime.graph_runtime_info()
 
         assert info["graph_id"] == "runtime_info_probe"
@@ -118,6 +127,12 @@ def test_graph_runtime_info_exposes_nodes_edges_resources_pressure_and_progress(
         edge = next(item for item in info["edges"].values() if item["source"]["node"] == "camera")
         assert camera_node["resource_kind"] == "camera"
         assert detect_node["pressure_behavior"] == "skip_before_compute"
+        completed_at = runtime.node_metrics["detect"].last_completed_at
+        assert detect_node["last_completed_at"] == completed_at
+        assert detect_node["last_received_at"] is None
+        assert detect_node["progress"]["completed_packets"] == 1
+        assert camera_node["last_completed_at"] is None
+        assert runtime.graph_runtime_info()["nodes"]["detect"]["last_completed_at"] == completed_at
         assert edge["pressure_cause"] == "drop_policy"
         assert edge["progress"]["dropped_total"] == 1
 
@@ -132,6 +147,102 @@ def test_graph_runtime_info_exposes_nodes_edges_resources_pressure_and_progress(
             assert current["unavailable_reason"] == issue
             assert current["runtime_state"] == ("degraded" if issue else "active")
             assert current["progress"]["error_count"] == 0
+
+    asyncio.run(scenario())
+
+
+def _activity_context() -> NodeExecutionContext:
+    return NodeExecutionContext(
+        node_id="probe",
+        operator_id="test.probe",
+        execution_mode="in_event_loop",
+        max_concurrency=1,
+        scheduler=ExecutionScheduler(),
+        pipeline_name="activity_probe",
+        inputs={"in": BoundedChannel(name="input", maxsize=1)},
+        outputs={"out": [BoundedChannel(
+            name="output", maxsize=1, drop_policy=DropPolicy.DROP_NEWEST,
+        )]},
+        cancel_event=asyncio.Event(),
+        metrics=NodeRuntimeMetrics(),
+        logger=logging.getLogger("test.activity_probe"),
+    )
+
+
+@pytest.mark.parametrize("outcome", ["empty", "error", "canceled", "emitted", "dropped"])
+def test_activity_distinguishes_receipt_completion_and_delivery(outcome: str) -> None:
+    async def scenario() -> None:
+        context = _activity_context()
+        entered, release = asyncio.Event(), asyncio.Event()
+        packet = Packet.create(stream_id="activity")
+        await context.inputs["in"].put(packet)
+        if outcome == "dropped":
+            await context.outputs["out"][0].put(packet)
+
+        class ControlledTransform(TransformOperatorRuntime):
+            async def process_packet(self, packet, context):
+                entered.set()
+                await release.wait()
+                if outcome in {"empty", "error", "canceled"}:
+                    context.cancel_event.set()
+                if outcome == "error":
+                    raise ValueError("controlled failure")
+                if outcome == "canceled":
+                    raise asyncio.CancelledError
+                return [] if outcome == "empty" else [packet]
+
+        task = asyncio.create_task(ControlledTransform().run(context))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            receiving = context.metrics.snapshot()
+            assert receiving["processed_packets"] == 1
+            assert receiving["last_received_at"] is not None
+            assert receiving["completed_packets"] == 0
+            assert receiving["last_completed_at"] is None
+            assert receiving["last_emitted_at"] is None
+            release.set()
+            if outcome in {"emitted", "dropped"}:
+                async def wait_for_delivery_attempt():
+                    while not (context.metrics.emitted_packets or context.metrics.dropped_packets):
+                        await asyncio.sleep(0)
+
+                await asyncio.wait_for(wait_for_delivery_attempt(), timeout=1)
+                context.cancel_event.set()
+            if outcome == "canceled":
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                await asyncio.wait_for(task, timeout=1)
+            finished = context.metrics.snapshot()
+            assert finished["last_received_at"] == receiving["last_received_at"]
+            completed = outcome not in {"error", "canceled"}
+            assert finished["completed_packets"] == int(completed)
+            assert (finished["last_completed_at"] is not None) == completed
+            assert (finished["last_emitted_at"] is not None) == (outcome == "emitted")
+            assert finished["error_count"] == int(outcome == "error")
+            assert context.metrics.snapshot() == finished
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("produces_packet", [False, True])
+def test_source_completion_requires_a_produced_packet(produces_packet: bool) -> None:
+    async def scenario() -> None:
+        context = _activity_context()
+
+        class OneSource(SourceOperatorRuntime):
+            async def produce(self, context):
+                context.cancel_event.set()
+                return Packet.create(stream_id="source") if produces_packet else None
+
+        await OneSource().run(context)
+        assert context.metrics.completed_packets == int(produces_packet)
+        assert (context.metrics.last_completed_at is not None) == produces_packet
+        assert context.metrics.last_received_at is None
 
     asyncio.run(scenario())
 

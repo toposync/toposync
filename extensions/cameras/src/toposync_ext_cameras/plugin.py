@@ -248,7 +248,7 @@ PRESET_PIPELINE_LABELS = {
     "people_simple": "Detecção de pessoas",
     "people_individual": "Ocorrências individuais de pessoas",
     "people_quiet": "Presença agrupada de pessoas e pets",
-    "presence_area": "Presença agrupada por proximidade",
+    "presence_area": "Grupos por proximidade",
     "vehicle_stopped": "Veículo parado",
     "person_stopped": "Pessoa parada",
     "person_vehicle_interaction": "Pessoa próxima de veículo",

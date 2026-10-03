@@ -351,24 +351,7 @@ export function CameraPipelinePresetModal({
 
   const isMappingPreset = presetRequiresMapping(preset);
   const isStopPreset = presetConfirmsStop(preset);
-  const title =
-    preset === "people_simple"
-      ? t("ext.cameras.pipeline_preset.people_simple.title", {}, "Simple detection")
-      : preset === "people_quiet"
-      ? t("ext.cameras.pipeline_preset.people_quiet.title", {}, "Grouped presence")
-      : preset === "presence_area"
-        ? t("ext.cameras.pipeline_preset.presence_area.title", {}, "Presence by area")
-      : preset === "vehicle_stopped"
-        ? t("ext.cameras.pipeline_preset.vehicle_stopped.title", {}, "Vehicle stopped")
-      : preset === "person_stopped"
-        ? t("ext.cameras.pipeline_preset.person_stopped.title", {}, "Person stopped")
-      : preset === "person_vehicle_interaction"
-        ? t(
-            "ext.cameras.pipeline_preset.person_vehicle_interaction.title",
-            {},
-            "Person–vehicle interaction",
-          )
-        : t("ext.cameras.pipeline_preset.people_individual.title", {}, "Individual people events");
+  const title = t(`ext.cameras.pipeline_preset.${preset}.title`);
   const noSource = videoSources.length === 0;
   const noMapping = isMappingPreset && mappedCompositions.length === 0;
   const canOfferPtzAttention = Boolean(
@@ -820,46 +803,8 @@ export function CameraPipelinePresetModal({
 
         <p className="settingsDescription">{t("ext.cameras.recipe.saved_disabled")}</p>
 
-        <div className="settingsStatusMuted">
-          {preset === "people_simple"
-            ? t(
-                "ext.cameras.pipeline_preset.people_simple.summary",
-                {},
-                "Uses motion, person detection, tracking, throttling, object crops, storage and notifications without requiring mapping.",
-              )
-            : preset === "people_quiet"
-            ? t(
-                "ext.cameras.pipeline_preset.people_quiet.summary",
-                {},
-                "Uses motion, mapping, person/pet detection, tracking, grouped session events, throttling, crops, storage and notifications.",
-              )
-            : preset === "presence_area"
-              ? t(
-                  "ext.cameras.pipeline_preset.presence_area.summary",
-                  {},
-                  "Uses mapping, tracking and proximity grouping to create quieter presence notifications.",
-                )
-            : preset === "person_vehicle_interaction"
-              ? t(
-                  "ext.cameras.pipeline_preset.person_vehicle_interaction.summary",
-                  {},
-                  "Detects and maps people and vehicles, includes stationary subjects, confirms sustained proximity and emits one stable semantic event with an image and high-priority notification.",
-                )
-            : isStopPreset
-              ? t(
-                  preset === "person_stopped"
-                    ? "ext.cameras.pipeline_preset.person_stopped.summary"
-                    : "ext.cameras.pipeline_preset.vehicle_stopped.summary",
-                  {},
-                  preset === "person_stopped"
-                    ? "Uses motion, person detection, tracking, mapping, optional area restriction, speed estimation and notification with an image after a stop is confirmed."
-                    : "Uses motion, vehicle detection, tracking, mapping, optional area restriction, speed estimation and notification with an image after a stop is confirmed.",
-                )
-              : t(
-                  "ext.cameras.pipeline_preset.people_individual.summary",
-                  {},
-                  "Uses motion, mapping, person detection, tracking, 10s throttling, object crops, storage and notifications.",
-                )}
+        <div className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>
+          {t(`ext.cameras.pipeline_preset.${preset}.summary`)}
         </div>
 
         {createBlockedReasons.length ? (

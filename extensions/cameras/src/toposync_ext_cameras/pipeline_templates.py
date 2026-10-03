@@ -225,7 +225,7 @@ def build_person_vehicle_interaction_graph(
                 "config": {
                     "notification_type": "pipelines.tracking",
                     "title": notification_title
-                    or "{{camera_name}}: interação entre pessoa e veículo",
+                    or "{{camera_name}}: pessoa próxima de veículo",
                     "description": notification_description
                     or "{{payload.spatial_relation_event.visits.description}}Pessoa próxima de veículo por {{payload.spatial_relation_event.dwell_seconds}} s",
                     "include_payload_paths": ["area_id", "spatial_relation_event"],

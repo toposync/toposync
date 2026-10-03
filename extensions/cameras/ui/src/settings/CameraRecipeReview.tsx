@@ -62,6 +62,7 @@ function CameraRecipeReview({ graph, i18n }: { graph: unknown; i18n: HostI18n })
     return () => controller.abort();
   }, []);
   const sources = nodes.filter(node => node.operator === "camera.source" || node.operator === "camera.audio_source");
+  const hasSpatialRelation = nodes.some(node => node.operator === "vision.spatial_relation_event");
   const physical = nodes.some(node => node.operator === "ptz_attention.request");
   function areaName(node: Node, area = node.config.area as SavedArea | undefined): string {
     if (!node.config.composition_id) return area?.name || text("Área sem nome", "Unnamed area");
@@ -84,14 +85,16 @@ function CameraRecipeReview({ graph, i18n }: { graph: unknown; i18n: HostI18n })
     })}
     {failed && <p role="status">{text("Não foi possível conferir as fontes. Revise a câmera antes de habilitar.", "Sources could not be checked. Review the camera before enabling.")}</p>}
     <div><strong>{text("O que será observado", "What will be observed")}</strong>
-      {nodes.filter(node => ["ai.condition_filter", "vision.detect", "camera.area_occurrence", "core.stationary_event", "camera.audio_features"].includes(node.operator)).map(node => <p key={node.id} style={{ margin: "8px 0 0" }}>
+      {nodes.filter(node => ["ai.condition_filter", "vision.detect", "camera.area_occurrence", "core.stationary_event", "camera.audio_features", "vision.spatial_relation_event", "vision.group_events"].includes(node.operator) && !(hasSpatialRelation && node.operator === "vision.group_events")).map(node => <p key={node.id} style={{ margin: "8px 0 0" }}>
         {node.operator === "camera.audio_features" ? text("Som acima da referência fornecida. Suporte de áudio ainda não verificado.", "Sound above the supplied baseline. Audio support has not been verified.")
           : node.operator === "ai.condition_filter" ? String(node.config.condition_description || text("Condição sem descrição", "Condition has no description"))
           : node.operator === "core.stationary_event" ? text("Parada observada", "Observed stop")
+          : node.operator === "vision.spatial_relation_event" ? text("Proximidade observada", "Observed proximity")
+          : node.operator === "vision.group_events" ? (node.config.mode === "proximity" ? text("Agrupamento por proximidade", "Grouping by proximity") : text("Atividade agrupada", "Grouped activity"))
           : node.operator === "camera.area_occurrence" ? `${node.config.mode === "entry" ? text("Entrada", "Entry") : text("Presença", "Presence")} · ${areaName(node)}`
           : text("Detecção visual", "Visual detection")}
-        {Array.isArray(node.config.categories) ? ` · ${node.config.categories.map(category => ({ person: text("pessoa", "person"), cat: text("gato", "cat"), dog: text("cão", "dog") })[String(category)] || String(category)).join(", ")}` : ""}
-        {typeof (node.config.minimum_duration_seconds ?? node.config.min_stationary_seconds) === "number" ? ` · ${text("duração mínima", "minimum duration")}: ${new Intl.NumberFormat(locale, { maximumFractionDigits: 3 }).format((node.config.minimum_duration_seconds ?? node.config.min_stationary_seconds) as number)} s` : ""}
+        {Array.isArray(node.config.categories) ? ` · ${node.config.categories.map(category => ({ person: text("pessoa", "person"), cat: text("gato", "cat"), dog: text("cão", "dog"), car: text("carro", "car"), truck: text("caminhão", "truck"), bus: text("ônibus", "bus"), motorcycle: text("motocicleta", "motorcycle"), bicycle: text("bicicleta", "bicycle") })[String(category)] || String(category)).join(", ")}` : ""}
+        {typeof (node.config.minimum_duration_seconds ?? node.config.min_stationary_seconds ?? node.config.dwell_seconds) === "number" ? ` · ${text("duração mínima", "minimum duration")}: ${new Intl.NumberFormat(locale, { maximumFractionDigits: 3 }).format((node.config.minimum_duration_seconds ?? node.config.min_stationary_seconds ?? node.config.dwell_seconds) as number)} s` : ""}
       </p>)}
       {nodes.filter(node => node.operator === "camera.area_restriction").map(node => <p key={node.id} style={{ margin: "8px 0 0" }}>{text("Área", "Area")}: {node.config.composition_id
         ? areasOf(node).map(area => areaName(node, area)).join(", ")

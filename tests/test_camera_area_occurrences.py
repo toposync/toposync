@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import time
 from dataclasses import replace
 
@@ -7,7 +8,7 @@ import pytest
 
 from toposync.runtime.config_store import AppConfig, ConfigStore, UserDataPaths
 from toposync.runtime.notifications.store import NotificationStore
-from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+from toposync.runtime.pipelines.execution import NodeRuntimeMetrics, PipelineRuntimeDependencies
 from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from toposync_ext_cameras.area_events import AreaOccurrenceRuntime, build_area_occurrence_graph
@@ -117,6 +118,10 @@ def test_area_suppressed_update_keeps_latest_evidence_for_idle_close():
 
         class Context:
             emitted = []
+            flow_limiter = None
+            metrics = NodeRuntimeMetrics()
+            logger = logging.getLogger(__name__)
+            node_id = "area"
 
             def is_cancelled(self):
                 return len(self.emitted) == 2
@@ -140,6 +145,7 @@ def test_area_suppressed_update_keeps_latest_evidence_for_idle_close():
         assert closed.payload["area_occurrence"]["last_evidence_at"] == 0.005
         assert closed.payload["area_occurrence"]["duration_seconds"] == 0.005
         assert closed.payload["area_occurrence"]["status"] == "evidence_timeout"
+        assert context.metrics.completed_packets == 2
     asyncio.run(scenario())
 
 
@@ -322,6 +328,10 @@ def test_area_offline_closes_at_last_observation():
     async def scenario():
         class Context:
             incoming = observation(0)
+            flow_limiter = None
+            metrics = NodeRuntimeMetrics()
+            logger = logging.getLogger(__name__)
+            node_id = "area"
 
             def __init__(self):
                 self.emitted = []
@@ -366,6 +376,87 @@ def test_area_reset_closes_old_visit_and_subject_capacity_is_bounded():
             if index > 1:
                 assert outputs[0].payload["area_occurrence"]["status"] == "subject_capacity"
 
+    asyncio.run(scenario())
+
+
+def test_area_expiration_runs_while_other_subjects_keep_arriving():
+    async def scenario():
+        runtime = AreaOccurrenceRuntime({"area": AREA, "minimum_duration_seconds": 0})
+        [opened] = await runtime.process_packet(observation(0, subject="missing"), None)
+        next(iter(runtime.states.values())).last_seen -= 6
+        outputs = await runtime.process_packet(observation(1, subject="arriving"), None)
+        assert [packet.lifecycle for packet in outputs] == [Lifecycle.OPEN, Lifecycle.CLOSE]
+        assert outputs[1].stream_id == opened.stream_id
+        assert outputs[1].payload["area_occurrence"]["status"] == "evidence_timeout"
+        assert outputs[1].payload["area_occurrence"]["last_evidence_at"] == 0
+        assert len(runtime.states) == 1
+    asyncio.run(scenario())
+
+
+def test_area_actual_executor_counts_success_and_errors_without_counting_idle_close():
+    from collections import deque
+    from toposync.runtime.config_store import Pipeline
+    from toposync.runtime.pipelines import OperatorRegistry, PipelineGraphCompiler, PipelineRuntime, SourceOperatorRuntime
+    from toposync.runtime.pipelines.execution import SinkRuntime
+    from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+    from toposync_ext_cameras.area_events import register_area_occurrence_operator
+
+    async def scenario():
+        pending = deque()
+        records = []
+        closed = asyncio.Event()
+
+        class Source(SourceOperatorRuntime):
+            async def produce(self, context):
+                return pending.popleft() if pending else None
+
+        class Sink(SinkRuntime):
+            async def process_packet(self, packet, context):
+                records.append((packet, runtime.node_metrics["area"].last_completed_at))
+                if packet.lifecycle == Lifecycle.CLOSE:
+                    closed.set()
+                return []
+
+        registry = OperatorRegistry()
+        register_area_occurrence_operator(registry)
+        registry.register_operator(operator_id="test.source", outputs=[{"name": "out"}],
+                                   capabilities=["source"], runtime_factory=lambda *_: Source())
+        registry.register_operator(operator_id="test.sink", inputs=[{"name": "in", "required": True}],
+                                   runtime_factory=lambda *_: Sink())
+        graph = build_pipeline_graph_v2(graph_uid="area_counts", nodes=[
+            {"id": "source", "operator": "test.source", "config": {}},
+            {"id": "area", "operator": "camera.area_occurrence", "config": {
+                "area": AREA, "minimum_duration_seconds": 0, "evidence_timeout_seconds": .1,
+            }},
+            {"id": "sink", "operator": "test.sink", "config": {}},
+        ], edges=[{"from": {"node": source, "port": "out"}, "to": {"node": target, "port": "in"},
+                   "maxsize": 8, "drop_policy": "block"} for source, target in [("source", "area"), ("area", "sink")]])
+        runtime = PipelineRuntime(compiled=PipelineGraphCompiler(registry).compile_pipeline(Pipeline(name="area_counts", graph=graph)),
+                                  registry=registry)
+        await runtime.start()
+        area = runtime._runtime_by_node["area"]
+        original = area.process_packet
+
+        async def fail_once(packet, context):
+            if packet.payload["subject"]["id"] == "broken":
+                raise ValueError("Deliberate processing failure")
+            return await original(packet, context)
+
+        area.process_packet = fail_once
+        pending.extend([observation(0, subject="broken"), observation(0), observation(.05)])
+        try:
+            await asyncio.wait_for(closed.wait(), timeout=2)
+            metrics = runtime.node_metrics["area"]
+            assert metrics.completed_packets == 2
+            assert metrics.error_count == 1
+            assert "Deliberate processing failure" in metrics.last_error
+            assert len(metrics.process_latency_ms) == 2
+            assert [packet.lifecycle for packet, _ in records] == [Lifecycle.OPEN, Lifecycle.UPDATE, Lifecycle.CLOSE]
+            assert records[-1][1] == records[-2][1] == metrics.last_completed_at
+            assert records[-1][0].payload["area_occurrence"]["duration_seconds"] == .05
+        finally:
+            await runtime.stop()
+        assert all(task.done() for task in runtime._tasks)
     asyncio.run(scenario())
 
 

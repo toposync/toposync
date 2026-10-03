@@ -121,22 +121,23 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         self.polygon = [(point.x, point.z) for point in area.points] if area else []
         return outputs
 
-    async def run(self, context):
-        while not context.is_cancelled():
-            packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
-            outputs = await self.process_packet(packet, context) if packet is not None else await self._refresh_area(context)
-            now = time.monotonic()
-            for key, state in list(self.states.items()):
-                if now - state.last_seen > self.config.evidence_timeout_seconds:
-                    outputs.extend(self._close(key, state, "evidence_timeout"))
-                    self.states.pop(key, None)
-                    self.closed_subjects.forget_active(key)
-            for output in outputs:
-                await context.emit(output, port=self.output_port)
+    def _expire_observations(self):
+        outputs = []
+        now = time.monotonic()
+        for key, state in list(self.states.items()):
+            if now - state.last_seen > self.config.evidence_timeout_seconds:
+                outputs.extend(self._close(key, state, "evidence_timeout"))
+                self.states.pop(key, None)
+                self.closed_subjects.forget_active(key)
+        return outputs
+
+    async def on_idle(self, context):
+        return await self._refresh_area(context) + self._expire_observations()
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:
         outputs = await self._refresh_area(context)
-        return outputs + await self._process_subject_packet(packet, context)
+        outputs.extend(await self._process_subject_packet(packet, context))
+        return outputs + self._expire_observations()
 
     async def _process_subject_packet(self, packet: Packet, context) -> list[Packet]:
         subject = packet.payload.get("subject") or {}

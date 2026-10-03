@@ -191,6 +191,12 @@ not the number of subjects or detection work. The operator's
 `update_interval_seconds=0` leaves updates unlimited and preserves the storage
 advisory. Grouped-entry and doorbell correlation keep their separate contracts.
 
+Area occurrences use the shared executor's processing, latency and error counters.
+A normal filter result counts as completed processing even when it emits no event;
+idle expiration can emit a close without incrementing the processing counter.
+Expiration also runs while observations of other subjects continue arriving.
+These counters describe execution, not detection quality or calibration accuracy.
+
 **People entering together** requires two distinct tracked people crossing into the
 selected mapped area within five seconds of the first crossing. Repeated crossings
 by the same tracked subject count once in that group. It reuses area occurrences

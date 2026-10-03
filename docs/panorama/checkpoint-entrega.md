@@ -1,5 +1,19 @@
 # Panorâmica ao vivo — aceleração e recuperação em validação, 25/09/2026
 
+## Integridade da referência de retorno — 03/10/2026
+
+A atualização do catálogo invalida a indicação de preset pendente ou ativo quando
+seu token desaparece ou passa a outro nome. Repetir a criação com a mesma chave
+também recusa um token cujo nome já diverge. Falha ao consultar o catálogo não é
+tratada como remoção. O número do token e o último comando aceito não comprovam
+a identidade física de uma referência de retorno.
+
+O retorno preciso continua sem aprovação no ensaio com erro de 6,75 pixels e
+limite de três pixels. Uma próxima coleta exige referência atual conferida,
+controle exclusivo, revisão carregada conhecida e observação da trajetória e da
+estabilidade. A espera fixa de dois segundos antes do Stop é uma hipótese a
+investigar; a causa mecânica ou temporal da reprovação não está confirmada.
+
 ## Integração local — 26/09/2026
 
 Base `0b162eb5`, sem novas capturas ou movimentos físicos. A verificação local de cobertura e sessão live encontrou 213 testes aprovados e duas falhas de publicação regional: uma reconstrução aprovada substituía o ativo, inclusive quando sua identidade óptica estava antiga. Corrigida a publicação v4 para conservar o novo resultado como candidato quando já existe geometria ativa. Reabertura e a finalização automática do cliente também preservam o ativo; a primeira publicação continua disponível. Os arquivos integrais e máscaras anteriores permanecem intactos. A regressão de API/publicação passou em 283 testes; o cenário foi ampliado para identidade atual/antiga e retorno confirmado/não confirmado.

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import type { HostI18n, PipelineReviewPanel } from "@toposync/plugin-api";
-import { fetchCamerasIndex } from "../api/camerasApi";
-import type { CamerasIndex } from "../types";
+import { fetchCameraContexts, fetchCamerasIndex } from "../api/camerasApi";
+import type { CameraContextsResponse, CamerasIndex } from "../types";
 
 type Node = { id: string; operator: string; config: Record<string, unknown> };
 function nodesOf(graph: unknown): Node[] {
@@ -30,12 +30,44 @@ function CameraRecipeReview({ graph, i18n }: { graph: unknown; i18n: HostI18n })
   const nodes = nodesOf(graph);
   const [cameras, setCameras] = useState<CamerasIndex["cameras"] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [areaContexts, setAreaContexts] = useState<CameraContextsResponse[] | null>(null);
+  const [areaContextFailed, setAreaContextFailed] = useState(false);
+  const boundAreas = nodes.some(node => node.operator === "camera.area_occurrence" && node.config.composition_id);
+  const contextCameraIds = JSON.stringify(boundAreas ? [...new Set(nodes.filter(node => node.operator === "camera.camera_mapping")
+    .map(node => String(node.config.camera_id || "")).filter(Boolean))] : []);
+  const areaReferenceKey = JSON.stringify(nodes.filter(node => node.operator === "camera.area_occurrence")
+    .map(node => [node.config.composition_id, (node.config.area as { id?: string } | undefined)?.id]));
+  useEffect(() => {
+    let controller: AbortController | null = null;
+    const refresh = () => {
+      controller?.abort();
+      const current = new AbortController();
+      controller = current;
+      setAreaContexts(null); setAreaContextFailed(false);
+      Promise.all((JSON.parse(contextCameraIds) as string[]).map(id => fetchCameraContexts(id, current.signal)))
+        .then(value => { if (!current.signal.aborted) setAreaContexts(value); })
+        .catch(() => { if (!current.signal.aborted) setAreaContextFailed(true); });
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => { controller?.abort(); window.removeEventListener("focus", refresh); };
+  }, [contextCameraIds, areaReferenceKey]);
   useEffect(() => { const controller = new AbortController();
     fetchCamerasIndex(controller.signal).then(value => setCameras(value.cameras)).catch(() => { if (!controller.signal.aborted) setFailed(true); });
     return () => controller.abort();
   }, []);
   const sources = nodes.filter(node => node.operator === "camera.source" || node.operator === "camera.audio_source");
   const physical = nodes.some(node => node.operator === "ptz_attention.request");
+  function areaName(node: Node): string {
+    const area = node.config.area as { id?: string; name?: string } | undefined;
+    if (!node.config.composition_id) return area?.name || text("Área sem nome", "Unnamed area");
+    if (areaContextFailed) return text("Não foi possível conferir a área", "Area could not be checked");
+    if (areaContexts === null) return text("Conferindo área…", "Checking area…");
+    const current = areaContexts.flatMap(context => context.compositions)
+      .filter(composition => composition.id === node.config.composition_id)
+      .flatMap(composition => composition.areas).find(item => item.id === area?.id);
+    return current?.name || text("Área indisponível ou sem acesso", "Area unavailable or inaccessible");
+  }
   return <section className="card" aria-label={text("Revisar receita", "Review recipe")}><div className="cardBody" style={{ display: "grid", gap: 16 }}>
     <strong>{text("Revisar receita", "Review recipe")}</strong>
     {sources.map(node => { const camera = cameras?.find(item => item.id === node.config.camera_id); const source = camera?.sources?.find(item => item.id === node.config.source_id);
@@ -47,7 +79,7 @@ function CameraRecipeReview({ graph, i18n }: { graph: unknown; i18n: HostI18n })
         {node.operator === "camera.audio_features" ? text("Som acima da referência fornecida. Suporte de áudio ainda não verificado.", "Sound above the supplied baseline. Audio support has not been verified.")
           : node.operator === "ai.condition_filter" ? String(node.config.condition_description || text("Condição sem descrição", "Condition has no description"))
           : node.operator === "core.stationary_event" ? text("Parada observada", "Observed stop")
-          : node.operator === "camera.area_occurrence" ? `${node.config.mode === "entry" ? text("Entrada", "Entry") : text("Presença", "Presence")} · ${String((node.config.area as { name?: string } | undefined)?.name || text("Área sem nome", "Unnamed area"))}`
+          : node.operator === "camera.area_occurrence" ? `${node.config.mode === "entry" ? text("Entrada", "Entry") : text("Presença", "Presence")} · ${areaName(node)}`
           : text("Detecção visual", "Visual detection")}
         {Array.isArray(node.config.categories) ? ` · ${node.config.categories.map(category => ({ person: text("pessoa", "person"), cat: text("gato", "cat"), dog: text("cão", "dog") })[String(category)] || String(category)).join(", ")}` : ""}
         {typeof (node.config.minimum_duration_seconds ?? node.config.min_stationary_seconds) === "number" ? ` · ${text("duração mínima", "minimum duration")}: ${node.config.minimum_duration_seconds ?? node.config.min_stationary_seconds} s` : ""}

@@ -3,6 +3,7 @@ import json
 import time
 from dataclasses import replace
 
+from toposync.runtime.config_store import AppConfig, ConfigStore, UserDataPaths
 from toposync.runtime.notifications.store import NotificationStore
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
@@ -92,7 +93,21 @@ def test_perimeter_description_persists_facts_and_loss_without_duplicate_alert(t
             graph_uid="perimeter",
         )
         configurations = {node["id"]: node["config"] for node in graph["nodes"]}
-        area = AreaOccurrenceRuntime(configurations["area"])
+        data = tmp_path / "configuration"
+        config_store = ConfigStore(paths=UserDataPaths(
+            data_dir=data, config_path=data / "config.json", files_dir=data / "files",
+        ))
+        await config_store.save_config(AppConfig.model_validate({
+            "active_composition_id": "yard", "compositions": [{"id": "yard", "name": "Quintal", "elements": [{
+                "id": "area-pool", "type": "com.toposync.structural.area", "name": AREA["name"],
+                "props": {"vertices": AREA["points"]},
+            }]}],
+        }))
+        area = AreaOccurrenceRuntime(configurations["area"], PipelineRuntimeDependencies(config_store=config_store))
+
+        async def observe(packet):
+            packet.payload["mapping"] = {"composition_id": "yard"}
+            return await area.process_packet(packet, None)
         store = NotificationStore(tmp_path / "notifications.sqlite3")
         records = []
 
@@ -102,16 +117,16 @@ def test_perimeter_description_persists_facts_and_loss_without_duplicate_alert(t
         sink = NotifyRuntime({**configurations["notify"], "update_interval_seconds": 0},
                              PipelineRuntimeDependencies(notifications_upsert=upsert))
         context = type("Context", (), {"pipeline_name": "perimeter", "node_id": "notify"})()
-        assert await area.process_packet(observation(0), None) == []  # Already inside is not an entry.
-        assert await area.process_packet(observation(1, x=3), None) == []
-        assert await area.process_packet(observation(2), None) == []
+        assert await observe(observation(0)) == []  # Already inside is not an entry.
+        assert await observe(observation(1, x=3)) == []
+        assert await observe(observation(2)) == []
         for timestamp in (3, 4):
-            for packet in await area.process_packet(observation(timestamp), None):
+            for packet in await observe(observation(timestamp)):
                 await sink.process_packet(packet, context)
         assert records[-1][0].description == "Gato: entrada observada na área piscina. Evidência por 2.0 segundos."
         missing = observation(5)
         missing.payload.pop("world")
-        for packet in await area.process_packet(missing, None):
+        for packet in await observe(missing):
             await sink.process_packet(packet, context)
             assert _render_template(packet, "{{payload.area_occurrence.description}}") == packet.payload["area_occurrence"]["description"]
         record = records[-1][0]
@@ -125,7 +140,7 @@ def test_perimeter_description_persists_facts_and_loss_without_duplicate_alert(t
         assert record.payload["data"]["area_occurrence"]["observed_subject"]["category"] == "cat"
         assert len({item.id for item, _ in records}) == 1
         assert sum(created for _, created in records) == 1
-        assert await area.process_packet(observation(4), None) == []
+        assert await observe(observation(4)) == []
 
     asyncio.run(scenario())
 
@@ -162,8 +177,14 @@ def test_grouped_crossings_require_distinct_people_in_fixed_window_and_preserve_
         updated = await send(5, "two")
         assert updated[0].stream_id == opened[0].stream_id
         assert updated[0].payload["group_observation"]["duration_seconds"] == 4
-        assert await send(6, "two", missing=True) == []
-        assert await send(6, "one", missing=True) == []
+        lost_two = await send(6, "two", missing=True)
+        lost_one = await send(6, "one", missing=True)
+        for events, active in [(lost_two, ["one"]), (lost_one, [])]:
+            assert len(events) == 1 and events[0].lifecycle == Lifecycle.UPDATE
+            assert events[0].stream_id == opened[0].stream_id
+            assert events[0].payload["active_member_event_ids"] == active
+            assert events[0].payload["group_observation"]["last_evidence_at"] == 5
+            assert events[0].payload["group_observation"]["duration_seconds"] == 4
         # Loss closes at last evidence, not at the later timeout clock.
         closed = group._close_expired_groups(
             observation(20), source_stream_id="camera:one", now_monotonic=time.monotonic(), packet_ts=20,
@@ -179,7 +200,7 @@ def test_grouped_crossings_require_distinct_people_in_fixed_window_and_preserve_
         sink = NotifyRuntime({"dedupe_by_occurrence": True, "update_interval_seconds": 0},
                              PipelineRuntimeDependencies(notifications_upsert=upsert))
         context = type("Context", (), {"pipeline_name": "grouped-entry", "node_id": "notify"})()
-        for event in [opened[0], updated[0], updated[0], closed[0]]:
+        for event in [opened[0], updated[0], updated[0], *lost_two, *lost_one, closed[0]]:
             await sink.process_packet(event, context)
         assert sum(created for _, created in records) == 1
         assert len({record.id for record, _ in records}) == 1

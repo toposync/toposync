@@ -7,20 +7,23 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
+from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness, resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 
-from .pipelines.postprocess import AreaRestrictionPolygon, _point_in_polygon
+from .pipelines.postprocess import AreaRestrictionPolygon, _diagnostic_get, _point_in_polygon
 
 
 class AreaOccurrenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     area: AreaRestrictionPolygon | None = None
+    composition_id: str = ""
     categories: list[Literal["person", "dog", "cat"]] = Field(default_factory=lambda: ["person", "dog", "cat"])
     mode: Literal["presence", "entry"] = "presence"
     minimum_duration_seconds: float = Field(default=1.0, ge=0, le=3600)
@@ -34,6 +37,55 @@ class AreaOccurrenceConfig(BaseModel):
         if value is not None and not all(math.isfinite(axis) for point in value.points for axis in (point.x, point.z)):
             raise ValueError("Area coordinates must be finite")
         return value
+
+    @model_validator(mode="after")
+    def validate_reference(self):
+        self.composition_id = self.composition_id.strip()
+        if self.composition_id and (self.area is None or self.area.id is None):
+            raise ValueError("A mapped area reference requires an area identifier")
+        return self
+
+
+def resolve_composition_area(compositions, *, composition_id, area_id):
+    """Resolve the selected structural area, never a same-named replacement."""
+    matches = []
+    for composition in compositions:
+        if _diagnostic_get(composition, "id") != composition_id:
+            continue
+        for element in _diagnostic_get(composition, "elements", []):
+            if (_diagnostic_get(element, "id") != area_id
+                    or _diagnostic_get(element, "type") != "com.toposync.structural.area"):
+                continue
+            props = _diagnostic_get(element, "props", {})
+            try:
+                area = AreaRestrictionPolygon.model_validate({
+                    "id": area_id, "name": _diagnostic_get(element, "name") or area_id,
+                    "points": props.get("vertices"),
+                })
+                if not all(math.isfinite(axis) for point in area.points for axis in (point.x, point.z)):
+                    return None
+                matches.append(area)
+            except (ValueError, TypeError, AttributeError):
+                return None
+    return matches[0] if len(matches) == 1 else None
+
+
+def _area_reference_diagnostics(config, context):
+    parsed = AreaOccurrenceConfig.model_validate(config)
+    if not parsed.composition_id:
+        return []
+    compositions = context.get("compositions")
+    if compositions is None and not context.get("check_runtime_prerequisites"):
+        return []
+    if isinstance(compositions, list) and resolve_composition_area(
+        compositions, composition_id=parsed.composition_id, area_id=parsed.area.id,
+    ) is not None:
+        return []
+    return [OperatorDiagnostic(
+        severity="error", code="camera_area_unavailable",
+        message="The selected map area is missing or no longer has a valid boundary.",
+        suggestion="Restore the area in the map, or create a recipe for another area before enabling it.",
+    )]
 
 
 @dataclass
@@ -52,16 +104,49 @@ class _AreaState:
 
 
 class AreaOccurrenceRuntime(TransformOperatorRuntime):
-    def __init__(self, config):
+    def __init__(self, config, dependencies=None):
         self.config = AreaOccurrenceConfig.model_validate(config)
+        self.dependencies = dependencies
+        self.area = self.config.area
+        self._area_config_snapshot = None
         self.states: OrderedDict[tuple, _AreaState] = OrderedDict()
         self.closed_subjects = ClosedSubjectLedger()
-        self.polygon = [(point.x, point.z) for point in self.config.area.points] if self.config.area else []
+        self.polygon = [(point.x, point.z) for point in self.area.points] if self.area else []
+
+    async def _refresh_area(self, context):
+        if not self.config.composition_id:
+            return []
+        store = getattr(self.dependencies, "config_store", None)
+        try:
+            configuration = await store.get_config() if isinstance(store, ConfigStore) else None
+        except Exception:
+            configuration = None
+        if configuration is not None and configuration is self._area_config_snapshot:
+            return []
+        self._area_config_snapshot = configuration
+        area = resolve_composition_area(
+            configuration.compositions, composition_id=self.config.composition_id, area_id=self.config.area.id,
+        ) if configuration is not None else None
+        metrics = getattr(context, "metrics", None)
+        if metrics is not None:
+            metrics.unavailable_reason = (
+                None if area else "core.ui.pipelines.alerts.camera_area_unavailable.message"
+            )
+        if area == self.area:
+            return []
+        outputs = []
+        for key, state in self.states.items():
+            outputs.extend(self._close(key, state, "area_changed" if area else "area_unavailable"))
+            state.inside = None
+            # Keep capture/timestamp fences: an older packet cannot reopen a visit.
+        self.area = area
+        self.polygon = [(point.x, point.z) for point in area.points] if area else []
+        return outputs
 
     async def run(self, context):
         while not context.is_cancelled():
             packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
-            outputs = await self.process_packet(packet, context) if packet is not None else []
+            outputs = await self.process_packet(packet, context) if packet is not None else await self._refresh_area(context)
             now = time.monotonic()
             for key, state in list(self.states.items()):
                 if now - state.last_seen > self.config.evidence_timeout_seconds:
@@ -72,8 +157,10 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
                 await context.emit(output, port=self.output_port)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:
-        if self.config.area is None:
-            return []
+        outputs = await self._refresh_area(context)
+        return outputs + await self._process_subject_packet(packet, context)
+
+    async def _process_subject_packet(self, packet: Packet, context) -> list[Packet]:
         subject = packet.payload.get("subject") or {}
         if not isinstance(subject, dict) or not subject.get("id"):
             return []
@@ -93,6 +180,8 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
             self.closed_subjects.close(key, subject)
             self.states.pop(key, None)
             return self._close(key, state, "subject_closed") if state is not None else []
+        if self.area is None:
+            return []
         freshness = resolve_frame_freshness(packet)
         if freshness.age_seconds is not None and state is not None:
             evidence = packet.payload["capture_evidence"]
@@ -132,6 +221,11 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         state.published_at = evidence["published_at"]
         world = packet.payload.get("world")
         try:
+            mapping = packet.payload.get("mapping")
+            if self.config.composition_id and (
+                not isinstance(mapping, dict) or mapping.get("composition_id") != self.config.composition_id
+            ):
+                raise ValueError("Position does not belong to the selected composition")
             if type(world["x"]) not in (int, float) or type(world["z"]) not in (int, float):
                 raise ValueError("World coordinates must be finite numbers")
             x, z = float(world["x"]), float(world["z"])
@@ -167,19 +261,19 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         timestamp = resolve_media_ts(packet)
         while state.visits and state.visits[0] <= timestamp - self.config.visit_window_seconds:
             state.visits.popleft()
-        identity = hashlib.sha256(f"{key}:{state.capture[:2]}:{self.config.area.name}:{state.started_at}".encode()).hexdigest()[:32]
+        identity = hashlib.sha256(f"{key}:{state.capture[:2]}:{self.area.name}:{state.started_at}".encode()).hexdigest()[:32]
         payload = dict(packet.payload)
-        payload["area_label"] = self.config.area.name
+        payload["area_label"] = self.area.name
         # A name alone cannot establish a mapped identity, nor inherit another area's identifier.
         payload.pop("area_id", None)
-        if self.config.area.id is not None:
-            payload["area_id"] = self.config.area.id
+        if self.area.id is not None:
+            payload["area_id"] = self.area.id
         subject = dict(packet.payload["subject"])
         subject.update({"type": "event", "id": identity, "lifecycle": lifecycle.value, "started_ts": state.started_at})
         duration = resolve_media_ts(packet) - state.started_at
         category = {"person": "Pessoa", "dog": "Cão", "cat": "Gato"}[subject["category"]]
         action = "entrada observada" if self.config.mode == "entry" else "presença observada"
-        description = f"{category}: {action} na área {self.config.area.name}. Evidência por {duration:.1f} segundos."
+        description = f"{category}: {action} na área {self.area.name}. Evidência por {duration:.1f} segundos."
         if len(state.visits) > 1:
             qualifier = "Pelo menos " if timestamp < state.visits_overflow_until else ""
             description = (f"{qualifier}{len(state.visits)} entradas observadas em "
@@ -191,7 +285,7 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
             )
         payload.update({
             "subject": subject, "correlation_id": identity,
-            "area_occurrence": {"area": self.config.area.name, "mode": self.config.mode,
+            "area_occurrence": {"area": self.area.name, "mode": self.config.mode,
                 "status": status, "observed_subject": packet.payload["subject"],
                 "visits": {"count": len(state.visits), "window_seconds": self.config.visit_window_seconds,
                            "count_is_lower_bound": timestamp < state.visits_overflow_until,
@@ -224,7 +318,8 @@ def register_area_occurrence_operator(registry):
         capabilities=["camera", "tracking"], execution_mode="in_event_loop", max_concurrency=1,
         requires_payload_keys=["subject"], produces_payload_keys=["subject", "area_occurrence", "correlation_id"],
         state_kind="stateful_per_stream", ordering="strict", share_strategy="never", owner="com.toposync.cameras",
-        runtime_factory=lambda config, _dependencies: AreaOccurrenceRuntime(config),
+        diagnostics_factory=_area_reference_diagnostics,
+        runtime_factory=lambda config, dependencies: AreaOccurrenceRuntime(config, dependencies),
     )
 
 
@@ -249,7 +344,7 @@ def build_area_occurrence_graph(*, preset, camera_id, source_id, detection_model
         {"id": "map", "operator": "camera.camera_mapping", "config": {"camera_id": camera_id, "composition_id": composition_id}},
         {"id": "track", "operator": "vision.track", "config": {"tracker_id": "byte_world", "use_world_anchor": "auto"}},
         {"id": "area", "operator": "camera.area_occurrence", "config": {
-            "area": area, "mode": mode, "categories": categories,
+            "area": area, "composition_id": composition_id, "mode": mode, "categories": categories,
             "minimum_duration_seconds": 0 if grouped else 1}},
         {"id": "store", "operator": "core.store_images", "config": {"format": "webp"}},
         {"id": "notify", "operator": "core.notify", "config": {

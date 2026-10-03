@@ -11,6 +11,7 @@ from toposync.app import create_app
 import toposync.extensions.manager as ext_manager_mod
 import toposync_ext_cameras.plugin as cameras_plugin_mod
 from toposync.runtime.pipelines import Lifecycle, Packet
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.operators_core import FPSReducerRuntime, StationaryEventRuntime
 
 
@@ -293,14 +294,19 @@ def test_area_recipe_preserves_selected_categories(tmp_path, monkeypatch, catego
         from toposync_ext_cameras.area_events import AreaOccurrenceRuntime
 
         async def replay():
-            runtime = AreaOccurrenceRuntime(_node_config(pipeline, "camera.area_occurrence"))
+            area_configuration = _node_config(pipeline, "camera.area_occurrence")
+            runtime = AreaOccurrenceRuntime(
+                area_configuration, PipelineRuntimeDependencies(config_store=client.app.state.config_store),
+            )
             excluded = next(value for value in ("cat", "person", "dog") if value not in categories)
             for timestamp in (0, 1):
                 packet = observation(timestamp, subject="excluded")
+                packet.payload["mapping"] = {"composition_id": area_configuration["composition_id"]}
                 packet.payload["subject"]["category"] = excluded
                 assert await runtime.process_packet(packet, None) == []
             for timestamp in (2, 3):
                 packet = observation(timestamp, subject="selected")
+                packet.payload["mapping"] = {"composition_id": area_configuration["composition_id"]}
                 packet.payload["subject"]["category"] = categories[0]
                 outputs = await runtime.process_packet(packet, None)
             assert [packet.lifecycle for packet in outputs] == [Lifecycle.OPEN]

@@ -73,6 +73,75 @@ def _configure_camera(client: TestClient) -> None:
     )
 
 
+@pytest.mark.parametrize("phase", ["pending", "active"])
+@pytest.mark.parametrize("catalog_change", ["unchanged", "renamed", "removed", "unavailable"])
+def test_preset_catalog_invalidates_reused_return_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str, catalog_change: str,
+) -> None:
+    from toposync_ext_cameras.onvif import OnvifError, OnvifPtzPreset, OnvifPtzStatus
+
+    presets = {}
+    set_calls = 0
+    catalog_unavailable = False
+
+    class FakeOnvifClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def get_ptz_presets(self, *args, **kwargs):
+            if catalog_unavailable:
+                raise OnvifError("catalog unavailable")
+            return [OnvifPtzPreset(token=token, name=name) for token, name in presets.items()]
+
+        async def set_preset(self, *args, preset_name, **kwargs):
+            nonlocal set_calls
+            set_calls += 1
+            presets["007"] = preset_name
+            return "007"
+
+        async def get_ptz_status(self, *args, **kwargs):
+            return OnvifPtzStatus(move_status="IDLE")
+
+    monkeypatch.setattr("toposync_ext_cameras.plugin.OnvifClient", FakeOnvifClient)
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        services = client.app.state.services
+
+        async def scenario():
+            nonlocal catalog_unavailable
+            values = {"camera_id": "cam1", "camera_source_id": "zoom"}
+            create = {**values, "preset_name": "Return reference", "idempotency_key": "return-identity"}
+            await services.call("cameras.ptz.set_preset", **create)
+            if phase == "active":
+                initial = await services.call("cameras.ptz.get_status", **values)
+                assert initial["preset_name"] == "Return reference"
+            if catalog_change == "renamed":
+                presets["007"] = "User view"
+            elif catalog_change == "removed":
+                presets.clear()
+            if catalog_change == "unavailable":
+                catalog_unavailable = True
+                with pytest.raises(HTTPException) as failed_read:
+                    await services.call("cameras.ptz.list_presets", **values)
+                assert failed_read.value.status_code == 502
+            else:
+                await services.call("cameras.ptz.list_presets", **values)
+            status = await services.call("cameras.ptz.get_status", **values)
+            preserved = catalog_change in {"unchanged", "unavailable"}
+            assert status["preset_token"] == ("007" if preserved else "")
+            assert status["preset_name"] == ("Return reference" if preserved else "")
+            catalog_unavailable = False
+            if preserved:
+                assert (await services.call("cameras.ptz.set_preset", **create))["token"] == "007"
+            else:
+                with pytest.raises(HTTPException) as rejected:
+                    await services.call("cameras.ptz.set_preset", **create)
+                assert rejected.value.status_code == 409
+            assert set_calls == 1
+
+        client.portal.call(scenario)
+
+
 def test_ptz_preset_http_retries_only_reconcile_ambiguous_mutations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -2492,7 +2492,10 @@ class CamerasExtension(BaseExtension):
                 if str(token or "").strip()
             }
             for preset in presets:
-                if str(preset.token or "").strip() in preferred_tokens:
+                if (
+                    str(preset.token or "").strip() in preferred_tokens
+                    and str(preset.name or "").strip() == operation.preset_name
+                ):
                     return preset
 
             if not operation.preset_name:
@@ -2582,6 +2585,16 @@ class CamerasExtension(BaseExtension):
                 for item in result
                 if str(item["name"] or "").strip()
             }
+            # The device may rename, remove or reuse a token outside Toposync.
+            # A stale command receipt cannot identify the new catalog entry.
+            tracking = _get_ptz_preset_tracking(key)
+            for attribute in ("pending", "active"):
+                remembered = getattr(tracking, attribute)
+                if (
+                    remembered is not None
+                    and onvif_ptz_preset_names[key].get(remembered[0]) != remembered[1]
+                ):
+                    setattr(tracking, attribute, None)
             return result
 
         async def _svc_ptz_set_preset(
@@ -2644,6 +2657,11 @@ class CamerasExtension(BaseExtension):
                         None,
                     )
                     if resolved_match is not None:
+                        if str(resolved_match.name or "").strip() != operation.preset_name:
+                            raise HTTPException(
+                                status_code=409,
+                                detail="Preset created by this Idempotency-Key no longer matches its original name",
+                            )
                         return {"token": operation.resolved_token, "name": operation.preset_name}
                     if not operation.automatic:
                         operation.removed = True

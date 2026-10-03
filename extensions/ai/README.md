@@ -391,6 +391,21 @@ resulta em indisponibilidade explícita. Após inferência, autorização e regi
 são verificados novamente; alteração ou exclusão descarta a resposta. Citações
 são extraídas no servidor pelos índices validados, nunca copiadas do modelo.
 
+Antes da classificação, o modelo extrai trechos literais de ameaça afirmada,
+negação explícita e atribuição, além da suficiência do contexto. Cada trecho deve
+existir exatamente no segmento citado. O servidor aplica a precedência de contexto
+insuficiente, atribuição, negação, ameaça e ausência de ameaça identificada; uma
+negação não depende de existir ameaça afirmada. O modelo não escolhe diretamente
+o rótulo final. Correspondência textual não comprova que o trecho sustenta a
+interpretação: a avaliação semântica e a revisão humana continuam necessárias.
+
+O contrato foi avaliado localmente com Qwen3.5 9B em uma transcrição humana inglesa
+que antes recebia atribuição indevida, onze regressões textuais e oito textos
+reservados. Os vinte rótulos e os trechos emitidos passaram nesse recorte. Textos
+autorais não qualificam transcrição real em português, falas espontâneas, ameaças
+reais ou desempenho geral. A narrativa anterior com oráculo insuficiente continua
+inconclusiva.
+
 Resultados são temporários e descartados ao mudar a evidência ou voltar à janela.
 A revisão diferencia negação, citação/ficção, fala potencialmente ameaçadora,
 ausência de palavras ameaçadoras no trecho e contexto insuficiente. Essas classes

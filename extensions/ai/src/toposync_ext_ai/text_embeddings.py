@@ -130,6 +130,14 @@ class TextHistorySearch:
                     **(interpretation or {})}}
 
     async def _semantic(self, query: str, limit: int, priorities: list[str] | None = None, types: list[str] | None = None, created_after: float | None = None, created_before: float | None = None, data_filter: dict[str, str] | None = None, notification_ids: list[str] | None = None) -> dict[str, Any]:
+        items, _ = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids)
+        if not items:
+            # No candidate records exist to rank. Avoid loading a model for an empty selection.
+            return {"notifications": [], "search": {
+                "mode": "literal", "status": "ready", "reason": "no_matching_notifications",
+                "returned_count": 0, "results_truncated": False, "visual_similarity": False,
+                "time_basis": "notification_created_at", "created_after": created_after, "created_before": created_before,
+            }}
         settings = await self.services.call("ai.settings.get")
         provider = next((provider for provider in settings.providers
                          if provider.enabled and provider.kind == "ollama" and provider.local), None)
@@ -138,7 +146,6 @@ class TextHistorySearch:
         endpoint = urlsplit(provider.host)
         if endpoint.scheme not in {"http", "https"} or endpoint.hostname not in {"localhost", "127.0.0.1", "::1"} or endpoint.username or endpoint.password:
             raise ValueError("loopback_provider_required")
-        items, _ = await self.notifications.list(limit=CORPUS_LIMIT, priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids)
         documents = {item["id"]: (hashlib.sha256(document_text(item).encode()).hexdigest(), document_text(item)) for item in items}
         async with httpx.AsyncClient(base_url=provider.host.rstrip("/"), timeout=60, trust_env=False) as client:
             response = await client.get("/api/tags")

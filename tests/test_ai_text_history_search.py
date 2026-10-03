@@ -14,6 +14,37 @@ class Services:
         return SimpleNamespace(providers=[SimpleNamespace(enabled=True, kind="ollama", local=True, host="http://localhost:11434")])
 
 
+@pytest.mark.parametrize("filters", [
+    None,
+    {"priorities": ["high"]},
+    {"types": ["door"]},
+    {"data_filter": {"camera_id": "garage"}},
+    {"created_before": 50},
+    {"notification_ids": []},
+])
+def test_empty_filtered_corpus_never_contacts_model(tmp_path, monkeypatch, filters):
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    if filters is not None:
+        runtime.store.upsert(type="event", title="Pessoa", now=100,
+                             payload={"data": {"camera_id": "patio"}})
+
+    class UnusedServices:
+        async def call(self, _name):
+            pytest.fail("An empty corpus must not request an inference provider")
+
+    def no_client(**_kwargs):
+        pytest.fail("An empty corpus must not contact a model server")
+
+    monkeypatch.setattr(httpx, "AsyncClient", no_client)
+    result = asyncio.run(TextHistorySearch(runtime, UnusedServices()).search(query="pessoa", **(filters or {})))
+    assert result["notifications"] == []
+    assert result["search"]["mode"] == "literal"
+    assert result["search"]["status"] == "ready"
+    assert result["search"]["reason"] == "no_matching_notifications"
+    assert result["search"]["returned_count"] == 0
+    assert result["search"]["created_before"] == (filters or {}).get("created_before")
+
+
 def test_text_index_lifecycle_and_space_isolation(tmp_path: Path) -> None:
     runtime = NotificationsRuntime(data_dir=tmp_path)
     record, _ = runtime.store.upsert(type="event", title="Gato", dedupe_key="gato")

@@ -406,10 +406,21 @@ class TransformOperatorRuntime(BaseOperatorRuntime):
     async def process_packet(self, packet: Packet, context: NodeExecutionContext) -> list[Packet]:
         return [packet]
 
+    async def on_idle(self, context: NodeExecutionContext) -> list[Packet]:
+        return []
+
     async def run(self, context: NodeExecutionContext) -> None:
         while not context.is_cancelled():
             packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
             if packet is None:
+                try:
+                    for out_packet in await self.on_idle(context):
+                        await context.emit(out_packet, port=self.output_port)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    context.metrics.record_error(exc)
+                    context.logger.exception("Node '%s' failed during idle processing", context.node_id)
                 continue
             permit: FlowLimiterPermit | None = None
             limiter = context.flow_limiter

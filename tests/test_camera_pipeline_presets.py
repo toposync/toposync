@@ -1285,7 +1285,7 @@ def test_camera_pipeline_stopped_area_uses_area_composition_and_restriction(
             "min_stationary_seconds"
         ) == pytest.approx(2.0)
 
-        assert _node_config(pipeline, "core.notify")["include_payload_paths"] == ["area_id"]
+        assert _node_config(pipeline, "core.notify")["include_payload_paths"] == ["area_id", "stationary_event"]
         area = _node_config(pipeline, "camera.area_restriction")
         from toposync_ext_cameras.pipelines.postprocess import AreaRestrictionRuntime
         from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
@@ -1309,6 +1309,7 @@ def test_camera_pipeline_stopped_area_uses_area_composition_and_restriction(
         records, _ = storage.list(data_filter={"area_id": "area-1"})
         assert len(records) == 1
         assert records[0].payload["data"]["area_label"] == "Gate"
+        assert records[0].payload["data"]["stationary_event"]["stationary_seconds"] == 2
         assert storage.data_options("area_id", "area_label") == [{"value": "area-1", "label": "Gate"}]
         assert area.get("include_area_names") == ["Gate"]
         assert area.get("drop_when_unmapped") is True

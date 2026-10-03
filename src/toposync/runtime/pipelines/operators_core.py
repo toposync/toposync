@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import tempfile
 import time
@@ -20,7 +21,8 @@ from .execution import (
 )
 from .images import MAIN_ARTIFACT_NAME
 from .operator_registry import OperatorRegistry, payload_path_hint
-from .packet_contract import build_media_descriptor, build_source_descriptor
+from .packet_contract import build_media_descriptor, build_source_descriptor, resolve_frame_freshness
+from .subject_lifecycle import ClosedSubjectLedger
 from .runtime import Artifact, Lifecycle, Packet
 from .operators_control import register_control_operators
 from .operators_distributed import register_distributed_operators
@@ -127,6 +129,8 @@ class StationaryEventConfig(BaseModel):
     arrival_min_distance_m: float = Field(default=0.50, ge=0.0, le=10000.0)
     close_after_moving_seconds: float = Field(default=0.75, ge=0.0, le=3600.0)
     merge_moving_gap_seconds: float = Field(default=0.0, ge=0.0, le=3600.0)
+    evidence_timeout_seconds: float = Field(default=5.0, gt=0.0, le=3600.0)
+    maximum_subjects: int = Field(default=4096, ge=1, le=65536)
 
 
 @dataclass(slots=True)
@@ -140,6 +144,12 @@ class _StationaryEventState:
     confirmed: bool = False
     moving_since: float | None = None
     last_event_packet: Packet | None = None
+    last_seen_monotonic: float = float("-inf")
+    last_timestamp: float = float("-inf")
+    capture: tuple[str, int, int] | None = None
+    published_at: float = float("-inf")
+    stationary_seconds: float = 0.0
+    previous_stationary_timestamp: float | None = None
 
 
 _DEBUG_SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -1031,11 +1041,13 @@ def _resolve_world_position(packet: Packet) -> tuple[float, float] | None:
     if not isinstance(world, dict):
         return None
     try:
+        if type(world.get("x")) not in (int, float) or type(world.get("z")) not in (int, float):
+            return None
         x = float(world.get("x"))
         z = float(world.get("z"))
     except Exception:
         return None
-    if x != x or z != z:
+    if not math.isfinite(x) or not math.isfinite(z):
         return None
     return (x, z)
 
@@ -1052,7 +1064,38 @@ class StationaryEventRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any]) -> None:
         parsed = StationaryEventConfig.model_validate(config)
         self._config = parsed
-        self._state_by_key: dict[str, _StationaryEventState] = {}
+        self._state_by_key: dict[tuple[str, str, str], _StationaryEventState] = {}
+        self._closed_subjects = ClosedSubjectLedger(capacity=parsed.maximum_subjects)
+
+    def _end_observation(self, state, reason):
+        outputs = []
+        if state.confirmed and state.last_event_packet is not None:
+            last = state.last_event_packet
+            payload = dict(last.payload)
+            payload["stationary_event"] = {**payload["stationary_event"], "reason": reason}
+            outputs.append(replace(
+                last, lifecycle=Lifecycle.CLOSE, payload=payload,
+                packet_id=f"{last.packet_id}:stationary-close", parent_packet_id=last.packet_id,
+            ))
+        state.first_seen_at = None
+        state.first_position = None
+        state.arrival_observed = False
+        state.confirmed = False
+        state.moving_since = None
+        state.last_event_packet = None
+        self._reset_candidate(state)
+        return outputs
+
+    def _expire_observations(self):
+        now = time.monotonic()
+        outputs = []
+        for state in self._state_by_key.values():
+            if now - state.last_seen_monotonic > self._config.evidence_timeout_seconds:
+                outputs.extend(self._end_observation(state, "evidence_timeout"))
+        return outputs
+
+    async def on_idle(self, context):
+        return self._expire_observations()
 
     def _annotate(
         self,
@@ -1065,12 +1108,12 @@ class StationaryEventRuntime(TransformOperatorRuntime):
     ) -> Packet:
         payload = dict(packet.payload)
         candidate_since = state.candidate_since
-        stationary_seconds = max(0.0, now - candidate_since) if candidate_since is not None else 0.0
         payload["stationary_event"] = {
             "confirmed": bool(state.confirmed),
             "candidate_since": float(candidate_since) if candidate_since is not None else None,
+            "last_evidence_at": now,
             "sample_count": int(state.sample_count),
-            "stationary_seconds": float(stationary_seconds),
+            "stationary_seconds": state.stationary_seconds,
             "distance_m": float(distance_m),
             "arrival_observed": bool(state.arrival_observed),
             "reason": str(reason or "").strip() or None,
@@ -1081,49 +1124,93 @@ class StationaryEventRuntime(TransformOperatorRuntime):
         state.candidate_since = None
         state.candidate_position = None
         state.sample_count = 0
+        state.stationary_seconds = 0.0
+        state.previous_stationary_timestamp = None
 
-    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        key = _resolve_key(packet, self._config.key_field)
-        state = self._state_by_key.setdefault(key, _StationaryEventState())
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:
+        outputs = self._expire_observations()
+        key = (
+            str(packet.payload.get("source_stream_id") or packet.stream_id),
+            str(packet.payload.get("camera_id") or ""), _resolve_key(packet, self._config.key_field),
+        )
+        subject = packet.payload.get("subject")
+        subject = subject if isinstance(subject, dict) else {}
+        state = self._state_by_key.get(key)
+        if self._closed_subjects.observe(key, subject, retain=False):
+            return outputs
+        if packet.lifecycle == Lifecycle.CLOSE:
+            evidence = packet.payload.get("capture_evidence")
+            if state is not None and state.capture is not None and isinstance(evidence, dict):
+                if (evidence.get("capture_instance"), evidence.get("generation")) != state.capture[:2]:
+                    return outputs
+            self._closed_subjects.close(key, subject)
+            self._state_by_key.pop(key, None)
+            return outputs + (self._end_observation(state, "source_closed") if state is not None else [])
+        if self._closed_subjects.capacity_reached or (
+            state is None and len(self._state_by_key) >= self._config.maximum_subjects
+        ):
+            metrics = getattr(context, "metrics", None)
+            if metrics is not None and not getattr(self, "_capacity_reported", False):
+                metrics.record_error(RuntimeError("Stationary observation state capacity reached; restart this pipeline to resume new subjects."))
+                self._capacity_reported = True
+            return outputs
+        evidence = packet.payload.get("capture_evidence")
+        if evidence is None and state is not None and state.capture is not None:
+            return outputs + self._end_observation(state, "unconfirmed")
+        age = 0.0
+        capture = None
+        if evidence is not None:
+            freshness = resolve_frame_freshness(packet)
+            if freshness.age_seconds is None or freshness.age_seconds > self._config.evidence_timeout_seconds:
+                return outputs + (self._end_observation(state, "unconfirmed") if state is not None else [])
+            age = freshness.age_seconds
+            capture = (evidence["capture_instance"], evidence["generation"], evidence["sequence"])
+            if state is not None:
+                if evidence["published_at"] < state.published_at:
+                    return outputs
+                if state.capture is not None and capture[0] == state.capture[0] and (
+                    capture[1] < state.capture[1] or (capture[1] == state.capture[1] and capture[2] <= state.capture[2])
+                ):
+                    return outputs
         now = _resolve_packet_event_time(packet)
+        if state is not None and capture is not None and state.capture is not None and capture[:2] != state.capture[:2]:
+            outputs.extend(self._end_observation(state, "source_reset"))
+            state.last_timestamp = float("-inf")
+        if state is not None and now <= state.last_timestamp:
+            return outputs
+        if self._closed_subjects.observe(key, subject):
+            return outputs
+        state = self._state_by_key.setdefault(key, _StationaryEventState())
+        if now - state.last_timestamp > self._config.evidence_timeout_seconds:
+            outputs.extend(self._end_observation(state, "evidence_gap"))
+        state.last_timestamp = now
+        if capture is not None:
+            state.capture = capture
+            state.published_at = evidence["published_at"]
         position = _resolve_world_position(packet)
+        valid = _resolve_bool_field(packet, self._config.valid_field)
+        speed = _resolve_number_field(packet, self._config.speed_field)
+        stopped = _resolve_bool_field(packet, self._config.stopped_field)
+        if position is None or valid is False or (stopped is None and speed is None):
+            return outputs + self._end_observation(state, "unconfirmed")
+        state.last_seen_monotonic = time.monotonic() - age
+        return outputs + self._process_observation(packet, state, now, position, speed, stopped)
 
+    def _process_observation(self, packet, state, now, position, speed, stopped):
         if state.first_seen_at is None:
             state.first_seen_at = now
             state.first_position = position
-
-        if packet.lifecycle == Lifecycle.CLOSE:
-            self._state_by_key.pop(key, None)
-            if not state.confirmed:
-                return []
-            annotated = self._annotate(
-                packet,
-                state=state,
-                now=now,
-                distance_m=_distance_m(state.candidate_position, position),
-                reason="source_closed",
-            )
-            return [annotated.with_lifecycle(Lifecycle.CLOSE)]
-
-        valid = _resolve_bool_field(packet, self._config.valid_field)
-        if valid is False:
-            if not state.confirmed:
-                self._reset_candidate(state)
-            return []
-
-        speed = _resolve_number_field(packet, self._config.speed_field)
-        stopped = _resolve_bool_field(packet, self._config.stopped_field)
-        has_stopped_signal = stopped is not None or speed is not None
         is_stationary = bool(stopped is True or (speed is not None and speed <= self._config.max_speed_mps))
         is_moving = bool(stopped is False or (speed is not None and speed > self._config.max_speed_mps))
-
+        if is_stationary and is_moving:
+            return self._end_observation(state, "unconfirmed")
+        if is_stationary and state.previous_stationary_timestamp is not None:
+            state.stationary_seconds += now - state.previous_stationary_timestamp
+        state.previous_stationary_timestamp = now if is_stationary else None
         if is_moving:
             state.arrival_observed = True
-        elif position is not None and _distance_m(state.first_position, position) >= self._config.arrival_min_distance_m:
+        elif _distance_m(state.first_position, position) >= self._config.arrival_min_distance_m:
             state.arrival_observed = True
-
-        if not has_stopped_signal:
-            return []
 
         if state.confirmed:
             if (
@@ -1137,15 +1224,7 @@ class StationaryEventRuntime(TransformOperatorRuntime):
                     + self._config.merge_moving_gap_seconds
                 )
                 if moving_seconds >= close_after_seconds:
-                    annotated = self._annotate(
-                        packet,
-                        state=state,
-                        now=now,
-                        distance_m=_distance_m(state.candidate_position, position),
-                        reason="moving",
-                    )
-                    self._state_by_key.pop(key, None)
-                    return [annotated.with_lifecycle(Lifecycle.CLOSE)]
+                    return self._end_observation(state, "moving")
 
             if is_moving:
                 if state.moving_since is None:
@@ -1156,15 +1235,7 @@ class StationaryEventRuntime(TransformOperatorRuntime):
                     + self._config.merge_moving_gap_seconds
                 )
                 if moving_seconds >= close_after_seconds:
-                    annotated = self._annotate(
-                        packet,
-                        state=state,
-                        now=now,
-                        distance_m=_distance_m(state.candidate_position, position),
-                        reason="moving",
-                    )
-                    self._state_by_key.pop(key, None)
-                    return [annotated.with_lifecycle(Lifecycle.CLOSE)]
+                    return self._end_observation(state, "moving")
                 return []
 
             moving_was_pending = (
@@ -1205,6 +1276,8 @@ class StationaryEventRuntime(TransformOperatorRuntime):
             state.candidate_since = now
             state.candidate_position = position
             state.sample_count = 1
+            state.stationary_seconds = 0.0
+            state.previous_stationary_timestamp = now
             return []
 
         if self._config.require_arrival and not state.arrival_observed:

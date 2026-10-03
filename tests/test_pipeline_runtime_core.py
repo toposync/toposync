@@ -18,6 +18,7 @@ from toposync.runtime.pipelines import (
     TransformOperatorRuntime,
 )
 from toposync.runtime.pipelines.operators_core import StationaryEventRuntime
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 
 
 class _OnePacketSourceRuntime(SourceOperatorRuntime):
@@ -247,6 +248,9 @@ def test_stationary_event_merges_short_moving_gap() -> None:
             make_packet(2.1, True, 0.01, 0.0),
             make_packet(2.5, False, 1.0, 0.2),
             make_packet(3.3, False, 1.0, 1.0),
+            make_packet(5.0, False, 1.0, 1.0),
+            make_packet(7.0, False, 1.0, 1.0),
+            make_packet(9.0, False, 1.0, 1.0),
             make_packet(11.0, True, 0.01, 1.0),
         ]:
             outputs.extend(await runtime.process_packet(packet, context=None))
@@ -255,6 +259,8 @@ def test_stationary_event_merges_short_moving_gap() -> None:
         stationary = outputs[-1].payload.get("stationary_event")
         assert isinstance(stationary, dict)
         assert stationary.get("reason") == "merged_moving_gap"
+        # Grouping short movements does not count those seconds as stationary.
+        assert stationary["stationary_seconds"] == 1.1
 
     asyncio.run(scenario())
 
@@ -364,19 +370,19 @@ def test_runtime_snapshot_includes_last_node_error() -> None:
         )
         pipeline = Pipeline(
             name="runtime_error_probe",
-            graph={
-                "schema_version": 1,
-                "nodes": [
+            graph=build_pipeline_graph_v2(
+                graph_uid="runtime_error_probe",
+                nodes=[
                     {"id": "source", "operator": "test.source", "config": {}},
                     {"id": "fail", "operator": "test.fail", "config": {}},
                 ],
-                "edges": [
+                edges=[
                     {
                         "from": {"node": "source", "port": "out"},
                         "to": {"node": "fail", "port": "in"},
                     }
                 ],
-            },
+            ),
         )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)

@@ -7,11 +7,11 @@ import math
 import time
 from dataclasses import replace
 from itertools import count
-from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
+from toposync.runtime.pipelines.execution import NodeRuntimeMetrics
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync_ext_vision.pipelines.operators import register_vision_pipeline_operators
@@ -652,9 +652,7 @@ def test_run_loop_uses_idle_tick_to_close_and_clears_on_shutdown(monkeypatch):
 
     class Context:
         node_id = "gesture-test"
-        metrics = SimpleNamespace(
-            record_latency=lambda value: None, record_error=lambda error: pytest.fail(str(error))
-        )
+        metrics = NodeRuntimeMetrics()
         outputs = []
 
         def is_cancelled(self):
@@ -672,6 +670,8 @@ def test_run_loop_uses_idle_tick_to_close_and_clears_on_shutdown(monkeypatch):
     assert [output.lifecycle for output in context.outputs] == [Lifecycle.OPEN, Lifecycle.CLOSE]
     assert context.outputs[-1].payload["gesture_event"]["reason"] == "stale_timeout"
     assert operator._actors == {}
+    assert context.metrics.completed_packets == 2
+    assert context.metrics.error_count == 0
 
 
 def test_forward_hands_with_leaning_torso_are_not_overhead_raise():

@@ -124,6 +124,8 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
                         if packet is None
                         else await self.process_packet(packet, context)
                     )
+                    if packet is not None:
+                        context.metrics.record_completion()
                     for output in outputs:
                         await context.emit(output, port="out")
                 except Exception as exc:

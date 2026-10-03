@@ -209,6 +209,8 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             context.metrics.record_latency(
                 max(0.0, (time.monotonic_ns() - started_ns) / 1_000_000.0)
             )
+            if packet is not None:
+                context.metrics.record_completion()
             for output in outputs:
                 await context.emit(output, port="out")
 

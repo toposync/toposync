@@ -572,6 +572,8 @@ class VisionTrackRuntime(TransformOperatorRuntime):
             context.metrics.record_latency(
                 max(0.0, (time.monotonic_ns() - started_ns) / 1_000_000.0)
             )
+            if packet is not None:
+                context.metrics.record_completion()
             for out_packet in out_packets:
                 await context.emit(out_packet, port=self.output_port)
 

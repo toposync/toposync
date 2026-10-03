@@ -394,8 +394,9 @@ são extraídas no servidor pelos índices validados, nunca copiadas do modelo.
 Antes da classificação, o modelo extrai trechos literais de ameaça afirmada,
 negação explícita e atribuição, além da suficiência do contexto. Cada trecho deve
 existir exatamente no segmento citado. O servidor aplica a precedência de contexto
-insuficiente, atribuição, negação, ameaça e ausência de ameaça identificada; uma
-negação não depende de existir ameaça afirmada. O modelo não escolhe diretamente
+insuficiente, atribuição, ameaça afirmada, negação e ausência de ameaça identificada.
+Uma negação não cancela uma ação afirmada separadamente, nem depende de existir
+ameaça afirmada. O modelo não escolhe diretamente
 o rótulo final. Correspondência textual não comprova que o trecho sustenta a
 interpretação: a avaliação semântica e a revisão humana continuam necessárias.
 
@@ -412,6 +413,16 @@ um áudio, mas falhou nos outros dois. No primeiro, o Qwen3.5 9B confundiu nega�
 de participação em um incidente com negação de ameaça e omitiu a atribuição
 explícita da fala. A revisão contextual em português permanece reprovada nesse
 caso; validação de substrings e testes de código não corrigem essa falha semântica.
+
+O modelo já instalado sob o nome local `qwen3.8:27b-mlx` identificou corretamente
+a atribuição nesse caso e passou treze casos de desenvolvimento. Sua metadata
+declara arquitetura `qwen3_5`; o nome local não comprova uma versão oficial.
+Na reserva, sete de oito rótulos passaram. O oitavo revelou a precedência incorreta
+de negação sobre outra ação afirmada, apesar de o modelo extrair os dois trechos
+corretamente. O reparo dessa regra é determinístico e pode ser verificado com a
+resposta guardada. A rodada original permanece reprovada; não houve troca do perfil
+padrão. Atribuições com escopos mistos e qualidade da transcrição continuam sendo
+limites distintos dessa verificação.
 
 Resultados são temporários e descartados ao mudar a evidência ou voltar à janela.
 A revisão diferencia negação, citação/ficção, fala potencialmente ameaçadora,

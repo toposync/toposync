@@ -78,10 +78,11 @@ def interpretation_from(raw: dict, transcript: Transcript) -> tuple[str, list[in
         interpretation = "insufficient_context"
     elif facts.attribution:
         interpretation = "quoted_or_fictional"
-    elif facts.negated_threat:
-        interpretation = "negated"
     elif facts.asserted_threat:
         interpretation = "possible_threat"
+    elif facts.negated_threat:
+        # A denial of one act does not cancel a separately asserted act.
+        interpretation = "negated"
     else:
         interpretation = "no_threat_identified"
     return interpretation, sorted(indices)

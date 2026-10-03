@@ -133,6 +133,15 @@ def test_malformed_stored_transcript_is_not_sent_to_model(tmp_path, change):
         {"segment_index": 0, "quote": "Vou te machucar."}]), "possible_threat"),
     (["Não vou te machucar."], evidence(attribution=[], negated_threat=[
         {"segment_index": 0, "quote": "Não vou te machucar."}]), "negated"),
+    (["Não vou te machucar.", "Mas vou quebrar o braço do seu amigo."], evidence(
+        segment_indices=[0, 1], attribution=[],
+        negated_threat=[{"segment_index": 0, "quote": "Não vou te machucar."}],
+        asserted_threat=[{"segment_index": 1, "quote": "Mas vou quebrar o braço do seu amigo."}]),
+     "possible_threat"),
+    (["Vou te machucar, mas não vou quebrar a porta."], evidence(
+        attribution=[], asserted_threat=[{"segment_index": 0, "quote": "Vou te machucar"}],
+        negated_threat=[{"segment_index": 0, "quote": "não vou quebrar a porta"}]),
+     "possible_threat"),
     (["Essa fala é da peça.", "Vou te machucar."], evidence(segment_indices=[1, 0], attribution=[
         {"segment_index": 0, "quote": "Essa fala é da peça."}], asserted_threat=[
         {"segment_index": 1, "quote": "Vou te machucar."}]), "quoted_or_fictional"),

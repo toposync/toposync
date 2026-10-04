@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal, cast
 from urllib.parse import urlparse
@@ -20,9 +21,9 @@ from .providers import (
     attempt_from_success,
     build_provider,
 )
-from .settings import AiExtensionSettings, AiProfileConfig, AiProviderConfig, parse_ai_settings
+from .settings import AiExtensionSettings, AiProfileConfig, AiProviderConfig, OllayaConnectionSettings, parse_ai_settings
 from .usage import AiUsageLimiter
-from .jev import evaluate_event_text
+from .jev import CONNECTION_TEST_TEXT, describe_connection, evaluate_event_text
 
 
 class AiRouter:
@@ -71,6 +72,31 @@ class AiRouter:
         return await evaluate_event_text(
             text, remote_authorized=remote_authorized, connection=settings.jev,
         )
+
+    async def jev_connection(self) -> dict[str, Any]:
+        return describe_connection((await self.settings()).jev)
+
+    async def test_jev_connection(self, connection: OllayaConnectionSettings) -> dict[str, Any]:
+        result = {"status": "unavailable", "reason": "disabled"}
+        if connection.enabled:
+            settings = await self.settings()
+            allowed, reason = await self._limiter.check_and_increment(
+                profile_id="experimental_jev", limits=settings.limits,
+            )
+            result["reason"] = reason
+            if allowed:
+                try:
+                    async with asyncio.timeout(10):
+                        async with self._limiter.slot(profile_id="experimental_jev", limits=settings.limits):
+                            result = await evaluate_event_text(CONNECTION_TEST_TEXT, connection=connection)
+                except TimeoutError:
+                    result = {"status": "unavailable", "reason": "service_unavailable"}
+        return {
+            "ok": result["status"] == "evaluated", "reason": result["reason"],
+            "connection": connection.model_dump(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "experimental": True, "semantic_qualified": False, "review_required": True,
+        }
 
     async def locate_region(
         self,

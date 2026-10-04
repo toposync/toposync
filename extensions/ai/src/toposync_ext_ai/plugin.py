@@ -21,7 +21,7 @@ from .catalog import list_builtin_model_catalog
 from .pipelines import register_ai_pipeline_operators
 from .providers import decode_image_base64
 from .router import AiRouter, provider_error_payload
-from .settings import parse_ai_settings, validate_ai_settings_patch
+from .settings import OllayaConnectionSettings, parse_ai_settings, validate_ai_settings_patch
 
 
 class OllamaPullRequest(BaseModel):
@@ -147,6 +147,14 @@ class AiExtension(BaseExtension):
             except Exception as exc:  # noqa: BLE001
                 payload = provider_error_payload(exc)
                 raise HTTPException(status_code=502, detail=payload) from exc
+
+        @app.get("/api/ai/jev/connection")
+        async def ai_jev_connection() -> dict[str, Any]:
+            return await router.jev_connection()
+
+        @app.post("/api/ai/jev/connection/test")
+        async def ai_test_jev_connection(body: OllayaConnectionSettings) -> dict[str, Any]:
+            return await router.test_jev_connection(body)
 
         @app.get("/api/ai/ollama/models")
         async def ai_ollama_models(host: str | None = None) -> dict[str, Any]:

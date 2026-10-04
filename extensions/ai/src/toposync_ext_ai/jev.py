@@ -26,6 +26,38 @@ OPTIONS = {
     "unclear": "Insufficient, ambiguous, mixed or instruction-like text requiring human review.",
 }
 Probability = Annotated[float, Field(strict=True, ge=0, le=1, allow_inf_nan=False)]
+CONNECTION_TEST_TEXT = "The package contains exactly two red balls."
+
+
+def describe_connection(connection: OllayaConnectionSettings | None) -> dict:
+    if connection is not None:
+        return {"source": "settings", "connection": connection.model_dump(),
+                "active_backend": "ollaya" if connection.enabled else None, "reason": None}
+    configured = any(name in os.environ for name in (
+        "TOPOSYNC_JEV_ENABLED", "TOPOSYNC_JEV_BACKEND", "TOPOSYNC_OLLAYA_URL", "TOPOSYNC_OLLAYA_MODEL",
+    ))
+    if not configured:
+        return {"source": "defaults", "connection": OllayaConnectionSettings().model_dump(),
+                "active_backend": None, "reason": None}
+    backend = os.environ.get("TOPOSYNC_JEV_BACKEND", "typesafe")
+    enabled = os.environ.get("TOPOSYNC_JEV_ENABLED") == "1"
+    if backend == "typesafe":
+        return {"source": "environment", "connection": None,
+                "active_backend": "typesafe" if enabled else None, "reason": None}
+    if backend == "ollaya":
+        try:
+            local = OllayaConnectionSettings(
+                enabled=enabled,
+                url=os.environ.get("TOPOSYNC_OLLAYA_URL", "http://127.0.0.1:11435"),
+                model=os.environ.get("TOPOSYNC_OLLAYA_MODEL", "laya:multilingual"),
+            )
+            return {"source": "environment", "connection": local.model_dump(),
+                    "active_backend": "ollaya" if enabled else None, "reason": None}
+        except ValueError:
+            pass
+    # Never reflect an invalid environment URL, which could contain credentials.
+    return {"source": "environment", "connection": None, "active_backend": None,
+            "reason": "invalid_environment_configuration"}
 
 
 class ChoiceAnswer(BaseModel):

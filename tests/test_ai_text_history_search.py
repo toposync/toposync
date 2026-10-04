@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -60,6 +61,34 @@ def test_text_index_lifecycle_and_space_isolation(tmp_path: Path) -> None:
     runtime.store._conn.execute("DELETE FROM notification WHERE id=?", (record.id,))
     assert search.cache("model-a", documents) == {}
     assert runtime.store._conn.execute("SELECT count(*) FROM ai_notification_embedding").fetchone()[0] == 0
+
+
+def test_cache_only_materializes_current_candidates(tmp_path, monkeypatch):
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    records = [runtime.store.upsert(type="event", title=f"Occurrence {index}")[0] for index in range(100)]
+    documents = {record.id: ("hash", record.title) for record in records}
+    search = TextHistorySearch(runtime, Services())
+    search.cache("model", documents, {record.id: [1.0, 0.0] for record in records})
+    materialized = []
+    connect = sqlite3.connect
+
+    def observed_connection(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+
+        def observe_row(_cursor, row):
+            materialized.append(row)
+            return row
+
+        connection.row_factory = observe_row
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", observed_connection)
+    selected = records[0].id
+    assert search.cache("model", {selected: documents[selected]}) == {selected: [1.0, 0.0]}
+    assert len(materialized) == 1
+    materialized.clear()
+    assert search.cache("model", {}) == {}
+    assert materialized == []
 
 
 @pytest.mark.parametrize("raw", [[[0, 0]], [[float("nan")]], [[True]], [[1], [1, 2]], []])

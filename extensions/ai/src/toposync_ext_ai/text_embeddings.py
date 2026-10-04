@@ -65,6 +65,8 @@ class TextHistorySearch:
         self.lock = asyncio.Lock()
 
     def cache(self, space: str, documents: dict[str, tuple[str, str]], writes: dict[str, list[float]] | None = None) -> dict[str, list[float]]:
+        if not documents:
+            return {}
         with sqlite3.connect(self.notifications.store.path) as connection:
             connection.execute("PRAGMA foreign_keys=ON")
             connection.executescript("""
@@ -90,9 +92,10 @@ class TextHistorySearch:
                     ON CONFLICT(notification_id, space) DO UPDATE SET
                     content_hash=excluded.content_hash, vector_json=excluded.vector_json""",
                     (space, content_hash, json.dumps(vector), identifier))
-            rows = connection.execute("""SELECT e.notification_id, e.content_hash, e.vector_json
+            candidates = ",".join("?" for _ in documents)
+            rows = connection.execute(f"""SELECT e.notification_id, e.content_hash, e.vector_json
                 FROM ai_notification_embedding e JOIN notification n ON n.id=e.notification_id
-                WHERE e.space=?""", (space,)).fetchall()
+                WHERE e.space=? AND e.notification_id IN ({candidates})""", (space, *documents)).fetchall()
         return {identifier: json.loads(vector) for identifier, digest, vector in rows
                 if identifier in documents and documents[identifier][0] == digest}
 

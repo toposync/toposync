@@ -1,11 +1,70 @@
 from __future__ import annotations
 
 import io
+import threading
 from typing import Any
 
 import pytest
 
 from toposync_ext_cameras.processing import frame_grabber
+
+
+def test_ffmpeg_failed_restarts_are_spaced_even_when_process_creation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = frame_grabber.FfmpegFrameGrabber.__new__(frame_grabber.FfmpegFrameGrabber)
+    reader._frames_stop = threading.Event()
+    clock = [0.0]
+    restarts: list[float] = []
+    stopped: list[bool] = []
+
+    def advance(seconds: float) -> bool:
+        clock[0] += seconds
+        return reader._frames_stop.is_set()
+
+    def restart() -> None:
+        restarts.append(clock[0])
+        if len(restarts) == 1:
+            raise OSError("Process creation failed")
+        if len(restarts) == 3:
+            reader._frames_stop.set()
+
+    monkeypatch.setattr(reader._frames_stop, "wait", advance)
+    monkeypatch.setattr(frame_grabber.time, "sleep", advance)
+    monkeypatch.setattr(reader, "is_opened", lambda: False)
+    monkeypatch.setattr(reader, "_restart_process", restart)
+    monkeypatch.setattr(reader, "_stop_process", lambda: stopped.append(True))
+
+    reader._reader_loop()
+
+    assert len(restarts) == 3
+    assert restarts[0] >= 2.0
+    assert all(later - earlier >= 2.0 for earlier, later in zip(restarts, restarts[1:]))
+    assert stopped == [True]
+
+
+def test_ffmpeg_stop_interrupts_reopen_wait_without_starting_another_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = frame_grabber.FfmpegFrameGrabber.__new__(frame_grabber.FfmpegFrameGrabber)
+    reader._frames_stop = threading.Event()
+    restarts: list[bool] = []
+    stopped: list[bool] = []
+
+    def stop_during_wait(_seconds: float) -> bool:
+        reader._frames_stop.set()
+        return True
+
+    monkeypatch.setattr(reader._frames_stop, "wait", stop_during_wait)
+    monkeypatch.setattr(frame_grabber.time, "sleep", stop_during_wait)
+    monkeypatch.setattr(reader, "is_opened", lambda: False)
+    monkeypatch.setattr(reader, "_restart_process", lambda: restarts.append(True))
+    monkeypatch.setattr(reader, "_stop_process", lambda: stopped.append(True))
+
+    reader._reader_loop()
+
+    assert restarts == []
+    assert stopped == [True]
 
 
 @pytest.mark.parametrize(

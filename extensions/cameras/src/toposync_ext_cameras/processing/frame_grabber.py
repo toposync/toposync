@@ -788,11 +788,13 @@ class FfmpegFrameGrabber:
         end_search_from = 2
         while not self._frames_stop.is_set():
             if not self.is_opened():
-                time.sleep(0.15)
+                # Match OpenCV's reopen cooldown without delaying shutdown.
+                if self._frames_stop.wait(2.0):
+                    break
                 try:
                     self._restart_process()
                 except Exception:
-                    time.sleep(0.8)
+                    pass  # The next iteration also waits before retrying.
                 continue
 
             chunk = self._read_chunk(8192)

@@ -125,6 +125,11 @@ video {
   -webkit-user-select: text;
 }
 
+.viewportCanvas:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: -3px;
+}
+
 .main2dRoot {
   overflow: hidden;
   touch-action: none;

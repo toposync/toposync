@@ -43,7 +43,7 @@ test("opening settings does not write the composition loaded from the server", a
   expect(fixture.unexpectedWrites).toEqual([]);
 });
 
-test("measurement edits, undo and redo still save after composition hydration", async ({ page }) => {
+test("measurement edits, undo and redo still save after composition hydration", async ({ page }, testInfo) => {
   const fixture = await compositionFixture(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Composition: Persistence fixture", exact: true })).toBeVisible();
@@ -56,13 +56,12 @@ test("measurement edits, undo and redo still save after composition hydration", 
   await page.mouse.down();
   await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.65, { steps: 5 });
   await page.mouse.up();
+  await expect(canvas).toBeFocused();
   await expect.poll(() => fixture.writes.at(-1)?.elements.length).toBe(1);
   expect(fixture.writes).toHaveLength(1);
   expect(fixture.writes[0].id).toBe(fixture.composition.id);
   expect(fixture.writes[0].elements).toHaveLength(1);
   expect(fixture.writes[0].elements[0].type).toBe("com.toposync.core.measurement.line");
-  // Tool-panel keys are intentionally contained; use the editor's global shortcut scope.
-  await page.getByRole("button", { name: "Back", exact: true }).focus();
   await page.keyboard.press("Control+z");
   await expect.poll(() => fixture.writes.length).toBe(2);
   expect(fixture.writes[1].elements).toEqual([]);
@@ -70,4 +69,13 @@ test("measurement edits, undo and redo still save after composition hydration", 
   await expect.poll(() => fixture.writes.length).toBe(3);
   expect(fixture.writes[2].elements).toEqual(fixture.writes[0].elements);
   expect(fixture.unexpectedWrites).toEqual([]);
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole("button", { name: /^Tools:/ }).focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(page.getByLabel("Composition drawing area", { exact: true })).toBeFocused();
+    expect(await canvas.evaluate(element => element.matches(":focus-visible"))).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false);
+    await page.screenshot({ path: testInfo.outputPath(`canvas-focus-${width}.png`), animations: "disabled" });
+  }
 });

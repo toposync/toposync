@@ -333,6 +333,7 @@ const translationsByLocale: Record<Locale, Translations> = {
 	    "core.ui.layers.reorder": "Reorder layer",
 
 	    "core.tools.navigate": "Move",
+	    "core.ui.composition.drawing_area": "Composition drawing area",
 	    "core.tools.navigate_desc": "Pan around the canvas.",
 	    "core.tools.select": "Select",
 	    "core.tools.select_desc": "Select and move elements.",
@@ -2968,6 +2969,7 @@ const translationsByLocale: Record<Locale, Translations> = {
 	    "core.ui.layers.reorder": "Reordenar camada",
 
 	    "core.tools.navigate": "Mover",
+	    "core.ui.composition.drawing_area": "Área de desenho da composição",
 	    "core.tools.navigate_desc": "Mover o canvas.",
 	    "core.tools.select": "Selecionar",
 	    "core.tools.select_desc": "Selecionar e mover elementos.",

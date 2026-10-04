@@ -400,7 +400,7 @@ export function Viewport2D({
   maxScale = 240,
   displayRotationDegrees = 0,
 }: Props): React.ReactElement {
-  const { locale } = i18n.useI18n();
+  const { locale, t } = i18n.useI18n();
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawRef = useRef<(() => void) | null>(null);
@@ -1795,6 +1795,7 @@ export function Viewport2D({
 
     function handlePointerDown(e: PointerEvent) {
       e.preventDefault();
+      if (enableKeyboardShortcutsRef.current) canvasEl.focus({ preventScroll: true });
       canvasEl.setPointerCapture(e.pointerId);
 
       const spacePressed = spacePressedRef.current;
@@ -2713,5 +2714,6 @@ export function Viewport2D({
     };
   }, []);
 
-  return <canvas className="viewportCanvas" ref={canvasRef} style={{ touchAction: "none" }} />;
+  return <canvas className="viewportCanvas" ref={canvasRef} tabIndex={enableKeyboardShortcuts ? 0 : undefined}
+    aria-label={t("core.ui.composition.drawing_area")} style={{ touchAction: "none" }} />;
 }

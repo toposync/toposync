@@ -1,5 +1,11 @@
 # Optional Jev text review
 
+For the experimental local Ollaya alternative and its manual connection settings,
+see [the AI extension guide](README.md#experimental-jev-compatible-text-review).
+It uses open local models, not proprietary Jev weights. A saved local connection
+overrides the environment selection; saving it disabled also disables this
+service. The TypeSafe instructions below apply when no local connection is saved.
+
 The server service `ai.jev.evaluate_event_text` classifies event descriptions or
 transcribed text as `factual_observation`, `reported_speech` or `unclear` for human
 review. It does not establish that an event happened, identify anyone, infer

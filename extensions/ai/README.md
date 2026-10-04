@@ -35,7 +35,22 @@ The internal service `ai.jev.evaluate_event_text` optionally classifies a descri
 as an observation, attributed speech, or unclear text. Its output always requires
 human review: it does not establish identity, intent, danger, or truth and must not
 authorize actions. No pipeline, chat provider, or frontend enables this service
-implicitly. It is disabled unless `TOPOSYNC_JEV_ENABLED=1`.
+implicitly. It is disabled by default. The local connection can be explicitly
+enabled in **Settings → AI → JEV**; environment configuration remains available
+when no connection has been saved.
+
+The JEV section offers a manual **Verify connection** action using a fixed,
+short synthetic text. It does not send camera images, event descriptions or
+transcripts. Opening or saving settings does not run inference or install a
+model. Save through the usual settings action, then reopen to confirm the saved
+connection. Changing its address, model or enabled state clears the previous
+verification result. A successful check only verifies the connection and response
+contract: semantic quality remains unqualified and automatic consumers stay off.
+
+The optional `jev` settings block contains only `enabled`, `url` and `model`.
+Saved settings take precedence over the process environment, including when
+disabled. Credentials stay in the server environment. Advanced connection fields
+default to `http://127.0.0.1:11435` and `laya:multilingual`.
 
 `TOPOSYNC_JEV_BACKEND=typesafe` (the default) uses TypeSafe's `jev-1.13.0`.
 It requires `TYPESAFE_API_KEY` and the caller's `remote_authorized=True` for the
@@ -54,7 +69,8 @@ OLLAYA_HOST=127.0.0.1:11435 OLLAYA_DEVICE=cpu OLLAYA_KEEP_ALIVE=30s \
 ollaya pull laya:multilingual
 ```
 
-Set these variables in the Toposync backend process:
+Alternatively, leave the saved connection absent and set these variables in the
+Toposync backend process:
 
 ```sh
 export TOPOSYNC_JEV_ENABLED=1
@@ -75,6 +91,13 @@ Ollaya's native `/api/decide` API before evaluation. Missing models, invalid
 distributions, timeouts and unavailable daemons return `status: unavailable`
 with `review_required: true`. Stop the daemon when the experiment is over;
 `keep_alive` bounds residency, not the daemon lifetime.
+
+The read-only `GET /api/ai/jev/connection` endpoint describes the effective
+connection and its origin without contacting a model. The manual
+`POST /api/ai/jev/connection/test` accepts the local connection fields, checks
+the existing AI usage/concurrency limits and applies a ten-second budget including
+queue wait. It never saves settings or returns a semantic classification. Its
+timestamped response keeps `semantic_qualified: false` and `review_required: true`.
 
 The result identifies `backend`, `experimental` and
 `probabilities_calibrated_for_task: false`. Model confidence is not measured

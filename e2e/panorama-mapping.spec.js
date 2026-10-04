@@ -222,6 +222,62 @@ test.beforeEach(async ({ page, request }) => {
   });
 });
 
+for (const [input, width] of [["keyboard", 1280], ["touch", 390]]) {
+  test.describe(`camera editing with ${input}`, () => {
+    test.use({ viewport: { width, height: 900 }, hasTouch: input === "touch" });
+    test("opens ground mapping without double click and restores focus", async ({ page, request }, testInfo) => {
+      await page.route(`**/cameras/${cameraId}/snapshot**`, route => route.fulfill({
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400" fill="#67887b"/></svg>',
+      }));
+      await page.route(`**/cameras/${cameraId}/ptz/status**`, route => route.fulfill({
+        json: { camera_id: cameraId, status: { pan: 0, tilt: -0.6, zoom: 0, move_status: "idle" } },
+      }));
+      const activate = async locator => {
+        if (input === "touch") return locator.tap();
+        for (let count = 0; count < 120; count++) {
+          if (await locator.evaluate(element => element === document.activeElement)) {
+            await page.keyboard.press("Enter");
+            return;
+          }
+          await page.keyboard.press("Tab");
+        }
+        throw new Error(`Keyboard could not reach ${await locator.textContent()}`);
+      };
+      await page.goto("/");
+      await activate(page.getByRole("button", { name: "Edit", exact: true }));
+      const controls = page.getByRole("button", { name: /^Tools and layers:/ });
+      if (await controls.getAttribute("aria-expanded") === "false") await activate(controls);
+      const edit = page.getByRole("button", { name: "Edit Câmera simulada", exact: true });
+      await expect(edit).toHaveCount(0);
+      await activate(page.getByRole("button", { name: /^Câmera simulada/ }));
+      await expect(edit).toBeVisible();
+      expect(await edit.evaluate(element => {
+        const button = element.getBoundingClientRect();
+        const panel = element.closest(".overlayLeft").getBoundingClientRect();
+        return button.height >= 44 && button.left >= panel.left && button.right <= panel.right;
+      })).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath("selected-layer.png") });
+      await activate(edit);
+      const editor = page.getByRole("dialog", { name: "Edit: Câmera simulada", exact: true });
+      await expect(editor).toBeVisible();
+      const calibrate = editor.getByRole("button", { name: "Calibrate ground and metric geometry", exact: true });
+      await page.screenshot({ path: testInfo.outputPath("camera-editor.png") });
+      await activate(calibrate);
+      const ground = page.getByRole("dialog", { name: "Mapear câmera", exact: true });
+      await expect(ground).toBeVisible();
+      await expect.poll(() => ground.locator("img").evaluateAll(images => images.some(image => image.complete && image.naturalWidth === 640))).toBe(true);
+      await expect(ground.getByRole("button", { name: /^Marcar ponto de ajuste/ })).toBeEnabled();
+      await page.screenshot({ path: testInfo.outputPath("ground-entry.png") });
+      await page.keyboard.press("Escape");
+      await expect(calibrate).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(edit).toBeFocused();
+      expect((await fixture(request)).commands).toEqual([]);
+    });
+  });
+}
+
 test("ground mapping keeps image markers aligned across responsive layouts", async ({ page, request }) => {
   // Only image layout is under test: this image proves no physical calibration.
   await page.route(`**/cameras/${cameraId}/snapshot**`, route => route.fulfill({

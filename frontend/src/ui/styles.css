@@ -7199,6 +7199,16 @@ video {
   position: relative;
 }
 
+.layerRow:has(.layerEditAction) {
+  flex-wrap: wrap;
+}
+
+.layerEditAction {
+  flex-basis: 100%;
+  grid-column: 1 / -1;
+  min-height: 44px;
+}
+
 .layerRow.isHidden .layerMainButton {
   opacity: 0.66;
 }

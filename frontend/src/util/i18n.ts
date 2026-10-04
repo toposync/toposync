@@ -28,6 +28,8 @@ const translationsByLocale: Record<Locale, Translations> = {
   en: {
     "core.ui.editor.show_controls": "Show tools and layers",
     "core.ui.editor.hide_controls": "Hide tools and layers",
+    "core.ui.editor.tools_and_layers": "Tools and layers",
+    "core.ui.layers.edit": "Edit {{name}}",
 
     "core.map.map": "Map",
     "core.map.title": "Composition on the map",
@@ -2670,6 +2672,8 @@ const translationsByLocale: Record<Locale, Translations> = {
   "pt-BR": {
     "core.ui.editor.show_controls": "Mostrar ferramentas e camadas",
     "core.ui.editor.hide_controls": "Recolher ferramentas e camadas",
+    "core.ui.editor.tools_and_layers": "Ferramentas e camadas",
+    "core.ui.layers.edit": "Editar {{name}}",
 
     "core.map.map": "Mapa",
     "core.map.title": "Composição no mapa",

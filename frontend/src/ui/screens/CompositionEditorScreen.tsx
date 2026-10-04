@@ -808,6 +808,16 @@ export function CompositionEditorScreen({
     [createElement],
   );
 
+  const renderLayerEditAction = (elementId: string, title: string) => (
+    selectedElementIds.length === 1 && selectedElementIds[0] === elementId
+      ? <button className="chipButton layerEditAction" type="button"
+          aria-label={t("core.ui.layers.edit", { name: title })}
+          onClick={() => setEditingElementId(elementId)}>
+          {t("core.actions.edit")}
+        </button>
+      : null
+  );
+
   return (
     <div className={`screenRoot compositionEditorRoot${isControlsOpen ? "" : " isControlsCollapsed"}`}>
       {isMapOpen && <GeoreferenceEditor activeNotification={activeNotification} notificationRenderers={notificationRenderers} compositionId={activeCompositionId} value={georeference} elements={elements} elementTypesById={elementTypesById} onSave={onSaveGeoreference} onClose={() => setIsMapOpen(false)} />}
@@ -842,7 +852,7 @@ export function CompositionEditorScreen({
           title={t(isControlsOpen ? "core.ui.editor.hide_controls" : "core.ui.editor.show_controls")}
           onClick={() => isControlsOpen ? closeControls() : setIsControlsOpen(true)}>
           <Icon name={isControlsOpen ? "chevron-left" : "chevron-right"} />
-          {t("core.ui.tools")}: {resolveLocalizedString(toolsById[selectedToolId]?.name)}
+          {t("core.ui.editor.tools_and_layers")}: {resolveLocalizedString(toolsById[selectedToolId]?.name)}
         </button>
         <button className="chipButton" type="button" onClick={() => setIsMapOpen(true)}>{t("core.map.map")}</button>
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
@@ -1007,6 +1017,7 @@ export function CompositionEditorScreen({
                           <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                             {t("core.actions.delete")}
                           </button>
+                          {renderLayerEditAction(el.id, title)}
                         </div>
                       );
                     })}
@@ -1082,6 +1093,7 @@ export function CompositionEditorScreen({
                   <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                     {t("core.actions.delete")}
                   </button>
+                  {renderLayerEditAction(el.id, title)}
                 </div>
               );
             })}
@@ -1164,6 +1176,7 @@ export function CompositionEditorScreen({
                           <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                             {t("core.actions.delete")}
                           </button>
+                          {renderLayerEditAction(el.id, title)}
                         </div>
                       );
                     })}
@@ -1263,6 +1276,7 @@ export function CompositionEditorScreen({
 	                          <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
 	                            {t("core.actions.delete")}
 	                          </button>
+	                          {renderLayerEditAction(el.id, title)}
 	                        </div>
 	                      );
 	                    })}
@@ -1349,6 +1363,7 @@ export function CompositionEditorScreen({
                           <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                             {t("core.actions.delete")}
                           </button>
+                          {renderLayerEditAction(el.id, title)}
                         </div>
                       );
                     })}

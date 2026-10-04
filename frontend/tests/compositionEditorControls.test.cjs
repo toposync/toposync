@@ -10,7 +10,7 @@ const filename = path.resolve(__dirname, "../src/ui/screens/CompositionEditorScr
 const nodes = tree => !tree || typeof tree !== "object" ? [] : Array.isArray(tree) ? tree.flatMap(nodes)
   : [tree, ...nodes(tree.props?.children)];
 
-function harness(width) {
+function harness(width, { elements = [], elementTypesById = {} } = {}) {
   let cursor = 0, focused = 0;
   const state = [];
   const hooks = { ...React,
@@ -43,7 +43,7 @@ function harness(width) {
   vm.runInContext(ts.transpileModule(fs.readFileSync(filename, "utf8"), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   }).outputText, context);
-  const props = { elements: [], elementTypesById: {}, editorTools: [], fileDropHandlers: [], activeCompositionId: "room", compositions: [] };
+  const props = { elements, elementTypesById, editorTools: [], fileDropHandlers: [], activeCompositionId: "room", compositions: [] };
   const render = () => { cursor = 0; return context.exports.CompositionEditorScreen(props); };
   const find = predicate => nodes(render()).find(predicate);
   const toggle = () => find(node => node.props?.["aria-controls"] === "composition-editor-controls");
@@ -89,3 +89,20 @@ test("desktop keeps tools open after selection; native Space activation does not
   assert.equal(h.panel().props.hidden, true);
   assert.equal(h.viewport().props.interactionMode, "select");
 });
+
+for (const layerGroup of [undefined, "background", "walls", "areas", "measurements"]) {
+  test(`a single selected ${layerGroup ?? "ungrouped"} layer exposes editing without double click`, () => {
+    const elements = ["first", "second"].map(id => ({ id, type: "test.object", name: id, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, props: {} }));
+    const h = harness(390, { elements, elementTypesById: { "test.object": { name: "Object", layerGroup } } });
+    const edit = () => h.find(node => node.props?.["aria-label"] === "core.ui.layers.edit");
+    assert.equal(edit(), undefined);
+    h.viewport().props.onSelectElements(["first"]);
+    assert.ok(edit(), "A selected existing element needs a keyboard and touch editing action");
+    edit().props.onClick();
+    assert.equal(h.find(node => node.props?.title === "core.actions.edit: first").props.open, true);
+    h.viewport().props.onSelectElements(["first", "second"]);
+    assert.equal(edit(), undefined, "Do not imply a bulk editing action");
+    h.viewport().props.onSelectElements([]);
+    assert.equal(edit(), undefined);
+  });
+}

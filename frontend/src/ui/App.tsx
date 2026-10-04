@@ -474,7 +474,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const extensionActivationPromisesRef = useRef<Map<string, Promise<void>>>(new Map());
   const [composition, setComposition] = useState<Composition>(() => defaultComposition());
   const compositionRef = useRef<Composition>(composition);
-  const persistedMetadataCompositionRef = useRef<Composition | null>(null);
+  const persistedCompositionRef = useRef<Composition | null>(null);
   const [compositions, setCompositions] = useState<Array<{ id: string; name: string }>>([]);
   const [activeCompositionId, setActiveCompositionId] = useState<string>("ground");
   const [compositionLoaded, setCompositionLoaded] = useState(false);
@@ -866,6 +866,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         setActiveCompositionId(index.active_composition_id);
 
         compositionRef.current = fromBackend;
+        // Loading a server snapshot is not an edit and must not schedule a write.
+        persistedCompositionRef.current = fromBackend;
         setComposition(fromBackend);
         setActiveCompositionId(fromBackend.id);
         setCompositions((prev) => {
@@ -1224,7 +1226,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     if (!compositionLoaded) return;
     if (!backendAvailable) return;
 
-    if (composition === persistedMetadataCompositionRef.current) return;
+    if (composition === persistedCompositionRef.current) return;
+    // An edit invalidates that snapshot, including an undo back to the loaded value.
+    persistedCompositionRef.current = null;
     const handle = window.setTimeout(() => {
       void putComposition(composition).catch((err) => {
         console.error("Failed to save composition to backend", err);
@@ -1878,7 +1882,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             setComposition(current => {
               if (current.id !== snapshot.id) return current;
               const next = { ...current, meta: { ...current.meta, georeference } };
-              if (current === snapshot) persistedMetadataCompositionRef.current = next;
+              if (current === snapshot) persistedCompositionRef.current = next;
               return next;
             });
             setCompositionRevision(value => value + 1);

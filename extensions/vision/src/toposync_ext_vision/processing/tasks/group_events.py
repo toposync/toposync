@@ -239,11 +239,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
 
     def _idle_flush_packet(self, packet: Packet) -> Packet:
         payload = dict(packet.payload)
-        now_ts = time.time()
-        payload["frame_ts"] = now_ts
-        media = payload.get("media")
-        if isinstance(media, dict):
-            payload["media"] = {**media, "ts": now_ts}
+        # Idle expiry uses the monotonic clock; it is not a new media observation.
         metadata = dict(packet.metadata)
         metadata["source_stream_id"] = self._source_stream_id(packet)
         metadata["vision_group_idle_flush"] = True

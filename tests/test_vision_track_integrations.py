@@ -469,10 +469,17 @@ def test_tracking_group_closes_when_source_stops_emitting_packets() -> None:
         await runtime.run_for(1.35)
 
         packets = collector.get("sink", [])
-        assert [packet.lifecycle for packet in packets] == [Lifecycle.OPEN, Lifecycle.CLOSE]
-        assert packets[1].payload["subject"]["id"] == packets[0].payload["subject"]["id"]
-        assert packets[1].payload["subject"]["type"] == "group_event"
-        assert packets[1].payload["subject"]["lifecycle"] == "close"
+        assert [packet.lifecycle for packet in packets] == [
+            Lifecycle.OPEN, Lifecycle.UPDATE, Lifecycle.CLOSE,
+        ]
+        # Losing the member updates activity; it cannot skip the group's own timeout.
+        assert packets[1].payload["active_member_event_ids"] == []
+        assert packets[-1].created_at - packets[0].created_at >= 1.0
+        assert len({packet.payload["subject"]["id"] for packet in packets}) == 1
+        assert packets[-1].payload["subject"]["type"] == "group_event"
+        assert packets[-1].payload["subject"]["lifecycle"] == "close"
+        assert all(packet.payload["frame_ts"] == 100.0 for packet in packets)
+        assert packets[-1].payload["group_observation"]["duration_seconds"] == 0
 
     asyncio.run(scenario())
 

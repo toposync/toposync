@@ -450,20 +450,29 @@ function OllamaSection({
         {recommendations.map((entry) => {
           const installed = hasInstalledModel(installedModelRefs, entry.model, entry.name);
           const pulling = pullingModel === entry.model;
+          const installedModel = models.find((model) => [model.name, model.model].includes(entry.model));
+          const diskBytes = installedModel?.size;
+          const sizeLabel = typeof diskBytes === "number" && Number.isFinite(diskBytes) && diskBytes > 0
+            ? t("ext.ai.settings.model_disk_size", { size: formatBytes(diskBytes) })
+            : entry.estimated_size ? t("ext.ai.settings.model_download_estimate", { size: entry.estimated_size }) : null;
           return (
             <div key={entry.id} className="choiceItem">
               <div className="settingsListItemRow">
                 <div className="settingsListItemMain">
                   <div className="settingsListItemTitle">{entry.name || entry.model}</div>
-                  <div className="settingsListItemMeta">
-                    {entry.model} · {entry.estimated_size || "-"} ·{" "}
-                    {installed ? t("ext.ai.settings.installed", {}, "Instalado") : t("ext.ai.settings.not_installed", {}, "Não instalado")}
+                  <div className="settingsListItemMeta" style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>
+                    {[
+                      entry.name && entry.name !== entry.model ? entry.model : null,
+                      sizeLabel,
+                      installed ? t("ext.ai.settings.installed", {}, "Instalado") : t("ext.ai.settings.not_installed", {}, "Não instalado"),
+                    ].filter(Boolean).join(" · ")}
                   </div>
                 </div>
                 <button
                   className="chipButton"
                   type="button"
                   onClick={() => onPull(entry.model)}
+                  style={{ flexShrink: 0, whiteSpace: "nowrap" }}
                   disabled={installed || pulling}
                 >
                   <i className={installed ? "fa-solid fa-check" : "fa-solid fa-download"} aria-hidden="true" />{" "}

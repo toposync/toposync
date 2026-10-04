@@ -9,19 +9,16 @@ from .constants import DEFAULT_OLLAMA_MODEL
 
 BUILTIN_MODEL_CATALOG: list[dict[str, Any]] = [
     {
-        "id": "ollama_qwen3_vl_30b",
+        "id": "ollama_local_default",
         "provider": "ollama",
         "model": DEFAULT_OLLAMA_MODEL,
-        "name": "Qwen3-VL 30B",
-        "recommendation": "best_local_quality",
+        "name": DEFAULT_OLLAMA_MODEL,
+        "recommendation": "local_default",
         "tasks": ["image_region", "image_condition"],
         "capabilities": ["vision", "structured_json", "bbox", "boolean_filter"],
         "input_modalities": ["text", "image"],
         "local": True,
-        "estimated_size": "20GB",
-        "min_ollama_version": "0.12.7",
-        "last_verified_at": "2026-05-02",
-        "notes": "Initial high-quality local recommendation for image reasoning through Ollama.",
+        "notes": "Local default. Check the served model metadata and measure resource use for the intended workload.",
     },
     {
         "id": "ollama_qwen3_vl_8b",
@@ -36,7 +33,7 @@ BUILTIN_MODEL_CATALOG: list[dict[str, Any]] = [
         "estimated_size": "6.1GB",
         "min_ollama_version": "0.12.7",
         "last_verified_at": "2026-05-02",
-        "notes": "Lighter local fallback when the 30B variant is too heavy for the machine.",
+        "notes": "Smaller vision candidate. Compare quality and resource use for the intended workload.",
     },
 ]
 

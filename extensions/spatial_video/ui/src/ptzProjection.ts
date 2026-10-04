@@ -74,15 +74,16 @@ function enrichStatusWithPreset(status: PtzStatus, presets: PtzPreset[] = []): P
   if (!presets.length) {
     return status;
   }
-  let matchedPreset = presets.find((preset) => presetMatchesStatus(preset, status));
-  if (!matchedPreset && finite(status.pan) && finite(status.tilt)) {
+  let matchedPreset: PtzPreset | null | undefined = presets.find((preset) => presetMatchesStatus(preset, status));
+  const { pan, tilt } = status;
+  if (!matchedPreset && finite(pan) && finite(tilt)) {
     matchedPreset =
       presets
         .map((preset) => {
           if (!finite(preset.pan) || !finite(preset.tilt)) {
             return null;
           }
-          return { preset, distance: Math.hypot(preset.pan - status.pan, preset.tilt - status.tilt) };
+          return { preset, distance: Math.hypot(preset.pan - pan, preset.tilt - tilt) };
         })
         .filter((entry): entry is { preset: PtzPreset; distance: number } => Boolean(entry))
         .sort((left, right) => left.distance - right.distance)
@@ -184,7 +185,10 @@ function validControlPoint(point: CameraControlPoint | null | undefined): point 
   );
 }
 
-function cloneControlPoint(point: CameraControlPoint): CameraControlPoint {
+function cloneControlPoint(point: CameraControlPoint & {
+  image: NonNullable<CameraControlPoint["image"]>;
+  world: NonNullable<CameraControlPoint["world"]>;
+}): CameraControlPoint {
   return {
     ...point,
     image: { x: point.image.x, y: point.image.y },

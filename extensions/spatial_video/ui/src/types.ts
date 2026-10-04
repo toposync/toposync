@@ -41,7 +41,7 @@ export type CameraControlPointSet = {
   stream_scope?: {
     compatible_roles?: string[];
     compatible_source_ids?: string[];
-  };
+  } | null;
   control_points?: CameraControlPoint[];
   refinement_points?: CameraProjectionRefinementPoint[];
   boundary_refinement_points?: CameraProjectionBoundaryPoint[];

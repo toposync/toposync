@@ -165,6 +165,12 @@ function fitCameraAngledOverview(camera: THREE.PerspectiveCamera, controls: Orbi
   high *= 1.15;
 
   const fits = (distance: number) => {
+    // A narrow viewport can require a distance beyond the initial far plane.
+    // Keep depth clipping from making an otherwise valid fit look too close.
+    if (camera.far < distance + maxRadius) {
+      camera.far = (distance + maxRadius) * 1.1;
+      camera.updateProjectionMatrix();
+    }
     camera.position.copy(target).addScaledVector(direction, distance);
     camera.lookAt(target);
     camera.updateMatrixWorld(true);
@@ -359,6 +365,7 @@ export function SpatialVideo3DView({
   const compositionIdRef = useRef(compositionId);
   const onElementActivatedRef = useRef(onElementActivated);
   const elementTypesByIdRef = useRef(elementTypesById);
+  const needsRenderRef = useRef(true);
   const [liveViews, setLiveViews] = useState<CameraLiveView[]>([]);
   const [liveViewsLoading, setLiveViewsLoading] = useState(true);
   const [liveViewsError, setLiveViewsError] = useState<string | null>(null);
@@ -375,6 +382,12 @@ export function SpatialVideo3DView({
   const renderViewKey = `${viewSettings.wallHeightPreset}:${viewSettings.wallHeight}:${viewSettings.graphicsQuality ?? "simplified"}`;
 
   const bumpVersion = useCallback(() => setVersion((prev) => prev + 1), []);
+  const requestRender = useCallback(() => {
+    needsRenderRef.current = true;
+  }, []);
+
+  // React updates and asynchronous extension geometry invalidate the same scene.
+  useEffect(requestRender);
 
   function syncNotificationOverlay(): void {
     const overlay = notificationOverlayRef.current;
@@ -435,7 +448,7 @@ export function SpatialVideo3DView({
           view: renderViewSettingsRef.current,
           elements,
           compositionId: currentCompositionId ?? undefined,
-          requestRender: () => bumpVersion(),
+          requestRender,
         },
         notification,
         actions,
@@ -662,6 +675,7 @@ export function SpatialVideo3DView({
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       fitContentIfAllowed();
+      requestRender();
     };
     const observer = new ResizeObserver(resize);
     observer.observe(container);
@@ -733,6 +747,7 @@ export function SpatialVideo3DView({
 
     let raf = 0;
     let lastFrameTs = 0;
+    const renderedTextures = new WeakMap<THREE.Texture, { version: number; time: number | null }>();
     const frame = (ts: number) => {
       raf = requestAnimationFrame(frame);
       if (document.hidden) {
@@ -741,16 +756,19 @@ export function SpatialVideo3DView({
       }
       const dt = lastFrameTs ? Math.min((ts - lastFrameTs) / 1000, 0.05) : 0;
       lastFrameTs = ts;
+      let shouldRender = needsRenderRef.current;
+      needsRenderRef.current = false;
       const pulse = 0.65 + 0.35 * Math.sin(ts * 0.006);
       for (const entry of trackedRef.current.values()) {
         try {
-          entry.instance.tick?.(dt);
+          if (entry.instance.tick?.(dt) === true) shouldRender = true;
         } catch (error) {
           console.warn(`[spatial-video-3d:element:${entry.type}.tick]`, error);
         }
       }
       for (const adornment of statusAdornmentsRef.current.values()) {
         if (adornment.statusKind === "loading") {
+          shouldRender = true;
           const scale = 0.86 + pulse * 0.22;
           adornment.group.scale.setScalar(scale);
           adornment.ring.material.opacity = 0.48 + pulse * 0.32;
@@ -762,22 +780,44 @@ export function SpatialVideo3DView({
         }
       }
       try {
-        notificationOverlayRef.current?.tick?.(dt);
+        if (notificationOverlayRef.current?.tick?.(dt) === true) shouldRender = true;
       } catch (error) {
         console.warn("[spatial-video-3d:notificationOverlay.tick]", error);
       }
       for (const entry of projectionEntriesRef.current.values()) {
         const map = entry.material.map;
-        if (map) map.needsUpdate = true;
+        if (!map || !entry.mesh.visible) continue;
+        const previous = renderedTextures.get(map);
+        if (previous?.version !== map.version) shouldRender = true;
+        // Older browsers update VideoTexture during render instead of via a frame callback.
+        const video = map.image;
+        if (video instanceof HTMLVideoElement && typeof video.requestVideoFrameCallback !== "function" && previous?.time !== video.currentTime) {
+          shouldRender = true;
+        }
       }
-      controls.update();
-      renderer.render(scene, camera);
-      labelRenderer.render(scene, camera);
+      if (controls.update()) shouldRender = true;
+      if (shouldRender || needsRenderRef.current) {
+        renderer.render(scene, camera);
+        labelRenderer.render(scene, camera);
+        for (const entry of projectionEntriesRef.current.values()) {
+          const map = entry.material.map;
+          if (map && entry.mesh.visible) {
+            renderedTextures.set(map, {
+              version: map.version,
+              time: map.image instanceof HTMLVideoElement ? map.image.currentTime : null,
+            });
+          }
+        }
+      }
     };
+    window.addEventListener("toposync:invalidate", requestRender);
+    document.addEventListener("visibilitychange", requestRender);
     raf = requestAnimationFrame(frame);
 
     return () => {
       cancelAnimationFrame(raf);
+      window.removeEventListener("toposync:invalidate", requestRender);
+      document.removeEventListener("visibilitychange", requestRender);
       observer.disconnect();
       controls.removeEventListener("start", handleControlsStart);
       controls.dispose();
@@ -828,7 +868,7 @@ export function SpatialVideo3DView({
       projectionGroupRef.current = null;
       markerGroupRef.current = null;
     };
-  }, [fitContentIfAllowed]);
+  }, [fitContentIfAllowed, requestRender]);
 
   useEffect(() => {
     const scene = sceneRef.current;
@@ -881,7 +921,7 @@ export function SpatialVideo3DView({
               view: renderViewSettingsRef.current,
               elements,
               compositionId: compositionIdRef.current,
-              requestRender: () => undefined,
+              requestRender,
             },
             element,
           );

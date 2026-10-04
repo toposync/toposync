@@ -444,6 +444,59 @@ def test_onvif_state_gate_can_fail_open_when_configured() -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("fail_open", [False, True])
+@pytest.mark.parametrize("failure", ["unavailable_without_error", "service_error"])
+def test_onvif_state_gate_recovery_does_not_reopen_from_stale_motion(fail_open, failure):
+    services = ServiceRegistry()
+    state = {"known": True, "available": True, "value": True, "error": ""}
+    unavailable = False
+
+    async def snapshot(**kwargs):
+        if unavailable and failure == "service_error":
+            raise RuntimeError("event service unavailable")
+        return dict(state)
+
+    services.register("cameras.onvif_events.snapshot", snapshot)
+    runtime = OnvifStateGateRuntime(
+        {"camera_id": "cam1", "fail_open": fail_open, "hold_seconds": 30},
+        PipelineRuntimeDependencies(services=services),
+    )
+
+    async def scenario():
+        nonlocal unavailable
+        assert (await runtime._resolve_gate_state())[0] is True
+        unavailable = True
+        state["available"] = False
+        assert (await runtime._resolve_gate_state())[0] is fail_open
+        unavailable = False
+        state.update(available=True, value=False)
+        assert (await runtime._resolve_gate_state())[0] is False
+        # A new, healthy falling edge still keeps the configured hold period.
+        state["value"] = True
+        assert (await runtime._resolve_gate_state())[0] is True
+        state["value"] = False
+        assert (await runtime._resolve_gate_state())[0] is True
+
+    asyncio.run(scenario())
+
+
+def test_onvif_state_gate_applies_fallback_before_first_state_arrives():
+    services = ServiceRegistry()
+
+    async def snapshot(**kwargs):
+        return {"known": False, "available": False, "value": None, "error": ""}
+
+    services.register("cameras.onvif_events.snapshot", snapshot)
+    runtime = OnvifStateGateRuntime(
+        {"camera_id": "cam1", "fail_open": True},
+        PipelineRuntimeDependencies(services=services),
+    )
+    opened, evidence = asyncio.run(runtime._resolve_gate_state())
+    assert opened is True
+    assert evidence["known"] is False
+    assert evidence["matched"] is False
+
+
 def test_onvif_event_source_suppresses_repeated_boolean_state_values(monkeypatch) -> None:
     monkeypatch.setattr("toposync_ext_cameras.pipelines.operators.time.time", lambda: 100.0)
     services = ServiceRegistry()

@@ -1223,6 +1223,8 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
         }
         services = self._dependencies.services
         if services is None:
+            self._last_raw_active = False
+            self._hold_until_ts = 0.0
             gate_open = bool(self._config.fail_open)
             payload.update(
                 {
@@ -1243,6 +1245,8 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
                 item_name=self._config.item_name,
             )
         except Exception as exc:  # noqa: BLE001
+            self._last_raw_active = False
+            self._hold_until_ts = 0.0
             gate_open = bool(self._config.fail_open)
             payload.update(
                 {
@@ -1260,8 +1264,9 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
         available = bool(snapshot.get("available"))
         error = str(snapshot.get("error") or "").strip()
         value = snapshot.get("value")
-        matched = known and isinstance(value, bool) and value == bool(self._config.open_when)
-        if error and not available:
+        matched = available and known and isinstance(value, bool) and value == bool(self._config.open_when)
+        if not available:
+            self._hold_until_ts = 0.0
             gate_open = bool(self._config.fail_open)
             reason = "onvif_unavailable"
         elif matched:

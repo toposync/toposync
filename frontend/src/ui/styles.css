@@ -723,7 +723,75 @@ video {
   line-height: var(--line-height-relaxed);
 }
 
+.processingServersRoot .pipelinesServerMain {
+  cursor: default;
+}
+
+.processingServersRoot .pipelinesServerRow {
+  align-items: flex-start;
+  padding: var(--space-3);
+}
+
+.processingServersRoot .pipelinesServerMeta {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  line-height: var(--line-height-relaxed);
+}
+
+.processingServersRoot .pipelinesServerMetaDiag {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.processingServerDetails {
+  margin-top: var(--space-3);
+}
+
+.processingServerDetails > summary {
+  padding: var(--space-2) 0;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.processingServerModel {
+  margin-top: var(--space-3);
+}
+
+.processingServerModelActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.processingServerModelActions .pillButton {
+  max-width: 100%;
+  height: auto;
+  min-height: var(--control-height-m);
+  padding: var(--space-2) var(--space-3);
+  white-space: normal;
+}
+
+@media (max-width: 600px) {
+  .processingServersRoot .pipelinesTopbar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+
+  .processingServersRoot .pipelinesTopbarRight {
+    grid-column: 1 / -1;
+    margin-left: 0;
+  }
+
+  .processingServersRoot .pipelinesTopbarRight .pillButton {
+    width: 100%;
+  }
+}
+
 .processingServersList {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0;

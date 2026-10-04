@@ -716,7 +716,7 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
   }, [handleTestServer, serverStatusById]);
 
   return (
-    <div className="pipelinesRoot screenRoot">
+    <div className="pipelinesRoot screenRoot processingServersRoot">
       <div className="pipelinesTopbar">
         <button className="iconButton" type="button" onClick={onClose} aria-label={t("core.actions.back", {}, "Back")}>
           <i className="fa-solid fa-arrow-left" aria-hidden="true" />
@@ -788,25 +788,7 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
                 : "";
               return (
                 <div key={server.id} className={["pipelinesServerRow", server.id === "local" ? "isBuiltIn" : ""].filter(Boolean).join(" ")}>
-                  <div
-                    className="pipelinesServerMain"
-                    role="button"
-                    tabIndex={server.id === "local" ? -1 : 0}
-                    aria-disabled={server.id === "local"}
-                    onClick={() => {
-                      if (server.id === "local") return;
-                      setServerModalTarget(server);
-                      setServerModalOpen(true);
-                    }}
-                    onKeyDown={(event) => {
-                      if (server.id === "local") return;
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setServerModalTarget(server);
-                        setServerModalOpen(true);
-                      }
-                    }}
-                  >
+                  <div className="pipelinesServerMain">
                     <div className="pipelinesServerId">
                       {server.id}
                       {server.id === "local" ? ` ${t("core.ui.processing_servers.built_in")}` : ""}
@@ -816,11 +798,6 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
                       {server.url ? ` • ${server.url}` : ""}
                       {statusLabel}
                     </div>
-                    {diagnosticsLine ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag" title={diagnosticsLine}>
-                        {diagnosticsLine}
-                      </div>
-                    ) : null}
                     {runtimeNodeIssues.length ? (
                       <div className="pipelinesAlertRow isError processingServerInlineIssue">
                         <div className="pipelinesAlertBadge">{t("core.ui.processing_servers.runtime_issues.badge")}</div>
@@ -841,316 +818,319 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
                         </div>
                       </div>
                     ) : null}
-                    {runtimeUpgrades.map((item) => (
-                      <div key={item.id} className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        <div>
+                    {probe?.ok ? <details className="processingServerDetails">
+                      <summary>{t("core.ui.processing_servers.technical_details")}</summary>
+                      {diagnosticsLine ? <div className="pipelinesServerMeta pipelinesServerMetaDiag">{diagnosticsLine}</div> : null}
+                      {runtimeUpgrades.map((item) => (
+                        <div key={item.id} className="pipelinesServerMeta pipelinesServerMetaDiag">
+                          <div>
+                            {t(
+                              "core.ui.processing_servers.runtime_upgrade.title",
+                              { label: item.label },
+                              `Suggested runtime upgrade: ${item.label}`,
+                            )}
+                          </div>
+                          <div style={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>
+                            {item.replacementRequired ? item.replaceCommand : item.installCommand}
+                          </div>
+                          {item.note ? <div>{item.note}</div> : null}
+                        </div>
+                      ))}
+                      {localBuilder ? (
+                        <div className="pipelinesServerMeta pipelinesServerMetaDiag">
+                          {localBuilder.supported
+                            ? t("core.ui.processing_servers.local_build.ready", {
+                                runtime: localBuilder.runtime || localBuilder.backend || "local",
+                                count: localBuilder.supportedModels.length || 0,
+                              })
+                            : t("core.ui.processing_servers.local_build.unavailable", {
+                                reason: localBuildReasonLabel(localBuilder.reason, t),
+                              })}
+                        </div>
+                      ) : null}
+                      {localBuilder && !localBuilder.supported ? (
+                        <div className="pipelinesServerMeta pipelinesServerMetaDiag">
                           {t(
-                            "core.ui.processing_servers.runtime_upgrade.title",
-                            { label: item.label },
-                            `Suggested runtime upgrade: ${item.label}`,
+                            "core.ui.processing_servers.local_build.unavailable_next_step",
+                            {},
+                            "Next step: install Docker or Podman on this host, choose a ready model, or prepare/upload the model manually in the detection operator.",
                           )}
                         </div>
-                        <div style={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>
-                          {item.replacementRequired ? item.replaceCommand : item.installCommand}
-                        </div>
-                        {item.note ? <div>{item.note}</div> : null}
-                      </div>
-                    ))}
-                    {visionCatalog ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        {t("core.ui.processing_servers.vision_recommendations.title")}{" "}
-                        {t("core.ui.processing_servers.vision_recommendations.profile", {
-                          profile: t(
-                            `core.ui.processing_servers.vision_recommendations.profile_label.${visionCatalog.profile}`,
-                            {},
-                            visionCatalog.profile,
-                          ),
-                        })}
-                      </div>
-                    ) : null}
-                    {localBuilder ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        {localBuilder.supported
-                          ? t("core.ui.processing_servers.local_build.ready", {
-                              runtime: localBuilder.runtime || localBuilder.backend || "local",
-                              count: localBuilder.supportedModels.length || 0,
-                            })
-                          : t("core.ui.processing_servers.local_build.unavailable", {
-                              reason: localBuildReasonLabel(localBuilder.reason, t),
-                            })}
-                      </div>
-                    ) : null}
-                    {localBuilder && !localBuilder.supported ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        {t(
-                          "core.ui.processing_servers.local_build.unavailable_next_step",
-                          {},
-                          "Next step: install Docker or Podman on this host, choose a ready model, or prepare/upload the model manually in the detection operator.",
-                        )}
-                      </div>
-                    ) : null}
-                    {localBuilder?.lastJob ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        {t("core.ui.processing_servers.local_build.last_job", {
-                          model: localBuilder.lastJob.displayName || localBuilder.lastJob.modelId,
-                          phase: localBuilderLastPhase || localBuilder.lastJob.phase || localBuilder.lastJob.status || "queued",
-                        })}
-                      </div>
-                    ) : null}
-                    {localBuilderActor ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        {t("core.ui.processing_servers.local_build.last_job_actor", {
-                          actor: localBuilderActor,
-                        })}
-                      </div>
-                    ) : null}
-                    {localBuilder?.lastJob?.sourceLabel ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        {t("core.ui.processing_servers.local_build.last_job_source", {
-                          source: localBuilder.lastJob.sourceLabel,
-                        })}
-                      </div>
-                    ) : null}
-                    {localBuilder?.lastJob?.outputSha256 ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        {t("core.ui.processing_servers.local_build.last_job_hash", {
-                          sha: shortDigest(localBuilder.lastJob.outputSha256),
-                        })}
-                      </div>
-                    ) : null}
-                    {localBuilder?.lastJob?.error ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        {t("core.ui.processing_servers.local_build.last_job_error", {
-                          error: localBuilder.lastJob.error,
-                        })}
-                      </div>
-                    ) : null}
-                    {originSummary ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        {t("core.ui.processing_servers.origin_metrics.models", {
-                          summary: originSummary,
-                        })}
-                      </div>
-                    ) : null}
-                    {sourceSummary ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        {t("core.ui.processing_servers.origin_metrics.jobs", {
-                          summary: sourceSummary,
-                        })}
-                      </div>
-                    ) : null}
-                    {visionCatalog
-                      ? visionCatalog.items.map((item) => {
-                          const badges = item.badgeIds.map(renderRecommendationBadge).filter(Boolean);
-                          const suffix = badges.length ? ` • ${badges.join(" • ")}` : "";
-                          const installedSuffix = item.artifactExists
-                            ? ` • ${t("core.ui.processing_servers.vision_recommendations.installed")}`
-                            : ` • ${t("core.ui.processing_servers.vision_recommendations.needs_model_file")}`;
-                          const jobPhase = item.installJob?.phase ? installPhaseLabel(item.installJob.phase, t) : "";
-                          const key = `${server.id}:${item.modelId}`;
-                          const cancelKey = `${server.id}:${item.modelId}:cancel`;
-                          const retryKey = `${server.id}:${item.modelId}:retry`;
-                          const installStatus = String(item.installJob?.status || "").trim();
-                          const canPrepareLocally =
-                            canManageProvisioning &&
-                            !item.artifactExists &&
-                            item.localBuildSupported &&
-                            !item.installJob;
-                          const canCancel =
-                            canManageProvisioning && isActiveInstallStatus(installStatus) && installStatus !== "canceling";
-                          const canRetry =
-                            canManageProvisioning && (installStatus === "failed" || installStatus === "canceled");
-                          return (
-                            <div key={item.modelId} className="pipelinesServerMeta pipelinesServerMetaDiag">
-                              <div>
-                                {item.displayName}
-                                {suffix}
-                                {installedSuffix}
-                              </div>
-                              {item.installJob ? (
-                                <div>
-                                  {t("core.ui.pipelines.panels.yolo.local_build.job_progress", {
-                                    phase: jobPhase || item.installJob.phase || "queued",
-                                    progress: Math.max(0, Math.min(100, Math.round(item.installJob.progressPct || 0))),
-                                  })}
-                                </div>
-                              ) : null}
-                              {!item.artifactExists && !item.localBuildSupported && item.localBuildReason ? (
-                                <>
-                                  <div>
-                                    {t("core.ui.processing_servers.local_build.reason", {
-                                      reason: localBuildReasonLabel(item.localBuildReason, t),
-                                    })}
-                                  </div>
-                                  <div>
-                                    {t(
-                                      "core.ui.processing_servers.local_build.model_unavailable_next_step",
-                                      {},
-                                      "Install Docker or Podman on this host, choose a ready model, or prepare/upload this model manually in the detection operator.",
-                                    )}
-                                  </div>
-                                </>
-                              ) : null}
-                              {canPrepareLocally || canCancel || canRetry ? (
-                                <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                  {canPrepareLocally ? (
-                                    <button
-                                      className="pillButton"
-                                      type="button"
-                                      disabled={!!provisioningByKey[key]}
-                                      onClick={(event) => {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        void openLocalBuildConsent(server.id, item);
-                                      }}
-                                    >
-                                      {provisioningByKey[key]
-                                        ? t("core.ui.pipelines.panels.yolo.local_build.starting")
-                                        : t("core.ui.pipelines.panels.yolo.provisioning.action.local_prepare")}
-                                    </button>
-                                  ) : null}
-                                  {canCancel ? (
-                                    <button
-                                      className="pillButton"
-                                      type="button"
-                                      disabled={!!provisioningByKey[cancelKey]}
-                                      onClick={(event) => {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        void handleCancelInstall(server.id, item.modelId);
-                                      }}
-                                    >
-                                      {provisioningByKey[cancelKey]
-                                        ? t("core.ui.processing_servers.install.canceling")
-                                        : t("core.actions.cancel")}
-                                    </button>
-                                  ) : null}
-                                  {canRetry ? (
-                                    <button
-                                      className="pillButton"
-                                      type="button"
-                                      disabled={!!provisioningByKey[retryKey]}
-                                      onClick={(event) => {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        void handleRetryInstall(server.id, item.modelId);
-                                      }}
-                                    >
-                                      {provisioningByKey[retryKey]
-                                        ? t("core.ui.processing_servers.install.retrying")
-                                        : t("core.actions.retry")}
-                                    </button>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                            </div>
-                          );
-                        })
-                      : null}
-                    {customCatalog.length ? (
-                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
-                        <div>
-                          {t("core.ui.processing_servers.custom_catalog.title", {
-                            count: customCatalog.length,
+                      ) : null}
+                      {localBuilder?.lastJob ? (
+                        <div className="pipelinesServerMeta pipelinesServerMetaDiag">
+                          {t("core.ui.processing_servers.local_build.last_job", {
+                            model: localBuilder.lastJob.displayName || localBuilder.lastJob.modelId,
+                            phase: localBuilderLastPhase || localBuilder.lastJob.phase || localBuilder.lastJob.status || "queued",
                           })}
                         </div>
-                        {customCatalog.map((item) => {
-                          const installStatus = String(item.installJob?.status || "").trim();
-                          const installPhase = item.installJob?.phase ? installPhaseLabel(item.installJob.phase, t) : "";
-                          const cancelKey = `${server.id}:${item.modelId}:cancel`;
-                          const retryKey = `${server.id}:${item.modelId}:retry`;
-                          const actor = item.importedBy?.displayName || item.importedBy?.username || "";
-                          const canCancel =
-                            canManageProvisioning && isActiveInstallStatus(installStatus) && installStatus !== "canceling";
-                          const canRetry =
-                            canManageProvisioning && (installStatus === "failed" || installStatus === "canceled");
-                          return (
-                            <div key={item.modelId} style={{ marginTop: 8 }}>
-                              <div>
-                                {item.displayName}
-                                {` • ${formatTaskLabel(item.task, t)} • ${formatAvailabilityLabel(item.availability, t)}`}
+                      ) : null}
+                      {localBuilderActor ? (
+                        <div className="pipelinesServerMeta pipelinesServerMetaDiag">
+                          {t("core.ui.processing_servers.local_build.last_job_actor", {
+                            actor: localBuilderActor,
+                          })}
+                        </div>
+                      ) : null}
+                      {localBuilder?.lastJob?.sourceLabel ? (
+                        <div className="pipelinesServerMeta pipelinesServerMetaDiag">
+                          {t("core.ui.processing_servers.local_build.last_job_source", {
+                            source: localBuilder.lastJob.sourceLabel,
+                          })}
+                        </div>
+                      ) : null}
+                      {localBuilder?.lastJob?.outputSha256 ? (
+                        <div className="pipelinesServerMeta pipelinesServerMetaDiag">
+                          {t("core.ui.processing_servers.local_build.last_job_hash", {
+                            sha: shortDigest(localBuilder.lastJob.outputSha256),
+                          })}
+                        </div>
+                      ) : null}
+                      {originSummary ? (
+                        <div className="pipelinesServerMeta pipelinesServerMetaDiag">
+                          {t("core.ui.processing_servers.origin_metrics.models", {
+                            summary: originSummary,
+                          })}
+                        </div>
+                      ) : null}
+                      {sourceSummary ? (
+                        <div className="pipelinesServerMeta pipelinesServerMetaDiag">
+                          {t("core.ui.processing_servers.origin_metrics.jobs", {
+                            summary: sourceSummary,
+                          })}
+                        </div>
+                      ) : null}
+                    </details> : null}
+                    {localBuilder?.lastJob?.error ? <div className="errorText processingServerInlineIssue">{localBuilder.lastJob.error}</div> : null}
+                    {visionCatalog || customCatalog.length ? <details
+                      className="processingServerDetails"
+                      open={[...(visionCatalog?.items || []), ...customCatalog].some((item) => {
+                        const status = String(item.installJob?.status || "");
+                        return isActiveInstallStatus(status) || status === "failed";
+                      })}
+                    >
+                      <summary>{t("core.ui.processing_servers.models", { count: (visionCatalog?.items.length || 0) + customCatalog.length })}</summary>
+                      {visionCatalog ? (
+                        <div className="pipelinesServerMeta pipelinesServerMetaDiag">
+                          {t("core.ui.processing_servers.vision_recommendations.title")}{" "}
+                          {t("core.ui.processing_servers.vision_recommendations.profile", {
+                            profile: t(`core.ui.processing_servers.vision_recommendations.profile_label.${visionCatalog.profile}`, {}, visionCatalog.profile),
+                          })}
+                        </div>
+                      ) : null}
+                      {visionCatalog
+                        ? visionCatalog.items.map((item) => {
+                            const badges = item.badgeIds.map(renderRecommendationBadge).filter(Boolean);
+                            const suffix = badges.length ? ` • ${badges.join(" • ")}` : "";
+                            const installedSuffix = item.artifactExists
+                              ? ` • ${t("core.ui.processing_servers.vision_recommendations.installed")}`
+                              : ` • ${t("core.ui.processing_servers.vision_recommendations.needs_model_file")}`;
+                            const jobPhase = item.installJob?.phase ? installPhaseLabel(item.installJob.phase, t) : "";
+                            const key = `${server.id}:${item.modelId}`;
+                            const cancelKey = `${server.id}:${item.modelId}:cancel`;
+                            const retryKey = `${server.id}:${item.modelId}:retry`;
+                            const installStatus = String(item.installJob?.status || "").trim();
+                            const canPrepareLocally =
+                              canManageProvisioning &&
+                              !item.artifactExists &&
+                              item.localBuildSupported &&
+                              !item.installJob;
+                            const canCancel =
+                              canManageProvisioning && isActiveInstallStatus(installStatus) && installStatus !== "canceling";
+                            const canRetry =
+                              canManageProvisioning && (installStatus === "failed" || installStatus === "canceled");
+                            return (
+                              <div key={item.modelId} className="pipelinesServerMeta processingServerModel">
+                                <div>
+                                  {item.displayName}
+                                  {suffix}
+                                  {installedSuffix}
+                                </div>
+                                {item.installJob ? (
+                                  <div>
+                                    {t("core.ui.pipelines.panels.yolo.local_build.job_progress", {
+                                      phase: jobPhase || item.installJob.phase || "queued",
+                                      progress: Math.max(0, Math.min(100, Math.round(item.installJob.progressPct || 0))),
+                                    })}
+                                  </div>
+                                ) : null}
+                                {!item.artifactExists && !item.localBuildSupported && item.localBuildReason ? (
+                                  <>
+                                    <div>
+                                      {t("core.ui.processing_servers.local_build.reason", {
+                                        reason: localBuildReasonLabel(item.localBuildReason, t),
+                                      })}
+                                    </div>
+                                    <div>
+                                      {t(
+                                        "core.ui.processing_servers.local_build.model_unavailable_next_step",
+                                        {},
+                                        "Install Docker or Podman on this host, choose a ready model, or prepare/upload this model manually in the detection operator.",
+                                      )}
+                                    </div>
+                                  </>
+                                ) : null}
+                                {canPrepareLocally || canCancel || canRetry ? (
+                                  <div className="processingServerModelActions">
+                                    {canPrepareLocally ? (
+                                      <button
+                                        className="pillButton"
+                                        type="button"
+                                        disabled={!!provisioningByKey[key]}
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          void openLocalBuildConsent(server.id, item);
+                                        }}
+                                      >
+                                        {provisioningByKey[key]
+                                          ? t("core.ui.pipelines.panels.yolo.local_build.starting")
+                                          : t("core.ui.pipelines.panels.yolo.provisioning.action.local_prepare")}
+                                      </button>
+                                    ) : null}
+                                    {canCancel ? (
+                                      <button
+                                        className="pillButton"
+                                        type="button"
+                                        disabled={!!provisioningByKey[cancelKey]}
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          void handleCancelInstall(server.id, item.modelId);
+                                        }}
+                                      >
+                                        {provisioningByKey[cancelKey]
+                                          ? t("core.ui.processing_servers.install.canceling")
+                                          : t("core.actions.cancel")}
+                                      </button>
+                                    ) : null}
+                                    {canRetry ? (
+                                      <button
+                                        className="pillButton"
+                                        type="button"
+                                        disabled={!!provisioningByKey[retryKey]}
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          void handleRetryInstall(server.id, item.modelId);
+                                        }}
+                                      >
+                                        {provisioningByKey[retryKey]
+                                          ? t("core.ui.processing_servers.install.retrying")
+                                          : t("core.actions.retry")}
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                ) : null}
                               </div>
-                              <div>
-                                {t("core.ui.processing_servers.custom_catalog.origin", {
-                                  origin: formatOriginLabel(item.origin, t),
-                                })}
-                                {item.sourceRef
-                                  ? ` • ${t("core.ui.processing_servers.custom_catalog.revision", { ref: item.sourceRef })}`
-                                  : ""}
-                                {item.adapterFamily ? ` • ${item.adapterFamily}` : ""}
+                            );
+                          })
+                        : null}
+                      {customCatalog.length ? (
+                        <div className="pipelinesServerMeta pipelinesServerMetaDiag">
+                          <div>
+                            {t("core.ui.processing_servers.custom_catalog.title", {
+                              count: customCatalog.length,
+                            })}
+                          </div>
+                          {customCatalog.map((item) => {
+                            const installStatus = String(item.installJob?.status || "").trim();
+                            const installPhase = item.installJob?.phase ? installPhaseLabel(item.installJob.phase, t) : "";
+                            const cancelKey = `${server.id}:${item.modelId}:cancel`;
+                            const retryKey = `${server.id}:${item.modelId}:retry`;
+                            const actor = item.importedBy?.displayName || item.importedBy?.username || "";
+                            const canCancel =
+                              canManageProvisioning && isActiveInstallStatus(installStatus) && installStatus !== "canceling";
+                            const canRetry =
+                              canManageProvisioning && (installStatus === "failed" || installStatus === "canceled");
+                            return (
+                              <div key={item.modelId} className="processingServerModel">
+                                <div>
+                                  {item.displayName}
+                                  {` • ${formatTaskLabel(item.task, t)} • ${formatAvailabilityLabel(item.availability, t)}`}
+                                </div>
+                                <div>
+                                  {t("core.ui.processing_servers.custom_catalog.origin", {
+                                    origin: formatOriginLabel(item.origin, t),
+                                  })}
+                                  {item.sourceRef
+                                    ? ` • ${t("core.ui.processing_servers.custom_catalog.revision", { ref: item.sourceRef })}`
+                                    : ""}
+                                  {item.adapterFamily ? ` • ${item.adapterFamily}` : ""}
+                                </div>
+                                {actor ? (
+                                  <div>
+                                    {t("core.ui.processing_servers.custom_catalog.imported_by", {
+                                      actor,
+                                    })}
+                                  </div>
+                                ) : null}
+                                {item.sourceUrl ? (
+                                  <div style={{ overflowWrap: "anywhere" }}>
+                                    {t("core.ui.processing_servers.custom_catalog.source_url", {
+                                      source: item.sourceUrl,
+                                    })}
+                                  </div>
+                                ) : null}
+                                {item.benchmark ? (
+                                  <div>
+                                    {t("core.ui.processing_servers.custom_catalog.benchmark", {
+                                      latency: item.benchmark.avgLatencyMs.toFixed(1),
+                                      provider: item.benchmark.provider || t("core.ui.processing_servers.custom_catalog.provider_unknown"),
+                                    })}
+                                  </div>
+                                ) : null}
+                                {item.installJob ? (
+                                  <div>
+                                    {t("core.ui.pipelines.panels.yolo.local_build.job_progress", {
+                                      phase: installPhase || item.installJob.phase || item.installJob.status || "queued",
+                                      progress: Math.max(0, Math.min(100, Math.round(item.installJob.progressPct || 0))),
+                                    })}
+                                    {item.installJob.error ? ` • ${item.installJob.error}` : ""}
+                                  </div>
+                                ) : null}
+                                {canCancel || canRetry ? (
+                                  <div className="processingServerModelActions">
+                                    {canCancel ? (
+                                      <button
+                                        className="pillButton"
+                                        type="button"
+                                        disabled={!!provisioningByKey[cancelKey]}
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          void handleCancelInstall(server.id, item.modelId);
+                                        }}
+                                      >
+                                        {provisioningByKey[cancelKey]
+                                          ? t("core.ui.processing_servers.install.canceling")
+                                          : t("core.actions.cancel")}
+                                      </button>
+                                    ) : null}
+                                    {canRetry ? (
+                                      <button
+                                        className="pillButton"
+                                        type="button"
+                                        disabled={!!provisioningByKey[retryKey]}
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          void handleRetryInstall(server.id, item.modelId);
+                                        }}
+                                      >
+                                        {provisioningByKey[retryKey]
+                                          ? t("core.ui.processing_servers.install.retrying")
+                                          : t("core.actions.retry")}
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                ) : null}
                               </div>
-                              {actor ? (
-                                <div>
-                                  {t("core.ui.processing_servers.custom_catalog.imported_by", {
-                                    actor,
-                                  })}
-                                </div>
-                              ) : null}
-                              {item.sourceUrl ? (
-                                <div style={{ overflowWrap: "anywhere" }}>
-                                  {t("core.ui.processing_servers.custom_catalog.source_url", {
-                                    source: item.sourceUrl,
-                                  })}
-                                </div>
-                              ) : null}
-                              {item.benchmark ? (
-                                <div>
-                                  {t("core.ui.processing_servers.custom_catalog.benchmark", {
-                                    latency: item.benchmark.avgLatencyMs.toFixed(1),
-                                    provider: item.benchmark.provider || t("core.ui.processing_servers.custom_catalog.provider_unknown"),
-                                  })}
-                                </div>
-                              ) : null}
-                              {item.installJob ? (
-                                <div>
-                                  {t("core.ui.pipelines.panels.yolo.local_build.job_progress", {
-                                    phase: installPhase || item.installJob.phase || item.installJob.status || "queued",
-                                    progress: Math.max(0, Math.min(100, Math.round(item.installJob.progressPct || 0))),
-                                  })}
-                                  {item.installJob.error ? ` • ${item.installJob.error}` : ""}
-                                </div>
-                              ) : null}
-                              {canCancel || canRetry ? (
-                                <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                  {canCancel ? (
-                                    <button
-                                      className="pillButton"
-                                      type="button"
-                                      disabled={!!provisioningByKey[cancelKey]}
-                                      onClick={(event) => {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        void handleCancelInstall(server.id, item.modelId);
-                                      }}
-                                    >
-                                      {provisioningByKey[cancelKey]
-                                        ? t("core.ui.processing_servers.install.canceling")
-                                        : t("core.actions.cancel")}
-                                    </button>
-                                  ) : null}
-                                  {canRetry ? (
-                                    <button
-                                      className="pillButton"
-                                      type="button"
-                                      disabled={!!provisioningByKey[retryKey]}
-                                      onClick={(event) => {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        void handleRetryInstall(server.id, item.modelId);
-                                      }}
-                                    >
-                                      {provisioningByKey[retryKey]
-                                        ? t("core.ui.processing_servers.install.retrying")
-                                        : t("core.actions.retry")}
-                                    </button>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : null}
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </details> : null}
                     {serverProvisionError ? <div className="errorText" style={{ marginTop: 8 }}>{serverProvisionError}</div> : null}
                   </div>
 

@@ -2417,6 +2417,8 @@ const translationsByLocale: Record<Locale, Translations> = {
 
     "core.ui.processing_servers.title": "Processing servers",
     "core.ui.processing_servers.add_server": "Add server",
+    "core.ui.processing_servers.technical_details": "Technical details",
+    "core.ui.processing_servers.models": "Vision models ({{count}})",
     "core.ui.processing_servers.description":
       "Configure remote processing servers to run heavy operators (vision). Storage and notifications still happen on the origin server.",
     "core.ui.processing_servers.none": "No processing servers configured.",
@@ -5075,6 +5077,8 @@ const translationsByLocale: Record<Locale, Translations> = {
 
     "core.ui.processing_servers.title": "Servidores de processamento",
     "core.ui.processing_servers.add_server": "Adicionar servidor",
+    "core.ui.processing_servers.technical_details": "Detalhes técnicos",
+    "core.ui.processing_servers.models": "Modelos de visão ({{count}})",
     "core.ui.processing_servers.description":
       "Configure servidores de processamento remotos para executar operadores pesados (vision). Armazenamento e notificações continuam na origem.",
     "core.ui.processing_servers.none": "Nenhum servidor de processamento configurado.",

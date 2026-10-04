@@ -87,6 +87,7 @@ class _OpenState:
     backend_override_until_monotonic: float = 0.0
     last_backend_failover_monotonic: float = 0.0
     last_reacquire_monotonic: float = 0.0
+    last_observed_frame_ts: float = 0.0
 
 
 class CameraCaptureTransientError(RuntimeError):
@@ -280,6 +281,7 @@ class CameraCaptureService:
             if existing is not None:
                 await self._hub.release(key=hub_key)
                 return existing
+        state.last_observed_frame_ts = 0.0
         self._leases[lease_id] = lease
         self._lease_ids_by_key[lease_key] = lease_id
         return lease
@@ -574,14 +576,19 @@ class CameraCaptureService:
     async def _maybe_reacquire(self, lease: CameraCaptureLease, *, metrics: dict[str, Any]) -> bool:
         now_mono = time.monotonic()
         state = self._open_states.setdefault(lease.lease_key, _OpenState())
-        if (now_mono - state.last_reacquire_monotonic) < self._reacquire_cooldown_s:
-            return False
         last_frame_ts = 0.0
         try:
             last_frame_ts = float(metrics.get("last_frame_ts") or 0.0)
         except Exception:
             last_frame_ts = 0.0
-        stale_for_s = max(0.0, time.time() - last_frame_ts) if last_frame_ts > 0.0 else max(0.0, time.time() - lease.acquired_at)
+        if math.isfinite(last_frame_ts) and last_frame_ts > 0.0:
+            state.last_observed_frame_ts = last_frame_ts
+        if (now_mono - state.last_reacquire_monotonic) < self._reacquire_cooldown_s:
+            return False
+        # Decoder restarts clear their frame buffer. Preserve only the observed
+        # timestamp so a brief gap is not measured from the lease's creation.
+        stale_since = state.last_observed_frame_ts or lease.acquired_at
+        stale_for_s = max(0.0, time.time() - stale_since)
         if stale_for_s < self._reacquire_after_s:
             return False
 

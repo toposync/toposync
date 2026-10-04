@@ -307,6 +307,62 @@ def test_camera_capture_service_keeps_recent_cached_frame_during_polling() -> No
     asyncio.run(_run_keeps_recent_cached_frame_during_polling())
 
 
+@pytest.mark.parametrize("clock_moves_backwards", [False, True])
+def test_camera_capture_service_keeps_last_frame_time_when_decoder_clears_buffer(
+    monkeypatch: pytest.MonkeyPatch, clock_moves_backwards: bool,
+) -> None:
+    clock = {"wall": 2000.0, "monotonic": 1000.0}
+    monkeypatch.setattr(time, "time", lambda: clock["wall"])
+    monkeypatch.setattr(time, "monotonic", lambda: clock["monotonic"])
+
+    def advance(seconds: float) -> None:
+        clock["wall"] += seconds
+        clock["monotonic"] += seconds
+
+    async def scenario() -> None:
+        grabber = _Grabber(frame_ts=clock["wall"])
+        hub = _Hub(grabber=grabber)
+        service = _service(hub=hub)
+        request = CameraCaptureRequest(owner_id="owner", camera_id="front", backend="ffmpeg")
+        lease = await service.open(request, PipelineRuntimeDependencies())
+
+        advance(30)
+        grabber.frame_ts = clock["wall"]
+        assert (await service.get_latest(lease.lease_id)).fresh
+
+        if clock_moves_backwards:
+            clock["wall"] -= 20
+            clock["monotonic"] += 1
+            grabber.frame_ts = clock["wall"]
+            assert (await service.get_latest(lease.lease_id)).fresh
+
+        # A decoder restart clears pixels and its timestamp, but the outage
+        # starts at the last frame, not when this long-lived lease was opened.
+        grabber.frame = None
+        grabber.frame_ts = 0.0
+        grabber.opened = False
+        advance(2)
+        missing = await service.get_latest(lease.lease_id)
+        assert missing.frame is None
+        assert not missing.fresh
+        assert not missing.released
+        advance(12.9)
+        assert not (await service.get_latest(lease.lease_id)).released
+        advance(0.2)
+        assert (await service.get_latest(lease.lease_id)).released
+
+        # A new lease has its own startup window; previous frame history must
+        # not make it stale as soon as the reacquisition cooldown expires.
+        replacement = await service.open(request, PipelineRuntimeDependencies())
+        advance(6)
+        assert not (await service.get_latest(replacement.lease_id)).released
+        advance(9.1)
+        assert (await service.get_latest(replacement.lease_id)).released
+        assert len(hub.release_calls) == 2
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("configured_backend", ["auto", "opencv", "ffmpeg"])
 def test_camera_capture_service_disables_ffmpeg_override_after_hard_open_error(
     monkeypatch: pytest.MonkeyPatch, configured_backend: str,

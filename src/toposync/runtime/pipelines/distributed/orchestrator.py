@@ -212,8 +212,6 @@ class PipelinesOrchestrator:
             "graph_info": {"graphs": graph_info},
             "last_error": self._last_error,
             "activation_errors": dict(self._activation_errors),
-            "last_signature": self._last_sig,
-            "last_settings_signature": self._last_settings_sig,
         }
 
     def graph_runtime_info(self) -> list[dict[str, Any]]:

@@ -297,10 +297,6 @@ const RENDER_MODE_STORAGE_KEY = "toposync.render_mode.v1";
 const LAST_CAMERA_LIVE_VIEW_STORAGE_KEY = "toposync.streams.last_live_view_id.v1";
 const STREAMS_OVERLAY_IDLE_MS = 2500;
 const LIVE_VIEWS_REFRESH_MS = 15000;
-type WindowWithIdleCallback = Window & {
-  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
-  cancelIdleCallback?: (handle: number) => void;
-};
 
 const BUILTIN_RENDER_MODES = new Set<string>(["3d", "2d", "vector2d", "streams", "camera-live"]);
 

@@ -6,6 +6,7 @@ import type { CompositionElement, ElementType, Notification, Notification2DOverl
 import { localToGeographic, longitudeNear, readGeoreference, type Georeference } from "../util/georeference";
 import { Modal } from "./Modal";
 import { i18n } from "../util/i18n";
+import { orderElementsForMain2D } from "./main2d/shared";
 
 const initial: Georeference = { version: 1, latitude: 0, longitude: 0, rotationDegrees: 0, scale: 1, axes: "x-east-z-south", units: "metres" };
 // Configuração do provedor separada da geometria da composição.
@@ -79,11 +80,7 @@ export function GeoreferenceEditor({ activeNotification, notificationRenderers, 
       const viewport: Viewport2DContext = { canvas: output, width, height, dpr, scale,
         worldToScreen: point => new Vector2(point.x * scale, point.z * scale),
         screenToWorld: point => ({ x: point.x / scale, z: point.y / scale }) };
-      const rank = (element: CompositionElement) => {
-        const group = elementTypesById[element.type]?.layerGroup;
-        return group === "background" ? (element.props.mode === "tracing" ? 0.5 : -1) : group === "areas" ? 0 : group === "walls" ? 1 : group === "measurements" ? 3 : 2;
-      };
-      for (const element of [...elements].sort((a, b) => rank(a) - rank(b))) {
+      for (const element of orderElementsForMain2D(elements, elementTypesById)) {
         context.save();
         const renderer = elementTypesById[element.type]?.render2D;
         if (renderer) renderer({ ctx: context, element, elements, viewport });

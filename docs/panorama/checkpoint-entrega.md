@@ -469,3 +469,7 @@ A segunda sondagem manteve 200 milissegundos e reduziu somente a velocidade para
 Após a imagem salva, a interface conduz à seção de mapeamento da mesma câmera e à consulta de disponibilidade da panorâmica ao vivo. Câmeras impedidas mostram o motivo de incompatibilidade no seletor. A remoção da imagem ativa invalida a continuação; uma imagem disponível continua sem certificar cobertura ou retorno físico. O texto inicial deixou de prometer uma captura limitada a duas faixas.
 
 Verificação focal: transições, ordenação de estado, epoch e traduções aprovados; aplicação renderizada com replay explícito de imagem salva, candidata reprovada e geometria incompatível, sem comandos físicos. Retorno preciso e cobertura conservam os resultados e impedimentos anteriores. Registros internos desta rodada ficam no diretório externo `~/.codex/task-artifacts/toposync/integrated-goal-20260926/ux-integration/`.
+
+## Remoção do editor legado — 04/10/2026
+
+O elemento de câmera mantém duas entradas: calibração pela panorâmica salva e mapeamento do chão com geometria métrica. O editor antigo de calibração, seu diálogo de poses e auxiliares privados sem consumidores foram removidos; os componentes ativos e seus controles de evidência permanecem iguais. Esta simplificação não altera os critérios de cobertura, precisão ou retorno físico.

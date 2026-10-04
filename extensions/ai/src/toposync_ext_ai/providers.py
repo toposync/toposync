@@ -58,6 +58,23 @@ class AiAttempt(BaseModel):
     error: str = ""
 
 
+def _normalize_region_aliases(data: dict[str, Any]) -> None:
+    for field, aliases in (
+        ("bbox01", ("bbox", "box", "bbox_2d", "box_2d", "bounding_box", "boundingBox", "coordinates")),
+        ("confidence", ("score", "probability", "certainty", "confidence_score")),
+        ("label", ("name", "class", "category", "description")),
+    ):
+        missing = data.get(field) in {None, ""} if field == "label" else data.get(field) is None
+        if missing:
+            for alias in aliases:
+                value = data.get(alias)
+                if value is not None and (field != "label" or value):
+                    data[field] = value
+                    break
+        for alias in aliases:
+            data.pop(alias, None)
+
+
 class RegionDetection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -72,40 +89,8 @@ class RegionDetection(BaseModel):
         if not isinstance(values, dict):
             return values
         data = dict(values)
-        if data.get("bbox01") is None:
-            for key in ("bbox", "box", "bbox_2d", "box_2d", "bounding_box", "boundingBox", "coordinates"):
-                if data.get(key) is not None:
-                    data["bbox01"] = data.get(key)
-                    break
-        if data.get("confidence") is None:
-            for key in ("score", "probability", "certainty", "confidence_score"):
-                if data.get(key) is not None:
-                    data["confidence"] = data.get(key)
-                    break
-        if data.get("label") in {None, ""}:
-            for key in ("name", "class", "category", "description"):
-                if data.get(key):
-                    data["label"] = data.get(key)
-                    break
-        for key in (
-            "bbox",
-            "box",
-            "bbox_2d",
-            "box_2d",
-            "bounding_box",
-            "boundingBox",
-            "coordinates",
-            "score",
-            "probability",
-            "certainty",
-            "confidence_score",
-            "name",
-            "class",
-            "category",
-            "description",
-            "found",
-        ):
-            data.pop(key, None)
+        _normalize_region_aliases(data)
+        data.pop("found", None)
         return data
 
     @field_validator("label", "reason", mode="before")
@@ -143,11 +128,7 @@ class RegionDetectionResult(BaseModel):
         if not isinstance(values, dict):
             return values
         data = dict(values)
-        if data.get("bbox01") is None:
-            for key in ("bbox", "box", "bbox_2d", "box_2d", "bounding_box", "boundingBox", "coordinates"):
-                if data.get(key) is not None:
-                    data["bbox01"] = data.get(key)
-                    break
+        _normalize_region_aliases(data)
         if data.get("detections") is None:
             for key in ("regions", "objects", "items", "boxes", "bounding_boxes", "boundingBoxes"):
                 if data.get(key) is not None:
@@ -155,16 +136,6 @@ class RegionDetectionResult(BaseModel):
                     break
         if data.get("detections") is not None and isinstance(data.get("detections"), dict):
             data["detections"] = [data["detections"]]
-        if data.get("confidence") is None:
-            for key in ("score", "probability", "certainty", "confidence_score"):
-                if data.get(key) is not None:
-                    data["confidence"] = data.get(key)
-                    break
-        if data.get("label") in {None, ""}:
-            for key in ("name", "class", "category", "description"):
-                if data.get(key):
-                    data["label"] = data.get(key)
-                    break
         detections = data.get("detections")
         if not detections and data.get("bbox01") is not None:
             data["detections"] = [
@@ -183,29 +154,7 @@ class RegionDetectionResult(BaseModel):
                 detections[0]["label"] = data.get("label")
         if data.get("found") is None and (data.get("bbox01") is not None or data.get("detections")):
             data["found"] = True
-        for key in (
-            "bbox",
-            "box",
-            "bbox_2d",
-            "box_2d",
-            "bounding_box",
-            "boundingBox",
-            "coordinates",
-            "regions",
-            "objects",
-            "items",
-            "boxes",
-            "bounding_boxes",
-            "boundingBoxes",
-            "score",
-            "probability",
-            "certainty",
-            "confidence_score",
-            "name",
-            "class",
-            "category",
-            "description",
-        ):
+        for key in ("regions", "objects", "items", "boxes", "bounding_boxes", "boundingBoxes"):
             data.pop(key, None)
         return data
 

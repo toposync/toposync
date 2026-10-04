@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal, cast
 from urllib.parse import urlparse
 
 from toposync.runtime.config_store import AppSettings
@@ -75,56 +75,12 @@ class AiRouter:
         min_confidence: float = 0.0,
         fallback_on_low_confidence: bool = False,
     ) -> RegionDetectionResult:
-        settings = await self.settings()
-        attempts: list[AiAttempt] = []
-        profiles = self._resolve_profiles(
-            settings=settings,
-            profile_id=profile_id,
-            fallback_profile_ids=fallback_profile_ids,
-        )
-        if not profiles:
-            return RegionDetectionResult(found=False, reason="no_ai_profile_available")
-
-        last_result: RegionDetectionResult | None = None
-        for profile, provider in profiles:
-            if not self._provider_allows_image(provider):
-                attempts.append(self._attempt_not_allowed(profile=profile, provider=provider))
-                continue
-            allowed, reason = await self._limiter.check_and_increment(profile_id=profile.id, limits=settings.limits)
-            if not allowed:
-                attempts.append(
-                    AiAttempt(
-                        profile_id=profile.id,
-                        provider_id=provider.id,
-                        provider_kind=provider.kind,
-                        model=profile.model,
-                        ok=False,
-                        error=reason,
-                    )
-                )
-                continue
-            async with self._limiter.slot(profile_id=profile.id, limits=settings.limits):
-                started = time.monotonic()
-                try:
-                    result = await build_provider(provider, profile).locate_region(
-                        image=image,
-                        description=description,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    attempts.append(attempt_from_error(profile=profile, provider=provider, started=started, error=exc))
-                    continue
-                attempts.append(attempt_from_success(profile=profile, provider=provider, started=started))
-                result.attempts = list(attempts)
-                last_result = result
-                if result.confidence >= min_confidence:
-                    return result
-                if not fallback_on_low_confidence:
-                    return result
-
-        if last_result is not None:
-            last_result.attempts = list(attempts)
-            return last_result
-        return RegionDetectionResult(found=False, reason="all_ai_profiles_failed", attempts=attempts)
+        return cast(RegionDetectionResult, await self._infer_image(
+            operation="locate_region", result_type=RegionDetectionResult,
+            image=image, description=description, profile_id=profile_id,
+            fallback_profile_ids=fallback_profile_ids, min_confidence=min_confidence,
+            fallback_on_low_confidence=fallback_on_low_confidence,
+        ))
 
     async def evaluate_condition(
         self,
@@ -136,6 +92,20 @@ class AiRouter:
         min_confidence: float = 0.0,
         fallback_on_low_confidence: bool = False,
     ) -> ConditionEvaluationResult:
+        return cast(ConditionEvaluationResult, await self._infer_image(
+            operation="evaluate_condition", result_type=ConditionEvaluationResult,
+            image=image, description=description, profile_id=profile_id,
+            fallback_profile_ids=fallback_profile_ids, min_confidence=min_confidence,
+            fallback_on_low_confidence=fallback_on_low_confidence,
+        ))
+
+    async def _infer_image(
+        self, *, operation: Literal["locate_region", "evaluate_condition"],
+        result_type: type[RegionDetectionResult] | type[ConditionEvaluationResult],
+        image: Any, description: str, profile_id: str | None,
+        fallback_profile_ids: list[str] | None, min_confidence: float,
+        fallback_on_low_confidence: bool,
+    ) -> RegionDetectionResult | ConditionEvaluationResult:
         settings = await self.settings()
         attempts: list[AiAttempt] = []
         profiles = self._resolve_profiles(
@@ -143,10 +113,11 @@ class AiRouter:
             profile_id=profile_id,
             fallback_profile_ids=fallback_profile_ids,
         )
+        negative_result = {"found": False} if result_type is RegionDetectionResult else {"matches": False}
         if not profiles:
-            return ConditionEvaluationResult(matches=False, reason="no_ai_profile_available")
+            return result_type(**negative_result, reason="no_ai_profile_available")
 
-        last_result: ConditionEvaluationResult | None = None
+        last_result: RegionDetectionResult | ConditionEvaluationResult | None = None
         for profile, provider in profiles:
             if not self._provider_allows_image(provider):
                 attempts.append(self._attempt_not_allowed(profile=profile, provider=provider))
@@ -167,10 +138,8 @@ class AiRouter:
             async with self._limiter.slot(profile_id=profile.id, limits=settings.limits):
                 started = time.monotonic()
                 try:
-                    result = await build_provider(provider, profile).evaluate_condition(
-                        image=image,
-                        description=description,
-                    )
+                    provider_runtime = build_provider(provider, profile)
+                    result = await getattr(provider_runtime, operation)(image=image, description=description)
                 except Exception as exc:  # noqa: BLE001
                     attempts.append(attempt_from_error(profile=profile, provider=provider, started=started, error=exc))
                     continue
@@ -185,7 +154,7 @@ class AiRouter:
         if last_result is not None:
             last_result.attempts = list(attempts)
             return last_result
-        return ConditionEvaluationResult(matches=False, reason="all_ai_profiles_failed", attempts=attempts)
+        return result_type(**negative_result, reason="all_ai_profiles_failed", attempts=attempts)
 
     async def generate_local_json(
         self, *, messages: list[dict[str, Any]], profile_id: str | None = None

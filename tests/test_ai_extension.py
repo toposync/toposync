@@ -18,7 +18,7 @@ from toposync_ext_ai.catalog import normalize_model_ref
 from toposync_ext_ai.constants import EXTENSION_ID
 from toposync_ext_ai.pipelines import register_ai_pipeline_operators
 from toposync_ext_ai.pipelines.runtime import AiConditionFilterRuntime, AiSmartCropRuntime
-from toposync_ext_ai.providers import ConditionEvaluationResult, RegionDetectionResult
+from toposync_ext_ai.providers import ConditionEvaluationResult, RegionDetection, RegionDetectionResult
 from toposync_ext_ai.router import AiRouter
 
 
@@ -348,6 +348,23 @@ def test_ai_result_parsers_accept_common_model_aliases() -> None:
     condition = ConditionEvaluationResult.model_validate({"answer": True, "score": 0.62})
     assert condition.matches is True
     assert condition.confidence == pytest.approx(0.62)
+
+
+@pytest.mark.parametrize("model_type", [RegionDetection, RegionDetectionResult])
+@pytest.mark.parametrize("canonical,label", [
+    ({"bbox01": None, "confidence": None, "label": None}, "cat"),
+    ({"bbox01": [0.1, 0.2, 0.8, 0.9], "confidence": 0, "label": ""}, "cat"),
+    ({"bbox01": [0.1, 0.2, 0.8, 0.9], "confidence": False, "label": False}, ""),
+])
+def test_ai_region_aliases_preserve_precedence_and_empty_values(model_type, canonical, label):
+    raw = {**canonical, "bbox": None, "box": [100, 200, 800, 900], "bbox_2d": [0, 0, 1, 1],
+           "score": 0, "probability": 0.9, "name": "", "class": False,
+           "category": "cat", "description": "other", "found": False}
+    result = model_type.model_validate(raw)
+    assert result.bbox01 == pytest.approx([0.1, 0.2, 0.8, 0.9])
+    assert result.confidence == 0
+    assert result.label == label
+    assert raw["description"] == "other" and raw["found"] is False
 
 
 def test_ai_model_ref_normalization_matches_ollama_display_names() -> None:
@@ -757,22 +774,28 @@ def test_ai_condition_filter_uses_profile_fallback_when_concurrency_is_full() ->
     assert context.metrics.dropped_packets == 0
 
 
-def test_ai_router_falls_back_between_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def scenario() -> RegionDetectionResult:
+@pytest.mark.parametrize("operation", ["locate_region", "evaluate_condition"])
+@pytest.mark.parametrize("first_result", ["error", "low_confidence"])
+def test_ai_router_falls_back_between_profiles(monkeypatch: pytest.MonkeyPatch, operation: str, first_result: str) -> None:
+    async def scenario():
         class _Provider:
             def __init__(self, model: str) -> None:
                 self.model = model
 
             async def locate_region(self, *, image: Any, description: str) -> RegionDetectionResult:  # noqa: ARG002
-                if self.model == "bad-model":
+                if self.model == "bad-model" and first_result == "error":
                     raise RuntimeError("model failed")
                 return RegionDetectionResult(
                     found=True,
-                    confidence=0.91,
+                    confidence=0.2 if self.model == "bad-model" else 0.91,
                     bbox01=[0.1, 0.2, 0.7, 0.8],
                     label="target",
                     model=self.model,
                 )
+
+            async def evaluate_condition(self, *, image: Any, description: str) -> ConditionEvaluationResult:
+                region = await self.locate_region(image=image, description=description)
+                return ConditionEvaluationResult(matches=True, confidence=region.confidence, model=self.model)
 
         def _build_provider(provider, profile):  # noqa: ANN001
             return _Provider(profile.model)
@@ -797,33 +820,38 @@ def test_ai_router_falls_back_between_profiles(monkeypatch: pytest.MonkeyPatch) 
                     ],
                     "limits": {
                         "max_concurrency": 1,
-                        "requests_per_minute": 10,
+                        "requests_per_minute": 1,
                         "requests_per_hour": 10,
                         "requests_per_day": 10,
                     },
                 }
             )
         )
-        return await router.locate_region(
+        result = await getattr(router, operation)(
             image=b"image",
             description="target",
             min_confidence=0.5,
             fallback_on_low_confidence=True,
         )
+        limited = await getattr(router, operation)(image=b"image", description="target")
+        return result, limited
 
-    result = asyncio.run(scenario())
-    assert result.found is True
+    result, limited = asyncio.run(scenario())
+    assert getattr(result, "found" if operation == "locate_region" else "matches") is True
     assert result.model == "good-model"
-    assert [attempt.ok for attempt in result.attempts] == [False, True]
+    assert [attempt.ok for attempt in result.attempts] == [first_result != "error", True]
+    assert limited.reason == "all_ai_profiles_failed"
+    assert [attempt.error for attempt in limited.attempts] == ["minute_limit", "minute_limit"]
 
 
-def test_ai_router_blocks_cloud_profiles_without_image_upload_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("operation", ["locate_region", "evaluate_condition"])
+def test_ai_router_blocks_cloud_profiles_without_image_upload_opt_in(monkeypatch: pytest.MonkeyPatch, operation: str) -> None:
     def _build_provider(_provider, _profile):  # noqa: ANN001
         raise AssertionError("cloud provider should not be called")
 
     monkeypatch.setattr("toposync_ext_ai.router.build_provider", _build_provider)
 
-    async def scenario() -> RegionDetectionResult:
+    async def scenario():
         router = AiRouter(
             config_store=_FakeConfigStore(
                 {
@@ -843,12 +871,16 @@ def test_ai_router_blocks_cloud_profiles_without_image_upload_opt_in(monkeypatch
                 }
             )
         )
-        return await router.locate_region(image=b"image", description="target", min_confidence=0.5)
+        result = await getattr(router, operation)(image=b"image", description="target", min_confidence=0.5)
+        missing = await getattr(router, operation)(image=b"image", description="target", profile_id="missing")
+        return result, missing
 
-    result = asyncio.run(scenario())
-    assert result.found is False
+    result, missing = asyncio.run(scenario())
+    assert getattr(result, "found" if operation == "locate_region" else "matches") is False
     assert result.reason == "all_ai_profiles_failed"
     assert result.attempts[0].error == "image_upload_not_allowed"
+    assert missing.reason == "no_ai_profile_available"
+    assert missing.model_fields_set == {"found" if operation == "locate_region" else "matches", "reason"}
 
 
 def test_ai_router_detects_installed_ollama_model_alias(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -473,3 +473,5 @@ Verificação focal: transições, ordenação de estado, epoch e traduções ap
 ## Remoção do editor legado — 04/10/2026
 
 O elemento de câmera mantém duas entradas: calibração pela panorâmica salva e mapeamento do chão com geometria métrica. O editor antigo de calibração, seu diálogo de poses e auxiliares privados sem consumidores foram removidos; os componentes ativos e seus controles de evidência permanecem iguais. Esta simplificação não altera os critérios de cobertura, precisão ou retorno físico.
+
+No mapeamento do chão, imagem e planta passam a ocupar uma coluna em telas estreitas. Os marcadores acompanham o redimensionamento da imagem, inclusive suas faixas vazias, e os campos permanecem dentro dos cartões. Fonte, parâmetros medidos da lente e validação continuam acessíveis; a adaptação de layout não modifica pontos salvos nem aprova geometria.

@@ -129,7 +129,11 @@ test("failed decode and stale load cannot authorize editing", () => {
   assert.equal(c.canActivate, false);
 });
 
-const translations = { exports: {}, require: () => ({ sourcePanoramaTranslations: { en: {}, "pt-BR": {} } }) };
+const translations = { exports: {}, require: (name) => {
+  const dependency = { exports: {} };
+  vm.runInNewContext(compile(fs.readFileSync(path.join(root, `${name}.ts`), "utf8")), dependency);
+  return dependency.exports;
+} };
 vm.runInNewContext(compile(fs.readFileSync(path.join(root, "translations.ts"), "utf8")), translations);
 const editor = { exports: {}, require: (name) => name === "react" ? React : lensContext.exports };
 vm.runInNewContext(compile(fs.readFileSync(path.join(root, "elements/CameraGroundLensEditor.tsx"), "utf8")), editor);

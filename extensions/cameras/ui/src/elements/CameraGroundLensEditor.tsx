@@ -38,7 +38,7 @@ export function CameraGroundLensEditor({ view, imageSize, i18n, onDirty, onApply
       {resolutionStatus === "mismatch" ? <p className="cardMeta" role="alert">{t("ext.cameras.ground_lens.resolution_mismatch")}</p> : null}
       <div className="field">
         <label className="label" htmlFor={`${id}-choice`}>{t("ext.cameras.ground_lens.model")}</label>
-        <select id={`${id}-choice`} className="input" value={draft.choice} onChange={(event) => {
+        <select id={`${id}-choice`} className="input" style={{ minWidth: 0, width: "100%" }} value={draft.choice} onChange={(event) => {
           const choice = event.target.value as LensChoice;
           const sameFamily = choice.startsWith("brown") && draft.choice.startsWith("brown");
           change({ ...draft, choice, coefficients: coefficientNames(choice).map((_, index) => sameFamily ? draft.coefficients[index] ?? "" : "") });

@@ -222,6 +222,60 @@ test.beforeEach(async ({ page, request }) => {
   });
 });
 
+test("ground mapping keeps image markers aligned across responsive layouts", async ({ page, request }) => {
+  // Only image layout is under test: this image proves no physical calibration.
+  await page.route(`**/cameras/${cameraId}/snapshot**`, route => route.fulfill({
+    contentType: "image/svg+xml",
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400" fill="#67887b"/></svg>',
+  }));
+  await page.route(`**/cameras/${cameraId}/ptz/status**`, route => route.fulfill({
+    json: { camera_id: cameraId, status: { pan: 0, tilt: -0.6, zoom: 0, move_status: "idle" } },
+  }));
+  await openCameraEditor(page);
+  await page.getByRole("button", { name: "Calibrate ground and metric geometry", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Mapear câmera", exact: true });
+  const image = dialog.locator("img");
+  const plan = dialog.locator("canvas");
+  await page.setViewportSize({ width: 390, height: 900 });
+  await dialog.getByRole("button", { name: /^Marcar ponto de ajuste/ }).click();
+  await image.scrollIntoViewIfNeeded();
+  const point = { x: 0.24, y: 0.74 };
+  const imagePosition = () => image.evaluate((element, point) => {
+    const bounds = element.getBoundingClientRect();
+    const scale = Math.min(bounds.width / element.naturalWidth, bounds.height / element.naturalHeight);
+    const width = element.naturalWidth * scale;
+    const height = element.naturalHeight * scale;
+    return { x: bounds.x + (bounds.width - width) / 2 + point.x * width, y: bounds.y + (bounds.height - height) / 2 + point.y * height };
+  }, point);
+  const position = await imagePosition();
+  await page.mouse.click(position.x, position.y);
+  await expect(dialog.getByText("Agora clique no mesmo marco na planta.", { exact: true })).toBeVisible();
+  await plan.scrollIntoViewIfNeeded();
+  const bounds = await plan.boundingBox();
+  await plan.click({ position: { x: bounds.width * 0.65, y: bounds.height * 0.65 } });
+  const marker = dialog.locator('span[title="Arraste para ajustar o ponto 1 na imagem"]');
+  await expect(marker).toBeVisible();
+  for (const width of [390, 820, 1280, 320, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await image.scrollIntoViewIfNeeded();
+    const expected = await imagePosition();
+    const actual = await marker.boundingBox();
+    expect(Math.hypot(actual.x + actual.width / 2 - expected.x, actual.y + actual.height / 2 - expected.y)).toBeLessThan(1);
+    const imagePanel = await image.locator("xpath=ancestor::section").boundingBox();
+    const planPanel = await plan.locator("xpath=ancestor::section").boundingBox();
+    expect(planPanel.y > imagePanel.y + imagePanel.height - 1).toBe(width < 820);
+    expect(await dialog.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    expect(await dialog.locator("section input, section select, section button").evaluateAll(controls => controls.filter(control => {
+      const bounds = control.getBoundingClientRect();
+      const card = control.closest("section").getBoundingClientRect();
+      return bounds.left < card.left || bounds.right > card.right;
+    }).map(control => control.outerHTML))).toEqual([]);
+  }
+  await expect(dialog.getByRole("button", { name: "Ativar mapeamento", exact: true })).toHaveCount(0);
+  expect((await fixture(request)).commands).toEqual([]);
+});
+
 test("legacy panorama review, six fits, independent checks, activation, aim and geometry invalidation", async ({ page, request }) => {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));

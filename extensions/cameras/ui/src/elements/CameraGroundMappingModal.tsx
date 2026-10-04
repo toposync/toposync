@@ -371,6 +371,14 @@ export function CameraGroundMappingModal({
     onSaveDraftRef.current = onSaveDraft;
   }, [onSaveDraft]);
 
+  useEffect(() => {
+    const image = snapshotImageRef.current;
+    if (!open || !image) return;
+    const observer = new ResizeObserver(() => setImageLayoutRevision((value) => value + 1));
+    observer.observe(image);
+    return () => observer.disconnect();
+  }, [open, snapshotUrl]);
+
   const restoreViews = useCallback((next: CameraRayGroundCalibratedView[], record = true) => {
     setViews((current) => {
       if (record) {
@@ -1273,7 +1281,7 @@ export function CameraGroundMappingModal({
           </div>
         </section> : null}
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 12 }}>
           <section className="card" style={{ margin: 0, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0 }}>
             <div className="cardBody rowWrap" style={{ padding: 10, borderBottom: "1px solid var(--color-border-subtle)", justifyContent: "space-between" }}>
               <strong>1. Imagem atual</strong>
@@ -1347,7 +1355,7 @@ export function CameraGroundMappingModal({
           </section>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 230px), 1fr))", gap: 12 }}>
           <section className="card" style={{ margin: 0 }}>
             <div className="cardBody" style={{ display: "flex", flexDirection: "column", gap: 8, padding: 12 }}>
               <strong>Vista</strong>

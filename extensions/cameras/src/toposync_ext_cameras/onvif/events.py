@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from .client import (
@@ -855,10 +855,14 @@ class OnvifEventsClient:
         url = str(subscription_xaddr or "").strip()
         if not url:
             raise OnvifError("Missing ONVIF PullPoint subscription URL")
+        wait_seconds = max(0.1, min(30.0, float(timeout_s)))
+        # Long polling may legitimately return only after the advertised wait.
+        # Keep the larger transport budget local to this request, including auth fallbacks.
+        pull_client = replace(self._client, timeout_s=max(self._client.timeout_s, wait_seconds + 2.0))
         payload, ns = await _call_event_operation(
-            self._client,
+            pull_client,
             url=url,
-            body_xml=_tev_pull_messages_body(timeout_s=timeout_s, message_limit=message_limit),
+            body_xml=_tev_pull_messages_body(timeout_s=wait_seconds, message_limit=message_limit),
             soap_action=_action(TEV_NS, "PullMessages"),
             operation="PullMessages",
         )

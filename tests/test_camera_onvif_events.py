@@ -4,6 +4,7 @@ import asyncio
 from importlib.metadata import EntryPoint
 from pathlib import Path
 from typing import Any
+import xml.etree.ElementTree as ET
 
 from fastapi.testclient import TestClient
 import pytest
@@ -26,6 +27,7 @@ from toposync_ext_cameras.onvif.events import (
     parse_pull_messages,
 )
 from toposync_ext_cameras.onvif import OnvifClient, OnvifError, OnvifEventsClient
+import toposync_ext_cameras.onvif.events as events_module
 from toposync_ext_cameras.pipelines.operators import (
     OnvifEventSourceRuntime,
     OnvifStateGateRuntime,
@@ -157,6 +159,58 @@ def test_onvif_events_client_falls_back_to_common_event_xaddr(monkeypatch: pytes
 
     assert asyncio.run(scenario()) == "http://192.168.0.64:8000/onvif/event_service"
     assert calls == ["http://192.168.0.64:8000/onvif/event_service"]
+
+
+@pytest.mark.parametrize("http_auth", [False, True])
+@pytest.mark.parametrize("transport_timeout,pull_timeout", [(3.5, 5), (3.5, 60), (40, 5)])
+def test_pull_messages_allows_the_announced_wait_without_changing_other_operations(
+    monkeypatch: pytest.MonkeyPatch, http_auth: bool,
+    transport_timeout: float, pull_timeout: float,
+) -> None:
+    from toposync_ext_cameras.onvif import client as client_module
+
+    observed: list[tuple[str, float]] = []
+
+    def reply(*, body: bytes, timeout_s: float, **kwargs: Any) -> bytes:
+        root = ET.fromstring(body)
+        timeout = root.find(f".//{{{events_module.TEV_NS}}}Timeout")
+        if timeout is not None:
+            advertised_wait = float(str(timeout.text)[2:-1])
+            observed.append(("pull", timeout_s))
+            # A quiet camera may use the entire advertised long-poll interval.
+            if timeout_s <= advertised_wait:
+                raise TimeoutError("response arrives after the transport deadline")
+            response_name = "PullMessagesResponse"
+        else:
+            observed.append(("unsubscribe", timeout_s))
+            response_name = "UnsubscribeResponse"
+        return (
+            f'<s:Envelope xmlns:s="{events_module.SOAP12_NS}"><s:Body>'
+            f'<{response_name}/></s:Body></s:Envelope>'
+        ).encode()
+
+    async def direct_reply(**kwargs: Any) -> bytes:
+        if http_auth:
+            raise OnvifError("HTTP authentication required")
+        return reply(**kwargs)
+
+    monkeypatch.setattr(client_module, "_http_post_soap", direct_reply)
+    monkeypatch.setattr(events_module, "_http_post_soap_http_auth_sync", reply)
+    client = OnvifClient(
+        xaddr="http://camera/onvif", username="test", password="test",
+        timeout_s=transport_timeout,
+    )
+    events_client = OnvifEventsClient(client)
+
+    async def scenario() -> None:
+        assert await events_client.pull_messages("http://camera/subscription", timeout_s=pull_timeout) == []
+        await events_client.unsubscribe("http://camera/subscription")
+
+    asyncio.run(scenario())
+    assert len([entry for entry in observed if entry[0] == "pull"]) == 1
+    assert observed[0][1] >= transport_timeout
+    assert observed[-1] == ("unsubscribe", transport_timeout)
+    assert client.timeout_s == transport_timeout
 
 
 def test_onvif_event_state_manager_tracks_boolean_state() -> None:

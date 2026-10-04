@@ -213,6 +213,53 @@ def test_pull_messages_allows_the_announced_wait_without_changing_other_operatio
     assert client.timeout_s == transport_timeout
 
 
+def test_event_transport_reuses_verified_mode_and_renegotiates_after_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from toposync_ext_cameras.onvif import client as client_module
+
+    calls: list[str] = []
+    require_addressing = True
+
+    async def reject_direct(**kwargs: Any) -> bytes:
+        calls.append("soap")
+        raise OnvifError("HTTP authentication required")
+
+    def http_reply(*, body: bytes, **kwargs: Any) -> bytes:
+        addressed = ET.fromstring(body).find(f".//{{{events_module.WSA_NS}}}Action") is not None
+        calls.append("http_addressed" if addressed else "http")
+        if addressed != require_addressing:
+            raise OnvifError("transport changed")
+        return (
+            f'<s:Envelope xmlns:s="{events_module.SOAP12_NS}"><s:Body>'
+            '<PullMessagesResponse/></s:Body></s:Envelope>'
+        ).encode()
+
+    monkeypatch.setattr(client_module, "_http_post_soap", reject_direct)
+    monkeypatch.setattr(events_module, "_http_post_soap_http_auth_sync", http_reply)
+    client = OnvifEventsClient(OnvifClient(xaddr="http://camera/onvif", username="test"))
+
+    async def scenario() -> None:
+        nonlocal require_addressing
+        await client.pull_messages("http://camera/subscription")
+        assert len(calls) > 1
+        calls.clear()
+        await client.pull_messages("http://camera/subscription")
+        assert calls == ["http_addressed"]
+        calls.clear()
+        await client.pull_messages("http://camera/another-subscription")
+        assert len(calls) > 1  # Never assume another endpoint accepts the cached transport.
+        require_addressing = False
+        calls.clear()
+        await client.pull_messages("http://camera/subscription")
+        assert calls[0] == "http_addressed" and calls[-1] == "http"
+        calls.clear()
+        await client.pull_messages("http://camera/subscription")
+        assert calls == ["http"]
+
+    asyncio.run(scenario())
+
+
 def test_onvif_event_state_manager_tracks_boolean_state() -> None:
     descriptor = OnvifEventDescriptor(
         topic="RuleEngine/CellMotionDetector/Motion",

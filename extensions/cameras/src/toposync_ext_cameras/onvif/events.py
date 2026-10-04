@@ -541,60 +541,49 @@ async def _call_event_operation(
     body_xml: str,
     soap_action: str,
     operation: str,
+    transport_cache: dict[tuple[str, str], tuple[str, str, str]] | None = None,
 ) -> tuple[bytes, str]:
     last_error: Exception | None = None
-    for version, ns in (("1.2", SOAP12_NS), ("1.1", SOAP11_NS)):
-        for auth in client._auth_attempts():  # noqa: SLF001
-            try:
+    attempts = [(version, auth, "soap") for version in ("1.2", "1.1")
+                for auth in client._auth_attempts()]  # noqa: SLF001
+    if str(client.username or "").strip() or str(client.password or "").strip():
+        attempts.extend((version, auth, transport) for transport in ("http", "http_addressed")
+                        for version in ("1.2", "1.1") for auth in ("none", "digest", "text"))
+    key = (url, operation)
+    cached = transport_cache.get(key) if transport_cache is not None else None
+    if cached in attempts:
+        attempts.remove(cached)
+        attempts.insert(0, cached)
+    for version, auth, transport in attempts:
+        ns = SOAP12_NS if version == "1.2" else SOAP11_NS
+        try:
+            if transport == "soap":
                 payload = await client._call(  # noqa: SLF001
                     url=url,
                     body_xml=body_xml,
                     soap_action=soap_action,
                     soap_ns=ns,
                     soap_version=version,  # type: ignore[arg-type]
-                    auth=auth,
+                    auth=auth,  # type: ignore[arg-type]
                 )
-                root = _parse_xml(payload)
-                _raise_if_fault(root, soap_ns=ns)
-                return payload, ns
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-    if str(client.username or "").strip() or str(client.password or "").strip():
-        for version, ns in (("1.2", SOAP12_NS), ("1.1", SOAP11_NS)):
-            for envelope_auth in ("none", "digest", "text"):
-                try:
-                    payload = await _call_with_http_auth(
-                        client,
-                        url=url,
-                        body_xml=body_xml,
-                        soap_action=soap_action,
-                        soap_ns=ns,
-                        soap_version=version,  # type: ignore[arg-type]
-                        envelope_auth=envelope_auth,  # type: ignore[arg-type]
-                    )
-                    root = _parse_xml(payload)
-                    _raise_if_fault(root, soap_ns=ns)
-                    return payload, ns
-                except Exception as exc:  # noqa: BLE001
-                    last_error = exc
-        for version, ns in (("1.2", SOAP12_NS), ("1.1", SOAP11_NS)):
-            for envelope_auth in ("none", "digest", "text"):
-                try:
-                    payload = await _call_with_http_auth(
-                        client,
-                        url=url,
-                        body_xml=body_xml,
-                        soap_action=soap_action,
-                        soap_ns=ns,
-                        soap_version=version,  # type: ignore[arg-type]
-                        envelope_auth=envelope_auth,  # type: ignore[arg-type]
-                        wsa_action=_wsa_action_for_operation(operation, soap_action),
-                    )
-                    root = _parse_xml(payload)
-                    _raise_if_fault(root, soap_ns=ns)
-                    return payload, ns
-                except Exception as exc:  # noqa: BLE001
-                    last_error = exc
+            else:
+                payload = await _call_with_http_auth(
+                    client, url=url, body_xml=body_xml, soap_action=soap_action,
+                    soap_ns=ns, soap_version=version, envelope_auth=auth,
+                    wsa_action=_wsa_action_for_operation(operation, soap_action) if transport == "http_addressed" else "",
+                )
+            root = _parse_xml(payload)
+            _raise_if_fault(root, soap_ns=ns)
+            if transport_cache is not None:
+                # A client can visit multiple subscription URLs; retain only bounded preferences.
+                if key not in transport_cache and len(transport_cache) >= 32:
+                    transport_cache.pop(next(iter(transport_cache)))
+                transport_cache[key] = (version, auth, transport)
+            return payload, ns
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if transport_cache is not None:
+                transport_cache.pop(key, None)
     raise OnvifError(str(last_error) if last_error else f"ONVIF {operation} failed")
 
 
@@ -743,6 +732,7 @@ def _wrap_event_envelope(
 class OnvifEventsClient:
     def __init__(self, client: OnvifClient) -> None:
         self._client = client
+        self._transport_cache: dict[tuple[str, str], tuple[str, str, str]] = {}
 
     async def get_services(self) -> list[OnvifService]:
         url = self._client.xaddr
@@ -754,6 +744,7 @@ class OnvifEventsClient:
             body_xml=_tds_get_services_body(),
             soap_action=_action(TDS_NS, "GetServices"),
             operation="GetServices",
+            transport_cache=self._transport_cache,
         )
         return parse_onvif_services(payload, soap_ns=ns)
 
@@ -812,6 +803,7 @@ class OnvifEventsClient:
             body_xml=_tev_get_event_properties_body(),
             soap_action=_action(TEV_NS, "GetEventProperties"),
             operation="GetEventProperties",
+            transport_cache=self._transport_cache,
         )
         return parse_get_event_properties(payload, soap_ns=ns)
 
@@ -830,6 +822,7 @@ class OnvifEventsClient:
             body_xml=_tev_create_pull_point_subscription_body(termination_time),
             soap_action=_action(TEV_NS, "CreatePullPointSubscription"),
             operation="CreatePullPointSubscription",
+            transport_cache=self._transport_cache,
         )
         return _parse_subscription(payload, soap_ns=ns)
 
@@ -843,6 +836,7 @@ class OnvifEventsClient:
             body_xml=_tev_set_synchronization_point_body(),
             soap_action=_action(TEV_NS, "SetSynchronizationPoint"),
             operation="SetSynchronizationPoint",
+            transport_cache=self._transport_cache,
         )
 
     async def pull_messages(
@@ -865,6 +859,7 @@ class OnvifEventsClient:
             body_xml=_tev_pull_messages_body(timeout_s=wait_seconds, message_limit=message_limit),
             soap_action=_action(TEV_NS, "PullMessages"),
             operation="PullMessages",
+            transport_cache=self._transport_cache,
         )
         return parse_pull_messages(payload, soap_ns=ns)
 
@@ -878,6 +873,7 @@ class OnvifEventsClient:
             body_xml=_wsnt_renew_body(termination_time),
             soap_action=f"{WSNT_NS}/Renew",
             operation="Renew",
+            transport_cache=self._transport_cache,
         )
 
     async def unsubscribe(self, subscription_xaddr: str) -> None:
@@ -890,6 +886,7 @@ class OnvifEventsClient:
             body_xml=_wsnt_unsubscribe_body(),
             soap_action=f"{WSNT_NS}/Unsubscribe",
             operation="Unsubscribe",
+            transport_cache=self._transport_cache,
         )
 
 

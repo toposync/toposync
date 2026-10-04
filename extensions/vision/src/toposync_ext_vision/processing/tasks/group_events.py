@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
@@ -235,7 +235,12 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         self._last_packet_by_source_stream: dict[str, Packet] = {}
 
     async def shutdown(self) -> None:
-        return None
+        self._groups_by_id.clear()
+        self._group_ids_by_source_stream.clear()
+        self._group_id_by_member_key.clear()
+        self._next_group_number_by_source_stream.clear()
+        self._last_packet_by_source_stream.clear()
+        self._lifecycle_epoch = uuid.uuid4().hex
 
     def _idle_flush_packet(self, packet: Packet) -> Packet:
         payload = dict(packet.payload)
@@ -265,6 +270,9 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                     packet_ts=None,
                 )
             )
+            if not self._group_ids_by_source_stream.get(source_stream_id):
+                self._last_packet_by_source_stream.pop(source_stream_id, None)
+                self._group_ids_by_source_stream.pop(source_stream_id, None)
         return outputs
 
     async def run(self, context) -> None:  # noqa: ANN001
@@ -867,7 +875,8 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         packet_ts_value = _packet_ts_seconds(packet)
         packet_ts = packet_ts_value if math.isfinite(packet_ts_value) else None
         source_stream_id = self._source_stream_id(packet)
-        self._last_packet_by_source_stream[source_stream_id] = packet
+        # Expiração usa metadados; conservar a imagem aqui prolongaria sua retenção.
+        self._last_packet_by_source_stream[source_stream_id] = replace(packet, artifacts={})
         outputs = self._close_expired_groups(
             packet,
             source_stream_id=source_stream_id,

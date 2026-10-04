@@ -312,3 +312,76 @@ def test_group_existing_frame_without_private_field_remains_compatible():
         assert result.payload["subject"]["members"][0]["event_id"] == value.payload["subject"]["id"]
 
     asyncio.run(scenario())
+
+
+def test_group_timers_release_images_and_forget_expired_sources(monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    import weakref
+
+    import numpy as np
+
+    from toposync.runtime.pipelines import Artifact
+    from toposync_ext_vision.processing.tasks import group_events
+
+    clock = [100.0]
+    monkeypatch.setattr(
+        group_events, "time", SimpleNamespace(monotonic=lambda: clock[0], time=lambda: clock[0])
+    )
+
+    async def scenario():
+        runtime = _runtime({"mode": "session", "idle_timeout_seconds": 1.0})
+        identifiers = []
+        for index, source in enumerate(("camera:first", "camera:second")):
+            clock[0] = 100.0 + index * 0.5
+            frame = np.full((24, 32, 3), 127, dtype=np.uint8)
+            reference = weakref.ref(frame)
+            packet = _event_packet(clock[0], str(index))
+            packet = replace(
+                packet,
+                payload={**packet.payload, "source_stream_id": source},
+                artifacts={"main": Artifact("main", frame, mime_type="image/raw", private=True)},
+            )
+            delivered = await runtime.process_packet(packet, None)
+            identifiers.append(delivered[0].payload["subject"]["id"])
+            assert not delivered[0].artifacts
+            del delivered, packet, frame
+            assert reference() is None
+
+        clock[0] = 101.1
+        closed = await runtime._flush_idle_groups(None)
+        assert [packet.payload["subject"]["id"] for packet in closed] == identifiers[:1]
+        assert closed[0].lifecycle == Lifecycle.CLOSE and not closed[0].artifacts
+        assert set(runtime._last_packet_by_source_stream) == {"camera:second"}
+
+        clock[0] = 101.6
+        closed = await runtime._flush_idle_groups(None)
+        assert [packet.payload["subject"]["id"] for packet in closed] == identifiers[1:]
+        assert closed[0].lifecycle == Lifecycle.CLOSE and not closed[0].artifacts
+        assert not runtime._last_packet_by_source_stream
+        assert await runtime._flush_idle_groups(None) == []
+
+    asyncio.run(scenario())
+
+
+def test_group_shutdown_discards_pending_closes_without_reusing_identity(monkeypatch):
+    from types import SimpleNamespace
+
+    from toposync_ext_vision.processing.tasks import group_events
+
+    clock = [100.0]
+    monkeypatch.setattr(
+        group_events, "time", SimpleNamespace(monotonic=lambda: clock[0], time=lambda: clock[0])
+    )
+
+    async def scenario():
+        runtime = _runtime({"mode": "session", "idle_timeout_seconds": 1.0})
+        first = (await runtime.process_packet(_event_packet(100.0, "1"), None))[0]
+        await runtime.shutdown()
+        clock[0] = 200.0
+        assert await runtime._flush_idle_groups(None) == []
+        reopened = (await runtime.process_packet(_event_packet(200.0, "1"), None))[0]
+        assert reopened.lifecycle == Lifecycle.OPEN
+        assert reopened.payload["subject"]["id"] != first.payload["subject"]["id"]
+
+    asyncio.run(scenario())

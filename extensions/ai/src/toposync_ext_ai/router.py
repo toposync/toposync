@@ -22,6 +22,7 @@ from .providers import (
 )
 from .settings import AiExtensionSettings, AiProfileConfig, AiProviderConfig, parse_ai_settings
 from .usage import AiUsageLimiter
+from .jev import evaluate_event_text
 
 
 class AiRouter:
@@ -64,6 +65,12 @@ class AiRouter:
             else:
                 merged[key] = value
         return await self.replace_settings(merged)
+
+    async def evaluate_event_text(self, text: str, *, remote_authorized: bool = False) -> dict:
+        settings = await self.settings()
+        return await evaluate_event_text(
+            text, remote_authorized=remote_authorized, connection=settings.jev,
+        )
 
     async def locate_region(
         self,

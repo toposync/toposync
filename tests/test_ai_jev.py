@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from toposync_ext_ai import jev
+from toposync_ext_ai.settings import OllayaConnectionSettings, parse_ai_settings
 
 
 def response_body():
@@ -31,6 +32,98 @@ def setup_transport(monkeypatch, handler):
     monkeypatch.setattr(jev.httpx, "AsyncClient", lambda **kwargs: original(
         transport=httpx.MockTransport(handler), **kwargs,
     ))
+
+
+@pytest.mark.parametrize("url", [
+    "https://example.invalid", "http://localhost:11435", "http://127.0.0.2:11435",
+    "http://secret@127.0.0.1:11435", "http://127.0.0.1:11435/api",
+    "http://127.0.0.1:11435/?secret=value", "http://127.0.0.1:11435/#fragment",
+    "http://127.0.0.1:0", "http://127.0.0.1:70000", "http://127.0.0.1:\n11435",
+])
+def test_saved_jev_connection_rejects_nonlocal_or_ambiguous_endpoints(url):
+    with pytest.raises(ValueError):
+        OllayaConnectionSettings(url=url)
+
+
+@pytest.mark.parametrize("model", ["laya", "laya:", ":multilingual", "laya:tag/path", "laya:tag\n"])
+def test_saved_jev_connection_requires_an_exact_model_tag(model):
+    with pytest.raises(ValueError):
+        OllayaConnectionSettings(model=model)
+
+
+def test_jev_settings_have_no_implicit_activation_or_secret_field():
+    assert parse_ai_settings({}).jev is None
+    assert OllayaConnectionSettings().enabled is False
+    assert OllayaConnectionSettings(url="http://[::1]:11435/").url == "http://[::1]:11435"
+    with pytest.raises(ValueError):
+        OllayaConnectionSettings(api_key="synthetic-secret")
+
+
+def test_saved_jev_connection_overrides_environment_and_survives_reopening(tmp_path, monkeypatch):
+    from toposync.runtime.config_store import ConfigStore, UserDataPaths
+    from toposync_ext_ai.router import AiRouter
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert str(request.url) == "http://127.0.0.1:11435/v1/systemone"
+        assert "authorization" not in request.headers
+        body = response_body()
+        body["model"] = "laya:multilingual"
+        return httpx.Response(200, json=body)
+
+    setup_transport(monkeypatch, handler)
+    monkeypatch.setenv("TOPOSYNC_OLLAYA_URL", "https://remote.invalid")
+    paths = UserDataPaths(data_dir=tmp_path, config_path=tmp_path / "config.json", files_dir=tmp_path / "files")
+
+    async def scenario():
+        router = AiRouter(config_store=ConfigStore(paths=paths))
+        await router.replace_settings({"jev": {"enabled": True}})
+        assert calls == []  # Saving does not connect or evaluate.
+        reopened = AiRouter(config_store=ConfigStore(paths=paths))
+        result = await reopened.evaluate_event_text("Synthetic connection example.")
+        assert result["status"] == "evaluated" and result["backend"] == "ollaya"
+        assert result["review_required"] is True
+        assert len(calls) == 1
+        await reopened.patch_settings({"jev": {"enabled": False}})
+        disabled = AiRouter(config_store=ConfigStore(paths=paths))
+        assert (await disabled.evaluate_event_text("example", remote_authorized=True))["reason"] == "disabled"
+        assert len(calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_jev_extension_validates_host_saves_and_binds_persisted_settings(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from toposync.runtime.config_store import AppSettings, ConfigStore, UserDataPaths
+    from toposync.runtime.event_bus import EventBus
+    from toposync.runtime.services import ServiceRegistry
+    from toposync_ext_ai.constants import EXTENSION_ID
+    from toposync_ext_ai.plugin import AiExtension
+
+    calls = []
+    setup_transport(monkeypatch, lambda request: calls.append(request))
+    paths = UserDataPaths(data_dir=tmp_path, config_path=tmp_path / "config.json", files_dir=tmp_path / "files")
+
+    async def scenario():
+        store = ConfigStore(paths=paths)
+        app = FastAPI()
+        app.state.config_store = store
+        services = ServiceRegistry()
+        await AiExtension().setup(app, bus=EventBus(), services=services)
+        await store.patch_extension_settings(EXTENSION_ID, {"jev": {"enabled": False}})
+        saved = paths.config_path.read_bytes()
+        with pytest.raises(ValueError):
+            await store.patch_extension_settings(EXTENSION_ID, {"jev": {"url": "https://remote.invalid"}})
+        with pytest.raises(ValueError):
+            await store.replace_settings(AppSettings(extensions={EXTENSION_ID: {"jev": {"model": "untagged"}}}))
+        assert paths.config_path.read_bytes() == saved
+        result = await services.call("ai.jev.evaluate_event_text", text="synthetic example", remote_authorized=True)
+        assert result["reason"] == "disabled"
+        assert calls == []
+
+    asyncio.run(scenario())
 
 
 def test_jev_requires_both_enablement_and_specific_authorization(monkeypatch):

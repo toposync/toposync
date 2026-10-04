@@ -16,12 +16,12 @@ from .assistant import install_assistant_routes
 from .text_embeddings import install_text_history_routes
 from .history_answer import install_history_answer_routes
 from .transcription_review import install_transcription_review_routes
-from .jev import evaluate_event_text
+from .constants import EXTENSION_ID
 from .catalog import list_builtin_model_catalog
 from .pipelines import register_ai_pipeline_operators
 from .providers import decode_image_base64
 from .router import AiRouter, provider_error_payload
-from .settings import parse_ai_settings
+from .settings import parse_ai_settings, validate_ai_settings_patch
 
 
 class OllamaPullRequest(BaseModel):
@@ -70,6 +70,9 @@ class AiExtension(BaseExtension):
             register_ai_pipeline_operators(registry)
 
         config_store = getattr(app.state, "config_store", None)
+        register_filter = getattr(config_store, "register_extension_settings_patch_filter", None)
+        if callable(register_filter):
+            register_filter(EXTENSION_ID, validate_ai_settings_patch)
         data_dir = getattr(getattr(config_store, "paths", None), "data_dir", None)
         router = AiRouter(config_store=config_store, data_dir=data_dir)
 
@@ -81,7 +84,7 @@ class AiExtension(BaseExtension):
             install_text_history_routes(app, services)
             install_history_answer_routes(app, services, router)
             install_transcription_review_routes(app, router)
-        services.register("ai.jev.evaluate_event_text", evaluate_event_text)
+        services.register("ai.jev.evaluate_event_text", router.evaluate_event_text)
 
         services.register("ai.catalog.list", lambda: list_builtin_model_catalog())
         services.register("ai.settings.get", router.settings)

@@ -17,6 +17,8 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from .settings import OllayaConnectionSettings
+
 MODEL = "jev-1.13.0"
 OPTIONS = {
     "factual_observation": "A description of an observable event, without attributed speech.",
@@ -57,12 +59,16 @@ class EvaluationResponse(BaseModel):
     usage: Usage
 
 
-async def evaluate_event_text(text: str, *, remote_authorized: bool = False) -> dict:
+async def evaluate_event_text(
+    text: str, *, remote_authorized: bool = False,
+    connection: OllayaConnectionSettings | None = None,
+) -> dict:
     """Fail closed to local human review, without forwarding secrets or errors."""
     fallback = {"status": "unavailable", "review_required": True, "evaluation": None}
-    if os.environ.get("TOPOSYNC_JEV_ENABLED") != "1":
+    enabled = connection.enabled if connection is not None else os.environ.get("TOPOSYNC_JEV_ENABLED") == "1"
+    if not enabled:
         return {**fallback, "reason": "disabled"}
-    backend = os.environ.get("TOPOSYNC_JEV_BACKEND", "typesafe")
+    backend = "ollaya" if connection is not None else os.environ.get("TOPOSYNC_JEV_BACKEND", "typesafe")
     if backend not in {"typesafe", "ollaya"}:
         return {**fallback, "reason": "invalid_backend"}
     if backend == "typesafe" and remote_authorized is not True:
@@ -78,7 +84,7 @@ async def evaluate_event_text(text: str, *, remote_authorized: bool = False) -> 
     model = MODEL
     endpoint = "https://api.typesafe.ai/v1/systemone"
     if backend == "ollaya":
-        host = os.environ.get("TOPOSYNC_OLLAYA_URL", "http://127.0.0.1:11435")
+        host = connection.url if connection is not None else os.environ.get("TOPOSYNC_OLLAYA_URL", "http://127.0.0.1:11435")
         try:
             url = urlsplit(host)
             if (url.scheme not in {"http", "https"}
@@ -88,7 +94,7 @@ async def evaluate_event_text(text: str, *, remote_authorized: bool = False) -> 
                 raise ValueError("invalid local endpoint")
         except ValueError:
             return {**fallback, "reason": "loopback_provider_required"}
-        model = os.environ.get("TOPOSYNC_OLLAYA_MODEL", "laya:multilingual")
+        model = connection.model if connection is not None else os.environ.get("TOPOSYNC_OLLAYA_MODEL", "laya:multilingual")
         # Exigir nome e tag explícitos evita roteamento implícito para outro modelo.
         if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*", model):
             return {**fallback, "reason": "invalid_model"}

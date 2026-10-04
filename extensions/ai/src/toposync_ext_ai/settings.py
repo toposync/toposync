@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -91,6 +92,39 @@ class AiLimitSettings(BaseModel):
     requests_per_month: int | None = Field(default=None, ge=1)
 
 
+class OllayaConnectionSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    enabled: bool = False
+    url: str = Field(default="http://127.0.0.1:11435", max_length=2048)
+    model: str = Field(
+        default="laya:multilingual", max_length=256,
+        pattern=r"^[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$",
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _local_endpoint(cls, value: str) -> str:
+        if any(character.isspace() or ord(character) < 32 for character in value):
+            raise ValueError("loopback_provider_required")
+        url = urlsplit(value)
+        if (url.scheme not in {"http", "https"}
+                or url.hostname not in {"127.0.0.1", "::1"}
+                or url.username or url.password or url.query or url.fragment
+                or url.path not in {"", "/"} or url.port == 0):
+            raise ValueError("loopback_provider_required")
+        return value.rstrip("/")
+
+
+def validate_ai_settings_patch(
+    _current: dict[str, Any], proposed: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate the local connection on the host's shared settings save path."""
+    if proposed.get("jev") is not None:
+        proposed["jev"] = OllayaConnectionSettings.model_validate(proposed["jev"]).model_dump()
+    return proposed
+
+
 class AiExtensionSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -99,6 +133,8 @@ class AiExtensionSettings(BaseModel):
     profiles: list[AiProfileConfig] = Field(default_factory=list)
     limits: AiLimitSettings = Field(default_factory=AiLimitSettings)
     model_catalog_version: str = "builtin-2026-05-02"
+    # Absence preserves process configuration; a saved disabled connection wins.
+    jev: OllayaConnectionSettings | None = None
 
     @field_validator("default_profile_id", mode="before")
     @classmethod

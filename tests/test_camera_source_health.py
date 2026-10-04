@@ -115,6 +115,82 @@ def test_camera_source_health_classifies_unauthorized_and_redacts_sensitive_erro
     assert redacted == "[REDACTED]"
 
 
+@pytest.mark.parametrize("metrics", [None, {}])
+def test_camera_source_health_partial_tick_preserves_observed_metrics(metrics) -> None:
+    now = {"value": 100.0}
+    store = CameraSourceHealthStore(time_func=lambda: now["value"])
+    observed = store.record_frame(
+        source_id="shared-camera",
+        frame_ts=100.0,
+        metrics={
+            "backend": "ffmpeg", "opened": True, "fps": 24.8, "target_fps": 25,
+            "frames_captured": 123, "decode_failures": 2, "restarts": 1,
+        },
+    )
+
+    now["value"] = 101.0
+    tick = store.record_tick(source_id="shared-camera", status="starting", metrics=metrics)
+
+    for field in (
+        "backend", "opened", "capture_fps", "target_fps", "frames_captured",
+        "decode_failures", "restarts_total", "last_frame_at_unix",
+    ):
+        assert getattr(tick, field) == getattr(observed, field), field
+    assert tick.source_frame_age_seconds == 1.0
+    assert store.snapshot()["sources"][0]["status"] == "healthy"
+
+
+def test_camera_source_health_explicit_metrics_can_reset_observations() -> None:
+    store = CameraSourceHealthStore(time_func=lambda: 115.0)
+    store.record_tick(
+        source_id="restarted-camera",
+        metrics={
+            "backend": "ffmpeg", "opened": True, "fps": 24.8, "target_fps": 25,
+            "frames_captured": 123, "decode_failures": 2, "restarts": 1,
+            "last_frame_ts": 100.0, "last_error": "Connection refused",
+        },
+    )
+
+    reset = store.record_tick(
+        source_id="restarted-camera",
+        metrics={
+            "opened": False, "fps": None, "target_fps": None,
+            "frames_captured": 0, "decode_failures": 0, "restarts": 0,
+            "last_frame_ts": None, "last_error": None,
+        },
+    )
+
+    assert reset.backend == "ffmpeg"
+    assert reset.opened is False
+    assert reset.capture_fps is None and reset.target_fps is None
+    assert reset.frames_captured == reset.decode_failures == reset.restarts_total == 0
+    assert reset.last_frame_at_unix is None and reset.source_frame_age_seconds is None
+    assert reset.last_error is None
+    assert reset.status == "starting"
+
+
+def test_camera_source_health_snapshot_preserves_idle_until_capture_resumes() -> None:
+    now = {"value": 100.0}
+    store = CameraSourceHealthStore(time_func=lambda: now["value"])
+    store.record_frame(
+        source_id="released-camera", frame_ts=100.0,
+        metrics={"backend": "ffmpeg", "opened": True},
+    )
+    store.mark_shutdown(source_id="released-camera")
+
+    assert store.snapshot()["sources"][0]["status"] == "idle"
+    now["value"] = 115.0
+    assert store.snapshot()["sources"][0]["status"] == "idle"
+
+    starting = store.record_tick(
+        source_id="released-camera", status="starting",
+        metrics={"opened": True, "last_frame_ts": None},
+    )
+    assert starting.status == "starting"
+    store.record_frame(source_id="released-camera", frame_ts=115.0)
+    assert store.snapshot()["sources"][0]["status"] == "healthy"
+
+
 def test_camera_source_health_ignores_transient_decode_warning_when_frames_are_fresh() -> None:
     now = {"value": 200.13}
     store = CameraSourceHealthStore(

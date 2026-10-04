@@ -241,7 +241,11 @@ class CameraSourceHealthStore:
         source_filter = str(source_id or "").strip()
         records = []
         for record in self._records.values():
-            finalized = self._finalize_record(record, now_unix=now)
+            finalized = self._finalize_record(
+                record,
+                now_unix=now,
+                forced_status="idle" if record.status == "idle" else None,
+            )
             if camera_filter and finalized.camera_id != camera_filter:
                 continue
             if source_filter and finalized.source_id != source_filter:
@@ -354,22 +358,23 @@ def _record_from_metrics(
     metrics: dict[str, Any],
     now_unix: float,
 ) -> CameraSourceHealthRecord:
-    last_frame_at = _as_float(metrics.get("last_frame_ts"))
+    # Scheduling ticks can omit metrics. Only an explicit value resets an observation.
+    last_frame_at = _as_float(metrics.get("last_frame_ts", base.last_frame_at_unix))
     age = None
     if last_frame_at is not None and last_frame_at > 0.0:
         age = max(0.0, float(now_unix) - float(last_frame_at))
     return replace(
         base,
-        backend=_normalize_backend(metrics.get("backend")) or base.backend,
-        target_fps=_as_float(metrics.get("target_fps")),
-        opened=bool(metrics.get("opened")),
-        frames_captured=max(0, int(_as_float(metrics.get("frames_captured")) or base.frames_captured or 0)),
-        decode_failures=max(0, int(_as_float(metrics.get("decode_failures")) or base.decode_failures or 0)),
-        restarts_total=max(0, int(_as_float(metrics.get("restarts")) or base.restarts_total or 0)),
-        last_frame_at_unix=last_frame_at or base.last_frame_at_unix,
+        backend=_normalize_backend(metrics.get("backend", base.backend)),
+        target_fps=_as_float(metrics.get("target_fps", base.target_fps)),
+        opened=bool(metrics.get("opened", base.opened)),
+        frames_captured=max(0, int(_as_float(metrics.get("frames_captured", base.frames_captured)) or 0)),
+        decode_failures=max(0, int(_as_float(metrics.get("decode_failures", base.decode_failures)) or 0)),
+        restarts_total=max(0, int(_as_float(metrics.get("restarts", base.restarts_total)) or 0)),
+        last_frame_at_unix=last_frame_at,
         source_frame_age_seconds=age,
-        capture_fps=_as_float(metrics.get("fps")),
-        last_error=sanitize_source_error(metrics.get("last_error")) or base.last_error,
+        capture_fps=_as_float(metrics.get("fps", base.capture_fps)),
+        last_error=sanitize_source_error(metrics.get("last_error", base.last_error)),
     )
 
 

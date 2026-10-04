@@ -192,6 +192,10 @@ select:focus-visible {
   -webkit-backdrop-filter: blur(var(--topo-frost-blur)) saturate(140%);
 }
 
+.navbar-sidebar {
+  background: var(--topo-surface);
+}
+
 .navbar__brand {
   font-weight: 800;
   letter-spacing: -0.03em;

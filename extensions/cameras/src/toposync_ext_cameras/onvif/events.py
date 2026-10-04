@@ -34,6 +34,8 @@ WSA_NS = "http://www.w3.org/2005/08/addressing"
 WSA_2004_NS = "http://schemas.xmlsoap.org/ws/2004/08/addressing"
 WSNT_NS = "http://docs.oasis-open.org/wsn/b-2"
 WSTOP_NS = "http://docs.oasis-open.org/wsn/t-1"
+# Source operators may poll every 60 seconds; allow two intervals before releasing.
+_WATCH_IDLE_SECONDS = 120.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +176,7 @@ class _CameraEventRuntime:
     error: str = ""
     descriptors_loaded_at_ts: float = 0.0
     started: bool = False
+    last_consumer_monotonic: float = 0.0
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task[None] | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -1037,6 +1040,7 @@ class OnvifEventStateManager:
 
     async def _ensure_watch(self, runtime: _CameraEventRuntime) -> None:
         await self._ensure_descriptors(runtime)
+        runtime.last_consumer_monotonic = time.monotonic()
         if runtime.started and runtime.task is not None and not runtime.task.done():
             return
         async with runtime.lock:
@@ -1074,8 +1078,11 @@ class OnvifEventStateManager:
                 return descriptor
         return None
 
+    def _watch_has_demand(self, runtime: _CameraEventRuntime) -> bool:
+        return time.monotonic() - runtime.last_consumer_monotonic < _WATCH_IDLE_SECONDS
+
     async def _pull_loop(self, runtime: _CameraEventRuntime) -> None:
-        while not runtime.stop_event.is_set():
+        while not runtime.stop_event.is_set() and self._watch_has_demand(runtime):
             subscription_xaddr = ""
             try:
                 events_client = self._events_client(runtime.context)
@@ -1088,7 +1095,7 @@ class OnvifEventStateManager:
                 runtime.available = True
                 runtime.error = ""
                 last_renew_ts = time.time()
-                while not runtime.stop_event.is_set():
+                while not runtime.stop_event.is_set() and self._watch_has_demand(runtime):
                     now = time.time()
                     if (now - last_renew_ts) >= 240.0:
                         with contextlib.suppress(Exception):
@@ -1107,6 +1114,8 @@ class OnvifEventStateManager:
                 runtime.error = f"{exc.__class__.__name__}: {exc}"
                 await self._sleep_or_stop(runtime, self._reconnect_backoff_s)
             finally:
+                # A new subscription must synchronize before old boolean state can be used.
+                runtime.states.clear()
                 if subscription_xaddr:
                     with contextlib.suppress(Exception):
                         await self._events_client(runtime.context).unsubscribe(subscription_xaddr)

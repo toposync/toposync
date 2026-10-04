@@ -685,7 +685,8 @@ function CameraEditor({
           </button>
         </div>
         <button
-          className="secondaryButton"
+          className="chipButton"
+          style={{ minHeight: 44, whiteSpace: "normal" }}
           type="button"
           disabled={!selectedCameraId}
           onClick={() => setIsGroundMappingOpen(true)}

@@ -262,6 +262,9 @@ for (const [input, width] of [["keyboard", 1280], ["touch", 390]]) {
       const editor = page.getByRole("dialog", { name: "Edit: Câmera simulada", exact: true });
       await expect(editor).toBeVisible();
       const calibrate = editor.getByRole("button", { name: "Calibrate ground and metric geometry", exact: true });
+      const target = await calibrate.boundingBox();
+      expect(target.height).toBeGreaterThanOrEqual(44);
+      expect(await editor.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
       await page.screenshot({ path: testInfo.outputPath("camera-editor.png") });
       await activate(calibrate);
       const ground = page.getByRole("dialog", { name: "Mapear câmera", exact: true });

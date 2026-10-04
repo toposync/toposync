@@ -85,16 +85,13 @@ class _DeviceRuntime:
     settle_deadline: float = 0.0
     focused_since: float | None = None
     focused_started_monotonic: float | None = None
-    grace_until: float | None = None
     grace_deadline_monotonic: float | None = None
-    cooldown_until: float | None = None
     cooldown_deadline_monotonic: float | None = None
     last_heartbeat_at: float | None = None
     movement_times: deque[float] = field(default_factory=deque)
     session_id: str = ""
     fault: str = ""
     last_rate_limit_key: str = ""
-    returning_to_paused: bool = False
     recovery_required: bool = False
 
 
@@ -553,9 +550,7 @@ class PtzAttentionController:
             runtime.events.clear()
             runtime.active_key = ""
             runtime.candidate_key = ""
-            runtime.grace_until = None
             runtime.grace_deadline_monotonic = None
-            runtime.cooldown_until = None
             runtime.cooldown_deadline_monotonic = None
             if released:
                 runtime.fault = ""
@@ -588,9 +583,7 @@ class PtzAttentionController:
             runtime.events.clear()
             runtime.active_key = ""
             runtime.candidate_key = ""
-            runtime.grace_until = None
             runtime.grace_deadline_monotonic = None
-            runtime.cooldown_until = None
             runtime.cooldown_deadline_monotonic = None
             runtime.fault = ""
             self._clear_command(runtime)
@@ -620,9 +613,7 @@ class PtzAttentionController:
             runtime.events.clear()
             runtime.active_key = ""
             runtime.candidate_key = ""
-            runtime.grace_until = None
             runtime.grace_deadline_monotonic = None
-            runtime.returning_to_paused = profile.mode == "paused"
             runtime.fault = ""
             return await self._begin_return(
                 profile,
@@ -967,7 +958,6 @@ class PtzAttentionController:
             if replacement is not None:
                 old_key = runtime.active_key
                 runtime.active_key = replacement.intent.key
-                runtime.grace_until = None
                 runtime.grace_deadline_monotonic = None
                 self._set_state(runtime, "FOCUSED", now)
                 self._record(
@@ -994,11 +984,6 @@ class PtzAttentionController:
                             if active.intent.hold_after_close_seconds is not None
                             else profile.close_grace_seconds
                         ),
-                    )
-                    runtime.grace_until = self._public_deadline(
-                        runtime.grace_deadline_monotonic,
-                        monotonic_now=now,
-                        wall_now=self._clock(),
                     )
                     self._set_state(runtime, "GRACE", now)
                     self._record(
@@ -1094,7 +1079,6 @@ class PtzAttentionController:
                 runtime.candidate_key = best.intent.key
                 self._set_state(runtime, "IDLE", now)
                 return
-            runtime.cooldown_until = None
             runtime.cooldown_deadline_monotonic = None
             runtime.candidate_key = best.intent.key
             if runtime.state != "CANDIDATE":
@@ -1187,7 +1171,6 @@ class PtzAttentionController:
         self._end_session(runtime, outcome="preempted" if previous is not None else "replaced")
         runtime.active_key = tracked.intent.key
         runtime.candidate_key = ""
-        runtime.grace_until = None
         runtime.grace_deadline_monotonic = None
         runtime.focused_since = None
         runtime.focused_started_monotonic = None
@@ -1294,7 +1277,6 @@ class PtzAttentionController:
         runtime.candidate_key = ""
         runtime.focused_since = None
         runtime.focused_started_monotonic = None
-        runtime.grace_until = None
         runtime.grace_deadline_monotonic = None
         mode = effective_mode(profile)
         if mode == "disabled":
@@ -1491,7 +1473,6 @@ class PtzAttentionController:
                 return
             self._end_session(runtime, outcome="returned_home")
             self._clear_command(runtime)
-            runtime.returning_to_paused = False
             self._set_cooldown(runtime, now=now, seconds=profile.cooldown_seconds)
             runtime.fault = ""
             if runtime.recovery_required:
@@ -1843,7 +1824,6 @@ class PtzAttentionController:
         runtime.events.clear()
         runtime.active_key = ""
         runtime.candidate_key = ""
-        runtime.grace_until = None
         runtime.grace_deadline_monotonic = None
         runtime.focused_since = None
         runtime.focused_started_monotonic = None
@@ -1872,7 +1852,6 @@ class PtzAttentionController:
         runtime.events.clear()
         runtime.active_key = ""
         runtime.candidate_key = ""
-        runtime.grace_until = None
         runtime.grace_deadline_monotonic = None
         runtime.focused_since = None
         runtime.focused_started_monotonic = None
@@ -1900,7 +1879,6 @@ class PtzAttentionController:
         runtime.events.clear()
         runtime.active_key = ""
         runtime.candidate_key = ""
-        runtime.grace_until = None
         runtime.grace_deadline_monotonic = None
         runtime.focused_since = None
         runtime.focused_started_monotonic = None
@@ -2181,11 +2159,6 @@ class PtzAttentionController:
         seconds: float,
     ) -> None:
         runtime.cooldown_deadline_monotonic = now + seconds
-        runtime.cooldown_until = self._public_deadline(
-            runtime.cooldown_deadline_monotonic,
-            monotonic_now=now,
-            wall_now=self._clock(),
-        )
 
     def _renew_deadline(
         self,

@@ -231,7 +231,7 @@ def test_closed_subject_ledger_saturates_without_forgetting_identity(runtime_typ
         assert result["reason"] == "closed_subject_capacity_reached"
         await runtime.shutdown()
         assert not runtime.closed_subjects
-        assert not runtime.closed_subject_capacity_reached
+        assert not runtime.closed_subjects.capacity_reached
 
     asyncio.run(scenario())
 

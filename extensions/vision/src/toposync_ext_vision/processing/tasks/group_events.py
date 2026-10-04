@@ -765,13 +765,6 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         now_monotonic: float,
         packet_ts: float | None,
     ) -> _GroupState:
-        mapped_group_id = self._group_id_by_member_key.get(
-            self._member_key(member.source_stream_id, member.event_id)
-        )
-        if mapped_group_id:
-            mapped = self._groups_by_id.get(mapped_group_id)
-            if mapped is not None:
-                return mapped
         best: tuple[float, _GroupState] | None = None
         for group_id in self._group_ids_by_source_stream.get(member.source_stream_id) or []:
             group = self._groups_by_id.get(group_id)

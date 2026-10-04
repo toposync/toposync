@@ -307,6 +307,67 @@ def test_camera_capture_service_keeps_recent_cached_frame_during_polling() -> No
     asyncio.run(_run_keeps_recent_cached_frame_during_polling())
 
 
+@pytest.mark.parametrize("configured_backend", ["auto", "opencv", "ffmpeg"])
+def test_camera_capture_service_disables_ffmpeg_override_after_hard_open_error(
+    monkeypatch: pytest.MonkeyPatch, configured_backend: str,
+) -> None:
+    clock = {"monotonic": 1000.0, "wall": 2000.0}
+    monkeypatch.setattr(time, "monotonic", lambda: clock["monotonic"])
+    monkeypatch.setattr(time, "time", lambda: clock["wall"])
+
+    class FailedGrabber(_Grabber):
+        backend = "ffmpeg" if configured_backend == "ffmpeg" else "opencv"
+        last_error = None
+
+        def metrics_snapshot(self) -> _Metrics:
+            return _Metrics(backend=self.backend, last_frame_ts=self.frame_ts,
+                            opened=False, last_error=self.last_error)
+
+    async def scenario() -> None:
+        grabber = FailedGrabber(frame_ts=clock["wall"] - 60)
+        hub = _Hub(grabber=grabber)
+        service = _service(hub=hub)
+        request = CameraCaptureRequest(
+            owner_id="owner", camera_id="front", source_id="main", backend=configured_backend,
+        )
+        first = await service.open(request, PipelineRuntimeDependencies())
+        assert (await service.get_latest(first.lease_id)).released
+
+        grabber.backend = "ffmpeg"
+        grabber.last_error = "Error opening input files: Server returned 404 Not Found"
+        failing = await service.open(request, PipelineRuntimeDependencies())
+        assert failing.backend == "ffmpeg"
+        # An error does not bypass the existing reacquisition cooldown.
+        assert not (await service.get_latest(failing.lease_id)).released
+        assert hub.release_calls == [f"front:main:{configured_backend}"]
+
+        clock["monotonic"] += 6
+        clock["wall"] += 6
+        assert (await service.get_latest(failing.lease_id)).released
+        state = service._open_states[failing.lease_key]
+        assert state.backend_override is None
+        assert state.backend_override_until_monotonic == 0.0
+        assert hub.release_calls == [f"front:main:{configured_backend}", "front:main:ffmpeg"]
+        # Reading the released lease cannot schedule another attempt.
+        assert (await service.get_latest(failing.lease_id)).frame is None
+        assert len(hub.acquire_calls) == 2
+
+        recovered = await service.open(request, PipelineRuntimeDependencies())
+        assert recovered.backend == configured_backend
+        assert [call["backend"] for call in hub.acquire_calls] == [
+            configured_backend, "ffmpeg", configured_backend,
+        ]
+        # A second stale observation also preserves the backend failover cooldown.
+        grabber.backend = "ffmpeg" if configured_backend == "ffmpeg" else "opencv"
+        clock["monotonic"] += 6
+        clock["wall"] += 6
+        assert (await service.get_latest(recovered.lease_id)).released
+        assert (await service.open(request, PipelineRuntimeDependencies())).backend == configured_backend
+        await service.release_owner("owner")
+
+    asyncio.run(scenario())
+
+
 async def _run_keeps_recent_cached_frame_during_polling() -> None:
     grabber = _Grabber(opened=False)
     hub = _Hub(grabber=grabber)

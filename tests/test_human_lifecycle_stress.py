@@ -304,7 +304,7 @@ def test_gesture_terminal_capacity_closes_active_events_and_abstains_until_shutd
             terminal_identities = set(operator._closed)
             assert len(terminal_identities) == 4096
             assert ("camera:a", "camera:a", "closed:0") in terminal_identities
-            assert not operator._closed_capacity_reached
+            assert not operator._closed.capacity_reached
 
             active_event_ids = set()
             for actor in ("active:one", "active:two"):
@@ -328,11 +328,11 @@ def test_gesture_terminal_capacity_closes_active_events_and_abstains_until_shutd
             # A repeated CLOSE at capacity must not consume another slot or
             # interrupt other identities. Only a new terminal identity saturates.
             await operator.process_packet(close("closed:0"), None)
-            assert not operator._closed_capacity_reached
+            assert not operator._closed.capacity_reached
             assert len(operator._actors) == 2
 
             outputs = await operator.process_packet(close("overflow:4097"), None)
-            assert operator._closed_capacity_reached
+            assert operator._closed.capacity_reached
             assert set(operator._closed) == terminal_identities
             assert not operator._actors
             if output_mode == "events":
@@ -381,10 +381,10 @@ def test_gesture_terminal_capacity_closes_active_events_and_abstains_until_shutd
         finally:
             await operator.shutdown()
         assert not operator._actors and not operator._closed
-        assert not operator._closed_capacity_reached
+        assert not operator._closed.capacity_reached
         # Cleanup itself is idempotent and never emits/recreates an actor.
         await operator.shutdown()
         assert not operator._actors and not operator._closed
-        assert not operator._closed_capacity_reached
+        assert not operator._closed.capacity_reached
 
     asyncio.run(scenario())

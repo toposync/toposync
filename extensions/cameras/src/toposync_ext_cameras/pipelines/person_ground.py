@@ -339,12 +339,10 @@ class PersonGroundRuntime(TransformOperatorRuntime):
         )
         self.history: dict[tuple[str, str, str], _History] = {}
         self.closed_subjects = ClosedSubjectLedger()
-        self.closed_subject_capacity_reached = False
 
     def _remember_closed_subject(self, key, subject=None):
         self.closed_subjects.close(key, subject)
-        self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
-        if self.closed_subject_capacity_reached:
+        if self.closed_subjects.capacity_reached:
             self.history.clear()
 
     def _prune_idle(self, now: float) -> None:
@@ -367,12 +365,10 @@ class PersonGroundRuntime(TransformOperatorRuntime):
             await asyncio.gather(expiry, return_exceptions=True)
             self.history.clear()
             self.closed_subjects.clear()
-            self.closed_subject_capacity_reached = False
 
     async def shutdown(self):
         self.history.clear()
         self.closed_subjects.clear()
-        self.closed_subject_capacity_reached = False
         await self.mapping.shutdown()
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:
@@ -383,7 +379,6 @@ class PersonGroundRuntime(TransformOperatorRuntime):
         source = str(packet.payload.get("source_stream_id") or packet.stream_id)
         key = (source, str(packet.payload.get("camera_id") or ""), actor)
         subject_closed = self.closed_subjects.observe(key, subject, retain=False)
-        self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
         timestamp = resolve_media_ts(packet)
         base = {
             "schema_version": 1,
@@ -423,7 +418,7 @@ class PersonGroundRuntime(TransformOperatorRuntime):
             return unavailable(
                 "subject_closed" if packet.lifecycle == Lifecycle.CLOSE else "disabled"
             )
-        if self.closed_subject_capacity_reached:
+        if self.closed_subjects.capacity_reached:
             return unavailable("closed_subject_capacity_reached")
         if subject_closed:
             return unavailable("subject_closed")
@@ -563,7 +558,6 @@ class PersonGroundRuntime(TransformOperatorRuntime):
             self.history.pop(oldest)
             self.closed_subjects.forget_active(oldest)
         if self.closed_subjects.observe(key, subject):
-            self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
             return unavailable("closed_subject_capacity_reached")
         self.history[key] = _History(
             timestamp,

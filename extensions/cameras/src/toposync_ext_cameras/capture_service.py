@@ -132,6 +132,23 @@ def camera_capture_lease_as_dict(lease: CameraCaptureLease) -> dict[str, Any]:
     }
 
 
+def _is_hard_capture_open_error(message: str) -> bool:
+    text = str(message or "").strip().lower()
+    if not text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "error opening input files",
+            "404",
+            "not found",
+            "connection refused",
+            "connection reset",
+            "timed out",
+        )
+    )
+
+
 class CameraCaptureService:
     def __init__(
         self,
@@ -576,6 +593,15 @@ class CameraCaptureService:
         ):
             state.backend_override = "ffmpeg"
             state.backend_override_until_monotonic = now_mono + self._backend_failover_s
+            state.last_backend_failover_monotonic = now_mono
+        elif (
+            backend == "ffmpeg"
+            and state.backend_override == "ffmpeg"
+            and lease.request.backend in {"auto", "opencv"}
+            and _is_hard_capture_open_error(str(metrics.get("last_error") or ""))
+        ):
+            state.backend_override = None
+            state.backend_override_until_monotonic = 0.0
             state.last_backend_failover_monotonic = now_mono
         state.last_reacquire_monotonic = now_mono
         self._record_status(

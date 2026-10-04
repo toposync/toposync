@@ -101,16 +101,13 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
         self._actors: dict[tuple[str, str, str], _Actor] = {}
         # Bounded tombstones prevent late UPDATEs from reopening a closed actor.
         self._closed = ClosedSubjectLedger(source_index=1)
-        self._closed_capacity_reached = False
 
     async def shutdown(self) -> None:
         self._actors.clear()
         self._closed.clear()
-        self._closed_capacity_reached = False
 
     def _remember_closed(self, key: tuple[str, str, str], subject=None) -> None:
         self._closed.close(key, subject)
-        self._closed_capacity_reached = self._closed.capacity_reached
 
     async def run(self, context) -> None:
         # Same bounded read/tick mechanism as the other finite-event operators.
@@ -143,7 +140,6 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
             finally:
                 self._actors.clear()
                 self._closed.clear()
-                self._closed_capacity_reached = False
 
     def _identity(self, packet):
         payload = packet.payload
@@ -597,7 +593,6 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
         actor = self._actors.get(key)
         subject = _mapping(packet.payload.get("subject"))
         subject_closed = self._closed.observe(key, subject, retain=False)
-        self._closed_capacity_reached = self._closed.capacity_reached
         if self._config.enabled and key[2] and subject_closed and (
             packet.lifecycle == Lifecycle.CLOSE or subject.get("lifecycle") == "close"
         ):
@@ -628,7 +623,7 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
                 and not any(target.key == key for target in targets)
             ):
                 self._remember_closed(key, subject)
-            if self._closed_capacity_reached:
+            if self._closed.capacity_reached:
                 for remaining in list(self._actors.values()):
                     outputs.extend(self._retire(remaining, "closed_subject_capacity_reached"))
             if self._config.output_mode == "annotate":
@@ -642,7 +637,7 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
                     )
                 )
             return outputs
-        if self._closed_capacity_reached or subject_closed:
+        if self._closed.capacity_reached or subject_closed:
             if self._config.output_mode == "annotate":
                 outputs.append(
                     self._annotation(
@@ -651,7 +646,7 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
                         status="unknown",
                         reason=(
                             "closed_subject_capacity_reached"
-                            if self._closed_capacity_reached
+                            if self._closed.capacity_reached
                             else "actor_closed"
                         ),
                     )
@@ -705,7 +700,6 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
             oldest = min(self._actors.values(), key=lambda value: value.last_seen)
             outputs.extend(self._retire(oldest, "capacity_limit"))
         if self._closed.observe(key, subject):
-            self._closed_capacity_reached = self._closed.capacity_reached
             if self._config.output_mode == "annotate":
                 outputs.append(self._annotation(packet, None, status="unknown", reason="closed_subject_capacity_reached"))
             return outputs

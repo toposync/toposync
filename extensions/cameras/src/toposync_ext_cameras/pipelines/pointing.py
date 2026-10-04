@@ -70,18 +70,15 @@ class PointingTargetRuntime(TransformOperatorRuntime):
         self.store = dependencies.config_store
         self.timestamps = {}
         self.closed_subjects = ClosedSubjectLedger()
-        self.closed_subject_capacity_reached = False
 
     def _remember_closed_subject(self, key, subject=None):
         self.closed_subjects.close(key, subject)
-        self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
-        if self.closed_subject_capacity_reached:
+        if self.closed_subjects.capacity_reached:
             self.timestamps.clear()
 
     async def shutdown(self):
         self.timestamps.clear()
         self.closed_subjects.clear()
-        self.closed_subject_capacity_reached = False
 
     async def run(self, context):
         try:
@@ -89,7 +86,6 @@ class PointingTargetRuntime(TransformOperatorRuntime):
         finally:
             self.timestamps.clear()
             self.closed_subjects.clear()
-            self.closed_subject_capacity_reached = False
 
     async def process_packet(self, packet, context):
         from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness
@@ -102,7 +98,6 @@ class PointingTargetRuntime(TransformOperatorRuntime):
         key = (source_stream, camera_id, resolve_source_id(packet), source.get("view_id"), actor)
         closed_key = (source_stream, camera_id, actor)
         subject_closed = self.closed_subjects.observe(closed_key, payload.get("subject") or {}, retain=False)
-        self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
         spatial = dict(payload.get("spatial") or {})
         result = {
             "schema_version": 1,
@@ -138,7 +133,7 @@ class PointingTargetRuntime(TransformOperatorRuntime):
                 raise ValueError(
                     "subject_closed" if packet.lifecycle == Lifecycle.CLOSE else "disabled"
                 )
-            if self.closed_subject_capacity_reached:
+            if self.closed_subjects.capacity_reached:
                 raise ValueError("closed_subject_capacity_reached")
             if subject_closed:
                 raise ValueError("subject_closed")
@@ -170,7 +165,6 @@ class PointingTargetRuntime(TransformOperatorRuntime):
                 self.timestamps.pop(oldest)
                 self.closed_subjects.forget_active((oldest[0], oldest[1], oldest[4]))
             if self.closed_subjects.observe(closed_key, payload.get("subject") or {}):
-                self.closed_subject_capacity_reached = self.closed_subjects.capacity_reached
                 raise ValueError("closed_subject_capacity_reached")
             self.timestamps[key] = (
                 timestamp,

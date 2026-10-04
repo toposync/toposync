@@ -18,6 +18,7 @@ from toposync.runtime.pipelines import (
     PipelineRuntimeDependencies,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
@@ -201,7 +202,6 @@ def test_camera_source_passes_backend_to_frame_grabber(monkeypatch: pytest.Monke
         register_camera_pipeline_operators(registry)
 
         graph = {
-            "schema_version": 1,
             "nodes": [
                 {
                     "id": "camera",
@@ -211,10 +211,13 @@ def test_camera_source_passes_backend_to_frame_grabber(monkeypatch: pytest.Monke
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
             "edges": [
-                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}}
+                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"},
+                 "traffic": {"modality": "video", "semantic_class": "frame", "continuous": True}}
             ],
         }
-        pipeline = Pipeline(name="camera_source_backend_passthrough", graph=graph)
+        pipeline = Pipeline(name="camera_source_backend_passthrough", graph=build_pipeline_graph_v2(
+            graph_uid="camera_source_backend_passthrough", nodes=graph["nodes"], edges=graph["edges"],
+        ))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.05)
@@ -268,7 +271,6 @@ def test_camera_source_waits_for_camera_settings_without_crashing(
         register_camera_pipeline_operators(registry)
 
         graph = {
-            "schema_version": 1,
             "nodes": [
                 {
                     "id": "camera",
@@ -278,10 +280,13 @@ def test_camera_source_waits_for_camera_settings_without_crashing(
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
             "edges": [
-                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}}
+                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"},
+                 "traffic": {"modality": "video", "semantic_class": "frame", "continuous": True}}
             ],
         }
-        pipeline = Pipeline(name="camera_source_wait_for_settings", graph=graph)
+        pipeline = Pipeline(name="camera_source_wait_for_settings", graph=build_pipeline_graph_v2(
+            graph_uid="camera_source_wait_for_settings", nodes=graph["nodes"], edges=graph["edges"],
+        ))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(
             compiled=compiled,
@@ -424,63 +429,3 @@ def test_camera_hub_starts_different_keys_without_global_lock_serialization() ->
 
     max_concurrent_starts = asyncio.run(scenario())
     assert max_concurrent_starts >= 2
-
-
-def test_camera_source_disables_ffmpeg_failover_override_after_hard_open_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import toposync_ext_cameras.pipelines.operators as camera_ops
-
-    class _Logger:
-        def warning(self, *args: Any, **kwargs: Any) -> None:
-            _ = args
-            _ = kwargs
-
-    class _Context:
-        node_id = "camera-node"
-        logger = _Logger()
-
-    async def scenario() -> tuple[str | None, float, int]:
-        runtime = camera_ops.CameraSourceRuntime(
-            {"rtsp_url": "rtsp://example", "backend": "auto"},
-            PipelineRuntimeDependencies(),
-        )
-        runtime._grabber = object()
-        runtime._grabber_started_monotonic = time.monotonic() - 120.0
-        runtime._reacquire_after_s = 1.0
-        runtime._reacquire_cooldown_s = 0.0
-        runtime._backend_override = "ffmpeg"
-        runtime._backend_override_until_monotonic = time.monotonic() + 180.0
-        runtime._backend_failover_cooldown_s = 120.0
-        runtime._last_backend_failover_monotonic = 0.0
-
-        stop_calls = 0
-
-        async def _fake_stop_grabber_if_needed() -> None:
-            nonlocal stop_calls
-            stop_calls += 1
-            runtime._grabber = None
-
-        monkeypatch.setattr(runtime, "_stop_grabber_if_needed", _fake_stop_grabber_if_needed)
-
-        await runtime._maybe_reacquire_grabber(
-            _Context(),
-            metrics={
-                "opened": False,
-                "backend": "ffmpeg",
-                "restarts": 12,
-                "last_frame_ts": 0.0,
-                "last_error": "Error opening input files: Server returned 404 Not Found",
-            },
-        )
-
-        return (
-            runtime._backend_override,
-            float(runtime._backend_override_until_monotonic),
-            stop_calls,
-        )
-
-    backend_override, backend_override_until, stop_calls = asyncio.run(scenario())
-    assert backend_override is None
-    assert backend_override_until == 0.0
-    assert stop_calls == 1

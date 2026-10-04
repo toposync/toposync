@@ -305,23 +305,6 @@ def _packet_ts_seconds(packet: Packet, *, fallback: float | None = None) -> floa
     return float(fallback)
 
 
-def _is_hard_capture_open_error(message: str) -> bool:
-    text = str(message or "").strip().lower()
-    if not text:
-        return False
-    return any(
-        token in text
-        for token in (
-            "error opening input files",
-            "404",
-            "not found",
-            "connection refused",
-            "connection reset",
-            "timed out",
-        )
-    )
-
-
 _GLOBAL_CAMERA_HUB = get_global_camera_hub(frame_grabber_factory=_frame_grabber_factory)
 _GLOBAL_CAMERA_CAPTURE_SERVICE: CameraCaptureService | None = None
 _GLOBAL_CAMERA_CAPTURE_SERVICE_HUB: Any | None = None
@@ -1449,8 +1432,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._capture_owner_id = f"camera.source:{uuid.uuid4().hex}"
         self._lease_id = ""
         self._grabber: Any | None = None
-        self._grabber_started_monotonic = 0.0
-        self._hub_key: str = ""
         self._last_ts = 0.0
         self._camera_name = ""
         self._camera_id = ""
@@ -1470,43 +1451,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._gate_known = False
         self._waiting_for_source_config = False
         self._last_wait_log_monotonic = 0.0
-        self._last_start_error = ""
-        self._start_retry_after_monotonic = 0.0
-        self._backend_override: str | None = None
-        self._backend_override_until_monotonic = 0.0
-        self._last_reacquire_monotonic = 0.0
         self._source_health_id = ""
-        self._reacquire_after_s = _read_env_float(
-            "TOPOSYNC_CAMERA_SOURCE_REACQUIRE_AFTER_S",
-            15.0,
-            min_value=5.0,
-            max_value=300.0,
-        )
-        self._reacquire_cooldown_s = _read_env_float(
-            "TOPOSYNC_CAMERA_SOURCE_REACQUIRE_COOLDOWN_S",
-            5.0,
-            min_value=1.0,
-            max_value=120.0,
-        )
-        self._start_failure_backoff_s = _read_env_float(
-            "TOPOSYNC_CAMERA_SOURCE_START_BACKOFF_S",
-            10.0,
-            min_value=1.0,
-            max_value=300.0,
-        )
-        self._backend_failover_s = _read_env_float(
-            "TOPOSYNC_CAMERA_SOURCE_BACKEND_FAILOVER_S",
-            180.0,
-            min_value=5.0,
-            max_value=900.0,
-        )
-        self._backend_failover_cooldown_s = _read_env_float(
-            "TOPOSYNC_CAMERA_SOURCE_BACKEND_FAILOVER_COOLDOWN_S",
-            120.0,
-            min_value=5.0,
-            max_value=1_800.0,
-        )
-        self._last_backend_failover_monotonic = 0.0
         self._ptz_guard_required: bool | None = None
         self._ptz_device_id = ""
         self._ptz_settings_refresh_after_monotonic = 0.0
@@ -1533,9 +1478,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 self._dependencies,
             )
         except CameraCaptureTransientError as exc:
-            self._last_start_error = str(exc)
-            if "backend=ffmpeg" in self._last_start_error:
-                self._backend_override = "ffmpeg"
             raise _CameraSourceTransientError(str(exc)) from exc
         resolved = lease.resolved
         self._waiting_for_source_config = False
@@ -1553,12 +1495,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._ingest_path = resolved.ingest_path
         self._ingest_warnings = tuple(resolved.ingest_warnings)
         self._ingest_blocking_errors = tuple(resolved.ingest_blocking_errors)
-        self._hub_key = lease.hub_key
         self._lease_id = lease.lease_id
         self._grabber = lease.grabber
-        self._last_start_error = ""
-        self._start_retry_after_monotonic = 0.0
-        self._grabber_started_monotonic = time.monotonic()
 
     async def _uses_ptz_geometry_guard(self) -> bool:
         now = time.monotonic()
@@ -1682,10 +1620,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         if self._grabber is None:
             return
         self._grabber = None
-        self._grabber_started_monotonic = 0.0
         self._source_uses_ingest = False
         self._ingest_path = ""
-        self._hub_key = ""
         lease_id = self._lease_id
         self._lease_id = ""
         if lease_id:
@@ -1767,79 +1703,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             )
         return record.as_dict()
 
-    async def _maybe_reacquire_grabber(
-        self, context, *, metrics: dict[str, Any] | None = None
-    ) -> None:  # noqa: ANN001
-        if self._grabber is None:
-            return
-        now_mono = time.monotonic()
-        if (now_mono - self._last_reacquire_monotonic) < self._reacquire_cooldown_s:
-            return
-
-        details = metrics if isinstance(metrics, dict) else self._capture_metrics_snapshot()
-        opened = bool(details.get("opened"))
-        backend = str(details.get("backend") or "")
-        last_error = str(details.get("last_error") or "").strip()
-        restarts_raw = details.get("restarts")
-        try:
-            restarts = int(restarts_raw) if restarts_raw is not None else 0
-        except Exception:
-            restarts = 0
-
-        stale_for_s = max(0.0, now_mono - self._grabber_started_monotonic)
-        last_frame_ts_raw = details.get("last_frame_ts")
-        try:
-            last_frame_ts = float(last_frame_ts_raw)
-        except Exception:
-            last_frame_ts = 0.0
-        if last_frame_ts > 0.0:
-            stale_for_s = max(0.0, time.time() - last_frame_ts)
-
-        if stale_for_s < self._reacquire_after_s:
-            return
-
-        failover_note = ""
-        if (
-            backend == "opencv"
-            and self._config.backend in {"auto", "opencv"}
-            and (now_mono - self._last_backend_failover_monotonic)
-            >= self._backend_failover_cooldown_s
-        ):
-            self._backend_override = "ffmpeg"
-            self._backend_override_until_monotonic = now_mono + self._backend_failover_s
-            self._last_backend_failover_monotonic = now_mono
-            failover_note = f" Switching backend to ffmpeg for {self._backend_failover_s:.0f}s."
-        elif (
-            backend == "ffmpeg"
-            and self._backend_override == "ffmpeg"
-            and self._config.backend in {"auto", "opencv"}
-            and _is_hard_capture_open_error(last_error)
-        ):
-            self._backend_override = None
-            self._backend_override_until_monotonic = 0.0
-            self._last_backend_failover_monotonic = now_mono
-            failover_note = " Disabling ffmpeg failover override due hard open errors."
-
-        self._last_reacquire_monotonic = now_mono
-        context.logger.warning(
-            "Node '%s' camera source stalled for %.1fs (opened=%s backend=%s restarts=%d). "
-            "Re-resolving source.%s last_error=%s",
-            context.node_id,
-            stale_for_s,
-            opened,
-            backend or "-",
-            restarts,
-            failover_note,
-            last_error or "-",
-        )
-        self._record_source_health(
-            context,
-            status="stale",
-            metrics=details,
-            last_error=last_error or None,
-        )
-        await self._stop_grabber_if_needed()
-
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         await self._consume_gate_packets(context)
         if not self._gate_open:
@@ -1890,8 +1753,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         )
         if capture_frame.released:
             self._grabber = None
-            self._grabber_started_monotonic = 0.0
-            self._hub_key = ""
             self._lease_id = ""
             self._last_ts = 0.0
         frame = capture_frame.frame

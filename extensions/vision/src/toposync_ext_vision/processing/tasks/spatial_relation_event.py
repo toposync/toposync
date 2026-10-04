@@ -127,8 +127,6 @@ class _GroupSnapshot:
     lifecycle: Lifecycle
     members: tuple[_Member, ...]
     bbox01: tuple[float, float, float, float]
-    world_envelope: dict[str, Any] | None
-    packet: Packet
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,14 +147,12 @@ class _RelationState:
     last_input_monotonic: float
     last_packet: Packet
     last_bbox01: tuple[float, float, float, float]
-    last_world_envelope: dict[str, Any] | None
     last_members: tuple[_Member, ...] = field(default_factory=tuple)
     last_match: _RelationMatch | None = None
     visit_pair: tuple[str, str] | None = None
     observed_outside: bool = False
     visits: deque[float] = field(default_factory=lambda: deque(maxlen=256))
     visits_overflow_until: float = float("-inf")
-    candidate_since_monotonic: float | None = None
     last_positive_media_ts: float | None = None
     capture: tuple[str, int, int] | None = None
     published_at: float = float("-inf")
@@ -164,7 +160,6 @@ class _RelationState:
     observed_duration_seconds: float = 0.0
     losing_since_monotonic: float | None = None
     loss_reason: str = ""
-    opened_at_monotonic: float | None = None
     last_emit_monotonic: float | None = None
     relation_event_id: str = ""
     relation_event_code: str = ""
@@ -271,8 +266,6 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         bbox01 = _bbox(packet.payload.get("group_bbox01")) or _bbox(subject.get("bbox01"))
         if bbox01 is None:
             bbox01 = (0.0, 0.0, 1.0, 1.0)
-        world_envelope_raw = packet.payload.get("world_envelope") or subject.get("world_envelope")
-        world_envelope = dict(world_envelope_raw) if isinstance(world_envelope_raw, dict) else None
         source_stream_id = (
             _text(packet.payload.get("source_stream_id"))
             or _text(packet.metadata.get("source_stream_id"))
@@ -290,8 +283,6 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             lifecycle=_lifecycle(subject.get("lifecycle"), packet.lifecycle),
             members=tuple(members),
             bbox01=bbox01,
-            world_envelope=world_envelope,
-            packet=packet,
         )
 
     def _best_match(
@@ -532,11 +523,9 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             state.relation_event_id = ""
             state.relation_event_code = ""
             state.correlation_id = ""
-            state.candidate_since_monotonic = None
             state.last_positive_media_ts = None
             state.observed_duration_seconds = 0.0
             state.losing_since_monotonic = None
-            state.opened_at_monotonic = None
             state.last_match = None
         else:
             self._states_by_group.pop((state.source_stream_id, state.camera_id, state.group_event_id), None)
@@ -627,7 +616,7 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             relation_match = self._best_match(
                 group.members,
                 use_exit_threshold=bool(
-                    state and (state.opened or state.candidate_since_monotonic is not None)
+                    state and (state.opened or state.last_match is not None)
                 ),
                 preferred=state.last_match if state else None,
             )
@@ -655,7 +644,6 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                 last_input_monotonic=now_monotonic,
                 last_packet=packet,
                 last_bbox01=group.bbox01,
-                last_world_envelope=group.world_envelope,
             )
             self._states_by_group[key] = state
         state.group_event_code = group.group_event_code or state.group_event_code
@@ -670,7 +658,6 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         state.last_packet = packet
         state.last_members = group.members
         state.last_bbox01 = group.bbox01
-        state.last_world_envelope = group.world_envelope
 
         observed_pair = relation_match or self._best_match(
             group.members, use_exit_threshold=True, preferred=state.last_match, require_proximity=False
@@ -696,8 +683,6 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             state.last_match = relation_match
             state.losing_since_monotonic = None
             state.loss_reason = ""
-            if state.candidate_since_monotonic is None:
-                state.candidate_since_monotonic = now_monotonic
             if not state.opened:
                 if state.observed_duration_seconds >= float(self._config.dwell_seconds):
                     if state.observed_outside:
@@ -706,7 +691,6 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                         state.visits.append(pair_media_ts)
                     state.observed_outside = False
                     self._next_relation_identity(state)
-                    state.opened_at_monotonic = now_monotonic
                     state.last_emit_monotonic = now_monotonic
                     outputs.append(
                         self._build_packet(
@@ -733,7 +717,6 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             return outputs
 
         if not state.opened:
-            state.candidate_since_monotonic = None
             state.last_positive_media_ts = None
             state.observed_duration_seconds = 0.0
             state.last_match = None

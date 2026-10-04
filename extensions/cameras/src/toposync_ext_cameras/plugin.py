@@ -119,7 +119,6 @@ from .onvif import (
     onvif_xaddr_candidates,
     resolve_onvif_discovery_targets,
 )
-from .onvif.reolink_cgi import ReolinkCgiClient, ReolinkCgiError
 
 
 NotificationPriority = Literal["low", "medium", "high"]
@@ -2900,58 +2899,6 @@ class CamerasExtension(BaseExtension):
                 onvif_ptz_remove_preset_ambiguous.pop(operation_key, None)
                 _clear_removed_ptz_preset(key, token)
             return {"ok": True}
-
-        def _reolink_cgi_client(client: OnvifClient) -> ReolinkCgiClient:
-            return ReolinkCgiClient(
-                device_xaddr=client.xaddr,
-                username=client.username,
-                password=client.password,
-                timeout_s=client.timeout_s,
-            )
-
-        async def _list_ptz_presets_with_reolink_fallback(
-            *,
-            client: OnvifClient,
-            ptz_xaddr: str,
-            profile_token: str,
-        ) -> tuple[list[OnvifPtzPreset], ReolinkCgiClient | None]:
-            """Read CGI slots only when ONVIF cannot enumerate a preset.
-
-            A valid empty ONVIF response remains authoritative for ordinary
-            cameras.  The CGI fallback is opt-in in practice: it is returned
-            only after the Reolink endpoint independently confirms at least one
-            enabled slot, whose token is namespaced as ``reolink:<slot>``.
-            """
-
-            onvif_error: OnvifError | None = None
-            try:
-                presets = await client.get_ptz_presets(
-                    ptz_xaddr,
-                    profile_token=profile_token,
-                )
-            except OnvifError as exc:
-                presets = []
-                onvif_error = exc
-            if presets:
-                return presets, None
-
-            reolink = _reolink_cgi_client(client)
-            try:
-                cgi_slots = await reolink.list_presets(include_disabled=True)
-            except ReolinkCgiError:
-                if onvif_error is not None:
-                    raise onvif_error
-                return presets, None
-            if not cgi_slots:
-                return presets, None
-            cgi_presets = [preset for preset in cgi_slots if preset.enabled]
-            return (
-                [
-                    OnvifPtzPreset(token=preset.token, name=preset.name)
-                    for preset in cgi_presets
-                ],
-                reolink,
-            )
 
         async def _svc_ptz_goto_preset(
             *,

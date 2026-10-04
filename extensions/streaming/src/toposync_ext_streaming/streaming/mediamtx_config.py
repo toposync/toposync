@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+
+
+_INVALID_PATH_CHARACTERS = re.compile(r"[^\w-]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +38,7 @@ def normalize_path_slug(value: str, *, fallback: str = "test") -> str:
     if not raw:
         return fallback_value
 
-    filtered = "".join(ch if (ch.isalnum() or ch in {"-", "_"}) else "-" for ch in raw)
+    filtered = _INVALID_PATH_CHARACTERS.sub("-", raw)
     cleaned = filtered.strip("-_")
     if cleaned:
         return cleaned

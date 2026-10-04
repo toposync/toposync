@@ -17,6 +17,7 @@ from ..api.models import StreamingEngineSettings
 from . import MEDIAMTX_VERSION
 from .mediamtx_binary import extract_mediamtx_binary
 from .mediamtx_config import MediaMTXPathAuth, MediaMTXResolvedPorts, render_mediamtx_config
+from .mediamtx_config import normalize_path_slug as _normalize_path
 from .mediamtx_processes import kill_mediamtx_processes_for_config_path
 from .platform import detect_mediamtx_platform
 
@@ -1451,15 +1452,6 @@ async def _tcp_reachable(host: str, port: int) -> bool:
         pass
     _ = reader
     return True
-
-
-def _normalize_path(value: str) -> str:
-    raw = str(value or "").strip().lower()
-    if not raw:
-        return "test"
-    filtered = "".join(ch if (ch.isalnum() or ch in {"-", "_"}) else "-" for ch in raw)
-    cleaned = filtered.strip("-_")
-    return cleaned or "test"
 
 
 def _mediamtx_log_error_hint(log_path: Path | None, *, max_bytes: int = 4096) -> str:

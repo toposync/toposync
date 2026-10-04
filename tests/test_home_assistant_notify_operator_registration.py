@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from importlib.metadata import EntryPoint
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,69 @@ import pytest
 from toposync.app import create_app
 from toposync_ext_home_assistant.plugin import EXTENSION_ID, _run_cancelable_home_assistant_read
 import toposync.extensions.manager as ext_manager_mod
+import toposync_ext_home_assistant.plugin as home_assistant_plugin
+
+
+def test_registry_preserves_readable_labels_when_home_assistant_names_are_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entities = [
+        {"entity_id": "media_player.room", "name": None, "original_name": "Room speaker",
+         "icon": None, "original_icon": "mdi:speaker", "device_id": "speaker"},
+        {"entity_id": "tts.voice", "name": " My voice ", "original_name": "Original",
+         "icon": "mdi:account-voice", "original_icon": "mdi:speaker"},
+        {"entity_id": "media_player.empty", "name": " ", "original_name": None,
+         "icon": None, "original_icon": None},
+        {"entity_id": None, "name": "Invalid entity"},
+    ]
+    devices = [
+        {"id": "speaker", "name_by_user": None, "name": "Speaker device"},
+        {"id": "renamed", "name_by_user": " Custom device ", "name": "Original"},
+        {"id": "unnamed", "name_by_user": None, "name": None},
+        {"id": None, "name": "Invalid device"},
+    ]
+    sent = []
+
+    class RegistrySocket:
+        async def __aenter__(self):
+            self.messages = iter([
+                {"type": "auth_required"}, {"type": "auth_ok"},
+                {"id": 1, "type": "result", "success": True, "result": entities},
+                {"id": 2, "type": "result", "success": True, "result": devices},
+            ])
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def recv(self):
+            return json.dumps(next(self.messages))
+
+        async def send(self, message):
+            sent.append(json.loads(message)["type"])
+
+    monkeypatch.setattr(home_assistant_plugin.websockets, "connect", lambda *_args, **_kwargs: RegistrySocket())
+    client, writes = _create_client(tmp_path, monkeypatch)
+    with client:
+        client.portal.call(client.app.state.config_store.patch_extension_settings, EXTENSION_ID, {
+            "servers": [{"id": "ha-main", "name": "Casa", "host": "http://ha.local:8123", "apiKey": "fixture-key"}],
+        })
+        response = client.get("/api/home_assistant/ha-main/registry")
+        assert response.status_code == 200
+        registry = response.json()
+        assert [(item["entity_id"], item["name"], item["icon"]) for item in registry["entities"]] == [
+            ("media_player.room", "Room speaker", "mdi:speaker"),
+            ("tts.voice", "My voice", "mdi:account-voice"),
+            ("media_player.empty", "media_player.empty", ""),
+        ]
+        assert registry["devices"] == [
+            {"id": "speaker", "name": "Speaker device"},
+            {"id": "renamed", "name": "Custom device"},
+            {"id": "unnamed", "name": "unnamed"},
+        ]
+        assert registry["device_entities"] == {"speaker": ["media_player.room"]}
+    assert sent == ["auth", "config/entity_registry/list", "config/device_registry/list"]
+    assert writes == []
 
 
 class _FakeResponse:

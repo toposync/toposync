@@ -352,17 +352,17 @@ class HomeAssistantExtension(BaseExtension):
                 _check_cancelled()
                 if not isinstance(e, dict):
                     continue
-                entity_id = str(e.get("entity_id", "")).strip()
+                entity_id = str(e.get("entity_id") or "").strip()
                 if not entity_id:
                     continue
                 device_id = str(e.get("device_id", "")).strip() if e.get("device_id") else ""
                 domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
                 name = (
-                    str(e.get("name", "")).strip()
-                    or str(e.get("original_name", "")).strip()
+                    str(e.get("name") or "").strip()
+                    or str(e.get("original_name") or "").strip()
                     or entity_id
                 )
-                icon = str(e.get("icon", "")).strip() or str(e.get("original_icon", "")).strip()
+                icon = str(e.get("icon") or "").strip() or str(e.get("original_icon") or "").strip()
                 out_entities.append(
                     {
                         "entity_id": entity_id,
@@ -380,10 +380,10 @@ class HomeAssistantExtension(BaseExtension):
                 _check_cancelled()
                 if not isinstance(d, dict):
                     continue
-                did = str(d.get("id", "")).strip()
+                did = str(d.get("id") or "").strip()
                 if not did:
                     continue
-                name = str(d.get("name_by_user", "")).strip() or str(d.get("name", "")).strip() or did
+                name = str(d.get("name_by_user") or "").strip() or str(d.get("name") or "").strip() or did
                 out_devices.append({"id": did, "name": name})
 
             resp = RegistryResponse(entities=out_entities, devices=out_devices, device_entities=device_entities)

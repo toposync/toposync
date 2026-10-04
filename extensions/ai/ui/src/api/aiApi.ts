@@ -3,10 +3,24 @@ import { requestJson } from "@toposync/plugin-api";
 import type {
   AiCatalogResponse,
   AiExtensionSettings,
+  JevConnectionInfo,
+  JevConnectionTest,
+  OllayaConnectionSettings,
   OllamaModelsResponse,
   ProviderTestResponse,
   UsageSnapshot,
 } from "../types";
+
+export function fetchJevConnection(signal?: AbortSignal): Promise<JevConnectionInfo> {
+  return requestJson<JevConnectionInfo>("/api/ai/jev/connection", { signal });
+}
+
+export function testJevConnection(connection: OllayaConnectionSettings, signal?: AbortSignal): Promise<JevConnectionTest> {
+  return requestJson<JevConnectionTest>("/api/ai/jev/connection/test", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(connection), signal,
+  });
+}
 
 export async function fetchAiCatalog(signal?: AbortSignal): Promise<AiCatalogResponse> {
   return requestJson<AiCatalogResponse>("/api/ai/catalog", { signal });

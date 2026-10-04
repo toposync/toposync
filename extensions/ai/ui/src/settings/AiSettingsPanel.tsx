@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import type { SettingsPanel, ToposyncHost } from "@toposync/plugin-api";
+import { JevConnectionSection } from "./JevConnectionSection";
 
 import {
   DEFAULT_OLLAMA_HOST,
@@ -35,7 +36,7 @@ type Props = {
   updateSettings: (patch: Record<string, unknown>) => void;
 };
 
-type Section = "ollama" | "profiles" | "providers" | "limits";
+type Section = "ollama" | "profiles" | "providers" | "limits" | "jev";
 
 const PROVIDER_KINDS: AiProviderKind[] = ["openai", "anthropic", "google", "litellm"];
 
@@ -304,17 +305,18 @@ function AiSettingsPanelContent({ i18n, settings, updateSettings }: Props): Reac
       <div className="settingsDetailHeader" style={{ alignItems: "flex-start", gap: 16 }}>
         <div>
           <div className="modalSectionTitle">{t("ext.ai.settings.title", {}, "IA")}</div>
-          <div className="cardMeta">
+          {activeSection !== "jev" ? <div className="cardMeta">
             {qwenInstalled ? t("ext.ai.settings.installed", {}, "Instalado") : t("ext.ai.settings.not_installed", {}, "Não instalado")} ·{" "}
             {DEFAULT_OLLAMA_MODEL}
-          </div>
+          </div> : null}
         </div>
         <div className="settingsTabBar" style={{ justifyContent: "flex-end" }}>
-          {(["ollama", "profiles", "providers", "limits"] as Section[]).map((section) => (
+          {(["ollama", "profiles", "providers", "limits", "jev"] as Section[]).map((section) => (
             <button
               key={section}
               type="button"
               className={["settingsTab", activeSection === section ? "isSelected" : ""].filter(Boolean).join(" ")}
+              aria-pressed={activeSection === section}
               onClick={() => setActiveSection(section)}
             >
               {sectionLabel(section, t)}
@@ -376,14 +378,9 @@ function AiSettingsPanelContent({ i18n, settings, updateSettings }: Props): Reac
       {activeSection === "limits" ? (
         <LimitsSection t={t} limits={normalized.limits} usage={usage} onChange={updateLimits} />
       ) : null}
-      <details className="card" style={{ marginTop: 20 }}>
-        <summary style={{ padding: 16, cursor: "pointer" }}>{t("ext.ai.jev.title")}</summary>
-        <div className="cardBody" style={{ display: "grid", gap: 12 }}>
-          <p style={{ margin: 0 }}>{t("ext.ai.jev.scope")}</p>
-          <p style={{ margin: 0 }}>{t("ext.ai.jev.configuration")}</p>
-          <p style={{ margin: 0 }}>{t("ext.ai.jev.validation")}</p>
-        </div>
-      </details>
+      {activeSection === "jev" ? (
+        <JevConnectionSection t={t} connection={normalized.jev} onChange={(jev) => updateSettings({ jev })} />
+      ) : null}
     </div>
   );
 }
@@ -896,6 +893,11 @@ function normalizeSettings(raw: Record<string, unknown>, defaults: AiExtensionSe
     profiles: ensureDefaultProfiles(profiles),
     limits: normalizeLimits(isRecord(raw.limits) ? raw.limits : base.limits),
     model_catalog_version: asString(raw.model_catalog_version, base.model_catalog_version),
+    jev: isRecord(raw.jev) ? {
+      enabled: raw.jev.enabled === true,
+      url: asString(raw.jev.url, "http://127.0.0.1:11435"),
+      model: asString(raw.jev.model, "laya:multilingual"),
+    } : null,
   };
 }
 
@@ -965,6 +967,7 @@ function sectionLabel(section: Section, t: ToposyncHost["i18n"]["t"]): string {
   if (section === "ollama") return t("ext.ai.settings.ollama", {}, "Ollama");
   if (section === "profiles") return t("ext.ai.settings.profiles", {}, "Perfis");
   if (section === "providers") return t("ext.ai.settings.providers", {}, "Provedores");
+  if (section === "jev") return t("ext.ai.jev.tab");
   return t("ext.ai.settings.limits", {}, "Limites");
 }
 

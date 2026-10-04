@@ -39,6 +39,30 @@ export type AiExtensionSettings = {
   profiles: AiProfileConfig[];
   limits: AiLimitSettings;
   model_catalog_version: string;
+  jev?: OllayaConnectionSettings | null;
+};
+
+export type OllayaConnectionSettings = {
+  enabled: boolean;
+  url: string;
+  model: string;
+};
+
+export type JevConnectionInfo = {
+  source: "defaults" | "settings" | "environment";
+  connection: OllayaConnectionSettings | null;
+  active_backend: "ollaya" | "typesafe" | null;
+  reason: string | null;
+};
+
+export type JevConnectionTest = {
+  ok: boolean;
+  reason: string;
+  connection: OllayaConnectionSettings;
+  checked_at: string;
+  experimental: true;
+  semantic_qualified: false;
+  review_required: true;
 };
 
 export type AiModelCatalogEntry = {

@@ -22,6 +22,16 @@ export type StreamTextureSnapshot = {
 
 type Listener = () => void;
 
+export function textureFrameVersion(texture: THREE.Texture): number | string {
+  const video = texture.image;
+  // VideoTexture and CanvasTexture already mark each decoded frame dirty.
+  // Older video implementations only update their texture during a render.
+  if (video instanceof HTMLVideoElement && typeof video.requestVideoFrameCallback !== "function") {
+    return `${texture.version}:${video.currentTime}`;
+  }
+  return texture.version;
+}
+
 const HEARTBEAT_TTL_SECONDS = 45;
 const MSE_CODEC_REQUEST = "avc1.640029,avc1.64002A,avc1.640033,avc1.42E01E,mp4a.40.2,opus";
 const MSE_INIT_TIMEOUT_MS = 6000;

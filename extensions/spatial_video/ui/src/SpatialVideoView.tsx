@@ -18,7 +18,7 @@ import { createProjectionGeometry } from "./projectionGeometry";
 import { resolveActiveProjectionPose } from "./ptzProjection";
 import { readSpatialVideoSettings, SPATIAL_VIDEO_RENDER_VIEW_ID } from "./spatialSettings";
 import { SpatialVideoCompatibilityNotice } from "./SpatialVideoCompatibilityNotice";
-import { StreamTextureSource } from "./streamTexture";
+import { StreamTextureSource, textureFrameVersion } from "./streamTexture";
 import type { CameraControlPointSet, CameraLiveView, PtzPreset, PtzStatus, WorldPoint } from "./types";
 
 type ProjectionEntry = {
@@ -385,6 +385,7 @@ export function SpatialVideoView({
   const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const projectionGroupRef = useRef<THREE.Group | null>(null);
   const projectionEntriesRef = useRef<Map<string, ProjectionEntry>>(new Map());
+  const needsRenderRef = useRef(true);
   const pointerDownRef = useRef<{ x: number; y: number; cameraX: number; cameraZ: number; moved: boolean } | null>(null);
   const lastSizeRef = useRef({ width: 1, height: 1 });
   const sceneBounds = useMemo(() => computeSceneBounds(elements, elementTypesById), [elements, elementTypesById]);
@@ -405,6 +406,9 @@ export function SpatialVideoView({
   const meshDensity = spatialSettings.meshDensity;
 
   const requestRender = useCallback(() => setVersion((prev) => prev + 1), []);
+  useEffect(() => {
+    needsRenderRef.current = true;
+  });
 
   const notificationOverlay = useMemo(() => {
     if (!activeNotification || !activeNotificationRenderer?.create2DOverlay) return null;
@@ -594,17 +598,32 @@ export function SpatialVideoView({
     resize();
 
     let raf = 0;
+    const renderedTextures = new WeakMap<THREE.Texture, number | string>();
+    const invalidate = () => { needsRenderRef.current = true; };
     const frame = () => {
       raf = requestAnimationFrame(frame);
+      if (document.hidden) return;
+      let shouldRender = needsRenderRef.current;
+      needsRenderRef.current = false;
       for (const entry of projectionEntriesRef.current.values()) {
         const map = entry.material.map;
-        if (map) map.needsUpdate = true;
+        if (map && entry.mesh.visible && renderedTextures.get(map) !== textureFrameVersion(map)) shouldRender = true;
       }
-      renderer.render(scene, camera);
+      if (shouldRender) {
+        renderer.render(scene, camera);
+        for (const entry of projectionEntriesRef.current.values()) {
+          const map = entry.material.map;
+          if (map && entry.mesh.visible) renderedTextures.set(map, textureFrameVersion(map));
+        }
+      }
     };
+    window.addEventListener("toposync:invalidate", invalidate);
+    document.addEventListener("visibilitychange", invalidate);
     raf = requestAnimationFrame(frame);
 
     return () => {
+      window.removeEventListener("toposync:invalidate", invalidate);
+      document.removeEventListener("visibilitychange", invalidate);
       observer.disconnect();
       cancelAnimationFrame(raf);
       for (const entry of projectionEntriesRef.current.values()) {

@@ -25,7 +25,7 @@ import { createProjectionGeometry } from "./projectionGeometry";
 import { resolveActiveProjectionPose } from "./ptzProjection";
 import { readSpatialVideoSettings, SPATIAL_VIDEO_RENDER_VIEW_ID } from "./spatialSettings";
 import { SpatialVideoCompatibilityNotice } from "./SpatialVideoCompatibilityNotice";
-import { StreamTextureSource } from "./streamTexture";
+import { StreamTextureSource, textureFrameVersion } from "./streamTexture";
 import type { CameraControlPointSet, CameraLiveView, PtzPreset, PtzStatus, WorldPoint } from "./types";
 
 type TrackedElement = {
@@ -753,7 +753,7 @@ export function SpatialVideo3DView({
 
     let raf = 0;
     let lastFrameTs = 0;
-    const renderedTextures = new WeakMap<THREE.Texture, { version: number; time: number | null }>();
+    const renderedTextures = new WeakMap<THREE.Texture, number | string>();
     const frame = (ts: number) => {
       raf = requestAnimationFrame(frame);
       if (document.hidden) {
@@ -793,13 +793,7 @@ export function SpatialVideo3DView({
       for (const entry of projectionEntriesRef.current.values()) {
         const map = entry.material.map;
         if (!map || !entry.mesh.visible) continue;
-        const previous = renderedTextures.get(map);
-        if (previous?.version !== map.version) shouldRender = true;
-        // Older browsers update VideoTexture during render instead of via a frame callback.
-        const video = map.image;
-        if (video instanceof HTMLVideoElement && typeof video.requestVideoFrameCallback !== "function" && previous?.time !== video.currentTime) {
-          shouldRender = true;
-        }
+        if (renderedTextures.get(map) !== textureFrameVersion(map)) shouldRender = true;
       }
       if (controls.update()) shouldRender = true;
       if (shouldRender || needsRenderRef.current) {
@@ -808,10 +802,7 @@ export function SpatialVideo3DView({
         for (const entry of projectionEntriesRef.current.values()) {
           const map = entry.material.map;
           if (map && entry.mesh.visible) {
-            renderedTextures.set(map, {
-              version: map.version,
-              time: map.image instanceof HTMLVideoElement ? map.image.currentTime : null,
-            });
+            renderedTextures.set(map, textureFrameVersion(map));
           }
         }
       }

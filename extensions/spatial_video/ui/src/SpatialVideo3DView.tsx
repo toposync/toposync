@@ -539,6 +539,7 @@ export function SpatialVideo3DView({
   }, [compositionId]);
 
   const candidates = useMemo(() => resolveProjectionCandidates(elements, elementTypesById, liveViews), [elementTypesById, elements, liveViews]);
+  const ptzCandidates = useMemo(() => candidates.filter((candidate) => candidate.hasPtz !== false), [candidates]);
 
   const activePoses = useMemo(() => {
     const out = new Map<string, ReturnType<typeof resolveActiveProjectionPose>>();
@@ -558,13 +559,13 @@ export function SpatialVideo3DView({
   }, [candidates, presetsByCamera, ptzByCamera]);
 
   useEffect(() => {
-    if (candidates.length === 0) {
+    if (ptzCandidates.length === 0) {
       setPresetsByCamera({});
       return;
     }
     const controller = new AbortController();
     void Promise.all(
-      candidates.map(async (candidate) => {
+      ptzCandidates.map(async (candidate) => {
         try {
           const presets = await fetchCameraPtzPresets(candidate.cameraId, candidate.cameraSourceId, controller.signal);
           return [candidate.cameraId, presets] as const;
@@ -579,18 +580,22 @@ export function SpatialVideo3DView({
       setPresetsByCamera(next);
     });
     return () => controller.abort();
-  }, [candidates]);
+  }, [ptzCandidates]);
 
   useEffect(() => {
-    if (candidates.length === 0) return;
+    if (ptzCandidates.length === 0) {
+      setPtzByCamera({});
+      return;
+    }
     let cancelled = false;
+    const controller = new AbortController();
     let timeoutId: number | null = null;
     const poll = async () => {
       const next: Record<string, PtzStatus | null> = {};
       await Promise.all(
-        candidates.map(async (candidate) => {
+        ptzCandidates.map(async (candidate) => {
           try {
-            next[candidate.cameraId] = await fetchCameraPtzStatus(candidate.cameraId, candidate.cameraSourceId);
+            next[candidate.cameraId] = await fetchCameraPtzStatus(candidate.cameraId, candidate.cameraSourceId, controller.signal);
           } catch {
             next[candidate.cameraId] = null;
           }
@@ -604,9 +609,10 @@ export function SpatialVideo3DView({
     void poll();
     return () => {
       cancelled = true;
+      controller.abort();
       if (timeoutId != null) window.clearTimeout(timeoutId);
     };
-  }, [candidates]);
+  }, [ptzCandidates]);
 
   useEffect(() => {
     const container = containerRef.current;

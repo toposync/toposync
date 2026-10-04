@@ -225,6 +225,7 @@ export function resolveProjectionCandidates(
       id: `${element.id}:${liveView.id}`,
       cameraId,
       cameraSourceId: preferredVariant?.camera_source_id ?? null,
+      hasPtz: preferredVariant?.has_ptz ?? liveView.has_ptz ?? null,
       liveViewId: liveView.id,
       label: liveView.name || element.name || "Câmera",
       element,

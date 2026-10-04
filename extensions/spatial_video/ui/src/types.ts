@@ -110,6 +110,7 @@ export type CameraLiveVariant = {
   output_id?: string | null;
   quality_profile_id?: string | null;
   enabled?: boolean;
+  has_ptz?: boolean;
 };
 
 export type CameraLiveView = {
@@ -117,6 +118,7 @@ export type CameraLiveView = {
   camera_id?: string | null;
   name: string;
   enabled?: boolean;
+  has_ptz?: boolean;
   variants?: CameraLiveVariant[];
 };
 
@@ -141,6 +143,7 @@ export type ProjectionCandidate = {
   id: string;
   cameraId: string;
   cameraSourceId?: string | null;
+  hasPtz: boolean | null;
   liveViewId: string;
   label: string;
   element: CompositionElement;

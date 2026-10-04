@@ -89,6 +89,11 @@ class VisionTrackRuntime(TransformOperatorRuntime):
     def _world_anchor_for_packet(self, packet: Packet) -> dict[str, float] | None:
         if self._parsed.use_world_anchor == "never":
             return None
+        vision = packet.payload.get("vision")
+        detections = vision.get("detections") if isinstance(vision, dict) else None
+        # A frame's representative position cannot locate its other detections.
+        if isinstance(detections, list) and len(detections) != 1:
+            return None
         world = packet.payload.get("world_anchor")
         if not isinstance(world, dict):
             world = packet.payload.get("world")
@@ -590,6 +595,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         concurrency_key = f"vision.track:{backend.tracker_id}"
         runtime_metadata = dict(packet.metadata)
         runtime_metadata["camera_id"] = self._camera_id_for_packet(packet)
+        runtime_metadata.pop("world_anchor", None)
         if (world_anchor := self._world_anchor_for_packet(packet)) is not None:
             runtime_metadata["world_anchor"] = world_anchor
         if (

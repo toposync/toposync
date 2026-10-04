@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Literal
 
 import pytest
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.runtime import Packet
+from toposync_ext_cameras.area_events import AreaOccurrenceRuntime
+from toposync_ext_vision.processing.tasks.tracking import VisionTrackRuntime
 from toposync_ext_cameras.pipelines.postprocess import (
     CameraMappingRuntime,
     _parse_calibrated_views_as_control_point_sets,
@@ -52,6 +55,78 @@ def test_ray_ground_mapping_maps_only_the_proven_ground_region() -> None:
     assert mapper.map(0.05, 0.5) is None
     assert mapper.map_world_to_image(5.0, 5.0) == pytest.approx((0.5, 0.5))
     assert mapper.map_world_to_image(0.5, 5.0) is None
+
+
+def test_tracking_does_not_place_an_unmapped_person_at_another_person_position() -> None:
+    class Context:
+        async def run_blocking(self, function, /, *args, **kwargs):
+            kwargs.pop("concurrency_key", None)
+            return function(*args, **kwargs)
+
+    async def scenario() -> None:
+        dependencies = PipelineRuntimeDependencies()
+        mapping = CameraMappingRuntime(
+            {"calibrated_views": [{
+                "id": "fixed",
+                "stream_scope": {"physical_view_id": "fixed", "compatible_source_ids": ["main"]},
+                "projection_model": {
+                    "type": "camera_ray_ground_v2",
+                    "source_geometry": {"width": 640, "height": 480},
+                    "lens": {"type": "identity_rectilinear_v1"},
+                    "correspondences": [
+                        {"id": f"p{index}", "role": role,
+                         "image": {"x": u, "y": v}, "world": {"x": u * 10, "z": v * 10}}
+                        for index, (role, u, v) in enumerate([
+                            ("fit", .1, .1), ("fit", .9, .1), ("fit", .9, .9),
+                            ("fit", .1, .9), ("fit", .5, .1), ("fit", .5, .9),
+                            ("check", .3, .3), ("check", .7, .7),
+                        ])
+                    ],
+                },
+                "projection_quality": {"status": "ready"},
+            }]}, dependencies,
+        )
+        tracking = VisionTrackRuntime({"default_interval_seconds": 0}, dependencies)
+        area = AreaOccurrenceRuntime({
+            "area": {"id": "inside", "name": "Inside", "points": [
+                {"x": 2, "z": 4}, {"x": 4, "z": 4},
+                {"x": 4, "z": 6}, {"x": 2, "z": 6},
+            ]},
+            "minimum_duration_seconds": 0,
+        })
+        packet = Packet.create(stream_id="camera:test", payload={
+            "camera_id": "camera", "frame_ts": 100,
+            "frame_width": 640, "frame_height": 480,
+            "source": {"source_id": "main", "view_id": "fixed"},
+            "capture_evidence": {"capture_instance": "test", "generation": 1,
+                                 "sequence": 1, "published_at": time.time()},
+            "vision": {"detections": [
+                {"label": "person", "label_id": 1, "model_id": "fixture",
+                 "score": .95, "bbox01": [.2, .2, .4, .5]},
+                {"label": "person", "label_id": 1, "model_id": "fixture",
+                 "score": .9, "bbox01": [.92, .2, .98, .5]},
+            ]},
+        })
+        try:
+            mapped = (await mapping.process_packet(packet, Context()))[0]
+            detections = mapped.payload["vision"]["detections"]
+            assert "world_anchor" in detections[0]
+            assert "world_anchor" not in detections[1]
+            tracks = await tracking.process_packet(mapped, Context())
+            assert len(tracks) == 2
+            unlocated = next(p for p in tracks if p.payload["subject"]["bbox01"][0] > .9)
+            assert "world" not in unlocated.payload
+            assert "world_anchor" not in unlocated.payload
+            assert "world_anchor" not in unlocated.payload["subject"]
+            assert unlocated.payload.get("mapping", {}).get("status") != "mapped"
+            events = []
+            for tracked in tracks:
+                events.extend(await area.process_packet(tracked, Context()))
+            assert len(events) == 1
+        finally:
+            await tracking.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_ray_ground_mapping_supports_opencv_eight_term_brown_profile() -> None:

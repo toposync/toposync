@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from toposync.runtime.pipelines import Lifecycle, Packet
 from toposync_ext_vision.pipelines.schemas import VisionTrackConfig
 from toposync_ext_vision.processing.tasks.event_assembler import TrackEventAssembler
@@ -72,6 +74,27 @@ def test_track_event_keeps_same_tracklet_on_same_subject() -> None:
         assert opened[0].payload["tracklet_ids"] == ["trk:camera:test:1"]
         assert opened[0].payload["raw_tracking_id"] == "1"
         assert opened[0].payload["identity_id"] is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("keep_located_track", [True, False])
+def test_track_event_does_not_inherit_another_detection_position(keep_located_track: bool) -> None:
+    async def scenario() -> None:
+        located = _track("located", world_anchor={"x": 2.0, "z": 3.0})
+        unlocated = _track("unlocated", bbox01=(.7, .1, .9, .5))
+        packet = _packet(1, [located, unlocated] if keep_located_track else [unlocated])
+        packet.payload.update(world={"x": 2.0, "z": 3.0}, world_anchor={"x": 2.0, "z": 3.0},
+                              mapping={"status": "mapped"})
+        packet.payload["vision"]["detections"] = [{"label": "person"}, {"label": "person"}]
+        outputs = await _runtime().process_packet(packet, None)
+        missing = next(p for p in outputs if p.payload["tracklet_id"] == "unlocated")
+        assert "world" not in missing.payload
+        assert "world_anchor" not in missing.payload["subject"]
+        assert "mapping" not in missing.payload
+        if keep_located_track:
+            present = next(p for p in outputs if p.payload["tracklet_id"] == "located")
+            assert present.payload["world"] == {"x": 2.0, "z": 3.0}
 
     asyncio.run(scenario())
 

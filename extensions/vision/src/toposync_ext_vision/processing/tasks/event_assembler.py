@@ -198,7 +198,13 @@ class TrackEventAssembler:
             or _normalize_string(packet.metadata.get("camera_id"))
             or source_stream_id
         )
-        packet_world_anchor = _normalize_world_anchor(packet.payload.get("world"))
+        detections = vision.get("detections")
+        packet_world_anchor = (
+            _normalize_world_anchor(packet.payload.get("world"))
+            if len(raw_tracks) == 1
+            and (not isinstance(detections, list) or len(detections) == 1)
+            else None
+        )
         out: list[_TrackSnapshot] = []
         for raw in raw_tracks:
             if not isinstance(raw, dict):
@@ -519,6 +525,8 @@ class TrackEventAssembler:
         subject["lifecycle_epoch"] = self._lifecycle_epoch
         subject["lifecycle_sequence"] = int(state.event_code)
         object_world_anchor = object_data.get("world_anchor")
+        payload.pop("world", None)
+        payload.pop("world_anchor", None)
         if isinstance(object_world_anchor, dict):
             try:
                 payload["world"] = {
@@ -528,6 +536,9 @@ class TrackEventAssembler:
             except Exception:
                 pass
             payload["world_anchor"] = dict(object_world_anchor)
+        else:
+            # Mapping metadata inherited from the frame describes another object.
+            payload.pop("mapping", None)
         payload.update(
             {
                 "event_id": state.event_id,

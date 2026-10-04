@@ -237,6 +237,7 @@ def test_grouped_crossings_require_distinct_people_in_fixed_window_and_preserve_
         assert await send(3, "two", x=3) == []
         opened = await send(4, "two")
         assert len(opened) == 1 and opened[0].lifecycle == Lifecycle.OPEN
+        assert opened[0].payload["subject"]["started_ts"] == 1
         assert opened[0].payload["member_event_ids"] == ["one", "two"]
         updated = await send(5, "two")
         assert updated[0].stream_id == opened[0].stream_id
@@ -255,6 +256,7 @@ def test_grouped_crossings_require_distinct_people_in_fixed_window_and_preserve_
         )
         assert len(closed) == 1 and closed[0].lifecycle == Lifecycle.CLOSE
         assert closed[0].payload["group_observation"]["duration_seconds"] == 4
+        assert closed[0].payload["frame_ts"] == 5
         records = []
         store = NotificationStore(tmp_path / "notifications.sqlite3")
 
@@ -269,6 +271,7 @@ def test_grouped_crossings_require_distinct_people_in_fixed_window_and_preserve_
         assert sum(created for _, created in records) == 1
         assert len({record.id for record, _ in records}) == 1
         assert records[-1][0].payload["lifecycle"] == "close"
+        assert records[-1][0].payload["event"]["duration_seconds"] == 4
         assert await send(5, "two") == []  # delayed replay cannot reopen crossing
 
         assert await send(21, "three", x=3) == []

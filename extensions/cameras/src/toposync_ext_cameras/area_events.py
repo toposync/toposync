@@ -344,8 +344,7 @@ def build_area_occurrence_graph(*, preset, camera_id, source_id, detection_model
             "include_stationary_members": True, "update_interval_seconds": 1,
         }})
         nodes[-1]["config"]["description"] = notification_description or (
-            "{{payload.category_summary.member_count}} pessoas entraram em até cinco segundos. "
-            "{{payload.group_observation.duration_seconds}} s entre a primeira entrada e a última evidência."
+            "{{payload.category_summary.member_count}} pessoas entraram em até cinco segundos."
         )
         nodes[-1]["config"]["include_payload_paths"] = ["group_observation", "area_occurrence", "area_id"]
     return build_pipeline_graph_v2(graph_uid=graph_uid, nodes=nodes, edges=_linear_edges([node["id"] for node in nodes]))

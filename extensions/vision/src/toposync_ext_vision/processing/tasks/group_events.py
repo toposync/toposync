@@ -543,6 +543,8 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         }
         if world_envelope := self._world_envelope(group):
             subject["world_envelope"] = world_envelope
+        if group.first_seen_packet_ts is not None:
+            subject["started_ts"] = group.first_seen_packet_ts
         return subject
 
     def _build_group_packet(
@@ -590,6 +592,10 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         )
         if trigger is not None:
             payload["member_subject"] = dict(trigger.subject)
+        if group.last_seen_packet_ts is not None:
+            payload["frame_ts"] = group.last_seen_packet_ts
+            if isinstance(payload.get("media"), dict):
+                payload["media"] = {**payload["media"], "ts": group.last_seen_packet_ts}
         if world_envelope := subject.get("world_envelope"):
             payload["world_envelope"] = world_envelope
         vision_raw = payload.get("vision")

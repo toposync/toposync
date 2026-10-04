@@ -53,8 +53,12 @@ function priorityHex(priority: Priority): number {
 }
 
 function formatDurationCompact(secondsRaw: unknown): string | null {
-  const seconds = Math.floor(asNumber(secondsRaw, 0));
-  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const roundedSeconds = Math.round(asNumber(secondsRaw, 0) * 10) / 10;
+  if (!Number.isFinite(roundedSeconds) || roundedSeconds <= 0) return null;
+  if (roundedSeconds < 60) {
+    return `${roundedSeconds.toLocaleString(i18n.getLocale(), { maximumFractionDigits: 1 })}s`;
+  }
+  const seconds = Math.floor(roundedSeconds);
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   if (mins <= 0) return `${secs}s`;

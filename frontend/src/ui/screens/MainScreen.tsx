@@ -151,11 +151,12 @@ function formatTimestampMillis(locale: string, tsMillis: number | undefined): st
   }
 }
 
-function formatDurationVerbose(secondsRaw: unknown): string | null {
+function formatDurationVerbose(secondsRaw: unknown, locale: string): string | null {
   const totalSeconds = asFiniteNumber(secondsRaw);
   if (totalSeconds == null || totalSeconds < 0) return null;
-  const seconds = Math.floor(totalSeconds);
-  if (seconds < 60) return `${seconds}s`;
+  const roundedSeconds = Math.round(totalSeconds * 10) / 10;
+  if (roundedSeconds < 60) return `${roundedSeconds.toLocaleString(locale, { maximumFractionDigits: 1 })}s`;
+  const seconds = Math.floor(roundedSeconds);
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   if (mins < 60) return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
@@ -606,7 +607,7 @@ export function MainScreen({
     const trackingId = asTrimmedString(payload.tracking_id) || asTrimmedString(data.tracking_id);
     const eventId = asTrimmedString(payload.event_id) || asTrimmedString(data.event_id);
     const eventCode = asTrimmedString(payload.event_code) || asTrimmedString(data.event_code);
-    const duration = formatDurationVerbose(event.duration_seconds);
+    const duration = formatDurationVerbose(event.duration_seconds, locale);
     const createdAt = formatDateTimeLong(locale, activeNotification.createdAt);
     const updatedAt = formatDateTimeLong(locale, activeNotification.updatedAt);
 

@@ -12,6 +12,7 @@ from toposync.runtime.pipelines import (
     PipelineRuntimeDependencies,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
 
@@ -62,7 +63,6 @@ def test_camera_source_treats_capture_start_timeout_as_transient(monkeypatch) ->
         register_camera_pipeline_operators(registry)
 
         graph = {
-            "schema_version": 1,
             "nodes": [
                 {
                     "id": "camera",
@@ -72,10 +72,13 @@ def test_camera_source_treats_capture_start_timeout_as_transient(monkeypatch) ->
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
             "edges": [
-                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}}
+                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"},
+                 "traffic": {"modality": "video", "semantic_class": "frame", "continuous": True}}
             ],
         }
-        pipeline = Pipeline(name="camera_source_start_timeout", graph=graph)
+        pipeline = Pipeline(name="camera_source_start_timeout", graph=build_pipeline_graph_v2(
+            graph_uid="camera_source_start_timeout", nodes=graph["nodes"], edges=graph["edges"],
+        ))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(
             compiled=compiled,
@@ -88,13 +91,15 @@ def test_camera_source_treats_capture_start_timeout_as_transient(monkeypatch) ->
         snapshot = runtime.snapshot()
         runtime_obj = runtime._runtime_by_node["camera"]
         await runtime.stop()
+        states = list(runtime_obj._capture_service._open_states.values())
+        assert len(states) == 1
         return (
             _SlowFrameGrabber.start_calls,
             list(_SlowFrameGrabber.init_backends),
             {
                 "node": (snapshot.get("nodes") or {}).get("camera") or {},
-                "backend_override": getattr(runtime_obj, "_backend_override", None),
-                "last_start_error": getattr(runtime_obj, "_last_start_error", ""),
+                "backend_override": states[0].backend_override,
+                "last_start_error": states[0].last_start_error,
             },
         )
 

@@ -469,7 +469,13 @@ class _SettingsStore:
         )
 
 
-def test_camera_source_bootstraps_ptz_guard_and_leaves_non_ptz_unchanged() -> None:
+def test_camera_source_bootstraps_ptz_guard_and_leaves_non_ptz_unchanged(monkeypatch) -> None:
+    import toposync_ext_cameras.pipelines.operators as camera_ops
+
+    clock = [100.0]
+    monkeypatch.setattr(camera_ops, "time", SimpleNamespace(
+        monotonic=lambda: clock[0], time=lambda: 1000 + clock[0],
+    ))
     async def scenario() -> tuple[
         list[dict[str, Any]],
         list[Packet | None],
@@ -488,6 +494,7 @@ def test_camera_source_bootstraps_ptz_guard_and_leaves_non_ptz_unchanged() -> No
                     hub_key=f"hub:{request.camera_id}",
                     grabber=object(),
                     resolved=SimpleNamespace(
+                        fps=5.0,
                         camera_id=request.camera_id,
                         camera_name="Front",
                         source_id=request.source_id,
@@ -515,6 +522,7 @@ def test_camera_source_bootstraps_ptz_guard_and_leaves_non_ptz_unchanged() -> No
                     height=8,
                     width=8,
                     metrics={"backend": "test", "source_status": "live"},
+                    capture_evidence={},
                 )
 
         _PTZ_PHYSICAL_REFRESH_AFTER_BY_DEVICE.clear()
@@ -561,7 +569,10 @@ def test_camera_source_bootstraps_ptz_guard_and_leaves_non_ptz_unchanged() -> No
             node_id="source",
             logger=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
         )
-        packets = [await ptz_runtime.produce(context) for _index in range(6)]
+        packets = []
+        for index in range(6):
+            clock[0] = 100.0 + index * 0.25
+            packets.append(await ptz_runtime.produce(context))
 
         fixed_calls = 0
         fixed_services = ServiceRegistry()

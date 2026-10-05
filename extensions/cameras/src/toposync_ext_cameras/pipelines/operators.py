@@ -1438,6 +1438,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._lease_id = ""
         self._grabber: Any | None = None
         self._last_ts = 0.0
+        self._frame_interval_seconds = 0.0
+        self._next_frame_monotonic = 0.0
         self._camera_name = ""
         self._camera_id = ""
         self._source_id = ""
@@ -1485,6 +1487,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         except CameraCaptureTransientError as exc:
             raise _CameraSourceTransientError(str(exc)) from exc
         resolved = lease.resolved
+        self._frame_interval_seconds = 1.0 / float(resolved.fps)
         self._waiting_for_source_config = False
         self._camera_id = resolved.camera_id
         self._camera_name = resolved.camera_name
@@ -1632,6 +1635,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         if lease_id:
             await self._capture_service.release(lease_id)
         self._last_ts = 0.0
+        self._next_frame_monotonic = 0.0
 
     def _capture_metrics_snapshot(self) -> dict[str, Any]:
         if self._grabber is None:
@@ -1715,6 +1719,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             await self._stop_grabber_if_needed()
             return None
 
+        # Another consumer can raise the shared decoder cadence without raising ours.
+        if self._grabber is not None and time.monotonic() < self._next_frame_monotonic:
+            return None
+
         try:
             self._record_source_health(context, status="starting")
             await self._ensure_grabber(context)
@@ -1760,6 +1768,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             self._grabber = None
             self._lease_id = ""
             self._last_ts = 0.0
+            self._next_frame_monotonic = 0.0
         frame = capture_frame.frame
         frame_ts = capture_frame.frame_ts
         if frame is None or not frame_ts:
@@ -1767,6 +1776,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         if not capture_frame.fresh:
             return None
         self._last_ts = frame_ts
+        now = time.monotonic()
+        self._next_frame_monotonic += self._frame_interval_seconds
+        if self._next_frame_monotonic <= now:
+            self._next_frame_monotonic = now + self._frame_interval_seconds
 
         ptz_snapshot = await self._ptz_geometry_snapshot()
         ptz_state = (
@@ -1858,6 +1871,9 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             await context.sleep(max(0.05, float(self._config.poll_interval_ms) / 1000.0))
             return
         sleep_s = max(0.001, float(self._config.poll_interval_ms) / 1000.0)
+        remaining = self._next_frame_monotonic - time.monotonic()
+        if self._grabber is not None and remaining > 0.0:
+            sleep_s = min(sleep_s, max(0.001, remaining))
         if self._waiting_for_source_config:
             sleep_s = max(0.25, sleep_s)
         await context.sleep(sleep_s)

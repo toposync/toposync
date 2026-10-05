@@ -771,19 +771,22 @@ export function MainScreen({
     let requestController: AbortController | null = null;
 
     const loadCameraLiveViews = async (showLoading: boolean) => {
+      if (document.hidden) return;
       if (showLoading) setCameraLiveViewsLoading(true);
       requestController?.abort();
-      requestController = new AbortController();
+      const controller = new AbortController();
+      requestController = controller;
       try {
-        const payload = await listStreamingCameraLiveViews({ signal: requestController.signal });
-        if (cancelled || requestController.signal.aborted) return;
+        const payload = await listStreamingCameraLiveViews({ signal: controller.signal });
+        if (cancelled || controller.signal.aborted) return;
         setCameraLiveViews(Array.isArray(payload) ? payload : []);
         setCameraLiveViewsError(null);
       } catch (error) {
-        if (cancelled || isAbortError(error)) return;
+        if (cancelled || controller.signal.aborted || isAbortError(error)) return;
         setCameraLiveViewsError(errorMessage(error));
       } finally {
-        if (!cancelled && !requestController?.signal.aborted && showLoading) setCameraLiveViewsLoading(false);
+        if (!cancelled && !controller.signal.aborted) setCameraLiveViewsLoading(false);
+        if (requestController === controller) requestController = null;
       }
     };
 
@@ -791,11 +794,17 @@ export function MainScreen({
     const intervalId = window.setInterval(() => {
       void loadCameraLiveViews(false);
     }, LIVE_VIEWS_REFRESH_MS);
+    const onVisibilityChange = () => {
+      if (document.hidden) requestController?.abort();
+      else void loadCameraLiveViews(false);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
       cancelled = true;
       requestController?.abort();
       window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [streamingAvailability]);
 

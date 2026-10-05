@@ -3969,6 +3969,7 @@ function AvailableStreamsDashboard({
   }, []);
 
   useEffect(() => {
+    if (!tabVisible || !isActive) return;
     let cancelled = false;
     let firstLoadPending = true;
 
@@ -4004,7 +4005,7 @@ function AvailableStreamsDashboard({
       liveViewsRequestRef.current?.abort();
       window.clearInterval(intervalId);
     };
-  }, []);
+  }, [tabVisible, isActive]);
 
   const enabledLiveViews = useMemo(() => {
     const normalizedCameraId = String(cameraId || "").trim();

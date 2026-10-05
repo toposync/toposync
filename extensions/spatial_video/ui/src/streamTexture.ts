@@ -181,6 +181,16 @@ export class StreamTextureSource {
   private contentRect: MediaContentRect | null = null;
   private contentRectAuthoritative = false;
   private destroyed = false;
+  private onVisibilityChange = () => {
+    if (!document.hidden) {
+      this.start();
+      return;
+    }
+    this.abortController?.abort();
+    this.abortController = null;
+    this.resetPlaybackArtifacts();
+    this.setSnapshot({ status: "idle", message: "Transmissão pausada.", transport: null, texture: null });
+  };
   private snapshot: StreamTextureSnapshot = {
     status: "idle",
     message: "Aguardando transmissão.",
@@ -205,7 +215,9 @@ export class StreamTextureSource {
   }
 
   start(): void {
-    if (this.abortController || this.destroyed) return;
+    if (this.destroyed) return;
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
+    if (this.abortController || document.hidden) return;
     this.abortController = new AbortController();
     this.setSnapshot({ status: "loading", message: "Preparando transmissão espacial.", transport: null, texture: null, contentRect: null });
     void this.startAsync(this.abortController.signal);
@@ -213,6 +225,7 @@ export class StreamTextureSource {
 
   destroy(): void {
     this.destroyed = true;
+    document.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.stopHeartbeat();
     this.clearFrameTimer();
     this.abortController?.abort();
@@ -303,6 +316,7 @@ export class StreamTextureSource {
 
         try {
           await primeTransmissionDemand(playback.transmission.id, selection.output.output_id, this.qualityProfileId, signal);
+          if (signal.aborted || this.destroyed) return;
           this.startHeartbeat(playback.transmission.id, selection.transport, selection.output.output_id, this.qualityProfileId);
           if (selection.transport === "mse") await this.startMse(selection.output.url, signal);
           else if (selection.transport === "hls") await this.startHls(selection.output.url, signal);
@@ -329,7 +343,8 @@ export class StreamTextureSource {
 
   private startHeartbeat(transmissionId: string, transport: StreamingTransport, outputId: string | null, qualityProfileId: string | null): void {
     const run = () => {
-      const controller = new AbortController();
+      const signal = this.abortController?.signal;
+      if (!signal || signal.aborted) return;
       void heartbeatTransmissionDemand({
         transmissionId,
         playbackSessionId: this.playbackSessionId,
@@ -337,7 +352,7 @@ export class StreamTextureSource {
         outputId,
         qualityProfileId,
         ttlSeconds: HEARTBEAT_TTL_SECONDS,
-        signal: controller.signal,
+        signal,
       }).catch(() => undefined);
     };
     run();
@@ -356,6 +371,7 @@ export class StreamTextureSource {
 
   private waitForVideoFrame(video: HTMLVideoElement, signal: AbortSignal, timeoutMs = FIRST_FRAME_TIMEOUT_MS): Promise<void> {
     return new Promise((resolve, reject) => {
+      signal.throwIfAborted();
       let done = false;
       const cleanup = () => {
         video.removeEventListener("loadeddata", onFrame);

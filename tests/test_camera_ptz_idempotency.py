@@ -387,3 +387,45 @@ def test_ptz_preset_http_retries_only_reconcile_ambiguous_mutations(
         client.portal.call(exercise_cancellation_windows)
         assert set_calls["Cancelled create"] == 1
         assert remove_calls["cancelled-remove"] == 1
+
+
+def test_ptz_preset_http_removal_checks_expected_identity_before_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from toposync_ext_cameras.onvif import OnvifPtzPreset
+
+    presets = {"007": "User view"}
+    remove_calls = []
+
+    class FakeOnvifClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def get_ptz_presets(self, *args, **kwargs):
+            return [OnvifPtzPreset(token=token, name=name) for token, name in presets.items()]
+
+        async def remove_preset(self, *args, profile_token, preset_token, **kwargs):
+            remove_calls.append((profile_token, preset_token))
+            presets.pop(preset_token)
+
+    monkeypatch.setattr("toposync_ext_cameras.plugin.OnvifClient", FakeOnvifClient)
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        endpoint = "/api/cameras/cameras/cam1/ptz/presets/007"
+        rejected = client.delete(
+            endpoint,
+            params={"source_id": "zoom", "expected_preset_name": "Temporary return"},
+        )
+        assert rejected.status_code == 409, rejected.text
+        assert rejected.json()["detail"] == "Preset identity changed"
+        assert remove_calls == []
+        assert presets == {"007": "User view"}
+
+        params = {"source_id": "zoom", "expected_preset_name": "User view"}
+        removed = client.delete(endpoint, params=params)
+        repeated = client.delete(endpoint, params=params)
+        assert removed.status_code == 200, removed.text
+        assert repeated.status_code == 200, repeated.text
+        assert removed.json() == repeated.json() == {"ok": True}
+        assert remove_calls == [("ptz-token", "007")]
+        assert presets == {}

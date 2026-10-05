@@ -4591,6 +4591,7 @@ class CamerasExtension(BaseExtension):
             camera_id: str,
             preset_token: str,
             source_id: str = "",
+            expected_preset_name: str = "",
         ) -> CameraPtzActionResponse:
             _require_auth(request, action="core:settings:write")
             cid = str(camera_id or "").strip()
@@ -4607,6 +4608,7 @@ class CamerasExtension(BaseExtension):
                     camera_id=cid,
                     camera_source_id=str(source_id or "").strip() or None,
                     preset_token=token,
+                    expected_preset_name=str(expected_preset_name or "").strip() or None,
                 )
             except KeyError:
                 raise HTTPException(

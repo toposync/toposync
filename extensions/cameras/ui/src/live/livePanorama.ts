@@ -3,9 +3,9 @@ export function isExternalMotionEpoch(previous: number | null, next: unknown, co
   return typeof next === 'number' && previous !== null && next !== previous && next !== completed;
 }
 
-export const livePanoramaStyles = `.livePanorama { color: var(--text); height: 100%; min-height: 420px; display: flex; flex-direction: column; background: var(--bg); box-sizing: border-box; }
+export const livePanoramaStyles = `.livePanorama { color: var(--text); height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--bg); box-sizing: border-box; }
 .livePanoramaEmpty { margin: auto; max-width: 440px; padding: 24px; color: var(--muted); text-align: center; }
-.livePanoramaControls { position: absolute; top: 14px; left: 64px; right: 14px; display: flex; align-items: center; gap: 8px; pointer-events: none; }
+.livePanoramaControls { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; pointer-events: none; }
 .livePanoramaControls .iconButton { pointer-events: auto; }
 .livePanoramaStatus { min-height: 36px; display: inline-flex; align-items: center; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in srgb, var(--panelSolid) 88%, transparent); box-shadow: 0 14px 38px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.10); backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate)); }
 .livePanoramaStop { margin-left: 4px; }

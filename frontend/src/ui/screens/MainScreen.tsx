@@ -1095,7 +1095,7 @@ export function MainScreen({
               activeNotificationRenderer={activeNotificationRenderer}
             />
           ) : activeRenderView ? (
-            <>
+            <div className={`registeredRenderView${notificationsOpen ? " withNotifications" : ""}`}>
               {activeRenderView.render({
                 compositionId: activeCompositionId,
                 compositionName,
@@ -1113,7 +1113,7 @@ export function MainScreen({
                   });
                 },
               })}
-            </>
+            </div>
           ) : renderMode === "streams" ? (
             <StreamsDashboard uiVisible={streamsOverlayVisible} isActive={renderMode === "streams"} />
           ) : renderMode === "camera-live" ? (

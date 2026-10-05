@@ -628,8 +628,8 @@ function LiveSession({ host, choice, refreshReferences }: {
     const message = error || (failedIntention && aligned
         ? 'O último apontamento não foi concluído. O vídeo está localizado novamente; você pode escolher outro destino.'
         : state?.error || '');
-    return <div style={{ position: 'relative', flex: 1, minHeight: 360, overflow: 'hidden' }}>
-    <host.ui.NavigableViewport label="Panorama navegável" contentKey={choice.artifact.id} contentSize={{ width: width * 2, height }} initialBounds={bounds} controllerRef={navigation} onContentClick={click} style={{ width: '100%', height: '100%', minHeight: 360, background: '#151920' }}>
+    return <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+    <host.ui.NavigableViewport label="Panorama navegável" contentKey={choice.artifact.id} contentSize={{ width: width * 2, height }} initialBounds={bounds} controllerRef={navigation} onContentClick={click} style={{ width: '100%', height: '100%', minHeight: 0, background: '#151920' }}>
       <img draggable={false} src={resolveToposyncUrl(choice.artifact.image_url)} alt="Panorama capturado — referência histórica" style={{ position: 'absolute', width, height, filter: 'grayscale(1) brightness(.65)', pointerEvents: 'none' }}/>
       <img draggable={false} src={resolveToposyncUrl(choice.artifact.image_url)} alt="" style={{ position: 'absolute', left: width, width, height, filter: 'grayscale(1) brightness(.65)', pointerEvents: 'none' }}/>
       <canvas ref={backgroundCanvas} aria-label="Fotografias confirmadas nesta sessão — referência histórica" style={{ position: 'absolute', width: width * 2, height, filter: 'grayscale(1) brightness(.65)', pointerEvents: 'none' }}/>

@@ -104,9 +104,21 @@ video {
 }
 
 .screenRoot {
+  --notification-rail-width: min(clamp(280px, 34vw, 420px), calc(100vw - 28px));
   position: absolute;
   inset: 0;
   z-index: var(--z-base);
+}
+
+.registeredRenderView {
+  position: absolute;
+  inset: 64px 0 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.registeredRenderView.withNotifications {
+  left: var(--notification-rail-width);
 }
 
 .viewportRoot,
@@ -2893,7 +2905,7 @@ video {
   top: 0;
   left: 0;
   height: 100%;
-  width: min(clamp(280px, 34vw, 420px), calc(100vw - 28px));
+  width: var(--notification-rail-width);
   padding: 14px;
   z-index: 20;
   pointer-events: none;
@@ -4594,6 +4606,12 @@ video {
 }
 
 @media (max-width: 720px) {
+  .registeredRenderView,
+  .registeredRenderView.withNotifications {
+    top: 112px;
+    left: 0;
+  }
+
   .overlayTopRight {
     top: 10px;
     right: 10px;

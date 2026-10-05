@@ -222,7 +222,8 @@ class _FakeCameraHub:
         self.acquire_calls.append(dict(kwargs))
         return self.grabber
 
-    async def release(self, *, key: str) -> None:
+    async def release(self, *, key: str, grabber: Any) -> None:
+        assert grabber is self.grabber
         self.release_calls.append(key)
 
 

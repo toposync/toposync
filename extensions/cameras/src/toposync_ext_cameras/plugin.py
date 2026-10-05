@@ -1787,7 +1787,7 @@ class CamerasExtension(BaseExtension):
 
             if release_hub_key:
                 try:
-                    await get_global_camera_hub().release(key=release_hub_key)
+                    await get_global_camera_hub().release(key=release_hub_key, grabber=entry.grabber)
                 except Exception:
                     return
 
@@ -1804,14 +1804,14 @@ class CamerasExtension(BaseExtension):
             tasks = list(snapshot_hub_release_tasks.values())
             for task in tasks:
                 task.cancel()
-            release_keys: list[str] = []
+            release_entries: list[SnapshotHubLeaseEntry] = []
             async with snapshot_hub_lock:
-                release_keys = [entry.hub_key for entry in snapshot_hub_leases.values()]
+                release_entries = list(snapshot_hub_leases.values())
                 snapshot_hub_leases.clear()
                 snapshot_hub_release_tasks.clear()
-            for hub_key in release_keys:
+            for entry in release_entries:
                 try:
-                    await get_global_camera_hub().release(key=hub_key)
+                    await get_global_camera_hub().release(key=entry.hub_key, grabber=entry.grabber)
                 except Exception:
                     pass
 
@@ -1870,6 +1870,7 @@ class CamerasExtension(BaseExtension):
             )
             expires_ts = time.time() + snapshot_warm_lease_ttl_s
             old_hub_key = ""
+            old_grabber: Any | None = None
             grabber: Any | None = None
             async with snapshot_hub_lock:
                 lease = snapshot_hub_leases.get(cache_key)
@@ -1879,11 +1880,12 @@ class CamerasExtension(BaseExtension):
                     _ensure_snapshot_hub_release_task(cache_key)
                 elif lease is not None:
                     old_hub_key = lease.hub_key
+                    old_grabber = lease.grabber
                     snapshot_hub_leases.pop(cache_key, None)
 
             if old_hub_key:
                 try:
-                    await get_global_camera_hub().release(key=old_hub_key)
+                    await get_global_camera_hub().release(key=old_hub_key, grabber=old_grabber)
                 except Exception:
                     pass
 

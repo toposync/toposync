@@ -279,7 +279,7 @@ class CameraCaptureService:
         if existing_id:
             existing = self._leases.get(existing_id)
             if existing is not None:
-                await self._hub.release(key=hub_key)
+                await self._hub.release(key=hub_key, grabber=grabber)
                 return existing
         state.last_observed_frame_ts = 0.0
         self._leases[lease_id] = lease
@@ -365,7 +365,7 @@ class CameraCaptureService:
         source_health_id = lease.source_health_id
         self._lease_ids_by_key.pop(lease_key, None)
         if hub_key:
-            await self._hub.release(key=hub_key)
+            await self._hub.release(key=hub_key, grabber=lease.grabber)
         if source_health_id:
             self._health_store.mark_shutdown(source_id=source_health_id)
 

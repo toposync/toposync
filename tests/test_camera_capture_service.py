@@ -79,7 +79,8 @@ class _Hub:
             raise RuntimeError("open failed")
         return self.grabber
 
-    async def release(self, *, key: str) -> None:
+    async def release(self, *, key: str, grabber: Any) -> None:
+        assert grabber is self.grabber
         self.release_calls.append(key)
 
 
@@ -205,7 +206,7 @@ def test_direct_transport_does_not_reuse_another_owners_relay_reader() -> None:
             relay, direct, shared = leases
             assert direct.grabber is not relay.grabber
             assert direct.grabber.url == direct_url
-            assert shared.grabber is relay.grabber
+            assert shared.grabber.get_latest()[0] is relay.grabber.get_latest()[0]
             assert all("secret" not in lease.hub_key and "@" not in lease.hub_key for lease in leases)
             await service.release(direct.lease_id)
             assert direct.grabber.stopped

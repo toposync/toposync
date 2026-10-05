@@ -75,12 +75,13 @@ def test_camera_hub_upgrades_frequency_without_invalidating_existing_reader_hand
             key="camera:test", rtsp_url="rtsp://example", target_fps=12.0, backend="auto"
         )
         snapshot = await hub.snapshot()
-        await hub.release(key="camera:test")
-        await hub.release(key="camera:test")
+        await hub.release(key="camera:test", grabber=low)
+        await hub.release(key="camera:test", grabber=high)
         return low, high, snapshot
 
     low, high, snapshot = asyncio.run(scenario())
-    assert low is high
+    assert low is not high
+    assert low.target_fps == high.target_fps
     assert low.target_fps == 12.0
     assert len(_FrameGrabber.instances) == 2
     assert _FrameGrabber.instances[0].stopped
@@ -120,7 +121,7 @@ def test_camera_hub_keeps_existing_reader_when_frequency_upgrade_fails() -> None
         except RuntimeError as exc:
             assert str(exc) == "upgrade open failed"
         snapshot = await hub.snapshot()
-        await hub.release(key="camera:test")
+        await hub.release(key="camera:test", grabber=low)
         return low, snapshot
 
     low, snapshot = asyncio.run(scenario())

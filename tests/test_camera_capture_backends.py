@@ -417,13 +417,13 @@ def test_camera_hub_starts_different_keys_without_global_lock_serialization() ->
         _FakeFrameGrabber.max_concurrent_starts = 0
         hub = CameraHub(frame_grabber_factory=_FakeFrameGrabber)
 
-        await asyncio.gather(
+        first, second = await asyncio.gather(
             hub.acquire(key="camera:a", rtsp_url="rtsp://a", target_fps=5.0, backend="auto"),
             hub.acquire(key="camera:b", rtsp_url="rtsp://b", target_fps=5.0, backend="auto"),
         )
         await asyncio.gather(
-            hub.release(key="camera:a"),
-            hub.release(key="camera:b"),
+            hub.release(key="camera:a", grabber=first),
+            hub.release(key="camera:b", grabber=second),
         )
         return int(_FakeFrameGrabber.max_concurrent_starts)
 

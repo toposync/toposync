@@ -1,4 +1,23 @@
-# Panorâmica ao vivo — aceleração e recuperação em validação, 25/09/2026
+# Panorâmica ao vivo — retorno preciso ainda reprovado, 04/10/2026
+
+## Resposta temporal e retorno — 04/10/2026
+
+Na revisão carregada `6a780f1b`, uma saída horizontal nominal de 0,025 por
+120 milissegundos deslocou 13,19 pixels. O único retorno reservado ficou em
+4,03 pixels, acima do limite de três na análise de 960×540. A estática final
+foi de 0,036 pixel, com correspondências distribuídas e sobreposição de 99,29%.
+O desvio já estava estável antes do Stop; não houve pulso corretivo ou repetição.
+
+Stop e estado parado foram confirmados, a configuração nativa foi restaurada
+exatamente e os presets anteriores foram preservados. A referência própria
+foi conservada porque o retorno óptico reprovou. Iluminação e horário diferem
+do ensaio histórico de 200 milissegundos: não há ganho mecânico proporcional
+ou repetibilidade qualificados. Cobertura e acompanhamento físico dependentes
+do retorno preciso continuam sem aprovação.
+
+A remoção HTTP de preset agora aceita o nome esperado e reutiliza a proteção
+de identidade existente no serviço; divergência recusa a mutação. Essa proteção
+de cadastro não certifica a posição física da câmera.
 
 ## Trajetória de retorno observada — 03/10/2026
 

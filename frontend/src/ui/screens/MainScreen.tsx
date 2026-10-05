@@ -1473,6 +1473,9 @@ export function MainScreen({
                           ) : n.description ? (
                             <div className="notificationCardDesc">{n.description}</div>
                           ) : null}
+                          {rawThumbUrl && !thumbUrl ? (
+                            <div className="cardBody">{t("core.ui.notifications.image_unavailable")}</div>
+                          ) : null}
                         </div>
                       </div>
 

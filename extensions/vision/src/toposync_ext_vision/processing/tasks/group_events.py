@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -196,6 +197,7 @@ class _MemberState:
     last_seen_packet_ts: float | None = None
     recognition_occurrence_id: str | None = None
     capture_evidence: dict[str, Any] | None = None
+    mapping: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -216,6 +218,7 @@ class _GroupState:
     last_emit_packet_ts: float | None = None
     last_bbox01: tuple[float, float, float, float] | None = None
     last_world_envelope: dict[str, Any] | None = None
+    last_observation: dict[str, Any] = field(default_factory=dict)
 
 
 class VisionGroupEventsRuntime(TransformOperatorRuntime):
@@ -465,10 +468,12 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         anchors = [item.world_anchor for item in self._active_members(group) if item.world_anchor]
         anchors = [item for item in anchors if item]
         if not anchors:
-            return group.last_world_envelope
+            # A previous group position is history, not a new mapped sample.
+            group.last_world_envelope = None
+            return None
         axes = sorted({axis for item in anchors for axis in item.keys() if axis in {"x", "y", "z"}})
         if not axes:
-            return group.last_world_envelope
+            return None
         center: dict[str, float] = {}
         for axis in axes:
             values = [float(item[axis]) for item in anchors if axis in item]
@@ -526,6 +531,8 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             }
             if member.world_anchor:
                 item["world_anchor"] = dict(member.world_anchor)
+            if member.mapping:
+                item["mapping"] = deepcopy(member.mapping)
             if member.recognition_occurrence_id:
                 item["recognition_occurrence_id"] = member.recognition_occurrence_id
             out.append(item)
@@ -568,6 +575,9 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         member_event_ids = list(subject["member_event_ids"])
         active_member_event_ids = list(subject["active_member_event_ids"])
         payload = dict(source_packet.payload)
+        # Group position and health belong to its members, not the trigger.
+        for key in ("world", "world_anchor", "world_envelope", "mapping"):
+            payload.pop(key, None)
         payload.pop("tracking_id", None)
         # A group never inherits the triggering member's individual identity.
         payload.pop("recognition", None)
@@ -600,12 +610,33 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         )
         if trigger is not None:
             payload["member_subject"] = dict(trigger.subject)
+        terminal = lifecycle == Lifecycle.CLOSE or (trigger is not None and trigger.lifecycle == Lifecycle.CLOSE)
+        if terminal:
+            for key in ("frame_ts", "ts", "media", "source", "capture_evidence"):
+                payload.pop(key, None)
+            payload.update(deepcopy(group.last_observation))
         if group.last_seen_packet_ts is not None:
             payload["frame_ts"] = group.last_seen_packet_ts
             if isinstance(payload.get("media"), dict):
                 payload["media"] = {**payload["media"], "ts": group.last_seen_packet_ts}
         if world_envelope := subject.get("world_envelope"):
             payload["world_envelope"] = world_envelope
+        members = [member for member in group.members.values() if member.active] or list(group.members.values())
+        mappings = [member.mapping for member in members if member.mapping]
+        if mappings:
+            mapped = sum(member.world_anchor is not None for member in members)
+            reasons = sorted({str(item.get("reason") or "object_position_unavailable")
+                              for item in mappings if item.get("status") == "unmapped"})
+            payload["mapping"] = {
+                **deepcopy(mappings[0]),
+                "status": "mapped" if mapped == len(members) else "partial" if mapped else "unmapped",
+                "mapped_members": mapped, "member_count": len(members),
+                "reasons": reasons,
+            }
+            payload["mapping"].pop("reason", None)
+            if reasons:
+                payload["mapping"]["reason"] = reasons[0]
+            subject["mapping"] = deepcopy(payload["mapping"])
         vision_raw = payload.get("vision")
         vision = dict(vision_raw) if isinstance(vision_raw, dict) else {}
         vision["task"] = "group_events"
@@ -645,7 +676,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             artifacts={
                 name: artifact
                 for name, artifact in source_packet.artifacts.items()
-                if not getattr(artifact, "private", False)
+                if not terminal and not getattr(artifact, "private", False)
             },
             metadata=metadata,
             parent_packet_id=source_packet.packet_id,
@@ -659,10 +690,16 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         now_monotonic: float,
         packet_ts: float | None,
     ) -> None:
-        if group.first_seen_monotonic <= 0.0:
+        if not group.members:
             group.first_seen_monotonic = now_monotonic
             group.first_seen_packet_ts = packet_ts
         group.last_seen_monotonic = now_monotonic
+        if packet_ts is not None and (group.last_seen_packet_ts is None or packet_ts >= group.last_seen_packet_ts):
+            group.last_observation = {
+                key: deepcopy(member.packet.payload[key])
+                for key in ("frame_ts", "ts", "media", "source", "capture_evidence")
+                if key in member.packet.payload
+            }
         if packet_ts is not None:
             group.last_seen_packet_ts = max(packet_ts, group.last_seen_packet_ts or packet_ts)
         group.camera_id = member.camera_id or group.camera_id
@@ -685,6 +722,8 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             recognition_occurrence_id=occurrence,
             capture_evidence=(dict(member.packet.payload["capture_evidence"])
                               if isinstance(member.packet.payload.get("capture_evidence"), dict) else None),
+            mapping=(deepcopy(member.packet.payload["mapping"])
+                     if isinstance(member.packet.payload.get("mapping"), dict) else None),
         )
         self._group_id_by_member_key[self._member_key(member.source_stream_id, member.event_id)] = (
             group.group_event_id

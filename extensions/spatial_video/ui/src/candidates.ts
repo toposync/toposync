@@ -97,6 +97,8 @@ export function completeControlPointCount(set: CameraControlPointSet): number {
 
 export function mappedControlPointSets(element: CompositionElement): CameraControlPointSet[] {
   const props = readRecord(element.props);
+  // A selected panorama owns projection; an invalid reference must not revive old geometry.
+  if (Object.prototype.hasOwnProperty.call(props, "panorama_mapping")) return [];
   const calibratedViews = Array.isArray(props.calibrated_views) ? props.calibrated_views : [];
   const mappedViews = calibratedViews
     .map((item, index): CameraControlPointSet | null => {

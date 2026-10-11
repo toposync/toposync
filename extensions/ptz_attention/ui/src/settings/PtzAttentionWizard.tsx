@@ -12,6 +12,7 @@ import type {
   AttentionValidationResponse,
   AttentionViewCatalogItem,
 } from "../types";
+import { PanoramaAttentionFields } from "./PanoramaAttentionFields";
 import { SubModal } from "./SubModal";
 
 type Translate = ReturnType<HostI18n["useI18n"]>["t"];
@@ -62,6 +63,7 @@ export function PtzAttentionWizard({
 }): React.ReactElement | null {
   const { t } = i18n.useI18n();
   const [step, setStep] = useState(0);
+  const [panoramic, setPanoramic] = useState(true);
   const [profile, setProfile] = useState<AttentionProfile>(DEFAULT_PROFILE);
   const [validation, setValidation] = useState<AttentionValidationResponse | null>(null);
   const [validating, setValidating] = useState(false);
@@ -71,6 +73,7 @@ export function PtzAttentionWizard({
   useEffect(() => {
     if (!open) return;
     setStep(0);
+    setPanoramic(!initialProfile || Boolean(initialProfile.panorama_element_id));
     setProfile(initialProfile ? cloneProfile(initialProfile) : { ...DEFAULT_PROFILE, event_policies: [], eligible_view_ids: [] });
     setValidation(null);
     setValidating(false);
@@ -169,6 +172,7 @@ export function PtzAttentionWizard({
     sharedObserver,
     sharedObserverAcknowledged,
     t,
+    panoramic,
   });
 
   function selectCamera(cameraId: string): void {
@@ -312,6 +316,7 @@ export function PtzAttentionWizard({
         sharedObserver,
         sharedObserverAcknowledged,
         t,
+        panoramic,
       }))
       .find(Boolean);
     if (firstError) {
@@ -376,7 +381,19 @@ export function PtzAttentionWizard({
             onUpdatePolicy={updateEventPolicy}
           />
         ) : null}
-        {step === 1 ? (
+        {step === 1 && panoramic ? <PanoramaAttentionFields t={t} cameras={cameras} profile={profile}
+          occupied={occupiedPtzDeviceIds} onChange={setProfile} sharedObserver={sharedObserver}
+          globalConfigure={catalog?.permissions.configure === true} /> : null}
+        {step === 1 && !panoramic ? <div className="ptzAttentionNotice" data-tone="warning">
+          {t("ext.ptz_attention.panorama.migrate_help")}
+          <button type="button" className="chipButton" onClick={() => {
+            setPanoramic(true);
+            setProfile(previous => ({ ...previous, mode: "shadow", resume_mode: null,
+              home_view_id: "", eligible_view_ids: [], home_target: null, attention_region: [], minimum_target_confidence: 0,
+              event_policies: previous.event_policies.map(policy => ({ ...policy, preferred_view_id: "" })) }));
+          }}>{t("ext.ptz_attention.panorama.migrate")}</button>
+        </div> : null}
+        {step === 1 && !panoramic ? (
           <CameraStep
             t={t}
             cameras={cameras}
@@ -817,7 +834,7 @@ function PolicyStep({ t, profile, onChange }: { t: Translate; profile: Attention
           <label className="ptzAttentionField"><span>{t("ext.ptz_attention.wizard.policy.settle", {}, "Settle timeout")} ({t("ext.ptz_attention.wizard.policy.seconds", {}, "seconds")})</span>{numberField("settle_timeout_seconds", profile.settle_timeout_seconds, 0.5, 120, 0.5)}</label>
           <label className="ptzAttentionField"><span>{t("ext.ptz_attention.wizard.policy.lease", {}, "Control lease duration")} ({t("ext.ptz_attention.wizard.policy.seconds", {}, "seconds")})</span>{numberField("lease_ttl_seconds", profile.lease_ttl_seconds, 3, 300, 1)}</label>
           <label className="ptzAttentionField"><span>{t("ext.ptz_attention.wizard.policy.maximum_moves", {}, "Maximum movements per minute")}</span>{numberField("max_movements_per_minute", profile.max_movements_per_minute, 1, 120, 1)}</label>
-          <label className="ptzAttentionField"><span>{t("ext.ptz_attention.wizard.policy.confidence", {}, "Minimum target confidence")}</span>{numberField("minimum_target_confidence", profile.minimum_target_confidence, 0, 1, 0.05)}</label>
+          {!profile.panorama_element_id ? <label className="ptzAttentionField"><span>{t("ext.ptz_attention.wizard.policy.confidence", {}, "Minimum target confidence")}</span>{numberField("minimum_target_confidence", profile.minimum_target_confidence, 0, 1, 0.05)}</label> : null}
         </div>
       </details>
     </section>
@@ -868,9 +885,9 @@ function SafetyStep({
           <div><input type="radio" name="attention-mode" disabled={paused} checked={selectedMode === "shadow"} onChange={() => onMode("shadow")} /><span className="ptzAttentionChoiceTitle">{t("ext.ptz_attention.wizard.mode.shadow.title", {}, "Shadow review")}</span></div>
           <div className="ptzAttentionChoiceMeta">{t("ext.ptz_attention.wizard.mode.shadow.desc", {}, "Evaluate without moving the camera.")}</div>
         </label>
-        <label className="ptzAttentionChoice" data-selected={selectedMode === "live_preset"}>
-          <div><input type="radio" name="attention-mode" disabled={paused} checked={selectedMode === "live_preset"} onChange={() => onMode("live_preset")} /><span className="ptzAttentionChoiceTitle">{t("ext.ptz_attention.wizard.mode.live.title", {}, "Live movement")}</span></div>
-          <div className="ptzAttentionChoiceMeta">{t("ext.ptz_attention.wizard.mode.live.desc", {}, "Move only among selected calibrated views.")}</div>
+        <label className="ptzAttentionChoice" data-selected={selectedMode === (profile.panorama_element_id ? "live_panorama" : "live_preset")}>
+          <div><input type="radio" name="attention-mode" disabled={paused} checked={selectedMode === (profile.panorama_element_id ? "live_panorama" : "live_preset")} onChange={() => onMode(profile.panorama_element_id ? "live_panorama" : "live_preset")} /><span className="ptzAttentionChoiceTitle">{t("ext.ptz_attention.wizard.mode.live.title", {}, "Live movement")}</span></div>
+          <div className="ptzAttentionChoiceMeta">{profile.panorama_element_id ? t("ext.ptz_attention.panorama.live_help") : t("ext.ptz_attention.wizard.mode.live.desc", {}, "Move only among selected calibrated views.")}</div>
         </label>
         <label className="ptzAttentionChoice" data-selected={selectedMode === "disabled"}>
           <div><input type="radio" name="attention-mode" disabled={paused} checked={selectedMode === "disabled"} onChange={() => onMode("disabled")} /><span className="ptzAttentionChoiceTitle">{t("ext.ptz_attention.wizard.mode.disabled.title", {}, "Disabled")}</span></div>
@@ -881,8 +898,8 @@ function SafetyStep({
       <div className="ptzAttentionMetrics">
         <SummaryMetric label={t("ext.ptz_attention.wizard.summary.events", {}, "Event types")} value={profile.event_policies.filter((policy) => policy.enabled).map((policy) => policy.event_type).join(", ") || "-"} />
         <SummaryMetric label={t("ext.ptz_attention.wizard.summary.camera", {}, "Camera")} value={camera?.name || profile.camera_id || "-"} />
-        <SummaryMetric label={t("ext.ptz_attention.wizard.summary.home", {}, "Home")} value={viewLabel(profile.home_view_id) || "-"} />
-        <SummaryMetric label={t("ext.ptz_attention.wizard.summary.views", {}, "Focus views")} value={profile.eligible_view_ids.map(viewLabel).join(", ") || "-"} />
+        <SummaryMetric label={t("ext.ptz_attention.wizard.summary.home", {}, "Home")} value={profile.home_target ? `${profile.home_target.x}, ${profile.home_target.z}` : viewLabel(profile.home_view_id) || "-"} />
+        <SummaryMetric label={profile.panorama_element_id ? t("ext.ptz_attention.panorama.region") : t("ext.ptz_attention.wizard.summary.views", {}, "Focus views")} value={profile.panorama_element_id ? `${profile.attention_region?.length ?? 0} ${t("ext.ptz_attention.panorama.vertices")}` : profile.eligible_view_ids.map(viewLabel).join(", ") || "-"} />
         <SummaryMetric label={t("ext.ptz_attention.wizard.mode", {}, "Execution mode")} value={t(`ext.ptz_attention.profile.mode.${profile.mode}`, {}, profile.mode)} />
         <SummaryMetric label={t("ext.ptz_attention.wizard.summary.hard_timeout", {}, "Hard focus timeout")} value={`${profile.max_focus_seconds} ${t("ext.ptz_attention.wizard.policy.seconds", {}, "seconds")}`} />
         <SummaryMetric
@@ -993,6 +1010,7 @@ function validateStep(
     sharedObserver: boolean;
     sharedObserverAcknowledged: boolean;
     t: Translate;
+    panoramic?: boolean;
   },
 ): string | null {
   if (step === 0 && profile.event_policies.filter((policy) => policy.enabled).length === 0) {
@@ -1003,7 +1021,10 @@ function validateStep(
     if (!isEnabledVideoSource(context.selectedCamera, profile.source_id)) {
       return context.t("ext.ptz_attention.wizard.error.source", {}, "Select a video source.");
     }
-    if (!profile.home_view_id || !context.readyViews.some((view) => view.id === profile.home_view_id)) {
+    if (context.panoramic && (!profile.panorama_element_id || !profile.home_target || (profile.attention_region?.length ?? 0) < 3)) {
+      return context.t("ext.ptz_attention.panorama.required");
+    }
+    if (!context.panoramic && (!profile.home_view_id || !context.readyViews.some((view) => view.id === profile.home_view_id))) {
       return context.t("ext.ptz_attention.wizard.error.home", {}, "Select a ready home view.");
     }
     if (context.sharedObserver && !context.sharedObserverAcknowledged) {
@@ -1058,7 +1079,7 @@ function canValidateProfile(
     profile.event_policies.some((policy) => policy.enabled) &&
     profile.camera_id &&
     isEnabledVideoSource(camera, profile.source_id) &&
-    readyViews.some((view) => view.id === profile.home_view_id) &&
+    (profile.panorama_element_id ? Boolean(profile.home_target && (profile.attention_region?.length ?? 0) >= 3) : readyViews.some((view) => view.id === profile.home_view_id)) &&
     (effectiveMode !== "live_preset" || hasDistinctReadyEventView(profile, readyViews)) &&
     (!sharedObserver || sharedAcknowledged),
   );

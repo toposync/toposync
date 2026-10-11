@@ -13,6 +13,7 @@ NotificationPriority = Literal["low", "medium", "high"]
 
 PERSON_STOPPED_OBJECT_CATEGORIES = ["person"]
 VEHICLE_STOPPED_OBJECT_CATEGORIES = ["car", "truck", "bus", "motorcycle"]
+PRESENCE_OBJECT_CATEGORIES = ["person", "dog", "cat"]
 PERSON_VEHICLE_INTERACTION_OBJECT_CATEGORIES = [
     *PERSON_STOPPED_OBJECT_CATEGORIES,
     *VEHICLE_STOPPED_OBJECT_CATEGORIES,
@@ -47,6 +48,29 @@ CAT_ACTIVITY_RECIPES = {
         "title": "{{camera_name}}: gato com ação observável de beber",
     },
 }
+
+
+def build_shared_camera_detection_nodes(
+    *, camera_id: str, source_id: str, detection_model_id: str
+) -> list[dict[str, Any]]:
+    return [
+        {"id": "source", "operator": "camera.source",
+         "config": {"camera_id": camera_id, "source_id": source_id, "fps": 4.0}},
+        {"id": "motion", "operator": "camera.motion_gate",
+         "config": {"threshold": 0.01, "activation_frames": 2, "hold_seconds": 6.0,
+                    "emit_when_idle": True}},
+        {"id": "cadence", "operator": "core.velocity_throttle",
+         "config": {"moving_interval_seconds": 0.01, "stopped_interval_seconds": 1.0,
+                    "key_field": "stream_id", "moving_field": "metadata.motion_gate_open",
+                    "default_moving": True}},
+        {"id": "motion_region", "operator": "camera.image_crop",
+         "config": {"region_mode": "motion"}},
+        {"id": "detect", "operator": "vision.detect",
+         "config": {"model_id": detection_model_id,
+                    "categories": [*PRESENCE_OBJECT_CATEGORIES, *VEHICLE_STOPPED_OBJECT_CATEGORIES],
+                    "confidence_threshold": 0.25, "emit_mode": "annotate",
+                    "use_image_region": True}},
+    ]
 
 
 class CameraObservationRegion(BaseModel):

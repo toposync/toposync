@@ -13,6 +13,7 @@ from toposync_ext_cameras.processing.panorama_mapping import (
     image_pixel_to_ray,
     map_ray_to_world,
     map_world_to_ray,
+    mapping_extrapolated,
     panorama_pixel_to_ray,
     pan_tilt_to_ray,
     preview_panorama_mapping,
@@ -31,7 +32,7 @@ def _ground_ray(x: float, z: float, *, height: float = 3.0) -> list[float]:
 
 def _points() -> list[dict]:
     return [
-        {"id": str(index), "role": "fit", "world_x": x, "world_z": z, "ray": _ground_ray(x, z)}
+        {"id": str(index), "world_x": x, "world_z": z, "ray": _ground_ray(x, z)}
         for index, (x, z) in enumerate(
             [
                 (-6, -6),
@@ -44,21 +45,6 @@ def _points() -> list[dict]:
                 (6, 0),
             ]
         )
-    ] + [
-        {
-            "id": "check-one",
-            "role": "check",
-            "world_x": 2.0,
-            "world_z": 1.0,
-            "ray": _ground_ray(2, 1),
-        },
-        {
-            "id": "check-two",
-            "role": "check",
-            "world_x": -2.0,
-            "world_z": -1.0,
-            "ray": _ground_ray(-2, -1),
-        },
     ]
 
 
@@ -110,94 +96,62 @@ def test_optical_pixels_use_intrinsics_and_the_observed_pose() -> None:
         image_pixel_to_ray(1, 1, {**lens, "fx": 0}, 0, 0)
 
 
-def test_known_plane_recovers_full_pan_support_and_rejects_opposite_rays() -> None:
-    result = estimate_panorama_mapping(_points())
-    assert result["quality"]["status"] == "ready"
+def test_four_controls_recover_known_plane_and_extrapolate_both_directions() -> None:
+    result = estimate_panorama_mapping(_points()[:4])
     assert result["preview"] == {"eligible": True, "status": "ready", "reasons": []}
-    assert result["quality"]["maximum_check_error_radians"] < 1e-8
-    assert len(result["support_polygon"]) == 4
+    assert result["quality"]["warnings"] == []
     json.dumps(result, allow_nan=False)
-    for x, z in ((-4, 0.01), (-4, -0.01), (4, 2), (-5, 5), (0, 0)):
+    for x, z in ((-4, .01), (-4, -.01), (0, 0), (6, 0), (6.0001, 0), (80, 25)):
         ray = map_world_to_ray(result, x, z)
         assert ray == pytest.approx(_ground_ray(x, z), abs=1e-8)
         assert map_ray_to_world(result, ray) == pytest.approx((x, z), abs=1e-8)
         assert map_ray_to_world(result, [-value for value in ray]) is None
-    assert map_world_to_ray(result, 8, 0) is None
-    assert map_ray_to_world(result, _ground_ray(8, 0)) is None
+        assert mapping_extrapolated(result, x, z) == (x > 6)
     assert map_ray_to_world(result, [1, 0, 0]) is None
 
 
-def test_noise_and_an_outlier_do_not_corrupt_independent_predictions() -> None:
-    points = _points()
-    generator = np.random.default_rng(21)
-    for point in points:
-        if point["role"] == "fit":
-            point["ray"] = (np.array(point["ray"]) + generator.normal(0, 0.0005, 3)).tolist()
-    points[4]["ray"] = [0, 0, 1]
-    result = estimate_panorama_mapping(points, angular_threshold_radians=0.01)
-    assert result["quality"]["status"] == "ready"
-    assert "4" not in result["inlier_point_ids"]
-    assert result["quality"]["number_of_inliers"] == 7
-    assert result["quality"]["maximum_check_error_radians"] < 0.005
-    assert result["preview"]["eligible"] is True
-    assert map_world_to_ray(result, 1, 2) == pytest.approx(_ground_ray(1, 2), abs=0.002)
-    points[5]["ray"] = [0, 0, 1]
-    insufficient = estimate_panorama_mapping(points, angular_threshold_radians=0.01)
-    assert insufficient["quality"]["number_of_inliers"] == 6
-    assert insufficient["quality"]["inlier_ratio"] == 0.75
-    assert insufficient["preview"]["eligible"] is False
-
-
-def test_holdouts_do_not_fit_the_model_and_must_be_independent() -> None:
+def test_every_control_influences_approximate_fit_without_an_error_gate() -> None:
     original = _points()
     reference = estimate_panorama_mapping(original)
     changed = copy.deepcopy(original)
-    changed[-1]["ray"] = _ground_ray(-2, -1, height=1.0)
-    rejected = estimate_panorama_mapping(changed)
-    assert rejected["matrix"] == reference["matrix"]
-    assert rejected["quality"]["status"] == "review"
-    assert "check_error_exceeds_threshold" in rejected["quality"]["reasons"]
-    assert rejected["preview"]["eligible"] is False
-    original[-1] = {**original[0], "id": "copied-fit", "role": "check"}
-    assert estimate_panorama_mapping(original)["quality"]["status"] == "review"
-    original[-1] = {**original[-2], "id": "copied-check"}
-    assert estimate_panorama_mapping(original)["quality"]["status"] == "review"
-    assert estimate_panorama_mapping(original[:-2])["quality"]["status"] == "review"
-    assert estimate_panorama_mapping(original[:5])["quality"]["status"] == "incomplete"
+    changed[0]["ray"] = _ground_ray(-6, -6, height=8)
+    result = estimate_panorama_mapping(changed)
+    assert result["matrix"] != reference["matrix"]
+    assert result["preview"]["eligible"] is True
+    assert result["quality"]["status"] == "ready"
+    assert result["quality"]["warnings"] == ["approximate_fit"]
+    assert len(result["quality"]["point_errors"]) == len(original)
+    assert {point["id"] for point in result["quality"]["point_errors"]} == {point["id"] for point in original}
+    assert estimate_panorama_mapping(changed) == result
+    assert map_world_to_ray(result, 1, 2) != pytest.approx(map_world_to_ray(reference, 1, 2), abs=.001)
 
 
-def test_preview_allows_only_missing_checks_and_keeps_activation_quality() -> None:
-    for points in (_points()[:6], _points()[:-2], _points()[:-1]):
-        result = estimate_panorama_mapping(points)
-        assert result["quality"]["status"] == "review"
-        assert result["preview"] == {
-            "eligible": True,
-            "status": "provisional",
-            "reasons": ["at_least_two_independent_check_points_required"],
-        }
+@pytest.mark.parametrize("count", range(4))
+def test_preview_requires_four_complete_controls(count: int) -> None:
+    result = estimate_panorama_mapping(_points()[:count])
+    assert result["quality"]["reasons"] == ["at_least_four_fit_points_required"]
+    assert result["preview"]["eligible"] is False
+
+
+def test_additional_noisy_controls_remain_usable_and_deterministic() -> None:
     points = _points()
-    points[-1] = {**points[0], "id": "copied-fit", "role": "check"}
-    assert estimate_panorama_mapping(points)["preview"]["eligible"] is False
-    points = _points()
-    points[-1].update(world_x=20, world_z=20, ray=_ground_ray(20, 20))
-    assert estimate_panorama_mapping(points)["preview"]["eligible"] is False
-    assert estimate_panorama_mapping(points[:5])["preview"]["eligible"] is False
-    for point in points[:8]:
-        point.update(world_z=point["world_x"], ray=_ground_ray(point["world_x"], point["world_x"]))
-    assert estimate_panorama_mapping(points)["preview"]["eligible"] is False
+    generator = np.random.default_rng(19)
+    for point in points:
+        point["ray"] = (np.array(point["ray"]) + generator.normal(0, .008, 3)).tolist()
+    result = estimate_panorama_mapping(points)
+    assert result["preview"]["eligible"] is True
+    assert len(result["quality"]["point_errors"]) == len(points)
+    assert estimate_panorama_mapping(points) == result
 
 
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("number_of_inliers", 5),
-        ("inlier_ratio", 0.79),
+        ("number_of_fit_points", 3),
         ("number_of_fit_points", True),
         ("median_fit_error_radians", None),
         ("p95_fit_error_radians", math.nan),
         ("angular_threshold_radians", 0),
-        ("maximum_check_error_radians", 0.1),
-        ("number_of_check_points", 0),
         ("status", "unknown"),
         ("status", []),
         ("status", {}),
@@ -299,6 +253,18 @@ def test_large_render_handles_opencv_remap_dimension_limit() -> None:
     )
     assert np.count_nonzero(result["coverage_mask"]) > 32767
     assert np.all(result["image"][result["source_indices"] >= 0] == 200)
+
+
+def test_refinement_failure_keeps_validated_linear_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_refinement(*args: object) -> None:
+        raise np.linalg.LinAlgError("Synthetic singular refinement")
+
+    monkeypatch.setattr(
+        "toposync_ext_cameras.processing.panorama_mapping._refine_angular", fail_refinement
+    )
+    result = estimate_panorama_mapping(_points())
+    assert result["quality"]["status"] == "ready"
+    assert result["quality"]["p95_fit_error_radians"] < 1e-8
 
 
 def test_bad_render_input_is_rejected() -> None:

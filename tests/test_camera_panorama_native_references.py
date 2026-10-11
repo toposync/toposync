@@ -1,15 +1,13 @@
-"""Persistent preparation contracts; simulated tests do not approve hardware."""
+"""Retired resource maintenance; simulated tests do not approve hardware."""
 from contextlib import asynccontextmanager
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import numpy as np
 import pytest
 from fastapi import HTTPException
 
 from toposync_ext_cameras.panorama import PanoramaService, PrepareNativeReference
-from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
 
 
 @asynccontextmanager
@@ -33,6 +31,8 @@ def environment(tmp_path):
     service._native_preparations = {}
     service.cancelled = set()
     path = tmp_path / "source-panorama" / "artifacts" / binding["id"] / "native-references" / body.preparation_id / "reference.json"
+    service._atomic(path.parents[2] / "artifact.json", {"id": binding["id"], "revision": 1,
+                     "camera_id": "camera", "source_id": "main"})
     return service, binding, body, path
 
 
@@ -70,109 +70,18 @@ def test_persisted_reference_is_bound_to_geometry_and_observed_arrival(tmp_path,
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("fault", [None, "recall", "stop", "journal", "cancel_before_acquire", "cancel_after_create"])
-async def test_preparation_publishes_only_observed_reference_and_does_not_retry_creation(tmp_path, monkeypatch, fault):
-    import toposync_ext_cameras.panorama_scan as scan_module
-    import toposync_ext_cameras.panorama_navigation as navigation_module
-    service, binding, body, path = environment(tmp_path)
-    events = []
-
-    class Camera:
-        async def discover(self):
-            if fault == "cancel_before_acquire":
-                assert (await service.stop_native_reference(None, "camera", body))["status"] == "stopping"
-            return {"motion_automation": {"auto_tracking": False, "automatic_return": False}}
-
-        async def acquire(self):
-            events.append("acquire")
-
-        async def save_return(self, role, *, preserve_zoom, before_create):
-            pending = {"kind": "pending_preset", "role": role, "owner_id": f"native-{body.preparation_id}",
-                       "preserve_zoom": preserve_zoom}
-            await before_create(pending)
-            assert service._read(path)["destination"] == pending
-            if fault == "journal":
-                raise OSError("Device call never dispatched")
-            events.append("create")
-            if fault == "cancel_after_create":
-                await service.stop_native_reference(None, "camera", body)
-            return {**pending, "kind": "preset", "preset_token": "owned"}
-
-        def pending_return_destinations(self):
-            return []
-
-        async def remove_return(self, destination):
-            events.append("remove")
-
-        async def close(self):
-            events.append("close")
-
-    class Scanner:
-        def __init__(self, *args):
-            self.acquired = False
-            self.physical_state = "unknown"
-            self.cancelled = args[3]
-
-        def _check(self):
-            if self.cancelled():
-                raise scan_module._Stopped
-
-        async def _stop(self):
-            return True
-
-        async def _reference_window(self):
-            self._check()
-            return {}
-
-        async def _confirm_stop(self, **kwargs):
-            self.physical_state = "stop_unconfirmed" if fault == "stop" else "stopped"
-
-    class Navigator:
-        def __init__(self, *args, **kwargs):
-            self.commands = 0
-            self.trace = []
-
-        async def locate(self):
-            return {"rotation_matrix": np.eye(3).tolist()}
-
-        async def _pulse(self, axis, amount):
-            assert axis == "pan" and amount == .12
-            self.commands += 1
-
-        async def approach_reference(self, destination, ray):
-            self.commands += 1
-            if fault == "recall":
-                raise PanoramaCaptureError("visual_native_reference_unconfirmed")
-            self.trace.append({"state": "observed", "measurement": {"center_error_pixels": 1.2}})
-
-    monkeypatch.setattr(scan_module, "_Scan", Scanner)
-    monkeypatch.setattr(navigation_module, "VisualNavigator", Navigator)
-    service.camera_factory = lambda **kwargs: Camera()
-    if fault in {"cancel_before_acquire", "cancel_after_create"}:
-        assert (await service.prepare_native_reference(None, "camera", body))["status"] == "interrupted"
-        record = service._read(path)
-        assert record["status"] == "unverified" and record["commands"] == 0
-        assert not service._native_preparations and not service.cancelled
-        if fault == "cancel_before_acquire":
-            assert events == ["close"]
-        else:
-            assert events == ["acquire", "create", "remove", "close"]
-            assert record["physical_state"] == "stopped" and record["cleanup_confirmed"]
-    elif fault:
-        with pytest.raises((PanoramaCaptureError, OSError)):
-            await service.prepare_native_reference(None, "camera", body)
-        assert service._read(path)["status"] == "unverified"
-        assert not service.native_references("camera", "main", binding)
-        with pytest.raises(HTTPException):
-            await service.prepare_native_reference(None, "camera", body)
-    else:
-        assert (await service.prepare_native_reference(None, "camera", body))["status"] == "ready"
-        assert service.native_references("camera", "main", binding)
-        assert (await service.prepare_native_reference(None, "camera", body))["reused"] is True
-        assert events.count("create") == 1
-        assert (await service.remove_native_reference(None, "camera", body))["status"] == "retired"
-        assert not service.native_references("camera", "main", binding)
-    assert events[-1] == "close"
+@pytest.mark.parametrize("generated", [False, True])
+async def test_retired_preparation_cannot_create_resources_even_for_generated_jobs(tmp_path, generated):
+    service, _, body, path = environment(tmp_path)
+    service.camera_factory = lambda **kwargs: pytest.fail("Retired preparation opened a camera")
+    options = {"generated_job": {"id": "c" * 32}} if generated else {}
+    with pytest.raises(HTTPException) as retired:
+        await service.prepare_native_reference(None, "camera", body, **options)
+    assert retired.value.status_code == 410
+    assert retired.value.detail["code"] == "native_reference_retired"
+    service.reference_localizer.assert_not_awaited()
+    service.app.state.camera_source_panorama._context.assert_not_awaited()
+    assert not path.exists() and not service._native_preparations and not service.cancelled
 
 
 @pytest.mark.anyio
@@ -198,25 +107,6 @@ async def test_preparation_catalog_tracks_live_ownership_and_hides_device_detail
         row, = result["references"]
         assert row["status"] == ("unverified" if state == "abandoned" else state)
         assert "destination" not in row and "private-device-token" not in str(result)
-
-
-@pytest.mark.anyio
-async def test_stop_while_waiting_for_shared_reference_lock_never_opens_camera(tmp_path):
-    from toposync_ext_cameras.panorama_reference import PanoramaReferenceCoordinator
-    service, _, body, _ = environment(tmp_path)
-    service.reference_coordinator = PanoramaReferenceCoordinator()
-    opened = []
-    service.camera_factory = lambda **kwargs: opened.append(kwargs)
-    async with service.reference_coordinator.hold("camera", body.source_id):
-        task = asyncio.create_task(service.prepare_native_reference(None, "camera", body))
-        await asyncio.sleep(0)
-        with pytest.raises(HTTPException) as duplicate:
-            await service.prepare_native_reference(None, "camera", body)
-        assert duplicate.value.detail["code"] == "native_reference_busy"
-        assert (await service.stop_native_reference(None, "camera", body))["status"] == "stopping"
-        assert (await asyncio.wait_for(task, 1))["status"] == "interrupted"
-        assert service.reference_coordinator._lock("camera", body.source_id).locked()
-    assert not opened and not service.cancelled and not service._native_preparations
 
 
 @pytest.mark.anyio

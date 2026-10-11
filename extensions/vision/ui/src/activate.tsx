@@ -1,11 +1,19 @@
 import React from "react";
 import type { ToposyncHost } from "@toposync/plugin-api";
 import { Gallery, NotificationIdentity, supportsRecognition } from "./Gallery";
-import { HistoryFilter, historyEndpoint } from "./HistoryFilter";
+import { CategoryHistoryFilter, categoryHistoryEndpoint, DetectedCategorySummary, detectedCategoryCounts, HistoryFilter, historyEndpoint } from "./HistoryFilter";
 import { ModelSetup } from "./ModelSetup";
 import { translations } from "./translations";
 export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(translations);
+  host.registerNotificationHistoryFilter?.({
+    id: "com.toposync.vision.categories", endpoint: categoryHistoryEndpoint,
+    render: context => <CategoryHistoryFilter {...context} i18n={host.i18n} />,
+  });
+  host.registerNotificationDetailPanel?.({
+    id: "com.toposync.vision.categories", supports: notification => detectedCategoryCounts(notification).length > 0,
+    render: notification => <DetectedCategorySummary notification={notification} i18n={host.i18n} />,
+  });
   host.registerNotificationHistoryFilter?.({
     id: "com.toposync.vision.identities", endpoint: historyEndpoint,
     render: context => <HistoryFilter {...context} i18n={host.i18n} />,

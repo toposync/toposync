@@ -62,6 +62,7 @@ def _packet() -> Packet:
             "image_uv": {"u": 0.5, "v": 0.5},
             "world": {"x": 99, "z": 99},
             "world_anchor": {"x": 99, "z": 99},
+            "world_projection": {"status": "stale"},
             "pan_tilt_zoom_state": {
                 "pan": 0,
                 "tilt": -0.5,
@@ -71,7 +72,7 @@ def _packet() -> Packet:
                 "motion_epoch": 7,
             },
             "vision": {
-                key: [{"bbox01": [0.4, 0.4, 0.6, 0.5], "world_anchor": {"x": 99, "z": 99}}]
+                key: [{"bbox01": [0.4, 0.4, 0.6, 0.5], "world_anchor": {"x": 99, "z": 99}, "metadata": {"world_projection": {"status": "stale"}, "preserved": True}}]
                 for key in ("detections", "tracks", "segmentations")
             },
         },
@@ -105,9 +106,12 @@ def _assert_unmapped(result: Packet, reason: str) -> None:
     assert result.payload["mapping"]["reason"] == reason
     assert "world" not in result.payload
     assert "world_anchor" not in result.payload
+    assert result.payload.get("world_projection", {}).get("status") != "stale"
     assert "calibrated_view_id" not in result.metadata
     for key in ("detections", "tracks", "segmentations"):
         assert "world_anchor" not in result.payload["vision"][key][0]
+        assert result.payload["vision"][key][0].get("metadata", {}).get("world_projection", {}).get("status") != "stale"
+        assert result.payload["vision"][key][0]["metadata"]["preserved"] is True
 
 
 @pytest.mark.parametrize("pan", [0.0, 0.5, -0.5, 1.0, -1.0])
@@ -192,7 +196,7 @@ def test_panorama_requires_the_exact_source_composition_and_valid_profile(
     _assert_unmapped(_run(_packet(), {"applies": True, "job": job}), reason)
 
 
-def test_panorama_excludes_horizon_and_outside_support_without_discarding_valid_detections() -> (
+def test_panorama_preserves_horizon_observations_and_extrapolates_positions() -> (
     None
 ):
     packet = _packet()
@@ -205,7 +209,11 @@ def test_panorama_excludes_horizon_and_outside_support_without_discarding_valid_
 
     job = _job()
     job["solution"]["support_polygon"] = [[-1, -1], [1, -1], [1, 1], [-1, 1]]
-    _assert_unmapped(_run(_packet(), {"applies": True, "job": job}), "outside_calibrated_ground")
+    result = _run(_packet(), {"applies": True, "job": job})
+    assert result.payload["mapping"]["status"] == "mapped"
+    assert result.payload["vision"]["detections"][0]["world_anchor"] == pytest.approx({"x": 3, "z": 0})
+    assert result.payload["vision"]["detections"][0]["metadata"]["world_projection"]["extrapolated"] is True
+    assert result.payload["world_projection"]["extrapolated"] is True
 
 
 @pytest.mark.parametrize(
@@ -384,3 +392,60 @@ def test_visual_mapping_refuses_same_sized_image_without_pixel_provenance():
     result, calls = _visual_runtime_case(change_packet=change)
     assert not calls
     _assert_unmapped(result, "panorama_source_geometry_changed")
+
+
+def test_mixed_observations_keep_individual_positions_and_remove_stale_anchors():
+    packet = _packet()
+    job = _job()
+    job["solution"]["support_polygon"] = [[2, -1], [4, -1], [4, 1], [2, 1]]
+    # Optical centre maps to x=3, the lower edge to x=0, the top to the horizon.
+    packet.payload["vision"]["detections"] = [
+        {"id": label, "bbox01": [.4, 0, .6, v], "world_anchor": {"x": 99, "z": 99},
+         "metadata": {"world_projection": {"status": "stale"}, "preserved": True}}
+        for label, v in [("inside", .5), ("outside", 1), ("horizon", 0)]
+    ]
+    original = copy.deepcopy(packet.payload)
+    result = _run(packet, {"applies": True, "job": job})
+    inside, outside, horizon = result.payload["vision"]["detections"]
+    assert inside["world_anchor"] == pytest.approx({"x": 3, "z": 0})
+    assert inside["metadata"]["world_projection"]["extrapolated"] is False
+    assert outside["world_anchor"] == pytest.approx({"x": 0, "z": 0}, abs=1e-8)
+    assert outside["metadata"]["world_projection"]["extrapolated"] is True
+    assert "world_anchor" not in horizon
+    assert horizon["metadata"]["world_projection"]["reason"] == "no_ground_intersection"
+    assert horizon["metadata"]["world_projection"]["direction_reference"] == "panorama"
+    assert len(horizon["metadata"]["world_projection"]["panorama_ray"]) == 3
+    assert [item["id"] for item in (inside, outside, horizon)] == ["inside", "outside", "horizon"]
+    assert all(item["metadata"]["preserved"] for item in (inside, outside, horizon))
+    assert packet.payload == original
+
+
+def test_mapped_detection_metadata_survives_installed_tracker():
+    from toposync.runtime.pipelines.runtime import Artifact
+    from toposync_ext_vision.processing.tasks.tracking import VisionTrackRuntime
+
+    class Context:
+        async def run_blocking(self, function, /, *args, **kwargs):
+            kwargs.pop("concurrency_key", None)
+            return function(*args, **kwargs)
+
+    packet = _packet().with_artifact(Artifact("main", object()))
+    packet.payload["vision"] = {"detections": [
+        {"label": "person", "label_id": 0, "score": .95,
+         "model_id": "test.detector", "bbox01": [.4, v - .2, .6, v],
+         "metadata": {"identity": identity}}
+        for identity, v in [("inside", .5), ("outside", 1)]
+    ]}
+    job = _job()
+    job["solution"]["support_polygon"] = [[2, -1], [4, -1], [4, 1], [2, 1]]
+    mapped = _run(packet, {"applies": True, "job": job})
+    tracker = VisionTrackRuntime({"default_interval_seconds": 0}, PipelineRuntimeDependencies())
+    outputs = asyncio.run(tracker.process_packet(mapped, Context()))
+    tracks = [item for output in outputs for item in output.payload["vision"]["tracks"]]
+    assert len(tracks) == 2
+    by_identity = {item["metadata"]["identity"]: item for item in tracks}
+    for identity, x, extrapolated in [("inside", 3, False), ("outside", 0, True)]:
+        track = by_identity[identity]
+        assert track["world_anchor"] == pytest.approx({"x": x, "z": 0}, abs=1e-8)
+        assert track["metadata"]["world_projection"]["extrapolated"] is extrapolated
+        assert track["metadata"]["world_projection"]["panorama_revision"] == job["revision"]

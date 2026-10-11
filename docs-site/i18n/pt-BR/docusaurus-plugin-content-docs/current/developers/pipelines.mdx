@@ -266,3 +266,35 @@ Esta página é o mapa, não a referência completa. Páginas separadas devem co
 - provisionamento de modelos de visão;
 - retenção de telemetria e armazenamento;
 - autoria de extensões com operadores customizados.
+
+
+### Enquadramento por movimento
+
+Configure `camera.image_crop.region_mode` como `"motion"` depois de `camera.motion_gate`
+e habilite `vision.detect.use_image_region`. Ambos devem selecionar a mesma imagem.
+Nesse modo, o operador de recorte produz somente `image_region`, com retângulo em
+pixels e proveniência da captura. O detector usa uma visão temporária da região
+na inferência existente, devolvendo coordenadas pela geometria já disponível.
+A imagem `main` continua intacta para mapeamento, rastreamento e recortes finais;
+não há imagem adicional nas filas. O modo fixo continua produzindo imagem.
+
+A política atual reúne regiões dos últimos 0,75 segundo, expande imediatamente
+quando aparece movimento fora da janela e adiciona 25% de contexto de cada lado.
+Usa lado mínimo de 640 pixels. Movimento espalhado, saturação das seis regiões do
+filtro ou área superior a 65% fazem usar a imagem inteira. Movimento sem proveniência
+confiável também usa a imagem inteira. Ausência do filtro anterior é erro de configuração.
+O detector rejeita regiões de outra captura, de outra imagem ou fora dos limites.
+
+Uma observação global substitui o recorte a cada segundo na cadência de entrada do
+operador. Descartes posteriores podem reduzir essa cobertura; isso não garante
+observação contínua de objetos parados. As limitações da admissão por movimento,
+inclusive para objetos pequenos, continuam valendo.
+
+`image_region.reason` e `image_region.area_ratio` explicam a escolha. A telemetria
+numérica existente publica `camera.crop.area_ratio` e `camera.crop.unverified_motion`.
+A prévia temporária do editor omite filtros de movimento e não reproduz este modo;
+valide pelas observações e pela telemetria do pipeline em execução.
+
+No editor de recorte, selecione **Acompanhar movimento**; no detector, marque
+**Usar enquadramento da etapa anterior**. Os presets não habilitam esse modo por
+padrão: meça qualidade, compartilhamento, filas e memória na cena pretendida.

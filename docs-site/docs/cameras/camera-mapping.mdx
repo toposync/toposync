@@ -21,13 +21,27 @@ over the composition.
 
 ## Assisted calibration
 
-Open the camera element and choose **Calibrate camera**. A compatible saved panorama opens directly at the next point. Without one, prepare the panorama inside the assistant; capture starts only when requested. The assistant continues once the saved panorama is compatible.
+Open the camera element and choose **Map in composition**. Prepare a compatible saved panorama first if one is not available. You can also open **Settings → Cameras → Mapping** and use the mapping button beside the composition. If the camera appears more than once, choose the camera element first. The separate editor button opens the composition without starting mapping. Unsaved camera changes must be resolved before leaving settings.
 
-Mark the same floor locations in the panorama and floor plan: six adjustment points followed automatically by two independent check points. Use the mouse wheel to zoom and drag to navigate. **Confirm point** saves each pair. Corrections, extra points and undo are available under the point review and help controls.
+Start with four recognizable places on the same floor, spread across the region that matters. Mark the same place in both views, in either order. Numbers identify pairs; they do not define polygon edges. Additional controls are optional and all complete controls participate in the calculation.
 
-Choose **Finish calibration** when validation passes. **Review calibration** creates an editable draft while the current calibration remains in use until its replacement is completed. Camera pointing verification is a separate, explicit operation; a valid visual map does not certify physical pointing or panorama coverage.
+A usable calculation shows ghost points immediately. Move the pointer to compare views. With no numbered place selected, click, tap or use the keyboard to keep a precise target: its ring fades while its centre remains. These queries do not save points or move the camera. Refine a control to update the preview before saving. Adding an unfinished control does not erase a usable preview.
 
-Existing calibrated views remain compatible with the runtime. The snapshot-based calibration editor is no longer an entry point; the legacy view model described below is retained for existing configurations. Spatial video clipping still requires compatible calibrated views.
+Use **Use this mapping** when it meets your needs. There are no independent A/B check points or mandatory error threshold. Approximate fits show a warning; missing pairs, degenerate geometry or incompatible source revisions explain what must change. Visual acceptance does not certify measured accuracy or physical camera pointing.
+
+The outline shows the distribution of controls. Ghosts and pipeline positions continue beyond it as **extrapolated positions**. Near the horizon the estimate can be very sensitive; a ray with no valid ground intersection has no fabricated position. Observations retain their available direction and reason when their ground position is unavailable.
+
+Both views stay visible on one screen, side by side or stacked on small displays. Rotation in 90-degree steps, zoom, dragging and keyboard controls remain available. Select a numbered place to adjust its two references. Confirm the pair to save it, or choose **Finish adjustment** to return to queries while retaining draft changes. Use the nearby remove button and undo to refine places. To find a pinned target outside the current framing, use **Center target** in that panel; it preserves zoom and rotation. Hover never recentres either view. Rotation changes presentation only. Saved drafts can be reopened; editing a replacement draft preserves the active revision until you accept the new result.
+
+## Reference, mapping and positioning
+
+The camera source owns the saved panorama; each composition element owns its accepted mapping revision. Camera settings show the visual reference, mapping and positioning separately. A partial image can remain useful while mapping is absent or pointing is unqualified. Old calibration records do not certify an active panorama.
+
+Acquisition now saves causal movement responses with the final reconstruction geometry. It does not create an extra preset after reconstruction or require manual approach points. A local continuous response candidate only predicts a bounded pulse inside consistent observed support, with fixed optical zoom. Fresh stopped video and the existing independent arrival measurement remain mandatory. Candidate data are not physical qualification; automatic prediction stays disabled until qualified. Without it, the existing visual navigator measures its response live.
+
+Saved approach points are retired from navigation. Their managed resources can still be cleaned up explicitly; foreign camera presets are preserved. Opening settings, inspecting mapping and editing a crop do not move the camera.
+
+Metric calibration remains a separate resource: a ground mapping does not supply camera height or three-dimensional extrinsics. Existing metric records remain readable. An active panorama also prevents attention from silently selecting an obsolete view preset; the canonical target resolver returns a ray and revision without moving the camera. Attention profiles now select the panorama mapping, an explicit region and return point. Software integration is available in shadow; physical arrival and return require separate qualification. The camera editor can copy existing metric records into `metric_calibrations` without overwriting records or inferring lens/pose data.
 
 ## Static image mapping smoke {/* #static-image-mapping-smoke */}
 
@@ -55,8 +69,7 @@ After placement, calibrate the view from a current camera snapshot.
 
 ## Legacy ground correspondence model {/* #ground-correspondence-mapping */}
 
-The current mapping workflow does not deform the image. It maps only the ground
-that can be proved from corresponding points:
+The older snapshot correspondence model described in this section is separate from the panorama assistant above:
 
 1. capture a current frame;
 2. click a stable mark on the **ground** in the image;
@@ -116,50 +129,29 @@ Existing panorama mappings and drafts remain available through **Review
 existing mapping** in the camera element. They retain their original optical
 profile and geometry checks; normalized ONVIF positions are not degrees.
 
-1. Open the saved panorama and review the existing draft.
-2. Identify six stable places on the ground, one at a time. Select each place
-   in the panorama and then in the floor plan. Spread them across the area you
-   want to use; correct or undo a pair if needed.
-3. Add two different check places inside that area. Point the camera at each
-   check and inspect the returned image. Report an offset or an unrecognizable
-   place honestly; the assistant preserves your work for correction.
-4. Activate after the geometry and both camera checks pass. Click a place in
-   the supported floor-plan area and deliberately request the camera to aim
-   there. The returned image lets you inspect the result.
+1. Open the saved panorama and mark at least four distributed floor locations.
+2. Explore using the pointer, taps and keyboard; adjust places while watching the preview.
+3. Choose **Use this mapping** when the result meets your needs.
 
-The supported region is the polygon covered by the fit places. Runtime image
-points can map onto this ground plane at different safe pan and tilt positions,
-using the pose attached to each frame. Movement, unknown telemetry, changed
-zoom, changed source geometry, or points outside that polygon return unmapped.
-Changing composition geometry invalidates the calibration; cosmetic renaming
-does not.
+Runtime image points use the geometry bound to each frame. Positions beyond the control region remain available and are marked as extrapolated. Movement, unknown pose, changed zoom or incompatible source geometry can prevent mapping. Composition geometry changes invalidate the reference; cosmetic renaming does not. Physical pointing retains its separate operational requirements.
 
 This version covers one approximately planar region at one optical zoom. It
 does not calibrate stairs, uneven terrain, multiple floors, or moving objects.
-The panorama mapping does not replace the calibrated views used by 360 View
-projection and Semantic PTZ attention.
+A selected panorama supplies the ground layer for 360 View and the target contract
+for semantic attention. If its reference is invalid, old projection layers and
+preset destinations are not revived.
 
-## PTZ views {/* #ptz-views */}
+## PTZ optical and metric references {/* #ptz-views */}
 
-PTZ cameras can have multiple calibrated views. Capturing a view records its
-numeric pan, tilt, and zoom after the head is idle, and creates a named preset
-for later movement. The preset is a movement target; the numeric pose and safe
-telemetry are the evidence that enables a mapping.
+A physical view identifies the optical stream and capture geometry. It is not a
+list of permitted attention destinations. Existing metric calibrations remain
+separate: lens, numeric pose and independent ground correspondences may be needed
+for body pointing and metric projection. Missing extrinsics are never inferred
+from a projective panorama.
 
-When the camera moves:
-
-- mapping is off while the head is moving or telemetry is unsafe;
-- a numeric pose selects only its matching view;
-- a missing pose, a different physical stream, or a point outside the saved
-  ground polygon returns **unmapped**, rather than estimating a location.
-
-Warnings about pose quality do not mean the stream is broken. They mean the
-projected position may be imprecise.
-
-[Semantic PTZ attention](ptz-attention.mdx) uses only the calibrated views allowed
-by its profile. One ready view is selected as home and the remaining allowed views
-form the focus target set. A preset token is a movement target, not proof that the
-camera reached the expected composition.
+[Semantic PTZ attention](ptz-attention.mdx) uses the selected source mapping, an
+explicit permitted polygon and return point. Arrival and return require visual
+evidence and a current qualification for that exact revision.
 
 ## Area clipping for 360 View {/* #area-clipping-for-360-view */}
 
@@ -203,12 +195,16 @@ transmission/publication before it can be projected as live video.
 1. Confirm the snapshot is current and comes from the physical source to map.
 2. Confirm live viewing works for that source.
 3. Place the camera element in the composition.
-4. Add six well-spread pairs on the ground; avoid sky, people, shadows, and
+4. Add at least four well-spread pairs on the ground; avoid sky, people, shadows, and
    moving vehicles.
-5. Add two different check pairs and correct the fit points until they pass.
-6. Add a separate PTZ view for every intentional angle or zoom; capture it only
-   after the head stops.
-7. For PTZ attention, mark one ready view as home and keep the allowed focus set
-   small.
+5. Explore ghost points, refine important regions, and accept the result when it meets your needs.
+6. Keep the optical source identity and fixed zoom compatible with the saved panorama.
+7. For PTZ attention, define the permitted region and mapped return point; begin in shadow.
 8. Use area clipping only when you want a spatial crop in 360 View.
 9. Open 360 View and check that the video, marker, and warnings make sense.
+
+### Spatial availability in notifications
+
+Detections retain a mapping failure reason through tracking, grouping, and notification storage. A group with only some located members reports partial mapping; it does not assign one member's position to another. The mapping node reports degraded spatial processing when calibration is unavailable or detected objects cannot be located, and clears that state after recovery.
+
+Notifications distinguish missing spatial location, degraded processing, and a partial trajectory after recovery. Previously recorded points remain available, but the displayed trail uses the latest continuous segment and does not connect positions across a recorded mapping gap. Closed events preserve the mapping result of their last observed frame. Existing notifications are not automatically reprocessed, and these indicators do not certify physical calibration accuracy.

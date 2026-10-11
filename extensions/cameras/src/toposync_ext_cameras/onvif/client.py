@@ -65,6 +65,9 @@ class OnvifProfile:
     fps: int | None = None
     has_ptz: bool = False
     ptz_configuration_token: str = ""
+    video_source_token: str = ""
+    video_source_configuration_token: str = ""
+    audio_encoding: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +315,21 @@ def _soap_fault_text(root: ET.Element, *, soap_ns: str) -> str | None:
     return "ONVIF SOAP fault"
 
 
+_MAX_SOAP_RESPONSE_BYTES = 4 * 1024 * 1024
+
+
+def _read_soap_payload(response) -> bytes:
+    payload = response.read(_MAX_SOAP_RESPONSE_BYTES + 1)
+    if len(payload) > _MAX_SOAP_RESPONSE_BYTES:
+        raise OnvifError("ONVIF response exceeds the size limit")
+    return payload
+
+
+class _NoSoapRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise OnvifError("ONVIF service redirects are not accepted")
+
+
 def _http_post_soap_sync(
     *,
     url: str,
@@ -337,10 +355,10 @@ def _http_post_soap_sync(
 
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=max(0.5, float(timeout_s))) as resp:  # noqa: S310
-            return resp.read()
+        with urllib.request.build_opener(_NoSoapRedirects()).open(req, timeout=max(0.5, float(timeout_s))) as resp:  # noqa: S310
+            return _read_soap_payload(resp)
     except urllib.error.HTTPError as exc:
-        payload = exc.read() if hasattr(exc, "read") else b""
+        payload = _read_soap_payload(exc) if hasattr(exc, "read") else b""
         message = f"ONVIF HTTP error ({exc.code})"
         if payload:
             try:
@@ -383,6 +401,8 @@ async def _http_post_soap(
 
 
 def _parse_xml(payload: bytes) -> ET.Element:
+    if len(payload) > _MAX_SOAP_RESPONSE_BYTES or b"<!DOCTYPE" in payload.replace(b"\x00", b"").upper() or b"<!ENTITY" in payload.replace(b"\x00", b"").upper():
+        raise OnvifError("Unsupported ONVIF XML document")
     try:
         return ET.fromstring(payload)
     except Exception as exc:  # noqa: BLE001
@@ -645,6 +665,10 @@ def _parse_profiles(payload: bytes, *, soap_ns: str) -> list[OnvifProfile]:
                 height=height,
                 fps=fps,
                 has_ptz=has_ptz,
+                video_source_token=_findtext(el, f"{{{TT_NS}}}VideoSourceConfiguration/{{{TT_NS}}}SourceToken"),
+                video_source_configuration_token=(el.find(f"{{{TT_NS}}}VideoSourceConfiguration").get("token", "")
+                    if el.find(f"{{{TT_NS}}}VideoSourceConfiguration") is not None else ""),
+                audio_encoding=_findtext(el, f"{{{TT_NS}}}AudioEncoderConfiguration/{{{TT_NS}}}Encoding"),
                 ptz_configuration_token=(
                     str(ptz_configuration.get("token") or "").strip()
                     if ptz_configuration is not None else ""

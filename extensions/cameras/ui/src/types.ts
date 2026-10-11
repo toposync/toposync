@@ -267,8 +267,8 @@ export type CameraGroundLens =
     };
 
 export type CameraGroundCorrespondence = {
-  id: string;
   role: "fit" | "check";
+  id: string;
   origin: "manual" | "automatic";
   image: { x: number; y: number };
   world: { x: number; z: number };
@@ -432,7 +432,15 @@ export type CameraContextCameraElement = {
   id: string;
   name: string;
   control_points_pairs: number;
-  calibrated_views?: number;
+  mapping?: {
+    source_id: string | null;
+    revision: number | null;
+    reference: "available" | "partial" | "incompatible" | "absent";
+    mapping: "active" | "draft" | "review_required" | "absent";
+    positioning: "available" | "unqualified";
+    reason: string | null;
+    control_points_pairs: number;
+  };
   has_mapping: boolean;
 };
 
@@ -486,6 +494,7 @@ export type CameraPipelinesResponse = {
 };
 
 export type CameraPipelinePresetRequest = {
+  onvif_optimization?: CameraOnvifOptimization;
   preset: CameraPipelinePreset;
   audio_baseline?: { reference: string; rms: number };
   audio_peer?: { camera_id: string; source_id: string; baseline: { reference: string; rms: number } };
@@ -604,7 +613,6 @@ export type CameraPanoramaScan = {
 
 export type CameraPanoramaPoint = {
   id: string;
-  role: "fit" | "check";
   panorama: { x: number; y: number };
   world: { x: number; z: number };
 };
@@ -717,6 +725,7 @@ export type CameraSourcePanoramaArtifact = {
     horizontal_rotation_degrees?: number;
     axis_divergence_degrees_p95?: number | null;
   } | null;
+  approach?: { version: number; status: "candidate" | "qualified" | "unavailable"; reason: string };
   positioning_status: "not_validated";
   stale?: boolean;
   stale_reason?: "source_changed" | "source_unavailable" | null;
@@ -747,6 +756,7 @@ export type CameraSourcePanoramaTelemetry = {
 };
 
 export type CameraSourcePanoramaJob = {
+  quick_approach?: { status: "preparing" | "ready" | "unavailable" | "interrupted"; reason?: string; preparation_id?: string; physical_state?: string };
   outcomes?: CameraSourcePanoramaOutcomes;
   capture_goal?: "initial_region" | "reachable_domain";
   operation?: "capture" | "verify_control";
@@ -820,4 +830,28 @@ export type CameraSourcePanorama = {
   candidate?: CameraSourcePanoramaArtifact | null;
   replacement_pending?: boolean;
   job: CameraSourcePanoramaJob | null;
+};
+
+export type CameraOnvifState = {
+  topic: string; qualified_topic: string; item_name: string; label: string;
+  known: boolean; value: boolean | null; available: boolean; operation?: string;
+  source: Record<string, string>; key: Record<string, string>; last_event_ts?: number;
+};
+export type CameraOnvifOptimization = Pick<CameraOnvifState, "topic" | "qualified_topic" | "item_name" | "source" | "key"> & { coverage_confirmed: boolean; hold_seconds?: number };
+export type CameraOnvifTransport = {
+  status: string; successful_pulls: number; failed_pulls: number; subscriptions: number;
+  last_pull_at: number | null; unsubscribe: string;
+  received_messages: number; transitions: number; queue_overflows: number;
+};
+export type CameraOnvifCapabilities = {
+  camera_id: string; queried_at: number; valid_until: number; status: string;
+  identification: Record<string, string>;
+  sections: Record<string, string>;
+  services: Array<{ namespace: string; status: string; integrated: boolean }>;
+  profiles: Array<{ token: string; name: string; encoding: string; width: number | null; height: number | null;
+    fps: number | null; audio_encoding: string; video_source_token: string; video_source_configuration_token: string;
+    ptz: { absolute: boolean | null; continuous: boolean | null; relative: boolean | null; absolute_zoom: boolean | null;
+      limits: unknown; status: string; presets: unknown } | null }>;
+  events: Array<{ topic: string; qualified_topic: string; item_name: string; label: string; is_boolean: boolean; is_property: boolean }>;
+  observed_states: CameraOnvifState[]; observation: string; recipe_optimization: Record<string, string>;
 };

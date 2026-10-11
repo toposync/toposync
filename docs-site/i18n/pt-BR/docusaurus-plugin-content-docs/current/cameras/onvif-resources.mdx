@@ -1,0 +1,48 @@
+---
+title: Recursos ONVIF e eventos da câmera
+description: Consulte recursos da câmera e aproveite uma detecção qualificada antes da análise local.
+sidebar_position: 4
+---
+
+Abra **Configurações → Câmeras → Informações técnicas → Recursos ONVIF**. A consulta usa a conexão salva e não movimenta a câmera, captura vídeo ou executa inferência. Salve alterações da conexão antes de consultá-la.
+
+Identificação, perfis de vídeo/áudio, ações e limites de movimento publicados, serviços anunciados e descrições de eventos são consultados separadamente. Uma resposta parcial preserva as consultas bem-sucedidas. Informação ausente continua desconhecida; anunciar um serviço não certifica todas as operações. Limites são coordenadas publicadas, não medidas do alcance físico.
+
+**Observar eventos por 60 segundos** inicia uma visualização limitada de mensagens e propriedades booleanas recebidas. Fechar ou encerrar interrompe as consultas da interface. A assinatura compartilhada continua disponível aos demais consumidores e expira após 120 segundos sem demanda. O primeiro valor sincroniza o estado; mudanças posteriores contam como transições mesmo quando a câmera repete `Initialized`. Valores repetidos não criam ocorrências. Origem, chave e espaço de nomes do tópico distinguem sensores. Eventos do fabricante que não foram anunciados podem aparecer sem que seu significado esteja integrado a uma receita.
+
+## Detecção de pessoas
+
+Na receita **Detecção de pessoas**, marcar **Usar detecção da câmera para iniciar a análise** observa eventos enquanto a opção permanecer marcada e a janela estiver aberta. O checkbox continua visível mesmo se a observação for interrompida. **Atualizar recursos** atualiza o catálogo anunciado; não inicia a observação. O seletor mostra propriedades booleanas compatíveis observadas, vinculadas à fonte de vídeo ONVIF selecionada e com tópico integrado, com os detalhes do tópico e da origem abaixo de cada nome. Uma interrupção conserva o sinal escolhido e bloqueia a confirmação até a observação se recuperar. Trocar câmera, fonte ou sinal exige nova confirmação. Uma fonte RTSP salva manualmente precisa conservar o identificador do perfil, e o endereço do fluxo precisa coincidir com o retornado para esse perfil. Canais sem vínculo e significados específicos do fabricante continuam indisponíveis. Este piloto funciona com processamento no ambiente principal.
+
+Para uma retransmissão RTSP verificada, `origin.metadata.onvif_profile_binding` pode registrar `profile_token`, `rtsp_url` (o retransmissor configurado) e `upstream_rtsp_url` (sua origem confirmada na câmera). O servidor continua comparando essa origem com a URI retornada pela câmera para o perfil. Alterar o endereço do retransmissor ou o perfil invalida o vínculo. Confira novamente se a configuração do retransmissor mudar; o nome sozinho não comprova sua origem. Entradas FLV e canais alternativos sem verificação não são qualificados por esse vínculo RTSP.
+
+`VideoSource/MotionAlarm` usa o identificador padrão `Source` para a fonte de vídeo; eventos suportados de regras usam identificadores da fonte ou de sua configuração. Tópicos recebidos do fabricante que não constam no catálogo continuam como evidência de diagnóstico. Interrupções da observação identificam a operação ONVIF que falhou, sem expor credenciais.
+
+Confira passagens rápidas, pessoas paradas e atraso de reabertura antes de confirmar cobertura. O sinal da câmera é preliminar: a detecção visual continua depois, e o filtro local de movimento respeita a janela ONVIF. O estado ativo mantém a janela aberta sem exigir mensagens repetidas. Inativo inicia a tolerância de fechamento; nova ativação cancela o fechamento, e inativo repetido não prolonga o prazo. A receita usa 30 segundos por padrão, ajustáveis de 0 a 300 nas opções avançadas. A captura conserva pelo menos cinco segundos após o primeiro quadro novo utilizável, com espera de aquisição limitada quando não chega imagem. Estados desconhecidos, ambíguos, desconectados ou ainda não sincronizados retomam o processamento normal. Somente um estado inativo conhecido e saudável fecha a demanda de captura desta receita. Outros consumidores podem manter a decodificação compartilhada.
+
+Criar ou revisar a receita não a ativa. Fluxos existentes não são migrados. O editor avançado de condição ONVIF conserva espaço de nomes, origem e chave; escolhas antigas ambíguas ficam desconhecidas até uma nova seleção.
+
+O editor avançado oferece estado de propriedade e ocorrência declarada. Cada ocorrência prolonga uma janela temporal, inclusive entregas distintas com valores iguais. Descrições desconhecidas e sincronização de propriedade não viram pulsos. Novos controles genéricos usam dez segundos; controles salvos preservam seus valores. Os prazos usam relógio monotônico. Para receitas que exigem presença parada, `camera.source.keep_capture_when_gate_closed` conserva a captura enquanto os metadados da janela aumentam a cadência de processamento; fechar a captura perderia a evidência necessária.
+
+Recursos mostra leituras bem-sucedidas, falhas de leitura e assinaturas criadas. Uma desconexão transitória de leitura repete a consulta na mesma assinatura, com espera limitada e renovação mantida. Após uma lacuna prolongada, renovação e sincronização verificam a assinatura existente antes de substituí-la em caso de falha. Criar ou renovar a assinatura não comprova disponibilidade de leitura. Uma leitura vazia bem-sucedida comprova transporte, mas, após uma lacuna, a propriedade permanece desconhecida até sincronizar. Propriedades recebidas no lote de recuperação são preservadas; estados anteriores à lacuna não são restaurados. A recuperação independe da marca. A limpeza registra confirmação de encerramento ou depende da expiração se não houver confirmação.
+
+## Compatibilidade das receitas
+
+| Receita | Otimização de captura |
+|---|---|
+| Detecção de pessoas | Piloto que exige conferir fonte, sinal e tempo de resposta |
+| Visitante e campainha | Captura continua para preservar correlação de cinco segundos e ciclo do visitante; o evento já limita a análise posterior de pacote |
+| Pessoas e pets em uma área | Presença parada exige observação contínua |
+| Entrada em uma área | Precisa observar o mesmo sujeito fora antes de cruzar para dentro |
+| Pessoas entrando juntas | Precisa distinguir sujeitos e preservar a janela de entrada |
+| Ocorrências individuais de pessoas | Continuidade do acompanhamento ainda não qualificada |
+| Presença agrupada de pessoas e pets | Múltiplas categorias e continuidade da sessão ainda não qualificadas |
+| Grupos por proximidade | Relações espaciais e sujeitos parados precisam de observação |
+| Veículo parou | Ausência de movimento não pode fechar a observação necessária para comprovar parada |
+| Pessoa parou | Mesma restrição para pessoas paradas |
+| Pessoa próxima de veículo | Um sinal de pessoa não cobre ambas as categorias e sua relação |
+| Atividade na caixa de areia | Evento de animal não comprova espécie ou comportamento; movimentos pequenos importam |
+| Gato bebendo água | Mesma restrição para os pequenos movimentos ao beber |
+| Som acima da referência | Evento visual não cobre som; escuta continua independente |
+
+Entregar menos quadros comprova redução do trabalho desse consumidor, não um ganho global medido de processador ou acelerador. Compare quantidade de inferências, atraso e ocorrências perdidas ou indevidas em cenas conhecidas antes de depender da otimização para uma câmera e versão de firmware.

@@ -105,6 +105,58 @@ def test_occurrence_identity_is_independent_of_reused_tracker_id():
     )
 
 
+def test_identity_keyframes_skip_repetitions_preserve_quality_changes_and_bound_storage(monkeypatch):
+    import numpy as np
+    from types import SimpleNamespace
+    import toposync_ext_vision.identity.pipelines as pipelines
+
+    async def scenario():
+        runtime = IdentityEvidenceRuntime({
+            "enabled": True, "sample_interval_seconds": 0.25,
+            "keyframe_min_region_change": 0.1,
+            "keyframe_max_per_occurrence": 3, "keyframe_max_total": 4,
+        }, PipelineRuntimeDependencies())
+        runtime._extractor = lambda species: SimpleNamespace(process_specification=lambda: ())
+        quality = {"eligible": False}
+
+        def extract(*args, **kwargs):
+            value = IdentityEvidence(
+                species="cat", occurrence_id=kwargs["occurrence_id"],
+                source_id="camera:test", camera_id="camera", capture_id="frame",
+                observed_at=1, embedding_space="test:synthetic", quality=0.8,
+                vector=(1.0,) + (0.0,) * 15,
+                reference_eligible=quality["eligible"], region=kwargs["region"],
+            )
+            return SimpleNamespace(evidence=value, crop=None, status="ready", reason="")
+
+        monkeypatch.setattr(pipelines, "extract_in_process", extract)
+        original = packet().with_artifact(Artifact(name="main", data=np.zeros((20, 20, 3), dtype=np.uint8)))
+
+        async def run(value):
+            runtime._sampled.clear()  # Advance past the cadence without a wall-clock wait.
+            return (await runtime.process_packet(value, Context()))[0]
+
+        assert PRIVATE_EVIDENCE_ARTIFACT in (await run(original)).artifacts
+        assert PRIVATE_EVIDENCE_ARTIFACT not in (await run(original)).artifacts
+        quality["eligible"] = True
+        assert PRIVATE_EVIDENCE_ARTIFACT in (await run(original)).artifacts
+        moved = replace(original, payload={**original.payload, "subject": {
+            **original.payload["subject"], "bbox01": [0.3, 0.1, 0.9, 0.8],
+        }})
+        assert PRIVATE_EVIDENCE_ARTIFACT in (await run(moved)).artifacts
+        assert PRIVATE_EVIDENCE_ARTIFACT not in (await run(original)).artifacts
+        closed = await run(replace(original, lifecycle=Lifecycle.CLOSE))
+        assert closed.lifecycle == Lifecycle.CLOSE and not runtime._keyframes
+        new_visit = replace(original, payload={**original.payload, "correlation_id": "visit-two"})
+        assert PRIVATE_EVIDENCE_ARTIFACT in (await run(new_visit)).artifacts
+        exhausted = await run(replace(new_visit, payload={**new_visit.payload, "correlation_id": "visit-three"}))
+        assert exhausted.payload["recognition"]["reason"] == "evidence_budget"
+        assert PRIVATE_EVIDENCE_ARTIFACT not in exhausted.artifacts
+        assert (await run(replace(new_visit, lifecycle=Lifecycle.CLOSE))).lifecycle == Lifecycle.CLOSE
+
+    asyncio.run(scenario())
+
+
 def test_private_evidence_origin_resolution_and_notification_dedupe(tmp_path):
     async def scenario():
         store = IdentityStore(tmp_path / "gallery", scope="test")

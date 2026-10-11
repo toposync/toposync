@@ -35,7 +35,7 @@ class VisionExtension(BaseExtension):
             "auth": {
                 "action": "core:extension:use",
                 "resource_type": "core:extension",
-                "api_prefixes": ["/api/vision/identities"],
+                "api_prefixes": ["/api/vision/identities", "/api/vision/history"],
             }
         }
 
@@ -84,8 +84,10 @@ class VisionExtension(BaseExtension):
 
         from functools import partial
         from .identity.api import create_identity_router, identity_history_selection
+        from .history import create_history_router
 
         app.include_router(create_identity_router(identity_store))
+        app.include_router(create_history_router())
         services.register("vision.identity.store", identity_store)
         services.register("vision.identity.history_selection", partial(identity_history_selection, get_store=identity_store))
 

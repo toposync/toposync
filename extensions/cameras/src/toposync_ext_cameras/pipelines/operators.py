@@ -391,9 +391,13 @@ class OnvifStateGateConfig(BaseModel):
     camera_id: str = ""
     topic: str = ""
     item_name: str = ""
+    qualified_topic: str = ""
+    source: dict[str, str] | None = None
+    key: dict[str, str] | None = None
     open_when: bool = True
+    mode: Literal["state", "pulse"] = "state"
     fail_open: bool = False
-    hold_seconds: float = Field(default=5.0, ge=0.0, le=300.0)
+    hold_seconds: float = Field(default=5.0, ge=0.0, le=300.0, allow_inf_nan=False)
     poll_interval_ms: int = Field(default=500, ge=100, le=60_000)
     stream_id: str = ""
 
@@ -408,6 +412,9 @@ class OnvifEventFilterConfig(BaseModel):
 
     topic: str = ""
     item_name: str = ""
+    qualified_topic: str = ""
+    source: dict[str, str] | None = None
+    key: dict[str, str] | None = None
 
     @field_validator("topic", "item_name", mode="after")
     @classmethod
@@ -690,6 +697,8 @@ class CameraSourceConfig(BaseModel):
     password: str = ""
     backend: str = "auto"
     fps: float | None = Field(default=None, ge=1.0, le=60.0)
+    keep_capture_when_gate_closed: bool = False
+    gate_min_observation_seconds: float = Field(default=0.0, ge=0.0, le=300.0, allow_inf_nan=False)
     poll_interval_ms: int = Field(default=20, ge=1, le=250)
 
     @field_validator("camera_id", "source_id", "rtsp_url", mode="after")
@@ -1140,7 +1149,7 @@ def _onvif_event_dict_key(value: Any) -> tuple[tuple[str, str], ...]:
 def _onvif_event_state_key(event: dict[str, Any], *, item_name: str) -> tuple[Any, ...]:
     return (
         str(event.get("camera_id") or "").strip(),
-        str(event.get("topic") or "").strip(),
+        str(event.get("qualified_topic") or event.get("topic") or "").strip(),
         str(item_name or "").strip(),
         _onvif_event_dict_key(event.get("source")),
         _onvif_event_dict_key(event.get("key")),
@@ -1166,6 +1175,9 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
         self._hold_until_ts = 0.0
         self._last_telemetry_open: bool | None = None
         self._last_telemetry_ts = 0.0
+        self._session: int | None = None
+        self._pulse_sequence = 0
+        self._started_at = time.time()
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         gate_open, payload = await self._resolve_gate_state()
@@ -1213,6 +1225,7 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
 
     async def _resolve_gate_state(self) -> tuple[bool, dict[str, Any]]:
         now = time.time()
+        clock = time.monotonic()
         payload: dict[str, Any] = {
             "topic": self._config.topic,
             "item_name": self._config.item_name,
@@ -1222,6 +1235,8 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
             "evaluated_at_ts": now,
         }
         services = self._dependencies.services
+        if self._config.mode == "pulse":
+            return await self._resolve_pulse_window(services, now=now, clock=clock, payload=payload)
         if services is None:
             self._last_raw_active = False
             self._hold_until_ts = 0.0
@@ -1243,6 +1258,9 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
                 camera_id=self._config.camera_id,
                 topic=self._config.topic,
                 item_name=self._config.item_name,
+                **({"qualified_topic": self._config.qualified_topic, "source": self._config.source,
+                    "key": self._config.key} if self._config.qualified_topic or self._config.source is not None
+                    or self._config.key is not None else {}),
             )
         except Exception as exc:  # noqa: BLE001
             self._last_raw_active = False
@@ -1260,15 +1278,20 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
             return gate_open, payload
 
         snapshot = raw if isinstance(raw, dict) else {}
+        session = snapshot.get("session")
+        if session is not None and session != self._session:
+            self._last_raw_active = False
+            self._hold_until_ts = 0.0
+            self._session = session
         known = bool(snapshot.get("known"))
         available = bool(snapshot.get("available"))
         error = str(snapshot.get("error") or "").strip()
         value = snapshot.get("value")
         matched = available and known and isinstance(value, bool) and value == bool(self._config.open_when)
-        if not available:
+        if not available or not known or not isinstance(value, bool):
             self._hold_until_ts = 0.0
             gate_open = bool(self._config.fail_open)
-            reason = "onvif_unavailable"
+            reason = "onvif_unavailable" if not available else "unknown"
         elif matched:
             self._hold_until_ts = 0.0
             gate_open = True
@@ -1276,9 +1299,18 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
         else:
             if self._last_raw_active is True and float(self._config.hold_seconds) > 0.0:
                 self._hold_until_ts = max(
-                    self._hold_until_ts, now + float(self._config.hold_seconds)
+                    self._hold_until_ts, clock + float(self._config.hold_seconds)
                 )
-            gate_open = bool(self._hold_until_ts and now < self._hold_until_ts)
+            inactive_age = snapshot.get("last_inactive_age_seconds")
+            active_age = snapshot.get("last_active_age_seconds")
+            if self._config.open_when and isinstance(inactive_age, (int, float)) and isinstance(active_age, (int, float)):
+                # Retain a short activation even when both edges arrived between operator polls.
+                if active_age <= inactive_age + self._config.hold_seconds and inactive_age < self._config.hold_seconds:
+                    self._hold_until_ts = max(self._hold_until_ts, clock + self._config.hold_seconds - inactive_age)
+            active_ts = snapshot.get("last_active_ts")
+            if inactive_age is None and self._config.open_when and isinstance(active_ts, (float, int)) and 0 <= now - active_ts < self._config.hold_seconds:
+                self._hold_until_ts = max(self._hold_until_ts, clock + self._config.hold_seconds - (now - active_ts))
+            gate_open = bool(self._hold_until_ts and clock < self._hold_until_ts)
             reason = "hold" if gate_open else ("unknown" if not known else "not_matched")
         self._last_raw_active = bool(matched)
         payload.update(
@@ -1291,11 +1323,64 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
                 "label": str(snapshot.get("label") or "").strip(),
                 "last_event_ts": snapshot.get("last_event_ts"),
                 "last_changed_ts": snapshot.get("last_changed_ts"),
-                "hold_until_ts": self._hold_until_ts or None,
+                "hold_remaining_seconds": max(0.0, self._hold_until_ts - clock),
                 "error": error,
             }
         )
         return gate_open, payload
+
+    async def _resolve_pulse_window(self, services, *, now: float, clock: float, payload: dict) -> tuple[bool, dict]:
+        try:
+            raw = await services.call("cameras.onvif_events.recent_events", camera_id=self._config.camera_id,
+                                      after_sequence=self._pulse_sequence, limit=64)
+        except Exception:
+            self._hold_until_ts = 0.0
+            return self._config.fail_open, {**payload, "reason": "onvif_unavailable", "known": False}
+        if raw.get("session") != self._session:
+            self._hold_until_ts = 0.0
+            self._session = raw.get("session")
+        if not raw.get("available") or raw.get("gap"):
+            self._pulse_sequence = int(raw.get("last_sequence") or self._pulse_sequence)
+            self._hold_until_ts = 0.0
+            return self._config.fail_open, {**payload, "reason": "unknown", "known": False}
+        descriptors = raw.get("occurrence_descriptors")
+        if isinstance(descriptors, list) and not any(item.get("topic") == self._config.topic
+                and (not self._config.qualified_topic or item.get("qualified_topic") == self._config.qualified_topic)
+                and (not self._config.item_name or item.get("item_name") == self._config.item_name) for item in descriptors):
+            self._hold_until_ts = 0.0
+            return self._config.fail_open, {**payload, "reason": "unknown", "known": False}
+        for event in raw.get("events", []):
+            sequence = int(event.get("sequence") or 0)
+            if sequence <= self._pulse_sequence:
+                continue
+            self._pulse_sequence = sequence
+            receipt = event.get("received_at_ts")
+            if not isinstance(receipt, (int, float)) or not self._started_at <= receipt <= now:
+                continue
+            if event.get("is_property") is not False or event.get("session", raw.get("session")) != raw.get("session"):
+                continue
+            if str(event.get("operation") or "").lower() in {"initialized", "deleted"}:
+                continue
+            if event.get("topic") != self._config.topic or (self._config.qualified_topic and event.get("qualified_topic") != self._config.qualified_topic):
+                continue
+            if not self._config.qualified_topic and event.get("ambiguous_topic"):
+                continue
+            if any(wanted is not None and event.get(key, {}) != wanted for key, wanted in (
+                ("source", self._config.source), ("key", self._config.key))):
+                continue
+            data = event.get("data", {})
+            if self._config.item_name and self._config.item_name not in data:
+                continue
+            value, _ = _onvif_event_bool_with_item(event, item_name=self._config.item_name)
+            if value is not None and value != self._config.open_when:
+                continue
+            age = event.get("received_age_seconds")
+            if not isinstance(age, (int, float)) or not math.isfinite(age) or age < 0:
+                age = now - receipt
+            self._hold_until_ts = max(self._hold_until_ts, clock + self._config.hold_seconds - age)
+        opened = clock < self._hold_until_ts
+        return opened, {**payload, "mode": "pulse", "known": True, "reason": "hold" if opened else "not_matched",
+                        "hold_remaining_seconds": max(0.0, self._hold_until_ts - clock)}
 
 
 class OnvifEventSourceRuntime(SourceOperatorRuntime):
@@ -1308,6 +1393,7 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
         self._last_sequence = 0
         self._pending: list[Packet] = []
         self._last_boolean_values: dict[tuple[Any, ...], bool] = {}
+        self._session: int | None = None
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         if self._pending:
@@ -1326,6 +1412,13 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
         except Exception:
             return None
         snapshot = raw if isinstance(raw, dict) else {}
+        if not snapshot.get("available", True) or snapshot.get("gap"):
+            self._last_boolean_values.clear()
+            self._last_sequence = int(snapshot.get("last_sequence") or self._last_sequence)
+            return None
+        if snapshot.get("session") != self._session:
+            self._last_boolean_values.clear()
+        self._session = snapshot.get("session")
         events = snapshot.get("events") if isinstance(snapshot.get("events"), list) else []
         max_seen = self._last_sequence
         for event_raw in events:
@@ -1337,6 +1430,8 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
             if sequence <= max_seen:
                 continue
             max_seen = sequence
+            if event.get("session", self._session) != self._session:
+                continue
             # A live source must not replay the manager's pre-start history as
             # new activity. Receipt time is local evidence, not camera capture time.
             received_at = event.get("received_at_ts")
@@ -1347,6 +1442,8 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
             if not self._matches_event(event):
                 continue
             value, item_name = self._event_boolean_value(event)
+            if value is not None and event.get("is_property") is True and event.get("state_accepted") is False:
+                continue
             if self._is_duplicate_boolean_event(event, item_name=item_name, value=value):
                 continue
             self._pending.append(self._packet_for_event(event, context, boolean_value=value))
@@ -1374,6 +1471,14 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
         for item in filters:
             wanted_topic = str(item.topic or "").strip()
             wanted_item = str(item.item_name or "").strip()
+            if item.qualified_topic and item.qualified_topic != event.get("qualified_topic"):
+                continue
+            if item.source is not None and item.source != event.get("source", {}):
+                continue
+            if item.key is not None and item.key != event.get("key", {}):
+                continue
+            if not item.qualified_topic and event.get("ambiguous_topic"):
+                continue
             if wanted_topic and wanted_topic != topic:
                 continue
             if wanted_item and wanted_item not in data:
@@ -1391,9 +1496,13 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
     def _is_duplicate_boolean_event(
         self, event: dict[str, Any], *, item_name: str, value: bool | None
     ) -> bool:
-        if value is None:
+        if value is None or event.get("is_property") is False:
             return False
         key = _onvif_event_state_key(event, item_name=item_name)
+        operation = str(event.get("operation") or "").lower()
+        if operation == "deleted":
+            self._last_boolean_values.pop(key, None)
+            return False
         previous = self._last_boolean_values.get(key)
         if previous is value:
             return True
@@ -1409,7 +1518,9 @@ class OnvifEventSourceRuntime(SourceOperatorRuntime):
         value = boolean_value
         operation = str(event.get("operation") or "").strip().lower()
         lifecycle = Lifecycle.UPDATE
-        if value is True:
+        if event.get("is_property") is False:
+            lifecycle = Lifecycle.UPDATE
+        elif value is True:
             lifecycle = Lifecycle.OPEN
         elif value is False or operation == "deleted":
             lifecycle = Lifecycle.CLOSE
@@ -1456,6 +1567,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._ingest_blocking_errors: tuple[str, ...] = ()
         self._gate_open = True
         self._gate_known = False
+        self._onvif_gate_attached = False
+        self._gate_waiting_first_frame = False
+        self._gate_opened_at_ts = 0.0
+        self._gate_observation_until = 0.0
         self._waiting_for_source_config = False
         self._last_wait_log_monotonic = 0.0
         self._source_health_id = ""
@@ -1611,10 +1726,17 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 continue
 
             value = packet.payload.get("gate_open")
+            self._onvif_gate_attached = isinstance(packet.payload.get("onvif"), dict)
             if isinstance(value, bool):
+                if value and (not self._gate_known or not self._gate_open) and self._config.gate_min_observation_seconds:
+                    self._gate_waiting_first_frame = True
+                    self._gate_opened_at_ts = time.time()
+                    # Bound acquisition when the source never delivers a usable frame.
+                    self._gate_observation_until = time.monotonic() + 30.0
                 self._gate_open = value
                 self._gate_known = True
                 continue
+
             if packet.lifecycle == Lifecycle.OPEN:
                 self._gate_open = True
                 self._gate_known = True
@@ -1623,6 +1745,9 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 self._gate_open = False
                 self._gate_known = True
                 continue
+
+    def _capture_gate_open(self) -> bool:
+        return self._gate_open or self._config.keep_capture_when_gate_closed or time.monotonic() < self._gate_observation_until
 
     async def _stop_grabber_if_needed(self) -> None:
         if self._grabber is None:
@@ -1710,11 +1835,17 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 last_error=last_error,
                 metrics=metrics,
             )
+        node_metrics = getattr(context, "metrics", None)
+        if node_metrics is not None:
+            if last_error:
+                node_metrics.unavailable_reason = "camera_source_unavailable"
+            elif status == "idle" or (frame_ts is not None and frame_ts > 0):
+                node_metrics.unavailable_reason = None
         return record.as_dict()
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         await self._consume_gate_packets(context)
-        if not self._gate_open:
+        if not self._capture_gate_open():
             self._record_source_health(context, status="idle")
             await self._stop_grabber_if_needed()
             return None
@@ -1775,6 +1906,13 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             return None
         if not capture_frame.fresh:
             return None
+        if self._gate_waiting_first_frame:
+            published_at = capture_frame.capture_evidence.get("published_at")
+            if isinstance(published_at, (int, float)) and published_at < self._gate_opened_at_ts:
+                return None
+            self._gate_waiting_first_frame = False
+            self._gate_observation_until = time.monotonic() + self._config.gate_min_observation_seconds
+        self._record_source_health(context, frame_ts=float(frame_ts), metrics=dict(capture_frame.metrics))
         self._last_ts = frame_ts
         now = time.monotonic()
         self._next_frame_monotonic += self._frame_interval_seconds
@@ -1854,6 +1992,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "camera_source_id": self._source_id or None,
                 "capture_backend": str(capture_metrics.get("backend") or ""),
                 "source_status": str(capture_metrics.get("source_status") or ""),
+                **({"onvif_gate_open": self._gate_open or time.monotonic() < self._gate_observation_until,
+                    "onvif_signal_open": self._gate_open,
+                    "onvif_observation_retained": not self._gate_open and time.monotonic() < self._gate_observation_until}
+                   if self._onvif_gate_attached else {}),
                 **(
                     {
                         "ptz_motion_epoch": int(ptz_state.get("motion_epoch") or 0),
@@ -1866,7 +2008,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         )
 
     async def idle_sleep(self, context) -> None:  # noqa: ANN001
-        if not self._gate_open:
+        if not self._capture_gate_open():
             # Avoid a tight loop when the gate is closed.
             await context.sleep(max(0.05, float(self._config.poll_interval_ms) / 1000.0))
             return
@@ -2151,12 +2293,16 @@ class MotionGateRuntime(TransformOperatorRuntime):
             state["active_frames"] = 0
 
         hold_until = float(state.get("hold_until", 0.0) or 0.0)
-        gate_open = bool(motion.active) or now <= hold_until
+        gate_open = bool(motion.active) or now <= hold_until or packet.metadata.get("onvif_gate_open") is True
         if not gate_open and not self._emit_when_idle:
             return []
 
         payload = dict(packet.payload)
         payload["motion"] = {
+            "artifact_name": _artifact_name,
+            "image_geometry": packet.artifacts[_artifact_name].metadata.get("image_geometry"),
+            "capture_evidence": packet.payload.get("capture_evidence"),
+            "frame_ts": packet.payload.get("frame_ts"),
             "active": bool(motion.active),
             "score": float(motion.score),
             "bboxes01": [list(bbox) for bbox in motion.bboxes01],
@@ -3350,14 +3496,14 @@ def _camera_source_diagnostics(config: dict[str, Any], context: dict[str, Any]) 
 def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
     registry.register_operator(
         operator_id="camera.onvif_state_gate",
-        description="ONVIF boolean state gate that can open camera.source only while the selected camera state matches.",
+        description="ONVIF observation window maintained by a property state or a declared occurrence.",
         config_model=OnvifStateGateConfig,
         inputs=[],
         outputs=[{"name": "out"}],
         capabilities=["camera", "onvif", "gate_control", "realtime"],
-        defaults=OnvifStateGateConfig().model_dump(),
+        defaults={**OnvifStateGateConfig().model_dump(), "hold_seconds": 10.0},
         produces_payload_keys=["gate_open", "camera_id", "onvif"],
-        share_strategy="never",
+        share_strategy="by_signature",
         owner="com.toposync.cameras",
         ui={
             "pipeline_group": "input",

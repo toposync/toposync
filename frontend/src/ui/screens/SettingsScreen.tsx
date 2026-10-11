@@ -54,7 +54,7 @@ type Props = {
   onCreateComposition: (name: string) => Promise<Composition>;
   onRenameComposition: (compositionId: string, name: string) => Promise<Composition>;
   onDeleteComposition: (compositionId: string) => Promise<void>;
-  onOpenCompositionEditor: () => void;
+  onOpenCompositionEditor: (elementId?: string, initialAction?: string) => void;
   canManageAccess: boolean;
   authUser: AuthUser | null;
   onLogout: () => Promise<void>;
@@ -182,6 +182,8 @@ export function SettingsScreen({
   const [compositionError, setCompositionError] = useState<string | null>(null);
   const [pendingExitAction, setPendingExitAction] = useState<ExitAction | null>(null);
   const [pendingCompositionEditorId, setPendingCompositionEditorId] = useState<string | null>(null);
+  const pendingCompositionElementId = useRef<string | undefined>(undefined);
+  const pendingCompositionInitialAction = useRef<string | undefined>(undefined);
   const lastSettingsRef = useRef<AppSettings>(settings);
 
   async function loadExtensionCatalog(): Promise<void> {
@@ -778,15 +780,19 @@ export function SettingsScreen({
         await onActivateComposition(compositionId);
       }
       setCompositionActionId(null);
-      onOpenCompositionEditor();
+      onOpenCompositionEditor(pendingCompositionElementId.current, pendingCompositionInitialAction.current);
+      pendingCompositionElementId.current = undefined;
+      pendingCompositionInitialAction.current = undefined;
     } catch (err) {
       setCompositionError(err instanceof Error ? err.message : t("core.ui.settings.compositions.error.open_editor"));
       setCompositionActionId(null);
     }
   }
 
-  function requestOpenSettingsCompositionEditor(compositionId: string): void {
+  function requestOpenSettingsCompositionEditor(compositionId: string, elementId?: string, initialAction?: string): void {
     if (saving || compositionActionId) return;
+    pendingCompositionElementId.current = elementId;
+    pendingCompositionInitialAction.current = initialAction;
     if (hasUnsavedChanges) {
       setPendingExitAction("composition_editor");
       setPendingCompositionEditorId(compositionId);
@@ -798,10 +804,12 @@ export function SettingsScreen({
 
   useEffect(() => {
     function handleOpenCompositionEditor(event: Event): void {
-      const detail = (event as CustomEvent<{ compositionId?: unknown }>).detail;
+      const detail = (event as CustomEvent<{ compositionId?: unknown; elementId?: unknown; initialAction?: unknown }>).detail;
       const compositionId = typeof detail?.compositionId === "string" ? detail.compositionId : "";
       if (!compositionId || !compositions.some((composition) => composition.id === compositionId)) return;
-      requestOpenSettingsCompositionEditor(compositionId);
+      requestOpenSettingsCompositionEditor(compositionId,
+        typeof detail?.elementId === "string" ? detail.elementId : undefined,
+        typeof detail?.initialAction === "string" ? detail.initialAction : undefined);
     }
 
     window.addEventListener("toposync:open-composition-editor", handleOpenCompositionEditor);
@@ -1608,6 +1616,8 @@ export function SettingsScreen({
 	                    setConfirmExitOpen(false);
 	                    setPendingExitAction(null);
 	                    setPendingCompositionEditorId(null);
+                        pendingCompositionElementId.current = undefined;
+                        pendingCompositionInitialAction.current = undefined;
 	                  }}
 	                >
 	                  {t("core.actions.cancel")}

@@ -158,3 +158,22 @@ def test_demand_returning_during_unsubscribe_waits_for_the_shared_loop():
             await manager.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_pull_failure_identifies_operation_without_exposing_transport_details():
+    async def scenario():
+        manager, transport = manager_and_transport()
+        async def failed_pull(*args, **kwargs):
+            transport.pulling.set()
+            raise RuntimeError("rtsp://user:private-password@camera.invalid")
+        transport.pull_messages = failed_pull
+        try:
+            await snapshot(manager)
+            await asyncio.wait_for(transport.pulling.wait(), .5)
+            result = await manager.recent_events(camera_id="controlled")
+            assert result["available"] is False
+            assert result["error"] == "RuntimeError: ONVIF PullMessages unavailable"
+            assert "private-password" not in str(result)
+        finally:
+            await manager.shutdown()
+    asyncio.run(scenario())

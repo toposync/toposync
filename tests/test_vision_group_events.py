@@ -385,3 +385,34 @@ def test_group_shutdown_discards_pending_closes_without_reusing_identity(monkeyp
         assert reopened.payload["subject"]["id"] != first.payload["subject"]["id"]
 
     asyncio.run(scenario())
+
+
+def test_group_terminal_keeps_latest_member_capture_and_has_no_new_frame(monkeypatch):
+    from toposync.runtime.pipelines import Artifact
+    from toposync_ext_vision.processing.tasks import group_events
+    clock = [100.0]
+    monkeypatch.setattr(group_events.time, 'monotonic', lambda: clock[0])
+    async def scenario():
+        runtime = _runtime({'mode': 'session', 'idle_timeout_seconds': 30, 'update_interval_seconds': 0})
+        for ts, member in [(100, 'a'), (105, 'b')]:
+            clock[0] = ts
+            packet = _event_packet(ts, member)
+            packet.payload.update(media={'ts': ts}, capture_evidence={'capture_instance': 'decoder', 'generation': 1, 'sequence': ts})
+            await runtime.process_packet(packet, None)
+        clock[0] = 110
+        closed_member = _event_packet(100, 'a', lifecycle=Lifecycle.CLOSE)
+        closed_member.payload.update(media={'ts': 100}, capture_evidence={'capture_instance': 'decoder', 'generation': 1, 'sequence': 100})
+        output = (await runtime.process_packet(closed_member, None))[0]
+        assert output.payload['frame_ts'] == output.payload['media']['ts'] == 105
+        assert output.payload['capture_evidence']['sequence'] == 105
+        assert not output.artifacts
+        clock[0] = 150
+        later = _event_packet(150, 'c')
+        later.payload.update(media={'ts': 150}, capture_evidence={'capture_instance': 'new', 'generation': 2})
+        later.artifacts['main'] = Artifact('main', b'new unrelated image')
+        outputs = await runtime.process_packet(later, None)
+        closed = next(packet for packet in outputs if packet.lifecycle == Lifecycle.CLOSE)
+        assert closed.payload['frame_ts'] == closed.payload['media']['ts'] == 105
+        assert closed.payload['capture_evidence']['sequence'] == 105
+        assert not closed.artifacts
+    asyncio.run(scenario())

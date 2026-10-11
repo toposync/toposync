@@ -20,7 +20,11 @@ for (const [locale, width] of [["en", 1440], ["pt-BR", 390]]) {
     await page.setViewportSize({ width, height: 900 });
     await page.addInitScript((value) => localStorage.setItem("toposync.locale", value), locale);
     await page.goto("/settings");
-    await page.getByRole("button", { name: /^(Cameras|Câmeras)\b/ }).click();
+    if (width < 800) {
+      await page.locator(".settingsMobileNavigation select").selectOption("com.toposync.cameras.audio-tools");
+    } else {
+      await page.getByRole("button", { name: /^(Audio tools|Ferramentas de áudio)\b/ }).click();
+    }
     const title = locale === "en" ? "Analyze an audio sample" : "Analisar amostra de áudio";
     await page.getByText(title, { exact: true }).click();
     const panel = page.locator("details").filter({ has: page.locator("summary", { hasText: title }) }).first();
@@ -43,3 +47,35 @@ for (const [locale, width] of [["en", 1440], ["pt-BR", 390]]) {
     }
   });
 }
+
+test("audio tools handle errors and abort analysis when leaving without changing camera settings", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("toposync.locale", "en"));
+  await page.goto("/settings?panel=com.toposync.cameras.audio-tools");
+  const title = page.getByText("Analyze an audio sample", { exact: true });
+  await title.click();
+  const panel = page.locator("details").filter({ has: page.locator("summary", { hasText: "Analyze an audio sample" }) }).first();
+  await panel.getByLabel("Audio sample", { exact: true }).setInputFiles({ name: "tone.wav", mimeType: "audio/wav", buffer: tone(8000) });
+  await page.route("**/api/cameras/audio/analyze?*", route => route.fulfill({ status: 503, json: { detail: "Synthetic analysis failure" } }));
+  await panel.getByRole("button", { name: "Analyze sample", exact: true }).click();
+  await expect(panel.getByRole("alert")).toContainText("Could not analyze");
+  await expect(page.getByText(/^Unsaved:/)).toHaveCount(0);
+  await page.unroute("**/api/cameras/audio/analyze?*");
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let reached;
+  const started = new Promise(resolve => { reached = resolve; });
+  await page.route("**/api/cameras/audio/analyze?*", async route => {
+    reached();
+    await gate;
+    await route.fulfill({ status: 503, json: { detail: "Delayed synthetic failure" } }).catch(() => {});
+  });
+  await panel.getByRole("button", { name: "Analyze sample", exact: true }).click();
+  await started;
+  const cancelled = page.waitForEvent("requestfailed", { predicate: request => request.url().includes("/audio/analyze?") });
+  await page.getByRole("button", { name: /^Cameras\b/ }).click();
+  await cancelled;
+  release();
+  await expect(page.getByTestId("camera-device-settings")).toBeVisible();
+  await expect(page.getByText(/^Unsaved:/)).toHaveCount(0);
+  await expect(page.getByText("Delayed synthetic failure", { exact: true })).toHaveCount(0);
+});

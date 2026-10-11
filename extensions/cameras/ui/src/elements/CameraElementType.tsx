@@ -16,12 +16,14 @@ import type {
 
 import {
   fetchCameraPanoramaContext,
+  fetchCameraPanoramaJob,
   fetchCameraSnapshot,
   fetchCamerasIndex,
 } from "../api/camerasApi";
 import { CAMERA_ELEMENT_TYPE_ID } from "../constants";
 import {
   readCalibratedViews,
+  legacyMetricCalibrations,
   readRecord,
   readString,
   summarizeCalibratedViewQuality,
@@ -30,12 +32,12 @@ import type {
   CameraCalibratedView,
   CameraConnectionType,
   CameraPanoramaContext,
+  CameraPanoramaJob,
   CameraSourceConfig,
   CameraSourceRole,
   CamerasIndex,
 } from "../types";
 import { CameraPanoramaMappingModal } from "./CameraPanoramaMappingModal";
-import { CameraGroundMappingModal } from "./CameraGroundMappingModal";
 
 function roundRectPath(
   canvasContext: CanvasRenderingContext2D,
@@ -442,8 +444,10 @@ export function createCameraElementType(host: ToposyncHost): ElementType {
         },
       };
     },
-    renderEditorModal: ({ element, elements, elementTypesById, update, remove, close }) => (
+    renderEditorModal: ({ compositionId, initialAction, element, elements, elementTypesById, update, remove, close }) => (
       <CameraEditor
+        compositionId={compositionId}
+        initialAction={initialAction}
         element={element}
         elements={elements}
         elementTypesById={elementTypesById}
@@ -459,6 +463,8 @@ export function createCameraElementType(host: ToposyncHost): ElementType {
 }
 
 function CameraEditor({
+  compositionId,
+  initialAction,
   element,
   elements,
   elementTypesById,
@@ -468,6 +474,8 @@ function CameraEditor({
   i18n,
   host,
 }: {
+  compositionId?: string;
+  initialAction?: string;
   element: CompositionElement;
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
@@ -479,33 +487,43 @@ function CameraEditor({
 }): React.ReactElement {
   const { t } = i18n.useI18n();
   const props = readRecord(element.props);
+  const metricRecords = legacyMetricCalibrations(props);
   const selectedCameraId = readString(props.camera_id).trim();
   const existingCalibratedViews = useMemo(() => {
     return readCalibratedViews(props.calibrated_views, element.position);
   }, [element.position, props.calibrated_views]);
-  const readySets = useMemo(
-    () => existingCalibratedViews.filter((item) => summarizeCalibratedViewQuality(item).status !== "incomplete").length,
-    [existingCalibratedViews],
-  );
   const readyCalibratedViews = useMemo(
-    () => existingCalibratedViews.filter((item) => summarizeCalibratedViewQuality(item).status !== "incomplete"),
-    [existingCalibratedViews],
+    () => Object.prototype.hasOwnProperty.call(props, "panorama_mapping") ? []
+      : existingCalibratedViews.filter((item) => summarizeCalibratedViewQuality(item).status !== "incomplete"),
+    [existingCalibratedViews, props.panorama_mapping],
   );
-  const totalSets = existingCalibratedViews.length;
   const spatialClipAreaId = readSpatialVideoClipAreaId(props);
   const [isPanoramaMappingOpen, setIsPanoramaMappingOpen] = useState(false);
-  const [isGroundMappingOpen, setIsGroundMappingOpen] = useState(false);
+  useEffect(() => {
+    // Open after the host editor has registered its modal focus layer.
+    if (initialAction === "panorama-mapping") setIsPanoramaMappingOpen(true);
+  }, [initialAction]);
   const [legacyPanoramaContext, setLegacyPanoramaContext] = useState<CameraPanoramaContext | null>(null);
+  const [activePanorama, setActivePanorama] = useState<CameraPanoramaJob | null>(null);
 
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndex | null>(null);
   const [indexErrorMessage, setIndexErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     setLegacyPanoramaContext(null);
+    setActivePanorama(null);
     if (!selectedCameraId) return;
     const controller = new AbortController();
     void fetchCameraPanoramaContext(selectedCameraId, element.id, controller.signal)
-      .then((context) => { if (!controller.signal.aborted) setLegacyPanoramaContext(context); })
+      .then(async (context) => {
+        if (controller.signal.aborted) return;
+        setLegacyPanoramaContext(context);
+        if (context.active) {
+          const active = context.job?.id === context.active.job_id && context.job.revision === context.active.revision
+            ? context.job : await fetchCameraPanoramaJob(selectedCameraId, context.active.job_id, controller.signal);
+          if (!controller.signal.aborted) setActivePanorama(active);
+        }
+      })
       .catch(() => { /* A saved mapping reference remains available if context cannot load. */ });
     return () => controller.abort();
   }, [selectedCameraId, element.id]);
@@ -585,15 +603,26 @@ function CameraEditor({
       || selectedCamera?.sources.find((source) => source.enabled && source.is_default)?.id
       || selectedCamera?.sources.find((source) => source.enabled)?.id;
     const parameters = new URLSearchParams({ panel: "com.toposync.cameras", camera_id: selectedCameraId });
-    if (sourceId) parameters.set("source_id", sourceId);
+    if (sourceId) {
+      parameters.set("source_id", sourceId);
+      try { sessionStorage.setItem(`toposync.panorama-source.${selectedCameraId}.${element.id}`, sourceId); }
+      catch { /* The settings URL still retains the selected source. */ }
+    }
+    if (compositionId) {
+      parameters.set("return_composition_id", compositionId);
+      parameters.set("return_element_id", element.id);
+    }
     setIsPanoramaMappingOpen(false);
     close();
     window.history.pushState({}, "", resolveToposyncUrl(`/settings?${parameters.toString()}`));
     window.dispatchEvent(new Event("popstate"));
   }
+  const panoramaFootprint = useMemo(() => activePanorama?.active && activePanorama.source_panorama?.compatible
+    && activePanorama.solution?.quality.status === "ready" && activePanorama.solution.preview?.eligible
+    ? activePanorama.solution.support_polygon.map(([x, z]) => ({ x, z })) : [], [activePanorama]);
+  const hasAreaMapping = readyCalibratedViews.length > 0 || panoramaFootprint.length >= 3;
   const areaClipOptions = useMemo<CameraAreaClipOption[]>(() => {
-    if (readyCalibratedViews.length === 0) return [];
-    const footprints = readyCalibratedViews.map(calibratedViewFootprint).filter((footprint) => footprint.length >= 3);
+    const footprints = [...readyCalibratedViews.map(calibratedViewFootprint), panoramaFootprint].filter((footprint) => footprint.length >= 3);
     if (footprints.length === 0) return [];
     return elements
       .filter((item) => item.id !== element.id && (elementTypesById[item.type]?.layerGroup ?? "") === "areas")
@@ -610,9 +639,9 @@ function CameraEditor({
         };
       })
       .filter((item): item is CameraAreaClipOption => Boolean(item));
-  }, [element.id, elementTypesById, elements, readyCalibratedViews]);
+  }, [element.id, elementTypesById, elements, readyCalibratedViews, panoramaFootprint]);
   const selectedAreaClipOption = areaClipOptions.find((option) => option.value === spatialClipAreaId) ?? null;
-  const areaClipDisabled = !selectedCameraId || readyCalibratedViews.length === 0 || areaClipOptions.length === 0;
+  const areaClipDisabled = !selectedCameraId || !hasAreaMapping || areaClipOptions.length === 0;
   const areaClipInvalid = Boolean(spatialClipAreaId && !selectedAreaClipOption);
 
   function updateSpatialVideoClipArea(nextAreaId: string) {
@@ -665,40 +694,44 @@ function CameraEditor({
       )}
 
       <div className="field">
-        <label className="label">{t("ext.cameras.editor.calibration")}</label>
+        <label className="label">{t("ext.cameras.panorama.mapping_label")}</label>
         <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div className="cardMeta">
-            {readRecord(props.panorama_mapping).status === "ready"
-              ? t("ext.cameras.panorama.active_title")
-              : totalSets > 0
-              ? t("ext.cameras.editor.control_sets_some", { ready: readySets, total: totalSets })
-              : t("ext.cameras.editor.calibration_none")}
+            {t(activePanorama?.active && activePanorama.permissions?.can_activate
+              ? "ext.cameras.mapping.active"
+              : props.panorama_mapping || existingCalibratedViews.length
+                ? "ext.cameras.mapping.review_required" : "ext.cameras.mapping.absent")}
+            {activePanorama?.active ? ` · ${t(activePanorama.permissions?.aim_enabled
+              ? "ext.cameras.mapping.positioning_available" : "ext.cameras.mapping.positioning_unqualified")}` : ""}
           </div>
 
           <button
             className="primaryButton"
+            style={{ minHeight: 44, whiteSpace: "normal" }}
             type="button"
             disabled={!selectedCameraId}
             onClick={() => setIsPanoramaMappingOpen(true)}
           >
-            {t("ext.cameras.panorama.calibrate_camera")}
+            {t(readRecord(props.panorama_mapping).status === "ready"
+              ? "ext.cameras.panorama.review_calibration"
+              : legacyPanoramaContext?.job?.points.length
+              ? "ext.cameras.panorama.continue_calibration"
+              : "ext.cameras.panorama.calibrate_camera")}
           </button>
         </div>
-        <button
-          className="chipButton"
-          style={{ minHeight: 44, whiteSpace: "normal" }}
-          type="button"
-          disabled={!selectedCameraId}
-          onClick={() => setIsGroundMappingOpen(true)}
-        >
-          {t("ext.cameras.editor.ground_calibration")}
-        </button>
-        <div className="cardMeta">{t("ext.cameras.editor.ground_calibration_hint")}</div>
       </div>
+
+      {metricRecords.length > 0 ? <div className="field">
+        <p className="cardMeta">{t("ext.cameras.mapping.metric_preservation")}</p>
+        <button className="chipButton" type="button" onClick={() => update({ props: { metric_calibrations: metricRecords } })}>
+          {t("ext.cameras.mapping.metric_separate")}
+        </button>
+      </div> : null}
 
       <div className="field">
         <label className="label">{t("ext.cameras.editor.spatial_clip")}</label>
         <Select<CameraAreaClipOption, false>
+          aria-label={t("ext.cameras.editor.spatial_clip")}
           styles={cameraAreaSelectStyles}
           value={selectedAreaClipOption}
           options={areaClipOptions}
@@ -708,8 +741,8 @@ function CameraEditor({
           onChange={(option: SingleValue<CameraAreaClipOption>) => updateSpatialVideoClipArea(option?.value ?? "")}
         />
         <div className="cardMeta" style={{ marginTop: 6 }}>
-          {readyCalibratedViews.length === 0
-            ? t(readRecord(props.panorama_mapping).status === "ready" ? "ext.cameras.panorama.spatial_clip_unavailable" : "ext.cameras.editor.spatial_clip_disabled_no_calibration")
+          {!hasAreaMapping
+            ? t("ext.cameras.panorama.area_requires_mapping")
             : areaClipOptions.length === 0
               ? t("ext.cameras.editor.spatial_clip_none")
               : t("ext.cameras.editor.spatial_clip_hint")}
@@ -748,24 +781,10 @@ function CameraEditor({
         i18n={i18n}
         element={element}
         cameraId={selectedCameraId}
-        onActivate={(job) => update({ props: {
+        onActivate={(job) => { setActivePanorama(job); update({ props: {
           panorama_mapping: { job_id: job.id, revision: job.revision, source_id: job.source_id, status: "ready" },
           previous_panorama_mapping: props.panorama_mapping,
-        } })}
-      />
-
-      <CameraGroundMappingModal
-        open={isGroundMappingOpen}
-        onClose={() => setIsGroundMappingOpen(false)}
-        host={host}
-        i18n={i18n}
-        element={element}
-        cameraId={selectedCameraId}
-        cameraSources={selectedCamera?.sources ?? []}
-        initialViews={props.calibrated_views}
-        initialDraftViews={props.calibrated_views_draft}
-        onSaveDraft={(views) => update({ props: { calibrated_views_draft: views } })}
-        onActivate={(views) => update({ props: { calibrated_views: views } })}
+        } }); }}
       />
 
     </div>

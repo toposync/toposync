@@ -60,9 +60,9 @@ import {
   readDetectionModelCatalog,
   type DetectionModelCatalogItem,
 } from "./visionModelCatalog";
+import { CameraOnvifResourcesModal } from "./CameraOnvifResourcesModal";
 import { SubModal } from "../ui/SubModal";
 import { CameraSourcePanoramaSection } from "./CameraSourcePanoramaSection";
-import { AudioFileAnalysis } from "./AudioFileAnalysis";
 
 type TranslateFn = ReturnType<HostI18n["useI18n"]>["t"];
 
@@ -334,11 +334,11 @@ function openSettingsPanel(panelId: string): void {
   window.dispatchEvent(new CustomEvent("toposync:open-settings-panel", { detail: { panelId } }));
 }
 
-function openCompositionEditor(compositionId: string): void {
+function openCompositionEditor(compositionId: string, elementId?: string, initialAction?: string): void {
   if (typeof window === "undefined") return;
   const normalized = String(compositionId || "").trim();
   if (!normalized) return;
-  window.dispatchEvent(new CustomEvent("toposync:open-composition-editor", { detail: { compositionId: normalized } }));
+  window.dispatchEvent(new CustomEvent("toposync:open-composition-editor", { detail: { compositionId: normalized, elementId, initialAction } }));
 }
 
 function slugSourceId(value: string, fallback: string): string {
@@ -448,7 +448,11 @@ function CamerasSettingsPanelContent({
   const cameras = useMemo(() => parseCameras(settings), [settings]);
   const readLocation = () => {
     const parameters = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
-    return { cameraId: parameters.get("camera_id") || "", sourceId: parameters.get("source_id") || "" };
+    return {
+      cameraId: parameters.get("camera_id") || "", sourceId: parameters.get("source_id") || "",
+      returnCompositionId: parameters.get("return_composition_id") || "",
+      returnElementId: parameters.get("return_element_id") || "",
+    };
   };
   const [requestedLocation, setRequestedLocation] = useState(readLocation);
   const appliedLocation = useRef<typeof requestedLocation | null>(null);
@@ -468,8 +472,7 @@ function CamerasSettingsPanelContent({
   const [cameraPipelinesLoading, setCameraPipelinesLoading] = useState(false);
   const [cameraPipelinesError, setCameraPipelinesError] = useState<string | null>(null);
   const [pipelinePresetOpen, setPipelinePresetOpen] = useState<CameraPipelinePreset | null>(null);
-  const mappingHeading = useRef<HTMLDivElement>(null);
-  const [activePanoramaId, setActivePanoramaId] = useState<string | null>(null);
+  const [mappingElementByComposition, setMappingElementByComposition] = useState<Record<string, string>>({});
   const [createdPipeline, setCreatedPipeline] = useState<string | null>(null);
   const reviewButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -498,6 +501,7 @@ function CamerasSettingsPanelContent({
   const [probeBusy, setProbeBusy] = useState(false);
   const [probeResult, setProbeResult] = useState<RtspProbeResponse | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
+  const [onvifResourcesCameraId, setOnvifResourcesCameraId] = useState<string | null>(null);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
@@ -625,7 +629,6 @@ function CamerasSettingsPanelContent({
     activeCamera?.sources[0]?.id ||
     "";
   const activeSource = activeCamera?.sources.find((source) => source.id === activeSourceId) ?? activeCamera?.sources[0] ?? null;
-  useEffect(() => setActivePanoramaId(null), [activeCameraId, activeSourceId]);
   useEffect(() => {
     if (!activeCamera || !activeSource) return;
     // A draft toggle can change the default source. Keep the operator's selected
@@ -1116,7 +1119,12 @@ function CamerasSettingsPanelContent({
   }
 
   return (
-    <div className="settingsPanel">
+    <div className="settingsPanel cameraSettingsPanel">
+      {requestedLocation.returnCompositionId ? <div className="rowWrap" style={{ marginBottom: "var(--space-4)" }}>
+        <button className="chipButton" type="button" onClick={() => openCompositionEditor(requestedLocation.returnCompositionId, requestedLocation.returnElementId)}>
+          {t("ext.cameras.panorama.return_composition")}
+        </button>
+      </div> : null}
       <div className="settingsHeaderRow">
         <div>
           <div className="settingsTitle">{t("ext.cameras.settings.name", {}, "Câmeras")}</div>
@@ -1134,7 +1142,6 @@ function CamerasSettingsPanelContent({
         </div>
       </div>
 
-      <AudioFileAnalysis i18n={i18n} />
       <div className="card">
         <div className="cardBody">
           <div className="settingsSectionHeader">
@@ -1228,8 +1235,9 @@ function CamerasSettingsPanelContent({
             <div className="emptyState">{t("ext.cameras.settings.empty", {}, "Adicione uma câmera para começar.")}</div>
           ) : (
             <>
-              <div className="card">
+              <div className="card" data-testid="camera-device-settings">
                 <div className="cardBody">
+                  <h2 className="modalSectionTitle">{t("ext.cameras.settings.device", {}, "Câmera")}</h2>
                   <div className="rowWrap">
                     <div className="field" style={{ flex: 2, minWidth: 220 }}>
                       <label className="label">{t("ext.cameras.settings.camera_name", {}, "Nome da câmera")}</label>
@@ -1323,10 +1331,11 @@ function CamerasSettingsPanelContent({
                       </div>
                       {inspectError ? <div className="errorText">{inspectError}</div> : null}
                       {inspectResult?.warnings?.length ? <div className="settingsStatusMuted">{inspectResult.warnings.join(" ")}</div> : null}
-                      <div className="field" style={{ marginTop: 12 }}>
-                        <label className="chipButton" style={{ width: "fit-content" }}>
+                      <div className="field cameraAutomationConfirmation">
+                        <label className="cameraAutomationLabel">
                           <input
                             type="checkbox"
+                            aria-describedby={`camera-automation-help-${activeCamera.id}`}
                             checked={activeCamera.control.automation_exclusive_control_confirmed === true}
                             onChange={(event) => updateCamera(activeCamera.id, (camera) => ({
                               ...camera,
@@ -1336,13 +1345,13 @@ function CamerasSettingsPanelContent({
                               },
                             }))}
                           />
-                          {t("ext.cameras.settings.automation_exclusive_control", {}, "Controle PTZ exclusivo confirmado")}
+                          {t("ext.cameras.settings.automation_exclusive_control", {}, "Rastreamento e movimentos automáticos da câmera estão desativados")}
                         </label>
-                        <div className="settingsDescription">
+                        <div className="settingsDescription" id={`camera-automation-help-${activeCamera.id}`}>
                           {t(
                             "ext.cameras.settings.automation_exclusive_control_help",
                             {},
-                            "Confirmo que rastreamento nativo, movimento para o ponto de monitoramento e retorno automático estão desativados.",
+                            "Confirme que o rastreamento nativo, o movimento para o ponto de monitoramento e o retorno automático estão desativados na câmera antes de permitir que o Toposync a movimente.",
                           )}
                         </div>
                         {activeCamera.control.automation_exclusive_control_confirmed === true ? null : (
@@ -1357,12 +1366,22 @@ function CamerasSettingsPanelContent({
                       </div>
                     </div>
                   ) : null}
+                  <details className="cameraTechnicalDetails">
+                    <summary>{t("ext.cameras.settings.technical.title")}</summary>
+                    <dl className="settingsMetricGrid">
+                      <div><dt>{t("ext.cameras.settings.technical.connection")}</dt><dd>{activeCamera.control.type === "onvif" ? "ONVIF" : t("ext.cameras.settings.control.none")}</dd></div>
+                      <div><dt>{t("ext.cameras.settings.technical.identifier")}</dt><dd>{activeCamera.onvif?.device_id || t("ext.cameras.settings.technical.unknown")}</dd></div>
+                      <div><dt>{t("ext.cameras.settings.technical.hardware")}</dt><dd>{activeCamera.onvif?.hardware || t("ext.cameras.settings.technical.unknown")}</dd></div>
+                    </dl>
+                    <button className="chipButton" type="button" onClick={() => setOnvifResourcesCameraId(activeCamera.id)}>{t("ext.cameras.onvif.title")}</button>
+                  </details>
                 </div>
               </div>
 
+              <section className="cameraSettingsSection" aria-labelledby="camera-sources-heading">
               <div className="settingsSectionHeader">
                 <div>
-                  <div className="modalSectionTitle">{t("ext.cameras.settings.sources.title", {}, "Fontes da câmera")}</div>
+                  <h2 id="camera-sources-heading" className="modalSectionTitle">{t("ext.cameras.settings.sources.title", {}, "Fontes da câmera")}</h2>
                   <div className="settingsDescription">
                     {t("ext.cameras.settings.sources.help", {}, "Fluxos, snapshots e diagnósticos escolhem uma destas fontes.")}
                   </div>
@@ -1405,6 +1424,7 @@ function CamerasSettingsPanelContent({
                   </div>
 
                   {activeSource ? (
+                    <div className="cameraSourceDetails">
                     <div className="card">
                       <div className="cardBody">
                         <div className="rowWrap">
@@ -1446,7 +1466,8 @@ function CamerasSettingsPanelContent({
                               <option value="custom">{sourceRoleLabel("custom", t)}</option>
                             </select>
                           </div>
-                          <div className="field" style={{ width: 160 }}>
+                          <details className="field" style={{ width: 160 }}>
+                            <summary>{t("ext.cameras.settings.sources.optical_identity")}</summary>
                             <label className="label">{t("ext.cameras.settings.sources.view", {}, "Visão")}</label>
                             <input
                               className="input"
@@ -1455,7 +1476,7 @@ function CamerasSettingsPanelContent({
                                 updateSource(activeCamera.id, activeSource.id, (source) => ({ ...source, view_id: event.target.value }))
                               }
                             />
-                          </div>
+                          </details>
                         </div>
 
                         <div className="rowWrap">
@@ -1658,38 +1679,34 @@ function CamerasSettingsPanelContent({
                         </div>
                       </div>
                     </div>
+                    <div ref={panoramaSection}>
+                      <CameraSourcePanoramaSection
+                        ui={ui}
+                        key={`${activeCamera.id}:${activeSource.id}`}
+                        cameraId={activeCamera.id}
+                        sourceId={activeSource.id}
+                        cameraName={activeCamera.name || activeCamera.id}
+                        sourceName={activeSource.name || activeSource.id}
+                        enabled={activeCameraPersisted && activeSource.enabled && activeSource.kind === "video"}
+                        persisted={activeCameraPersisted}
+                        i18n={i18n}
+                        onOpenLive={artifact => {
+                          localStorage.setItem("toposync.livePanorama.reference", artifact.id);
+                          localStorage.setItem("toposync.render_mode.v1", "com.toposync.cameras.live-panorama");
+                          navigateInApp("/");
+                        }}
+                      />
+                    </div>
+                    </div>
                   ) : null}
                 </div>
               )}
+              </section>
 
-              {activeSource ? <div ref={panoramaSection}><CameraSourcePanoramaSection
-                ui={ui}
-                key={`${activeCamera.id}:${activeSource.id}`}
-                cameraId={activeCamera.id}
-                sourceId={activeSource.id}
-                cameraName={activeCamera.name || activeCamera.id}
-                sourceName={activeSource.name || activeSource.id}
-                enabled={activeCameraPersisted && activeSource.enabled && activeSource.kind === "video"}
-                persisted={activeCameraPersisted}
-                i18n={i18n}
-                onActiveArtifactChange={artifact => setActivePanoramaId(artifact?.id ?? null)}
-              /></div> : null}
-
-              {activePanoramaId ? <div className="card"><div className="cardBody" style={{ display: "grid", gap: 16 }}>
-                <p>{t("ext.cameras.recipe.panorama_next")}</p>
-                <div className="rowWrap">
-                  <button type="button" className="primaryButton" onClick={() => { mappingHeading.current?.scrollIntoView({ block: "center" }); mappingHeading.current?.focus(); }}>{t("ext.cameras.recipe.panorama_mapping")}</button>
-                  <button type="button" className="chipButton" onClick={() => {
-                    localStorage.setItem("toposync.livePanorama.reference", activePanoramaId);
-                    localStorage.setItem("toposync.render_mode.v1", "com.toposync.cameras.live-panorama");
-                    navigateInApp("/");
-                  }}>{t("ext.cameras.recipe.panorama_live")}</button>
-                </div>
-              </div></div> : null}
-
+              <section className="cameraSettingsSection" aria-labelledby="camera-mapping-heading">
               <div className="settingsSectionHeader">
                 <div>
-                  <div ref={mappingHeading} tabIndex={-1} className="modalSectionTitle">{t("ext.cameras.mapping.title", {}, "Mapeamento")}</div>
+                  <h2 id="camera-mapping-heading" className="modalSectionTitle">{t("ext.cameras.mapping.title", {}, "Mapeamento")}</h2>
                   <div className="settingsDescription">
                     {t("ext.cameras.mapping.help", {}, "Composições onde esta câmera aparece e se os pontos de controle estão mapeados.")}
                   </div>
@@ -1732,48 +1749,59 @@ function CamerasSettingsPanelContent({
               ) : (
                 <div className="settingsList" role="list">
                   {(cameraContexts?.compositions ?? []).map((composition) => {
-                    const calibratedViews = (composition.camera_elements ?? []).reduce(
-                      (sum, element) => sum + Number(element.calibrated_views || 0),
-                      0,
-                    );
-                    const ready = (composition.camera_elements ?? []).some((element) => Boolean(element.has_mapping));
                     const compositionName = composition.name || composition.id;
+                    const elements = composition.camera_elements ?? [];
+                    const selectedElement = elements.length === 1 ? elements[0]
+                      : elements.find(element => element.id === mappingElementByComposition[composition.id]);
                     return (
-                      <button
-                        className="settingsListItem cameraMappingCompositionItem"
-                        key={composition.id}
-                        type="button"
-                        aria-label={t(
-                          "ext.cameras.mapping.open_composition_aria",
-                          { name: compositionName },
-                          "Open composition editor for {{name}}",
-                        )}
-                        title={t("ext.cameras.mapping.open_composition", {}, "Open editor")}
-                        onClick={() => openCompositionEditor(composition.id)}
-                      >
-                        <span className="cameraMappingCompositionText">
+                      <div className="settingsListItem cameraMappingCompositionItem" role="listitem" key={composition.id}>
+                        <div className="cameraMappingCompositionText">
                           <span className="settingsListTitle">{compositionName}</span>
                           <span className="settingsListMeta">
-                            {ready
-                              ? t("ext.cameras.mapping.ready", {}, "Vistas calibradas")
-                              : t("ext.cameras.mapping.missing", {}, "Faltam vistas calibradas")}
-                            {" · "}
-                            {t("ext.cameras.mapping.views_count", { count: calibratedViews }, "{{count}} vistas")}
+                            {!selectedElement ? t("ext.cameras.mapping.choose_element") : t(`ext.cameras.mapping.${selectedElement.mapping?.mapping ?? "absent"}`)}
+                            {selectedElement?.mapping?.source_id ? ` · ${activeCamera.sources.find(source => source.id === selectedElement.mapping?.source_id)?.name || t("ext.cameras.settings.sources.title")}` : ""}
+                            {selectedElement?.mapping?.revision != null ? ` · ${t("ext.cameras.mapping.revision", { count: selectedElement.mapping.revision })}` : ""}
+                            {selectedElement?.mapping?.mapping === "active" ? ` · ${t(`ext.cameras.mapping.positioning_${selectedElement.mapping.positioning}`)}` : ""}
                           </span>
-                        </span>
-                        <span className="cameraMappingCompositionAction" aria-hidden="true">
-                          <span>{t("ext.cameras.mapping.open_composition", {}, "Open editor")}</span>
-                          <i className="fa-solid fa-arrow-up-right-from-square" />
-                        </span>
-                      </button>
+                          {selectedElement?.mapping ? <span className="settingsListMeta">
+                            {t(`ext.cameras.mapping.reference_${selectedElement.mapping.reference}`)}
+                            {selectedElement.mapping.reason ? ` · ${t(`ext.cameras.panorama.error_${selectedElement.mapping.reason}`, {}, t("ext.cameras.panorama.review_calibration"))}` : ""}
+                          </span> : null}
+                        </div>
+                        {elements.length > 1 ? <select
+                          className="input cameraMappingElementSelect"
+                          aria-label={t("ext.cameras.mapping.choose_element_aria", { name: compositionName })}
+                          value={selectedElement?.id ?? ""}
+                          onChange={event => setMappingElementByComposition(previous => ({ ...previous, [composition.id]: event.target.value }))}
+                        >
+                          <option value="">{t("ext.cameras.mapping.choose_element")}</option>
+                          {elements.map(element => <option key={element.id} value={element.id}>{element.name || element.id}</option>)}
+                        </select> : null}
+                        <div className="cameraMappingCompositionActions">
+                          <button className="chipButton" type="button"
+                            aria-label={t("ext.cameras.mapping.open_composition_aria", { name: compositionName })}
+                            title={t("ext.cameras.mapping.open_composition")}
+                            onClick={() => openCompositionEditor(composition.id)}>
+                            <i className="fa-solid fa-arrow-up-right-from-square" aria-hidden="true" />
+                          </button>
+                          <button className="chipButton" type="button" disabled={!selectedElement}
+                            aria-label={t("ext.cameras.mapping.open_mapping_aria", { name: compositionName })}
+                            title={t("ext.cameras.mapping.open_mapping")}
+                            onClick={() => selectedElement && openCompositionEditor(composition.id, selectedElement.id, "panorama-mapping")}>
+                            <i className="fa-solid fa-map-location-dot" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
               )}
 
+              </section>
+              <section className="cameraSettingsSection" aria-labelledby="camera-pipelines-heading">
               <div className="settingsSectionHeader">
                 <div>
-                  <div className="modalSectionTitle">{t("ext.cameras.pipelines.title", {}, "Fluxos")}</div>
+                  <h2 id="camera-pipelines-heading" className="modalSectionTitle">{t("ext.cameras.pipelines.title", {}, "Fluxos")}</h2>
                   <div className="settingsDescription">
                     {t("ext.cameras.pipelines.help", {}, "Gerencie os fluxos desta câmera. Escolha uma receita para criar um novo fluxo.")}
                   </div>
@@ -2007,11 +2035,13 @@ function CamerasSettingsPanelContent({
                   </div>
                 </div>
               )}
+              </section>
             </>
           )}
         </main>
       </div>
 
+      {activeCamera && onvifResourcesCameraId === activeCamera.id ? <CameraOnvifResourcesModal camera={activeCamera} open={true} t={t} onClose={() => setOnvifResourcesCameraId(null)} /> : null}
       <SubModal open={snapshotOpen} title={t("ext.cameras.settings.snapshot", {}, "Snapshot")} onClose={() => setSnapshotOpen(false)}>
         {snapshotError ? (
           <>

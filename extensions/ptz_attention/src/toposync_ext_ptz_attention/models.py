@@ -8,8 +8,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-AttentionMode = Literal["disabled", "shadow", "live_preset", "paused"]
-ResumableMode = Literal["disabled", "shadow", "live_preset"]
+AttentionMode = Literal["disabled", "shadow", "live_preset", "live_panorama", "paused"]
+ResumableMode = Literal["disabled", "shadow", "live_preset", "live_panorama"]
 IntentLifecycle = Literal["open", "update", "close"]
 ControllerState = Literal[
     "IDLE",
@@ -131,6 +131,9 @@ class AttentionProfile(StrictModel):
     operator_managed: bool = False
     same_head_observer_acknowledged: bool = False
     composition_id: str = ""
+    panorama_element_id: str = ""
+    home_target: WorldAnchor | None = None
+    attention_region: list[WorldAnchor] = Field(default_factory=list, max_length=64)
     home_view_id: str = ""
     eligible_view_ids: list[str] = Field(default_factory=list)
     event_policies: list[EventPolicy] = Field(default_factory=list)
@@ -153,6 +156,7 @@ class AttentionProfile(StrictModel):
         "source_id",
         "ptz_device_id",
         "composition_id",
+        "panorama_element_id",
         "home_view_id",
         mode="before",
     )
@@ -191,8 +195,21 @@ class AttentionProfile(StrictModel):
     @model_validator(mode="after")
     def _mode_contract(self) -> "AttentionProfile":
         effective_mode = self.resume_mode if self.mode == "paused" else self.mode
+        if self.panorama_element_id:
+            if not self.source_id or not self.composition_id or self.home_target is None:
+                raise ValueError("panorama attention requires source, composition and home target")
+            if self.home_view_id or self.eligible_view_ids or any(policy.preferred_view_id for policy in self.event_policies):
+                raise ValueError("panorama attention cannot use legacy view destinations")
+            if effective_mode == "live_preset":
+                raise ValueError("panorama attention requires live_panorama mode")
+            if not simple_region(self.attention_region):
+                raise ValueError("attention region must be a simple nondegenerate polygon")
+            if len(self.attention_region) < 3 or not target_in_region(self.home_target, self.attention_region):
+                raise ValueError("home target must be inside an explicit attention region")
+        elif effective_mode == "live_panorama" or self.home_target is not None or self.attention_region:
+            raise ValueError("panorama_element_id is required for panoramic targets")
         if self.follow_view_updates and (
-            effective_mode == "live_preset" or self.candidate_confirm_seconds <= 0
+            effective_mode in {"live_preset", "live_panorama"} or self.candidate_confirm_seconds <= 0
         ):
             raise ValueError("following views requires shadow mode and positive confirmation time")
         if self.ptz_device_id != self.camera_id:
@@ -287,9 +304,34 @@ class AttentionIntent(StrictModel):
         return self
 
 
+class PanoramaDestination(StrictModel):
+    camera_id: str
+    source_id: str
+    composition_id: str
+    element_id: str
+    job_id: str
+    revision: int = Field(strict=True, ge=1)
+    ray: tuple[float, float, float]
+
+    @field_validator("camera_id", "source_id", "composition_id", "element_id", "job_id")
+    @classmethod
+    def _identity(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("panorama identity is required")
+        return value.strip()
+
+    @field_validator("ray")
+    @classmethod
+    def _ray(cls, value: tuple[float, float, float]) -> tuple[float, float, float]:
+        if not all(math.isfinite(item) for item in value) or abs(sum(item * item for item in value) - 1) > 1e-6:
+            raise ValueError("panorama ray must be finite and normalized")
+        return value
+
+
 class ResolvedTarget(StrictModel):
-    view_id: str
-    preset_token: str
+    view_id: str = ""
+    preset_token: str = ""
+    panorama: PanoramaDestination | None = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     reason: str = ""
     eligible_view_ids: list[str] = Field(default_factory=list)
@@ -299,12 +341,20 @@ class ResolvedTarget(StrictModel):
     def _trim_resolved_text(cls, value: Any) -> str:
         return str(value or "").strip()
 
-    @field_validator("view_id", "preset_token")
-    @classmethod
-    def _required_resolved_text(cls, value: str) -> str:
-        if not value:
-            raise ValueError("field is required")
-        return value
+    @model_validator(mode="after")
+    def _destination(self) -> "ResolvedTarget":
+        if self.panorama is None and (not self.view_id or not self.preset_token):
+            raise ValueError("resolved legacy destination requires view and preset")
+        if self.panorama is not None and (self.view_id or self.preset_token):
+            raise ValueError("panorama destination cannot carry a preset")
+        return self
+
+    @property
+    def target_key(self) -> str:
+        if self.panorama is None:
+            return self.preset_token
+        import json
+        return json.dumps(self.panorama.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 class PtzAttentionRequestConfig(StrictModel):
@@ -391,6 +441,7 @@ class DeviceStatus(StrictModel):
     active_event_key: str = ""
     active_preset_token: str = ""
     active_view_id: str = ""
+    active_target: dict[str, Any] | None = None
     active_priority: int | None = None
     candidate_event_key: str = ""
     candidate_preset_token: str = ""
@@ -425,6 +476,44 @@ def effective_mode(profile: AttentionProfile) -> ResumableMode:
     if profile.mode == "paused":
         return profile.resume_mode or "disabled"
     return profile.mode
+
+
+def simple_region(region: list[WorldAnchor]) -> bool:
+    vertices = [(point.x, point.z) for point in region]
+    if len(vertices) < 3 or len(set(vertices)) != len(vertices):
+        return False
+    edges = list(zip(vertices, vertices[1:] + vertices[:1]))
+    if abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in edges)) < 1e-9:
+        return False
+    def cross(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    def on_segment(a, b, c):
+        return abs(cross(a, b, c)) < 1e-9 and all(min(a[i], b[i]) <= c[i] <= max(a[i], b[i]) for i in (0, 1))
+    for index, (a, b) in enumerate(edges):
+        for other, (c, d) in enumerate(edges[index + 1:], index + 1):
+            if other == index + 1 or (index == 0 and other == len(edges) - 1):
+                continue
+            if (cross(a, b, c) * cross(a, b, d) < 0 and cross(c, d, a) * cross(c, d, b) < 0
+                    or any((on_segment(a, b, c), on_segment(a, b, d), on_segment(c, d, a), on_segment(c, d, b)))):
+                return False
+    return True
+
+
+def target_in_region(point: WorldAnchor, region: list[WorldAnchor], radius: float = 0) -> bool:
+    """Require the complete event envelope inside the configured polygon."""
+    inside = False
+    for first, last in zip(region, region[1:] + region[:1]):
+        dx, dz = last.x - first.x, last.z - first.z
+        squared = dx * dx + dz * dz
+        if squared == 0:
+            return False
+        along = max(0.0, min(1.0, ((point.x - first.x) * dx + (point.z - first.z) * dz) / squared))
+        distance = math.hypot(point.x - first.x - along * dx, point.z - first.z - along * dz)
+        if distance < radius or distance < 1e-9:
+            return False
+        if (first.z > point.z) != (last.z > point.z) and point.x < first.x + (point.z - first.z) * dx / dz:
+            inside = not inside
+    return inside
 
 
 def _public_reason(value: str) -> str:

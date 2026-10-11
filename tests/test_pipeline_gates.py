@@ -19,6 +19,7 @@ from toposync.runtime.pipelines import (
     register_builtin_operators,
 )
 from toposync.runtime.pipelines.operators_gates import evaluate_schedule_gate
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
 
@@ -83,7 +84,6 @@ def test_category_gate_is_lifecycle_safe() -> None:
         )
 
         graph = {
-            "schema_version": 1,
             "nodes": [
                 {
                     "id": "source",
@@ -105,18 +105,33 @@ def test_category_gate_is_lifecycle_safe() -> None:
                 {
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "gate", "port": "in"},
+                    "traffic": {
+                        "modality": "video.frame",
+                        "semantic_class": "frame",
+                        "continuous": True,
+                    },
                     "maxsize": 32,
                     "drop_policy": "drop_oldest",
                 },
                 {
                     "from": {"node": "gate", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
+                    "traffic": {
+                        "modality": "video.frame",
+                        "semantic_class": "frame",
+                        "continuous": True,
+                    },
                     "maxsize": 32,
                     "drop_policy": "drop_oldest",
                 },
             ],
         }
-        pipeline = Pipeline(name="category_gate_test", graph=graph)
+        pipeline = Pipeline(
+            name="category_gate_test",
+            graph=build_pipeline_graph_v2(
+                graph_uid="category_gate_test", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.25)
@@ -164,7 +179,6 @@ def test_schedule_gate_pauses_camera_source(monkeypatch: pytest.MonkeyPatch) -> 
         register_camera_pipeline_operators(registry)
 
         graph = {
-            "schema_version": 1,
             "nodes": [
                 {"id": "gate", "operator": "core.schedule_gate", "config": gate_config},
                 {
@@ -176,10 +190,23 @@ def test_schedule_gate_pauses_camera_source(monkeypatch: pytest.MonkeyPatch) -> 
             ],
             "edges": [
                 {"from": {"node": "gate", "port": "out"}, "to": {"node": "camera", "port": "gate"}},
-                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+                {
+                    "from": {"node": "camera", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "traffic": {
+                        "modality": "video.frame",
+                        "semantic_class": "frame",
+                        "continuous": True,
+                    },
+                },
             ],
         }
-        pipeline = Pipeline(name="schedule_gate_pause_camera", graph=graph)
+        pipeline = Pipeline(
+            name="schedule_gate_pause_camera",
+            graph=build_pipeline_graph_v2(
+                graph_uid="schedule_gate_pause_camera", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.35)
@@ -234,7 +261,6 @@ def test_camera_hub_aggregates_demand_across_pipelines_with_different_schedules(
         register_camera_pipeline_operators(registry)
 
         graph_a = {
-            "schema_version": 1,
             "nodes": [
                 {"id": "gate", "operator": "core.schedule_gate", "config": {"enabled": False}},
                 {
@@ -246,11 +272,18 @@ def test_camera_hub_aggregates_demand_across_pipelines_with_different_schedules(
             ],
             "edges": [
                 {"from": {"node": "gate", "port": "out"}, "to": {"node": "camera", "port": "gate"}},
-                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+                {
+                    "from": {"node": "camera", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "traffic": {
+                        "modality": "video.frame",
+                        "semantic_class": "frame",
+                        "continuous": True,
+                    },
+                },
             ],
         }
         graph_b = {
-            "schema_version": 1,
             "nodes": [
                 # Enabled=true with default 24h window keeps the gate open, but differs from graph_a config.
                 {"id": "gate", "operator": "core.schedule_gate", "config": {}},
@@ -263,14 +296,32 @@ def test_camera_hub_aggregates_demand_across_pipelines_with_different_schedules(
             ],
             "edges": [
                 {"from": {"node": "gate", "port": "out"}, "to": {"node": "camera", "port": "gate"}},
-                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+                {
+                    "from": {"node": "camera", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "traffic": {
+                        "modality": "video.frame",
+                        "semantic_class": "frame",
+                        "continuous": True,
+                    },
+                },
             ],
         }
 
         report = PipelineGraphCompiler(registry).compile_many(
             [
-                Pipeline(name="final_a", graph=graph_a),
-                Pipeline(name="final_b", graph=graph_b),
+                Pipeline(
+                    name="final_a",
+                    graph=build_pipeline_graph_v2(
+                        graph_uid="final_a", nodes=graph_a["nodes"], edges=graph_a["edges"]
+                    ),
+                ),
+                Pipeline(
+                    name="final_b",
+                    graph=build_pipeline_graph_v2(
+                        graph_uid="final_b", nodes=graph_b["nodes"], edges=graph_b["edges"]
+                    ),
+                ),
             ],
         )
         runtime = PipelineBundleRuntime(report=report, registry=registry)

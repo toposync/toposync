@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+
 import asyncio
 from typing import Any
 
@@ -345,7 +347,9 @@ def test_pipeline_runtime_collects_numeric_and_image_telemetry() -> None:
                 },
             ],
         }
-        pipeline = Pipeline(name="telemetry_runtime_pipeline", graph=graph)
+        pipeline = Pipeline(name="telemetry_runtime_pipeline", graph=build_pipeline_graph_v2(
+            graph_uid="telemetry_runtime_pipeline", nodes=graph["nodes"], edges=graph["edges"],
+        ))
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
 
         telemetry_store = PipelineTelemetryStore(

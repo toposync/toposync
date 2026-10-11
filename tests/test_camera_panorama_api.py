@@ -293,7 +293,6 @@ def synthetic_points() -> list[dict[str, Any]]:
         points.append(
             {
                 "id": str(index),
-                "role": "fit" if index < 6 else "check",
                 "panorama": {"x": (pan + math.pi) / (2 * math.pi), "y": 0.5 - tilt / math.pi},
                 "world": {"x": x, "z": z},
             }
@@ -602,6 +601,20 @@ def test_unapproved_active_never_falls_back_to_clean_candidate(environment) -> N
     assert not service.jobs and controller.commands == [] and controller.snapshot_calls == 0
 
 
+def test_saved_panorama_draft_frames_captured_pixels_on_create_and_reopen(environment) -> None:
+    client, controller, service = environment
+    body, _ = saved_source_panorama(client, service)
+    response = client.post(BASE, json=body)
+    assert response.status_code == 200
+    draft = response.json()
+    expected = {"min_x": 0, "max_x": 1, "min_y": 40 / 128, "max_y": 1}
+    assert draft["coverage_bounds"] == expected
+    assert client.get(f"{BASE}/{draft['id']}").json()["coverage_bounds"] == expected
+    assert draft["points"] == [] and controller.commands == []
+    (service.root / draft["id"] / "coverage.png").unlink()
+    assert client.get(f"{BASE}/{draft['id']}").status_code == 200
+
+
 def test_assisted_draft_resume_and_review_preserve_active_mapping(environment) -> None:
     client, controller, service = environment
     body, _ = saved_source_panorama(client, service)
@@ -678,7 +691,7 @@ def test_saved_source_panorama_reuses_canonical_geometry_without_profile_or_capt
     )
     assert response.status_code == 200, response.text
     job = response.json()
-    assert job["solution"]["preview"]["status"] == "provisional"
+    assert job["solution"]["preview"]["status"] == "ready"
     assert job["solution"]["preview"]["context"]["source_artifact_id"] == body["source_artifact_id"]
     response = client.put(
         f"{BASE}/{job['id']}/points",
@@ -788,6 +801,46 @@ def test_saved_source_panorama_binds_revision_coverage_and_source_identity(envir
     assert not controller.commands and controller.snapshot_calls == 0
 
 
+
+@pytest.mark.parametrize("versioned", [False, True])
+@pytest.mark.parametrize("changed", ["fps", "event_binding"])
+def test_saved_mapping_operational_edit_requires_geometry_provenance(environment, versioned, changed):
+    from toposync_ext_cameras.source_panorama import _geometry_identity
+    from toposync_ext_cameras.settings import get_camera_device, get_camera_source
+
+    client, controller, service = environment
+    body, directory = saved_source_panorama(client, service)
+    config = client.portal.call(service.store.get_config)
+    camera = get_camera_device(config.settings.extensions["com.toposync.cameras"], camera_id="simulated")
+    source = get_camera_source(camera, source_id="main", enabled_only=True)
+    if versioned:
+        path = directory / "artifact.json"
+        artifact = json.loads(path.read_text())
+        artifact["_geometry_identity"] = _geometry_identity(camera, source)
+        path.write_text(json.dumps(artifact))
+    created = client.post(BASE, json=body)
+    assert created.status_code == 200
+    job = created.json()
+    source_config = config.settings.extensions["com.toposync.cameras"]["devices"][0]["sources"][0]
+    if changed == "fps":
+        source_config.setdefault("video", {})["fps"] = 12
+    else:
+        source_config["origin"].setdefault("metadata", {})["onvif_profile_binding"] = {
+            "profile_token": "main", "upstream_rtsp_url": "rtsp://camera/main",
+        }
+    client.portal.call(service.store.save_config, config)
+    response = client.put(f"{BASE}/{job['id']}/points", json={"revision": job["revision"], "points": synthetic_points()[:6]})
+    assert response.status_code == (200 if versioned else 409)
+    if versioned:
+        assert len(response.json()["points"]) == 6
+        config.settings.extensions["com.toposync.cameras"]["devices"][0].setdefault("metadata", {})["panorama_mount_revision"] = 2
+        client.portal.call(service.store.save_config, config)
+        rejected = client.put(f"{BASE}/{job['id']}/points", json={"revision": response.json()["revision"], "points": synthetic_points()})
+        assert rejected.status_code == 409
+        assert rejected.json()["detail"]["code"] == "camera_configuration_changed"
+    assert not controller.commands and controller.snapshot_calls == 0
+
+
 def fit_job(client: TestClient) -> dict[str, Any]:
     job = ready_job(client)
     response = client.put(
@@ -829,7 +882,7 @@ def test_capture_calibrate_validate_activate_and_aim_real_routes(environment) ->
     job = fit_job(client)
     assert job["revision"] == 2
     before = len(controller.commands)
-    assert client.post(f"{BASE}/{job['id']}/activate", json={"revision": 2}).status_code == 409
+    assert client.get(f"{BASE}/{job['id']}").json()["permissions"]["can_activate"]
     assert len(controller.commands) == before
     job = confirm_checks(client, job)
     response = client.post(f"{BASE}/{job['id']}/activate", json={"revision": 2})
@@ -968,7 +1021,8 @@ def test_check_receipts_reject_old_attempts_and_unverifiable_is_not_success(envi
         json={"revision": 2, "point_id": "6", "check_id": latest["id"], "result": "unverifiable"},
     )
     assert response.status_code == 200 and response.json()["checks"][0]["result"] == "unverifiable"
-    assert client.post(path + "/activate", json={"revision": 2}).status_code == 409
+    assert client.post(path + "/activate", json={"revision": 2}).status_code == 200
+    assert client.post(BASE + "/aim", json={"element_id": "camera-element", "world": {"x": 6, "z": 0}}).status_code == 409
 
 
 def test_restart_interrupts_without_motion_and_recovers_saved_draft(
@@ -1063,13 +1117,12 @@ def test_active_reference_conflict_and_restore_are_atomic_without_movement(envir
     assert config.active_composition_id == "ground"
 
 
-def test_additional_failed_or_pending_check_prevents_activation(environment) -> None:
+def test_failed_physical_check_blocks_aim_but_not_visual_acceptance(environment) -> None:
     client, _, _ = environment
     job = ready_job(client)
     points = synthetic_points()
     extra = {
         "id": "8",
-        "role": "check",
         "world": {"x": 5, "z": 1},
         "panorama": {
             "x": (math.atan2(1, 5) + math.pi) / (2 * math.pi),
@@ -1081,7 +1134,7 @@ def test_additional_failed_or_pending_check_prevents_activation(environment) -> 
     )
     assert response.status_code == 200
     job = confirm_checks(client, response.json())
-    assert client.post(f"{BASE}/{job['id']}/activate", json={"revision": 2}).status_code == 409
+    assert client.get(f"{BASE}/{job['id']}").json()["permissions"]["can_activate"]
     check = client.post(f"{BASE}/{job['id']}/check", json={"revision": 2, "point_id": "8"}).json()[
         "checks"
     ][-1]
@@ -1092,7 +1145,9 @@ def test_additional_failed_or_pending_check_prevents_activation(environment) -> 
         ).status_code
         == 200
     )
-    assert client.post(f"{BASE}/{job['id']}/activate", json={"revision": 2}).status_code == 409
+    permissions = client.get(f"{BASE}/{job['id']}").json()["permissions"]
+    assert permissions["can_activate"]
+    assert not permissions["aim_enabled"]
 
 
 def test_capture_memory_budget_receipt_identity_and_mask_values(
@@ -1135,7 +1190,7 @@ def test_target_wrap_selects_equivalent_inside_scan_and_grid_respects_off_center
     _, _, service = environment
     job = {
         "state": "ready",
-        "solution": {"quality": {"status": "ready"}},
+        "solution": {"quality": {"status": "ready"}, "support_polygon": [[-1,-1],[1,-1],[1,1],[-1,1]]},
         "profile": PROFILE,
         "scan": {"pan_min": 0.8, "pan_max": 1.0, "tilt_min": -0.7, "tilt_max": -0.05},
     }
@@ -1256,3 +1311,182 @@ def test_visual_operation_discovery_failure_cleans_ownership_and_never_reports_c
     assert not service.busy and not service._navigation_scanners
     camera.close.assert_awaited_once()
     assert controller.commands == []
+
+
+def test_four_point_preview_is_not_persisted_and_visual_acceptance_needs_no_checks(environment):
+    client, controller, service = environment
+    job = ready_job(client)
+    path = f"{BASE}/{job['id']}"
+    commands = len(controller.commands)
+    stored = (service.root / job["id"] / "job.json").read_bytes()
+    points = synthetic_points()[:4]
+    preview = client.post(path + "/preview", json={"revision": job["revision"], "points": points})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["solution"]["preview"]["eligible"]
+    assert preview.json()["revision"] == job["revision"]
+    assert (service.root / job["id"] / "job.json").read_bytes() == stored
+    assert client.post(path + "/activate", json={"revision": job["revision"]}).status_code == 409
+    saved = client.put(path + "/points", json={"revision": job["revision"], "points": points}).json()
+    assert client.post(path + "/preview", json={"revision": job["revision"], "points": points}).status_code == 409
+    accepted = client.post(path + "/activate", json={"revision": saved["revision"]})
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["active"] and not accepted.json()["permissions"]["aim_enabled"]
+    assert client.get(path).json()["points"] == points
+    from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+    from toposync.runtime.pipelines.runtime import Packet
+    from toposync_ext_cameras.pipelines.postprocess import CameraMappingRuntime
+
+    services = ServiceRegistry()
+    services.register("cameras.panorama.get_active", service.get_active)
+    runtime = CameraMappingRuntime(
+        {"composition_id": job["composition_id"]}, PipelineRuntimeDependencies(services=services)
+    )
+    packet = Packet.create(stream_id=f"camera:{job['camera_id']}:{job['source_id']}", payload={
+        "source": {"device_id": job["camera_id"], "source_id": job["source_id"]},
+        "media": {"width": 96, "height": 64}, "image_uv": {"u": .5, "v": .5},
+        "pan_tilt_zoom_state": {"pan": 0, "tilt": math.atan2(-3, 12) / (math.pi / 2),
+                               "zoom": 0, "geometry_safe": True, "move_status": "IDLE"},
+    })
+    result = client.portal.call(runtime.process_packet, packet, None)[0]
+    assert result.payload["world_anchor"] == pytest.approx({"x": 12, "z": 0}, abs=1e-8)
+    assert result.payload["world_projection"]["extrapolated"] is True
+    assert result.payload["mapping"]["panorama_revision"] == saved["revision"]
+    assert len(controller.commands) == commands
+
+
+def test_failed_point_write_and_activation_preserve_saved_revision(environment, monkeypatch):
+    client, controller, service = environment
+    job = ready_job(client)
+    path = f"{BASE}/{job['id']}"
+    stored = (service.root / job["id"] / "job.json").read_bytes()
+    original_atomic = service._atomic
+
+    def failed_write(*args):
+        raise OSError("Synthetic storage failure")
+
+    monkeypatch.setattr(service, "_atomic", failed_write)
+    with pytest.raises(OSError, match="Synthetic storage failure"):
+        client.put(path + "/points", json={"revision": job["revision"], "points": synthetic_points()[:4]})
+    assert client.get(path).json()["revision"] == job["revision"]
+    assert client.get(path).json()["points"] == job["points"]
+    assert (service.root / job["id"] / "job.json").read_bytes() == stored
+    monkeypatch.setattr(service, "_atomic", original_atomic)
+    saved = client.put(path + "/points", json={"revision": job["revision"], "points": synthetic_points()[:4]}).json()
+    original_patch = service.store.patch_element_props
+
+    async def failed_activation(**kwargs):
+        raise OSError("Synthetic activation failure")
+
+    monkeypatch.setattr(service.store, "patch_element_props", failed_activation)
+    with pytest.raises(OSError, match="Synthetic activation failure"):
+        client.post(path + "/activate", json={"revision": saved["revision"]})
+    assert not client.get(path).json()["active"]
+    assert client.get(path).json()["points"] == saved["points"]
+    monkeypatch.setattr(service.store, "patch_element_props", original_patch)
+    assert client.post(path + "/activate", json={"revision": saved["revision"]}).json()["active"]
+
+
+def test_configuration_summary_reuses_active_validity_without_device_reads(environment):
+    client, controller, service = environment
+    job = fit_job(client)
+    assert client.post(f"{BASE}/{job['id']}/activate", json={"revision": 2}).status_code == 200
+    before = (len(controller.commands), controller.snapshot_calls)
+
+    async def summary():
+        configuration = await service.store.get_config()
+        return await service.mapping_summary(camera_id="simulated", composition_id="yard",
+                                             element=configuration.compositions[1].elements[0])
+
+    result = client.portal.call(summary)
+    assert result["mapping"] == "active"
+    assert result["revision"] == 2 and result["source_id"] == "main"
+    assert result["positioning"] == "unqualified"
+    assert result["control_points_pairs"] == len(job["points"])
+    assert before == (len(controller.commands), controller.snapshot_calls)
+
+    async def change():
+        configuration = (await service.store.get_config()).model_copy(deep=True)
+        configuration.compositions[1].elements[0].props["panorama_mapping"]["revision"] = 99
+        await service.store.save_config(configuration)
+
+    client.portal.call(change)
+    result = client.portal.call(summary)
+    assert result["mapping"] == "review_required"
+    assert result["reason"] == "panorama_revision_mismatch"
+    assert before == (len(controller.commands), controller.snapshot_calls)
+
+
+def test_new_manual_approach_points_are_retired_before_any_motion(environment):
+    client, controller, _ = environment
+    response = client.post(BASE + "/native-reference", json={"preparation_id": "b" * 32,
+                           "source_id": "main", "artifact_id": "a" * 32, "revision": 1})
+    assert response.status_code == 410
+    assert controller.commands == [] and controller.snapshot_calls == 0
+
+
+def test_canonical_target_resolves_ray_without_preset_or_device_io(environment):
+    client, controller, service = environment
+    job = fit_job(client)
+    assert client.post(f"{BASE}/{job['id']}/activate", json={"revision": 2}).status_code == 200
+    before = len(controller.commands), controller.snapshot_calls
+    for target, expected in [({"world": {"x": 6, "z": 0}}, "ready"),
+                             ({"world": {"x": 10000, "z": 10000}}, "unavailable"),
+                             ({"world": {"x": True, "z": 0}}, "unavailable"),
+                             ({"bbox01": [0, 0, 1, 1]}, "unavailable")]:
+        resolved = client.portal.call(lambda: service.resolve_target(camera_id="simulated", source_id="main",
+            composition_id="yard", target=target))
+        assert resolved["status"] == expected
+        assert "preset_token" not in resolved
+        if expected == "ready":
+            assert len(resolved["target"]["ray"]) == 3
+            assert resolved["revision"] == 2 and not resolved["positioning_available"]
+    assert before == (len(controller.commands), controller.snapshot_calls)
+
+
+def test_saved_visual_reference_without_mapping_is_reported_independently(environment):
+    client, controller, service = environment
+    saved_source_panorama(client, service)
+
+    async def summary():
+        config = await service.store.get_config()
+        return await service.mapping_summary(camera_id="simulated", composition_id="yard",
+                                             element=config.compositions[1].elements[0])
+
+    result = client.portal.call(summary)
+    assert result["reference"] == "partial" and result["mapping"] == "absent"
+    assert result["source_id"] == "main" and result["positioning"] == "unqualified"
+    assert controller.commands == [] and controller.snapshot_calls == 0
+
+
+@pytest.mark.parametrize("pointer", [{"job_id": []}, {"job_id": {}}, {"job_id": "missing", "revision": True}])
+def test_malformed_saved_pointer_is_reviewable_not_a_configuration_crash(environment, pointer):
+    client, controller, service = environment
+
+    async def summary():
+        config = (await service.store.get_config()).model_copy(deep=True)
+        element = config.compositions[1].elements[0]
+        element.props["panorama_mapping"] = pointer
+        await service.store.save_config(config)
+        return await service.mapping_summary(camera_id="simulated", composition_id="yard", element=element)
+
+    result = client.portal.call(summary)
+    assert result["mapping"] == "review_required"
+    assert result["reason"] == "panorama_reference_invalid"
+    assert controller.commands == [] and controller.snapshot_calls == 0
+
+
+def test_draft_keeps_partial_visual_reference_separate_from_mapping(environment):
+    client, controller, service = environment
+    body, _ = saved_source_panorama(client, service)
+    response = client.post(BASE, json=body)
+    assert response.status_code == 200
+
+    async def summary():
+        config = await service.store.get_config()
+        return await service.mapping_summary(camera_id="simulated", composition_id="yard",
+                                             element=config.compositions[1].elements[0])
+
+    result = client.portal.call(summary)
+    assert result["reference"] == "partial" and result["mapping"] == "draft"
+    assert result["positioning"] == "unqualified"
+    assert controller.commands == [] and controller.snapshot_calls == 0

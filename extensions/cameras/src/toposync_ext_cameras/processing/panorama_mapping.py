@@ -13,7 +13,6 @@ supplied geometric evidence only; it never certifies hardware or activates it.
 
 from __future__ import annotations
 
-import itertools
 import math
 from typing import Any, Literal, NotRequired, TypedDict
 
@@ -349,7 +348,7 @@ def _solve_rays(positions: Any, rays: Any) -> Any:
     return matrix / np.linalg.norm(matrix)
 
 
-def _refine_angular(matrix: Any, positions: Any, rays: Any) -> Any:
+def _refine_angular(matrix: Any, positions: Any, rays: Any, weights: Any = None) -> Any:
     """Small damped least-squares refinement of angular tangent residuals."""
     homogeneous = np.column_stack((positions, np.ones(len(positions))))
     pivot = int(np.argmax(np.abs(matrix)))
@@ -368,7 +367,10 @@ def _refine_angular(matrix: Any, positions: Any, rays: Any) -> Any:
         cross = np.cross(predicted, rays)
         sine = np.linalg.norm(cross, axis=1)
         angle = np.arctan2(sine, np.sum(predicted * rays, axis=1))
-        return (cross * (angle / np.maximum(sine, 1e-12))[:, None]).ravel()
+        residuals = cross * (angle / np.maximum(sine, 1e-12))[:, None]
+        if weights is not None:
+            residuals *= np.sqrt(weights)[:, None]
+        return residuals.ravel()
 
     damping = 1e-5
     for _ in range(12):
@@ -403,94 +405,41 @@ def _refine_angular(matrix: Any, positions: Any, rays: Any) -> Any:
 
 
 def preview_panorama_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
-    """Classify geometric preview evidence without weakening activation quality.
-
-    Source identity, revision and captured coverage are checked by the consumer.
-    Only absent independent checks may yield a provisional preview.
-    """
-    missing_checks = "at_least_two_independent_check_points_required"
-    quality = mapping.get("quality")
-    if not isinstance(quality, dict):
+    """Validate a usable calculation; visual acceptance belongs to its revision."""
+    quality = mapping.get("quality", {})
+    if not isinstance(quality, dict) or not isinstance(quality.get("reasons"), list) or any(not isinstance(reason, str) for reason in quality["reasons"]):
         return {"eligible": False, "status": "blocked", "reasons": ["invalid_quality"]}
-    supplied_reasons = quality.get("reasons")
-    if not isinstance(supplied_reasons, list) or any(
-        not isinstance(reason, str) for reason in supplied_reasons
-    ):
-        return {"eligible": False, "status": "blocked", "reasons": ["invalid_quality"]}
-    reasons = [reason for reason in supplied_reasons if reason != missing_checks]
-    if quality.get("status") not in ("ready", "review"):
-        reasons.append("invalid_quality_status")
+    reasons = quality["reasons"].copy()
     try:
-        fit_count, inlier_count, check_count = (
-            _finite(quality.get(key))
-            for key in ("number_of_fit_points", "number_of_inliers", "number_of_check_points")
-        )
-        ratio = _finite(quality.get("inlier_ratio"))
-        threshold = _finite(quality.get("angular_threshold_radians"))
-        median = _finite(quality.get("median_fit_error_radians"))
-        percentile = _finite(quality.get("p95_fit_error_radians"))
-        if (
-            any(count != int(count) for count in (fit_count, inlier_count, check_count))
-            or not 6 <= inlier_count <= fit_count <= 64
-            or not 0 <= check_count <= 64 - fit_count
-            or not 0.8 <= ratio <= 1
-            or not math.isclose(ratio, inlier_count / fit_count, abs_tol=1e-9)
-            or not 0 < threshold < math.pi / 4
-            or not 0 <= median <= percentile <= threshold
-        ):
+        count = _finite(quality.get("number_of_fit_points"))
+        if quality.get("status") != "ready" or count != int(count) or not 4 <= count <= 64:
             reasons.append("insufficient_consistent_geometry")
-        if (check_count < 2) != (missing_checks in supplied_reasons):
-            reasons.append("invalid_check_evidence")
-        if check_count and not 0 <= _finite(quality.get("maximum_check_error_radians")) <= threshold:
-            reasons.append("check_error_exceeds_threshold")
-    except (ValueError, ZeroDivisionError):
-        reasons.append("invalid_quality")
-    try:
-        matrix, inverse = (
-            np.asarray([[_finite(value) for value in row] for row in mapping.get(key, [])])
-            for key in ("matrix", "inverse_matrix")
-        )
-        if (
-            mapping.get("type") != "panorama_ray_plane_v1"
-            or matrix.shape != (3, 3)
-            or inverse.shape != (3, 3)
-            or np.linalg.cond(matrix) > 1e12
-            or not np.allclose(matrix @ inverse, np.eye(3), atol=1e-6, rtol=0)
-            or not np.allclose(inverse @ matrix, np.eye(3), atol=1e-6, rtol=0)
-        ):
+        median, percentile, threshold = (_finite(quality.get(key)) for key in ("median_fit_error_radians", "p95_fit_error_radians", "angular_threshold_radians"))
+        if not 0 <= median <= percentile <= math.pi or not 0 < threshold < math.pi / 4:
+            reasons.append("invalid_quality")
+        matrix, inverse = (np.asarray(mapping.get(key), dtype=float) for key in ("matrix", "inverse_matrix"))
+        if (mapping.get("type") != "panorama_ray_plane_v1" or matrix.shape != (3, 3)
+                or inverse.shape != (3, 3) or not np.isfinite(matrix).all()
+                or not np.isfinite(inverse).all() or np.linalg.cond(matrix) > 1e12
+                or not np.allclose(matrix @ inverse, np.eye(3), atol=1e-6, rtol=0)
+                or not np.allclose(inverse @ matrix, np.eye(3), atol=1e-6, rtol=0)):
             reasons.append("unstable_geometry")
-    except (TypeError, ValueError, np.linalg.LinAlgError):
-        reasons.append("unstable_geometry")
-    try:
-        support = [tuple(_finite(value) for value in point) for point in mapping.get("support_polygon", [])]
+        support = [tuple(_finite(v) for v in point) for point in mapping.get("support_polygon", [])]
         if not 3 <= len(support) <= 64 or any(len(point) != 2 for point in support):
-            raise ValueError("Invalid support polygon")
-        hull = _convex_hull(support)
+            raise ValueError("Invalid support")
         area = abs(_polygon_area(support))
-        if (
-            not math.isfinite(area)
-            or area <= 1e-9
-            or len(hull) != len(support)
-            or not math.isclose(area, abs(_polygon_area(hull)), rel_tol=1e-8, abs_tol=1e-9)
-        ):
-            raise ValueError("Invalid support polygon")
-    except (TypeError, ValueError):
-        reasons.append("invalid_support_polygon")
-    return {
-        "eligible": not reasons,
-        "status": "blocked" if reasons else "provisional" if missing_checks in supplied_reasons else "ready",
-        "reasons": list(dict.fromkeys(reasons)) if reasons else supplied_reasons.copy(),
-    }
+        hull = _convex_hull(support)
+        if not math.isfinite(area) or area <= 1e-9 or len(hull) != len(support) or not math.isclose(area, abs(_polygon_area(hull)), rel_tol=1e-8):
+            reasons.append("invalid_support_polygon")
+    except (AttributeError, TypeError, ValueError, np.linalg.LinAlgError):
+        reasons.append("invalid_quality")
+    return {"eligible": not reasons, "status": "blocked" if reasons else "ready", "reasons": list(dict.fromkeys(reasons))}
 
 
 def estimate_panorama_mapping(
     points: list[dict[str, Any]], *, angular_threshold_radians: float = math.radians(1.0)
 ) -> dict[str, Any]:
-    """Fit only role=fit points; role=check points are independent evidence.
-
-    The threshold is a configurable angular evidence gate, not a measured
-    equipment specification. At most 64 points and 512 robust samples bound work.
-    """
+    """Fit every control; the angular threshold is a warning, never an acceptance gate."""
     threshold = _finite(angular_threshold_radians)
     if not 0 < threshold < math.pi / 4:
         raise ValueError("Angular threshold must be positive and smaller than pi/4")
@@ -503,149 +452,56 @@ def estimate_panorama_mapping(
         if not isinstance(identifier, str) or not identifier or identifier in identifiers:
             raise ValueError("Point identifiers must be unique nonempty strings")
         identifiers.add(identifier)
-        if point.get("role") not in {"fit", "check"}:
-            raise ValueError("Point role must be fit or check")
-        parsed.append(
-            {
-                "id": identifier,
-                "role": point["role"],
-                "position": (_finite(point.get("world_x")), _finite(point.get("world_z"))),
-                "ray": _unit(point.get("ray")),
-            }
-        )
-    fit = [point for point in parsed if point["role"] == "fit"]
-    checks = [point for point in parsed if point["role"] == "check"]
+        parsed.append({"id": identifier, "position": (_finite(point.get("world_x")), _finite(point.get("world_z"))), "ray": _unit(point.get("ray"))})
     quality: dict[str, Any] = {
-        "status": "incomplete",
-        "reasons": [],
-        "number_of_fit_points": len(fit),
-        "number_of_check_points": len(checks),
-        "number_of_inliers": 0,
-        "inlier_ratio": 0.0,
-        "angular_threshold_radians": threshold,
-        "median_fit_error_radians": None,
-        "p95_fit_error_radians": None,
-        "maximum_check_error_radians": None,
-        "point_errors": [],
+        "status": "incomplete", "reasons": [], "warnings": [],
+        "number_of_fit_points": len(parsed), "angular_threshold_radians": threshold,
+        "median_fit_error_radians": None, "p95_fit_error_radians": None, "point_errors": [],
     }
-    result: dict[str, Any] = {
-        "type": "panorama_ray_plane_v1",
-        "matrix": None,
-        "inverse_matrix": None,
-        "support_polygon": [],
-        "inlier_point_ids": [],
-        "quality": quality,
-    }
-    if len(fit) < 6:
-        quality["reasons"].append("at_least_six_fit_points_required")
+    result: dict[str, Any] = {"type": "panorama_ray_plane_v1", "matrix": None, "inverse_matrix": None, "support_polygon": [], "quality": quality}
+    def finish() -> dict[str, Any]:
         return {**result, "preview": preview_panorama_mapping(result)}
-    positions = np.asarray([point["position"] for point in fit])
-    rays = np.asarray([point["ray"] for point in fit])
-    if len(np.unique(positions, axis=0)) != len(fit):
+    if len(parsed) < 4:
+        quality["reasons"].append("at_least_four_fit_points_required")
+        return finish()
+    positions = np.asarray([point["position"] for point in parsed])
+    rays = np.asarray([point["ray"] for point in parsed])
+    if len(np.unique(positions, axis=0)) != len(parsed):
         quality.update(status="review", reasons=["duplicate_fit_positions"])
-        return {**result, "preview": preview_panorama_mapping(result)}
-    homogeneous = np.column_stack((positions, np.ones(len(fit))))
-    # ponytail: bounded deterministic spherical RANSAC; a larger solver is only
-    # needed if more than 64 operator-supplied points become a real requirement.
-    if math.comb(len(fit), 4) <= 512:
-        samples = list(itertools.combinations(range(len(fit)), 4))
-    else:
-        generator = np.random.default_rng(0)
-        samples = sorted(
-            {tuple(sorted(generator.choice(len(fit), 4, replace=False))) for _ in range(512)}
-        )
-    best_matrix, best_mask, best_score = None, None, (-1, -math.inf)
-    for sample in [tuple(range(len(fit))), *samples]:
-        indices = np.asarray(sample)
-        try:
-            matrix = _solve_rays(positions[indices], rays[indices])
-        except (ValueError, np.linalg.LinAlgError):
-            continue
-        errors = _angular_errors(homogeneous @ matrix.T, rays)
-        mask = errors <= threshold
-        score = (int(np.sum(mask)), -float(np.median(errors[mask])) if mask.any() else -math.inf)
-        if score > best_score:
-            best_matrix, best_mask, best_score = matrix, mask, score
-    if best_matrix is None or best_mask is None or np.count_nonzero(best_mask) < 6:
-        quality.update(status="review", reasons=["insufficient_consistent_geometry"])
-        return {**result, "preview": preview_panorama_mapping(result)}
+        return finish()
     try:
-        matrix = _solve_rays(positions[best_mask], rays[best_mask])
-        matrix = _refine_angular(matrix, positions[best_mask], rays[best_mask])
+        matrix = _solve_rays(positions, rays)
+        try:
+            matrix = _refine_angular(matrix, positions, rays)
+        except (ValueError, np.linalg.LinAlgError):
+            pass  # A valid linear fit remains available when refinement fails.
         inverse = np.linalg.inv(matrix)
+        if np.linalg.cond(matrix) > 1e12 or not np.isfinite(inverse).all():
+            raise ValueError("Unstable matrix")
     except (ValueError, np.linalg.LinAlgError):
-        quality.update(status="review", reasons=["unstable_geometry"])
-        return {**result, "preview": preview_panorama_mapping(result)}
-    errors = _angular_errors(homogeneous @ matrix.T, rays)
-    inliers = errors <= threshold
-    support = _convex_hull([tuple(point) for point in positions[inliers]])
-    reasons = []
-    if np.count_nonzero(inliers) < 6 or len(support) < 3:
         quality.update(status="review", reasons=["insufficient_consistent_geometry"])
-        return {**result, "preview": preview_panorama_mapping(result)}
-    if np.mean(inliers) < 0.8:
-        reasons.append("too_many_inconsistent_points")
-    valid_checks = []
-    for point in checks:
-        position = point["position"]
-        independent = all(math.dist(position, other["position"]) > 1e-6 for other in fit)
-        independent = independent and all(
-            math.dist(position, other) > 1e-6 for other in valid_checks
-        )
-        inside = _point_in_convex_polygon(position, tuple(support))
-        error = float(
-            _angular_errors(np.asarray([matrix @ [*position, 1]]), np.asarray([point["ray"]]))[0]
-        )
-        quality["point_errors"].append(
-            {
-                "id": point["id"],
-                "role": "check",
-                "error_radians": error,
-                "inside_support": inside,
-                "independent": independent,
-            }
-        )
-        if independent and inside:
-            valid_checks.append(position)
-        else:
-            reasons.append("check_points_must_be_independent_and_inside_support")
-        if error > threshold:
-            reasons.append("check_error_exceeds_threshold")
-    if len(valid_checks) < 2:
-        reasons.append("at_least_two_independent_check_points_required")
-    quality["point_errors"] = [
-        {"id": point["id"], "role": "fit", "error_radians": float(error), "inlier": bool(inlier)}
-        for point, error, inlier in zip(fit, errors, inliers, strict=True)
-    ] + quality["point_errors"]
-    check_errors = [
-        point["error_radians"] for point in quality["point_errors"] if point["role"] == "check"
-    ]
+        return finish()
+    errors = _angular_errors(np.column_stack((positions, np.ones(len(parsed)))) @ matrix.T, rays)
+    support = _convex_hull([tuple(point) for point in positions])
     quality.update(
-        status="review" if reasons else "ready",
-        reasons=list(dict.fromkeys(reasons)),
-        number_of_inliers=int(np.count_nonzero(inliers)),
-        inlier_ratio=float(np.mean(inliers)),
-        median_fit_error_radians=float(np.median(errors[inliers])),
-        p95_fit_error_radians=float(np.percentile(errors[inliers], 95)),
-        maximum_check_error_radians=max(check_errors) if check_errors else None,
+        status="ready", warnings=["approximate_fit"] if np.any(errors > threshold) else [],
+        median_fit_error_radians=float(np.median(errors)), p95_fit_error_radians=float(np.percentile(errors, 95)),
+        point_errors=[{"id": point["id"], "error_radians": float(error)} for point, error in zip(parsed, errors, strict=True)],
         support_area=abs(_polygon_area(support)),
     )
-    result.update(
-        matrix=matrix.tolist(),
-        inverse_matrix=inverse.tolist(),
-        support_polygon=[[float(value) for value in point] for point in support],
-        inlier_point_ids=[point["id"] for point, keep in zip(fit, inliers, strict=True) if keep],
-    )
-    return {**result, "preview": preview_panorama_mapping(result)}
+    result.update(matrix=matrix.tolist(), inverse_matrix=inverse.tolist(), support_polygon=[[float(v) for v in point] for point in support])
+    return finish()
+
+
+def mapping_extrapolated(mapping: dict[str, Any], world_x: float, world_z: float) -> bool:
+    return not _point_in_convex_polygon((world_x, world_z), mapping.get("support_polygon", []))
 
 
 def map_world_to_ray(
     mapping: dict[str, Any], world_x: float, world_z: float
 ) -> tuple[float, float, float] | None:
     position = (_finite(world_x), _finite(world_z))
-    if mapping.get("matrix") is None or not _point_in_convex_polygon(
-        position, mapping.get("support_polygon", [])
-    ):
+    if mapping.get("matrix") is None:
         return None
     ray = _unit(np.asarray(mapping["matrix"]) @ [*position, 1.0])
     return tuple(float(value) for value in ray)
@@ -661,6 +517,4 @@ def map_ray_to_world(mapping: dict[str, Any], ray: Any) -> tuple[float, float] |
     if not np.isfinite(point).all() or point[2] <= 1e-12:
         return None
     position = (float(point[0] / point[2]), float(point[1] / point[2]))
-    return (
-        position if _point_in_convex_polygon(position, mapping.get("support_polygon", [])) else None
-    )
+    return position if all(math.isfinite(value) for value in position) else None

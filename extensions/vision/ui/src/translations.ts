@@ -1,5 +1,6 @@
 import type { TranslationBundle } from "@toposync/plugin-api";
 const messages: Record<string, [string, string]> = {
+  historyCategory: ["Detected object", "Objeto detectado"],
   viewEvents: ["View associated events", "Ver acontecimentos associados"],
   associatedPhotos: ["Associated photos", "Fotos associadas"],
   automaticAssociation: ["Automatic association; review the photos before confirming.", "Associação automática; confira as fotos antes de confirmar."],

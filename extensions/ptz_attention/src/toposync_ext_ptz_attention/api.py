@@ -16,7 +16,7 @@ from toposync.runtime.auth import AuthContext, AuthPrincipal, AuthRuntime
 from .bindings import attention_bindings, live_observer_binding_issue
 from .constants import API_PREFIX, OPERATOR_ID_REQUEST
 from .controller import PtzAttentionController
-from .models import AttentionProfile
+from .models import AttentionProfile, PanoramaDestination, effective_mode
 from .store import (
     AttentionStore,
     DeviceProfileConflictError,
@@ -129,6 +129,30 @@ def create_router(
         ]
         for camera in cameras:
             camera_id = str(camera.get("id") or "")
+            camera["panorama_mappings"] = []
+            for composition in compositions:
+                for element in list(getattr(composition, "elements", []) or []):
+                    props = getattr(element, "props", {})
+                    if not isinstance(props, dict) or props.get("camera_id") != camera_id:
+                        continue
+                    pointer = props.get("panorama_mapping") or {}
+                    source_id = pointer.get("source_id", "") if isinstance(pointer, dict) else ""
+                    position = getattr(element, "position", None)
+                    label = getattr(element, "name", "") or f"{camera['name']} ({getattr(position, 'x', '')}, {getattr(position, 'z', '')})"
+                    mapping = {"composition_id": composition.id, "composition_name": getattr(composition, "name", ""),
+                               "element_id": element.id, "element_name": label, "source_id": source_id,
+                               "ready": False, "reason": "active_mapping_required"}
+                    if source_id and controller.has_service("cameras.panorama.get_active"):
+                        try:
+                            active = await controller.services.call("cameras.panorama.get_active", camera_id=camera_id,
+                                source_id=source_id, composition_id=composition.id, element_id=element.id)
+                            job = active.get("job")
+                            mapping.update(ready=bool(job), reason=active.get("reason") or "")
+                            if job:
+                                mapping.update(job_id=job["id"], revision=job["revision"])
+                        except Exception:
+                            mapping["reason"] = "panorama_unavailable"
+                    camera["panorama_mappings"].append(mapping)
             camera["permissions"] = {
                 "configure": _can_auth(
                     request,
@@ -162,7 +186,7 @@ def create_router(
         return {
             "generated_at": time.time(),
             "operator_id": OPERATOR_ID_REQUEST,
-            "modes": ["disabled", "shadow", "live_preset", "paused"],
+            "modes": ["disabled", "shadow", "live_preset", "live_panorama", "paused"],
             "states": [
                 "IDLE",
                 "CANDIDATE",
@@ -206,7 +230,7 @@ def create_router(
             action="core:camera:configure",
             camera_id=body.camera_id,
         )
-        if body.mode == "live_preset":
+        if body.mode in {"live_preset", "live_panorama"}:
             _require_auth(
                 request,
                 action="core:camera:control",
@@ -221,8 +245,8 @@ def create_router(
                 detail=f"ptz_device_id already belongs to profile '{conflict.id}'",
             )
         if store.is_recovery_required(body.ptz_device_id) and not (
-            body.mode == "live_preset"
-            or (body.mode == "paused" and body.resume_mode == "live_preset")
+            body.mode in {"live_preset", "live_panorama"}
+            or (body.mode == "paused" and body.resume_mode in {"live_preset", "live_panorama"})
         ):
             raise HTTPException(
                 status_code=409,
@@ -288,7 +312,7 @@ def create_router(
                 action="core:camera:configure",
                 camera_id=body.camera_id,
             )
-        if body.mode == "live_preset":
+        if body.mode in {"live_preset", "live_panorama"}:
             for camera_id in dict.fromkeys((previous.camera_id, body.camera_id)):
                 _require_auth(
                     request,
@@ -448,7 +472,7 @@ def create_router(
             action="core:camera:control",
             camera_id=selected_profile.camera_id,
         )
-        if selected_profile.mode == "paused" and selected_profile.resume_mode == "live_preset":
+        if selected_profile.mode == "paused" and selected_profile.resume_mode in {"live_preset", "live_panorama"}:
             await _require_live_observer_binding_safe(config_store, selected_profile)
             await _require_live_profile_ready(
                 controller,
@@ -513,10 +537,12 @@ async def _validate_profile(
     controller: PtzAttentionController,
     profile: AttentionProfile,
 ) -> dict[str, Any]:
+    if profile.panorama_element_id:
+        return await _validate_panorama_profile(controller, profile)
     issues: list[dict[str, Any]] = []
     resolved_views: dict[str, dict[str, Any]] = {}
-    live = profile.mode == "live_preset" or (
-        profile.mode == "paused" and profile.resume_mode == "live_preset"
+    live = profile.mode in {"live_preset", "live_panorama"} or (
+        profile.mode == "paused" and profile.resume_mode in {"live_preset", "live_panorama"}
     )
 
     def issue(code: str, message: str, *, blocking: bool) -> None:
@@ -663,14 +689,66 @@ async def _validate_profile(
     }
 
 
+async def _validate_panorama_profile(controller: PtzAttentionController, profile: AttentionProfile) -> dict:
+    live = effective_mode(profile) == "live_panorama"
+    issues = []
+    targets = {}
+    reference = None
+    services = controller.service_status(profile)
+    def issue(code: str, message: str, blocking: bool = True) -> None:
+        issues.append({"code": code, "message": message, "blocking": blocking,
+                       "severity": "error" if blocking else "warning"})
+    for service, available in services.items():
+        if not available:
+            issue("service_unavailable", f"Service is unavailable: {service}", live)
+    for label, point in [("home", profile.home_target), *[(str(index), point) for index, point in enumerate(profile.attention_region)]]:
+        try:
+            raw = await controller.services.call("cameras.panorama.resolve_target", camera_id=profile.camera_id,
+                source_id=profile.source_id, composition_id=profile.composition_id,
+                element_id=profile.panorama_element_id, target={"world_anchor": point.model_dump(exclude_none=True)})
+            if not isinstance(raw, dict) or raw.get("status") != "ready":
+                raise ValueError("mapping unavailable")
+            if any(raw.get(key) != value for key, value in {"camera_id": profile.camera_id,
+                "source_id": profile.source_id, "composition_id": profile.composition_id,
+                "element_id": profile.panorama_element_id}.items()):
+                raise ValueError("mapping context mismatch")
+            resolved = PanoramaDestination.model_validate({**{key: raw[key] for key in
+                ("camera_id", "source_id", "composition_id", "element_id", "job_id", "revision")},
+                "ray": raw["target"]["ray"]})
+            binding = resolved.model_dump(exclude={"ray"})
+            if reference is not None and binding != reference:
+                raise ValueError("mapping changed during validation")
+            reference = binding
+            if label == "home":
+                targets[label] = {key: raw[key] for key in ("job_id", "revision", "target", "source_id", "element_id")}
+            if raw.get("attention_qualified") is not True and not any(item["code"] == "attention_physical_qualification_required" for item in issues):
+                issue("attention_physical_qualification_required", "Physical qualification of attention arrival and return is required.", live)
+        except Exception:
+            issue("panorama_target_unresolved", f"Panorama target '{label}' is not supported by the current mapping.")
+    automation_ready = None
+    if controller.has_service("cameras.control.snapshot"):
+        try:
+            snapshot = await controller.services.call("cameras.control.snapshot", camera_id=profile.camera_id,
+                source_id=profile.source_id, ptz_device_id=profile.ptz_device_id, refresh_physical=False)
+            automation_ready = isinstance(snapshot, dict) and snapshot.get("automation_ready") is True
+        except Exception:
+            automation_ready = False
+    if live and not automation_ready:
+        issue("automation_exclusive_control_not_confirmed", "Camera automation exclusive control has not been confirmed.")
+    return {"ok": not any(item["blocking"] for item in issues), "profile_id": profile.id, "mode": profile.mode,
+        "issues": issues, "resolved_views": {}, "resolved_targets": targets,
+        "automation_ready": automation_ready, "automation_ready_reason": "" if automation_ready else "automation_exclusive_control_not_confirmed",
+        "services": services}
+
+
 async def _require_live_profile_ready(
     controller: PtzAttentionController,
     profile: AttentionProfile,
     *,
     allow_paused_resume: bool = False,
 ) -> None:
-    if profile.mode != "live_preset" and not (
-        allow_paused_resume and profile.mode == "paused" and profile.resume_mode == "live_preset"
+    if profile.mode not in {"live_preset", "live_panorama"} and not (
+        allow_paused_resume and profile.mode == "paused" and profile.resume_mode in {"live_preset", "live_panorama"}
     ):
         return
     result = await _validate_profile(controller, profile)
@@ -690,8 +768,8 @@ async def _require_live_observer_binding_safe(
     config_store: Any | None,
     profile: AttentionProfile,
 ) -> None:
-    if profile.mode != "live_preset" and not (
-        profile.mode == "paused" and profile.resume_mode == "live_preset"
+    if profile.mode not in {"live_preset", "live_panorama"} and not (
+        profile.mode == "paused" and profile.resume_mode in {"live_preset", "live_panorama"}
     ):
         return
     get_config = getattr(config_store, "get_config", None)
@@ -830,6 +908,8 @@ def _calibrated_views_by_camera(compositions: list[Any]) -> dict[str, list[dict[
             if not isinstance(props, dict):
                 continue
             camera_id = str(props.get("camera_id") or "").strip()
+            if "panorama_mapping" in props:
+                continue
             raw_views = props.get("calibrated_views")
             if not camera_id or not isinstance(raw_views, list):
                 continue

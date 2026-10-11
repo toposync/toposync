@@ -7,7 +7,7 @@ const backend = "http://127.0.0.1:8127";
 const cameraId = "panorama-simulated-camera";
 const elementId = "panorama-simulated-element";
 const panoramaPath = `/api/cameras/cameras/${cameraId}/panorama`;
-const evidenceDirectory = path.resolve(__dirname, "../.toposync-data/panorama-validation/evidence");
+const evidenceDirectory = process.env.TOPOSYNC_PANORAMA_EVIDENCE_DIR || path.resolve(__dirname, "../.toposync-data/panorama-validation/evidence");
 
 async function screenshot(page, name) {
   await fs.mkdir(evidenceDirectory, { recursive: true });
@@ -47,17 +47,18 @@ async function currentJob(request) {
 async function openCameraEditor(page) {
   await page.goto("/");
   await page.getByRole("button", { name: "Edit", exact: true }).click();
+  const tools = page.getByRole("button", { name: /^Tools and layers:/ });
+  if (await tools.getAttribute("aria-expanded") === "false") await tools.click();
   await page.getByText("Câmera simulada", { exact: true }).dblclick();
 }
 
 async function openWizard(page) {
   await openCameraEditor(page);
-  await page.getByRole("button", { name: "Calibrate camera", exact: true }).click();
+  await page.getByRole("button", { name: /^(Map in composition|Continue mapping|View mapping)$/, exact: true }).click();
   const wizard = page.getByTestId("camera-panorama-mapping");
   await expect(wizard).toBeVisible();
   await expect(wizard.locator(".cameraPanoramaViews")).toHaveCount(1);
-  const review = wizard.locator("summary").filter({ hasText: /^Review points$/ });
-  if (await review.count()) await review.click();
+  if (await wizard.locator(".cameraPanoramaPairs").count() && await wizard.locator(".cameraPanoramaPair").count() === 0) await wizard.getByRole("button", {name: "Add point", exact: true}).click();
   return wizard;
 }
 
@@ -99,9 +100,9 @@ async function reviewLegacyPanorama(page, request, evidencePrefix = "recovery") 
 const draftKey = `toposync.panorama-point.${cameraId}.${elementId}`;
 const panoramaPanel = wizard => wizard.getByRole("group", { name: /^Panorama: use arrow keys/ });
 const planPanel = wizard => wizard.getByRole("group", { name: /^Composition: use arrow keys/ });
-const saveButton = wizard => wizard.getByRole("button", { name: "Confirm point", exact: true });
+const saveButton = wizard => wizard.getByRole("button", { name: "Confirm pair", exact: true });
 const pointNavigation = wizard => wizard.getByRole("navigation", { name: "Places", exact: true });
-const pointButton = (wizard, number, role = "fit") => pointNavigation(wizard).getByRole("button", { name: `${role === "check" ? "Check" : "Adjust"} place ${number}`, exact: true });
+const pointButton = (wizard, number, role = "fit") => pointNavigation(wizard).getByRole("button", { name: `Adjust place ${number}`, exact: true });
 
 async function browserDraft(page) {
   return page.evaluate(key => JSON.parse(localStorage.getItem(key)), draftKey);
@@ -114,6 +115,8 @@ async function openPointDetails(wizard) {
 
 async function focusCamera(wizard) {
   await expect(planPanel(wizard)).toBeVisible();
+  const whole = wizard.getByRole("button", { name: "Whole composition", exact: true });
+  if (await whole.isVisible()) await whole.click();
   const focus = wizard.getByRole("button", { name: "Focus camera", exact: true });
   if (await focus.isVisible()) {
     await focus.click();
@@ -121,7 +124,11 @@ async function focusCamera(wizard) {
     const bounds = await canvas.boundingBox();
     const page = wizard.page();
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    // Pan from the camera to the middle of the synthetic floor, exercising navigation too.
+    // Zoom for precise marking, then pan to the middle of the synthetic floor.
+    const initialScale = Math.max(4, (Math.min(bounds.width, bounds.height) - 32) / 24);
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    await page.mouse.wheel(0, -420 * Math.log2(34 / initialScale));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
     await page.mouse.down();
     await page.mouse.move(bounds.x + bounds.width / 2 - 170, bounds.y + bounds.height / 2, { steps: 6 });
@@ -131,10 +138,11 @@ async function focusCamera(wizard) {
 }
 
 async function planPosition(wizard, world, rotation = 0) {
-  // Focus camera followed by the visible pan gesture centres x=5 at 34 pixels per metre.
+  // The visible pan gesture centres the synthetic floor after fitting the camera surroundings.
   const bounds = await planPanel(wizard).locator("canvas").boundingBox();
-  const dx = (world.x - 5) * 34;
-  const dz = world.z * 34;
+  const scale = 34;
+  const dx = (world.x - 5) * scale;
+  const dz = world.z * scale;
   const [x, y] = rotation === 90 ? [-dz, dx] : rotation === 180 ? [-dx, -dz] : rotation === 270 ? [dz, -dx] : [dx, dz];
   const position = { x: bounds.width / 2 + x, y: bounds.height / 2 + y };
   expect(position.x).toBeGreaterThan(0);
@@ -188,6 +196,9 @@ async function markImage(wizard, point) {
 }
 
 async function enterPoint(wizard, point, firstPanel = "panorama") {
+  if (await pointNavigation(wizard).locator("button[aria-pressed=true]").count() === 0) {
+    await wizard.getByRole("button", { name: "Add point", exact: true }).click();
+  }
   if (firstPanel === "plan") {
     await markPlan(wizard, point.world);
     await expect(saveButton(wizard)).toBeDisabled();
@@ -225,14 +236,7 @@ test.beforeEach(async ({ page, request }) => {
 for (const [input, width] of [["keyboard", 1280], ["touch", 390]]) {
   test.describe(`camera editing with ${input}`, () => {
     test.use({ viewport: { width, height: 900 }, hasTouch: input === "touch" });
-    test("opens ground mapping without double click and restores focus", async ({ page, request }, testInfo) => {
-      await page.route(`**/cameras/${cameraId}/snapshot**`, route => route.fulfill({
-        contentType: "image/svg+xml",
-        body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400" fill="#67887b"/></svg>',
-      }));
-      await page.route(`**/cameras/${cameraId}/ptz/status**`, route => route.fulfill({
-        json: { camera_id: cameraId, status: { pan: 0, tilt: -0.6, zoom: 0, move_status: "idle" } },
-      }));
+    test("opens panorama mapping without double click and restores focus", async ({ page, request }, testInfo) => {
       const activate = async locator => {
         if (input === "touch") return locator.tap();
         for (let count = 0; count < 120; count++) {
@@ -261,17 +265,18 @@ for (const [input, width] of [["keyboard", 1280], ["touch", 390]]) {
       await activate(edit);
       const editor = page.getByRole("dialog", { name: "Edit: Câmera simulada", exact: true });
       await expect(editor).toBeVisible();
-      const calibrate = editor.getByRole("button", { name: "Calibrate ground and metric geometry", exact: true });
+      await expect(editor.getByRole("button", { name: "Calibrate ground and metric geometry", exact: true })).toHaveCount(0);
+      const calibrate = editor.getByRole("button", { name: "Map in composition", exact: true });
       const target = await calibrate.boundingBox();
       expect(target.height).toBeGreaterThanOrEqual(44);
       expect(await editor.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
       await page.screenshot({ path: testInfo.outputPath("camera-editor.png") });
       await activate(calibrate);
-      const ground = page.getByRole("dialog", { name: "Mapear câmera", exact: true });
-      await expect(ground).toBeVisible();
-      await expect.poll(() => ground.locator("img").evaluateAll(images => images.some(image => image.complete && image.naturalWidth === 640))).toBe(true);
-      await expect(ground.getByRole("button", { name: /^Marcar ponto de ajuste/ })).toBeEnabled();
-      await page.screenshot({ path: testInfo.outputPath("ground-entry.png") });
+      const wizard = page.getByTestId("camera-panorama-mapping");
+      await expect(wizard).toBeVisible();
+      await expect.poll(() => wizard.locator("img").evaluateAll(images => images.some(image => image.complete && image.naturalWidth === 1024))).toBe(true);
+      await expect(wizard.getByRole("button", {name: "Use this mapping", exact: true})).toBeDisabled();
+      await page.screenshot({ path: testInfo.outputPath("mapping-entry.png") });
       await page.keyboard.press("Escape");
       await expect(calibrate).toBeFocused();
       await page.keyboard.press("Escape");
@@ -281,61 +286,39 @@ for (const [input, width] of [["keyboard", 1280], ["touch", 390]]) {
   });
 }
 
-test("ground mapping keeps image markers aligned across responsive layouts", async ({ page, request }) => {
-  // Only image layout is under test: this image proves no physical calibration.
-  await page.route(`**/cameras/${cameraId}/snapshot**`, route => route.fulfill({
-    contentType: "image/svg+xml",
-    body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400" fill="#67887b"/></svg>',
-  }));
-  await page.route(`**/cameras/${cameraId}/ptz/status**`, route => route.fulfill({
-    json: { camera_id: cameraId, status: { pan: 0, tilt: -0.6, zoom: 0, move_status: "idle" } },
-  }));
-  await openCameraEditor(page);
-  await page.getByRole("button", { name: "Calibrate ground and metric geometry", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Mapear câmera", exact: true });
-  const image = dialog.locator("img");
-  const plan = dialog.locator("canvas");
-  await page.setViewportSize({ width: 390, height: 900 });
-  await dialog.getByRole("button", { name: /^Marcar ponto de ajuste/ }).click();
-  await image.scrollIntoViewIfNeeded();
-  const point = { x: 0.24, y: 0.74 };
-  const imagePosition = () => image.evaluate((element, point) => {
-    const bounds = element.getBoundingClientRect();
-    const scale = Math.min(bounds.width / element.naturalWidth, bounds.height / element.naturalHeight);
-    const width = element.naturalWidth * scale;
-    const height = element.naturalHeight * scale;
-    return { x: bounds.x + (bounds.width - width) / 2 + point.x * width, y: bounds.y + (bounds.height - height) / 2 + point.y * height };
-  }, point);
-  const position = await imagePosition();
-  await page.mouse.click(position.x, position.y);
-  await expect(dialog.getByText("Agora clique no mesmo marco na planta.", { exact: true })).toBeVisible();
-  await plan.scrollIntoViewIfNeeded();
-  const bounds = await plan.boundingBox();
-  await plan.click({ position: { x: bounds.width * 0.65, y: bounds.height * 0.65 } });
-  const marker = dialog.locator('span[title="Arraste para ajustar o ponto 1 na imagem"]');
+test("panorama mapping keeps paired image markers aligned across responsive layouts", async ({ page, request }) => {
+  const known = await fixture(request);
+  const wizard = await openWizard(page);
+  const point = known.points[0].panorama;
+  await markImage(wizard, point);
+  const marked = (await browserDraft(page)).drafts[0].panorama;
+  const image = wizard.getByRole("img", { name: "Captured camera panorama", exact: true });
+  const marker = wizard.locator("span.cameraPanoramaMarker.isPending");
   await expect(marker).toBeVisible();
-  for (const width of [390, 820, 1280, 320, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  for (const [width, height] of [[1440, 900], [1280, 720], [768, 900], [390, 844], [320, 844]]) {
+    await page.setViewportSize({ width, height });
     await image.scrollIntoViewIfNeeded();
-    const expected = await imagePosition();
-    const actual = await marker.boundingBox();
-    expect(Math.hypot(actual.x + actual.width / 2 - expected.x, actual.y + actual.height / 2 - expected.y)).toBeLessThan(1);
-    const imagePanel = await image.locator("xpath=ancestor::section").boundingBox();
-    const planPanel = await plan.locator("xpath=ancestor::section").boundingBox();
-    expect(planPanel.y > imagePanel.y + imagePanel.height - 1).toBe(width < 820);
-    expect(await dialog.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
-    expect(await dialog.locator("section input, section select, section button").evaluateAll(controls => controls.filter(control => {
-      const bounds = control.getBoundingClientRect();
-      const card = control.closest("section").getBoundingClientRect();
-      return bounds.left < card.left || bounds.right > card.right;
-    }).map(control => control.outerHTML))).toEqual([]);
+    await expect.poll(async () => {
+      const bounds = await image.boundingBox();
+      const actual = await marker.boundingBox();
+      return Math.hypot(actual.x + actual.width / 2 - (bounds.x + bounds.width * marked.x), actual.y + actual.height / 2 - (bounds.y + bounds.height * marked.y));
+    }).toBeLessThan(1);
+    await checkLayout(wizard, width);
+    const primary = await wizard.locator(".cameraPanoramaFooter").boundingBox();
+    expect(primary.y).toBeGreaterThanOrEqual(0);
+    expect(primary.y + primary.height).toBeLessThanOrEqual(height);
+    const instruction = await wizard.locator(".cameraPanoramaInstruction").boundingBox();
+    const content = await wizard.locator(".cameraPanoramaContent").boundingBox();
+    expect(instruction.y).toBeGreaterThan(0);
+    expect(instruction.y + instruction.height).toBeLessThanOrEqual(content.y + 1);
+    expect(content.y + content.height).toBeLessThanOrEqual(primary.y + 1);
+    expect((await browserDraft(page)).drafts[0].panorama).toEqual(marked);
+    await screenshot(page, `mapping-responsive-${width}`);
   }
-  await expect(dialog.getByRole("button", { name: "Ativar mapeamento", exact: true })).toHaveCount(0);
   expect((await fixture(request)).commands).toEqual([]);
 });
 
-test("legacy panorama review, six fits, independent checks, activation, aim and geometry invalidation", async ({ page, request }) => {
+test("four controls, visual acceptance, reopen, responsive navigation and source invalidation", async ({ page, request }) => {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   const known = await fixture(request);
@@ -349,45 +332,22 @@ test("legacy panorama review, six fits, independent checks, activation, aim and 
   await focusCamera(wizard);
   await wizard.getByRole("button", { name: "Enlarge image", exact: true }).click();
   await wizard.getByRole("button", { name: "Enlarge image", exact: true }).click();
-  for (const [index, point] of known.points.slice(0, 6).entries()) {
+  for (const [index, point] of known.points.slice(0, 4).entries()) {
     await enterPoint(wizard, point, index % 2 ? "plan" : "panorama");
     await savePoint(page, wizard);
   }
-  await screenshot(page, "flow-03-six-linked-1440-day");
+  await screenshot(page, "flow-03-four-linked");
   expect((await fixture(request)).commands).toHaveLength(captureCommands);
-  await expect(pointButton(wizard, 7, "check")).toHaveAttribute("aria-current", "step");
-  await expect(saveButton(wizard)).toBeDisabled();
-  await expect(wizard.getByRole("button", { name: "Review and activate", exact: true })).toHaveCount(0);
-  for (const point of known.points.slice(6)) {
-    await enterPoint(wizard, point);
-    await savePoint(page, wizard);
-  }
-  expect((await currentJob(request)).solution.quality.status).toBe("ready");
+  await expect(wizard.getByRole("heading", { name: "Explore the current mapping", exact: true })).toBeVisible();
+  expect((await currentJob(request)).solution.preview.eligible).toBe(true);
   expect(compositionWrites).toEqual([]);
-  const checks = (await currentJob(request)).points.filter(point => point.role === "check");
-  for (const [index, point] of checks.entries()) {
-    await pointButton(wizard, index + 7, "check").click();
-    await expect(pointButton(wizard, index + 7, "check")).toHaveAttribute("aria-current", "step");
-    await wizard.getByRole("button", { name: "Point camera", exact: true }).click();
-    await expect(wizard.getByRole("img", { name: "Camera image after pointing to the check place", exact: true })).toBeVisible();
-    if (index === 0) {
-      await screenshot(page, "flow-04-independent-check-1440-day");
-      await wizard.getByRole("button", { name: "I could not verify", exact: true }).click();
-      await expect(wizard.getByRole("button", { name: "Review and activate", exact: true })).toBeDisabled();
-      await expect.poll(async () => (await currentJob(request)).checks[0]?.result).toBe("unverifiable");
-    }
-    await wizard.getByRole("button", { name: "It is correct", exact: true }).click();
-    await expect.poll(async () => (await currentJob(request)).checks.filter(check => check.result === "correct").length).toBe(index + 1);
-  }
-  await wizard.getByRole("button", { name: "Review and activate", exact: true }).click();
-  await wizard.getByRole("button", { name: "Finish calibration", exact: true }).click();
+  await wizard.getByRole("button", { name: "Use this mapping", exact: true }).click();
   await expect(wizard.getByRole("heading", { name: "Your camera is mapped", exact: true })).toBeVisible();
   expect((await currentJob(request)).active).toBe(true);
-  await wizard.locator("summary").filter({ hasText: /^Verify camera pointing$/ }).click();
-  await markPlan(wizard, { x: 5, z: 0 });
-  await wizard.getByRole("button", { name: "Point camera", exact: true }).click();
-  await expect(wizard.getByText("The camera completed the movement.", { exact: true })).toBeVisible();
-  expect((await fixture(request)).commands).toHaveLength(captureCommands + 3);
+  const activeMarkers = wizard.locator('.cameraPanoramaImageContent span.cameraPanoramaMarker');
+  await expect(activeMarkers).toHaveCount(4);
+  expect(await activeMarkers.first().evaluate(element => ({opacity:getComputedStyle(element).opacity,filter:getComputedStyle(element).filter}))).toEqual({opacity:'1',filter:'none'});
+  expect((await fixture(request)).commands).toHaveLength(captureCommands);
 
   // Visual evidence, not golden snapshots: exercise actual saved theme settings.
   for (const theme of ["day", "night"]) {
@@ -395,7 +355,6 @@ test("legacy panorama review, six fits, independent checks, activation, aim and 
       await page.evaluate(() => localStorage.setItem("toposync.theme", "topo-night"));
       wizard = await openWizard(page);
       await expect(wizard.getByRole("heading", { name: "Your camera is mapped", exact: true })).toBeVisible();
-      await wizard.locator("summary").filter({ hasText: /^Verify camera pointing$/ }).click();
     }
     for (const width of [1440, 768, 375]) {
       await page.setViewportSize({ width, height: width === 375 ? 844 : 1000 });
@@ -459,7 +418,7 @@ test("point navigation preserves identifiers, corrections, undo and multiple unf
   await wizard.getByRole("button", { name: "Undo last change", exact: true }).click();
   await expect.poll(async () => (await currentJob(request)).points[0]?.id).toBe(savedPoint.id);
 
-  await pointButton(wizard, 2).click();
+  await wizard.getByRole("button", {name: "Add point", exact: true}).click();
   await markPlan(wizard, known.points[1].world);
   const secondId = (await browserDraft(page)).selectedPointId;
   await wizard.getByRole("button", { name: "Add point", exact: true }).click();
@@ -467,19 +426,20 @@ test("point navigation preserves identifiers, corrections, undo and multiple unf
   const thirdId = (await browserDraft(page)).selectedPointId;
   expect(thirdId).not.toBe(secondId);
   await wizard.getByRole("button", { name: "Previous point", exact: true }).click();
-  await expect(pointButton(wizard, 2)).toHaveAttribute("aria-current", "step");
+  await expect(pointButton(wizard, 2)).toHaveAttribute("aria-pressed", "true");
   await expect(saveButton(wizard)).toBeDisabled();
   await wizard.getByRole("button", { name: "Next point", exact: true }).click();
-  await expect(pointButton(wizard, 3)).toHaveAttribute("aria-current", "step");
+  await expect(pointButton(wizard, 3)).toHaveAttribute("aria-pressed", "true");
   await expect(saveButton(wizard)).toBeDisabled();
   // Selecting an image marker opens its saved pair without overwriting either unfinished pair.
-  await wizard.locator(".cameraPanoramaImageContent").getByRole("button", { name: "Adjust place 1", exact: true }).click();
-  await expect(pointButton(wizard, 1)).toHaveAttribute("aria-current", "step");
+  const savedMarker = await wizard.locator(".cameraPanoramaImageContent").getByRole("button", { name: "Adjust place 1", exact: true }).boundingBox();
+  await page.mouse.click(savedMarker.x + savedMarker.width / 2, savedMarker.y + savedMarker.height / 2);
+  await expect(pointButton(wizard, 1)).toHaveAttribute("aria-pressed", "true");
   await pointButton(wizard, 2).click();
   await page.reload();
   wizard = await openWizard(page);
   await expect(wizard.getByText("Your unfinished marks were restored. Continue where you left off.", { exact: true })).toBeVisible();
-  await expect(pointButton(wizard, 2)).toHaveAttribute("aria-current", "step");
+  await expect(pointButton(wizard, 2)).toHaveAttribute("aria-pressed", "true");
   const restored = await browserDraft(page);
   expect(restored.selectedPointId).toBe(secondId);
   expect(restored.drafts.find(point => point.id === secondId).panorama).toBeNull();
@@ -487,7 +447,8 @@ test("point navigation preserves identifiers, corrections, undo and multiple unf
   await markImage(wizard, known.points[1].panorama);
   await savePoint(page, wizard);
   expect((await currentJob(request)).points[1].id).toBe(secondId);
-  await expect(pointButton(wizard, 3)).toHaveAttribute("aria-current", "step");
+  await pointButton(wizard, 3).click();
+  await expect(pointButton(wizard, 3)).toHaveAttribute("aria-pressed", "true");
   await expect(saveButton(wizard)).toBeDisabled();
   await focusCamera(wizard);
   await markPlan(wizard, known.points[2].world);
@@ -532,7 +493,8 @@ test("keyboard works from either panel and a failed save preserves the pair for 
   expect((await currentJob(request)).points[0]).toMatchObject(pending);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(pointButton(wizard, 2)).toHaveAttribute("aria-current", "step");
+  await wizard.getByRole("button", {name: "Add point", exact: true}).click();
+  await expect(pointButton(wizard, 2)).toHaveAttribute("aria-pressed", "true");
   await checkLayout(wizard, 390);
   await screenshot(page, "keyboard-03-next-place-390-day");
   expect(compositionWrites).toEqual([]);
@@ -544,12 +506,35 @@ test("bidirectional provisional previews follow independent locations without sa
   await seedLegacyPanorama(request);
   const seeded = await seedPoints(request, known.points.slice(0, 6));
   expect(seeded.solution.preview.eligible).toBe(true);
-  expect(seeded.solution.quality.status).not.toBe("ready");
+  expect(seeded.solution.quality.status).toBe("ready");
   const wizard = await openWizard(page);
   await pointButton(wizard, 1).click();
   await focusCamera(wizard);
   const canvas = planPanel(wizard).locator("canvas");
   const ghost = wizard.getByTestId("panorama-ghost");
+  const bounds = await canvas.boundingBox();
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.wheel(0, -420);
+  const hoverFloorReference = async (world, rotation = 0) => {
+    const guess = await planPosition(wizard, world, rotation);
+    const rectangle = await canvas.boundingBox();
+    guess.x = rectangle.width / 2 + 2 * (guess.x - rectangle.width / 2);
+    guess.y = rectangle.height / 2 + 2 * (guess.y - rectangle.height / 2);
+    // Locate the independently rendered cyan floor reference instead of assuming an exact pan centre.
+    const position = await canvas.evaluate((canvas, guess) => {
+      const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+      const scale = canvas.width / canvas.clientWidth;
+      const cyan = [];
+      for (let index = 0; index < pixels.length; index += 4) {
+        if (Math.abs(pixels[index] - 94) < 35 && Math.abs(pixels[index + 1] - 220) < 35 && Math.abs(pixels[index + 2] - 229) < 35) cyan.push({ x: (index / 4 % canvas.width + .5) / scale, y: (Math.floor(index / 4 / canvas.width) + .5) / scale });
+      }
+      if (!cyan.length) throw new Error("Independent floor reference is not visible");
+      const nearest = cyan.reduce((best, pixel) => Math.hypot(pixel.x - guess.x, pixel.y - guess.y) < Math.hypot(best.x - guess.x, best.y - guess.y) ? pixel : best);
+      const reference = cyan.filter(pixel => Math.hypot(pixel.x - nearest.x, pixel.y - nearest.y) < 30);
+      return { x: reference.reduce((sum, pixel) => sum + pixel.x, 0) / reference.length, y: reference.reduce((sum, pixel) => sum + pixel.y, 0) / reference.length };
+    }, guess);
+    await canvas.hover({ position });
+  };
   const originalDraft = await browserDraft(page);
   const commandCount = (await fixture(request)).commands.length;
   const requests = [];
@@ -564,7 +549,7 @@ test("bidirectional provisional previews follow independent locations without sa
     expect(x).toBeCloseTo(point.world.x, 1);
     expect(z).toBeCloseTo(point.world.z, 1);
     await expect(ghost).toHaveCount(0);
-    await canvas.hover({ position: await planPosition(wizard, point.world) });
+    await hoverFloorReference(point.world);
     await expect(ghost).toBeVisible();
     await expect(canvas).not.toHaveAttribute("data-panorama-ghost-world", /./);
     const projected = await ghost.evaluate(marker => ({ x: Number.parseFloat(marker.style.left) / 100, y: Number.parseFloat(marker.style.top) / 100 }));
@@ -574,17 +559,19 @@ test("bidirectional provisional previews follow independent locations without sa
   await screenshot(page, "preview-01-provisional-1440-day");
   for (const rotation of [90, 180, 270, 0]) {
     await wizard.getByRole("button", { name: "Rotate composition by 90 degrees", exact: true }).click();
-    await canvas.hover({ position: await planPosition(wizard, known.points[6].world, rotation) });
-    await expect(ghost).toBeVisible();
-    const projected = await ghost.evaluate(marker => ({ x: Number.parseFloat(marker.style.left) / 100, y: Number.parseFloat(marker.style.top) / 100 }));
-    expect(projected.x).toBeCloseTo(known.points[6].panorama.x, 3);
-    expect(projected.y).toBeCloseTo(known.points[6].panorama.y, 3);
+    // Rotation redraws the canvas asynchronously; locate the reference again after each redraw.
+    await expect.poll(async () => {
+      await hoverFloorReference(known.points[6].world, rotation);
+      if (!await ghost.count()) return Infinity;
+      const projected = await ghost.evaluate(marker => ({ x: Number.parseFloat(marker.style.left) / 100, y: Number.parseFloat(marker.style.top) / 100 }));
+      return Math.max(Math.abs(projected.x - known.points[6].panorama.x), Math.abs(projected.y - known.points[6].panorama.y));
+    }).toBeLessThan(.0005);
   }
-  await canvas.hover({ position: await planPosition(wizard, { x: 1, z: 0 }) });
-  await expect(ghost).toHaveCount(0);
-  await expect(canvas).not.toHaveAttribute("data-panorama-ghost-world", /./);
-  await screenshot(page, "preview-02-unsupported-region-1440-day");
-  await canvas.hover({ position: await planPosition(wizard, known.points[6].world) });
+  await canvas.hover({ position: await planPosition(wizard, { x: -3, z: 0 }) });
+  await expect(ghost).toBeVisible();
+  await expect(wizard).toContainText("Outside the control region · extrapolated position");
+  await screenshot(page, "preview-02-extrapolated-region-1440-day");
+  await hoverFloorReference(known.points[6].world);
   await expect(ghost).toBeVisible();
   await pointNavigation(wizard).hover();
   await expect(ghost).toHaveCount(0);
@@ -615,27 +602,19 @@ test("bidirectional provisional previews follow independent locations without sa
   await expect(ghost).toHaveCount(0);
   await expect(wizard).toBeVisible();
   await markPlan(wizard, { x: 3.2, z: -3 });
+  await expect(wizard.getByTestId("panorama-preview-status")).not.toContainText("Updating");
   await wizard.locator(".cameraPanoramaImageContent").hover({ position: await imagePosition(wizard, known.points[6].panorama) });
-  await expect(canvas).not.toHaveAttribute("data-panorama-ghost-world", /./);
+  await expect(canvas).toHaveAttribute("data-panorama-ghost-world", /./);
   expect((await currentJob(request)).points).toEqual(seeded.points);
 });
 
-test("independent check places, missing coverage and stale revision context never receive a suggestion", async ({ page, request }) => {
+test("missing coverage and stale revision context never receive a suggestion", async ({ page, request }) => {
   const known = await fixture(request);
   await seedLegacyPanorama(request);
   await seedPoints(request, known.points);
   let wizard = await openWizard(page);
   await focusCamera(wizard);
   const commandCount = (await fixture(request)).commands.length;
-  await pointButton(wizard, 7, "check").click();
-  await wizard.locator(".cameraPanoramaImageContent").hover({ position: await imagePosition(wizard, known.points[7].panorama) });
-  await expect(planPanel(wizard).locator("canvas")).not.toHaveAttribute("data-panorama-ghost-world", /./);
-  await planPanel(wizard).locator("canvas").hover({ position: await planPosition(wizard, known.points[7].world) });
-  await expect(wizard.getByTestId("panorama-ghost")).toHaveCount(0);
-  await expect(wizard.getByRole("button", { name: "Point camera", exact: true })).toBeEnabled();
-  await screenshot(page, "preview-03-independent-check-1440-day");
-  expect((await fixture(request)).commands).toHaveLength(commandCount);
-
   const job = await currentJob(request);
   const maskPath = new URL(job.coverage_url, backend).pathname;
   const maskRoute = url => url.pathname === maskPath;
@@ -683,7 +662,7 @@ test("cancelling a failed save removes the rejected pair without leaving a phant
   await expect.poll(async () => (await browserDraft(page)).unsavedPoints).toBeNull();
   expect((await browserDraft(page)).drafts.some(point => point.id === pending.id)).toBe(false);
   expect((await currentJob(request)).points).toHaveLength(0);
-  await expect(wizard.getByText("0 places linked · 0 check places", { exact: true })).toBeVisible();
+  await expect(wizard.getByText("0 places marked · preview from 4", { exact: true })).toBeVisible();
   await page.unroute("**/panorama/*/points");
   await enterPoint(wizard, known.points[1]);
   await savePoint(page, wizard);
@@ -726,11 +705,11 @@ test("revision conflict reload preserves the rejected draft separately from the 
 test("a saved source panorama starts a point pair without capture or optical inputs", async ({ page, request }) => {
   const known = await fixture(request);
   await openCameraEditor(page);
-  await page.getByRole("button", { name: "Calibrate camera", exact: true }).click();
+  await page.getByRole("button", { name: /^(Map in composition|Continue mapping|View mapping)$/, exact: true }).click();
   const wizard = page.getByTestId("camera-panorama-mapping");
   await expect(wizard.getByRole("button", { name: "Use saved panorama", exact: true })).toHaveCount(0);
-  await wizard.locator("summary").filter({ hasText: /^Review points$/ }).click();
-  await expect(pointButton(wizard, 1)).toHaveAttribute("aria-current", "step");
+  await wizard.getByRole("button", {name: "Add point", exact: true}).click();
+  await expect(pointButton(wizard, 1)).toHaveAttribute("aria-pressed", "true");
   await expect(wizard.locator("input[type='number']")).toHaveCount(0);
   await focusCamera(wizard);
   await wizard.getByRole("button", { name: "Enlarge image", exact: true }).click();
@@ -743,29 +722,29 @@ test("a saved source panorama starts a point pair without capture or optical inp
   expect(job.scan).toBeNull();
   expect(job.points).toHaveLength(1);
   expect(job.active).toBe(false);
-  await expect(wizard.getByText("Link six places and two independent checks. Lens and motor settings are not required.", { exact: true })).toBeVisible();
+  await expect(wizard.getByRole("button", { name: "Confirm pair", exact: true })).toHaveCount(0);
+  await expect(pointNavigation(wizard).locator("button[aria-pressed=true]")).toHaveCount(0);
   expect((await fixture(request)).commands).toHaveLength(0);
   await screenshot(page, "source-01-first-saved-pair-1440-day");
-  for (const point of known.points.slice(1, 6)) {
+  for (const point of known.points.slice(1, 4)) {
     await enterPoint(wizard, point);
     await savePoint(page, wizard);
   }
-  for (const point of known.points.slice(6)) {
-    await enterPoint(wizard, point);
-    await savePoint(page, wizard);
-  }
-  await expect(wizard.getByRole("button", { name: "Finish calibration", exact: true })).toBeEnabled();
-  await screenshot(page, "simulation-01-eight-points-ready");
-  await wizard.getByRole("button", { name: "Finish calibration", exact: true }).click();
+  expect((await currentJob(request)).points).toHaveLength(4);
+  await screenshot(page, "source-four-adjustment-pairs");
+  await expect(wizard.getByRole("button", { name: "Use this mapping", exact: true })).toBeEnabled();
+  await screenshot(page, "simulation-01-four-points-ready");
+  await wizard.getByRole("button", { name: "Use this mapping", exact: true }).click();
   const active = await currentJob(request);
   expect(active.active).toBe(true);
   expect(active.permissions.map_validated).toBe(true);
   expect(active.permissions.aim_enabled).toBe(false);
   await screenshot(page, "simulation-02-calibration-active");
   await expect(wizard.getByRole("button", { name: "Point camera", exact: true })).not.toBeVisible();
-  await wizard.locator("summary").filter({ hasText: /^Verify camera pointing$/ }).click();
+  await expect(wizard.locator(".cameraPanoramaViews")).toBeVisible();
   await wizard.getByRole("button", { name: "Fit image", exact: true }).click();
-  // Independent floor locations, absent from both the six fit and two check pairs.
+  await focusCamera(wizard);
+  // Independent floor locations, absent from the four controls.
   // The oracle uses the synthetic scene's camera at height 3, not the fitted matrix.
   const mappingProbes = [];
   const canvas = planPanel(wizard).locator("canvas");
@@ -789,11 +768,20 @@ test("a saved source panorama starts a point pair without capture or optical inp
   expect(persisted.points).toEqual(active.points);
   expect(persisted.revision).toBe(active.revision);
   await fs.writeFile(path.join(evidenceDirectory, "simulation-mapping-result.json"), JSON.stringify({ synthetic: true, job_id: active.id, active: active.active, points: active.points, quality: active.solution.quality, probes: mappingProbes, cameraCommands: (await fixture(request)).commands }, null, 2));
-  await expect(wizard.getByRole("button", { name: "Point camera", exact: true })).toBeDisabled();
-  await wizard.getByRole("button", { name: "Verify camera pointing", exact: true }).click();
-  await expect(wizard.getByRole("button", { name: "Point camera", exact: true })).toBeEnabled();
+  await expect(wizard.getByRole("button", { name: "Point camera", exact: true })).toHaveCount(0);
+  await expect(wizard.getByText("Verify camera pointing", { exact: true })).toHaveCount(0);
   expect((await fixture(request)).commands).toHaveLength(0);
   await screenshot(page, "source-02-active-map-before-pointing-1440-day");
+  await openCameraEditor(page);
+  await page.getByRole("button", { name: "View mapping", exact: true }).click();
+  await expect(wizard).toBeVisible();
+  await expect(wizard.getByRole("button", { name: "Edit points", exact: true })).toBeVisible();
+  const reopened = await currentJob(request);
+  expect(reopened.id).toBe(active.id);
+  expect(reopened.active).toBe(true);
+  expect(reopened.points).toEqual(active.points);
+  expect(reopened.revision).toBe(active.revision);
+  await screenshot(page, "source-active-map-reopened");
 });
 
 test("one calibration entry skips preparation and resumes the same draft", async ({ page, request }) => {
@@ -804,6 +792,7 @@ test("one calibration entry skips preparation and resumes the same draft", async
   await expect(wizard.getByRole("img", { name: "Captured camera panorama", exact: true })).toBeVisible();
   wizard = await openWizard(page);
   expect((await currentJob(request)).id).toBe(job.id);
+  await expect(wizard.getByText("Your pending markings were recovered. Continue where you left off.", { exact: true })).toHaveCount(0);
   expect((await fixture(request)).commands).toHaveLength(0);
 });
 
@@ -817,7 +806,7 @@ test("an old unfinished preparation uses the available source panorama", async (
   expect((await fixture(request)).commands).toHaveLength(0);
 });
 
-test("preparation stays inside the assistant and continues when a panorama becomes available", async ({ page, request }) => {
+test("missing panorama links to camera preparation and returns to the same composition editor", async ({ page, request }) => {
   let published = false;
   const captureRequests = [];
   page.on("request", request => { if (request.method() === "POST" && request.url().includes("/sources/")) captureRequests.push(request.url()); });
@@ -834,14 +823,29 @@ test("preparation stays inside the assistant and continues when a panorama becom
     await route.fulfill({ response, json: state });
   });
   await openCameraEditor(page);
-  await page.getByRole("button", { name: "Calibrate camera", exact: true }).click();
+  await page.getByRole("button", { name: /^(Map in composition|Continue mapping|View mapping)$/, exact: true }).click();
   const wizard = page.getByTestId("camera-panorama-mapping");
-  await expect(wizard.getByTestId("camera-source-panorama")).toBeVisible();
-  await expect(wizard.getByRole("button", { name: "Generate panorama", exact: true })).toBeEnabled();
+  await expect(wizard.getByTestId("camera-source-panorama")).toHaveCount(0);
+  await expect(wizard.getByRole("button", { name: "Generate panorama", exact: true })).toHaveCount(0);
+  await expect(wizard.locator(".cameraPanoramaViews")).toHaveCount(0);
+  await wizard.getByRole("button", { name: "Prepare panorama in camera settings", exact: true }).click();
+  await expect(page).toHaveURL(/settings\?.*camera_id=panorama-simulated-camera.*source_id=synthetic-wide/);
+  await expect(page.getByTestId("camera-source-panorama")).toBeVisible();
   expect(captureRequests).toEqual([]);
   published = true;
-  await expect(wizard.getByRole("img", { name: "Captured camera panorama", exact: true })).toBeVisible({ timeout: 20_000 });
-  await expect(wizard.getByTestId("camera-source-panorama")).toHaveCount(0);
+  // The absent state is injected; preparation below uses the real saved
+  // synthetic artifact and its real crop endpoint, without acquiring images.
+  await page.reload();
+  await page.getByRole("button", { name: "Edit useful area", exact: true }).click();
+  const savedSelection = page.waitForResponse(response => response.url().endsWith("/sources/synthetic-wide/panorama/crop") && response.request().method() === "PATCH");
+  await page.getByRole("button", { name: "Save useful area", exact: true }).click();
+  expect((await savedSelection).ok()).toBeTruthy();
+  await page.getByRole("button", { name: "Return to composition", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Edit: Câmera simulada", exact: true });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByRole("button", { name: "Calibrate ground and metric geometry", exact: true })).toHaveCount(0);
+  await editor.getByRole("button", { name: "Map in composition", exact: true }).click();
+  await expect(wizard.getByRole("img", { name: "Captured camera panorama", exact: true })).toBeVisible();
   expect(captureRequests).toEqual([]);
   expect((await fixture(request)).commands).toHaveLength(0);
 });
@@ -854,8 +858,8 @@ test("review creates an editable draft and keeps the active calibration", async 
   const fitted = await fit.json();
   expect((await request.post(`${backend}${panoramaPath}/${created.id}/activate`, { data: { revision: fitted.revision } })).ok()).toBeTruthy();
   const wizard = await openWizard(page);
-  await expect(wizard.getByRole("img", { name: "Captured camera panorama", exact: true })).not.toBeVisible();
-  await wizard.getByRole("button", { name: "Review calibration", exact: true }).click();
+  await expect(wizard.getByRole("img", { name: "Captured camera panorama", exact: true })).toBeVisible();
+  await wizard.getByRole("button", { name: "Edit points", exact: true }).click();
   await expect(wizard.getByRole("img", { name: "Captured camera panorama", exact: true })).toBeVisible();
   const draft = await currentJob(request);
   expect(draft.id).not.toBe(created.id);
@@ -863,6 +867,7 @@ test("review creates an editable draft and keeps the active calibration", async 
   expect(draft.active).toBe(false);
   expect((await (await request.get(`${backend}${panoramaPath}/${created.id}`)).json()).active).toBe(true);
   await focusCamera(wizard);
+  await pointButton(wizard, 1).click();
   await markPlan(wizard, { x: known.points[0].world.x + .1, z: known.points[0].world.z });
   await expect(saveButton(wizard)).toBeEnabled();
   await savePoint(page, wizard);
@@ -870,21 +875,22 @@ test("review creates an editable draft and keeps the active calibration", async 
   expect((await fixture(request)).commands).toHaveLength(0);
 });
 
-test("incompatible panorama stays in preparation without creating or capturing", async ({ page, request }) => {
+test("incompatible panorama offers a camera shortcut without embedding preparation or writing", async ({ page, request }) => {
   await page.route(`**${panoramaPath}?*`, async route => {
     const response = await route.fetch();
     const context = await response.json();
     context.blockers = ["source_panorama_revision_conflict"];
-    context.sources.forEach(source => { source.panorama = { id: source.panorama.id, compatible: false, blockers: context.blockers }; });
+    context.sources.forEach(source => { source.panorama = source.panorama ? { id: source.panorama.id, compatible: false, blockers: context.blockers } : null; });
     await route.fulfill({ response, json: context });
   });
   const writes = [];
   page.on("request", request => { if (request.method() === "POST" && request.url().includes("/panorama")) writes.push(request.url()); });
   await openCameraEditor(page);
-  await page.getByRole("button", { name: "Calibrate camera", exact: true }).click();
+  await page.getByRole("button", { name: /^(Map in composition|Continue mapping|View mapping)$/, exact: true }).click();
   const wizard = page.getByTestId("camera-panorama-mapping");
-  await expect(wizard.getByTestId("camera-source-panorama")).toBeVisible();
-  await expect(wizard.getByRole("group", { name: "Selected useful area of the camera panorama", exact: true })).toBeVisible();
+  await expect(wizard.getByTestId("camera-source-panorama")).toHaveCount(0);
+  await expect(wizard.getByText("The saved panorama needs a compatibility review before it can be mapped. Its image and existing points are preserved.", { exact: true })).toBeVisible();
+  await expect(wizard.getByRole("button", { name: "Prepare panorama in camera settings", exact: true })).toBeEnabled();
   await expect(wizard.locator(".cameraPanoramaViews")).toHaveCount(0);
   expect(await currentJob(request)).toBeNull();
   expect(writes).toEqual([]);
@@ -908,13 +914,12 @@ test("panorama request and image helpers retain the Home Assistant ingress prefi
   }
 });
 
-test("i18n preserves point drafts and localizes errors, help and singular counts", async ({ page, request }) => {
+test("i18n preserves point drafts and localizes errors, help and pair progress", async ({ page, request }) => {
   const known = await fixture(request);
   await openCameraEditor(page);
-  await page.getByRole("button", { name: "Calibrate camera", exact: true }).click();
+  await page.getByRole("button", { name: /^(Map in composition|Continue mapping|View mapping)$/, exact: true }).click();
   let wizard = page.getByTestId("camera-panorama-mapping");
   await expect(wizard.getByRole("button", { name: "Use saved panorama", exact: true })).toHaveCount(0);
-  await wizard.locator("summary").filter({ hasText: /^Review points$/ }).click();
   await focusCamera(wizard);
   await enterPoint(wizard, known.points[0], "plan");
   const pending = (await browserDraft(page)).drafts[0];
@@ -923,17 +928,16 @@ test("i18n preserves point drafts and localizes errors, help and singular counts
   await page.reload();
   await page.getByRole("button", { name: "Editar", exact: true }).click();
   await page.getByText("Câmera simulada", { exact: true }).dblclick();
-  await page.getByRole("button", { name: "Calibrar câmera", exact: true }).click();
+  await page.getByRole("button", { name: /^(Mapear na composição|Continuar mapeamento|Ver mapeamento)$/, exact: true }).click();
   wizard = page.getByTestId("camera-panorama-mapping");
-  await wizard.locator("summary").filter({ hasText: /^Revisar pontos$/ }).click();
   await expect(wizard.getByRole("navigation", { name: "Pontos", exact: true })).toBeVisible();
   await expect(wizard.getByRole("group", { name: /^Panorâmica: use as setas/ })).toBeVisible();
   await expect(wizard.getByRole("group", { name: /^Composição: use as setas/ })).toBeVisible();
-  await expect(wizard.getByRole("button", { name: "Confirmar ponto", exact: true })).toBeEnabled();
+  await expect(wizard.getByRole("button", { name: "Confirmar par", exact: true })).toBeEnabled();
   expect((await browserDraft(page)).drafts[0]).toEqual(pending);
 
   await page.route("**/panorama/*/points", route => route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: { code: "revision_conflict", message: "Synthetic revision conflict diagnostic" } }) }));
-  await wizard.getByRole("button", { name: "Confirmar ponto", exact: true }).click();
+  await wizard.getByRole("button", { name: "Confirmar par", exact: true }).click();
   const alert = wizard.getByRole("alert");
   await expect(alert.locator(":scope > span")).toHaveText("O trabalho salvo mudou. Suas marcações foram preservadas; recarregue a revisão salva antes de tentar novamente.");
   await expect(alert.getByText("Synthetic revision conflict diagnostic", { exact: true })).not.toBeVisible();
@@ -945,14 +949,14 @@ test("i18n preserves point drafts and localizes errors, help and singular counts
   await expect(alert.locator(":scope > span")).toHaveText("Não foi possível concluir esta ação. Tente novamente.");
   await page.unroute("**/panorama/*/points");
   await wizard.getByRole("button", { name: "Tentar salvar novamente", exact: true }).click();
-  await expect(wizard.getByText("1 lugar ligado · 0 lugares de conferência", { exact: true })).toBeVisible();
+  await expect(wizard.getByText("1 locais marcados · prévia a partir de 4", { exact: true })).toBeVisible();
   await expect(wizard).not.toContainText("coordenadas abaixo");
   await expect(wizard).not.toContainText("ext.cameras.");
   await screenshot(page, "i18n-01-points-pt-BR");
 
   await page.evaluate(() => localStorage.setItem("toposync.locale", "en"));
   wizard = await openWizard(page);
-  await expect(wizard.getByText("1 place linked · 0 check places", { exact: true })).toBeVisible();
+  await expect(wizard.getByText("1 places marked · preview from 4", { exact: true })).toBeVisible();
   await expect(wizard).not.toContainText("coordinates below");
   await expect(wizard).not.toContainText("ext.cameras.");
   expect((await currentJob(request)).points[0]).toMatchObject(pending);
@@ -979,4 +983,855 @@ test("a saved navigation failure remains visible after reopening the point wizar
   await expect(wizard.getByText("The return was attempted, but the original framing could not be confirmed.", { exact: true })).toBeVisible();
   await expect(wizard.getByRole("button", { name: "Return to original framing", exact: true })).toBeVisible();
   expect((await fixture(request)).commands).toHaveLength(0);
+});
+
+for (const view of ["360 View 2D", "360 View 3D"]) {
+  test(`panorama area selection clips rendered pixels and restores them in ${view}`, async ({ page, request }) => {
+    const known = await fixture(request);
+    const created = await request.post(`${backend}${panoramaPath}`, { data: {
+      element_id: elementId, source_id: known.source_id, source_artifact_id: known.source_artifact_id,
+      source_artifact_revision: known.source_artifact_revision,
+    } });
+    expect(created.ok()).toBeTruthy();
+    const draft = await created.json();
+    const saved = await request.put(`${backend}${panoramaPath}/${draft.id}/points`, { data: { revision: draft.revision, points: known.points } });
+    expect(saved.ok()).toBeTruthy();
+    const job = await saved.json();
+    expect((await request.post(`${backend}${panoramaPath}/${job.id}/activate`, { data: { revision: job.revision } })).ok()).toBeTruthy();
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    const panoramaPixels = async () => {
+      const screenshot = await page.screenshot();
+      return page.evaluate(async encoded => {
+        const image = await createImageBitmap(await (await fetch(`data:image/png;base64,${encoded}`)).blob());
+        const canvas = new OffscreenCanvas(image.width, image.height);
+        const context = canvas.getContext("2d");
+        context.drawImage(image, 0, 0); image.close();
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let count = 0;
+        // These are the two fixture checkerboard colours, absent from the floor.
+        for (let offset = 0; offset < pixels.length; offset += 4) {
+          if ([[112,126,95], [132,145,112]].some(colour => colour.every((value,index) => Math.abs(pixels[offset+index]-value) <= 2))) count++;
+        }
+        return count;
+      }, screenshot.toString("base64"));
+    };
+    await page.goto("/");
+    await page.getByRole("button", { name: /^Rendering:/ }).click();
+    await page.getByRole("dialog").getByRole("button", { name: new RegExp(`^${view} `) }).click();
+    await expect(page.getByTestId("panorama-ground-status")).toBeVisible();
+    await expect.poll(panoramaPixels).toBeGreaterThan(1000);
+    const before = await panoramaPixels();
+    await screenshot(page, `area-${view.endsWith("2D") ? "2d" : "3d"}-before`);
+    await openCameraEditor(page);
+    const editor = page.getByRole("dialog", { name: "Edit: Câmera simulada", exact: true });
+    const area = editor.getByRole("combobox", { name: "360 area crop", exact: true });
+    await expect(area).toBeEnabled();
+    await area.click();
+    await page.getByRole("option", { name: "Recorte de teste", exact: true }).click();
+    await editor.getByRole("button", { name: "Close", exact: true }).last().click();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    await expect(page.getByTestId("panorama-ground-status")).toBeVisible();
+    await expect.poll(panoramaPixels).toBeLessThan(before * .7);
+    const clipped = await panoramaPixels();
+    expect(clipped).toBeGreaterThan(before * .1);
+    await screenshot(page, `area-${view.endsWith("2D") ? "2d" : "3d"}-clipped`);
+    await openCameraEditor(page);
+    await expect(editor.getByText("Recorte de teste", { exact: true })).toBeVisible();
+    await area.focus();
+    await area.press("Backspace");
+    await editor.getByRole("button", { name: "Close", exact: true }).last().click();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    await expect.poll(panoramaPixels).toBeGreaterThan(before * .9);
+    await screenshot(page, `area-${view.endsWith("2D") ? "2d" : "3d"}-restored`);
+    if (view.endsWith("2D")) {
+      const sourcePath = `${backend}/api/cameras/cameras/${cameraId}/sources/${known.source_id}/panorama`;
+      const source = await (await request.get(sourcePath)).json();
+      const cropped = await request.patch(`${sourcePath}/crop`, { data: {
+        artifact_id: source.active.id, expected_revision: source.active.crop_revision,
+        crop: { u_start: .48, u_width: .03, v_start: .55, v_height: .3 },
+      } });
+      expect(cropped.ok()).toBeTruthy();
+      await page.reload();
+      await expect(page.getByTestId("panorama-ground-status")).toBeVisible();
+      await expect.poll(panoramaPixels).toBeLessThan(before * .7);
+      expect(await panoramaPixels()).toBeGreaterThan(100);
+      expect((await currentJob(request)).points).toEqual(known.points);
+      await screenshot(page, "area-2d-presentation-crop");
+      const reset = await request.patch(`${sourcePath}/crop`, { data: {
+        artifact_id: source.active.id, expected_revision: (await cropped.json()).artifact.crop_revision, crop: source.active.crop,
+      } });
+      expect(reset.ok()).toBeTruthy();
+      await page.reload();
+      await expect.poll(panoramaPixels).toBeGreaterThan(before * .9);
+    }
+    expect(errors).toEqual([]);
+    expect((await fixture(request)).commands).toHaveLength(0);
+    await fs.writeFile(path.join(evidenceDirectory, `area-${view.endsWith("2D") ? "2d" : "3d"}.json`), JSON.stringify({ view, before, clipped, restored: await panoramaPixels(), synthetic: true, physicalCommands: 0 }, null, 2));
+  });
+}
+
+test("image loading and failure explain recovery without losing the saved pairs", async ({ page, request }) => {
+  const known = await fixture(request);
+  const created = await request.post(`${backend}${panoramaPath}`, { data: { element_id: elementId, source_id: known.source_id, source_artifact_id: known.source_artifact_id, source_artifact_revision: known.source_artifact_revision } });
+  const job = await created.json();
+  const stored = await request.put(`${backend}${panoramaPath}/${job.id}/points`, { data: { revision: job.revision, points: known.points.slice(0, 1) } });
+  expect(stored.ok()).toBeTruthy();
+  let release;
+  const imageGate = new Promise(resolve => { release = resolve; });
+  await page.route("**/images/panorama.png", async route => { await imageGate; await route.abort(); });
+  const wizard = await openWizard(page);
+  await expect(wizard.getByText("Loading panorama image…", { exact: true })).toBeVisible();
+  await expect(wizard.getByRole("button", {name: "Use this mapping", exact: true})).toBeDisabled();
+  await screenshot(page, "state-image-loading");
+  release();
+  await expect(wizard.getByRole("alert")).toContainText("The saved image could not be loaded.");
+  await screenshot(page, "state-image-failed");
+  expect((await currentJob(request)).points).toEqual(known.points.slice(0, 1));
+  await page.unroute("**/images/panorama.png");
+  await wizard.getByRole("button", { name: "Reload saved work", exact: true }).click();
+  await expect(wizard.getByRole("img", { name: "Captured camera panorama", exact: true })).toHaveJSProperty("naturalWidth", 1024);
+  await expect(wizard.getByRole("alert")).toHaveCount(0);
+  expect((await currentJob(request)).points).toEqual(known.points.slice(0, 1));
+  expect((await fixture(request)).commands).toHaveLength(0);
+});
+
+test("camera preparation returns to the selected source even when another source has a panorama", async ({ page, request }) => {
+  let returned = false;
+  await page.route(`**${panoramaPath}?*`, async route => {
+    const response = await route.fetch();
+    const context = await response.json();
+    if (!returned) context.sources.forEach(source => { source.panorama = null; });
+    await route.fulfill({ response, json: context });
+  });
+  await openCameraEditor(page);
+  await page.getByRole("button", { name: "Map in composition", exact: true }).click();
+  const wizard = page.getByTestId("camera-panorama-mapping");
+  await wizard.getByRole("combobox").selectOption("synthetic-detail");
+  await wizard.getByRole("button", { name: "Prepare panorama in camera settings", exact: true }).click();
+  await expect(page).toHaveURL(/source_id=synthetic-detail/);
+  returned = true;
+  await page.getByRole("button", { name: "Return to composition", exact: true }).click();
+  await page.getByRole("button", { name: "Map in composition", exact: true }).click();
+  await expect(wizard.getByRole("combobox")).toHaveValue("synthetic-detail");
+  await expect(wizard.getByRole("button", { name: "Prepare panorama in camera settings", exact: true })).toBeVisible();
+  await expect(wizard.locator(".cameraPanoramaViews")).toHaveCount(0);
+  expect(await currentJob(request)).toBeNull();
+  expect((await fixture(request)).commands).toHaveLength(0);
+});
+
+for (const [status, message] of [
+  ["processing", "The panorama is being prepared."],
+  ["failed", "Panorama preparation did not finish."],
+]) {
+  test(`source preparation ${status} offers context without starting another capture`, async ({ page, request }) => {
+    await page.route(`**${panoramaPath}?*`, async route => {
+      const response = await route.fetch();
+      const context = await response.json();
+      context.sources.forEach(source => { source.panorama = null; });
+      await route.fulfill({ response, json: context });
+    });
+    await page.route("**/sources/synthetic-wide/panorama", async route => {
+      const response = await route.fetch();
+      const source = await response.json();
+      await route.fulfill({ response, json: { ...source, active: null, candidate: null, job: { status } } });
+    });
+    const writes = [];
+    page.on("request", request => { if (["POST", "PUT", "PATCH"].includes(request.method()) && request.url().includes("/panorama")) writes.push(request.url()); });
+    await openCameraEditor(page);
+    await page.getByRole("button", { name: "Map in composition", exact: true }).click();
+    const wizard = page.getByTestId("camera-panorama-mapping");
+    await expect(wizard.getByRole("status").filter({ hasText: message })).toBeVisible();
+    await expect(wizard.getByRole("button", { name: "Prepare panorama in camera settings", exact: true })).toBeEnabled();
+    expect(writes).toEqual([]);
+    expect((await fixture(request)).commands).toEqual([]);
+    await screenshot(page, `state-source-${status}`);
+  });
+}
+
+test("mapping images, point saves, camera shortcut and return execute through an ingress prefix", async ({ page, request }) => {
+  const prefix = "/api/hassio_ingress/panorama-validation";
+  await page.addInitScript(value => { window.__TOPOSYNC_PUBLIC_BASE_PATH__ = value; }, prefix);
+  const forwarded = [];
+  await page.route(`**${prefix}/**`, async route => {
+    const url = new URL(route.request().url());
+    forwarded.push(url.pathname);
+    url.pathname = url.pathname.slice(prefix.length) || "/";
+    await route.continue({ url: url.href });
+  });
+  await page.goto(`${prefix}/`);
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByText("Câmera simulada", { exact: true }).dblclick();
+  await page.getByRole("button", { name: "Map in composition", exact: true }).click();
+  const wizard = page.getByTestId("camera-panorama-mapping");
+  const image = wizard.getByRole("img", { name: "Captured camera panorama", exact: true });
+  await expect(image).toHaveJSProperty("naturalWidth", 1024);
+  await expect(image).toHaveAttribute("src", new RegExp(`^${prefix}/api/`));
+  const known = await fixture(request);
+  await focusCamera(wizard);
+  await enterPoint(wizard, known.points[0]);
+  await savePoint(page, wizard);
+  expect((await currentJob(request)).points).toHaveLength(1);
+  expect(forwarded.some(url => url.endsWith("/points"))).toBe(true);
+  expect(forwarded.some(url => url.endsWith("/images/panorama.png"))).toBe(true);
+  const fitted = await seedPoints(request, known.points);
+  expect((await request.post(`${backend}${panoramaPath}/${fitted.id}/activate`, { data: { revision: fitted.revision } })).ok()).toBeTruthy();
+  await page.reload();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByText("Câmera simulada", { exact: true }).dblclick();
+  await page.getByRole("button", { name: "View mapping", exact: true }).click();
+  await wizard.locator("summary").filter({ hasText: /^See details$/ }).click();
+  await wizard.getByRole("button", { name: "Prepare this source’s panorama", exact: true }).click();
+  expect(new URL(page.url()).pathname).toBe(`${prefix}/settings`);
+  await expect(page.getByTestId("camera-source-panorama")).toBeVisible();
+  await page.getByRole("button", { name: "Return to composition", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Edit: Câmera simulada", exact: true })).toBeVisible();
+  expect(new URL(page.url()).pathname).toBe(`${prefix}/`);
+  expect((await fixture(request)).commands).toHaveLength(0);
+});
+
+test("an incompatible source exposes preserved pairs as read-only history", async ({ page, request }) => {
+  const known = await fixture(request);
+  const created = await request.post(`${backend}${panoramaPath}`, { data: { element_id: elementId, source_id: known.source_id, source_artifact_id: known.source_artifact_id, source_artifact_revision: known.source_artifact_revision } });
+  const job = await created.json();
+  expect((await request.put(`${backend}${panoramaPath}/${job.id}/points`, { data: { revision: job.revision, points: known.points.slice(0, 1) } })).ok()).toBeTruthy();
+  await page.route(`**${panoramaPath}?*`, async route => {
+    const response = await route.fetch();
+    const context = await response.json();
+    context.blockers = ["camera_configuration_changed"];
+    context.sources.forEach(source => { if (source.panorama) source.panorama = { id: source.panorama.id, compatible: false, blockers: context.blockers }; });
+    await route.fulfill({ response, json: context });
+  });
+  const writes = [];
+  page.on("request", request => { if (["POST", "PUT", "PATCH"].includes(request.method()) && request.url().includes("/panorama")) writes.push(request.url()); });
+  await openCameraEditor(page);
+  await page.getByRole("button", { name: "Continue mapping", exact: true }).click();
+  const wizard = page.getByTestId("camera-panorama-mapping");
+  await wizard.locator("summary").filter({ hasText: /^Preserved points \(1\)$/ }).click();
+  await expect(wizard.getByText(/These saved pairs are read-only/)).toBeVisible();
+  await expect(wizard.locator("li")).toContainText("Adjustment");
+  await expect(wizard.locator(".cameraPanoramaViews")).toHaveCount(0);
+  expect((await currentJob(request)).points).toEqual(known.points.slice(0, 1));
+  expect(writes).toEqual([]);
+  await screenshot(page, "state-preserved-pairs");
+});
+
+test.describe("Touch mapping", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+  test("touch and keyboard explore approximate fits without creating points", async ({ page, request }) => {
+    const known = await fixture(request);
+    await seedLegacyPanorama(request);
+    const pairs = known.points.map(point => ({ ...point, panorama: { ...point.panorama } }));
+    pairs[6].panorama.y += .04;
+    const seeded = await seedPoints(request, pairs);
+    const wizard = await openWizard(page);
+    if (await wizard.getByRole("button", {name: "Finish adjustment", exact: true}).isVisible()) await wizard.getByRole("button", {name: "Finish adjustment", exact: true}).tap();
+    await focusCamera(wizard);
+    const image = wizard.locator(".cameraPanoramaImageContent");
+    const canvas = planPanel(wizard).locator("canvas");
+    await image.tap({ position: await imagePosition(wizard, known.points[6].panorama) });
+    await expect(canvas).toHaveAttribute("data-panorama-ghost-world", /./);
+    await canvas.tap({ position: await planPosition(wizard, known.points[6].world) });
+    await expect(wizard.getByTestId("panorama-ghost")).toBeVisible();
+    await expect(wizard.getByTestId("plan-probe")).toBeVisible();
+    await planPanel(wizard).press("ArrowRight");
+    await expect(wizard.getByTestId("panorama-ghost")).toBeVisible();
+    await planPanel(wizard).press("Escape");
+    await expect(wizard.getByTestId("panorama-ghost")).toHaveCount(0);
+    await checkLayout(wizard, 390);
+    expect((await currentJob(request)).revision).toBe(seeded.revision);
+    expect((await currentJob(request)).points).toEqual(seeded.points);
+    await screenshot(page, "ghost-touch-inspection");
+  });
+  test("completes four pairs with one confirmation and keeps review read-only", async ({ page, request }) => {
+    const known = await fixture(request);
+    await page.addInitScript(() => localStorage.setItem("toposync.locale", "pt-BR"));
+    await page.goto("/");
+    await page.getByRole("button", { name: "Editar", exact: true }).tap();
+    const tools = page.getByRole("button", { name: /^Ferramentas e camadas:/ });
+    if (await tools.getAttribute("aria-expanded") === "false") await tools.tap();
+    await page.getByRole("button", { name: /^Câmera simulada/ }).tap();
+    await page.getByRole("button", { name: "Editar Câmera simulada", exact: true }).tap();
+    await page.getByRole("button", { name: "Mapear na composição", exact: true }).tap();
+    const wizard = page.getByTestId("camera-panorama-mapping");
+    const imagePanel = wizard.getByRole("group", { name: /^Panorâmica: use/ });
+    const worldPanel = wizard.getByRole("group", { name: /^Composição: use/ });
+    const image = imagePanel.locator("img");
+    const confirm = wizard.getByRole("button", { name: "Confirmar par", exact: true });
+    const client = await page.context().newCDPSession(page);
+    const drag = async (x, y, dx, dy) => {
+      await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+      for (let step = 1; step <= 8; step++) await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + dx * step / 8, y: y + dy * step / 8 }] });
+      await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    };
+    const fullyVisible = async locator => {
+      expect(await locator.evaluate(element => {
+        const rectangle = element.getBoundingClientRect();
+        let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+        for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+          const style = getComputedStyle(parent);
+          if (/(auto|scroll|hidden|clip)/.test(style.overflowY + style.overflowX)) {
+            const bounds = parent.getBoundingClientRect();
+            left = Math.max(left, bounds.left); top = Math.max(top, bounds.top);
+            right = Math.min(right, bounds.right); bottom = Math.min(bottom, bounds.bottom);
+          }
+        }
+        return rectangle.left >= left - 1 && rectangle.top >= top - 1 && rectangle.right <= right + 1 && rectangle.bottom <= bottom + 1;
+      })).toBe(true);
+    };
+    await expect(imagePanel).toBeVisible();
+    await expect(worldPanel).toBeVisible();
+    await imagePanel.scrollIntoViewIfNeeded();
+    const untouched = await browserDraft(page);
+    const initialPanel = await imagePanel.boundingBox();
+    const touchA = { x: initialPanel.x + 100, y: initialPanel.y + 100 };
+    const touchB = { x: initialPanel.x + 180, y: initialPanel.y + 100 };
+    await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [touchA] });
+    await client.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
+    await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [touchA, touchB] });
+    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ ...touchA, x: touchA.x - 10 }, { ...touchB, x: touchB.x + 10 }] });
+    await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    expect((await browserDraft(page))?.drafts).toEqual(untouched?.drafts);
+    await worldPanel.scrollIntoViewIfNeeded();
+    await wizard.getByRole("button", { name: "Composição inteira", exact: true }).tap();
+    await wizard.getByRole("button", { name: "Focar câmera", exact: true }).tap();
+    await worldPanel.scrollIntoViewIfNeeded();
+    const canvas = worldPanel.locator("canvas");
+    let bounds = await canvas.boundingBox();
+    const initialPlanScale = Math.max(4, (Math.min(bounds.width, bounds.height) - 32) / 24);
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    await page.mouse.wheel(0, -420 * Math.log2(34 / initialPlanScale));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const planScale = 34;
+    // Two short touch pans centre x=5; neither may produce a point.
+    await drag(bounds.x + bounds.width * .75, bounds.y + bounds.height / 2, -2.5 * planScale, 0);
+    await drag(bounds.x + bounds.width * .75, bounds.y + bounds.height / 2, -2.5 * planScale, 0);
+    expect((await browserDraft(page))?.drafts?.[0]?.world ?? null).toBeNull();
+    let planCenter = { x: 5, z: 0 };
+    const visibleBounds = locator => locator.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      let left = rect.left, top = rect.top, right = rect.right, bottom = rect.bottom;
+      for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent), bounds = parent.getBoundingClientRect();
+        if (/(auto|scroll|hidden|clip)/.test(style.overflowY + style.overflowX)) {
+          left = Math.max(left, bounds.left); top = Math.max(top, bounds.top);
+          right = Math.min(right, bounds.right); bottom = Math.min(bottom, bounds.bottom);
+        }
+      }
+      const header = element.closest(".cameraPanoramaView").querySelector(".cameraPanoramaViewHeader").getBoundingClientRect();
+      top = Math.max(top, header.bottom);
+      return { x: left, y: top, width: right - left, height: bottom - top };
+    });
+    for (let index = 0; index < 4; index++) {
+      const point = known.points[index];
+      await wizard.getByRole("button", {name: "Adicionar ponto", exact: true}).tap();
+      await imagePanel.scrollIntoViewIfNeeded();
+      // Use visible navigation controls, then touch-pan the reference into view.
+      if (index === 0) for (let zoom = 0; zoom < 4; zoom++) await wizard.getByRole("button", { name: "Ampliar imagem", exact: true }).tap();
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const img = await image.boundingBox();
+        const panel = await visibleBounds(imagePanel);
+        const x = img.x + point.panorama.x * img.width, y = img.y + point.panorama.y * img.height;
+        const covered = await wizard.locator("button.cameraPanoramaMarker").evaluateAll((markers, point) => markers.some(marker => {
+          const r = marker.getBoundingClientRect(); return r.width && point.x >= r.left && point.x <= r.right && point.y >= r.top && point.y <= r.bottom;
+        }), { x, y });
+        if (x > panel.x + 25 && x < panel.x + panel.width - 25 && y > panel.y + 25 && y < panel.y + panel.height - 25 && !covered) {
+          await page.touchscreen.tap(x, y); break;
+        }
+        if (covered) await wizard.getByRole("button", { name: "Ampliar imagem", exact: true }).tap();
+        else await drag(panel.x + panel.width / 2, panel.y + panel.height / 2, Math.max(-100, Math.min(100, panel.x + panel.width / 2 - x)), Math.max(-80, Math.min(80, panel.y + panel.height / 2 - y)));
+      }
+      await expect(confirm).toBeDisabled();
+      await confirm.scrollIntoViewIfNeeded();
+      await fullyVisible(confirm);
+      await worldPanel.scrollIntoViewIfNeeded();
+      bounds = await canvas.boundingBox();
+      const visiblePlan = await visibleBounds(worldPanel);
+      const centre = { x: visiblePlan.x + visiblePlan.width / 2, y: visiblePlan.y + visiblePlan.height / 2 };
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const x = bounds.x + bounds.width / 2 + (point.world.x - planCenter.x) * planScale;
+        const y = bounds.y + bounds.height / 2 + (point.world.z - planCenter.z) * planScale;
+        const dx = Math.max(-80, Math.min(80, centre.x - x));
+        const dy = Math.max(-40, Math.min(40, centre.y - y));
+        if (Math.hypot(dx, dy) < 1) break;
+        await drag(centre.x, centre.y, dx, dy);
+        planCenter = { x: planCenter.x - dx / planScale, z: planCenter.z - dy / planScale };
+      }
+      await page.touchscreen.tap(centre.x, centre.y);
+      await expect(confirm).toBeEnabled();
+      await confirm.scrollIntoViewIfNeeded();
+      await fullyVisible(confirm);
+      if (index === 0) await screenshot(page, "touch-390-first-pair");
+      const saved = page.waitForResponse(response => response.url().endsWith("/points") && response.request().method() === "PUT");
+      await confirm.tap();
+      expect((await saved).ok()).toBeTruthy();
+    }
+    const activate = wizard.getByRole("button", { name: "Usar este mapeamento", exact: true });
+    await expect(activate).toBeEnabled();
+    const before = await currentJob(request);
+    expect(before.points).toHaveLength(4);
+    await canvas.tap({ position: { x: 80, y: 100 } });
+    expect((await currentJob(request)).revision).toBe(before.revision);
+    await screenshot(page, "touch-390-review");
+    await activate.tap();
+    await expect(wizard.getByRole("button", { name: "Editar pontos", exact: true })).toBeVisible();
+    const active = await currentJob(request);
+    expect(active.active).toBe(true);
+    expect(active.points).toEqual(before.points);
+    expect((await fixture(request)).commands).toEqual([]);
+    await screenshot(page, "touch-390-active");
+    for (const [width, height] of [[1440, 900], [1280, 720]]) {
+      await page.setViewportSize({ width, height });
+      await fullyVisible(wizard.getByRole("button", { name: "Voltar às opções da câmera", exact: true }));
+      await screenshot(page, `mapping-active-pt-${width}`);
+    }
+    await wizard.getByRole("button", { name: "Voltar às opções da câmera", exact: true }).tap();
+    await page.getByRole("button", { name: "Ver mapeamento", exact: true }).tap();
+    await expect(wizard.getByRole("button", { name: "Editar pontos", exact: true })).toBeVisible();
+    expect((await currentJob(request)).points).toEqual(active.points);
+    await client.detach();
+  });
+});
+
+test("incompatible quick references explain recovery and disabled controls do not animate", async ({ page, request }) => {
+  await page.route(`**${panoramaPath}/native-reference?*`, route => route.fulfill({ status: 409, json: { detail: { code: "source_panorama_changed", message: "Changed" } } }));
+  await page.goto(`/settings?panel=com.toposync.cameras&camera_id=${cameraId}&source_id=synthetic-wide`);
+  const section = page.getByTestId("panorama-native-references");
+  await expect(section).toBeVisible();
+  await section.locator("summary").click();
+  await expect(section).toContainText("no longer matches the current camera configuration");
+  await expect(section).not.toContainText("Wait for connection recovery");
+  const button = section.getByRole("button", { name: "Prepare current position", exact: true });
+  await expect(button).toBeDisabled();
+  await button.hover({ force: true });
+  const before = await button.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { cursor: style.cursor, opacity: Number(style.opacity), transform: style.transform };
+  });
+  expect(before.cursor).toBe("not-allowed");
+  expect(before.opacity).toBeLessThan(0.7);
+  const box = await button.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  expect(await button.evaluate(element => getComputedStyle(element).transform)).toBe(before.transform);
+  await page.mouse.up();
+  expect((await fixture(request)).commands).toHaveLength(0);
+  await screenshot(page, "quick-reference-incompatible-disabled");
+});
+
+test("approximate controls permit visual acceptance and live refinement without saving", async ({ page, request }) => {
+  const known = await fixture(request);
+  await seedLegacyPanorama(request);
+  const pairs = known.points.map(point => ({ ...point, panorama: { ...point.panorama } }));
+  pairs[0].panorama.y += .02;
+  const seeded = await seedPoints(request, pairs);
+  expect(seeded.solution.preview.eligible).toBe(true);
+  expect(seeded.solution.quality.warnings).toContain("approximate_fit");
+  const wizard = await openWizard(page);
+  await focusCamera(wizard);
+  const canvas = planPanel(wizard).locator("canvas");
+  const commands = (await fixture(request)).commands.length;
+  await wizard.locator(".cameraPanoramaImageContent").click({ position: await imagePosition(wizard, known.points[6].panorama) });
+  await expect(canvas).toHaveAttribute("data-panorama-ghost-world", /./);
+  const before = await canvas.getAttribute("data-panorama-ghost-world");
+  await pointButton(wizard, 1).click();
+  const previewResponse = page.waitForResponse(response => response.url().endsWith("/preview"));
+  await markPlan(wizard, { x: 3.4, z: -3 });
+  expect((await previewResponse).ok()).toBe(true);
+  await expect(canvas).not.toHaveAttribute("data-panorama-ghost-world", before);
+  expect((await currentJob(request)).revision).toBe(seeded.revision);
+  expect((await currentJob(request)).points).toEqual(seeded.points);
+  await expect(wizard.getByRole("button", { name: "Use this mapping", exact: true })).toBeEnabled();
+  await wizard.getByRole("button", { name: "Use this mapping", exact: true }).click();
+  await expect.poll(async () => (await currentJob(request)).active).toBe(true);
+  expect((await currentJob(request)).revision).toBe(seeded.revision + 1);
+  expect((await fixture(request)).commands).toHaveLength(commands);
+  await screenshot(page, "visual-acceptance-refinement");
+});
+
+test("review preserves incomplete drafts and approximate fits can be accepted", async ({ page, request }) => {
+  const known = await fixture(request);
+  let wizard = await openWizard(page);
+  await expect(pointNavigation(wizard)).toBeVisible();
+  await expect(wizard.locator(".cameraPanoramaView")).toHaveCount(2);
+  await expect(wizard.getByRole("button", {name: "Show both", exact: true})).toHaveCount(0);
+  await markImage(wizard, known.points[0].panorama);
+  const initial = await browserDraft(page);
+  await wizard.getByRole("button", { name: "Add point", exact: true }).click();
+  await wizard.getByRole("button", { name: "Remove place 2", exact: true }).click();
+  await expect(pointButton(wizard, 2)).toHaveCount(0);
+  expect((await browserDraft(page)).drafts[0]).toEqual(initial.drafts[0]);
+  const activate = wizard.getByRole("button", { name: "Use this mapping", exact: true });
+  await expect(activate).toBeDisabled();
+  await expect(activate).toHaveAttribute("aria-describedby", "panorama-activation-status");
+  expect(await activate.evaluate(button => getComputedStyle(button).cursor)).toBe("not-allowed");
+  expect(Number(await activate.evaluate(button => getComputedStyle(button).opacity))).toBeLessThan(.6);
+  expect((await browserDraft(page)).drafts[0]).toEqual(initial.drafts[0]);
+  const pairs = known.points.map(point => ({ ...point, panorama: { ...point.panorama } }));
+  pairs[6].panorama.y += .04;
+  pairs[7].panorama.y += .03;
+  const blocked = await seedPoints(request, pairs);
+  expect(blocked.solution.quality.warnings).toContain("approximate_fit");
+  await page.evaluate(key => localStorage.removeItem(key), draftKey);
+  wizard = await openWizard(page);
+  await expect(pointButton(wizard, 7, "check").locator(".cameraPanoramaPairState")).toHaveAttribute("aria-label", "Approximate fit — explore the result");
+  await expect(pointButton(wizard, 1)).not.toContainText("✓");
+  await expect(wizard.getByRole("button", { name: "Use this mapping", exact: true })).toBeEnabled();
+  await wizard.locator(".cameraPanoramaDiagnostics summary").click();
+  await expect(wizard.locator(".cameraPanoramaDiagnostics")).toContainText("Angular difference:");
+
+  await screenshot(page, "mapping-blocked-actionable-diagnostic");
+  await wizard.locator(".cameraPanoramaDiagnostics").getByRole("button", { name: "Adjust place 7", exact: true }).click();
+  await expect(pointButton(wizard, 7, "check")).toHaveAttribute("aria-pressed", "true");
+  await expect(wizard.getByTestId("panorama-ghost")).toHaveCount(0);
+  expect((await fixture(request)).commands).toEqual([]);
+});
+
+test("composition rotation preserves marking coordinates and review preserves navigation", async ({ page, request }) => {
+  const known = await fixture(request);
+  const wizard = await openWizard(page);
+  await focusCamera(wizard);
+  await wizard.getByRole("button", { name: "Enlarge image", exact: true }).click();
+  const center = await panoramaCenter(wizard);
+  const zoom = await wizard.locator(".cameraPanoramaViewHeader").first().textContent();
+  const original = await currentJob(request);
+  const canvas = planPanel(wizard).locator("canvas");
+  const world = { x: 5.8, z: 1.2 };
+  for (const rotation of [90, 180, 270, 0]) {
+    const before = await browserDraft(page);
+    await wizard.getByRole("button", { name: "Rotate composition by 90 degrees", exact: true }).click();
+    expect((await browserDraft(page)).drafts).toEqual(before.drafts);
+    await canvas.click({ position: await planPosition(wizard, world, rotation) });
+    const marked = (await browserDraft(page)).drafts[0].world;
+    expect(marked.x).toBeCloseTo(world.x, 1);
+    expect(marked.z).toBeCloseTo(world.z, 1);
+    await planPanel(wizard).focus();
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("Enter");
+    const keyboard = (await browserDraft(page)).drafts[0].world;
+    expect(keyboard.x).toBeCloseTo(world.x, 1);
+    expect(keyboard.z).toBeCloseTo(world.z, 1);
+  }
+  const returned = await panoramaCenter(wizard);
+  expect(returned.x).toBeCloseTo(center.x, 6);
+  expect(returned.y).toBeCloseTo(center.y, 6);
+  expect(await wizard.locator(".cameraPanoramaViewHeader").first().textContent()).toBe(zoom);
+  expect((await currentJob(request)).revision).toBe(original.revision);
+  expect((await fixture(request)).commands).toEqual([]);
+});
+
+test("fourth unsaved pair starts ghosts, pinned probes survive navigation and incomplete additions", async ({ page, request }) => {
+  const known = await fixture(request);
+  await seedLegacyPanorama(request);
+  const saved = await seedPoints(request, known.points.slice(0, 3));
+  const wizard = await openWizard(page);
+  await focusCamera(wizard);
+  await enterPoint(wizard, known.points[3]);
+  await expect(wizard.getByTestId("panorama-preview-status")).toHaveText("Move the pointer or tap to compare the two views");
+  await wizard.getByRole("button", { name: "Finish adjustment", exact: true }).click();
+  const canvas = planPanel(wizard).locator("canvas");
+  await wizard.locator(".cameraPanoramaImageContent").click({ position: await imagePosition(wizard, known.points[6].panorama) });
+  await pointNavigation(wizard).hover();
+  await expect(canvas).toHaveAttribute("data-panorama-ghost-world", /./);
+  await expect(wizard.getByTestId("plan-probe")).toBeVisible();
+  const pinned = await canvas.getAttribute("data-panorama-ghost-world");
+  const requests = [];
+  page.on("request", request => { if (/\/(preview|points)$/.test(new URL(request.url()).pathname)) requests.push(request.url()); });
+  for (let turn = 0; turn < 4; turn++) {
+    await wizard.getByRole("button", { name: "Rotate composition by 90 degrees", exact: true }).click();
+    await expect(canvas).toHaveAttribute("data-panorama-ghost-world", pinned);
+  }
+  await wizard.getByRole("button", { name: "Enlarge image", exact: true }).click();
+  await expect(canvas).toHaveAttribute("data-panorama-ghost-world", pinned);
+  await wizard.getByRole("button", { name: "Add point", exact: true }).click();
+  await expect(canvas).toHaveAttribute("data-panorama-ghost-world", pinned);
+  await wizard.getByRole("button", { name: "Remove place 5", exact: true }).click();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  expect(await wizard.getByTestId("plan-probe").evaluate(element => getComputedStyle(element, "::before").animationName)).toBe("none");
+  expect(requests).toEqual([]);
+  expect((await currentJob(request)).revision).toBe(saved.revision);
+  expect((await currentJob(request)).points).toEqual(saved.points);
+  await screenshot(page, "fourth-unsaved-persistent-probe");
+});
+
+test("live preview serializes requests, rejects stale results and recovers after failure", async ({ page, request }) => {
+  const known = await fixture(request);
+  await seedLegacyPanorama(request);
+  const saved = await seedPoints(request, known.points.slice(0, 4));
+  const wizard = await openWizard(page);
+  await focusCamera(wizard);
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  let calls = 0;
+  let started;
+  const firstStarted = new Promise(resolve => { started = resolve; });
+  await page.route("**/panorama/*/preview", async route => {
+    calls++;
+    if (calls === 1) {
+      const response = await route.fetch();
+      started();
+      await held;
+      await route.fulfill({ response });
+    } else await route.fulfill({ status: 503, contentType: "application/json", body: '{"detail":"Synthetic preview failure"}' });
+  });
+  await pointButton(wizard, 1).click();
+  await markPlan(wizard, { x: 3, z: -3 });
+  await firstStarted;
+  await markPlan(wizard, { x: 3.5, z: -3 });
+  // Wait past the debounce using a rendered state, then verify only the held request exists.
+  await expect(wizard.getByTestId("panorama-preview-status")).toContainText("Updating");
+  await page.waitForTimeout(350);
+  expect(calls).toBe(1);
+  release();
+  await expect(wizard.getByTestId("panorama-preview-status")).toContainText("Could not update");
+  expect(calls).toBe(2);
+  expect((await currentJob(request)).points).toEqual(saved.points);
+  await expect(wizard.getByTestId("panorama-ghost")).toHaveCount(0);
+  await page.unroute("**/panorama/*/preview");
+  const response = page.waitForResponse(response => response.url().endsWith("/preview"));
+  await markPlan(wizard, { x: 3.2, z: -3 });
+  expect((await response).ok()).toBe(true);
+  await wizard.locator(".cameraPanoramaImageContent").hover({ position: await imagePosition(wizard, known.points[6].panorama) });
+  await expect(planPanel(wizard).locator("canvas")).toHaveAttribute("data-panorama-ghost-world", /./);
+  expect((await currentJob(request)).revision).toBe(saved.revision);
+});
+
+test("hover shows the actual composition target and leaves both viewport rectangles stable", async ({ page, request }) => {
+  const known = await fixture(request);
+  await seedLegacyPanorama(request);
+  await seedPoints(request, known.points.slice(0, 6));
+  const wizard = await openWizard(page);
+  await focusCamera(wizard);
+  const canvas = planPanel(wizard).locator("canvas");
+  const probe = wizard.getByTestId("plan-probe");
+  const rectangles = () => wizard.locator(".cameraPanoramaViewport").evaluateAll(elements => elements.map(element => {
+    const {x, y, width, height} = element.getBoundingClientRect(); return {x, y, width, height};
+  }));
+  const baseline = await rectangles();
+  for (const point of known.points.slice(6)) {
+    const position = await planPosition(wizard, point.world);
+    await wizard.locator(".cameraPanoramaImageContent").hover({position: await imagePosition(wizard, point.panorama)});
+    await expect(probe).toBeVisible();
+    const panel = await canvas.boundingBox();
+    await expect.poll(async () => {
+      const marker = await probe.boundingBox();
+      return marker ? Math.hypot(marker.x + marker.width / 2 - panel.x - position.x, marker.y + marker.height / 2 - panel.y - position.y) : Infinity;
+    }).toBeLessThan(3);
+    expect(await rectangles()).toEqual(baseline);
+    const clip = await probe.boundingBox();
+    const shown = await page.screenshot({clip, animations: "disabled"});
+    await pointNavigation(wizard).hover();
+    await expect(probe).toBeHidden();
+    const hidden = await page.screenshot({clip, animations: "disabled"});
+    const changedPixels = await page.evaluate(async ([shown, hidden]) => {
+      const decode = async encoded => {
+        const image = new Image(); image.src = `data:image/png;base64,${encoded}`; await image.decode();
+        const canvas = document.createElement("canvas"); canvas.width = image.width; canvas.height = image.height;
+        const context = canvas.getContext("2d"); context.drawImage(image, 0, 0);
+        return context.getImageData(0, 0, image.width, image.height).data;
+      };
+      const [left, right] = await Promise.all([decode(shown), decode(hidden)]);
+      let changed = 0;
+      for (let index = 0; index < left.length; index += 4) {
+        if (Math.abs(left[index]-right[index])+Math.abs(left[index+1]-right[index+1])+Math.abs(left[index+2]-right[index+2]) > 50) changed++;
+      }
+      return changed;
+    }, [shown.toString("base64"), hidden.toString("base64")]);
+    expect(changedPixels, "The target must be painted above the composition, not merely present in the DOM").toBeGreaterThan(60);
+  }
+});
+
+test("continuous mapping keeps both views stable and centres only a pinned target without changing scale", async ({ page, request }) => {
+  const known = await fixture(request);
+  await seedLegacyPanorama(request);
+  const saved = await seedPoints(request, known.points.slice(0, 6));
+  const wizard = await openWizard(page);
+  await focusCamera(wizard);
+  await expect(wizard.locator('.cameraPanoramaStages, .cameraPanoramaViewSwitch')).toHaveCount(0);
+  await expect(wizard.locator('.cameraPanoramaView')).toHaveCount(2);
+  await expect(wizard.getByRole('button', {name: 'Use this mapping', exact: true})).toBeEnabled();
+  const centerImage = wizard.getByRole('button', {name: 'Center target in panorama', exact: true});
+  const centerPlan = wizard.getByRole('button', {name: 'Center target in composition', exact: true});
+  await expect(centerImage).toBeDisabled();
+  await expect(centerPlan).toBeDisabled();
+  const image = wizard.locator('.cameraPanoramaImageContent');
+  const canvas = planPanel(wizard).locator('canvas');
+  const probe = wizard.getByTestId('plan-probe');
+  const point = known.points[6];
+  const neighbour = known.points[7];
+  const markerPosition = async () => {
+    const marker = await probe.boundingBox();
+    const panel = await canvas.boundingBox();
+    return {x: marker.x + marker.width / 2 - panel.x, y: marker.y + marker.height / 2 - panel.y};
+  };
+  await image.hover({position: await imagePosition(wizard, point.panorama)});
+  await expect(probe).toBeVisible();
+  await expect(centerPlan).toBeDisabled(); // Hover is never a navigation instruction.
+  const first = await markerPosition();
+  await image.hover({position: await imagePosition(wizard, neighbour.panorama)});
+  await expect.poll(async () => Math.hypot((await markerPosition()).x - first.x, (await markerPosition()).y - first.y)).toBeGreaterThan(5);
+  const second = await markerPosition();
+  await image.click({position: await imagePosition(wizard, point.panorama)});
+  await expect(centerPlan).toBeEnabled();
+  const imageBefore = await panoramaCenter(wizard);
+  const bounds = await canvas.boundingBox();
+  for (let index = 0; index < 4; index++) {
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + bounds.width / 2 - 120, bounds.y + bounds.height / 2, {steps: 4});
+    await page.mouse.up();
+  }
+  await pointNavigation(wizard).hover();
+  await expect(wizard.getByTestId('panorama-preview-status')).toContainText('Target outside');
+  const geometry = () => wizard.locator('.cameraPanoramaViewport, .cameraPanoramaFooter').evaluateAll(elements => elements.map(element => {
+    const {x,y,width,height}=element.getBoundingClientRect();
+    return {x,y,width,height,scrollWidth:element.scrollWidth,scrollHeight:element.scrollHeight};
+  }));
+  const before = await geometry();
+  for (const location of [point.panorama, neighbour.panorama, {x:.5,y:.1}, point.panorama]) {
+    const target = await imagePosition(wizard, location);
+    const imageBounds = await image.boundingBox();
+    const view = await panoramaPanel(wizard).boundingBox();
+    // Move within the visible image without automatic locator scrolling.
+    const x = Math.max(view.x + 10, Math.min(view.x + view.width - 10, imageBounds.x + target.x));
+    const y = Math.max(view.y + 10, Math.min(view.y + view.height - 10, imageBounds.y + target.y));
+    await page.mouse.move(x, y);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(await geometry()).toEqual(before);
+  }
+  await centerPlan.click();
+  await expect.poll(async () => {const p=await markerPosition();return Math.hypot(p.x-bounds.width/2,p.y-bounds.height/2);}).toBeLessThan(1);
+  expect(await panoramaCenter(wizard)).toEqual(imageBefore);
+  await image.hover({position: await imagePosition(wizard, neighbour.panorama)});
+  await expect.poll(async () => {const p=await markerPosition(); return Math.hypot(p.x-bounds.width/2-(second.x-first.x),p.y-bounds.height/2-(second.y-first.y));}).toBeLessThan(2);
+  // A second centring request after another pan works even with the same target.
+  await page.mouse.move(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
+  await page.mouse.down(); await page.mouse.move(bounds.x+bounds.width/2+50,bounds.y+bounds.height/2,{steps:4}); await page.mouse.up();
+  await centerPlan.click();
+  await expect.poll(async () => {const p=await markerPosition();return Math.hypot(p.x-bounds.width/2,p.y-bounds.height/2);}).toBeLessThan(1);
+  expect((await currentJob(request)).revision).toBe(saved.revision);
+  await screenshot(page,'continuous-mapping-pinned-target');
+});
+
+test("two-digit place controls stay centred and responsive without decorative saved dots", async ({ page, request }) => {
+  await seedLegacyPanorama(request);
+  const points = Array.from({length:12}, (_, index) => {
+    const world = {x:3 + index % 4, z:-3 + Math.floor(index / 4) * 3};
+    return {id:`place-${index+1}`,world,panorama:{x:(Math.atan2(world.z,world.x)/Math.PI+1)/2,y:.5-Math.atan2(-3,Math.hypot(world.x,world.z))/Math.PI}};
+  });
+  await seedPoints(request,points);
+  const wizard=await openWizard(page);
+  const number=pointButton(wizard,12).locator('.cameraPanoramaPairNumber');
+  await number.scrollIntoViewIfNeeded();
+  await expect(number).toHaveText('12');
+  expect(await number.evaluate(element=>Number(getComputedStyle(element).fontWeight))).toBeGreaterThanOrEqual(700);
+  await expect(pointButton(wizard,12).locator('.cameraPanoramaPairState')).toHaveCount(0);
+  const centre=await number.evaluate(element=>{const label=element.getBoundingClientRect(),button=element.parentElement.getBoundingClientRect();return Math.hypot(label.x+label.width/2-button.x-button.width/2,label.y+label.height/2-button.y-button.height/2);});
+  expect(centre).toBeLessThan(1);
+  for(const width of [390,320]) {
+    await page.setViewportSize({width,height:844});
+    await number.scrollIntoViewIfNeeded();
+    await checkLayout(wizard,width);
+    const footer=await wizard.locator('.cameraPanoramaFooter').boundingBox();
+    const content=await wizard.boundingBox();
+    expect(footer.width).toBeCloseTo(content.width,0);
+    await screenshot(page,`continuous-mapping-twelve-places-${width}`);
+  }
+});
+
+async function openSettingsMapping(page, request) {
+  const composition = await (await request.get(`${backend}/api/composition`)).json();
+  await page.goto(`/settings?panel=com.toposync.cameras&camera_id=${cameraId}`);
+  return page.getByRole("button", { name: `Map camera in composition ${composition.name}`, exact: true });
+}
+
+test("camera settings shortcut opens mapping once and preserves saved pairs without camera commands", async ({ page, request }) => {
+  const known = await fixture(request);
+  const mapping = await openSettingsMapping(page, request);
+  await mapping.focus();
+  await page.keyboard.press("Enter");
+  const wizard = page.getByTestId("camera-panorama-mapping");
+  await expect(wizard).toBeVisible();
+  await expect(wizard.getByRole("img", { name: "Captured camera panorama", exact: true })).toBeVisible();
+  await wizard.getByRole("button", { name: "Add point", exact: true }).click();
+  await enterPoint(wizard, known.points[0]);
+  await savePoint(page, wizard);
+  await page.keyboard.press("Escape");
+  await expect(wizard).toHaveCount(0);
+  const editor = page.getByRole("dialog", { name: "Edit: Câmera simulada", exact: true });
+  await editor.getByRole("button", { name: /^(Map in composition|Continue mapping|View mapping)$/ }).click();
+  await expect(wizard).toBeVisible();
+  await expect(wizard.locator(".cameraPanoramaPair")).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await expect(editor).toHaveCount(0);
+  await page.getByRole("button", { name: /^Câmera simulada/ }).click();
+  await page.getByRole("button", { name: "Edit Câmera simulada", exact: true }).click();
+  await expect(editor).toBeVisible();
+  await expect(wizard).toHaveCount(0);
+  expect((await fixture(request)).commands).toEqual([]);
+});
+
+test("camera settings mapping requires an explicit element choice when the camera appears twice", async ({ page, request }) => {
+  const composition = await (await request.get(`${backend}/api/composition`)).json();
+  const second = structuredClone(composition.elements.find(element => element.id === elementId));
+  second.id = "second-synthetic-camera-element";
+  second.name = "Second synthetic camera element";
+  composition.elements.push(second);
+  expect((await request.put(`${backend}/api/composition`, { data: composition })).ok()).toBeTruthy();
+  const mapping = await openSettingsMapping(page, request);
+  await expect(mapping).toBeDisabled();
+  await page.getByRole("combobox", { name: `Camera element in composition ${composition.name}`, exact: true }).selectOption(second.id);
+  await expect(mapping).toBeEnabled();
+  await mapping.click();
+  await expect(page.getByRole("dialog", { name: `Edit: ${second.name}`, exact: true })).toBeVisible();
+  await expect(page.getByTestId("camera-panorama-mapping")).toBeVisible();
+  expect((await fixture(request)).commands).toEqual([]);
+});
+
+test("camera settings mapping cancellation keeps the draft and ordinary editor navigation", async ({ page, request }) => {
+  const composition = await (await request.get(`${backend}/api/composition`)).json();
+  const mapping = await openSettingsMapping(page, request);
+  const name = page.getByTestId("camera-device-settings").locator("input.input").first();
+  await name.fill("Unsaved synthetic camera");
+  await mapping.click();
+  const confirmation = page.locator(".settingsConfirmPanel");
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(name).toHaveValue("Unsaved synthetic camera");
+  await expect(page.getByTestId("camera-panorama-mapping")).toHaveCount(0);
+  await page.getByRole("button", { name: `Open composition editor for ${composition.name}`, exact: true }).click();
+  await expect(confirmation).toBeVisible();
+  await confirmation.locator(".dangerButton").click();
+  await expect(page).not.toHaveURL(/settings/);
+  await expect(page.getByTestId("camera-panorama-mapping")).toHaveCount(0);
+  expect((await fixture(request)).commands).toEqual([]);
+});
+
+test("camera settings mapping activates the target composition before opening its element", async ({ page, request }) => {
+  const original = await (await request.get(`${backend}/api/composition`)).json();
+  const response = await request.post(`${backend}/api/compositions`, { data: { name: "Other synthetic mapping composition" } });
+  expect(response.ok()).toBeTruthy();
+  const other = await response.json();
+  try {
+    expect((await request.post(`${backend}/api/compositions/${other.id}/activate`)).ok()).toBeTruthy();
+    const second = structuredClone(original.elements.find(element => element.id === elementId));
+    second.id = "other-composition-camera-element";
+    second.name = "Camera in other composition";
+    other.elements = [second];
+    expect((await request.put(`${backend}/api/composition`, { data: other })).ok()).toBeTruthy();
+    expect((await request.post(`${backend}/api/compositions/${original.id}/activate`)).ok()).toBeTruthy();
+    await page.goto(`/settings?panel=com.toposync.cameras&camera_id=${cameraId}`);
+    await page.getByRole("button", { name: `Map camera in composition ${other.name}`, exact: true }).click();
+    await expect(page.getByRole("dialog", { name: `Edit: ${second.name}`, exact: true })).toBeVisible();
+    await expect(page.getByTestId("camera-panorama-mapping")).toBeVisible();
+    expect((await (await request.get(`${backend}/api/composition`)).json()).id).toBe(other.id);
+    expect((await fixture(request)).commands).toEqual([]);
+  } finally {
+    await request.post(`${backend}/api/compositions/${original.id}/activate`);
+    await request.delete(`${backend}/api/compositions/${other.id}`);
+  }
 });

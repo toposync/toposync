@@ -62,6 +62,8 @@ from .pipeline_templates import (
     STOPPED_DEFAULT_MIN_STATIONARY_SECONDS,
     STOPPED_DEFAULT_SPEED_THRESHOLD_MPS,
     VEHICLE_STOPPED_OBJECT_CATEGORIES,
+    PRESENCE_OBJECT_CATEGORIES,
+    build_shared_camera_detection_nodes,
     build_pipeline_graph_v2,
     build_person_vehicle_interaction_graph,
     build_cat_activity_graph,
@@ -119,6 +121,10 @@ from .onvif import (
     onvif_xaddr_candidates,
     resolve_onvif_discovery_targets,
 )
+
+
+from .onvif.capabilities import OnvifCapabilitiesCatalog
+from .onvif.recipe_optimization import CameraOnvifOptimization, RECIPE_OPTIMIZATION, add_onvif_optimization
 
 
 NotificationPriority = Literal["low", "medium", "high"]
@@ -362,6 +368,7 @@ class OnvifEventItemResponse(BaseModel):
 
 class OnvifEventDescriptorResponse(BaseModel):
     topic: str
+    qualified_topic: str = ""
     item_name: str = ""
     item_type: str = ""
     is_property: bool = False
@@ -378,6 +385,9 @@ class CameraOnvifEventsResponse(BaseModel):
     available: bool = False
     error: str = ""
     event_xaddr: str = ""
+    queried_at: float = 0
+    observation: str = "not_observed"
+    observed_states: list[dict[str, Any]] = Field(default_factory=list)
     boolean_states: list[OnvifEventDescriptorResponse] = Field(default_factory=list)
     events: list[OnvifEventDescriptorResponse] = Field(default_factory=list)
 
@@ -732,6 +742,7 @@ class AudioPeerSource(BaseModel):
 
 
 class CameraPipelinePresetRequest(BaseModel):
+    onvif_optimization: CameraOnvifOptimization | None = None
     preset: Literal[
         "audio_anomaly",
         "area_presence",
@@ -2064,6 +2075,8 @@ class CamerasExtension(BaseExtension):
                 max_value=3600.0,
             ),
         )
+        onvif_capabilities = OnvifCapabilitiesCatalog(_resolve_onvif_event_context, onvif_event_manager)
+        app.state.camera_onvif_capabilities = onvif_capabilities
         app.state.camera_onvif_event_manager = onvif_event_manager
         register_extension_shutdown_callback(app, onvif_event_manager.shutdown)
 
@@ -2075,11 +2088,15 @@ class CamerasExtension(BaseExtension):
             camera_id: str,
             topic: str,
             item_name: str,
+            qualified_topic: str = "",
+            source: dict[str, str] | None = None,
+            key: dict[str, str] | None = None,
         ) -> dict[str, Any]:
             return await onvif_event_manager.snapshot(
                 camera_id=str(camera_id or "").strip(),
                 topic=str(topic or "").strip(),
                 item_name=str(item_name or "").strip(),
+                qualified_topic=qualified_topic, source=source, key=key,
             )
 
         async def _svc_onvif_events_recent(
@@ -3925,6 +3942,33 @@ class CamerasExtension(BaseExtension):
 
             return {"cameras": cameras}
 
+        @app.get("/api/cameras/cameras/{camera_id}/onvif/capabilities")
+        async def camera_onvif_capabilities(request: Request, camera_id: str, refresh: bool = False) -> dict[str, Any]:
+            _require_auth(request, action="core:settings:read")
+            try:
+                catalog = await onvif_capabilities.inspect(camera_id, refresh=refresh)
+                return {**catalog, "recipe_optimization": RECIPE_OPTIMIZATION}
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(502, "ONVIF resources could not be consulted") from exc
+
+        @app.get("/api/cameras/cameras/{camera_id}/onvif/observation")
+        async def camera_onvif_observation(request: Request, camera_id: str, after_sequence: int = 0) -> dict[str, Any]:
+            _require_auth(request, action="core:settings:read")
+            try:
+                recent = await onvif_event_manager.recent_events(camera_id=camera_id,
+                    after_sequence=after_sequence, limit=64)
+                catalog = await onvif_event_manager.list_descriptors(camera_id)
+                return {"camera_id": camera_id, "available": recent["available"],
+                        "last_sequence": recent["last_sequence"], "gap": recent["gap"], "error": recent.get("error", ""),
+                        "session": recent.get("session"), "transport": recent.get("transport"),
+                        "events": recent["events"], "states": catalog["observed_states"]}
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(502, "ONVIF events could not be observed") from exc
+
         @app.get(
             "/api/cameras/cameras/{camera_id}/onvif/events",
             response_model=CameraOnvifEventsResponse,
@@ -3942,7 +3986,7 @@ class CamerasExtension(BaseExtension):
             except HTTPException:
                 raise
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
+                raise HTTPException(status_code=502, detail="ONVIF event catalog unavailable") from exc
             return CameraOnvifEventsResponse.model_validate(raw if isinstance(raw, dict) else {})
 
         def _normalized_host(url: str) -> str:
@@ -5093,11 +5137,13 @@ class CamerasExtension(BaseExtension):
             settings: dict[str, Any],
             job_id: str,
             output_dir: Path,
+            borrowed_control: dict[str, Any] | None = None,
         ) -> PanoramaCamera:
             return PanoramaCamera(
                 camera_id=camera_id,
                 source_id=source_id,
                 owner_id=job_id,
+                borrowed_control=borrowed_control,
                 services=services,
                 capture_service=capture_service,
                 dependencies=_capture_dependencies(),
@@ -5139,18 +5185,16 @@ class CamerasExtension(BaseExtension):
                     props = element.props if isinstance(element.props, dict) else {}
                     if str(props.get("camera_id", "")).strip() != cid:
                         continue
-                    control_point_sets = _parse_mapping_control_point_sets_from_props(props)
+                    mapping = await panorama_service.mapping_summary(
+                        camera_id=cid, composition_id=composition.id, element=element
+                    )
                     camera_elements.append(
                         {
                             "id": element.id,
                             "name": str(element.name or "").strip() or element.id,
-                            "control_points_pairs": sum(
-                                len(item.control_points) for item in control_point_sets
-                            ),
-                            "calibrated_views": len(control_point_sets),
-                            "has_mapping": any(
-                                len(item.control_points) >= 4 for item in control_point_sets
-                            ),
+                            "control_points_pairs": mapping["control_points_pairs"],
+                            "has_mapping": mapping["mapping"] == "active",
+                            "mapping": mapping,
                         }
                     )
 
@@ -5382,10 +5426,10 @@ class CamerasExtension(BaseExtension):
             for index in range(len(node_ids) - 1):
                 target_id = node_ids[index + 1]
                 drop_policy = (
-                    "block" if target_id in {"store", "notify", "notify_store"} else "drop_oldest"
+                    "block" if target_id in {"store", "store_scene", "notify", "notify_store"} else "drop_oldest"
                 )
                 maxsize = 2 if index < 2 else 8
-                if target_id == "detect":
+                if target_id in {"cadence", "detect"}:
                     maxsize = 1
                 elif target_id == "track":
                     maxsize = 32
@@ -5396,11 +5440,14 @@ class CamerasExtension(BaseExtension):
                         "to": {"node": target_id, "port": "in"},
                         "maxsize": maxsize,
                         "drop_policy": drop_policy,
+                        **({"traffic": {"modality": "video.frame", "semantic_class": "frame",
+                                        "continuous": True}}
+                           if "cadence" in {node_ids[index], target_id} else {}),
                     }
                 )
             if edges:
                 edges[-1]["maxsize"] = 16
-                if node_ids[-1] in {"store", "notify", "notify_store"}:
+                if node_ids[-1] in {"store", "store_scene", "notify", "notify_store"}:
                     edges[-1]["drop_policy"] = "block"
             return edges
 
@@ -5472,7 +5519,12 @@ class CamerasExtension(BaseExtension):
                     },
                 },
             ]
-            if preset in {"person_stopped", "vehicle_stopped"}:
+            if preset in {"presence_area", "vehicle_stopped"}:
+                base_nodes = build_shared_camera_detection_nodes(
+                    camera_id=camera_id, source_id=source_id,
+                    detection_model_id=detection_model_id,
+                )
+            elif preset == "person_stopped":
                 # A motion gate stops observing precisely when this recipe needs evidence.
                 base_nodes[1] = {
                     "id": "fps",
@@ -5500,6 +5552,8 @@ class CamerasExtension(BaseExtension):
                         "default_interval_seconds": 0.25,
                         "use_world_anchor": "auto",
                         "world_match_distance_meters": 3.0,
+                        **({"pause_when_gate_closed": False}
+                           if preset in {"presence_area", "vehicle_stopped"} else {}),
                     },
                 },
             )
@@ -5588,7 +5642,13 @@ class CamerasExtension(BaseExtension):
             }:
                 if not composition_id:
                     raise ValueError(f"composition_id is required for {preset}")
-                tail_nodes = []
+                tail_nodes = ([{
+                    "id": "classes", "operator": "core.category_gate",
+                    "config": {"mode": "include", "categories": (
+                        PRESENCE_OBJECT_CATEGORIES if preset == "presence_area"
+                        else VEHICLE_STOPPED_OBJECT_CATEGORIES
+                    )},
+                }] if preset in {"presence_area", "vehicle_stopped"} else [])
 
                 speed_threshold = STOPPED_DEFAULT_SPEED_THRESHOLD_MPS
                 if stopped_speed_threshold is not None:
@@ -5643,7 +5703,7 @@ class CamerasExtension(BaseExtension):
                                 "operator": "vision.group_events",
                                 "config": {
                                     "mode": "proximity",
-                                    "categories": ["person", "dog", "cat"],
+                                    "categories": PRESENCE_OBJECT_CATEGORIES,
                                     "idle_timeout_seconds": 30.0,
                                     "update_interval_seconds": 5.0,
                                     "use_world_anchor": "auto",
@@ -5656,11 +5716,23 @@ class CamerasExtension(BaseExtension):
                                 "operator": "core.throttle",
                                 "config": {"interval_seconds": 10.0},
                             },
-                            {"id": "crop", "operator": "vision.crop_objects", "config": {}},
+                            {
+                                "id": "crop", "operator": "vision.crop_objects",
+                                "config": {"input_artifact_name": "main", "output_artifact_name": "subject_crop",
+                                           "fallback_to_detections": False, "missing_policy": "pass_through"},
+                            },
                             {
                                 "id": "store",
                                 "operator": "core.store_images",
-                                "config": {"format": "webp"},
+                                "config": {"format": "webp", "input_artifact_name": "subject_crop", "layer_label": "Subject"},
+                            },
+                            {
+                                "id": "resize_scene", "operator": "camera.image_resize",
+                                "config": {"input_artifact_name": "main", "max_edge_px": 1920, "allow_upscale": False},
+                            },
+                            {
+                                "id": "store_scene", "operator": "core.store_images",
+                                "config": {"format": "webp", "input_artifact_name": "main", "layer_label": "Scene"},
                             },
                             {
                                 "id": "notify",
@@ -5668,10 +5740,12 @@ class CamerasExtension(BaseExtension):
                                 "config": {
                                     "notification_type": "pipelines.tracking",
                                     "title": notification_title
-                                    or "{{camera_name}}: Presence mapped",
+                                    or "{{camera_name}}: Presence detected",
                                     "description": notification_description,
                                     "priority": notification_priority,
                                     "dedupe_key_template": "{{subject.id}}",
+                                    "input_artifact_name": "subject_crop",
+                                    "include_payload_paths": ["category_summary"],
                                 },
                             },
                         ]
@@ -5940,6 +6014,62 @@ class CamerasExtension(BaseExtension):
                 raise HTTPException(status_code=409, detail="Camera source not found or disabled")
             source_id = str(source.get("id") or "").strip()
 
+            if body.onvif_optimization is not None:
+                _require_auth(request, action="core:settings:read")
+                selection = body.onvif_optimization
+                if cached_events_only:
+                    raise HTTPException(409, "Select and qualify camera detection in the camera recipe interface")
+                if preset != "people_simple":
+                    raise HTTPException(400, "This recipe requires continuous visual observation")
+                if str(body.processing_server_id or "local").strip() != "local":
+                    raise HTTPException(409, "Camera event optimization currently requires local processing")
+                if not selection.coverage_confirmed:
+                    raise HTTPException(400, "Confirm event coverage and reopening latency for this source")
+                origin = source.get("origin") if isinstance(source.get("origin"), dict) else {}
+                if origin.get("type") not in {"onvif_profile", "rtsp"} or not origin.get("profile_token"):
+                    raise HTTPException(409, "Optimization requires an exactly bound ONVIF video profile")
+                catalog = await onvif_capabilities.inspect(cid)
+                profiles = [item for item in catalog.get("profiles", []) if item.get("token") == origin["profile_token"]]
+                if len(profiles) != 1:
+                    raise HTTPException(409, "The video profile could not be confirmed")
+                profile = profiles[0]
+                if origin.get("type") == "rtsp":
+                    try:
+                        matches = await onvif_capabilities.matches_stream(cid, profile_token=origin["profile_token"],
+                                                                         rtsp_url=str(origin.get("rtsp_url") or ""),
+                                                                         binding=(origin.get("metadata") or {}).get("onvif_profile_binding")
+                                                                         if isinstance(origin.get("metadata"), dict) else None)
+                    except Exception as exc:
+                        raise HTTPException(409, "The RTSP stream and ONVIF profile could not be matched") from exc
+                    if not matches:
+                        raise HTTPException(409, "The RTSP stream does not match the selected ONVIF profile")
+                expected_sources = {"VideoSourceToken": profile.get("video_source_token"),
+                                    "VideoSourceConfigurationToken": profile.get("video_source_configuration_token")}
+                if selection.topic == "VideoSource/MotionAlarm":
+                    expected_sources["Source"] = profile.get("video_source_token")
+                source_matches = [name for name in expected_sources if name in selection.source]
+                if not source_matches or any(not expected_sources[name] or selection.source[name] != expected_sources[name]
+                                             for name in source_matches):
+                    raise HTTPException(409, "Event origin does not match the selected video source")
+                descriptors = [item for item in catalog.get("events", [])
+                               if item.get("topic") == selection.topic and item.get("qualified_topic") == selection.qualified_topic
+                               and item.get("item_name") == selection.item_name and item.get("is_property") and item.get("is_boolean")]
+                # Only explicitly understood topic paths qualify; vendor labels are not evidence of category coverage.
+                if len(descriptors) != 1 or selection.topic not in {
+                    "RuleEngine/CellMotionDetector/Motion", "VideoSource/MotionAlarm",
+                    "RuleEngine/PeopleDetector/People", "RuleEngine/PeopleDetector/Person"}:
+                    raise HTTPException(409, "This event's detection semantics are not integrated")
+                if not selection.qualified_topic.startswith("{http://www.onvif.org/ver10/topics}"):
+                    raise HTTPException(409, "Vendor-specific event semantics have not been qualified")
+                try:
+                    observed = await onvif_event_manager.snapshot(camera_id=cid, topic=selection.topic,
+                        item_name=selection.item_name, qualified_topic=selection.qualified_topic,
+                        source=selection.source, key=selection.key)
+                except Exception as exc:
+                    raise HTTPException(409, "Selected camera event is unavailable; observe it again") from exc
+                if not observed.get("known") or not observed.get("available"):
+                    raise HTTPException(409, "Observe and synchronize the selected camera event first")
+
             if body.audio_peer is not None:
                 peer = body.audio_peer
                 if peer.camera_id == cid:
@@ -6090,6 +6220,8 @@ class CamerasExtension(BaseExtension):
                     orientation_reference=body.orientation_reference.strip(),
                     observation_region=body.observation_region,
                 )
+                if body.onvif_optimization is not None:
+                    graph = add_onvif_optimization(graph, camera_id=cid, selection=body.onvif_optimization)
                 if preset == "doorbell_visitor":
                     graph = add_recent_event_to_area_graph(graph, camera_id=cid,
                         topic=body.event_topic.strip(), item_name=body.event_item_name.strip(),

@@ -549,8 +549,9 @@ def test_camera_contexts_reports_control_point_sets(
         assert len(body["compositions"]) == 1
         composition = body["compositions"][0]
         assert composition["id"] == "yard"
-        assert composition["camera_elements"][0]["control_points_pairs"] == 7
-        assert composition["camera_elements"][0]["has_mapping"] is True
+        assert composition["camera_elements"][0]["control_points_pairs"] == 0
+        assert composition["camera_elements"][0]["has_mapping"] is False
+        assert composition["camera_elements"][0]["mapping"]["mapping"] == "review_required"
         assert composition["areas"][0]["id"] == "area-1"
         assert composition["areas"][0]["name"] == "Gate"
         assert composition["areas"][0]["vertices_count"] == 3
@@ -588,7 +589,7 @@ def test_camera_ptz_routes_forward_to_services(
             return {"token": "temporary-42", "name": preset_name}
 
         async def remove_preset(
-            *, camera_id: str, preset_token: str, camera_source_id: str | None = None
+            *, camera_id: str, preset_token: str, camera_source_id: str | None = None, expected_preset_name: str | None = None
         ):
             assert camera_id == "cam1"
             assert camera_source_id == "source-main"

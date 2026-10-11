@@ -1,6 +1,39 @@
 import React, { useEffect, useState } from "react";
-import type { HostI18n } from "@toposync/plugin-api";
+import type { HostI18n, Notification } from "@toposync/plugin-api";
 import { read, type GalleryData } from "./api";
+
+export function categoryHistoryEndpoint(value: string): string {
+  if (!["person", "dog", "cat"].includes(value)) throw new Error("Invalid object category");
+  return `/api/vision/history/notifications?category=${encodeURIComponent(value)}`;
+}
+
+export function detectedCategoryCounts(notification: Notification): Array<[string, number]> {
+  const payload = notification.payload as { data?: { category_summary?: { categories?: Record<string, { member_count?: unknown }> } } } | undefined;
+  const categories = payload?.data?.category_summary?.categories;
+  return ["person", "dog", "cat"].flatMap(category => {
+    const count = categories?.[category]?.member_count;
+    return typeof count === "number" && Number.isInteger(count) && count > 0 ? [[category, count] as [string, number]] : [];
+  });
+}
+
+export function DetectedCategorySummary({ notification, i18n }: { notification: Notification; i18n: HostI18n }) {
+  const { t } = i18n.useI18n();
+  return <p>{t("ext.vision.identity.historyCategory")}: {detectedCategoryCounts(notification)
+    .map(([category, count]) => `${t(`ext.vision.identity.${category}`)}: ${count}`).join(" · ")}</p>;
+}
+
+export function CategoryHistoryFilter({ value, onChange, i18n }: {
+  value: string | null; onChange: (value: string | null) => void; i18n: HostI18n;
+}) {
+  const { t } = i18n.useI18n();
+  return <label className="notificationsFilterSection">
+    <span>{t("ext.vision.identity.historyCategory")}</span>
+    <select className="notificationsFilterSearch" value={value ?? ""} onChange={event => onChange(event.target.value || null)}>
+      <option value="">{t("ext.vision.identity.all")}</option>
+      {["person", "dog", "cat"].map(category => <option key={category} value={category}>{t(`ext.vision.identity.${category}`)}</option>)}
+    </select>
+  </label>;
+}
 
 export function historyEndpoint(value: string): string {
   const [association, identity, extra] = value.split(":");

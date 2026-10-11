@@ -1,34 +1,39 @@
 # Toposync PTZ Attention Extension
 
-First-party Toposync extension for lifecycle-aware, event-directed PTZ camera
-attention.
+First-party event-directed PTZ attention. `ptz_attention.request` sends an explicit
+semantic lifecycle to a configured profile; policy priorities arbitrate one
+physical head (`ptz_device_id == camera_id`). Wide and zoom lenses remain sources
+of that head. The operator does not detect objects or infer event relevance.
 
-It registers the `ptz_attention.request` sink operator, applies strict event
-policies per profile, arbitrates every pipeline by physical `ptz_device_id`,
-and controls cameras only through the fenced `cameras.control.*` and semantic
-`cameras.views.resolve_target` service contracts. Shadow mode records the same
-decisions without moving a camera. Runtime events remain in memory; SQLite
-persists only profiles, decisions, completed or interrupted sessions, and
-recovery-required markers.
+Panorama profiles select `source_id`, `composition_id`, `panorama_element_id`, an
+explicit `home_target` and a simple `attention_region` polygon in composition
+coordinates. The complete event envelope must stay inside the region. Image-only
+boxes and legacy preferred destinations are rejected. Resolving through
+`cameras.panorama.resolve_target` is read-only and returns a normalized ray bound
+to source, composition, element, job and revision.
 
-Each camera device is one PTZ head (`ptz_device_id == camera_id`); wide and zoom
-lenses are sources of that device. After an interrupted active session, the
-extension stays faulted and performs no automatic camera I/O until an explicit
-return-home completes with fenced ownership and a geometry-safe stable pose.
+`shadow` records decisions with zero motor commands. Optional discrete following
+uses fresh `capture_evidence`, stable capture instance/generation and increasing
+sequence/publication time to confirm target changes. Minimum dwell, movement
+budget, hard timeout and stale timeout remain active. Manual ownership interrupts
+preview and requires explicit resumption. It is not continuous motor tracking.
 
-The operator offers an opt-in preview of discrete following between calibrated
-views (`preview_follow_views`). It creates a shadow profile and never acquires
-control or sends movement commands. Mapped event updates come from perception;
-the controller does not detect objects or infer their relevance. The preview
-requires fresh `capture_evidence`, a stable capture instance and generation,
-and increasing frame sequence and publication time. A changed capture epoch
-requires a new event occurrence.
+`live_panorama` dispatches `cameras.panorama.navigate_attention` under the existing
+attention lease, without a second acquisition or new presets. Zoom stays fixed.
+Fresh visual arrival must be within 12 pixels, return within 3 pixels, with
+confirmed stop, exact destination/command/lease/fence and matching stable motion
+epoch. Cancellation drains navigation before fenced cleanup. Manual takeover
+never triggers a return. Interrupted sessions remain faulted until explicit,
+qualified recovery; process restart never guesses a movement.
 
-A changed view needs repeated observations over the confirmation interval;
-oscillation back to the current view resets the candidate. Minimum dwell,
-movement budget, maximum focus duration, and target timeout still apply. A
-cached manual-control or competing lease signal interrupts the preview and
-requires explicit resumption. Decisions and the current view expose the
-hypothetical effect. This is discrete view selection, not continuous tracking
-or evidence of physical PTZ performance. Preview and physical operators cannot
-share the same head.
+Software tests do not qualify hardware. Live attention requires an exact private
+qualification record for the mapping revision, source identity, composition,
+source artifact and geometry, with independently verified arrival and return.
+This delivery does not create that record or promote cameras automatically.
+
+Settings > PTZ Attention creates panorama profiles by default. Previous view
+profiles and direct operator configurations remain available for explicit review.
+Migrating a profile clears old destination choices in the editor; source mapping,
+region and return must be selected and saved. Existing data is not inferred or
+rewritten during reads. SQLite retains profiles, decisions, sessions and recovery
+markers; runtime events remain in memory.

@@ -27,7 +27,11 @@ async function state(request) {
 
 async function openPanorama(page) {
   await page.goto("/settings");
-  await page.getByRole("button", { name: /^Cameras\b/ }).click();
+  if (await page.locator(".settingsMobileNavigation select").isVisible()) {
+    await page.locator(".settingsMobileNavigation select").selectOption("com.toposync.cameras");
+  } else {
+    await page.getByRole("button", { name: /^Cameras\b/ }).click();
+  }
   const section = page.getByTestId("camera-source-panorama");
   await expect(section).toBeVisible();
   await section.scrollIntoViewIfNeeded();
@@ -110,7 +114,7 @@ for (const partial of [false, true]) test(`completed capture becomes the single 
   }
   await expect(section.getByRole("button", { name: "Update panorama", exact: true })).toBeVisible();
   await expect(section.getByRole("button", { name: "Current panorama", exact: true })).toHaveCount(0);
-  await expect(section.getByRole("button", { name: "New capture", exact: true })).toHaveCount(0);
+  await expect(section.getByRole("button", { name: "New panorama", exact: true })).toHaveCount(0);
   await expect(section.getByRole("list", { name: "Panorama progress", exact: true })).toHaveCount(0);
   await expect(section.getByRole("link", { name: "Download original image", exact: true })).toHaveCount(0);
 
@@ -169,7 +173,7 @@ test("a candidate replaces the current panorama only after explicit review", asy
   await expect.poll(() => finalized).toBe(1);
   await expect(section.getByText("Panorama updated.", { exact: true })).toBeVisible();
   await expect(section.getByRole("button", { name: "Current panorama", exact: true })).toHaveCount(0);
-  await expect(section.getByRole("button", { name: "New capture", exact: true })).toHaveCount(0);
+  await expect(section.getByRole("button", { name: "New panorama", exact: true })).toHaveCount(0);
 });
 
 test("zero geometry fields, background job survives navigation, saved artifact persists", async ({ page, request }) => {
@@ -227,6 +231,7 @@ test("360 crop by two corners and keyboard round-trips without camera effects", 
   await expect(section.getByRole("img", { name: "Selected useful area of the camera panorama", exact: true })).toBeVisible();
   expect((await state(request)).active.crop).toEqual(first.crop);
   expect((await fixture(request)).events).toHaveLength(effects);
+  await section.getByTestId("panorama-diagnostics").locator("summary").first().click();
   const download = page.waitForEvent("download");
   await section.getByRole("button", { name: "Download useful area", exact: true }).click();
   await fs.mkdir(evidenceDirectory, { recursive: true });
@@ -272,14 +277,14 @@ test("new partial result preserves the current complete panorama", async ({ page
   await ready(page, request);
   const initial = (await state(request)).active;
   const section = await generate(page, request, "partial");
-  await expect(section.getByRole("button", { name: "New capture", exact: true })).toBeVisible();
+  await expect(section.getByRole("button", { name: "New panorama", exact: true })).toBeVisible();
   const completed = await state(request);
   expect(completed.active.id).toBe(initial.id);
   expect(completed.candidate.id).not.toBe(initial.id);
   expect(completed.candidate.status).toBe("partial");
   await expect(section.locator('[data-complete="true"]')).toHaveCount(0);
   await expect(section.getByText("3 photographs saved", { exact: true })).toBeVisible();
-  await section.getByRole("button", { name: "New capture", exact: true }).click();
+  await section.getByRole("button", { name: "New panorama", exact: true }).click();
   await expect(section.getByText("Partial panorama. Some areas are missing; the selection does not fill them in.", { exact: true })).toBeVisible();
   await expect(section.getByRole("link", { name: "Download original image", exact: true })).toBeVisible();
   await section.getByRole("button", { name: "Select useful area", exact: true }).click();
@@ -848,7 +853,7 @@ test("panorama quality review applies to the selected candidate and preserves th
   let editor = page.getByTestId("panorama-crop-editor");
   await expect(editor.getByTestId("panorama-crop-quality-warning")).toHaveCount(0);
   await editor.getByRole("button", { name: "Close editor", exact: true }).last().click();
-  await section.getByRole("button", { name: "New capture", exact: true }).click();
+  await section.getByRole("button", { name: "New panorama", exact: true }).click();
   await expect(section.getByTestId("panorama-quality-warning")).toBeVisible();
   await expect(section.getByTestId("panorama-quality-warning")).toHaveText(warning);
   const before = await fixture(request);
@@ -924,7 +929,7 @@ test("displayed revision keeps image quality, coverage and current camera state 
   await expect(section.getByTestId("panorama-camera-state")).toHaveText("Camera stopped; exact return not confirmed.");
   await expect(section.locator('[data-complete="true"]')).toHaveCount(0);
   await expect(section.getByTestId("panorama-quality-warning")).toHaveCount(0);
-  await section.getByRole("button", { name: "New capture", exact: true }).click();
+  await section.getByRole("button", { name: "New panorama", exact: true }).click();
   await expect(section.getByTestId("panorama-image-state")).toHaveText("Assembly needs review");
   await expect(section.getByTestId("panorama-coverage-state")).toHaveText("3 confirmed bands · Reach confirmed");
   await expect(section.getByTestId("panorama-quality-warning")).toBeVisible();
@@ -1113,4 +1118,178 @@ test("source panorama localizes diagnostic codes, singular counts and numbers wi
   await expect(diagnostics.getByRole("cell", { name: "posição horizontal nativa 1,25", exact: true })).toBeVisible();
   await expect(section).not.toContainText("ext.cameras.");
   expect((await fixture(request)).events).toEqual(before.events);
+});
+
+
+test("usable partial panorama groups limitations without hiding an unconfirmed stop", async ({ page, request }) => {
+  const section = await ready(page, request);
+  const source = await state(request);
+  const active = { ...source.active, status: "partial", coverage: { ...source.active.coverage, acquisition_complete: false } };
+  const job = { ...source.job, status: "partial", physical_state: "stopped", can_return: true,
+    quick_approach: { status: "unavailable", reason: "return_unconfirmed" } };
+  await page.route(`**${resource}`, route => route.fulfill({ json: { ...source, active, job } }));
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const limitations = section.getByTestId("panorama-limitations");
+  await expect(limitations.locator("summary")).toHaveText("Panorama available with limitations · View details");
+  await expect(limitations).not.toHaveAttribute("open", "");
+  await expect(section.getByRole("button", { name: "Return to the starting view", exact: true })).not.toBeVisible();
+  const before = (await fixture(request)).events;
+  await limitations.locator("summary").click();
+  await expect(limitations.getByText(/Some regions could not be confirmed/)).toBeVisible();
+  await expect(section.getByTestId("panorama-approach-status")).toContainText("No qualified automatic approach");
+  expect((await fixture(request)).events).toEqual(before);
+  job.physical_state = "stop_unconfirmed";
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(limitations).toHaveCount(0);
+  await expect(section.getByRole("alert")).toContainText("We could not confirm that the camera stopped.");
+});
+
+for (const locale of ["en", "pt-BR"]) test(`camera settings hierarchy, technical information and themed states ${locale}`, async ({ page, request }) => {
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const settings = await (await request.get(`${backend}/api/settings`)).json();
+  const extension = settings.extensions["com.toposync.cameras"];
+  extension.devices[0].onvif = { ...extension.devices[0].onvif, device_id: "synthetic-device", hardware: "Synthetic hardware" };
+  expect((await request.patch(`${backend}/api/settings/extensions/com.toposync.cameras`, { data: extension })).ok()).toBeTruthy();
+  await ready(page, request);
+  const events = (await fixture(request)).events;
+  // A context response for presentation only; navigation has separate real-fixture tests.
+  await page.route("**/cameras/source-panorama-synthetic-camera/contexts", route => route.fulfill({ json: {
+    camera_id: "source-panorama-synthetic-camera", compositions: [{ id: "source-panorama-synthetic-composition", name: "Synthetic composition", areas: [],
+      camera_elements: [{ id: "synthetic-element", name: "Synthetic element", calibrated_views: 0, control_points_pairs: 0, has_mapping: false }] }],
+  } }));
+  for (const theme of ["topo-day", "topo-night"]) {
+    await page.evaluate(({ locale, theme }) => {
+      localStorage.setItem("toposync.locale", locale);
+      localStorage.setItem("toposync.theme", theme);
+    }, { locale, theme });
+    await page.goto("/settings?panel=com.toposync.cameras&camera_id=source-panorama-synthetic-camera&source_id=synthetic-wide");
+    const panel = page.locator(".cameraSettingsPanel");
+    const panorama = panel.getByTestId("camera-source-panorama");
+    await expect(panorama.getByRole("img")).toBeVisible();
+    expect(await panorama.evaluate(element => Boolean(element.closest(".cameraSourceDetails")))).toBe(true);
+    await expect(panel.getByText(/^(Analyze an audio sample|Analisar amostra de áudio)$/)).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: /^(Review mapping|Revisar mapeamento)$/ })).toHaveCount(0);
+    const technical = panel.locator(".cameraTechnicalDetails");
+    await technical.locator("summary").click();
+    await expect(technical.getByText("synthetic-device", { exact: true })).toBeVisible();
+    await expect(technical.getByText("Synthetic hardware", { exact: true })).toBeVisible();
+    await expect(technical.locator("input, a")).toHaveCount(0);
+    const recipe = panel.locator(".cameraPipelinePresetCard:not(:disabled)").first();
+    const disabledRecipe = panel.locator(".cameraPipelinePresetCard:disabled").first();
+    const row = panel.locator(".cameraMappingCompositionItem");
+    for (const width of [1440, 768, 375, 320]) {
+      await page.setViewportSize({ width, height: 1000 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(await panel.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+      await recipe.hover();
+      expect(await recipe.evaluate(element => getComputedStyle(element).backgroundColor)).toBe(await row.hover().then(() => row.evaluate(element => getComputedStyle(element).backgroundColor)));
+      await recipe.focus();
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Tab");
+      await expect(recipe).toBeFocused();
+      expect(await recipe.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe("none");
+      const disabledColor = await disabledRecipe.evaluate(element => getComputedStyle(element).backgroundColor);
+      await disabledRecipe.hover();
+      expect(await disabledRecipe.evaluate(element => getComputedStyle(element).backgroundColor)).toBe(disabledColor);
+      for (const button of await row.getByRole("button").all()) {
+        const bounds = await button.boundingBox();
+        expect(bounds.width).toBeGreaterThanOrEqual(44);
+        expect(bounds.height).toBeGreaterThanOrEqual(44);
+      }
+      await panorama.scrollIntoViewIfNeeded();
+      await screenshot(page, `settings-${locale}-${theme}-${width}`);
+    }
+  }
+  expect((await fixture(request)).events).toEqual(events);
+  expect(errors).toEqual([]);
+});
+
+test("camera technical information stays local and control confirmation persists", async ({ page, request }) => {
+  await openPanorama(page);
+  const device = page.getByTestId("camera-device-settings");
+  await device.locator("summary").click();
+  await expect(device.getByText("Not provided", { exact: true })).toHaveCount(2);
+  const checkbox = device.getByRole("checkbox", { name: "Tracking and automatic camera movements are disabled", exact: true });
+  const description = await checkbox.getAttribute("aria-describedby");
+  await expect(page.locator(`[id="${description}"]`)).toContainText("monitoring point");
+  await checkbox.uncheck();
+  await page.getByRole("button", { name: "Save all changes", exact: true }).click();
+  await expect(page.getByText(/^Unsaved:/)).toHaveCount(0);
+  await page.reload();
+  await expect(checkbox).not.toBeChecked();
+  await checkbox.check();
+  await page.getByRole("button", { name: "Save all changes", exact: true }).click();
+  await expect(page.getByText(/^Unsaved:/)).toHaveCount(0);
+  await page.reload();
+  await expect(checkbox).toBeChecked();
+  const current = await (await request.get(`${backend}/api/settings`)).json();
+  const camera = current.extensions["com.toposync.cameras"].devices[0];
+  camera.control.type = "none";
+  camera.onvif = null;
+  expect((await request.patch(`${backend}/api/settings/extensions/com.toposync.cameras`, { data: current.extensions["com.toposync.cameras"] })).ok()).toBeTruthy();
+  await page.reload();
+  await device.locator("summary").click();
+  await expect(device.locator(".cameraTechnicalDetails").getByText("Manual / no ONVIF", { exact: true })).toBeVisible();
+  await expect(checkbox).toHaveCount(0);
+  expect((await fixture(request)).events).toEqual([]);
+});
+
+test("camera settings discard a late panorama response after changing source and camera", async ({ page, request }) => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let reached;
+  const started = new Promise(resolve => { reached = resolve; });
+  await page.route(`**${resource}`, async route => {
+    const response = await route.fetch();
+    reached();
+    await gate;
+    await route.fulfill({ response }).catch(() => {}); // The previous source request may already be aborted.
+  });
+  await page.goto("/settings?panel=com.toposync.cameras&camera_id=source-panorama-synthetic-camera&source_id=synthetic-wide");
+  await started;
+  await page.locator(".settingsSourceList").getByRole("button", { name: /^Synthetic tele stream/ }).click();
+  await expect(page.getByTestId("camera-source-panorama")).toContainText("Synthetic courtyard · Synthetic tele stream");
+  release();
+  await expect(page.getByTestId("camera-source-panorama")).not.toContainText("Synthetic wide stream");
+  await page.locator(".cameraSettingsPanel .settingsSidebar").getByRole("button", { name: /^Another synthetic camera/ }).click();
+  await expect(page.getByTestId("camera-source-panorama")).toContainText("Another synthetic camera · Synthetic wide stream");
+  expect((await fixture(request)).events).toEqual([]);
+});
+
+
+test("mapping context separates visual reference, active mapping and unqualified positioning without counting old views", async ({ page, request }) => {
+  const source = await state(request);
+  const queries = [];
+  page.on("request", request => queries.push([request.method(), request.url()]));
+  await page.route(`**/api/cameras/cameras/${source.camera_id}/contexts`, route => route.fulfill({ json: {
+    camera_id: source.camera_id, compositions: [{ id: "context-map", name: "Courtyard mapping", areas: [],
+      camera_elements: [{ id: "element", name: "Camera", calibrated_views: 7, control_points_pairs: 4,
+        has_mapping: true, mapping: { source_id: source.source_id, revision: 13, reference: "partial",
+          mapping: "active", positioning: "unqualified", reason: null, control_points_pairs: 4 } }] }],
+  } }));
+  for (const theme of ["topo-day", "topo-night"]) {
+    for (const width of [320, 375, 768, 1440]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.addInitScript(value => localStorage.setItem("toposync.theme", value), theme);
+      await openPanorama(page);
+      const mapping = page.locator(".cameraMappingCompositionItem");
+      await expect(mapping).toContainText("Active mapping");
+      await expect(mapping).toContainText("Revision 13");
+      await expect(mapping).toContainText("Positioning not qualified");
+      await expect(mapping).toContainText("Partial visual reference available");
+      await expect(mapping).not.toContainText("7 views");
+      expect(await mapping.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    }
+  }
+  expect(queries.filter(([method, url]) => method !== "GET" && /\/(aim|native-reference|jobs|ptz)\b/.test(url))).toEqual([]);
+  expect(queries.filter(([, url]) => url.includes("native-reference"))).toEqual([]);
+});
+
+
+test("automatic approach status keeps the image usable and removes manual point preparation", async ({ page, request }) => {
+  const section = await ready(page, request);
+  await expect(section.getByTestId("panorama-approach-status")).toContainText("No qualified automatic approach");
+  await expect(section.getByRole("img", { name: "Saved camera panorama", exact: true })).toBeVisible();
+  await expect(section.getByRole("button", { name: /Prepare.*point/i })).toHaveCount(0);
 });

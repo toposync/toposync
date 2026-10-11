@@ -305,7 +305,8 @@ def _grid_contract_data(camera: SimulatedCamera) -> tuple[dict, dict, list, dict
 
 
 @pytest.mark.parametrize("return_confirmed", [True, False])
-def test_control_verification_stops_at_first_unconfirmed_return(tmp_path, monkeypatch, return_confirmed):
+@pytest.mark.parametrize("check_limit", [None, 1])
+def test_control_verification_stops_at_first_unconfirmed_return(tmp_path, monkeypatch, return_confirmed, check_limit):
     async def scenario():
         camera = SimulatedCamera()
         scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
@@ -336,12 +337,13 @@ def test_control_verification_stops_at_first_unconfirmed_return(tmp_path, monkey
         monkeypatch.setattr(scanner, "_reference_window", window)
         monkeypatch.setattr(scanner, "_pulse", pulse)
         monkeypatch.setattr(scanner, "_restore", restore)
-        await scanner._verify_control()
+        await scanner._verify_control(check_limit=check_limit)
         result = scanner.checkpoint["control_verification"]
         if return_confirmed:
-            assert result["status"] == "verified" and len(pulses) == 12
+            assert result["status"] == ("limited" if check_limit else "verified")
+            assert len(pulses) == (check_limit or 12)
             assert pulses == [(axis, direction, 0.3) for _ in range(3)
-                              for axis, direction in (("pan", 1), ("pan", -1), ("tilt", 1), ("tilt", -1))]
+                              for axis, direction in (("pan", 1), ("pan", -1), ("tilt", 1), ("tilt", -1))][:check_limit]
         else:
             assert result["status"] == "return_unconfirmed"
             assert pulses == [("pan", 1, 0.3)]
@@ -10632,3 +10634,24 @@ def test_endpoint_reads_overlap_but_never_publish_or_release_before_both_finish(
             await asyncio.gather(operation, return_exceptions=True)
 
     asyncio.run(scenario())
+
+
+def test_return_failure_keeps_one_reserved_replay_after_regular_quota(tmp_path, monkeypatch):
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    frame = asyncio.run(camera.frame())
+    for _ in range(3):
+        attempt = scan._AttemptDiagnostic("movement")
+        attempt.frame(frame, {"code": "stable"})
+        attempt.value["outcome"] = "capture_stable"
+        asyncio.run(scanner._preserve_replay(attempt))
+    assert len(list(tmp_path.glob("replay-accepted-*.json"))) == 2
+    attempt.value["return_correction_failure"] = "visual_error_increased"
+    asyncio.run(scanner._preserve_replay(attempt, correction_failed=True))
+    asyncio.run(scanner._preserve_replay(attempt, correction_failed=True))
+    records = list(tmp_path.glob("replay-correction-failed-*.json"))
+    assert len(records) == 1
+    assert json.loads(records[0].read_text())["attempt"]["return_correction_failure"] == "visual_error_increased"
+    assert records[0].with_suffix(".npz").exists()
+    assert attempt.value["return_failure_replay_id"] == records[0].stem

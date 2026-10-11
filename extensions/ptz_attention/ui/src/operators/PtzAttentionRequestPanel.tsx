@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { HostApi, PipelineOperatorPanel } from "@toposync/plugin-api";
 
-import { fetchAttentionCatalog, fetchAttentionStatus } from "../api";
+import { fetchAttentionCatalog, fetchAttentionStatus, fetchAttentionProfiles } from "../api";
 import type {
   AttentionCameraCatalogItem,
   AttentionCatalogResponse,
   AttentionRequestOperatorConfig,
   AttentionViewCatalogItem,
   AttentionSession,
+  AttentionProfile,
 } from "../types";
 
 type PanelArgs = Parameters<PipelineOperatorPanel["render"]>[0];
@@ -46,6 +47,7 @@ function PtzAttentionRequestPanel({
   updateConfig,
 }: PanelArgs & { api: HostApi }): React.ReactElement {
   const { t } = i18n.useI18n();
+  const [profiles, setProfiles] = useState<AttentionProfile[]>([]);
   const [catalog, setCatalog] = useState<AttentionCatalogResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<AttentionSession | null>(null);
@@ -56,10 +58,11 @@ function PtzAttentionRequestPanel({
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchAttentionCatalog(api, controller.signal)
-      .then((payload) => {
+    Promise.all([fetchAttentionCatalog(api, controller.signal), fetchAttentionProfiles(api, controller.signal)])
+      .then(([payload, saved]) => {
         if (!controller.signal.aborted) {
           setCatalog(payload);
+          setProfiles(saved.profiles);
           setError(null);
         }
       })
@@ -107,6 +110,15 @@ function PtzAttentionRequestPanel({
           ? t("ext.ptz_attention.wizard.follow_preview_help")
           : t("ext.ptz_attention.operator.summary", {}, "Moves one calibrated PTZ head to an active mapped event. A higher numeric priority may preempt a lower one; equal priority never interrupts focus.")}
       </div>
+      <label className="pipelinesLabel"><span>{t("ext.ptz_attention.panorama.profile")}</span>
+        <select className="pipelinesSelect" value={current.profile_id} onChange={event => updateConfig({ profile_id: event.target.value,
+          camera_id: "", source_id: "", composition_id: "", preview_follow_views: false, preferred_view_id_field: "" })}>
+          <option value="">-</option>
+          {profiles.filter(profile => profile.panorama_element_id).map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+        </select>
+      </label>
+      <div className="pipelinesStepHint">{t("ext.ptz_attention.panorama.profile_help")}</div>
+      {!current.profile_id ? <details open={Boolean(current.camera_id)}><summary>{t("ext.ptz_attention.panorama.legacy_operator")}</summary>
       <label className="pipelinesCheckbox">
         <input type="checkbox" checked={Boolean(current.preview_follow_views)} onChange={(event) => updateConfig({ preview_follow_views: event.target.checked })} />
         <span>{t("ext.ptz_attention.wizard.follow_preview")}</span>
@@ -173,6 +185,7 @@ function PtzAttentionRequestPanel({
         <span>{t("ext.ptz_attention.operator.native_tracking_ack", {}, "I confirm native auto-tracking, monitor point, and automatic return are disabled for this camera.")}</span>
       </label> : null}
       {blocked ? <div className="pipelinesInlineError">{current.preview_follow_views ? t("ext.ptz_attention.operator.preview_setup") : t("ext.ptz_attention.operator.blocked", {}, "PTZ movement remains blocked until the camera, calibrated composition, and confirmation are complete.")}</div> : null}
+      </details> : null}
       {error ? <div className="pipelinesInlineError">{error}</div> : null}
       {showAdvanced ? (
         <>

@@ -53,6 +53,7 @@ function priorityHex(priority: Priority): number {
 }
 
 function formatDurationCompact(secondsRaw: unknown): string | null {
+  if (secondsRaw === 0) return i18n.t("core.ui.notifications.details.single_observation");
   const roundedSeconds = Math.round(asNumber(secondsRaw, 0) * 10) / 10;
   if (!Number.isFinite(roundedSeconds) || roundedSeconds <= 0) return null;
   if (roundedSeconds < 60) {
@@ -85,7 +86,7 @@ function isDefaultGroupPresenceDescription(value: string): boolean {
   return (
     !normalized ||
     isLegacyActiveDescription(normalized) ||
-    /^presence in progress(?:\s*-\s*.+)?$/.test(normalized)
+    /^presence (?:in progress|ended)(?:\s*-\s*.+)?$/.test(normalized)
   );
 }
 
@@ -106,10 +107,10 @@ function cameraLabel(payload: Record<string, unknown>, data: Record<string, unkn
   );
 }
 
-function displayDescription(
+export function notificationDescription(
   notification: Notification,
-  payload: Record<string, unknown>,
-  data: Record<string, unknown>,
+  payload: Record<string, unknown> = asRecord(notification.payload),
+  data: Record<string, unknown> = asRecord(payload.data),
 ): string {
   const description = asString(notification.description, "").trim();
   const resolvedSubjectType = subjectType(payload, data);
@@ -190,7 +191,11 @@ function resolveStoredImages(payload: Record<string, unknown>): NotificationImag
       if (!relPath) continue;
       idx += 1;
       const artifactName = asString(entry.artifact_name, "").trim();
-      const label = key || artifactName || "stored";
+      const name = key || artifactName || "stored";
+      const label = name === "subject_crop"
+        ? i18n.t("core.ui.notifications.details.subject_crop")
+        : name === "main" && Array.isArray(rawStored.subject_crop)
+        ? i18n.t("core.ui.notifications.details.scene") : name;
       out.push({
         id: `stored:${key}:${idx}:${relPath}`,
         url: toFileUrl(relPath),
@@ -218,7 +223,7 @@ function asFiniteNumber(value: unknown): number | null {
   return value;
 }
 
-type WorldPoint = { x: number; z: number; compositionId: string | null };
+type WorldPoint = { x: number; z: number; compositionId: string | null; gapBefore?: boolean };
 
 function readCompositionId(...records: Record<string, unknown>[]): string | null {
   for (const rec of records) {
@@ -240,7 +245,7 @@ function normalizeWorldPoint(value: unknown, fallbackCompositionId: string | nul
     asString(rec.composition_id, "").trim() ||
     asString(rec.compositionId, "").trim() ||
     fallbackCompositionId;
-  return { x, z, compositionId: compositionId || null };
+  return { x, z, compositionId: compositionId || null, gapBefore: rec.gap_before === true };
 }
 
 function normalizeWorldEnvelopeCenter(value: unknown, fallbackCompositionId: string | null): WorldPoint | null {
@@ -313,13 +318,13 @@ function resolveTrailEntryPoint(entry: unknown, fallbackCompositionId: string | 
   );
 }
 
-function resolveUnscopedTrailPoints(notification: Notification): Array<{ x: number; z: number; compositionId: string | null }> | null {
+function resolveUnscopedTrailPoints(notification: Notification): WorldPoint[] | null {
   const payload = asRecord(notification.payload);
   const data = asRecord(payload.data);
   const fallbackCompositionId = readCompositionId(payload, data);
   const rawTrail = payload.trail;
   if (Array.isArray(rawTrail)) {
-    const out: Array<{ x: number; z: number; compositionId: string | null }> = [];
+    const out: WorldPoint[] = [];
     for (const entry of rawTrail) {
       const point = resolveTrailEntryPoint(entry, fallbackCompositionId);
       if (!point) continue;
@@ -335,6 +340,37 @@ function resolveUnscopedTrailPoints(notification: Notification): Array<{ x: numb
 function resolveTrailPoints(notification: Notification, compositionId: string | undefined): WorldPoint[] | null {
   const points = resolveUnscopedTrailPoints(notification);
   return compositionId && points?.length && points.every(point => point.compositionId === compositionId) ? points : null;
+}
+
+function latestContinuousTrail(points: WorldPoint[]): WorldPoint[] {
+  for (let index = points.length - 1; index >= 0; index -= 1) {
+    if (points[index]?.gapBefore) return points.slice(index);
+  }
+  return points;
+}
+
+export function renderNotificationSpatialStatus(notification: Notification): React.ReactNode {
+  if (!["pipelines.tracking", "pipelines.event"].includes(notification.type)) return null;
+  const payload = asRecord(notification.payload);
+  const data = asRecord(payload.data);
+  const spatial = asRecord(payload.spatial_status);
+  const mapping = asRecord(data.mapping);
+  if (notification.type !== "pipelines.tracking" && !data.camera_id && !Object.keys(mapping).length && !Object.keys(spatial).length) return null;
+  const points = resolveUnscopedTrailPoints(notification);
+  const degraded = spatial.status === "degraded" || ["unmapped", "partial"].includes(asString(mapping.status, ""));
+  const missing = !points?.length;
+  if (!degraded && !missing && spatial.had_mapping_gaps !== true) return null;
+  const reason = asString(spatial.reason, "") || asString(mapping.reason, "");
+  const label = missing ? "unavailable" : degraded ? "degraded" : "partial";
+  const explanation = reason === "camera_configuration_changed" ? "configuration_changed"
+    : reason === "composition_changed" || reason === "panorama_composition_mismatch" ? "composition_changed"
+    : reason.includes("geometry") || reason.includes("binding") || reason.includes("identity") ? "frame_incompatible"
+    : reason.includes("outside") || reason === "no_ground_intersection" || reason === "source_point_unavailable" ? "outside_coverage"
+    : reason.includes("localization") ? "localization_failed" : "unknown";
+  return <div className="notificationSpatialStatus" role="status">
+    <strong>{i18n.t(`core.ui.notifications.spatial.${label}`)}</strong>
+    {missing || degraded ? <div>{i18n.t(`core.ui.notifications.spatial.reason.${explanation}`)}</div> : null}
+  </div>;
 }
 
 function createHaloTexture(THREE: Scene3DContext["THREE"]): import("three").Texture {
@@ -537,7 +573,7 @@ function createPipelines3DOverlay(
     haloMat.opacity = closed ? 0.25 : 0.6;
   }
 
-  writeTrail(trail);
+  writeTrail(latestContinuousTrail(trail));
   applyStyleFromNotification(notification);
 
   return {
@@ -562,7 +598,7 @@ function createPipelines3DOverlay(
     update: (next) => {
       const nextTrail = resolveTrailPoints(next, ctx.compositionId);
       group.visible = Boolean(nextTrail?.length);
-      if (nextTrail?.length) writeTrail(nextTrail);
+      if (nextTrail?.length) writeTrail(latestContinuousTrail(nextTrail));
       applyStyleFromNotification(next);
     },
     onPointerEvent: (event) => {
@@ -660,7 +696,7 @@ function renderPipelinesNotification(notification: Notification): React.ReactNod
 
   const locationLabel = asString(data.area_label, "").trim();
 
-  const description = displayDescription(notification, payload, data);
+  const description = notificationDescription(notification, payload, data);
   const metaParts = [locationLabel, duration].filter(Boolean);
   const meta = metaParts.join(" • ");
   const isLive = status === "open" && realtime;
@@ -680,6 +716,7 @@ function renderPipelinesNotification(notification: Notification): React.ReactNod
       ) : null}
 
       {description ? <div className="notificationText">{description}</div> : null}
+      {renderNotificationSpatialStatus(notification)}
     </div>
   );
 }
@@ -704,7 +741,7 @@ function createPipelines2DOverlay(
     return {
       x: last.x,
       z: last.z,
-      trail: trail.map((p) => ({ x: p.x, z: p.z })),
+      trail: latestContinuousTrail(trail).map((p) => ({ x: p.x, z: p.z })),
       priority: notificationPriority(current),
       closed,
     };

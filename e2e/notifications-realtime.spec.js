@@ -157,3 +157,72 @@ for (const recovery of ["reconnect", "overflow"]) {
     await page.screenshot({ path: test.info().outputPath(`recovery-${recovery}.png`) });
   });
 }
+
+test("server-resolved history refreshes low-priority inserts and updates without reconnecting", async ({ page }) => {
+  await mockNotificationsApi(page);
+  const low = NOTIFICATIONS.map(item => ({...item,priority:'low',payload:{...item.payload,priority:'low'}}));
+  let current = [low[0]];
+  await page.route(/\/api\/notifications(?:\?.*)?$/, route => route.fulfill({json:{notifications:current,next_cursor:null,
+    search:{mode:'literal',status:'ready',time_range:{timezone:'America/Sao_Paulo',created_after:1,created_before:2,basis:'notification_created_at',expression:'hoje'}}}}));
+  await page.goto('/');
+  await expect(page.getByText('First realtime notification')).toBeVisible();
+  current = low;
+  await page.evaluate(notification => {
+    const stream=window.__toposyncEventSources.find(source=>/\/api\/notifications\/stream$/.test(source.url));
+    stream.onmessage(new MessageEvent('message',{data:JSON.stringify({op:'insert',notification})}));
+  },low[1]);
+  await expect(page.getByText('Second realtime notification')).toBeVisible();
+  current = [low[1]];
+  await page.evaluate(notification => {
+    const stream=window.__toposyncEventSources.find(source=>/\/api\/notifications\/stream$/.test(source.url));
+    stream.onmessage(new MessageEvent('message',{data:JSON.stringify({op:'update',notification})}));
+  },{...low[0],description:'No longer in the selected period'});
+  await expect(page.locator('.notificationCard',{hasText:'First realtime notification'})).toHaveCount(0);
+  await expect(page.locator('.notificationCard',{hasText:'Second realtime notification'})).toHaveCount(1);
+});
+
+test("object category selector uses the extension route and refreshes on events", async ({ page }) => {
+  await mockNotificationsApi(page);
+  let reads = 0;
+  await page.route(/\/api\/vision\/history\/notifications\?.*/, route => {
+    expect(new URL(route.request().url()).searchParams.get('category')).toBe('dog');
+    reads++;
+    return route.fulfill({json:{notifications:[NOTIFICATIONS[0]],next_cursor:null,search:{mode:'literal',status:'ready'}}});
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:'Search events',exact:true}).click();
+  await page.getByRole('combobox',{name:'Detected object',exact:true}).selectOption('dog');
+  await expect.poll(() => reads).toBeGreaterThan(0);
+  const before = reads;
+  await page.evaluate(notification => {
+    const stream=window.__toposyncEventSources.find(source=>/\/api\/notifications\/stream$/.test(source.url));
+    stream.onmessage(new MessageEvent('message',{data:JSON.stringify({op:'update',notification})}));
+  },NOTIFICATIONS[0]);
+  await expect.poll(() => reads).toBeGreaterThan(before);
+  await page.screenshot({path:test.info().outputPath('category-filter.png')});
+});
+
+test("semantic history signals changes without repeating inference automatically", async ({ page }) => {
+  await mockNotificationsApi(page);
+  let reads = 0;
+  await page.route(/\/api\/ai\/history\/search\?.*/, route => {
+    reads++;
+    return route.fulfill({json:{notifications:[NOTIFICATIONS[0]],next_cursor:null,search:{mode:'semantic_text',status:'ready'}}});
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:'Search events',exact:true}).click();
+  await page.getByRole('searchbox',{name:'Search',exact:true}).fill('person');
+  await page.getByRole('combobox',{name:'Search in',exact:true}).selectOption('text');
+  await expect.poll(() => reads).toBeGreaterThan(0);
+  await page.getByRole('dialog').getByRole('button',{name:'Close',exact:true}).click();
+  const before = reads;
+  await page.evaluate(notification => {
+    const stream=window.__toposyncEventSources.find(source=>/\/api\/notifications\/stream$/.test(source.url));
+    stream.onmessage(new MessageEvent('message',{data:JSON.stringify({op:'insert',notification})}));
+  },NOTIFICATIONS[1]);
+  await expect(page.getByText('There are new or updated events.')).toBeVisible();
+  await page.waitForTimeout(800);
+  expect(reads).toBe(before);
+  await page.getByRole('button',{name:'Refresh results',exact:true}).click();
+  await expect.poll(() => reads).toBeGreaterThan(before);
+});

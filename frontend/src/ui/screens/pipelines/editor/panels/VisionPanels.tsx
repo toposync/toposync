@@ -2338,6 +2338,11 @@ export function VisionConfigCard({
       {isDetection ? (
         <>
           <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.yolo.use_image_region")}</span>
+            <input type="checkbox" checked={config.use_image_region === true}
+              onChange={event => onUpdateConfig(previous => ({ ...previous, use_image_region: event.target.checked }))} />
+          </label>
+          <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.yolo.detect_emit_mode")}</span>
             <select
               className="pipelinesInput"

@@ -642,3 +642,17 @@ def test_malformed_3d_metadata_fails_closed(metadata):
     pose["metadata"] = metadata
     with pytest.raises(ValueError, match="supported_image_3d_pose_required"):
         align_pose(camera, pose, ground, 0.65, 0.02)
+
+
+def test_explicit_metric_calibration_is_independent_of_panorama_and_old_views():
+    from toposync_ext_cameras.pipelines.postprocess import _parse_metric_calibrations_from_props
+    original = mapping_config()["calibrated_views"]
+    props = {"metric_calibrations": deepcopy(original), "panorama_mapping": {"job_id": "visual"},
+             "calibrated_views": []}
+    parsed = _parse_metric_calibrations_from_props(props)
+    assert len(parsed) == 1
+    assert solve_metric_camera(parsed[0].ground_projection).calibration_digest == solve_metric_camera(
+        _parse_metric_calibrations_from_props({"calibrated_views": original})[0].ground_projection
+    ).calibration_digest
+    assert _parse_metric_calibrations_from_props({"metric_calibrations": [], "calibrated_views": original}) == []
+    assert _parse_metric_calibrations_from_props({"panorama_mapping": {"job_id": "visual"}}) == []

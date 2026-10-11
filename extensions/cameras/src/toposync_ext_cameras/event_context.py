@@ -45,7 +45,10 @@ class RecentOnvifEventRuntime(TransformOperatorRuntime):
             # One bounded manager batch; no camera snapshot, extra watcher or model.
             for event_packet in await self.source.produce_batch(context):
                 event = event_packet.payload["onvif_event"]
-                if event.get("boolean_value") is True and str(event.get("operation", "")).lower() == "changed":
+                if event.get("boolean_value") is True and (
+                    event.get("state_changed", str(event.get("operation", "")).lower() == "changed") is True
+                    or (event.get("is_property") is False and str(event.get("operation", "")).lower() not in {"initialized", "deleted"})
+                ):
                     self.last_event = event
         if self.last_event is None:
             return []

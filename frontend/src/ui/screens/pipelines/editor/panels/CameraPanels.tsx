@@ -226,6 +226,7 @@ function useOnvifEvents(cameraId: string): {
     setError(null);
     getCameraOnvifEvents(cid, controller.signal)
       .then((next) => {
+        if (controller.signal.aborted) return;
         setValue(next);
         setError(String(next.error || "").trim() || null);
       })
@@ -243,20 +244,18 @@ function useOnvifEvents(cameraId: string): {
   return { value, loading, error };
 }
 
-function onvifDescriptorKey(descriptor: Pick<CameraOnvifEventDescriptor, "topic" | "item_name">): string {
-  return JSON.stringify([String(descriptor.topic || "").trim(), String(descriptor.item_name || "").trim()]);
+function onvifDescriptorKey(descriptor: CameraOnvifEventDescriptor): string {
+  return JSON.stringify([descriptor.topic || "", descriptor.item_name || "", descriptor.qualified_topic || "",
+    descriptor.source ?? null, descriptor.key ?? null]);
 }
 
-function parseOnvifDescriptorKey(value: string): { topic: string; item_name: string } {
+function parseOnvifDescriptorKey(value: string): { topic: string; item_name: string; qualified_topic: string; source: Record<string, string> | null; key: Record<string, string> | null } {
   try {
-    const parsed = JSON.parse(String(value || ""));
-    if (Array.isArray(parsed)) {
-      return { topic: String(parsed[0] || "").trim(), item_name: String(parsed[1] || "").trim() };
-    }
-  } catch {
-    return { topic: "", item_name: "" };
-  }
-  return { topic: "", item_name: "" };
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return { topic: String(parsed[0] || ""), item_name: String(parsed[1] || ""),
+      qualified_topic: String(parsed[2] || ""), source: parsed[3] ?? null, key: parsed[4] ?? null };
+  } catch { /* Cleared selections use an empty identity. */ }
+  return { topic: "", item_name: "", qualified_topic: "", source: null, key: null };
 }
 
 function onvifEventLabel(descriptor: CameraOnvifEventDescriptor): string {
@@ -276,7 +275,7 @@ function buildOnvifEventOptions(descriptors: CameraOnvifEventDescriptor[]): Onvi
   const base = (descriptors || [])
     .map((descriptor) => ({
       value: onvifDescriptorKey(descriptor),
-      label: onvifEventLabel(descriptor),
+      label: [onvifEventLabel(descriptor), descriptor.source ? JSON.stringify(descriptor.source) : "", descriptor.key ? JSON.stringify(descriptor.key) : ""].filter(Boolean).join(" · "),
       descriptor,
     }))
     .filter((option) => option.value && option.label);
@@ -316,14 +315,21 @@ export function OnvifStateGateConfigCard({
   const failOpen = Boolean((config as any).fail_open);
   const holdSeconds = Number((config as any).hold_seconds ?? 5);
   const pollIntervalMs = Number((config as any).poll_interval_ms ?? 500);
+  const signalMode = String(config.mode || "state");
   const selectedCameraOption = selectedCameraOptionForConfig(config, cameraSelectOptionById);
   const selectedCamera = (camerasIndex.cameras || []).find((camera) => String(camera.id || "").trim() === cameraId) ?? null;
   const onvifEvents = useOnvifEvents(cameraId);
   const conditionOptions = React.useMemo(
-    () => buildOnvifEventOptions(onvifEvents.value?.boolean_states ?? []),
-    [onvifEvents.value],
+    () => {
+      const observed = signalMode === "pulse" ? [] : (onvifEvents.value?.observed_states ?? []).filter(item => item.known && item.available);
+      const descriptors = signalMode === "pulse" ? (onvifEvents.value?.events ?? []).filter(item => item.is_property === false) : (onvifEvents.value?.boolean_states ?? []);
+      const declared = descriptors.filter(item => !observed.some(state =>
+        state.qualified_topic === item.qualified_topic && state.item_name === item.item_name));
+      return buildOnvifEventOptions([...observed, ...declared]);
+    },
+    [onvifEvents.value, signalMode],
   );
-  const selectedConditionKey = onvifDescriptorKey({ topic, item_name: itemName });
+  const selectedConditionKey = onvifDescriptorKey({ topic, item_name: itemName, qualified_topic: String(config.qualified_topic || ""), source: config.source as Record<string, string> | undefined, key: config.key as Record<string, string> | undefined });
   const selectedCondition =
     conditionOptions.find((option) => option.value === selectedConditionKey) ??
     (topic ? { value: selectedConditionKey, label: itemName || topic, descriptor: { topic, item_name: itemName } } : null);
@@ -339,7 +345,7 @@ export function OnvifStateGateConfigCard({
           isClearable
           placeholder={t("core.ui.pipelines.panels.onvif.camera_placeholder")}
           onChange={(value: SingleValue<SelectOption>) => {
-            onUpdateConfig((prev) => ({ ...prev, camera_id: value?.value ?? "", topic: "", item_name: "" }));
+            onUpdateConfig((prev) => ({ ...prev, camera_id: value?.value ?? "", topic: "", item_name: "", qualified_topic: "", source: null, key: null }));
           }}
         />
       </label>
@@ -361,7 +367,7 @@ export function OnvifStateGateConfigCard({
           placeholder={t("core.ui.pipelines.panels.onvif.condition_placeholder")}
           onChange={(value: SingleValue<OnvifEventOption>) => {
             const selected = parseOnvifDescriptorKey(value?.value ?? "");
-            onUpdateConfig((prev) => ({ ...prev, topic: selected.topic, item_name: selected.item_name }));
+            onUpdateConfig((prev) => ({ ...prev, ...selected }));
           }}
         />
       </label>
@@ -392,6 +398,12 @@ export function OnvifStateGateConfigCard({
 
       {showAdvanced ? (
         <>
+          <label className="pipelinesLabel"><span>{t("core.ui.pipelines.panels.onvif.mode")}</span>
+            <select className="pipelinesSelect" value={String(config.mode || "state")} onChange={event => onUpdateConfig(prev => ({ ...prev, mode: event.target.value }))}>
+              <option value="state">{t("core.ui.pipelines.panels.onvif.mode.state")}</option>
+              <option value="pulse">{t("core.ui.pipelines.panels.onvif.mode.pulse")}</option>
+            </select>
+          </label>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.onvif.hold_seconds")}</span>
             <PipelinesNumberInput
@@ -442,12 +454,15 @@ export function OnvifEventSourceConfigCard({
   const onvifEvents = useOnvifEvents(cameraId);
   const eventOptions = React.useMemo(() => buildOnvifEventOptions(onvifEvents.value?.events ?? []), [onvifEvents.value]);
   const filtersRaw = Array.isArray((config as any).event_filters) ? ((config as any).event_filters as any[]) : [];
-  const selectedKeys = new Set(
-    filtersRaw
-      .map((item) => onvifDescriptorKey({ topic: String(item?.topic || ""), item_name: String(item?.item_name || "") }))
-      .filter((value) => value.length > 0),
-  );
-  const selectedOptions = eventOptions.filter((option) => selectedKeys.has(option.value));
+  const selectedOptions = filtersRaw.map((item) => {
+    const descriptor = { ...item, topic: String(item?.topic || ""), item_name: String(item?.item_name || "") };
+    const exact = eventOptions.find(option => option.value === onvifDescriptorKey(descriptor));
+    if (exact) return exact;
+    const legacy = !descriptor.qualified_topic ? eventOptions.filter(option => option.descriptor.topic === descriptor.topic
+      && option.descriptor.item_name === descriptor.item_name) : [];
+    return legacy.length === 1 ? legacy[0] : { value: onvifDescriptorKey(descriptor),
+      label: onvifEventLabel(descriptor), descriptor };
+  });
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -2062,6 +2077,17 @@ export function ImageCropConfigCard({ config, pipelineName, steps, operatorsById
     <div className="pipelinesOperatorConfigCard">
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_crop.hint")}</div>
 
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.image_crop.region_mode")}</span>
+        <select className="pipelinesSelect" value={config.region_mode === "motion" ? "motion" : "fixed"}
+          onChange={event => onUpdateConfig(previous => ({ ...previous, region_mode: event.target.value }))}>
+          <option value="fixed">{t("core.ui.pipelines.panels.image_crop.region_fixed")}</option>
+          <option value="motion">{t("core.ui.pipelines.panels.image_crop.region_motion")}</option>
+        </select>
+      </label>
+      {config.region_mode === "motion" ? <p className="pipelinesStepHint">
+        {t("core.ui.pipelines.panels.image_crop.motion_hint")}
+      </p> : <>
       <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between" }}>
         <button
           className="chipButton"
@@ -2163,6 +2189,8 @@ export function ImageCropConfigCard({ config, pipelineName, steps, operatorsById
           {t("core.ui.pipelines.panels.image_crop.reset")}
         </button>
       </div>
+
+      </>}
 
       {showAdvanced ? (
         <>

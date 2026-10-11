@@ -9,6 +9,7 @@ import type { ToposyncHost } from "@toposync/plugin-api";
 import { createCameraElementType } from "./elements/CameraElementType";
 import { createCameraRecipeReview } from "./settings/CameraRecipeReview";
 import { createCamerasSettingsPanel } from "./settings/CamerasSettingsPanel";
+import { AudioFileAnalysis } from "./settings/AudioFileAnalysis";
 import { createAddCameraTool } from "./tools/addCameraTool";
 import { camerasTranslations } from "./translations";
 import { createHumanObservationRenderer } from "./notifications/HumanObservationRenderer";
@@ -35,6 +36,14 @@ export function activate(host: ToposyncHost): void {
     render: () => <LivePanoramaView host={host} />,
   });
   host.registerSettingsPanel(createCamerasSettingsPanel(host.ui));
+  host.registerSettingsPanel({
+    id: "com.toposync.cameras.audio-tools",
+    icon: "wave-square",
+    managesOwnPersistence: true,
+    name: { key: "ext.cameras.audio.toolsTitle", fallback: "Audio tools" },
+    description: { key: "ext.cameras.audio.toolsDescription" },
+    render: ({ i18n }) => <div className="settingsPanel"><AudioFileAnalysis i18n={i18n} /></div>,
+  });
   host.registerPipelineReviewPanel?.(createCameraRecipeReview(host.i18n));
   host.registerElementType(createCameraElementType(host));
   host.registerEditorTool(createAddCameraTool(host.i18n));

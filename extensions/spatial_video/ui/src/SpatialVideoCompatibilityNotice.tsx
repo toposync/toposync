@@ -19,7 +19,7 @@ export function SpatialVideoCompatibilityNotice({ loading, error, hasCompatibleP
     ? "Verificando câmeras com transmissão ativa e mapeamento nesta composição."
     : error
       ? error
-      : "Esta visualização só mostra câmeras que tenham uma transmissão/publicação ativa e um mapeamento com pelo menos 4 pontos de controle completos.";
+      : "Mapeie uma panorâmica salva na composição ou configure uma transmissão com uma vista calibrada para projetar a imagem nesta visualização.";
 
   return (
     <div

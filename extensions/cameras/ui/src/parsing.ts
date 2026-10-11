@@ -34,6 +34,12 @@ export function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+export function legacyMetricCalibrations(props: Record<string, unknown>): Record<string, unknown>[] {
+  if (Object.prototype.hasOwnProperty.call(props, "metric_calibrations")) return [];
+  return (Array.isArray(props.calibrated_views) ? props.calibrated_views : [])
+    .map(readRecord).filter(record => readRecord(record.projection_model).type === "camera_ray_ground_v2");
+}
+
 export function createUniqueId(): string {
   const cryptoAny = crypto as unknown as { randomUUID?: () => string };
   return cryptoAny.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;

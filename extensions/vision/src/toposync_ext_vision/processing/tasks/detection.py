@@ -9,6 +9,7 @@ from typing import Any
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
 from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
+from toposync.runtime.pipelines.image_geometry import transformed_geometry
 from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 
 from ...pipelines.schemas import VisionDetectConfig
@@ -89,6 +90,43 @@ class VisionDetectRuntime(TransformOperatorRuntime):
             return False
         self._last_inference_by_stream[key] = now_monotonic
         return True
+
+    def _region_input(self, packet: Packet, artifact_name: str, frame: Any) -> tuple[Packet, Any]:
+        region = packet.payload.get("image_region")
+        artifact = packet.artifacts[artifact_name]
+        if (
+            not isinstance(region, dict)
+            or region.get("artifact_name") != artifact_name
+            or region.get("image_geometry") != artifact.metadata.get("image_geometry")
+            or region.get("capture_evidence") != packet.payload.get("capture_evidence")
+            or region.get("frame_ts") != packet.payload.get("frame_ts")
+        ):
+            raise ValueError("Detection region is missing or does not belong to the selected image")
+        bounds = region.get("bbox_px")
+        height, width = frame.shape[:2]
+        if (
+            not isinstance(bounds, (list, tuple))
+            or len(bounds) != 4
+            or any(type(value) is not int for value in bounds)
+            or not (0 <= bounds[0] < bounds[2] <= width and 0 <= bounds[1] < bounds[3] <= height)
+        ):
+            raise ValueError(
+                "Detection region must be an ordered rectangle inside the selected image"
+            )
+        left, top, right, bottom = bounds
+        if tuple(bounds) == (0, 0, width, height):
+            return packet, frame
+        if not region.get("image_geometry"):
+            raise ValueError("A cropped detection region requires image geometry")
+        view = frame[top:bottom, left:right]
+        geometry = transformed_geometry(
+            artifact, [[1, 0, -left], [0, 1, -top], [0, 0, 1]], right - left, bottom - top
+        )
+        # This view and its geometry exist only for this inference, never in downstream queues.
+        temporary = packet.with_artifact(
+            replace(artifact, data=view, metadata={**artifact.metadata, **geometry})
+        )
+        return temporary, view
 
     def _normalize_detections(
         self,
@@ -349,6 +387,9 @@ class VisionDetectRuntime(TransformOperatorRuntime):
         detections: list[DetectionObject] = []
         now_monotonic = time.monotonic()
         if self._should_infer(packet, now_monotonic):
+            inference_packet = packet
+            if self._parsed.use_image_region:
+                inference_packet, frame = self._region_input(packet, artifact_name, frame)
             concurrency_key = f"vision.detect:{manifest.runtime}:{manifest.model_id}"
             raw_detections = await context.run_blocking(
                 backend.detect,
@@ -360,7 +401,7 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                 return []
             detections = self._normalize_detections(
                 raw_detections,
-                packet=packet,
+                packet=inference_packet,
                 manifest=manifest,
                 selected_artifact_name=artifact_name,
             )

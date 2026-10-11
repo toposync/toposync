@@ -318,3 +318,13 @@ def test_view_resolver_uses_canonical_camera_id_as_ptz_identity() -> None:
     )
     assert selected["view_id"] is None
     assert selected["reason"] == "ptz_device_mismatch"
+
+
+def test_panorama_reference_never_falls_back_to_obsolete_view_presets():
+    config = _config([_view("home", "1")])
+    config.compositions[0].elements[0].props["panorama_mapping"] = {"job_id": "canonical", "revision": 1}
+    selected = resolve_ptz_target_view(config=config, cameras_settings=_settings(), camera_id="cam1",
+                                      source_id="main", ptz_device_id="cam1", composition_id="front",
+                                      target={"world_anchor": {"x": 5, "z": 5}}, eligible_view_ids=["home"])
+    assert selected["preset_token"] is None
+    assert selected["reason"] == "panorama_navigation_required"

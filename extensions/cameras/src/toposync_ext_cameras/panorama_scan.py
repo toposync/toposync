@@ -2345,10 +2345,12 @@ class _Scan:
             if not any(issue.get("code") == "diagnostic_write_failed" for issue in self.issues):
                 self.issues.append({"code": "diagnostic_write_failed"})
 
-    async def _preserve_replay(self, attempt: _AttemptDiagnostic) -> None:
+    async def _preserve_replay(self, attempt: _AttemptDiagnostic, *, correction_failed: bool = False) -> None:
         """Persist only after Stop; never put private images in public telemetry."""
-        outcome = "accepted" if attempt.value["outcome"] == "capture_stable" else "rejected"
-        if not attempt.replay or len({path.stem for path in self.directory.glob(f"replay-{outcome}-*")}) >= MAX_REPLAYS_PER_OUTCOME:
+        outcome = "correction-failed" if correction_failed else "accepted" if attempt.value["outcome"] == "capture_stable" else "rejected"
+        # Reserve one bounded replay for a failure identified after settling.
+        limit = 1 if correction_failed else MAX_REPLAYS_PER_OUTCOME
+        if not attempt.replay or len({path.stem for path in self.directory.glob(f"replay-{outcome}-*")}) >= limit:
             return
         identifier = f"replay-{outcome}-{uuid.uuid4().hex}"
 
@@ -2374,7 +2376,7 @@ class _Scan:
             })
 
         await asyncio.to_thread(write)
-        attempt.value["replay_id"] = identifier
+        attempt.value["return_failure_replay_id" if correction_failed else "replay_id"] = identifier
 
     def _active_elapsed(self) -> float:
         now = self.active_finished if self.active_finished is not None and self.region_policy is None else time.monotonic()
@@ -3556,7 +3558,7 @@ class _Scan:
                         "command_id", "command_kind", "motion_epoch", "accepted",
                         "stale_after_execution", "command_elapsed_seconds",
                         "pulse_remaining_seconds", "device_timeout_s",
-                        "transport_elapsed_seconds",
+                        "transport_elapsed_seconds", "command_started_monotonic", "command_finished_monotonic",
                     ) if key in receipt
                 }
             if (
@@ -3728,6 +3730,11 @@ class _Scan:
             diagnostic.value["stop_command_accepted"] = accepted
             if accepted:
                 diagnostic.value["stop_accepted_seconds"] = time.monotonic() - start
+                receipt = self.last_stop_receipt or {}
+                diagnostic.value["stop_receipt"] = {key: receipt[key] for key in (
+                    "command_id", "command_started_monotonic", "command_finished_monotonic",
+                    "command_elapsed_seconds", "automatic_stop",
+                ) if key in receipt}
             return accepted
 
         def start_stop(reason: str) -> None:
@@ -4205,6 +4212,8 @@ class _Scan:
                     # Optional inspection must not mask the movement failure;
                     # Stop and command cleanup have already completed above.
                     diagnostic.value["terminal_scene_status"] = "unavailable"
+            if self.returning:
+                self._last_return_replay = diagnostic
             replay_started = time.monotonic()
             try:
                 await self._preserve_replay(diagnostic)
@@ -9404,7 +9413,7 @@ class _Scan:
             if return_issue is not None and self.physical_state != "restored":
                 self.issues.append(return_issue)
 
-    async def _verify_control(self) -> None:
+    async def _verify_control(self, *, check_limit: int | None = None) -> None:
         """Use the production movement/return path for twelve bounded checks."""
         if not any(
             self.capabilities.get(key)
@@ -9448,6 +9457,10 @@ class _Scan:
             await self._persist()
             return
         for index, (repetition, axis, direction) in enumerate(plan):
+            if check_limit is not None and index >= check_limit:
+                verification["status"] = "limited"
+                await self._persist()
+                return
             if index < len(checks):
                 existing = checks[index]
                 if (
@@ -9659,7 +9672,8 @@ class _Scan:
             fallback["state"] = "complete"
             await self._persist()
 
-    async def run(self, *, return_only: bool, verify_control: bool = False) -> dict:
+    async def run(self, *, return_only: bool, verify_control: bool = False,
+                  verification_check_limit: int | None = None) -> dict:
         self.capabilities = await self.camera.discover()
         if self.region_policy is not None and not return_only:
             if any(self.capabilities.get("axes", {}).get(axis) is not True for axis in ("pan", "tilt")):
@@ -9770,7 +9784,7 @@ class _Scan:
             if return_only:
                 await self._restore()
             elif verify_control:
-                await self._verify_control()
+                await self._verify_control(check_limit=verification_check_limit)
             else:
                 limits = self._limits()
                 await self._acquire_panorama(limits)
@@ -9924,8 +9938,10 @@ async def run_panorama_scan(
     checkpoint: dict | None = None,
     return_only: bool = False,
     verify_control: bool = False,
+    verification_check_limit: int | None = None,
     acquisition_policy: dict | None = None,
 ) -> dict:
     """Acquire a source panorama or deliberately restore an interrupted framing."""
     scan = _Scan(camera, output_dir, progress, cancelled, checkpoint, acquisition_policy)
-    return await scan.run(return_only=return_only, verify_control=verify_control)
+    return await scan.run(return_only=return_only, verify_control=verify_control,
+                          verification_check_limit=verification_check_limit)

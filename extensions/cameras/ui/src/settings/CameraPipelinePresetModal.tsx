@@ -9,11 +9,13 @@ import {
 } from "../api/camerasApi";
 import type {
   CameraConfig,
+  CameraOnvifOptimization,
   CameraContextComposition,
   CameraNotificationPriority,
   CameraPipelinePreset,
   ProcessingServer,
 } from "../types";
+import { CameraOnvifRecipeOptimization } from "./CameraOnvifRecipeOptimization";
 import { SubModal } from "../ui/SubModal";
 import { VisionModelConsentModal } from "./VisionModelConsentModal";
 import {
@@ -176,6 +178,8 @@ export function CameraPipelinePresetModal({
 }): React.ReactElement | null {
   const { t } = i18n.useI18n();
   const formId = React.useId();
+  const [onvifPending, setOnvifPending] = useState(false);
+  const [onvifOptimization, setOnvifOptimization] = useState<CameraOnvifOptimization>();
   const [sourceId, setSourceId] = useState("");
   const [pipelineName, setPipelineName] = useState("");
   const [compositionId, setCompositionId] = useState("");
@@ -303,6 +307,7 @@ export function CameraPipelinePresetModal({
     try {
       const response = await createCameraPipelinePreset(camera.id, {
         preset,
+        onvif_optimization: onvifOptimization,
         source_id: sourceId,
         pipeline_name: pipelineName.trim(),
         enabled: false,
@@ -367,6 +372,7 @@ export function CameraPipelinePresetModal({
   const modelStatusWaiting = Boolean(!modelStatusHasPayload && !modelStatusError);
   const showModelReadinessNotice = modelStatusWaiting || modelStatusUnavailable || !selectedModelReady;
   const createBlockedReasons: string[] = [];
+  if (onvifPending) createBlockedReasons.push(t("ext.cameras.onvif.qualify"));
   if (noSource) {
     createBlockedReasons.push(
       t("ext.cameras.pipeline_preset.blocked.no_source", {}, "Add an active video source before creating a pipeline."),
@@ -801,6 +807,7 @@ export function CameraPipelinePresetModal({
           </select>
         </div>
 
+        <CameraOnvifRecipeOptimization camera={camera} sourceId={sourceId} preset={preset} processingServerId={processingServerId} value={onvifOptimization} onChange={setOnvifOptimization} onPendingChange={setOnvifPending} t={t} disabled={creating} />
         <p className="settingsDescription">{t("ext.cameras.recipe.saved_disabled")}</p>
 
         <div className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>

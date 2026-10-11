@@ -23,10 +23,9 @@ from pydantic import BaseModel, Field
 from PIL import Image
 
 from .panorama import _digest, _error
-from .panorama_capture import PanoramaCaptureError
+from .panorama_capture import PanoramaCaptureError, require_motion_automation
 from .panorama_navigation import (
     MAXIMUM_LIVE_CENTER_ERROR_PIXELS, VisualNavigator,
-    select_direct_native_reference, select_native_reference,
 )
 from .panorama_scan import ATTEMPT_SECONDS, _Scan, _Stopped
 from .processing.panorama_mapping import _rotation_basis, panorama_pixel_to_ray
@@ -711,17 +710,7 @@ class LivePanoramaService:
                 timings["discovery_prepared"] = preparation is not None
                 timings["discovery_metadata_age_seconds"] = max(0.0, time.monotonic() - metadata_prepared_at)
                 timings["discovery_complete"] = time.monotonic() - started
-                automation = scanner.capabilities.get("motion_automation", {})
-                explicitly_disabled = all(
-                    automation.get(key) is False for key in ("auto_tracking", "automatic_return")
-                )
-                operator_confirmed = (camera_settings or {}).get("control", {}).get(
-                    "automation_exclusive_control_confirmed"
-                ) is True
-                if any(value is True for value in automation.values()):
-                    raise PanoramaCaptureError("external_automation_active")
-                if not explicitly_disabled and not operator_confirmed:
-                    raise PanoramaCaptureError("motion_automation_unqualified")
+                require_motion_automation(scanner.capabilities.get("motion_automation", {}), camera_settings or {})
                 if cancelled():
                     return
                 if time.monotonic() > expires:
@@ -751,21 +740,10 @@ class LivePanoramaService:
                 timings["retarget_stop_continued"] = continued
                 timings["initial_reference_observed"] = time.monotonic() - started
                 scanner._check()
-                references = self.panorama.native_references(session.camera_id, session.source_id, session.binding)
                 ray = panorama_pixel_to_ray(intention.x, intention.y)
-                selected = select_native_reference(session.localizer, hint, ray, references) if hint and references else None
-                timings["native_departure_hint_used"] = selected is not None
-                if selected is None and references:
-                    selected = select_direct_native_reference(session.localizer, ray, references, hint)
-                    timings["native_direct_target_used"] = selected is not None
-                if selected is not None:
-                    navigator.selected_native_reference = selected
-                    await camera.bind_reference_destination(selected["destination"])
-                    result = await navigator.aim(ray, native_destination=selected["destination"], native_ray=selected["ray"])
-                else:
-                    await navigator.prepare_stopped_view()
-                    timings["initial_view_qualified"] = time.monotonic() - started
-                    result = await navigator.aim(ray, **({"native_references": references} if references else {}))
+                await navigator.prepare_stopped_view()
+                timings["initial_view_qualified"] = time.monotonic() - started
+                result = await navigator.aim(ray)
                 timings["aim_complete"] = time.monotonic() - started
                 if not cancelled():
                     session.result = {"sequence": intention.sequence, **result}
@@ -773,12 +751,6 @@ class LivePanoramaService:
                 pass
             except Exception as error:
                 failure = error
-                if (getattr(navigator, "selected_native_reference", None) is not None
-                        and getattr(error, "code", None) in {
-                            "visual_native_reference_unconfirmed", "return_binding_changed", "return_preset_changed",
-                            "return_preset_ambiguous", "return_optical_state_mismatch", "return_owner_mismatch",
-                        }):
-                    self.panorama.invalidate_native_reference(navigator.selected_native_reference, error.code)
             finally:
                 if continuous_preparation is not None and not continuous_preparation.done() and (cancelled() or failure is not None):
                     continuous_preparation.cancel()

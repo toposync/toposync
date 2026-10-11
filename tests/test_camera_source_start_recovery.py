@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
+from types import SimpleNamespace
 from typing import Any
 
 from toposync.runtime.config_store import Pipeline
@@ -108,5 +110,46 @@ def test_camera_source_treats_capture_start_timeout_as_transient(monkeypatch) ->
     assert init_backends == ["auto"]
     assert int(details["node"].get("error_count") or 0) == 0
     assert int(details["node"].get("emitted_packets") or 0) == 0
+    assert details["node"]["unavailable_reason"] == "camera_source_unavailable"
     assert details["backend_override"] == "ffmpeg"
     assert "timed out after 0.05s" in str(details["last_start_error"])
+
+
+def test_camera_source_availability_recovers_only_after_a_fresh_frame(monkeypatch) -> None:
+    import numpy as np
+
+    from toposync.runtime.pipelines.execution import NodeRuntimeMetrics
+    from toposync_ext_cameras.capture_service import CameraCaptureFrame
+    from toposync_ext_cameras.pipelines import operators as camera_ops
+
+    async def scenario():
+        source = camera_ops.CameraSourceRuntime({"rtsp_url": "rtsp://example"}, PipelineRuntimeDependencies())
+        context = SimpleNamespace(inputs={}, pipeline_name="recovery", node_id="source",
+                                  logger=logging.getLogger(__name__), metrics=NodeRuntimeMetrics())
+
+        async def unavailable(_context):
+            raise camera_ops._CameraSourceTransientError("capture start timeout")
+
+        monkeypatch.setattr(source, "_ensure_grabber", unavailable)
+        assert await source.produce(context) is None
+        assert context.metrics.unavailable_reason == "camera_source_unavailable"
+
+        async def opened(_context):
+            source._grabber = object()
+            source._lease_id = "recovered"
+
+        ready = False
+
+        async def fresh(*_args, **_kwargs):
+            return CameraCaptureFrame(lease_id="recovered", frame=np.zeros((2, 2, 3), dtype=np.uint8),
+                                      frame_ts=time.time(), width=2, height=2, fresh=ready)
+
+        monkeypatch.setattr(source, "_ensure_grabber", opened)
+        monkeypatch.setattr(source._capture_service, "get_latest", fresh)
+        assert await source.produce(context) is None
+        assert context.metrics.unavailable_reason == "camera_source_unavailable"
+        ready = True
+        assert await source.produce(context) is not None
+        assert context.metrics.unavailable_reason is None
+
+    asyncio.run(scenario())

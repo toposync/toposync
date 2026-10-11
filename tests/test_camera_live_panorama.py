@@ -669,12 +669,12 @@ async def test_final_stop_fences_pending_result_and_binds_its_own_controller_epo
     reused = reusable_arrival and not superseded
     destination = {"kind": "preset", "preserve_zoom": True}
     reference = {"destination": destination, "ray": [1, 0, 0]}
-    monkeypatch.setattr(module, "select_direct_native_reference", lambda *args: reference if departure == "direct" else None)
+    monkeypatch.setattr(module, "select_direct_native_reference", lambda *args: pytest.fail("Retired native points must not be consulted"), raising=False)
     if departure in {"fresh", "expired"}:
         session.departure_hint = {"rotation_matrix": np.eye(3).tolist(),
                                   "observed_at": time.monotonic() - (2 if departure == "expired" else 0)}
         session.last_registration = 0  # intend consumes pointing eligibility independently.
-        monkeypatch.setattr(module, "select_native_reference", lambda *args: reference)
+        monkeypatch.setattr(module, "select_native_reference", lambda *args: pytest.fail("Retired native points must not be consulted"), raising=False)
 
     async def reusable(*_args):
         return reusable_arrival
@@ -750,10 +750,7 @@ async def test_final_stop_fences_pending_result_and_binds_its_own_controller_epo
             events.append("prepare-view")
 
         async def aim(self, ray, **kwargs):
-            if departure in {"fresh", "direct"}:
-                assert kwargs == {"native_destination": destination, "native_ray": [1, 0, 0]}
-            else:
-                assert "native_destination" not in kwargs
+            assert kwargs == {}, "Retired points must never dispatch a preset"
             events.append("aim")
             if superseded:
                 session.sequence = 2
@@ -791,7 +788,7 @@ async def test_final_stop_fences_pending_result_and_binds_its_own_controller_epo
         "acquire",
         "initial-stop",
         "fresh-observation",
-        "bind-reference" if departure in {"fresh", "direct"} else "prepare-view",
+        "prepare-view",
         "aim",
         *([] if reused else ["confirm-stop"]),
         *(['final-epoch'] if (confirmed_stop or reused) and not superseded else []),
@@ -813,7 +810,7 @@ async def test_final_stop_fences_pending_result_and_binds_its_own_controller_epo
 @pytest.mark.anyio
 @pytest.mark.parametrize("departure", ["fresh", "expired", "direct"])
 @pytest.mark.parametrize("confirmed_stop", [True, False])
-async def test_native_departure_hint_does_not_skip_stopped_observation_or_final_stop(
+async def test_retired_native_departure_hint_never_dispatches_presets_and_preserves_stop(
     monkeypatch, tmp_path, departure, confirmed_stop
 ):
     await test_final_stop_fences_pending_result_and_binds_its_own_controller_epoch(

@@ -4,23 +4,20 @@ export type PanoramaProjectionSolution = {
   matrix: number[][] | null;
   inverse_matrix: number[][] | null;
   support_polygon: Array<[number, number]>;
-  inlier_point_ids?: string[];
   quality: {
     status: string;
     reasons: string[];
+    warnings?: string[];
     number_of_fit_points: number;
-    number_of_check_points: number;
-    number_of_inliers: number;
-    inlier_ratio: number;
     angular_threshold_radians: number;
     median_fit_error_radians: number | null;
     p95_fit_error_radians: number | null;
-    maximum_check_error_radians: number | null;
+    point_errors?: Array<{ id: string; error_radians: number }>;
     [key: string]: unknown;
   };
   preview: {
     eligible: boolean;
-    status: "blocked" | "provisional" | "ready";
+    status: "blocked" | "ready";
     reasons: string[];
     context?: {
       job_id: string;
@@ -47,7 +44,6 @@ export type PanoramaProjector = {
 };
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-const missingChecks = "at_least_two_independent_check_points_required";
 type Vector = [number, number, number];
 const multiply = (matrix: number[][], vector: Vector): Vector => matrix.map(
   (row) => row[0] * vector[0] + row[1] * vector[1] + row[2] * vector[2],
@@ -58,7 +54,7 @@ const unit = (vector: Vector): Vector | null => {
     ? vector.map((value) => value / length) as Vector : null;
 };
 
-function insideSupport(x: number, z: number, polygon: Array<[number, number]>): boolean {
+export function insideSupport(x: number, z: number, polygon: Array<[number, number]>): boolean {
   let sign = 0;
   for (let index = 0; index < polygon.length; index += 1) {
     const start = polygon[index];
@@ -81,27 +77,12 @@ export function createPanoramaProjector(
   coverage: PanoramaCoverageMask | null | undefined,
 ): PanoramaProjector | null {
   const quality = solution?.quality;
-  const preview = solution?.preview;
-  if (!solution || solution.type !== "panorama_ray_plane_v1" || !quality || preview?.eligible !== true
-    || !["provisional", "ready"].includes(preview.status) || !["ready", "review"].includes(quality.status)
-    || !Array.isArray(quality.reasons) || quality.reasons.some((reason) => reason !== missingChecks)
-    || !Array.isArray(preview.reasons) || preview.reasons.some((reason) => reason !== missingChecks)) return null;
-  const fitCount = quality.number_of_fit_points;
-  const checkCount = quality.number_of_check_points;
-  const inliers = quality.number_of_inliers;
-  const threshold = quality.angular_threshold_radians;
-  const median = quality.median_fit_error_radians;
-  const percentile = quality.p95_fit_error_radians;
-  const provisional = quality.reasons.includes(missingChecks);
-  if (![fitCount, checkCount, inliers].every((value) => finite(value) && Number.isInteger(value))
-    || inliers < 6 || fitCount < inliers || fitCount > 64 || checkCount < 0 || fitCount + checkCount > 64
-    || !finite(quality.inlier_ratio) || quality.inlier_ratio < 0.8 || quality.inlier_ratio > 1
-    || Math.abs(quality.inlier_ratio - inliers / fitCount) > 1e-9
-    || !finite(threshold) || threshold <= 0 || threshold >= Math.PI / 4
-    || !finite(median) || !finite(percentile) || median < 0 || percentile < median || percentile > threshold
-    || (checkCount < 2) !== provisional || provisional !== (preview.status === "provisional")
-    || (checkCount > 0 && (!finite(quality.maximum_check_error_radians)
-      || quality.maximum_check_error_radians < 0 || quality.maximum_check_error_radians > threshold))) return null;
+  if (!solution || solution.type !== "panorama_ray_plane_v1" || !quality
+    || solution.preview?.eligible !== true || quality.status !== "ready"
+    || !Array.isArray(quality.reasons) || quality.reasons.length
+    || !Array.isArray(solution.preview.reasons) || solution.preview.reasons.length
+    || !finite(quality.number_of_fit_points) || !Number.isInteger(quality.number_of_fit_points)
+    || quality.number_of_fit_points < 4 || quality.number_of_fit_points > 64) return null;
   const { matrix, inverse_matrix: inverse, support_polygon: support } = solution;
   if (![matrix, inverse].every((value) => Array.isArray(value) && value.length === 3
     && value.every((row) => Array.isArray(row) && row.length === 3 && row.every(finite)))
@@ -138,7 +119,7 @@ export function createPanoramaProjector(
     if (!point.every(finite) || point[2] <= 1e-12) return null;
     const x = point[0] / point[2];
     const z = point[1] / point[2];
-    return finite(x) && finite(z) && insideSupport(x, z, support) ? { x, z } : null;
+    return finite(x) && finite(z) ? { x, z } : null;
   };
   return {
     panoramaToWorld(point) {
@@ -152,7 +133,7 @@ export function createPanoramaProjector(
       return rayToWorld([Math.cos(elevation) * Math.cos(pan), Math.cos(elevation) * Math.sin(pan), Math.sin(elevation)]);
     },
     worldToPanorama({ x, z }) {
-      if (!finite(x) || !finite(z) || !insideSupport(x, z, support)) return null;
+      if (!finite(x) || !finite(z)) return null;
       const ray = unit(multiply(matrix, [x, z, 1]));
       if (!ray || !rayToWorld(ray)) return null;
       const horizontal = Math.hypot(ray[0], ray[1]);

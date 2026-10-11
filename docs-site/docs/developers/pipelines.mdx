@@ -264,3 +264,39 @@ This page is the map, not the full reference. Separate docs should cover:
 - vision model provisioning;
 - telemetry and storage retention;
 - extension authoring for custom operators.
+
+
+### Motion-guided image framing
+
+Set `camera.image_crop.region_mode` to `"motion"` after `camera.motion_gate`, then
+set `vision.detect.use_image_region` to `true`. Keep the same image input for both.
+In this mode the crop operator emits `image_region` metadata, not another image.
+The detector uses a temporary view for its existing inference and maps results
+back through the existing image geometry. `main` stays intact for mapping,
+tracking evidence and the final object crop. No image is added to downstream queues.
+Fixed cropping continues to write the configured image artifact.
+
+The operator verifies motion provenance against the selected image and capture.
+It combines recent motion regions, adds context and immediately expands for new
+activity. It keeps only bounded coordinates, never previous images. The current
+policy uses a 0.75-second history, a minimum 640-pixel side, 25% context on each
+side and full-image fallback above 65% area or when motion blobs saturate the gate.
+Missing `camera.motion_gate` is a configuration error. Unverified motion, camera
+movement, stale evidence and dispersed activity use the full image. The detector
+rejects a region that belongs to another capture or image, or exceeds image bounds.
+
+A full-image observation replaces the crop at least once per second **at the
+crop operator's input cadence**. Downstream frame drops can reduce delivered
+coverage; this is not a guarantee of continuous observation of stationary objects.
+Existing motion admission rules still apply, including small-object limitations.
+
+`image_region.reason` and `image_region.area_ratio` describe the decision.
+Numeric telemetry exposes `camera.crop.area_ratio` and `camera.crop.unverified_motion`
+through the existing pipeline telemetry endpoint. Temporary editor previews omit
+motion gates and therefore cannot reproduce automatic framing; use the running
+pipeline's observations and telemetry to validate it.
+
+Measure memory, queue pressure, detector sharing and detection quality before
+enabling this composition in multiple recipes. Motion framing is not enabled in
+presets by default. In the crop editor, choose **Follow motion**; in the detection
+editor, enable **Use framing from the previous step**.

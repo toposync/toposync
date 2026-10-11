@@ -7,7 +7,7 @@ const ts = require("typescript");
 const filename = path.resolve(__dirname, "../src/ui/App.tsx");
 const source = fs.readFileSync(filename, "utf8");
 const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = new Set(["notificationMatchesDataFilter", "notificationMatchesFilter", "mergeNotificationPage", "upsertNotificationInState", "notificationFiltersEqual", "notificationFilterFacetsEqual", "stringArraysEqual"]);
+const names = new Set(["notificationHistoryRefreshMode","notificationMatchesDataFilter", "notificationMatchesFilter", "mergeNotificationPage", "upsertNotificationInState", "notificationFiltersEqual", "notificationFilterFacetsEqual", "stringArraysEqual"]);
 const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text));
 const context = {withoutEphemeralImage: value => value, sortNotificationIdsByCreatedDesc: ids => [...ids].sort(), asRecord: value => value && typeof value === "object" ? value : {}, notificationPriority: () => "medium"};
 vm.createContext(context);
@@ -130,4 +130,14 @@ test("date-only server results append pages even when semantic mode is selected"
   const first = context.mergeNotificationPage({byId:{},visibleIds:[]},[{id:"one"}],{replaceVisible:true,filter,ranked:false});
   const second = context.mergeNotificationPage(first,[{id:"two"}],{replaceVisible:false,filter,ranked:false});
   assert.equal(second.visibleIds.join(","),"one,two");
+});
+
+test("refresh policy updates deterministic selections without rerunning models", () => {
+  const filter = {priorities:["low"],types:[],query:""};
+  assert.equal(context.notificationHistoryRefreshMode(filter,false),"none");
+  assert.equal(context.notificationHistoryRefreshMode(filter,true),"automatic");
+  assert.equal(context.notificationHistoryRefreshMode({...filter,extension:{id:"categories",value:"dog"}},false),"automatic");
+  assert.equal(context.notificationHistoryRefreshMode({...filter,semantic:"visual"},true),"automatic");
+  assert.equal(context.notificationHistoryRefreshMode({...filter,semantic:true,query:"cat"},true),"manual");
+  assert.equal(context.notificationHistoryRefreshMode({...filter,semantic:"visual",query:"cat",extension:{id:"categories",value:"cat"}},false),"manual");
 });

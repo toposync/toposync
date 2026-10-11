@@ -304,7 +304,7 @@ class PtzAttentionRequestRuntime(SinkRuntime):
         profile: AttentionProfile,
         context: Any,
     ) -> str | None:
-        if effective_mode(profile) != "live_preset":
+        if effective_mode(profile) not in {"live_preset", "live_panorama"}:
             return None
         get_config = getattr(self.dependencies.config_store, "get_config", None)
         if not callable(get_config):

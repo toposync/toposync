@@ -33,6 +33,8 @@ from .processing.panorama_mapping import (
     estimate_panorama_mapping,
     image_pixel_to_ray,
     map_world_to_ray,
+    map_ray_to_world,
+    mapping_extrapolated,
     panorama_pixel_to_ray,
     preview_panorama_mapping,
     ray_to_pan_tilt,
@@ -40,7 +42,10 @@ from .processing.panorama_mapping import (
 )
 from .panorama_reference import PanoramaReferenceCoordinator
 from .settings import camera_source_has_ptz, get_camera_device, get_camera_source, iter_camera_sources
-from .source_panorama import SourcePanoramaService, _identity as source_panorama_identity
+from .source_panorama import (
+    SourcePanoramaService, _identity as source_panorama_identity,
+    _geometry_identity as source_panorama_geometry_identity, _artifact_identity_matches,
+)
 
 _PREFIX = "/api/cameras/cameras/{camera_id}/panorama"
 _MAX_STORAGE = 512 * 1024 * 1024
@@ -174,7 +179,6 @@ class World(_Input):
 
 class Point(_Input):
     id: str = Field(min_length=1, max_length=100)
-    role: Literal["fit", "check"]
     panorama: Pixel
     world: World
 
@@ -396,6 +400,18 @@ class PanoramaService:
             "aim_enabled": self._validated(job),
         }
         if job.get("source_panorama"):
+            if not result.get("coverage_bounds"):
+                try:
+                    with Image.open(self.root / job["id"] / "coverage.png") as mask:
+                        bounds = mask.getbbox()
+                        if bounds:
+                            left, top, right, bottom = bounds
+                            result["coverage_bounds"] = {
+                                "min_x": left / mask.width, "max_x": right / mask.width,
+                                "min_y": top / mask.height, "max_y": bottom / mask.height,
+                            }
+                except OSError:
+                    pass  # Missing imagery must not hide the draft's recovery controls.
             settings = (await self.store.get_settings()).extensions.get("com.toposync.cameras", {})
             camera = get_camera_device(settings, camera_id=job["camera_id"])
             source = get_camera_source(camera, source_id=job["source_id"]) if camera else None
@@ -411,6 +427,7 @@ class PanoramaService:
                 if not context_validated:
                     await self._current(job)
             except HTTPException as error:
+                result["permissions"] = {key: False for key in result["permissions"]}
                 preview = {
                     "eligible": False,
                     "status": "blocked",
@@ -567,7 +584,10 @@ class PanoramaService:
             raise _error("source_panorama_unavailable", "Choose a saved panorama from this source")
         if revision is not None and artifact.get("revision") != revision:
             raise _error("source_panorama_revision_conflict", "The saved panorama revision changed")
-        if artifact.get("_identity") != source_panorama_identity(camera, source):
+        if not _artifact_identity_matches(
+            artifact, source_panorama_identity(camera, source),
+            source_panorama_geometry_identity(camera, source),
+        ):
             raise _error(
                 "source_panorama_changed", "The source changed; choose a compatible panorama"
             )
@@ -645,7 +665,7 @@ class PanoramaService:
             "height": height,
             "crop": reference.get("crop", artifact.get("crop")) if reference else artifact.get("crop"),
             "crop_revision": reference.get("crop_revision", 1) if reference else artifact.get("crop_revision", 1),
-            "source_identity": artifact["_identity"],
+            "source_identity": artifact.get("_geometry_identity", artifact["_identity"]),
             "geometry": geometry,
         }, paths
 
@@ -668,7 +688,9 @@ class PanoramaService:
                 "The composition geometry changed; capture and validate a new mapping",
             )
         identity = (
-            source_panorama_identity(camera, source)
+            (source_panorama_geometry_identity(camera, source)
+             if str(job["source_panorama"].get("source_identity", "")).startswith("geometry-v1:")
+             else source_panorama_identity(camera, source))
             if source is not None and job.get("source_panorama")
             else self._source_digest(camera, source)
             if source is not None
@@ -1304,7 +1326,7 @@ class PanoramaService:
         return await self._public(job)
 
     async def points(
-        self, request: Request, camera_id: str, job_id: str, body: Points
+        self, request: Request, camera_id: str, job_id: str, body: Points, *, preview: bool = False
     ) -> dict[str, Any]:
         self._authorize(request, camera_id, write=True)
         job = self._job(camera_id, job_id, body.revision)
@@ -1336,15 +1358,18 @@ class PanoramaService:
             geometry_points.append(
                 {
                     "id": point.id,
-                    "role": point.role,
                     "world_x": point.world.x,
                     "world_z": point.world.z,
                     "ray": panorama_pixel_to_ray(point.panorama.x, point.panorama.y),
                 }
             )
         solution = await asyncio.to_thread(estimate_panorama_mapping, geometry_points)
+        if preview:
+            self._job(camera_id, job_id, body.revision)
+            return await self._public({**job, "points": [point.model_dump() for point in body.points], "solution": solution})
         async with self.lock:
             self._job(camera_id, job_id, body.revision)
+            await self._current(job, request)
             if (await self._public(job))["active"]:
                 raise _error(
                     "active_mapping_immutable",
@@ -1352,17 +1377,21 @@ class PanoramaService:
                 )
             if camera_id in self.busy:
                 raise _error("camera_busy", "Wait for the current camera operation")
-            job.update(
+            updated = dict(job,
                 points=[point.model_dump() for point in body.points],
                 solution=solution,
                 checks=[],
                 revision=body.revision + 1,
                 error=None,
             )
-            self._save(job)
+            self._save(updated)
+            job.update(updated)
         return await self._public(job)
 
     def _target(self, job: dict[str, Any], world: dict[str, float]) -> dict[str, Any]:
+        # Extrapolated observations do not widen the physical navigation envelope.
+        if mapping_extrapolated(job.get("solution") or {}, world["x"], world["z"]):
+            raise _error("outside_validated_region", "Choose a place inside the mapped region", 422)
         if job.get("source_panorama"):
             if not self._map_validated(job):
                 raise _error("mapping_not_ready", "Validate the mapped places before pointing")
@@ -1450,16 +1479,19 @@ class PanoramaService:
 
     async def _visual_operation(
         self, request: Request, job: dict[str, Any], target: dict[str, Any] | None,
+        *, borrowed_control: dict | None = None, maximum_error_pixels: float = 12,
     ) -> tuple[str, dict[str, Any]]:
         # Pin the exact source reference before any camera reservation. Every
         # supported pointer writer takes the same per-source fence, so active
         # geometry cannot change between validation and a motor command.
         async with self.reference_coordinator.hold(job["camera_id"], job["source_id"]):
             await self._current(job, request)
-            return await self._visual_operation_with_pinned_reference(request, job, target)
+            return await self._visual_operation_with_pinned_reference(request, job, target,
+                **({"borrowed_control": borrowed_control, "maximum_error_pixels": maximum_error_pixels} if borrowed_control is not None else {}))
 
     async def _visual_operation_with_pinned_reference(
         self, request: Request, job: dict[str, Any], target: dict[str, Any] | None,
+        *, borrowed_control: dict | None = None, maximum_error_pixels: float = 12,
     ) -> tuple[str, dict[str, Any]]:
         from .panorama_scan import _Scan, _Stopped, _write_image, _match
         from .panorama_capture import PanoramaCaptureError
@@ -1468,14 +1500,15 @@ class PanoramaService:
         if self.camera_factory is None:
             raise _error("visual_control_unavailable", "Visual camera control is unavailable")
         directory = self.root / job["id"] / "navigation"
-        checkpoint = dict(job.get("_navigation_checkpoint") or {})
+        checkpoint = {} if borrowed_control is not None else dict(job.get("_navigation_checkpoint") or {})
         checkpoint["active_seconds"] = 0.0
         checkpoint.pop("navigation_commands", None)
         camera = self.camera_factory(services=self.services, camera_id=job["camera_id"],
-                                     source_id=job["source_id"], settings={}, job_id=job["id"], output_dir=directory)
+                                     source_id=job["source_id"], settings={}, job_id=job["id"], output_dir=directory,
+                                     **({"borrowed_control": borrowed_control} if borrowed_control is not None else {}))
 
         async def progress(event: dict[str, Any]) -> None:
-            if event.get("checkpoint"):
+            if event.get("checkpoint") and borrowed_control is None:
                 job["_navigation_checkpoint"] = event["checkpoint"]
             job["navigation"] = {"phase": event.get("phase"), "physical_state": event.get("physical_state", "unknown")}
             self._save(job)
@@ -1521,7 +1554,7 @@ class PanoramaService:
                     scanner.checkpoint.pop("visual_original_ray", None)
                     scanner.checkpoint.pop("initial_path", None)
             else:
-                if not scanner.saved_return and not scanner.checkpoint.get("visual_original_ray"):
+                if borrowed_control is None and not scanner.saved_return and not scanner.checkpoint.get("visual_original_ray"):
                     path = directory / "initial-reference.jpg"
                     await asyncio.to_thread(_write_image, path, scanner.last_frame["image"])
                     scanner.checkpoint.update(initial_path=str(path), initial_zoom=scanner.last_pose.get("zoom"),
@@ -1535,12 +1568,13 @@ class PanoramaService:
                 )
                 if located.get("status") != "localized":
                     raise PanoramaCaptureError(located.get("reason", "panorama_visual_localization_failed"))
-                if not scanner.checkpoint.get("visual_original_ray"):
+                if borrowed_control is None and not scanner.checkpoint.get("visual_original_ray"):
                     scanner.checkpoint["visual_original_ray"] = _rotation_basis(located["rotation_matrix"])[:, 2].tolist()
                     await scanner._persist()
                 binding = job["source_panorama"]
                 localizer = self._localizers[(binding["id"], binding["geometry"]["model_digest"])]
-                evidence = await VisualNavigator(scanner, localizer).aim(target["ray"])
+                evidence = await VisualNavigator(scanner, localizer).aim(target["ray"],
+                    **({"maximum_error_pixels": maximum_error_pixels} if borrowed_control is not None else {}))
                 evidence["lens"] = localizer.lens
             await self._current(job, request)
             filename = f"check-{uuid.uuid4().hex}.jpg"
@@ -1576,9 +1610,11 @@ class PanoramaService:
                         }
                     except Exception:
                         scanner.checkpoint["last_observed_frame"] = {"unavailable": True}
-                job["_navigation_checkpoint"] = scanner.checkpoint
+                if borrowed_control is None:
+                    job["_navigation_checkpoint"] = scanner.checkpoint
+                return_checkpoint = job.get("_navigation_checkpoint") or {}
                 job["navigation"] = {"phase": "failed" if failure_code else "complete", "error_code": failure_code, "physical_state": "restored" if restored and job.get("stop_confirmed") else "stopped" if job.get("stop_confirmed") else scanner.physical_state,
-                                     "can_return": bool((scanner.saved_return or scanner.checkpoint.get("visual_original_ray")) and scanner.checkpoint.get("initial_path"))}
+                                     "can_return": bool((return_checkpoint.get("return") or return_checkpoint.get("visual_original_ray")) and return_checkpoint.get("initial_path"))}
                 self._save(job)
             finally:
                 try:
@@ -1616,12 +1652,12 @@ class PanoramaService:
             (
                 point
                 for point in job["points"]
-                if point["id"] == body.point_id and point["role"] == "check"
+                if point["id"] == body.point_id
             ),
             None,
         )
         if point is None:
-            raise _error("independent_point_required", "Choose an independent check place", 422)
+            raise _error("unknown_point", "Choose a mapped place", 422)
         target = self._target(job, point["world"])
         # Invalidate earlier evidence before a repeat, even when this attempt fails.
         job["checks"] = [check for check in job["checks"] if check["point_id"] != body.point_id]
@@ -1701,15 +1737,16 @@ class PanoramaService:
             raise _error("mapping_not_ready", "Complete the calibration before activating it")
         if not self._map_usable(job):
             raise _error(
-                "physical_checks_required",
-                "Confirm two independent places with fresh camera images",
+                "mapping_not_ready",
+                "The mapping must have a usable solution before activation",
             )
         async with self.lock:
             self._job(camera_id, job_id, body.revision)
+            await self._current(job, request)
             if camera_id in self.busy or not self._map_usable(job):
                 raise _error(
-                    "physical_checks_required",
-                    "Complete all independent camera checks before activating",
+                    "mapping_not_ready",
+                    "The mapping changed before activation",
                 )
             previous = await self._pointer(job)
             pointer = {
@@ -1738,22 +1775,17 @@ class PanoramaService:
                     "activation_conflict",
                     "The composition changed before activation; reload and review it",
                 ) from None
-            self._save(job)
         return await self._public(job)
 
     @staticmethod
     def _map_validated(job: dict[str, Any]) -> bool:
-        return (
-            job.get("state") == "ready"
-            and isinstance(job.get("solution"), dict)
-            and job["solution"].get("quality", {}).get("status") == "ready"
-            and sum(point.get("role") == "fit" for point in job.get("points", [])) >= 6
-            and sum(point.get("role") == "check" for point in job.get("points", [])) >= 2
-        )
+        return (job.get("state") == "ready" and len(job.get("points", [])) >= 4
+                and isinstance(job.get("solution"), dict)
+                and preview_panorama_mapping(job["solution"])["eligible"])
 
     @classmethod
     def _map_usable(cls, job: dict[str, Any]) -> bool:
-        return cls._map_validated(job) if job.get("source_panorama") else cls._validated(job)
+        return cls._map_validated(job)
 
     @staticmethod
     def _validated(job: dict[str, Any]) -> bool:
@@ -1763,7 +1795,7 @@ class PanoramaService:
             or job["solution"]["quality"]["status"] != "ready"
         ):
             return False
-        valid_checks = {point["id"] for point in job["points"] if point["role"] == "check"}
+        valid_checks = {point["id"] for point in job["points"]}
         confirmed = {
             check["point_id"]
             for check in job["checks"]
@@ -1777,8 +1809,8 @@ class PanoramaService:
             )
         }
         return (
-            len(valid_checks) >= 2
-            and confirmed == valid_checks
+            len(confirmed) >= 2
+            and confirmed <= valid_checks
             and all(
                 check["result"] == "correct"
                 for check in job["checks"]
@@ -1787,7 +1819,7 @@ class PanoramaService:
         )
 
     async def get_active(
-        self, *, camera_id: str, source_id: str = "", composition_id: str = ""
+        self, *, camera_id: str, source_id: str = "", composition_id: str = "", element_id: str = ""
     ) -> dict[str, Any]:
         candidates = []
         config = await self.store.get_config()
@@ -1799,11 +1831,13 @@ class PanoramaService:
                 camera_elements.append((composition, element))
                 if composition_id and composition.id != composition_id:
                     continue
+                if element_id and element.id != element_id:
+                    continue
                 pointer = element.props.get("panorama_mapping")
                 if pointer is not None:
                     pointer = pointer if isinstance(pointer, dict) else {}
                     candidates.append(
-                        (pointer, self.jobs.get(pointer.get("job_id")), composition, element)
+                        (pointer, self.jobs.get(pointer.get("job_id")) if isinstance(pointer.get("job_id"), str) else None, composition, element)
                     )
         if not candidates:
             return {"applies": False}
@@ -1816,6 +1850,7 @@ class PanoramaService:
             or job["element_id"] != element.id
             or job["camera_id"] != camera_id
             or pointer.get("status") != "ready"
+            or type(pointer.get("revision")) is not int
         ):
             return {"applies": True, "reason": "panorama_reference_invalid"}
         if sum(item.id == job["element_id"] for _, item in camera_elements) != 1:
@@ -1843,6 +1878,66 @@ class PanoramaService:
             return {"applies": True, "reason": error.detail["code"]}
         return {"applies": True, "job": await self._public(job, pointer=pointer)}
 
+    async def mapping_summary(self, *, camera_id: str, composition_id: str, element: Any) -> dict[str, Any]:
+        """Persisted configuration only; never opens a stream or contacts a device."""
+        pointer = element.props.get("panorama_mapping")
+        source_id = pointer.get("source_id", "") if isinstance(pointer, dict) else ""
+        active = await self.get_active(camera_id=camera_id, composition_id=composition_id,
+                                       element_id=element.id, source_id=source_id)
+        job = active.get("job")
+        reason = active.get("reason")
+        draft = None
+        if pointer is None:
+            drafts = [item for item in self.jobs.values() if item["camera_id"] == camera_id
+                      and item["composition_id"] == composition_id and item["element_id"] == element.id]
+            draft = max(drafts, key=lambda item: item["updated_at"]) if drafts else None
+            if draft:
+                source_id = draft["source_id"]
+                try:
+                    await self._current(draft)
+                except HTTPException as error:
+                    reason = error.detail["code"]
+        reference = "available" if (job or draft or {}).get("source_panorama") and not reason else "absent"
+        if reference == "available":
+            binding = (job or draft)["source_panorama"]
+            artifact = self._read(self.root.parent / "source-panorama" / "artifacts" / binding["id"] / "artifact.json") or {}
+            reference = "partial" if artifact.get("status") == "partial" else "available"
+        if not job and not draft:
+            configuration = await self.store.get_config()
+            camera = get_camera_device(configuration.settings.extensions.get("com.toposync.cameras", {}), camera_id=camera_id)
+            sources = iter_camera_sources(camera, kind="video", enabled_only=True) if camera else []
+            references = []
+            for source in sources:
+                if source_id and source["id"] != source_id:
+                    continue
+                metadata = source.get("metadata")
+                panorama = metadata.get("panorama") if isinstance(metadata, dict) else None
+                saved = panorama.get("active") if isinstance(panorama, dict) else None
+                references.append((source, saved))
+            references = [(source, saved) for source, saved in references if isinstance(saved, dict)]
+            if len(references) > 1:
+                reference = "incompatible"
+                reason = reason or "ambiguous_panorama_source"
+            elif references:
+                source, saved = references[0]
+                source_id = source["id"]
+                try:
+                    self._source_artifact(camera, source, saved.get("artifact_id"), saved.get("revision"))
+                    artifact = self._read(self.root.parent / "source-panorama" / "artifacts" / saved["artifact_id"] / "artifact.json") or {}
+                    reference = "partial" if artifact.get("status") == "partial" else "available"
+                except HTTPException as error:
+                    reference = "incompatible"
+                    reason = reason or error.detail["code"]
+        return {
+            "source_id": source_id or None,
+            "revision": job["revision"] if job else pointer.get("revision") if isinstance(pointer, dict) else draft["revision"] if draft else None,
+            "reference": reference,
+            "mapping": "active" if job else "draft" if draft and not reason else "review_required" if reason or active["applies"] or element.props.get("calibrated_views") or element.props.get("control_point_sets") else "absent",
+            "positioning": "available" if job and job["permissions"]["aim_enabled"] else "unqualified",
+            "reason": reason,
+            "control_points_pairs": len((job or draft or {}).get("points", [])),
+        }
+
     async def localize_frame(
         self, *, camera_id: str, source_id: str, job_id: str, revision: int,
         image: np.ndarray, capture_evidence: dict[str, Any], image_geometry: dict | None = None,
@@ -1858,6 +1953,96 @@ class PanoramaService:
         return {**located, "source_artifact_id": binding["id"],
                 "geometry_digest": binding["geometry"]["model_digest"], "source_id": source_id, "revision": revision,
                 "_coverage_mask": localizer.coverage_mask}
+
+    async def resolve_target(self, *, camera_id: str, source_id: str, composition_id: str,
+                             target: dict[str, Any], element_id: str = "") -> dict[str, Any]:
+        """Resolve composition intent without movement or guessing a preset."""
+        active = await self.get_active(camera_id=camera_id, source_id=source_id,
+                                       composition_id=composition_id, element_id=element_id)
+        if not active.get("job"):
+            return {"status": "unavailable", "reason": active.get("reason", "active_mapping_required")}
+        job = self.jobs[active["job"]["id"]]
+        world = (target.get("world") or target.get("world_anchor")) if isinstance(target, dict) else None
+        if world is None and isinstance(target, dict) and isinstance(target.get("world_envelope"), dict):
+            world = target["world_envelope"].get("center")
+        if not isinstance(world, dict):
+            return {"status": "unavailable", "reason": "panorama_world_target_required"}
+        try:
+            if any(type(world.get(axis)) not in (int, float) or not math.isfinite(world[axis]) for axis in ("x", "z")):
+                raise ValueError("Invalid world point")
+            if mapping_extrapolated(job["solution"], world["x"], world["z"]):
+                raise _error("outside_validated_region", "Choose a place inside the mapped region", 422)
+            ray = map_world_to_ray(job["solution"], world["x"], world["z"])
+            if ray is None:
+                raise ValueError("World point has no ray")
+            resolved = {"ray": list(ray)}
+        except (HTTPException, KeyError, TypeError, ValueError) as error:
+            reason = error.detail.get("code") if isinstance(error, HTTPException) and isinstance(error.detail, dict) else "invalid_target"
+            return {"status": "unavailable", "reason": reason}
+        return {"status": "ready", "camera_id": camera_id, "source_id": job["source_id"],
+                "composition_id": composition_id, "element_id": job["element_id"],
+                "job_id": job["id"], "revision": job["revision"], "target": resolved,
+                "positioning_available": active["job"]["permissions"]["aim_enabled"],
+                "attention_qualified": self._attention_qualified(job)}
+
+    @staticmethod
+    def _attention_qualified(job: dict) -> bool:
+        """Software delivery never promotes a device to physical qualification."""
+        binding = job.get("source_panorama") or {}
+        expected = {"job_id": job.get("id"), "revision": job.get("revision"),
+                    "source_identity": job.get("_source_digest"),
+                    "composition_digest": job.get("_composition_digest"),
+                    "artifact_id": binding.get("id"), "artifact_revision": binding.get("revision"),
+                    "geometry_digest": (binding.get("geometry") or {}).get("model_digest")}
+        qualification = job.get("_attention_qualification")
+        return bool(all(value is not None for value in expected.values()) and isinstance(qualification, dict)
+                    and qualification.get("arrival_verified") is True and qualification.get("return_verified") is True
+                    and type(qualification.get("revision")) is int and type(qualification.get("artifact_revision")) is int
+                    and qualification == {**expected, "arrival_verified": True, "return_verified": True})
+
+    async def navigate_attention(self, *, destination: dict, lease_id: str, fence: int,
+                                 command_id: str, returning: bool = False) -> dict:
+        if (not isinstance(destination, dict) or not isinstance(lease_id, str) or not lease_id.strip()
+                or type(fence) is not int or fence < 1 or not isinstance(command_id, str) or not command_id.strip()
+                or type(returning) is not bool
+                or any(not isinstance(destination.get(key), str) or not destination[key].strip() for key in
+                    ("camera_id", "source_id", "composition_id", "element_id", "job_id"))
+                or type(destination.get("revision")) is not int or destination["revision"] < 1):
+            raise _error("invalid_target", "The attention command binding is invalid", 422)
+        camera_id, source_id = destination.get("camera_id"), destination.get("source_id")
+        async with self.reference_coordinator.hold(camera_id, source_id):
+            active = await self.get_active(camera_id=camera_id, source_id=source_id,
+                composition_id=destination.get("composition_id"), element_id=destination.get("element_id"))
+            public = active.get("job")
+            if not public or any(public.get(key) != destination.get(key) for key in
+                ("revision", "camera_id", "source_id", "composition_id", "element_id")) or public.get("id") != destination.get("job_id"):
+                raise _error("panorama_reference_changed", "The attention mapping changed")
+            job = self.jobs[public["id"]]
+            if not self._attention_qualified(job):
+                raise _error("attention_physical_qualification_required", "Physical attention qualification is required")
+            ray = np.asarray(destination.get("ray"), dtype=float)
+            if ray.shape != (3,) or not np.isfinite(ray).all() or abs(np.linalg.norm(ray) - 1) > 1e-6:
+                raise _error("invalid_target", "The attention ray is invalid", 422)
+            world = map_ray_to_world(job["solution"], ray)
+            if world is None or mapping_extrapolated(job["solution"], *world):
+                raise _error("outside_validated_region", "The attention target is outside the mapped region", 422)
+            snapshot = await self.services.call("cameras.control.snapshot", camera_id=camera_id,
+                source_id=source_id, refresh_physical=False)
+            owned = snapshot.get("active_lease") or {}
+            if (owned.get("lease_id") != lease_id or owned.get("fence") != fence
+                    or owned.get("owner_kind") != "automation" or snapshot.get("automation_ready") is not True):
+                raise _error("control_lost", "Attention no longer owns exclusive camera control")
+            _, evidence = await self._visual_operation_with_pinned_reference(None, job, {"ray": ray.tolist()},
+                borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=3 if returning else 12)
+            final = await self.services.call("cameras.control.snapshot", camera_id=camera_id,
+                source_id=source_id, refresh_physical=False)
+            owned = final.get("active_lease") or {}
+            if (owned.get("lease_id") != lease_id or owned.get("fence") != fence
+                    or final.get("automation_ready") is not True or job.get("stop_confirmed") is not True):
+                raise _error("control_lost", "The stopped attention result no longer owns control")
+            return {"destination": destination, "command_id": command_id, "lease_id": lease_id,
+                    "fence": fence, "motion_epoch": final.get("motion_epoch"), "stop_confirmed": True,
+                    "returning": returning, "evidence": evidence}
 
     def native_references(self, camera_id: str, source_id: str, binding: dict) -> list[dict]:
         """Read separate native points only for this exact panorama geometry."""
@@ -1916,9 +2101,11 @@ class PanoramaService:
         sources._authorize(request, camera_id)
         if not _IDENTIFIER.fullmatch(artifact_id) or revision < 1:
             raise _error("native_reference_unavailable", "Referência panorâmica inválida.")
-        _, settings, source = await sources._context(camera_id, source_id, request)
-        binding, _ = self._source_artifact(settings, source, artifact_id, revision)
-        ready = {record["id"] for record in self.native_references(camera_id, source_id, binding)}
+        await sources._context(camera_id, source_id, request)
+        artifact = self._read(self.root.parent / "source-panorama" / "artifacts" / artifact_id / "artifact.json") or {}
+        if (artifact.get("id") != artifact_id or artifact.get("camera_id") != camera_id
+                or artifact.get("source_id") != source_id or artifact.get("revision") != revision):
+            raise _error("native_reference_unavailable", "Referência panorâmica inválida.")
         directory = self.root.parent / "source-panorama" / "artifacts" / artifact_id / "native-references"
         records = []
         for path in sorted(directory.glob("*/reference.json")):
@@ -1933,7 +2120,7 @@ class PanoramaService:
                        and active[1].artifact_id == artifact_id and active[1].revision == revision
                        and not active[2].done())
             status = ("stopping" if f"native-{identifier}" in self.cancelled else "preparing") if running else (
-                "ready" if identifier in ready else "unverified")
+                "unverified")
             # Device tokens, native coordinates and ownership records remain
             # private. A stale 'preparing' journal is never a running operation.
             records.append({"id": identifier, "status": status, "created_at": record.get("created_at"),
@@ -1958,134 +2145,9 @@ class PanoramaService:
         self.cancelled.add(f"native-{body.preparation_id}")
         return {"id": body.preparation_id, "status": "stopping"}
 
-    async def prepare_native_reference(self, request: Request, camera_id: str, body: PrepareNativeReference) -> dict:
-        from .panorama_scan import _Stopped
-
+    async def prepare_native_reference(self, request: Request | None, camera_id: str, body: PrepareNativeReference, *, generated_job: dict | None = None) -> dict:
         self.app.state.camera_source_panorama._authorize(request, camera_id, control=True, write=True)
-        if body.preparation_id in self._native_preparations:
-            raise _error("native_reference_busy", "Esta preparação já está em andamento.")
-        key = f"native-{body.preparation_id}"
-        self._native_preparations[body.preparation_id] = (camera_id, body, asyncio.current_task())
-        try:
-            return await self._prepare_native_reference(request, camera_id, body)
-        except _Stopped:
-            return {"id": body.preparation_id, "status": "interrupted"}
-        except asyncio.CancelledError:
-            if key not in self.cancelled:
-                raise
-            return {"id": body.preparation_id, "status": "interrupted"}
-        finally:
-            self._native_preparations.pop(body.preparation_id, None)
-            self.cancelled.discard(key)
-
-    async def _prepare_native_reference(self, request: Request, camera_id: str, body: PrepareNativeReference) -> dict:
-        """Prepare the currently observed view; never navigate to a requested ray.
-
-        This belongs to panorama preparation. Live clicks only consume its
-        persisted result. Repeating an interrupted request cannot create another
-        device preset, and an unverified point never enters navigation.
-        """
-        from .panorama_capture import PanoramaCaptureError
-        from .panorama_navigation import VisualNavigator, DEFAULT_NAVIGATION_PROBE_SECONDS
-        from .panorama_scan import _Scan, _Stopped
-
-        sources = self.app.state.camera_source_panorama
-        sources._authorize(request, camera_id, control=True, write=True)
-        async with self.reference_coordinator.hold(
-                camera_id, body.source_id, cancelled=lambda: f"native-{body.preparation_id}" in self.cancelled):
-            if f"native-{body.preparation_id}" in self.cancelled:
-                raise _Stopped
-            _, settings, source = await sources._context(camera_id, body.source_id, request)
-            binding, _ = self._source_artifact(settings, source, body.artifact_id, body.revision)
-            directory = (self.root.parent / "source-panorama" / "artifacts" / body.artifact_id
-                         / "native-references" / body.preparation_id)
-            path = directory / "reference.json"
-            if path.exists():
-                if any(record["id"] == body.preparation_id for record in self.native_references(camera_id, body.source_id, binding)):
-                    return {"id": body.preparation_id, "status": "ready", "reused": True}
-                raise _error("native_reference_reconciliation_required", "Esta preparação exige reconciliação antes de outra tentativa.")
-            localizer = await self.reference_localizer(camera_id, body.source_id, binding)
-            record = {"schema_version": 1, "revision": 1, "id": body.preparation_id,
-                      "camera_id": camera_id, "source_id": body.source_id,
-                      "artifact_id": body.artifact_id, "artifact_revision": body.revision,
-                      "geometry": binding["geometry"], "source_identity": binding["source_identity"],
-                      "status": "preparing", "created_at": time.time()}
-            self._atomic(path, record)
-            camera = self.camera_factory(services=self.services, camera_id=camera_id, source_id=body.source_id,
-                                         settings={}, job_id=f"native-{body.preparation_id}", output_dir=directory)
-
-            async def progress(event: dict) -> None:
-                pass
-
-            scanner = _Scan(camera, directory, progress, lambda: f"native-{body.preparation_id}" in self.cancelled, {})
-            navigator = VisualNavigator(scanner, localizer, maximum_commands=2)
-            destination = None
-            try:
-                async with asyncio.timeout(60):
-                    scanner.capabilities = await camera.discover()
-                    automation = scanner.capabilities.get("motion_automation", {})
-                    if (any(value is True for value in automation.values()) or
-                            not (all(automation.get(key) is False for key in ("auto_tracking", "automatic_return"))
-                                 or settings.get("control", {}).get("automation_exclusive_control_confirmed") is True)):
-                        raise PanoramaCaptureError("motion_automation_unqualified")
-                    scanner._check()
-                    await camera.acquire()
-                    scanner.acquired = True
-                    scanner._check()
-                    if not await scanner._stop():
-                        raise PanoramaCaptureError("stop_unconfirmed")
-                    scanner.last_frame = await scanner._reference_window()
-                    scanner.physical_state = "stopped"
-                    located = await navigator.locate()
-                    ray = _rotation_basis(located["rotation_matrix"])[:, 2]
-
-                    async def persist_intent(pending: dict) -> None:
-                        record["destination"] = pending
-                        self._atomic(path, record)
-
-                    scanner._check()
-                    destination = await camera.save_return("reference", preserve_zoom=True, before_create=persist_intent)
-                    record.update(destination=destination, ray=ray.tolist(), rotation_matrix=located["rotation_matrix"])
-                    self._atomic(path, record)
-                    # A recall at the saved position proves no movement. Use
-                    # one bounded departure through the existing navigator,
-                    # then verify the native return with independent imagery.
-                    scanner.last_frame = await scanner._reference_window()
-                    await navigator._pulse("pan", DEFAULT_NAVIGATION_PROBE_SECONDS)
-                    await navigator.approach_reference(destination, ray)
-                    record["validation"] = navigator.trace[-1]
-                    _, current_camera, current_source = await sources._context(camera_id, body.source_id, request)
-                    current, _ = self._source_artifact(current_camera, current_source, body.artifact_id, body.revision)
-                    if current["geometry"] != binding["geometry"] or current["source_identity"] != binding["source_identity"]:
-                        raise PanoramaCaptureError("return_binding_changed")
-                    scanner._check()
-                    record["status"] = "ready"
-            except BaseException:
-                record["status"] = "unverified"
-                raise
-            finally:
-                try:
-                    if scanner.acquired:
-                        await scanner._confirm_stop(observation_timeout=10)
-                        if scanner.physical_state != "stopped":
-                            record["status"] = "unverified"
-                        if record["status"] != "ready":
-                            for saved in ([destination] if destination else camera.pending_return_destinations()):
-                                await camera.remove_return(saved)
-                            record["cleanup_confirmed"] = True
-                except BaseException:
-                    record["status"] = "unverified"
-                    raise
-                finally:
-                    record["physical_state"] = scanner.physical_state
-                    record["commands"] = navigator.commands
-                    try:
-                        self._atomic(path, record)
-                    finally:
-                        await camera.close()
-            if record["status"] != "ready":
-                raise PanoramaCaptureError("stop_unconfirmed")
-            return {"id": body.preparation_id, "status": "ready", "commands": navigator.commands}
+        raise _error("native_reference_retired", "A aproximação agora é gerada pela aquisição da panorâmica.", 410)
 
     async def remove_native_reference(self, request: Request, camera_id: str, body: PrepareNativeReference) -> dict:
         """Retire only this preparation's device resource; keep its audit record."""
@@ -2108,7 +2170,7 @@ class PanoramaService:
                                          settings={}, job_id=f"native-{body.preparation_id}", output_dir=directory)
             try:
                 await camera.discover()
-                await camera.acquire()
+                # Cleanup verifies resource ownership and binding without moving the head.
                 if record.get("destination"):
                     await camera.remove_return(record["destination"])
                 self._atomic(path, {**record, "status": "retired", "cleanup_confirmed": True,
@@ -2163,6 +2225,12 @@ class PanoramaService:
                                 attempts.append(record["attempt"])
                     prepared.probe_observations = reference_probe_observations(
                         model, photographs, checkpoint.get("region_commands", []), attempts)
+                    from .panorama_approach import geometry_digest
+                    approach = artifact.get("approach")
+                    approach = approach if isinstance(approach, dict) else {}
+                    if (approach.get("geometry_digest") == geometry_digest(model)
+                            and approach.get("source_identity") == artifact.get("_geometry_identity", artifact.get("_identity"))):
+                        prepared.approach = approach
                     coverage_path = SourcePanoramaService._private_path(directory, artifact["_files"]["coverage"])
                     prepared.coverage_mask = cv2.imread(str(coverage_path), cv2.IMREAD_GRAYSCALE)
                     if prepared.coverage_mask is None:
@@ -2330,6 +2398,8 @@ def register_panorama_routes(
     app.state.camera_panorama = service
     services.register("cameras.panorama.get_active", service.get_active)
     services.register("cameras.panorama.localize_frame", service.localize_frame)
+    services.register("cameras.panorama.resolve_target", service.resolve_target)
+    services.register("cameras.panorama.navigate_attention", service.navigate_attention)
 
     @app.get(_PREFIX)
     async def preflight(request: Request, camera_id: str, element_id: str) -> dict[str, Any]:
@@ -2345,13 +2415,8 @@ def register_panorama_routes(
 
     @app.post(_PREFIX + "/native-reference")
     async def prepare_native_reference(request: Request, camera_id: str, body: PrepareNativeReference) -> dict:
-        from .panorama_capture import PanoramaCaptureError
-        try:
-            return await service.prepare_native_reference(request, camera_id, body)
-        except PanoramaCaptureError as error:
-            raise _error(error.code, "O ponto não foi confirmado. Confira o estado da preparação antes de tentar novamente.") from None
-        except TimeoutError:
-            raise _error("native_reference_timeout", "A preparação excedeu o prazo. Confira a parada e a limpeza do ponto.") from None
+        service._authorize(request, camera_id, control=True)
+        raise _error("native_reference_retired", "A aproximação agora é gerada pela aquisição da panorâmica.", 410)
 
     @app.get(_PREFIX + "/native-reference")
     async def list_native_references(request: Request, camera_id: str, source_id: str,
@@ -2413,6 +2478,10 @@ def register_panorama_routes(
     @app.put(_PREFIX + "/{job_id}/points")
     async def points(request: Request, camera_id: str, job_id: str, body: Points) -> dict[str, Any]:
         return await service.points(request, camera_id, job_id, body)
+
+    @app.post(_PREFIX + "/{job_id}/preview")
+    async def preview(request: Request, camera_id: str, job_id: str, body: Points) -> dict[str, Any]:
+        return await service.points(request, camera_id, job_id, body, preview=True)
 
     @app.post(_PREFIX + "/{job_id}/check")
     async def check(request: Request, camera_id: str, job_id: str, body: Check) -> dict[str, Any]:

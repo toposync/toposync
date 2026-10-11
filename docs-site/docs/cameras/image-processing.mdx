@@ -63,6 +63,14 @@ It is good for:
 It can become limited when several cameras decode video and run vision models at
 the same time, especially on small ARM devices.
 
+Area presence and stopped-vehicle presets keep observing static scenes. They
+sample at up to four frames per second during motion and for six seconds after
+it, then admit a frame at intervals of at least one second. Actual intervals
+also depend on capture cadence and processing load. This preserves periodic
+observation of stationary objects instead of closing a motion gate entirely.
+Compatible pipelines can share their initial processing while keeping tracking
+and notification branches independent.
+
 ## Processing servers {/* #processing-servers */}
 
 Use a processing server when the origin machine or Home Assistant OS add-on

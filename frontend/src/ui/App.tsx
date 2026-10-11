@@ -348,6 +348,11 @@ type NotificationsState = {
   resolvedOnServer?: boolean;
 };
 
+function notificationHistoryRefreshMode(filter: NotificationsFilter, resolvedOnServer: boolean): "manual" | "automatic" | "none" {
+  if (filter.semantic && filter.query.trim()) return "manual";
+  return filter.extension || resolvedOnServer ? "automatic" : "none";
+}
+
 function mergeNotificationPage(
   prev: NotificationsState,
   pageNotifications: readonly Notification[],
@@ -418,6 +423,8 @@ function upsertNotificationInState(
 export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElement {
   const pathname = usePathname();
   const [screen, setScreen] = useState<Screen>("main");
+  const [editorReturnElementId, setEditorReturnElementId] = useState<string | null>(null);
+  const [editorInitialAction, setEditorInitialAction] = useState<string | undefined>(undefined);
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
   const [historyRequest, setHistoryRequest] = useState<{ selection: { id: string; value: string }; returnToNotification?: string } | null>(null);
   const [historyAssistants, setHistoryAssistants] = useState<Record<string, NotificationHistoryAssistant>>({});
@@ -443,6 +450,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [notificationsHasMore, setNotificationsHasMore] = useState(true);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsSyncRevision, setNotificationsSyncRevision] = useState(0);
+  const [notificationsHistoryChanged, setNotificationsHistoryChanged] = useState(false);
+  const notificationsResolvedOnServerRef = useRef(false);
+  const notificationsLoadedFilterRef = useRef<NotificationsFilter | null>(null);
+  useLayoutEffect(() => { notificationsResolvedOnServerRef.current = Boolean(notificationsState.resolvedOnServer); }, [notificationsState.resolvedOnServer]);
   const [notificationsCount, setNotificationsCount] = useState<NotificationsCount>({
     total: 0,
     by_priority: { low: 0, medium: 0, high: 0 },
@@ -785,6 +796,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           initialFit,
           initialCenter,
           initialScale,
+          initialSpan,
           interactionMode,
           minScale,
           maxScale,
@@ -813,6 +825,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
                 initialFit={initialFit}
                 initialCenter={initialCenter}
                 initialScale={initialScale}
+                initialSpan={initialSpan}
                 minScale={minScale}
                 maxScale={maxScale}
                 displayRotationDegrees={displayRotationDegrees}
@@ -1019,10 +1032,13 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     notificationsListRequestRef.current = requestId;
     setNotificationsLoading(true);
     setNotificationsCursor(null);
+    setNotificationsHistoryChanged(false);
     setNotificationsSearchStatus(undefined);
     setNotificationsError(false);
     setNotificationsHasMore(true);
-    setNotificationsState((prev) => notificationsRequestFilter.extension ? { byId: {}, visibleIds: [] } : ({ ...prev, visibleIds: [] }));
+    if (!notificationsLoadedFilterRef.current || !notificationFiltersEqual(notificationsLoadedFilterRef.current, notificationsRequestFilter)) {
+      setNotificationsState((prev) => notificationsRequestFilter.extension ? { byId: {}, visibleIds: [] } : ({ ...prev, visibleIds: [] }));
+    }
 
     void (async () => {
       try {
@@ -1038,6 +1054,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           signal: controller.signal,
         });
         if (controller.signal.aborted || notificationsListRequestRef.current !== requestId) return;
+        notificationsLoadedFilterRef.current = notificationsRequestFilter;
         markToposyncPerformance("notifications-page-loaded", {
           page: "initial",
           count: page.notifications?.length ?? 0,
@@ -1086,8 +1103,21 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     // This global stream is intentionally separate from the selected-notification stream below.
     // The list/cache must keep receiving global realtime updates while details track one item.
     const es = new EventSource(resolveToposyncUrl("/api/notifications/stream"));
-    const resync = () => { if (!closed) setNotificationsSyncRevision((value) => value + 1); };
-    es.onopen = resync;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const resync = (force = true) => {
+      if (closed) return;
+      const mode = notificationHistoryRefreshMode(notificationsFilterRef.current, notificationsResolvedOnServerRef.current);
+      if (mode === "manual") { setNotificationsHistoryChanged(true); return; }
+      if (!force && mode === "none") return;
+      if (refreshTimer !== undefined) return;
+      refreshTimer = setTimeout(() => {
+        refreshTimer = undefined;
+        if (!closed && notificationHistoryRefreshMode(notificationsFilterRef.current, notificationsResolvedOnServerRef.current) !== "manual") {
+          setNotificationsSyncRevision(value => value + 1);
+        }
+      }, 500);
+    };
+    es.onopen = () => resync();
     es.onmessage = (ev) => {
       try {
         const parsed = JSON.parse(ev.data ?? "{}") as { op?: string; notification?: Notification };
@@ -1096,6 +1126,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         const notif = parsed.notification;
         if (!notif || typeof notif.id !== "string") return;
         upsertNotification(notif, op);
+        resync(false);
 
         if (op === "insert") {
           const bucket = notificationPriority(notif);
@@ -1126,6 +1157,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
 
     return () => {
       closed = true;
+      clearTimeout(refreshTimer);
       es.close();
     };
   }, [backendAvailable, upsertNotification]);
@@ -1742,10 +1774,19 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const openPipelinesSettings = useCallback(() => navigate("/settings/pipelines"), []);
   const openProcessingServersSettings = useCallback(() => navigate("/settings/processing-servers"), []);
   const openAccessSettings = useCallback(() => navigate("/settings/access"), []);
-  const openCompositionEditorFromSettings = useCallback(() => {
+  const openCompositionEditorFromSettings = useCallback((elementId?: string, initialAction?: string) => {
+    setEditorReturnElementId(elementId ?? null);
+    setEditorInitialAction(initialAction);
     replace("/");
     setScreen("editor");
   }, []);
+
+  useEffect(() => {
+    if (normalizedPathname.startsWith("/settings")) {
+      setEditorReturnElementId(null);
+      setEditorInitialAction(undefined);
+    }
+  }, [normalizedPathname]);
 
   const closeSettings = useCallback(() => replace(lastNonSettingsPathRef.current || "/"), []);
 
@@ -1850,6 +1891,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           notificationsHasMore={notificationsHasMore}
           notificationsFilter={notificationsFilter}
           notificationsSearchStatus={notificationsSearchStatus}
+          notificationsHistoryChanged={notificationsHistoryChanged}
           activeNotificationId={activeNotificationId}
           activeNotification={activeNotification}
           notificationsLoading={notificationsLoading}
@@ -1872,6 +1914,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         />
       ) : screen === "editor" ? (
         <CompositionEditorScreen
+          initialEditingElementId={editorReturnElementId}
+          initialEditingAction={editorInitialAction}
           activeNotification={activeNotification}
           notificationRenderers={notificationRenderers}
           georeference={composition.meta?.georeference}
@@ -1903,7 +1947,11 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           onEndUndoGroup={endUndoGroup}
           onUndo={undo}
           onRedo={redo}
-          onExit={() => setScreen("main")}
+          onExit={() => {
+            setEditorReturnElementId(null);
+            setEditorInitialAction(undefined);
+            setScreen("main");
+          }}
           onOpenSettings={openSettings}
           onActivateComposition={activateCompositionById}
           onCreateComposition={createNewComposition}

@@ -12,7 +12,9 @@ import toposync.extensions.manager as ext_manager_mod
 import toposync_ext_cameras.plugin as cameras_plugin_mod
 from toposync.runtime.pipelines import Lifecycle, Packet
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
-from toposync.runtime.pipelines.operators_core import FPSReducerRuntime, StationaryEventRuntime
+from toposync.runtime.pipelines.operators_core import (
+    FPSReducerRuntime, StationaryEventRuntime, VelocityThrottleRuntime,
+)
 
 
 CAMERA_PIPELINE_PRESETS = (
@@ -151,15 +153,22 @@ def test_stopped_recipe_keeps_observing_beyond_motion_hold(tmp_path, monkeypatch
         )
         assert response.status_code == 200, response.text
         pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
-        assert "camera.motion_gate" not in _operator_ids(pipeline)
         assert pipeline["enabled"] is False
-        limiter = FPSReducerRuntime(_node_config(pipeline, "core.fps_reducer"))
+        if preset == "vehicle_stopped":
+            assert _node_config(pipeline, "camera.motion_gate")["emit_when_idle"] is True
+            assert _node_config(pipeline, "vision.track")["pause_when_gate_closed"] is False
+            limiter = VelocityThrottleRuntime(_node_config(pipeline, "core.velocity_throttle"))
+        else:
+            assert "camera.motion_gate" not in _operator_ids(pipeline)
+            limiter = FPSReducerRuntime(_node_config(pipeline, "core.fps_reducer"))
         stationary = StationaryEventRuntime(_node_config(pipeline, "core.stationary_event"))
 
         async def replay():
             outputs = []
             admitted = 0
             for index in range(241):
+                if preset == "vehicle_stopped" and index % 5:
+                    continue
                 timestamp = index * 0.05
                 # Controlled replay clock; detector/world evidence is synthetic here.
                 monkeypatch.setattr("toposync.runtime.pipelines.operators_core.time.monotonic", lambda: timestamp + 100)
@@ -169,17 +178,106 @@ def test_stopped_recipe_keeps_observing_beyond_motion_hold(tmp_path, monkeypatch
                     "world": {"x": min(timestamp, 1.0), "z": 0.0},
                     "velocity": {"valid": True, "stopped": timestamp >= 1.0,
                                  "speed_mps": 0.0 if timestamp >= 1.0 else 1.0},
-                })
+                }, metadata={"motion_gate_open": timestamp < 7.0})
                 for sample in await limiter.process_packet(packet, None):
                     admitted += 1
                     outputs.extend(await stationary.process_packet(sample, None))
-            assert admitted == 49  # Four samples/second, including the initial sample.
+            assert admitted == (33 if preset == "vehicle_stopped" else 49)
             assert outputs[0].lifecycle == Lifecycle.OPEN
-            assert outputs[0].payload["stationary_event"]["stationary_seconds"] == 10.0
-            assert outputs[-1].lifecycle == Lifecycle.UPDATE
-            assert outputs[-1].payload["stationary_event"]["stationary_seconds"] == 11.0
+            assert 10.0 <= outputs[0].payload["stationary_event"]["stationary_seconds"] <= 11.25
+            assert outputs[-1].payload["stationary_event"]["stationary_seconds"] == pytest.approx(
+                outputs[-1].payload["frame_ts"] - 1.0
+            )
 
         asyncio.run(replay())
+
+
+def test_presence_and_vehicle_presets_share_detection_but_keep_tracking_and_classes_local(
+    tmp_path, monkeypatch
+):
+    from toposync.runtime.config_store import Pipeline
+    from toposync.runtime.pipelines import PipelineGraphCompiler
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client)
+        compiled = []
+        for preset in ("presence_area", "vehicle_stopped"):
+            response = client.post("/api/cameras/cameras/cam1/pipelines/presets", json={"preset": preset})
+            assert response.status_code == 200, response.text
+            pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
+            assert pipeline["enabled"] is False
+            assert _node_config(pipeline, "vision.track")["pause_when_gate_closed"] is False
+            assert _edge_config(pipeline, "motion", "cadence")["maxsize"] == 1
+            for source, target in (("motion", "cadence"), ("cadence", "motion_region")):
+                assert _edge_config(pipeline, source, target)["traffic"] == {
+                    "modality": "video.frame", "semantic_class": "frame", "continuous": True,
+                }
+            compiled.append(PipelineGraphCompiler(client.app.state.pipeline_operator_registry)
+                            .compile_pipeline(Pipeline.model_validate(pipeline)))
+        nodes = [{node.node_id: node for node in pipeline.nodes} for pipeline in compiled]
+        for node_id in ("source", "motion", "cadence", "motion_region", "detect", "map"):
+            assert nodes[0][node_id].shareable
+            assert nodes[0][node_id].signature == nodes[1][node_id].signature
+        assert nodes[0]["track"].signature != nodes[1]["track"].signature
+        assert nodes[0]["classes"].signature != nodes[1]["classes"].signature
+
+
+def test_adaptive_camera_cadence_preserves_motion_idle_and_packet_evidence(monkeypatch):
+    import math
+    from toposync.runtime.pipelines import Artifact
+    from toposync_ext_cameras.pipeline_templates import build_shared_camera_detection_nodes
+
+    nodes = build_shared_camera_detection_nodes(camera_id="camera", source_id="main",
+                                                detection_model_id="test.detector")
+    config = next(node["config"] for node in nodes if node["id"] == "cadence")
+
+    async def replay():
+        limiter = VelocityThrottleRuntime(config)
+        outputs = []
+        for index in range(240):
+            timestamp = index * 0.25 + 0.005 * math.sin(index)
+            active = 40 <= index < 88
+            monkeypatch.setattr("toposync.runtime.pipelines.operators_core.time.monotonic",
+                                lambda: timestamp + 100)
+            packet = Packet.create(stream_id="camera:main", lifecycle=Lifecycle.UPDATE,
+                                   payload={"frame_ts": timestamp, "capture_evidence": {
+                                       "generation": 1, "sequence": index,
+                                   }}, metadata={"motion_gate_open": active},
+                                   artifacts={"main": Artifact(name="main", data=b"original")})
+            emitted = await limiter.process_packet(packet, None)
+            if emitted:
+                assert emitted == [packet]
+                assert emitted[0].artifacts["main"] is packet.artifacts["main"]
+                outputs.append((index, timestamp, active))
+            if index == 20:
+                other = Packet.create(stream_id="camera:other", lifecycle=Lifecycle.UPDATE,
+                                      metadata={"motion_gate_open": False})
+                assert await limiter.process_packet(other, None) == [other]
+        assert [i for i, _, active in outputs if active] == list(range(40, 88))
+        gaps = [right[1] - left[1] for left, right in zip(outputs, outputs[1:])]
+        assert max(gaps) <= 1.26
+        idle = [item for item in outputs if not item[2]]
+        assert len(idle) < 60
+        for lifecycle in (Lifecycle.CLOSE, Lifecycle.OPEN):
+            packet = Packet.create(stream_id="camera:main", lifecycle=lifecycle)
+            assert await limiter.process_packet(packet, None) == [packet]
+        missing = Packet.create(stream_id="new:stream", lifecycle=Lifecycle.UPDATE)
+        assert await limiter.process_packet(missing, None) == [missing]
+        reconnected = Packet.create(
+            stream_id="camera:main", lifecycle=Lifecycle.UPDATE,
+            payload={"frame_ts": 0.0, "capture_evidence": {"generation": 2, "sequence": 0}},
+            metadata={"motion_gate_open": False},
+            artifacts={"main": Artifact(name="main", data=b"new generation")},
+        )
+        monkeypatch.setattr("toposync.runtime.pipelines.operators_core.time.monotonic",
+                            lambda: timestamp + 100.25)
+        assert await limiter.process_packet(reconnected, None) == []
+        monkeypatch.setattr("toposync.runtime.pipelines.operators_core.time.monotonic",
+                            lambda: timestamp + 101.25)
+        assert await limiter.process_packet(reconnected, None) == [reconnected]
+
+    asyncio.run(replay())
 
 
 class _ExtensionEntryPoint:
@@ -1126,12 +1224,15 @@ def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping
         res = client.get(f"/api/pipelines/{pipeline_name}")
         assert res.status_code == 200
         pipeline = res.json()
-        assert _operator_ids(pipeline)[:5] == [
+        assert _operator_ids(pipeline)[:8] == [
             "camera.source",
             "camera.motion_gate",
+            "core.velocity_throttle",
+            "camera.image_crop",
             "vision.detect",
             "camera.camera_mapping",
             "vision.track",
+            "core.category_gate",
         ]
         assert _node_config(pipeline, "vision.track").get("tracker_id") == "byte_world"
         assert _node_config(pipeline, "vision.track").get("default_interval_seconds") == 0.25
@@ -1148,6 +1249,18 @@ def test_camera_pipeline_presence_area_preset_adds_mapping_velocity_and_grouping
         assert notify.get("description") == ""
         assert notify.get("dedupe_key_template") == "{{subject.id}}"
         assert _edge_config(pipeline, "detect", "map").get("maxsize") == 8
+
+        assert _node_config(pipeline, "camera.source")["fps"] == 4
+        assert _node_config(pipeline, "vision.crop_objects")["output_artifact_name"] == "subject_crop"
+        assert _node_config(pipeline, "vision.crop_objects")["missing_policy"] == "pass_through"
+        assert _node_config(pipeline, "vision.crop_objects")["fallback_to_detections"] is False
+        assert _node_config(pipeline, "camera.image_resize")["max_edge_px"] == 1920
+        assert notify["include_payload_paths"] == ["category_summary"]
+        assert notify["input_artifact_name"] == "subject_crop"
+        nodes = {node["id"]: node for node in pipeline["graph"]["nodes"]}
+        assert nodes["store"]["config"]["input_artifact_name"] == "subject_crop"
+        assert nodes["store_scene"]["config"]["input_artifact_name"] == "main"
+        assert _edge_config(pipeline, "resize_scene", "store_scene")["drop_policy"] == "block"
 
         res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
         assert res.status_code == 200, res.text
@@ -1192,10 +1305,13 @@ def test_camera_pipeline_vehicle_stopped_builds_confirmed_stop_notification(
 
         assert _operator_ids(pipeline) == [
             "camera.source",
-            "core.fps_reducer",
+            "camera.motion_gate",
+            "core.velocity_throttle",
+            "camera.image_crop",
             "vision.detect",
             "camera.camera_mapping",
             "vision.track",
+            "core.category_gate",
             "camera.velocity_estimation",
             "core.stationary_event",
             "core.debounce",
@@ -1203,9 +1319,12 @@ def test_camera_pipeline_vehicle_stopped_builds_confirmed_stop_notification(
             "core.store_images",
             "core.notify",
         ]
-        assert _node_config(pipeline, "core.fps_reducer") == {"target_fps": 4.0}
+        assert _node_config(pipeline, "camera.source")["fps"] == 4
+        assert _node_config(pipeline, "camera.motion_gate")["emit_when_idle"] is True
+        assert _node_config(pipeline, "vision.track")["pause_when_gate_closed"] is False
+        assert _node_config(pipeline, "core.category_gate")["categories"] == ["car", "truck", "bus", "motorcycle"]
         detect = _vision_detect_config(pipeline)
-        assert detect.get("categories") == ["car", "truck", "bus", "motorcycle"]
+        assert detect.get("categories") == ["person", "dog", "cat", "car", "truck", "bus", "motorcycle"]
         assert detect.get("confidence_threshold") == 0.25
         assert _node_config(pipeline, "vision.track").get("tracker_id") == "byte_world"
         assert _node_config(pipeline, "camera.camera_mapping").get("composition_id") == "yard"
@@ -1687,3 +1806,76 @@ def test_audio_pair_requires_two_readable_sources_and_compiles_disabled(tmp_path
         monkeypatch.setattr(AuthRuntime, "authorize", deny_peer)
         for denied_camera in ("cam1", "cam2"):
             assert client.post(path, json=body).status_code == 403
+
+
+@pytest.mark.parametrize("topic,item_name,source_name", [("RuleEngine/CellMotionDetector/Motion", "IsMotion", "VideoSourceToken"), ("VideoSource/MotionAlarm", "State", "Source")])
+def test_onvif_people_recipe_preview_and_create_preserve_qualified_event(tmp_path, monkeypatch, topic, item_name, source_name):
+    selection = {"topic": topic,
+                 "qualified_topic": "{http://www.onvif.org/ver10/topics}" + topic,
+                 "item_name": item_name, "source": {source_name: "source-one"},
+                 "key": {"Rule": "one"}, "coverage_confirmed": True}
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_ptz_camera(client)
+        catalog = {"profiles": [{"token": "profile-main", "video_source_token": "source-one"}],
+                   "events": [{**selection, "is_property": True, "is_boolean": True}]}
+        async def inspect(*args, **kwargs):
+            return catalog
+        async def snapshot(**kwargs):
+            assert kwargs["source"] == selection["source"] and kwargs["key"] == selection["key"]
+            return {"known": True, "available": True, "value": False}
+        monkeypatch.setattr(client.app.state.camera_onvif_capabilities, "inspect", inspect)
+        monkeypatch.setattr(client.app.state.camera_onvif_event_manager, "snapshot", snapshot)
+        endpoint = "/api/cameras/cameras/cam1/pipelines/presets"
+        body = {"preset": "people_simple", "source_id": "main", "onvif_optimization": selection, "enabled": True}
+        preview = client.post(endpoint + "/preview", json=body)
+        assert preview.status_code == 200, preview.text
+        graph = preview.json()["pipeline"]["graph"]
+        gate = next(node for node in graph["nodes"] if node["operator"] == "camera.onvif_state_gate")
+        assert gate["config"]["qualified_topic"] == selection["qualified_topic"]
+        assert gate["config"]["fail_open"] is True
+        assert gate["config"]["hold_seconds"] == 30
+        assert next(node for node in graph["nodes"] if node["id"] == "source")["config"]["gate_min_observation_seconds"] == 5
+        custom = client.post(endpoint + "/preview", json={**body, "onvif_optimization": {**selection, "hold_seconds": 12.5}})
+        assert custom.status_code == 200
+        assert _node_config(custom.json()["pipeline"], "camera.onvif_state_gate")["hold_seconds"] == 12.5
+        for duration in (-1, 301):
+            assert client.post(endpoint + "/preview", json={**body, "onvif_optimization": {**selection, "hold_seconds": duration}}).status_code == 422
+        assert any(edge["from"]["node"] == gate["id"] and edge["to"] == {"node": "source", "port": "gate"} for edge in graph["edges"])
+        created = client.post(endpoint, json=body)
+        assert created.status_code == 200, created.text
+        saved = client.get(f"/api/pipelines/{created.json()['pipeline_name']}").json()
+        assert saved["enabled"] is False
+        assert _node_config(saved, "camera.onvif_state_gate") == gate["config"]
+        compiled = client.post("/api/pipelines/compile", json={"pipeline": saved})
+        assert compiled.status_code == 200, compiled.text
+        assert {alert["code"] for alert in compiled.json().get("alerts", [])} <= {"vision_model_artifact_missing"}
+        for replacement, expected in [({"source": {source_name: "other-source"}}, 409),
+                                      ({"source": {source_name: "source-one", "VideoSourceConfigurationToken": "conflicting-source"}}, 409),
+                                      ({"coverage_confirmed": False}, 400),
+                                      ({"qualified_topic": "{urn:vendor}RuleEngine/CellMotionDetector/Motion"}, 409),
+                                      ({"item_name": "invented"}, 409)]:
+            rejected = client.post(endpoint + "/preview", json={**body, "onvif_optimization": {**selection, **replacement}})
+            assert rejected.status_code == expected, rejected.text
+        assert client.post(endpoint + "/preview", json={**body, "processing_server_id": "remote"}).status_code == 409
+        for preset in ("people_individual", "person_stopped", "audio_anomaly", "doorbell_visitor"):
+            assert client.post(endpoint + "/preview", json={**body, "preset": preset}).status_code == 400
+
+
+def test_onvif_resource_api_preserves_authorization_and_sanitizes_errors(tmp_path, monkeypatch):
+    with _create_client(tmp_path, monkeypatch) as client:
+        async def inspect(*args, **kwargs):
+            raise RuntimeError("rtsp://user:private-password@camera.invalid")
+        monkeypatch.setattr(client.app.state.camera_onvif_capabilities, "inspect", inspect)
+        response = client.get("/api/cameras/cameras/cam1/onvif/capabilities")
+        assert response.status_code == 502
+        assert "private-password" not in response.text
+        from toposync.runtime.auth import AuthRuntime
+        from fastapi import HTTPException
+        original = AuthRuntime.authorize
+        def denied(self, **kwargs):
+            if kwargs.get("action") == "core:settings:read":
+                raise HTTPException(403, "Denied")
+            return original(self, **kwargs)
+        monkeypatch.setattr(AuthRuntime, "authorize", denied)
+        for operation in ("capabilities", "observation", "events"):
+            assert client.get(f"/api/cameras/cameras/cam1/onvif/{operation}").status_code == 403

@@ -73,6 +73,10 @@ from ..processing.mapping import (
 def _frame_crop_expression_hints() -> list[Any]:
     return [
         payload_path_hint(
+            "payload.image_region", value_type="object",
+            description="Capture-bound detection rectangle in pixels; motion mode keeps the image unchanged.",
+        ),
+        payload_path_hint(
             "payload.frame_crop",
             value_type="object",
             description="Crop metadata for the generated frame artifact.",
@@ -522,6 +526,7 @@ class ImageCropSnapshotBinding(BaseModel):
 
 class ImageCropConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    region_mode: Literal["fixed", "motion"] = "fixed"
     input_artifact_name: str = ""
     units: Literal["percent", "pixels"] = "percent"
     left: float = Field(default=0.0, ge=0.0)
@@ -535,6 +540,10 @@ class ImageCropConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_bound_region(self) -> ImageCropConfig:
+        if self.region_mode == "motion" and self.output_artifact_name != MAIN_ARTIFACT_NAME:
+            raise ValueError("Motion framing emits region metadata; remove output_artifact_name")
+        if self.region_mode == "motion" and self.snapshot_binding is not None:
+            raise ValueError("Motion framing cannot use a fixed snapshot binding")
         if self.snapshot_binding is not None:
             max_x = 100 if self.units == "percent" else self.snapshot_binding.width
             max_y = 100 if self.units == "percent" else self.snapshot_binding.height
@@ -1438,6 +1447,126 @@ class ImageCropRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = ImageCropConfig.model_validate(config)
         self._dependencies = dependencies
+        self._motion_regions: dict[str, dict[str, Any]] = {}
+
+    async def shutdown(self) -> None:
+        self._motion_regions.clear()
+
+    def _motion_region(
+        self, packet: Packet, name: str, width: int, height: int
+    ) -> tuple[tuple[float, float, float, float], str]:
+        full = (0.0, 0.0, 1.0, 1.0)
+        motion = packet.payload.get("motion")
+        if not isinstance(motion, dict):
+            raise ValueError("Motion framing requires camera.motion_gate before camera.image_crop")
+        geometry = packet.artifacts[name].metadata.get("image_geometry")
+        evidence = packet.payload.get("capture_evidence")
+        timestamp = packet.payload.get("frame_ts")
+        ptz = packet.payload.get("pan_tilt_zoom_state")
+        ptz = ptz if isinstance(ptz, dict) else {}
+        if (
+            not isinstance(geometry, dict)
+            or not isinstance(evidence, dict)
+            or not evidence.get("capture_instance")
+            or type(evidence.get("generation")) is not int
+            or type(evidence.get("sequence")) is not int
+            or geometry.get("image_size") != [width, height]
+            or not isinstance(timestamp, (float, int))
+            or not math.isfinite(timestamp)
+            or motion.get("artifact_name") != name
+            or motion.get("image_geometry") != geometry
+            or motion.get("capture_evidence") != evidence
+            or geometry.get("capture_evidence") != evidence
+            or motion.get("frame_ts") != timestamp
+            or (ptz and not ptz.get("geometry_safe", False))
+        ):
+            self._motion_regions.pop(packet.stream_id, None)
+            return full, "unverified_motion"
+        provenance = (
+            resolve_source_device_id(packet),
+            resolve_source_id(packet),
+            name,
+            width,
+            height,
+            evidence.get("capture_instance"),
+            evidence.get("generation"),
+            ptz.get("motion_epoch"),
+            geometry.get("to_source"),
+        )
+        state = self._motion_regions.get(packet.stream_id)
+        if (
+            state is None
+            or state["provenance"] != provenance
+            or timestamp <= state["timestamp"]
+            or evidence["sequence"] <= state["sequence"]
+        ):
+            if len(self._motion_regions) >= 64:
+                self._motion_regions.pop(next(iter(self._motion_regions)))
+            state = dict(
+                provenance=provenance,
+                timestamp=timestamp,
+                last_full=-math.inf,
+                boxes=deque(maxlen=32),
+            )
+            self._motion_regions[packet.stream_id] = state
+        state["timestamp"] = timestamp
+        state["sequence"] = evidence["sequence"]
+        history = state["boxes"]
+        while history and timestamp - history[0][0] > 0.75:
+            history.popleft()
+        boxes = motion.get("bboxes01")
+        if not isinstance(boxes, (list, tuple)):
+            history.clear()
+            return full, "invalid_motion"
+        # The gate retains at most six blobs; saturation may hide another moving object.
+        if len(boxes) >= 6:
+            history.clear()
+            return full, "distributed_motion"
+        current = []
+        for box in boxes:
+            if (
+                not isinstance(box, (list, tuple))
+                or len(box) != 4
+                or any(type(v) not in (float, int) or not math.isfinite(v) for v in box)
+                or not (0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1)
+            ):
+                history.clear()
+                return full, "invalid_motion"
+            current.append(box)
+        if current and motion.get("active"):
+            history.append(
+                (
+                    timestamp,
+                    (
+                        min(b[0] for b in current),
+                        min(b[1] for b in current),
+                        max(b[2] for b in current),
+                        max(b[3] for b in current),
+                    ),
+                )
+            )
+        elif not motion.get("hold_active"):
+            history.clear()
+        # A global observation replaces a crop, never adds an inference.
+        if timestamp - state["last_full"] >= 1.0:
+            state["last_full"] = timestamp
+            return full, "global_observation"
+        if not history:
+            return full, "no_recent_motion"
+        x1, y1 = min(b[0] for _, b in history) * width, min(b[1] for _, b in history) * height
+        x2, y2 = max(b[2] for _, b in history) * width, max(b[3] for _, b in history) * height
+        side = max(640, self._config.min_crop_size_px, (x2 - x1) * 1.5, (y2 - y1) * 1.5)
+        crop_width, crop_height = min(width, side), min(height, side)
+        left = max(0, min(width - crop_width, (x1 + x2 - crop_width) / 2))
+        top = max(0, min(height - crop_height, (y1 + y2 - crop_height) / 2))
+        if crop_width * crop_height >= width * height * 0.65:
+            return full, "distributed_motion"
+        return (
+            left / width,
+            top / height,
+            (left + crop_width) / width,
+            (top + crop_height) / height,
+        ), "motion"
 
     def _snapshot_issue(self, packet: Packet, binding: ImageCropSnapshotBinding) -> str | None:
         # PTZ requires a separate, observed pose binding, not decoder continuity.
@@ -1470,6 +1599,9 @@ class ImageCropRuntime(TransformOperatorRuntime):
         return None if matches else "ext.cameras.cat.regionReconfirm"
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        if self._config.region_mode == "motion" and packet.lifecycle == Lifecycle.CLOSE:
+            self._motion_regions.pop(packet.stream_id, None)
+            return [packet]
         binding = self._config.snapshot_binding
         if binding is not None:
             issue = self._snapshot_issue(packet, binding)
@@ -1557,6 +1689,26 @@ class ImageCropRuntime(TransformOperatorRuntime):
                     bottom / 100.0,
                 ),
             )
+
+        if self._config.region_mode == "motion":
+            bbox01_current, reason = self._motion_region(packet, selected_name, width, height)
+            rectangle = _bbox01_to_px(bbox01_current, width=width, height=height)
+            area_ratio = ((rectangle[2] - rectangle[0]) * (rectangle[3] - rectangle[1])) / (width * height)
+            observe = getattr(context, "observe_telemetry_numeric", None)
+            if callable(observe):
+                observe("camera.crop.area_ratio", area_ratio)
+                observe("camera.crop.unverified_motion", float(reason == "unverified_motion"))
+            payload = dict(packet.payload)
+            payload["image_region"] = {
+                "artifact_name": selected_name,
+                "bbox_px": list(rectangle),
+                "image_geometry": packet.artifacts[selected_name].metadata.get("image_geometry"),
+                "capture_evidence": packet.payload.get("capture_evidence"),
+                "frame_ts": packet.payload.get("frame_ts"),
+                "reason": reason,
+                "area_ratio": area_ratio,
+            }
+            return [replace(packet, payload=payload)]
 
         crop = _crop_bbox01(
             image=frame, bbox01=bbox01_current, min_crop_size_px=self._config.min_crop_size_px
@@ -3824,18 +3976,21 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             return replace(packet, payload=payload) if payload is not packet.payload else packet
         payload.pop(self._config.world_field, None)
         payload.pop("world_anchor", None)
+        payload.pop("world_projection", None)
         vision_raw = payload.get("vision")
         if isinstance(vision_raw, dict):
             vision = dict(vision_raw)
             for key in ("tracks", "detections", "segmentations"):
                 raw_items = vision_raw.get(key)
                 if isinstance(raw_items, list):
-                    vision[key] = [
-                        {k: v for k, v in item.items() if k != "world_anchor"}
-                        if isinstance(item, dict)
-                        else item
-                        for item in raw_items
-                    ]
+                    items = []
+                    for item in raw_items:
+                        if isinstance(item, dict):
+                            item = {k: v for k, v in item.items() if k != "world_anchor"}
+                            if isinstance(item.get("metadata"), dict):
+                                item["metadata"] = {k: v for k, v in item["metadata"].items() if k != "world_projection"}
+                        items.append(item)
+                    vision[key] = items
             payload["vision"] = vision
         payload["mapping"] = {
             "status": "unmapped",
@@ -3857,6 +4012,19 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 return [packet]
         panorama_packet = await self._process_panorama_packet(packet)
         if panorama_packet is not None:
+            mapping = panorama_packet.payload.get("mapping") or {}
+            detections = (panorama_packet.payload.get("vision") or {}).get("detections") or []
+            mapped = sum(isinstance(item, dict) and bool(item.get("world_anchor")) for item in detections)
+            degraded = mapped < len(detections) or (
+                mapping.get("status") == "unmapped"
+                and mapping.get("reason") not in {"outside_calibrated_ground", "source_point_unavailable"}
+            )
+            metrics = getattr(context, "metrics", None)
+            if metrics is not None:
+                metrics.unavailable_reason = "ext.cameras.mapping.degraded" if degraded else None
+            observe = getattr(context, "observe_telemetry_numeric", None)
+            if callable(observe):
+                observe("mapping.coverage_fraction", mapped / len(detections) if detections else float(not degraded))
             return [panorama_packet]
         point = _resolve_image_point(
             packet,
@@ -4227,6 +4395,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             "camera_id": camera_id, "composition_id": composition_id,
             "map_revision": map_revision,
             "calibrated_view_id": selection.control_point_set.id,
+            "metric_calibration_id": selection.control_point_set.id,
             "physical_view_id": selection.control_point_set.physical_view_id,
             "source_stream_id": packet.stream_id,
         }
@@ -4362,7 +4531,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             return unmapped("panorama_calibration_not_ready")
 
         try:
-            from ..processing.panorama_mapping import image_pixel_to_ray, map_ray_to_world, ray_to_panorama_pixel
+            from ..processing.panorama_mapping import image_pixel_to_ray, map_ray_to_world, mapping_extrapolated, ray_to_panorama_pixel
 
             lens = profile["lens"]
             width, height = int(lens["width"]), int(lens["height"])
@@ -4406,9 +4575,9 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                         return unmapped("panorama_pose_outside_profile")
                     angles.append(angle_low + (position - low) / (high - low) * (angle_high - angle_low))
 
-            def world_for_point(point: tuple[float, float] | None) -> dict[str, float] | None:
+            def world_for_point(point: tuple[float, float] | None) -> tuple[dict[str, float] | None, dict]:
                 if point is None:
-                    return None
+                    return None, {"status": "unavailable", "reason": "source_point_unavailable"}
                 ray = image_pixel_to_ray(
                     point[0] * (width - 1), point[1] * (height - 1), lens, *angles,
                     rotation_matrix=localization["rotation_matrix"] if visual else None,
@@ -4416,14 +4585,20 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 if visual:
                     coverage = localization.get("_coverage_mask")
                     if getattr(coverage, "ndim", None) != 2 or not coverage.size:
-                        return None
+                        return None, {"status": "unavailable", "reason": "source_point_unavailable"}
                     u, v = ray_to_panorama_pixel(ray)
                     row = min(coverage.shape[0] - 1, int(v * coverage.shape[0]))
                     column = min(coverage.shape[1] - 1, int(u * coverage.shape[1]))
                     if not coverage[row, column]:
-                        return None
+                        return None, {"status": "unavailable", "reason": "source_point_unavailable"}
                 world = map_ray_to_world(solution, ray)
-                return {"x": float(world[0]), "z": float(world[1])} if world is not None else None
+                details = {"status": "estimated" if world is not None else "unavailable",
+                           "panorama_ray": [float(value) for value in ray], "direction_reference": "panorama",
+                           "panorama_revision": job["revision"]}
+                if world is None:
+                    return None, {**details, "reason": "no_ground_intersection"}
+                details["extrapolated"] = mapping_extrapolated(solution, *world)
+                return {"x": float(world[0]), "z": float(world[1])}, details
 
             result = unmapped("outside_calibrated_ground")
             payload = result.payload
@@ -4453,7 +4628,8 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 if len(matching) == 1:
                     subject = matching[0]
             point = observation_point(subject, point)
-            anchor = world_for_point(point)
+            anchor, projection = world_for_point(point)
+            payload["world_projection"] = projection
             mapped_points = int(anchor is not None)
             if anchor is not None:
                 payload[self._config.world_field] = dict(anchor)
@@ -4467,7 +4643,8 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                     for item in items:
                         if not isinstance(item, dict):
                             continue
-                        anchor = world_for_point(observation_point(item, _image_point_from_bbox01(item.get("bbox01"))))
+                        anchor, projection = world_for_point(observation_point(item, _image_point_from_bbox01(item.get("bbox01"))))
+                        item["metadata"] = {**(item.get("metadata") or {}), "world_projection": projection}
                         if anchor is not None:
                             item["world_anchor"] = anchor
                             mapped_points += 1
@@ -5120,12 +5297,13 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "artifact", "crop"],
         defaults=ImageCropConfig().model_dump(),
         requires_artifacts=[MAIN_ARTIFACT_NAME],
-        produces_payload_keys=["frame_crop"],
+        produces_payload_keys=["frame_crop", "image_region"],
         produces_artifacts=[MAIN_ARTIFACT_NAME],
         expression_hints=[
             *_frame_crop_expression_hints(),
         ],
         pressure_behavior="block",
+        state_kind="stateful_per_camera",
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, deps: ImageCropRuntime(config, deps),
@@ -6291,10 +6469,19 @@ def _parse_calibrated_views_as_control_point_sets(value: Any) -> list[ControlPoi
 
 
 def _parse_mapping_control_point_sets_from_props(props: dict[str, Any]) -> list[ControlPointSet]:
+    if "metric_calibrations" in props:
+        return _parse_metric_calibrations_from_props(props)
     calibrated = _parse_calibrated_views_as_control_point_sets(props.get("calibrated_views"))
     if calibrated:
         return calibrated
     return _parse_control_point_sets(props.get("control_point_sets"))
+
+
+def _parse_metric_calibrations_from_props(props: dict[str, Any]) -> list[ControlPointSet]:
+    # Preserve old metric data until explicitly moved; a panorama has no metric extrinsics.
+    records = props.get("metric_calibrations") if "metric_calibrations" in props else props.get("calibrated_views")
+    return [item for item in _parse_calibrated_views_as_control_point_sets(records)
+            if item.ground_projection is not None]
 
 
 def _control_point_sets_from_models(

@@ -1,4 +1,4 @@
-export type AttentionExecutionMode = "disabled" | "shadow" | "live_preset" | "paused";
+export type AttentionExecutionMode = "disabled" | "shadow" | "live_preset" | "live_panorama" | "paused";
 export type AttentionResumableMode = Exclude<AttentionExecutionMode, "paused">;
 
 export type AttentionRuntimeState =
@@ -63,6 +63,8 @@ export type AttentionCameraCatalogItem = {
     has_ptz: boolean;
   }>;
   views: AttentionViewCatalogItem[];
+  panorama_mappings?: Array<{ composition_id: string; composition_name: string; element_id: string; element_name?: string; source_id: string; ready: boolean; reason: string }>;
+
 };
 
 export type AttentionCatalogResponse = {
@@ -103,6 +105,9 @@ export type AttentionProfile = {
   ptz_device_id: string;
   same_head_observer_acknowledged: boolean;
   composition_id: string;
+  panorama_element_id?: string;
+  home_target?: { x: number; z: number; y?: number } | null;
+  attention_region?: Array<{ x: number; z: number }>;
   home_view_id: string;
   eligible_view_ids: string[];
   event_policies: AttentionEventPolicy[];
@@ -134,6 +139,7 @@ export type AttentionValidationResponse = {
   profile_id: string;
   mode: AttentionExecutionMode;
   issues: AttentionReadinessIssue[];
+  resolved_targets?: Record<string, { revision: number; target: { ray: number[] } }>;
   resolved_views: Record<string, {
     view_id?: string;
     confidence?: number;
@@ -152,6 +158,7 @@ export type AttentionSession = {
   state_since: number;
   active_event_key: string;
   active_view_id: string;
+  active_target?: { ray: number[]; revision: number; source_id: string } | null;
   active_priority?: number | null;
   candidate_event_key: string;
   candidate_view_id: string;

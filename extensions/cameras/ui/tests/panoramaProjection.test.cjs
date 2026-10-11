@@ -28,16 +28,16 @@ physical = np.array([[0.94, -0.18, 0.9], [0.2, 0.88, -0.4], [0.08, 0.22, -2.7]])
 def point(identifier, x, z, role):
     ray = physical @ [x, z, 1]
     ray /= np.linalg.norm(ray)
-    return dict(id=identifier, role=role, world_x=x, world_z=z, ray=ray.tolist())
+    return dict(id=identifier, world_x=x, world_z=z, ray=ray.tolist())
 points = [point(str(i), x, z, 'fit') for i, (x,z) in enumerate(
     [(-6,-6), (6,-6), (6,6), (-6,6), (0,-6), (0,6), (-6,0), (6,0)])]
 points += [point('check-one', 2, 1, 'check'), point('check-two', -2, -1, 'check')]
 solution = estimate_panorama_mapping(points)
 probes = []
-for x,z in [(-4, .01), (-4, -.01), (4,2), (-5,5), (0,0), (1.125,-3.25)]:
+for x,z in [(-4, .01), (-4, -.01), (4,2), (-5,5), (80,25), (0,0), (1.125,-3.25)]:
     ray = map_world_to_ray(solution, x, z)
     probes.append(dict(world=[x,z], panorama=ray_to_panorama_pixel(ray), recovered=map_ray_to_world(solution, ray)))
-print(json.dumps(dict(solution=solution, provisional=estimate_panorama_mapping(points[:-2]), probes=probes)))
+print(json.dumps(dict(solution=solution, provisional=estimate_panorama_mapping(points[:4]), probes=probes)))
 `], { encoding: "utf8", cwd: repository }));
 
 function mask() { return { width: 64, height: 32, data: new Uint8Array(64 * 32).fill(255) }; }
@@ -46,7 +46,7 @@ function groundSolution() {
   return { ...structuredClone(vectors.solution), matrix: [[1, 0, 0], [0, 1, 0], [0, 0, -3]], inverse_matrix: [[1, 0, 0], [0, 1, 0], [0, 0, -1 / 3]] };
 }
 
-test("bidirectional held-out probes match Python spherical geometry before and after checks", () => {
+test("bidirectional held-out probes match Python spherical geometry with four and additional controls", () => {
   for (const solution of [vectors.solution, vectors.provisional]) {
     const before = structuredClone(solution);
     const projector = createPanoramaProjector(solution, mask());
@@ -73,10 +73,10 @@ test("full-circle seam, pole, horizon, opposite ray and unsupported ground are e
   close(right.x, left.x);
   close(right.z, left.z);
   assert.deepEqual(projector.worldToPanorama({ x: 0, z: 0 }), { x: 0.5, y: 1 });
-  for (const point of [{ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 + 1e-13 }, { x: 0.5, y: 0.25 }, { x: 0.5, y: 0.55 }]) {
+  for (const point of [{ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 + 1e-13 }, { x: 0.5, y: 0.25 }]) {
     assert.equal(projector.panoramaToWorld(point), null);
   }
-  assert.equal(projector.worldToPanorama({ x: 8, z: 0 }), null);
+  assert.ok(projector.worldToPanorama({ x: 80, z: 0 }));
   for (const invalid of [NaN, Infinity, "0", undefined]) {
     assert.equal(projector.worldToPanorama({ x: invalid, z: 0 }), null);
     assert.equal(projector.panoramaToWorld({ x: 0.5, y: invalid }), null);
@@ -115,13 +115,9 @@ test("explicit quality gate rejects stale eligibility, unknown reasons and malfo
     (solution) => { solution.preview = undefined; },
     (solution) => { solution.preview.eligible = false; },
     (solution) => { solution.quality = undefined; },
-    (solution) => { solution.quality.number_of_inliers = 5; },
-    (solution) => { solution.quality.inlier_ratio = 0.79; },
-    (solution) => { solution.quality.p95_fit_error_radians = 1; },
+    (solution) => { solution.quality.number_of_fit_points = 3; },
     (solution) => { solution.quality.reasons = ["future_unknown_reason"]; },
     (solution) => { solution.quality.reasons = ["check_error_exceeds_threshold"]; },
-    (solution) => { solution.quality.maximum_check_error_radians = 0.1; },
-    (solution) => { solution.quality.number_of_check_points = 0; },
     (solution) => { solution.matrix[0][0] = NaN; },
     (solution) => { solution.matrix = [[1, 2]]; },
     (solution) => { solution.inverse_matrix[0][0] += 1; },

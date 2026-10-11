@@ -56,6 +56,14 @@ class PanoramaCaptureError(RuntimeError):
                 self.ptz_failure_stage = PtzFailureStage.SERVICE_BOUNDARY.value
 
 
+def require_motion_automation(automation: dict[str, bool | None], camera: dict[str, Any]) -> None:
+    if any(value is True for value in automation.values()):
+        raise PanoramaCaptureError("external_automation_active")
+    if not (all(automation.get(key) is False for key in ("auto_tracking", "automatic_return"))
+            or camera.get("control", {}).get("automation_exclusive_control_confirmed") is True):
+        raise PanoramaCaptureError("motion_automation_unqualified")
+
+
 def _finite(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
         return None
@@ -110,11 +118,13 @@ class PanoramaCamera:
         capture_service: Any,
         dependencies: Any,
         resolve_onvif: Callable[..., Awaitable[Any]],
+        borrowed_control: dict[str, Any] | None = None,
     ):
         self.camera_id, self.source_id, self.owner_id = camera_id, source_id, owner_id
         self.services, self.capture_service = services, capture_service
         self.dependencies, self.resolve_onvif = dependencies, resolve_onvif
-        self.lease: dict[str, Any] | None = None
+        self.lease: dict[str, Any] | None = dict(borrowed_control) if borrowed_control is not None else None
+        self._borrowed_control = borrowed_control is not None
         self._capture_lease: Any = None
         self._client: Any = None
         self._ptz_xaddr = ""
@@ -336,9 +346,8 @@ class PanoramaCamera:
         return self._capabilities
 
     async def acquire(self) -> dict[str, Any]:
-        await self.discover()
-        if any(value is True for value in self._automation.values()):
-            raise PanoramaCaptureError("external_automation_active")
+        await self.refresh_discovery_observations()
+        require_motion_automation(self._automation, self._camera)
         if self.lease is not None:
             await self._guard()
             return self.lease
@@ -620,6 +629,13 @@ class PanoramaCamera:
                     {"kind": "stop", "pan_tilt": True, "zoom": include_zoom}
                 )
                 self._return_may_change_zoom = False
+                try:
+                    snapshot = await self._guard(stopping=True)
+                    automatic_stop = snapshot.get("last_automatic_stop")
+                    if isinstance(automatic_stop, dict) and automatic_stop.get("fence") == (self.lease or {}).get("fence"):
+                        result["automatic_stop"] = dict(automatic_stop)
+                except Exception:
+                    result["automatic_stop_observation_unavailable"] = True
                 return result
             except PanoramaCaptureError as error:
                 if error.code != "movement_unconfirmed" or attempt == 2:
@@ -1131,7 +1147,7 @@ class PanoramaCamera:
             await asyncio.gather(renewal, return_exceptions=True)
         lease, self.lease = self.lease, None
         try:
-            if lease:
+            if lease and not self._borrowed_control:
                 await self.services.call(
                     "cameras.control.release", lease_id=lease["lease_id"], fence=lease["fence"],
                 )

@@ -11,7 +11,8 @@ import type {
 
 import { areaClipSignature, controlPointSetIntersectsAreaClip } from "./areaClip";
 import { fetchCameraPtzPresets, fetchCameraPtzStatus, fetchLiveViews } from "./api";
-import { resolveProjectionCandidates } from "./candidates";
+import { mappedControlPointSets, resolveProjectionCandidates } from "./candidates";
+import { usePanoramaGroundLayer } from "./panoramaGroundLayer";
 import { markerEntries, markerVideoStatus, type MarkerVideoStatus } from "./markers";
 import { controlPointSetProjectionSignature, mediaContentRectSignature, type ProjectionMeshDensity, type ProjectionStrategyId } from "./projection";
 import { createProjectionGeometry } from "./projectionGeometry";
@@ -71,19 +72,7 @@ function includeBounds(bounds: BoundsXZ & { empty?: boolean }, input: BoundsXZ |
 }
 
 function includeControlPointBounds(bounds: BoundsXZ & { empty?: boolean }, element: CompositionElement): void {
-  const calibratedViews = Array.isArray(element.props?.calibrated_views) ? element.props.calibrated_views : [];
-  for (const rawView of calibratedViews) {
-    const view = readRecord(rawView);
-    const projection = readRecord(view.projection_model);
-    const quad = readRecord(projection.world_quad);
-    for (const corner of ["top_left", "top_right", "bottom_right", "bottom_left"]) {
-      const point = readRecord(quad[corner]);
-      const x = finiteNumber(point.x);
-      const z = finiteNumber(point.z);
-      if (x != null && z != null) includePoint(bounds, { x, z }, 0.12);
-    }
-  }
-  const sets = Array.isArray(element.props?.control_point_sets) ? element.props.control_point_sets : [];
+  const sets = mappedControlPointSets(element);
   for (const rawSet of sets) {
     const set = readRecord(rawSet);
     const points = Array.isArray(set.control_points) ? set.control_points : [];
@@ -651,6 +640,8 @@ export function SpatialVideoView({
     requestRender();
   }, [compositionId, requestRender, sceneBounds, syncViewBounds]);
 
+  const panoramaLayer = usePanoramaGroundLayer(sceneRef, elements, elementTypesById, requestRender);
+
   useEffect(() => {
     const group = projectionGroupRef.current;
     if (!group) return;
@@ -992,10 +983,11 @@ export function SpatialVideoView({
           </button>
         ))}
       </div>
+      {panoramaLayer.ready > 0 ? <span role="status" data-testid="panorama-ground-status" style={{ position: "absolute", bottom: 12, left: 12, padding: "6px 10px", background: "#ffffff", color: "#20252b", borderRadius: 8, pointerEvents: "none" }}>{panoramaLayer.ready === 1 ? "Panorâmica salva" : `${panoramaLayer.ready} panorâmicas salvas`}</span> : null}
       <SpatialVideoCompatibilityNotice
-        loading={liveViewsLoading}
-        error={liveViewsError}
-        hasCompatibleProjection={candidates.length > 0}
+        loading={liveViewsLoading || panoramaLayer.loading}
+        error={panoramaLayer.error || (panoramaLayer.ready ? null : liveViewsError)}
+        hasCompatibleProjection={candidates.length > 0 || panoramaLayer.ready > 0}
       />
     </div>
   );

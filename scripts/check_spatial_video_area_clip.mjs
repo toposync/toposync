@@ -26,6 +26,9 @@ function loadTypescriptModule(relativePath) {
     exports: module.exports,
     console,
     require: (id) => {
+      if (id === "three") return require("three");
+      if (["react", "@toposync/plugin-api", "../../../cameras/ui/src/elements/panoramaProjection"].includes(id)) return {};
+      if (id === "./projection" || id === "./areaClip") return loadTypescriptModule(`extensions/spatial_video/ui/src/${id.slice(2)}.ts`);
       throw new Error(`Unexpected runtime import in spatial video area clip test: ${id}`);
     },
   });
@@ -46,6 +49,20 @@ const controlPointSet = {
   ],
   refinement_points: [],
 };
+
+const { mappedControlPointSets, resolveProjectionCandidates } = loadTypescriptModule("extensions/spatial_video/ui/src/candidates.ts");
+const legacyElement = { id: "legacy-camera", type: "camera", props: { camera_id: "legacy", control_point_sets: [controlPointSet] } };
+assert.equal(mappedControlPointSets(legacyElement).length, 1);
+for (const pointer of [{ job_id: "panorama", revision: 1, source_id: "wide" }, { revision: -1 }, null]) {
+  const panoramaElement = { ...legacyElement, id: "panorama-camera", props: { ...legacyElement.props, camera_id: "panorama", panorama_mapping: pointer } };
+  assert.equal(mappedControlPointSets(panoramaElement).length, 0, "a selected or invalid panorama must not revive legacy geometry in 2D or 3D");
+  const candidates = resolveProjectionCandidates([panoramaElement, legacyElement], {}, [
+    { id: "panorama-live", camera_id: "panorama", variants: [{ id: "wide", role: "main", enabled: true }] },
+    { id: "legacy-live", camera_id: "legacy", variants: [{ id: "wide", role: "main", enabled: true }] },
+  ]);
+  assert.equal(candidates.length, 1, "the unrelated legacy camera keeps its layer");
+  assert.ok(candidates.every(candidate => candidate.cameraId !== "panorama"), "other sources must not restore the retired layer");
+}
 
 const clipPolygon = [
   { x: 0, z: 0 },
@@ -139,3 +156,29 @@ assert.equal(resolvedFar.clip?.areaElementId, "area-far");
 assert.equal(resolvedFar.warning, "A área de recorte não cruza nenhuma vista calibrada.");
 
 console.log("Spatial video area clip checks passed");
+
+// Panoramic ground uses the same clipping implementation in both renderers.
+const { panoramaGroundMesh } = loadTypescriptModule("extensions/spatial_video/ui/src/panoramaGroundLayer.ts");
+const support = [{x:0,z:0}, {x:10,z:0}, {x:10,z:10}, {x:0,z:10}];
+const concaveArea = [{x:1,z:1}, {x:7,z:1}, {x:7,z:3}, {x:3,z:3}, {x:3,z:7}, {x:1,z:7}];
+function meshArea(mesh) {
+  let total = 0;
+  for (let offset = 0; offset < mesh.indices.length; offset += 3) {
+    const points = Array.from(mesh.indices.slice(offset, offset + 3), index => ({x:mesh.positions[index*3],z:mesh.positions[index*3+2]}));
+    const [a,b,c] = points;
+    total += Math.abs((b.x-a.x)*(c.z-a.z)-(b.z-a.z)*(c.x-a.x))/2;
+    for (const point of [...points, {x:(a.x+b.x+c.x)/3,z:(a.z+b.z+c.z)/3}]) {
+      assert.ok(point.x >= 1-1e-6 && point.z >= 1-1e-6 && point.x <= 7+1e-6 && point.z <= 7+1e-6);
+      assert.ok(point.x <= 3+1e-6 || point.z <= 3+1e-6, "no triangle may bridge the concave cutout");
+    }
+  }
+  return total;
+}
+for (const polygon of [concaveArea, [...concaveArea].reverse()]) {
+  const mesh = panoramaGroundMesh(support, polygon);
+  assert.ok(mesh);
+  assert.ok(Math.abs(meshArea(mesh)-20) < 1e-5, "concave area must retain exactly 20 square metres");
+}
+assert.equal(panoramaGroundMesh(support, [{x:20,z:20},{x:25,z:20},{x:25,z:25},{x:20,z:25}]), null);
+assert.equal(panoramaGroundMesh(support, null).indices.length, 6, "removing an area restores the complete support polygon");
+console.log("Panorama ground area: concavity, winding, exclusion and removal passed.");

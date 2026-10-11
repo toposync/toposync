@@ -32,7 +32,7 @@ class PointingTargetConfig(BaseModel):
 def _check_current_calibration(composition, record, camera, packet):
     # Reuse the mapping parser and scope rules; do not invent an entity catalog.
     from .postprocess import (
-        _parse_mapping_control_point_sets_from_props,
+        _parse_metric_calibrations_from_props,
         _control_point_set_matches_source_scope,
     )
 
@@ -40,8 +40,8 @@ def _check_current_calibration(composition, record, camera, packet):
         view
         for element in composition.elements
         if element.props.get("camera_id") == record["camera_id"]
-        for view in _parse_mapping_control_point_sets_from_props(element.props)
-        if view.id == record.get("calibrated_view_id") and view.ground_projection is not None
+        for view in _parse_metric_calibrations_from_props(element.props)
+        if view.id == record.get("metric_calibration_id", record.get("calibrated_view_id"))
     ]
     if len(matching) != 1:
         raise ValueError("persisted_metric_calibration_required")

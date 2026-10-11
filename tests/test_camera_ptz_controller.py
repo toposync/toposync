@@ -1596,6 +1596,13 @@ def test_ptz_controller_slow_move_response_does_not_restart_pulse_budget(tmp_pat
             expected = ["continuous_move"] if transport_elapsed == 0.1 else ["continuous_move", "stop"]
             assert [call["command"]["kind"] for call in transport.calls] == expected
             assert receipt["command_elapsed_seconds"] == pytest.approx(0.4)
+            assert receipt["command_finished_monotonic"] - receipt["command_started_monotonic"] == pytest.approx(0.4)
+            if len(expected) == 2:
+                snapshot = await controller.snapshot(camera_id="wide", refresh_physical=False, include_readiness=False)
+                stop = snapshot["last_automatic_stop"]
+                assert stop["reason"] == "continuous_move_timeout"
+                assert stop["accepted"] is True
+                assert stop["finished_monotonic"] >= stop["started_monotonic"]
             assert receipt["pulse_remaining_seconds"] == pytest.approx(0.15 if transport_elapsed == 0.1 else 0)
             assert transport.max_active == 1
         finally:

@@ -604,7 +604,7 @@ def environment():
     configuration = {
         "devices": [{
             "id": "camera", "name": "Camera", "enabled": True,
-            "control": {"type": "onvif"},
+            "control": {"type": "onvif", "automation_exclusive_control_confirmed": True},
             "onvif": {"xaddr": "http://camera/onvif/device_service", "username": "user", "password": "secret"},
             "sources": [{
                 "id": "wide", "enabled": True, "is_default": True,
@@ -1051,7 +1051,7 @@ def test_return_position_or_temporary_preset_is_explicit_and_fenced():
             saved = await camera.save_return("work")
             assert saved["kind"] == "preset"
             await camera.return_to(saved)
-            assert services.calls[-1][1]["command"] == {"kind": "goto_preset", "preset_token": "temporary"}
+            assert [kwargs["command"] for name, kwargs in services.calls if name == "cameras.control.submit"][-1] == {"kind": "goto_preset", "preset_token": "temporary"}
             with pytest.raises(PanoramaCaptureError, match="return_owner_mismatch"):
                 await camera.remove_return({**saved, "owner_id": "another"})
             services.presets[0]["name"] = "Repurposed preset"
@@ -1184,9 +1184,9 @@ def test_destination_capacity_preserves_original_and_creates_each_role_once(maxi
                     assert original["preset_name"] != work["preset_name"]
                     assert original["preset_name"][:6] != work["preset_name"][:6]
                     await camera.return_to(original)
-                    assert services.calls[-1][1]["command"]["preset_token"] == original["preset_token"]
+                    assert [kwargs["command"] for name, kwargs in services.calls if name == "cameras.control.submit"][-1]["preset_token"] == original["preset_token"]
                     await camera.return_to(work)
-                    assert services.calls[-1][1]["command"]["preset_token"] == work["preset_token"]
+                    assert [kwargs["command"] for name, kwargs in services.calls if name == "cameras.control.submit"][-1]["preset_token"] == work["preset_token"]
             creations = [kwargs for name, kwargs in services.calls if name == "cameras.ptz.set_preset"]
             assert len(creations) == (2 if maximum is None else min(2, maximum))
             assert len({item["idempotency_key"] for item in creations}) == len(creations)
@@ -1366,7 +1366,7 @@ def test_legacy_original_preset_remains_usable_but_work_requires_binding():
         services.presets = [{"token": "legacy", "name": saved["preset_name"]}]
         try:
             await camera.return_to(saved)
-            assert services.calls[-1][1]["command"]["preset_token"] == "legacy"
+            assert [kwargs["command"] for name, kwargs in services.calls if name == "cameras.control.submit"][-1]["preset_token"] == "legacy"
             with pytest.raises(PanoramaCaptureError, match="return_binding_unverified"):
                 await camera.return_to({**saved, "role": "work"})
             await camera.remove_return(saved)
@@ -1395,7 +1395,7 @@ def test_absolute_return_restores_zoom_only_with_an_explicit_supported_space(sup
                 assert not any(name == "cameras.control.submit" for name, _ in services.calls[before:])
             else:
                 await camera.return_to(saved)
-                command = services.calls[-1][1]["command"]
+                command = [kwargs["command"] for name, kwargs in services.calls if name == "cameras.control.submit"][-1]
                 assert command.get("zoom") == expected
         finally:
             await camera.close()
@@ -1523,9 +1523,9 @@ def test_stop_includes_zoom_after_a_return_that_can_change_optics(destination):
             client.get_ptz_status.return_value = replace(client.get_ptz_status.return_value, zoom=.8)
             await camera.return_to(saved)
             await camera.stop()
-            assert services.calls[-1][1]["command"] == {"kind": "stop", "pan_tilt": True, "zoom": True}
+            assert [kwargs["command"] for name, kwargs in services.calls if name == "cameras.control.submit"][-1] == {"kind": "stop", "pan_tilt": True, "zoom": True}
             await camera.stop()
-            assert services.calls[-1][1]["command"]["zoom"] is False
+            assert [kwargs["command"] for name, kwargs in services.calls if name == "cameras.control.submit"][-1]["zoom"] is False
         finally:
             await camera.close()
     asyncio.run(run())
@@ -1605,7 +1605,7 @@ def test_unchanged_custom_zoom_does_not_prevent_pan_tilt_return(current_space, c
             before = len(services.calls)
             if current_space == "focal-mm" and current_zoom == 24:
                 await camera.return_to(saved)
-                assert "zoom" not in services.calls[-1][1]["command"]
+                assert "zoom" not in [kwargs["command"] for name, kwargs in services.calls if name == "cameras.control.submit"][-1]
             else:
                 with pytest.raises(PanoramaCaptureError, match="return_optical_state_mismatch"):
                     await camera.return_to(saved)
@@ -1644,6 +1644,33 @@ def test_pending_cleanup_with_no_matching_preset_validates_ownership_before_forg
                 await camera.remove_return(pending)
                 assert not camera.pending_return_destinations()
             assert not any(name == "cameras.ptz.remove_preset" for name, _ in services.calls)
+        finally:
+            await camera.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("observed,confirmed,expected", [
+    (None, False, "motion_automation_unqualified"),
+    (None, True, None), (False, False, None),
+    (True, False, "external_automation_active"), (True, True, "external_automation_active"),
+])
+def test_all_motion_acquisitions_require_current_automation_qualification(observed, confirmed, expected):
+    async def run():
+        camera, configuration, _, services, _ = environment()
+        configuration["devices"][0]["control"]["automation_exclusive_control_confirmed"] = confirmed
+        camera._read_motion_automation = AsyncMock(return_value={"auto_tracking": observed, "automatic_return": observed})
+        try:
+            if expected:
+                with pytest.raises(PanoramaCaptureError, match=expected):
+                    await camera.acquire()
+                assert not any(name == "cameras.control.acquire" for name, _ in services.calls)
+            else:
+                await camera.acquire()
+                camera._read_motion_automation.return_value = {"auto_tracking": True, "automatic_return": False}
+                with pytest.raises(PanoramaCaptureError, match="external_automation_active"):
+                    await camera.acquire()
+                await camera.stop()
+                assert [kwargs["command"] for name, kwargs in services.calls if name == "cameras.control.submit"][-1]["kind"] == "stop"
         finally:
             await camera.close()
     asyncio.run(run())

@@ -38,3 +38,17 @@ def test_missing_zone_never_assumes_host_zone_and_unsupported_dates_remain_liter
     assert resolve_history_time("gato ontem", "Unknown/Zone")[1] == {"reason": "installation_timezone_required"}
     assert resolve_history_time("gato semana passada", "UTC") == ("gato semana passada", None)
     assert resolve_history_time("pessoa com pacote", None) == ("pessoa com pacote", None)
+
+
+@pytest.mark.parametrize("phrase", ["ontem à tarde gato no bebedouro", "  ontem à tarde gato no bebedouro  ", "gato no bebedouro ontem à tarde"])
+def test_relative_period_at_either_end_has_the_same_meaning(phrase):
+    now = datetime(2026, 9, 27, 1, tzinfo=timezone.utc)
+    query, result = resolve_history_time(phrase, "America/Sao_Paulo", now=now)
+    assert query == "gato bebedouro"
+    assert result["time_range"]["created_after"] == datetime(2026, 9, 25, 15, tzinfo=timezone.utc).timestamp()
+    assert result["time_range"]["created_before"] == datetime(2026, 9, 25, 21, tzinfo=timezone.utc).timestamp()
+
+
+@pytest.mark.parametrize("phrase", ["ontem gato hoje", "gato ontem cachorro", "hojemente gato"])
+def test_ambiguous_or_embedded_relative_period_remains_literal(phrase):
+    assert resolve_history_time(phrase, "UTC") == (phrase, None)

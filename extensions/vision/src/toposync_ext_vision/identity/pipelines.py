@@ -79,6 +79,9 @@ class IdentityEvidenceConfig(BaseModel):
     sample_interval_seconds: float = Field(default=2.0, ge=0.25, le=60)
     max_active_occurrences: int = Field(default=128, ge=1, le=2048)
     inference_timeout_seconds: float = Field(default=2.0, ge=0.05, le=30)
+    keyframe_min_region_change: float = Field(default=0, ge=0, le=1)
+    keyframe_max_per_occurrence: int = Field(default=0, ge=0, le=10000)
+    keyframe_max_total: int = Field(default=0, ge=0, le=10000)
 
 
 class RecognizeIdentityConfig(BaseModel):
@@ -151,6 +154,8 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
         self.dependencies = dependencies
         self._extractors: dict[str, IdentityExtractor] = {}
         self._sampled: OrderedDict[str, float] = OrderedDict()
+        self._keyframes: dict[str, tuple[IdentityEvidence, int]] = {}
+        self._keyframe_total = 0
 
     def _extractor(self, species: str) -> IdentityExtractor:
         key = "person" if species == "person" else "pet"
@@ -183,16 +188,24 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
             ]
         if packet.lifecycle == Lifecycle.CLOSE:
             self._sampled.pop(key, None)
+            self._keyframes.pop(key, None)
             return [
                 _summary(packet, status="pending", reason="occurrence_closed", occurrence_id=key)
             ]
         now = time.monotonic()
+        previous = self._keyframes.get(key)
+        if self.config.keyframe_max_total and self._keyframe_total >= self.config.keyframe_max_total:
+            return [_summary(packet, status="unavailable", reason="evidence_budget", occurrence_id=key)]
+        if (self.config.keyframe_max_per_occurrence and previous
+                and previous[1] >= self.config.keyframe_max_per_occurrence):
+            return [_summary(packet, status="pending", reason="sampling", occurrence_id=key)]
         if key in self._sampled and now - self._sampled[key] < self.config.sample_interval_seconds:
             return [_summary(packet, status="pending", reason="sampling", occurrence_id=key)]
         if key not in self._sampled and len(self._sampled) >= self.config.max_active_occurrences:
             stale = [item for item, sampled_at in self._sampled.items() if now - sampled_at > 120]
             for item in stale:
                 self._sampled.pop(item, None)
+                self._keyframes.pop(item, None)
             if len(self._sampled) >= self.config.max_active_occurrences:
                 return [
                     _summary(
@@ -273,6 +286,16 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
             ]
         output = _summary(packet, status=result.status, reason=result.reason, occurrence_id=key)
         if result.evidence is not None:
+            evidence = result.evidence
+            if self.config.keyframe_min_region_change and previous:
+                last = previous[0]
+                # ponytail: box/quality novelty; add visual comparison if stationary pose changes matter.
+                changed = max(abs(a - b) for a, b in zip(evidence.region, last.region, strict=True))
+                if (changed < self.config.keyframe_min_region_change
+                        and evidence.status == last.status and evidence.reason == last.reason
+                        and evidence.reference_eligible == last.reference_eligible
+                        and evidence.quality < last.quality + 0.1):
+                    return [_summary(packet, status="pending", reason="sampling", occurrence_id=key)]
             data = json.dumps(
                 {
                     "evidence": result.evidence.model_copy(
@@ -300,6 +323,8 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
                     private=True,
                 )
             )
+            self._keyframes[key] = (evidence, previous[1] + 1 if previous else 1)
+            self._keyframe_total += 1
         return [output]
 
 

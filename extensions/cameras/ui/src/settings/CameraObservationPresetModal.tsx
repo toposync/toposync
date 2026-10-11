@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { requestJson, resolveToposyncUrl, type HostUi } from "@toposync/plugin-api";
 import type { CameraConfig, CameraPipelinePresetRequest } from "../types";
 import { createCameraPipelinePreset } from "../api/camerasApi";
+import { CameraOnvifRecipeOptimization } from "./CameraOnvifRecipeOptimization";
 import { SubModal } from "../ui/SubModal";
 import type { CameraPipelinePresetModal } from "./CameraPipelinePresetModal";
 
@@ -189,6 +190,7 @@ export function CameraObservationPresetModal({
       </div>
       </div>
     </details>
+    {preset ? <CameraOnvifRecipeOptimization camera={camera} sourceId={sourceId} preset={preset} processingServerId={serverId} t={t} disabled={saving} onChange={() => {}} /> : null}
     <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.paused")}</p>
     {error ? <p role="alert" className="errorText">{error}</p> : null}
     <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && (!reference || (peerId && (!selectedPeer || !peerReference)))) || (selectableCategories && categories.length === 0) || (cat && !regionReady)} onClick={() => void save()}>

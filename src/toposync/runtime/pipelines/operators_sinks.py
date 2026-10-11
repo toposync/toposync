@@ -1040,6 +1040,8 @@ class _NotifyState:
     trail: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=512))
     stored_images: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     historical_evidence: dict[str, Any] = field(default_factory=dict)
+    spatial_status: dict[str, Any] = field(default_factory=dict)
+    mapping_gap: bool = False
 
     def event(self) -> dict[str, Any]:
         duration = self.last_ts - self.started_ts
@@ -1142,6 +1144,31 @@ class NotifyRuntime(SinkRuntime):
 
         changed = False
         world_point = _resolve_packet_world_point(packet)
+        mapping = packet.payload.get("mapping")
+        if (isinstance(mapping, dict) or world_point is not None
+                or (state.spatial_status and packet.lifecycle != Lifecycle.CLOSE)):
+            mapping = mapping if isinstance(mapping, dict) else {}
+            degraded = world_point is None or mapping.get("status") in {"unmapped", "partial"}
+            failure_reasons = list(state.spatial_status.get("failure_reasons") or [])
+            if degraded:
+                reasons = mapping.get("reasons")
+                reasons = reasons if isinstance(reasons, list) and reasons else [mapping.get("reason") or "mapping_evidence_missing"]
+                for reason in reasons[:16]:
+                    reason = str(reason)[:256]
+                    if reason not in failure_reasons and len(failure_reasons) < 16:
+                        failure_reasons.append(reason)
+            spatial_status = {
+                "status": "degraded" if degraded else "ready",
+                "reason": mapping.get("reason", "mapping_evidence_missing") if degraded else None,
+                "composition_id": mapping.get("composition_id"),
+                "had_mapping_gaps": bool(state.spatial_status.get("had_mapping_gaps") or degraded),
+                "failure_reasons": failure_reasons,
+            }
+            if spatial_status != state.spatial_status:
+                changed = True
+                state.spatial_status = spatial_status
+            if degraded:
+                state.mapping_gap = True
         if world_point is not None:
             point = {
                 "ts": float(ts),
@@ -1149,13 +1176,14 @@ class NotifyRuntime(SinkRuntime):
                 "z": float(world_point["z"]),
                 "composition_id": world_point.get("composition_id") or None,
                 "area_label": world_point.get("area_label"),
+                **({"gap_before": True} if state.mapping_gap else {}),
             }
             if state.trail:
                 prev = state.trail[-1]
                 try:
                     dx = float(point["x"]) - float(prev.get("x", 0.0))
                     dz = float(point["z"]) - float(prev.get("z", 0.0))
-                    if (dx * dx + dz * dz) > 0.000_001:
+                    if (dx * dx + dz * dz) > 0.000_001 or state.mapping_gap:
                         state.trail.append(point)
                         changed = True
                 except Exception:
@@ -1164,6 +1192,7 @@ class NotifyRuntime(SinkRuntime):
             else:
                 state.trail.append(point)
                 changed = True
+            state.mapping_gap = False
 
         stored = packet.payload.get("stored_images")
         if isinstance(stored, dict):
@@ -1326,6 +1355,7 @@ class NotifyRuntime(SinkRuntime):
                 name: art.reference for name, art in packet.artifacts.items() if art.reference and not art.private
             },
             "trail": list(state.trail),
+            **({"spatial_status": dict(state.spatial_status)} if state.spatial_status else {}),
             "stored_images": state.stored_images,
             "data": data,
             **projection_envelope,
@@ -1395,6 +1425,8 @@ class NotifyRuntime(SinkRuntime):
                         "realtime": bool(self._config.realtime),
                         "reason": "shutdown_synthesized",
                         "event": state.event(),
+                        "trail": list(state.trail),
+                        **({"spatial_status": dict(state.spatial_status)} if state.spatial_status else {}),
                         **({"data": {"historical_evidence": state.historical_evidence}}
                            if self._config.historical_evidence_paths else {}),
                     },

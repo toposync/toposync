@@ -18,6 +18,8 @@ from toposync.runtime.config_store import AppConfig, AppSettings, ConfigStore, U
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.source_panorama import (
     _identity,
+    _geometry_identity,
+    _artifact_identity_matches,
     _replacement_candidate_reason,
     register_source_panorama_routes,
 )
@@ -533,6 +535,31 @@ def test_control_verification_does_not_reconstruct_or_publish(environment, verif
     assert conflict.json()["detail"]["code"] == "idempotency_conflict"
 
 
+def test_limited_control_verification_never_certifies_full_control(environment):
+    client, _, service, _ = environment
+
+    async def verify(camera, output, **kwargs):
+        assert kwargs["verification_check_limit"] == 1
+        return {"captures": [], "physical_state": "restored", "issues": [],
+                "checkpoint": {"control_verification": {
+                    "status": "limited", "checks": [{"status": "verified"}],
+                }}}
+
+    service.scan_runner = verify
+    body = {"idempotency_key": "limited-control", "operation": "verify_control",
+            "verification_check_limit": 1}
+    response = client.post(BASE + "/jobs", json=body)
+    assert response.status_code == 200
+    job = wait_done(client, response.json()["job"])
+    assert job["status"] == "partial" and job["control_checks_passed"] == 1
+    assert not job["can_resume"] and not job["can_reconstruct"]
+    assert client.get(BASE).json()["active"] is None
+    assert client.post(BASE + "/jobs", json={**body, "verification_check_limit": 12}).status_code == 409
+    for invalid in (0, 13, True):
+        assert client.post(BASE + "/jobs", json={**body, "verification_check_limit": invalid}).status_code == 422
+    assert client.post(BASE + "/jobs", json={**body, "operation": "capture"}).status_code == 422
+
+
 @pytest.mark.parametrize(
     "action", ["core:camera:read", "core:camera:control", "core:settings:write"]
 )
@@ -1004,6 +1031,7 @@ def test_invalid_active_does_not_block_current_approved_artifact(
         artifact = json.loads(path.read_text())
         if active_problem == "stale":
             artifact["_identity"] = "stale-source-identity"
+            artifact["_geometry_identity"] = "geometry-v1:stale"
         elif active_problem == "unapproved":
             artifact["quality_approved"] = False
         elif active_problem == "missing-file":
@@ -1407,13 +1435,17 @@ def test_stop_failure_and_exception_are_sanitized(environment):
     assert "private-host" not in json.dumps(failed)
 
 
-def test_control_failure_uses_known_actionable_message(environment):
+@pytest.mark.parametrize("code,message", [
+    ("external_automation_active", "Uma automação da câmera está ativa. Interrompa essa automação antes de gerar a panorâmica."),
+    ("motion_automation_unqualified", "Confirme que o rastreamento, a patrulha e o retorno automático estão desligados antes de confirmar o controle exclusivo nas configurações da câmera."),
+])
+def test_control_failure_uses_known_actionable_message(environment, code, message):
     from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
 
     client, fake, service, _ = environment
 
     async def blocked(camera, output, **kwargs):
-        raise PanoramaCaptureError("external_automation_active")
+        raise PanoramaCaptureError(code)
 
     service.scan_runner = blocked
     response = client.post(BASE + "/jobs", json={
@@ -1422,8 +1454,8 @@ def test_control_failure_uses_known_actionable_message(environment):
     failed = wait_done(client, response.json()["job"])
     assert failed["status"] == "failed"
     assert failed["error"] == {
-        "code": "external_automation_active",
-        "message": "Uma automação da câmera está ativa. Interrompa essa automação antes de gerar a panorâmica.",
+        "code": code,
+        "message": message,
     }
     assert fake.moves == 0
 
@@ -1930,6 +1962,53 @@ def test_optical_configuration_change_marks_preserved_artifact_stale(environment
         assert artifact["id"] == previous["id"] and artifact["stale"] is True
         assert artifact["stale_reason"] == "source_changed"
     assert client.get(previous["image_url"]).content == image and fake.moves == 1
+
+
+
+@pytest.mark.parametrize("changed", ["fps", "ingest", "event_address", "event_binding"])
+def test_operational_change_preserves_geometry_but_not_capture_identity(environment, changed):
+    client, fake, service, _ = environment
+    job = wait_done(client, create(client))
+    artifact = client.get(BASE).json()["active"]
+    image = client.get(artifact["image_url"]).content
+    original_identity = service.jobs[job["id"]]["_identity"]
+
+    async def change():
+        def update(settings):
+            camera = settings["devices"][0]
+            source = camera["sources"][0]
+            if changed == "fps":
+                source.setdefault("video", {})["fps"] = 12
+            elif changed == "ingest":
+                source["ingest"] = {"mode": "direct", "host_server_id": None}
+            elif changed == "event_binding":
+                source["origin"].setdefault("metadata", {})["onvif_profile_binding"] = {
+                    "profile_token": "main", "upstream_rtsp_url": "rtsp://camera/main",
+                }
+            else:
+                camera.setdefault("onvif", {})["event_xaddr"] = "http://events.invalid/new"
+            return settings
+        await service.store.update_extension_settings("com.toposync.cameras", update)
+        _, camera, source = await service._context("simulated", "main")
+        return _identity(camera, source)
+
+    assert client.portal.call(change) != original_identity
+    assert client.get(BASE).json()["active"]["stale"] is False
+    assert client.get(f"/api/cameras/panorama-artifacts/{artifact['id']}").json()["artifact"]["stale"] is False
+    assert client.get(artifact["image_url"]).content == image
+    assert fake.moves == 1
+
+
+def test_legacy_identity_and_unknown_geometry_version_fail_closed():
+    camera = {"id": "camera"}
+    source = {"id": "source", "video": {"fps": 15}}
+    old = {"_identity": _identity(camera, source)}
+    geometry = _geometry_identity(camera, source)
+    assert _artifact_identity_matches(old, old["_identity"], geometry)
+    source["video"]["fps"] = 10
+    assert _geometry_identity(camera, source) == geometry
+    assert not _artifact_identity_matches(old, _identity(camera, source), geometry)
+    assert not _artifact_identity_matches({**old, "_geometry_identity": "geometry-v99:unknown"}, old["_identity"], geometry)
 
 
 def test_label_and_crop_edits_do_not_mark_artifact_stale(environment):
@@ -3787,3 +3866,23 @@ def test_coverage_progress_exposes_bounded_recovery_state(environment):
         },
     )
     assert client.get(f"{JOBS}/{job['id']}").json()["job"]["coverage_progress"] == base
+
+
+def test_capture_publishes_independent_approach_without_extra_device_preparation(environment):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    client, scanner, service, _ = environment
+    prepare = AsyncMock(side_effect=AssertionError("Reconstruction must not start more movement"))
+    service.app.state.camera_panorama = SimpleNamespace(prepare_native_reference=prepare)
+    job = wait_done(client, create(client, "automatic-response"))
+    artifact = client.get(BASE).json()["active"]
+    assert artifact["approach"]["status"] == "unavailable"
+    assert artifact["approach"]["reason"] == "causal_response_unavailable"
+    assert "samples" not in artifact["approach"]
+    assert artifact["quality_approved"] is True
+    assert "quick_approach" not in job
+    prepare.assert_not_awaited()
+    moves = scanner.moves
+    client.get(BASE)
+    client.get(f"{JOBS}/{job['id']}")
+    assert scanner.moves == moves

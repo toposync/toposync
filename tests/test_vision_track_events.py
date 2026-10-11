@@ -53,6 +53,67 @@ def _packet(ts: float, tracks: list[dict[str, object]]) -> Packet:
     )
 
 
+@pytest.mark.parametrize("origin", [0.0, 100.0])
+@pytest.mark.parametrize("terminal", ["empty_frame", "idle", "disconnect"])
+def test_track_close_retains_last_observation_without_later_frame(monkeypatch, origin, terminal):
+    from types import SimpleNamespace
+    from toposync.runtime.pipelines import Artifact
+    from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+    from toposync.runtime.pipelines.operators_sinks import NotifyRuntime
+    from toposync_ext_vision.processing.tasks import event_assembler, group_events
+
+    clock = [100.0]
+    monkeypatch.setattr(event_assembler.time, "monotonic", lambda: clock[0])
+
+    async def scenario():
+        saved = []
+        async def upsert(**record):
+            saved.append(record)
+        runtime = _runtime({"default_interval_seconds": 0, "close_after_seconds": 10})
+        group = group_events.VisionGroupEventsRuntime({"idle_timeout_seconds": 30, "update_interval_seconds": 0})
+        notify = NotifyRuntime({"update_interval_seconds": 0}, PipelineRuntimeDependencies(notifications_upsert=upsert))
+        context = SimpleNamespace(pipeline_name="timing", node_id="notify")
+        async def deliver(events):
+            for event in events:
+                for packet in await group.process_packet(event, None):
+                    await notify.process_packet(packet, context)
+        for delta in (0, 1):
+            clock[0] = 100 + delta
+            packet = _packet(origin + delta, [_track("track")])
+            packet.payload.update(media={"ts": origin + delta}, source={"clock_domain": "observed"},
+                                  capture_evidence={"capture_instance": "decoder", "generation": 1, "sequence": delta})
+            await deliver(await runtime.process_packet(packet, None))
+        empty = _packet(origin + 7.2, [])
+        empty.payload.update(media={"ts": origin + 7.2}, source={"clock_domain": "later"},
+                             capture_evidence={"capture_instance": "another", "generation": 2})
+        empty.artifacts["main"] = Artifact("main", b"unrelated frame")
+        clock[0] = 107.2
+        assert await runtime.process_packet(empty, None) == []
+        clock[0] = 113
+        if terminal == "disconnect":
+            closed = runtime.close_stream(empty)
+        else:
+            if terminal == "idle":
+                empty.metadata["vision_track_idle_flush"] = True
+            else:
+                empty.payload["frame_ts"] = empty.payload["media"]["ts"] = origin + 13
+            closed = await runtime.process_packet(empty, None)
+        assert len(closed) == 1 and closed[0].lifecycle == Lifecycle.CLOSE
+        assert closed[0].payload["frame_ts"] == origin + 1
+        assert closed[0].payload["media"]["ts"] == origin + 1
+        assert closed[0].payload["source"]["clock_domain"] == "observed"
+        assert closed[0].payload["capture_evidence"] == {"capture_instance": "decoder", "generation": 1, "sequence": 1}
+        assert closed[0].artifacts == {}
+        await deliver(closed)
+        assert runtime.close_stream(empty) == []
+        clock[0] = 150
+        for packet in await group._flush_idle_groups(None):
+            await notify.process_packet(packet, context)
+        assert saved[-1]["payload"]["event"]["duration_seconds"] == 1
+        assert saved[-1]["payload"]["event"]["duration_status"] == "observed"
+    asyncio.run(scenario())
+
+
 def test_track_event_keeps_same_tracklet_on_same_subject() -> None:
     async def scenario() -> None:
         runtime = _runtime({"default_interval_seconds": 0.0})
@@ -91,7 +152,7 @@ def test_track_event_does_not_inherit_another_detection_position(keep_located_tr
         missing = next(p for p in outputs if p.payload["tracklet_id"] == "unlocated")
         assert "world" not in missing.payload
         assert "world_anchor" not in missing.payload["subject"]
-        assert "mapping" not in missing.payload
+        assert missing.payload["mapping"] == {"status": "unmapped", "reason": "object_position_unavailable"}
         if keep_located_track:
             present = next(p for p in outputs if p.payload["tracklet_id"] == "located")
             assert present.payload["world"] == {"x": 2.0, "z": 3.0}
@@ -255,4 +316,22 @@ def test_reconnect_closes_subject_and_preserves_producer_sequence():
         assert closed[0].payload["subject"]["lifecycle_epoch"] == resumed.payload["subject"]["lifecycle_epoch"]
         assert first.payload["subject"]["id"] != resumed.payload["subject"]["id"]
 
+    asyncio.run(scenario())
+
+
+def test_out_of_order_track_does_not_replace_latest_evidence_but_new_clock_is_not_hidden():
+    async def scenario():
+        runtime = _runtime({'default_interval_seconds': 0})
+        await runtime.process_packet(_packet(100, [_track('one')]), None)
+        await runtime.process_packet(_packet(105, [_track('one')]), None)
+        assert await runtime.process_packet(_packet(103, [_track('one')]), None) == []
+        terminal = runtime.close_stream(_packet(120, []))[0]
+        assert terminal.payload['frame_ts'] == 105
+        runtime = _runtime({'default_interval_seconds': 0})
+        await runtime.process_packet(_packet(100, [_track('one')]), None)
+        changed = _packet(1, [_track('one')])
+        changed.payload['capture_evidence'] = {'capture_instance': 'new', 'generation': 2}
+        emitted = await runtime.process_packet(changed, None)
+        assert emitted[0].payload['frame_ts'] == 1
+        assert emitted[0].payload['capture_evidence']['generation'] == 2
     asyncio.run(scenario())

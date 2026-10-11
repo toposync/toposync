@@ -173,6 +173,16 @@ class Fixture:
                 fixture.events.append({"operation": "discover", "job_id": identifier})
                 return {"source_identity": self.source_identity}
 
+            async def remove_managed_returns(self):
+                for token, destination in list(fixture.presets.items()):
+                    if destination.get("binding") != self.source_identity or not destination.get("owner_id"):
+                        continue
+                    if self.scenario == "cleanup_failed":
+                        raise RuntimeError("Synthetic preset removal failure")
+                    del fixture.presets[token]
+                    fixture.events.append({"operation": "remove_return", "job_id": identifier,
+                                           "token": token, "outcome": "removed"})
+
             async def remove_return(self, destination):
                 assert destination["owner_id"] == identifier
                 assert destination["binding"] == self.source_identity

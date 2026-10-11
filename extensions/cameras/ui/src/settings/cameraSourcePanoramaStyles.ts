@@ -45,6 +45,7 @@ export const cameraSourcePanoramaStyles = `
 .sourcePanorama summary { display: list-item; align-content: center; cursor: pointer; font-weight: var(--font-weight-medium); }
 .sourcePanorama details[open] > p, .sourcePanorama details[open] > .sourcePanoramaActions { margin-block-start: var(--space-2); }
 .sourcePanoramaDetails { min-width: 0; max-width: 100%; }
+.sourcePanoramaLimitations { font-size: var(--font-size-13); color: var(--color-text-muted); }
 .sourcePanoramaTelemetry { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); width: 100%; min-width: 0; margin-block: var(--space-3); }
 .sourcePanoramaTelemetry > *, .sourcePanoramaTelemetry figure { min-width: 0; max-width: 100%; }
 .sourcePanoramaTelemetryPlot, .sourcePanoramaTelemetryTable { min-width: 0; width: 100%; max-width: 100%; overflow: auto; }

@@ -260,7 +260,7 @@ function PtzAttentionSettingsPanelContent({ i18n, api }: { i18n: HostI18n; api: 
   );
   const liveResumeBlocked = Boolean(
     selectedProfile?.mode === "paused" &&
-    selectedProfile.resume_mode === "live_preset" &&
+    ["live_preset", "live_panorama"].includes(selectedProfile.resume_mode || "") &&
     (
       validationLoading ||
       validationError ||
@@ -283,7 +283,7 @@ function PtzAttentionSettingsPanelContent({ i18n, api }: { i18n: HostI18n; api: 
     setCommandBusy(true);
     setSuccess(null);
     try {
-      if (command === "resume" && selectedProfile.resume_mode === "live_preset") {
+      if (command === "resume" && ["live_preset", "live_panorama"].includes(selectedProfile.resume_mode || "")) {
         const latestValidation = await validateStoredAttentionProfile(api, selectedProfile.id);
         setValidation(latestValidation);
         setValidationError(null);
@@ -303,7 +303,7 @@ function PtzAttentionSettingsPanelContent({ i18n, api }: { i18n: HostI18n; api: 
       await loadCore(undefined, false);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
-      if (command === "resume" && selectedProfile.resume_mode === "live_preset") {
+      if (command === "resume" && ["live_preset", "live_panorama"].includes(selectedProfile.resume_mode || "")) {
         setValidationError(message);
       }
       setPartialErrors([message]);
@@ -666,8 +666,8 @@ function SessionCockpit({
           <Metric label={t("ext.ptz_attention.session.event", {}, "Event")} value={activeEvent} />
           <Metric label={t("ext.ptz_attention.session.camera", {}, "PTZ camera")} value={camera?.name || profile.camera_id} />
           <Metric
-            label={t("ext.ptz_attention.session.view", {}, "Desired view")}
-            value={activeView?.label || (state && ["IDLE", "RETURNING"].includes(state) ? viewLabel(camera, profile.home_view_id) : "-")}
+            label={profile.panorama_element_id ? t("ext.ptz_attention.panorama.target") : t("ext.ptz_attention.session.view", {}, "Desired view")}
+            value={profile.panorama_element_id ? session?.active_target ? `${session.active_target.source_id} · ${t("ext.ptz_attention.panorama.target")}` : profile.home_target ? `${profile.home_target.x}, ${profile.home_target.z}` : "-" : activeView?.label || (state && ["IDLE", "RETURNING"].includes(state) ? viewLabel(camera, profile.home_view_id) : "-")}
           />
           <Metric
             label={t("ext.ptz_attention.session.owner", {}, "Control owner")}
@@ -764,6 +764,7 @@ function DecisionReview({
                         decision.reason ? decisionReasonLabel(decision.reason, t) : "",
                         decision.event_key,
                         view?.label,
+                        decision.details.target ? t("ext.ptz_attention.panorama.target") : "",
                       ].filter(Boolean).join(" · ") || "-"}
                     </div>
                   </div>
@@ -900,7 +901,7 @@ function stateTone(state: AttentionRuntimeState): Tone {
 }
 
 function modeTone(mode: AttentionExecutionMode): Tone {
-  if (mode === "live_preset") return "success";
+  if (mode === "live_preset" || mode === "live_panorama") return "success";
   if (mode === "shadow") return "info";
   if (mode === "paused") return "warning";
   return "neutral";

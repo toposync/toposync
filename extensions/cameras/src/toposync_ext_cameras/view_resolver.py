@@ -81,6 +81,10 @@ def resolve_ptz_target_view(
     )
     if composition is None:
         return _failure("composition_not_found")
+    if any(isinstance(getattr(element, "props", None), dict)
+           and element.props.get("camera_id") == cid and element.props.get("panorama_mapping") is not None
+           for element in composition.elements):
+        return _failure("panorama_navigation_required")
 
     eligible = None
     if eligible_view_ids is not None:

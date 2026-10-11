@@ -101,9 +101,8 @@ gerado e corta entre câmeras a partir de notificações. Esse é um fluxo
 especializado, não a configuração normal de live view de câmera.
 
 [Atenção PTZ semântica](ptz-attention.mdx) é outro tipo de fluxo. Ela consome
-ciclos de vida explícitos de eventos semânticos, seleciona uma vista PTZ calibrada
-permitida, mantém essa vista enquanto o evento estiver ativo e retorna para uma
-vista inicial configurada. Ela não segue qualquer objeto em movimento nem infere
+ciclos de vida explícitos de eventos semânticos, resolve um alvo dentro da região
+do perfil pelo mapeamento panorâmico selecionado e retorna para um ponto mapeado explícito. Ela não segue qualquer objeto em movimento nem infere
 intenção criminosa.
 
 ## Mapeamento {/* #mapping */}
@@ -119,8 +118,7 @@ contexto espacial:
 Veja [Mapeamento de câmeras](camera-mapping.mdx) para calibração, poses PTZ e
 projeção espacial de vídeo.
 
-Vistas PTZ calibradas também formam o conjunto seguro de alvos usado pela atenção
-PTZ semântica.
+A atenção PTZ semântica começa em simulação com região e retorno explícitos. O movimento físico exige qualificação separada de chegada e retorno para o mapeamento exato.
 
 ## O que validar {/* #what-to-validate */}
 

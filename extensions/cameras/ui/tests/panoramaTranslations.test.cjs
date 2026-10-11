@@ -6,7 +6,7 @@ const path = require("node:path");
 const typescript = require("typescript");
 
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "toposync-panorama-translations-"));
-for (const relative of ["translations.ts", "settings/sourcePanoramaTranslations.ts", "settings/catActivityTranslations.ts", "settings/audioTranslations.ts"]) {
+for (const relative of ["translations.ts", "settings/sourcePanoramaTranslations.ts", "settings/catActivityTranslations.ts", "settings/audioTranslations.ts", "settings/onvifTranslations.ts"]) {
   const target = path.join(temporaryDirectory, relative.replace(/\.ts$/, ".js"));
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, typescript.transpileModule(fs.readFileSync(path.resolve(__dirname, "../src", relative), "utf8"), {
@@ -61,6 +61,15 @@ test("scanner recovery diagnostics are localized for every supported locale", ()
     for (const locale of ["en", "pt-BR"]) {
       const message = sourcePanoramaTranslations[locale][`ext.cameras.source_panorama.diagnostic_${code}`];
       assert.ok(message?.trim(), `${locale}: ${code}`);
+    }
+  }
+});
+
+
+test("visual geometry blockers have actionable translations", () => {
+  for (const code of ["at_least_four_fit_points_required", "duplicate_fit_positions", "insufficient_consistent_geometry", "invalid_quality", "invalid_support_polygon", "unstable_geometry"]) {
+    for (const locale of ["en", "pt-BR"]) {
+      assert.ok(camerasTranslations[locale][`ext.cameras.panorama.reason_${code}`]?.trim(), `${locale}: ${code}`);
     }
   }
 });

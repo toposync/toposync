@@ -422,7 +422,7 @@ export async function createCameraPanorama(cameraId: string, body: { element_id:
   });
 }
 
-export async function updateCameraPanorama(cameraId: string, jobId: string, action: "capture" | "cancel" | "points" | "check" | "check-result" | "activate" | "return-framing", body: { revision: number; points?: import("../types").CameraPanoramaPoint[]; point_id?: string; check_id?: string; result?: "correct" | "offset" | "unverifiable"; observed_image?: { x: number; y: number } }): Promise<import("../types").CameraPanoramaJob> {
+export async function updateCameraPanorama(cameraId: string, jobId: string, action: "capture" | "cancel" | "points" | "preview" | "check" | "check-result" | "activate" | "return-framing", body: { revision: number; points?: import("../types").CameraPanoramaPoint[]; point_id?: string; check_id?: string; result?: "correct" | "offset" | "unverifiable"; observed_image?: { x: number; y: number } }): Promise<import("../types").CameraPanoramaJob> {
   return requestPanorama(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/panorama/${encodeURIComponent(jobId)}/${action}`, {
     method: action === "points" ? "PUT" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
@@ -538,4 +538,15 @@ export async function saveCameraSourcePanoramaCrop(cameraId: string, sourceId: s
     body: JSON.stringify({ artifact_id: artifactId, expected_revision: expectedRevision, crop }),
   });
   return result.artifact;
+}
+
+export async function fetchCameraOnvifCapabilities(cameraId: string, refresh = false, signal?: AbortSignal): Promise<import("../types").CameraOnvifCapabilities> {
+  return requestJson(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/onvif/capabilities${refresh ? "?refresh=true" : ""}`, { signal });
+}
+export async function observeCameraOnvifEvents(cameraId: string, afterSequence: number, signal?: AbortSignal): Promise<{
+  available: boolean; gap: boolean; error?: string; last_sequence: number; states: import("../types").CameraOnvifState[];
+  transport?: import("../types").CameraOnvifTransport;
+  events: Array<{ sequence: number; topic: string; qualified_topic: string; operation: string; data: Record<string, string> }>;
+}> {
+  return requestJson(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/onvif/observation?after_sequence=${afterSequence}`, { signal });
 }

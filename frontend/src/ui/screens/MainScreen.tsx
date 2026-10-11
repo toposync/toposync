@@ -34,8 +34,10 @@ import { MainViewport2D } from "../main2d/MainViewport2D";
 import { MainViewportVector2D } from "../main2d/MainViewportVector2D";
 import {
   notificationImageItems,
+  notificationDescription,
   notificationPriority,
   notificationThumbnailUrl,
+  renderNotificationSpatialStatus,
   type NotificationImageItem,
 } from "../notifications/pipelinesNotifications";
 import { HistoryLocationFilter } from "../notifications/HistoryLocationFilter";
@@ -66,6 +68,7 @@ type Props = {
   notificationsHasMore: boolean;
   notificationsFilter: NotificationsFilter;
   notificationsSearchStatus?: import("../../util/api").NotificationSearchStatus;
+  notificationsHistoryChanged?: boolean;
   activeNotificationId: string | null;
   activeNotification: Notification | null;
   notificationsLoading: boolean;
@@ -389,6 +392,7 @@ export function MainScreen({
   notificationsHasMore,
   notificationsFilter,
   notificationsSearchStatus,
+  notificationsHistoryChanged,
   activeNotificationId,
   activeNotification: activeNotificationRaw,
   notificationsLoading,
@@ -603,7 +607,9 @@ export function MainScreen({
     const trackingId = asTrimmedString(payload.tracking_id) || asTrimmedString(data.tracking_id);
     const eventId = asTrimmedString(payload.event_id) || asTrimmedString(data.event_id);
     const eventCode = asTrimmedString(payload.event_code) || asTrimmedString(data.event_code);
-    const duration = formatDurationVerbose(event.duration_seconds, locale);
+    const duration = payload.source === "pipelines" && event.duration_seconds === 0
+      ? t("core.ui.notifications.details.single_observation")
+      : formatDurationVerbose(event.duration_seconds, locale);
     const createdAt = formatDateTimeLong(locale, activeNotification.createdAt);
     const updatedAt = formatDateTimeLong(locale, activeNotification.updatedAt);
 
@@ -1391,8 +1397,16 @@ export function MainScreen({
                   ) : null}
                 </div>
 
+            {filterRestrictive ? <div className="cardBody" role="status">
+              {t("core.ui.notifications.active_priorities", { priorities: filter.priorities.map(priority => t(`core.ui.notifications.filter.priority.${priority}`)).join(", ") || t("core.ui.notifications.filter.none") })}
+              {filter.query.trim() ? ` · ${filter.query.trim()}` : ""}
+              {filter.extension ? ` · ${t("core.ui.notifications.extension_filter_active")}` : ""}
+            </div> : null}
             {historyReturnError ? <p role="alert" className="cardBody">{t("core.ui.notifications.original_unavailable")}</p> : null}
             {notificationsError ? <div className="cardBody" role="alert">{t("core.ui.notifications.filter.load_error")} <button type="button" className="chipButton" onClick={onNotificationsSearchRefresh}>{t("core.ui.notifications.location.retry")}</button></div> : null}
+            {notificationsHistoryChanged ? <div className="notificationsSearchEntry" role="status">
+              {t("core.ui.notifications.history_changed")} <button type="button" className="chipButton" disabled={notificationsLoading} onClick={onNotificationsSearchRefresh}>{t("core.ui.notifications.filter.refresh_search")}</button>
+            </div> : null}
             {timeSearchMessage && filter.query.trim() ? <div className="cardBody" role="status">{timeSearchMessage}</div> : null}
             {notificationsSearchStatus && !notificationsError && filter.semantic && filter.query.trim() && !timezoneRequired ? (
               <div className="cardBody" role="status">
@@ -1758,7 +1772,8 @@ export function MainScreen({
             <div className="notificationDetailsHeader">
               <div className="notificationDetailsTitle">{activeNotification.title}</div>
               {activeNotificationSubtitle ? <div className="notificationDetailsSubtitle">{activeNotificationSubtitle}</div> : null}
-              {activeNotification.description ? <div className="notificationDetailsDescription">{activeNotification.description}</div> : null}
+              {activeNotification.description ? <div className="notificationDetailsDescription">{notificationDescription(activeNotification)}</div> : null}
+              {renderNotificationSpatialStatus(activeNotification)}
             </div>
 
             {activeNotificationRenderer?.renderDetails ? (
@@ -1810,6 +1825,7 @@ export function MainScreen({
                 </div>
 
                 <div className="notificationGalleryCaption">
+                  <span>{activeNotificationImage.label}</span>
                   <div className="notificationGalleryCounter">
                     {t(
                       "core.ui.notifications.details.image_counter",

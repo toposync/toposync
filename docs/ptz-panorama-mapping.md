@@ -15,6 +15,14 @@ at a fixed optical zoom, constructs a spherical image with known pixel-to-ray
 geometry, and associates ground places with composition coordinates. The
 assistant presents four stages: prepare, link places, verify, and use.
 
+Visual acceptance update, October 10, 2026: the assistant links places, explores the result and accepts a revision. Four complete, nondegenerate controls begin the preview. All controls participate in angular refinement. Residuals above one degree are warnings, not an activation gate. Independent A/B mapping points have been removed.
+
+The shared projector uses `preview.eligible` for mathematical usability. Source identity, revision, finite invertible geometry and captured coverage remain mandatory. The control hull describes distribution; point projection extrapolates beyond it. Physical navigation retains its own supported envelope and verified motion requirements.
+
+Hover projects locally without fitting or network requests. Click, tap and keyboard inspection keep a precise origin/destination target with a transient ring. Edits use the same server estimator through the authenticated, non-persisting `POST /{job_id}/preview` route. Debounced requests are serialized and stale responses cannot replace newer edits. Saving and activation bind the explicitly accepted revision; neither hovering nor preview changes the active mapping.
+
+Individual pipeline anchors carry `metadata.world_projection`, including `extrapolated` when a position exists, the panorama-frame ray and revision. This uses the detection/tracking metadata contract so the evidence follows each tracked observation. The packet-level projection is `world_projection`. Unavailable ground intersections retain observations with a reason and their available ray instead of a fabricated world position. Texture meshes retain finite extents and explicit area crops.
+
 ## Contracts and ownership
 
 - `processing/panorama_mapping.py` contains pure geometry, rendering and robust
@@ -39,7 +47,8 @@ registry is not maintained. Jobs and images live privately under the configured
 data directory at `runtime/cameras/panorama/<job_id>/`.
 
 Job identifiers, source identity, composition geometry, the fixed optical
-profile, point revision and independent verification records bind the result.
+profile and point revision bind the visual result. Separate physical verification
+records authorize camera pointing.
 Changing points invalidates camera checks. A check result must name both its
 point and the specific check attempt. Activation rereads the stored reference;
 the editor receives that same reference so its normal autosave preserves it.
@@ -92,22 +101,11 @@ frontal contributing image instead of cosmetically warping or filling holes.
 Missing image coverage cannot be used as a correspondence.
 
 A projective plane-to-ray matrix maps `[world_x, world_z, 1]` to a ray direction.
-Normalized direct linear transformation, bounded deterministic robust sampling
-and refinement estimate the matrix from fit pairs. Checks do not participate
-in fitting. The inverse supplies ray-to-plane queries with signed-ray, horizon
-and support-polygon guards.
+Normalized direct linear transformation and angular refinement estimate the matrix from every complete control. The inverse supplies ray-to-plane queries with signed-ray and horizon guards. The hull classifies extrapolation rather than clipping queries.
 
-Readiness requires at least six fit inliers, at least 80 percent inliers,
-nondegenerate geometry and two distinct independent check places inside the
-fit support polygon. Angular errors use a one-degree default threshold. This
-threshold measures geometric consistency; it is not a measured positioning
-accuracy in centimeters. Camera verification separately moves to the check
-places and asks the operator to inspect a physically fresh returned image.
+Usability requires at least four controls and finite, nondegenerate geometry. The one-degree default is diagnostic only, not measured equipment accuracy. Explicit activation accepts the saved revision for visual use. Separate physical camera verification does not depend on special A/B mapping points; it uses selected saved controls and fresh evidence, and is not granted by visual acceptance.
 
-Neither good fit residuals nor an operator check proves arbitrary extrapolation.
-Runtime accepts only the supported polygon, current source geometry, matching
-image dimensions, fixed zoom and safe idle pose evidence attached to the frame.
-Missing or conflicting evidence produces an explicit unmapped result.
+Runtime retains current-source, matching-dimension, fixed-zoom and frame-bound pose checks. Extrapolated positions are available; missing or conflicting evidence produces an explicit unavailable position without discarding the original observation.
 
 ## Motion and recovery
 
@@ -149,8 +147,8 @@ npx playwright test --config playwright.panorama.config.js
 npm run docs:build
 ```
 
-Geometry tests use known rays and plane coordinates, outliers, independent
-checks, degeneracy, wraparound, image projection and inverse consistency.
+Geometry tests use known rays and plane coordinates, noisy controls, influence of
+each control, degeneracy, extrapolation, wraparound and inverse consistency.
 Service tests exercise authenticated routes, physical freshness, motion fences,
 revision conflicts, cancellation, restart, configuration drift and activation.
 Runtime tests verify packet pose safety, source/zoom/frame mismatches, invalid
@@ -238,3 +236,15 @@ arbitrary vendor axis models or full parallax compensation. It does not convert
 the panorama into a live 360 video projection or change Semantic PTZ attention's
 preset-based view selection. Those existing consumers retain their calibrated
 view contract. No real-camera result is claimed by the simulated validation.
+
+## Source mapping and automatic approach response
+
+Camera contexts use `PanoramaService.mapping_summary`, sharing source/revision validation with the active mapping service. Visual reference, mapping and positioning are separate; obsolete view counts do not establish readiness. Explicit element selection handles multiple placements without silently picking one. Optical identity remains available under advanced source information.
+
+Source artifact `approach` version 1 binds compact causal samples to `geometry_digest` and `source_identity`. Publication reads accepted acquisition diagnostics and replays, requires accepted Stop, and never starts extra movement. A response failure leaves the visual artifact available. The local continuous model reserves each command in turn for prediction checks, requires three distinct nearby commands of the same axis/direction/speed, caps relative disagreement at 20 percent and angular error at one degree, and never exceeds the observed pulse range or 0.6 seconds. Fixed zoom and current visual arrival checks are unchanged. A candidate remains disabled on hardware until physical qualification; historical data alone are insufficient to claim acceleration.
+
+The old preparation POST returns 410. Live panorama never dispatches those points; listing, stopping and explicit owned-resource cleanup remain for reconciliation. The private creation routine has been removed as well; existing ownership journals remain available for explicit maintenance.
+
+Composition props may store `metric_calibrations` independently using the existing validated ground projection record. `spatial.camera.metric_calibration_id` identifies that reference. Pointing checks its exact digest and optical source scope. Existing metric records remain readable until explicitly moved; an empty explicit collection does not fall back to obsolete records. A panorama alone never produces metric extrinsics.
+
+`cameras.panorama.resolve_target` resolves finite world anchors or envelope centres into a supported ray and accepted revision without device I/O. Attention's old preset resolver fails closed when a panorama reference is present. Its physical dispatch migration and device benchmarks remain gated on qualification; the two items are not fully accepted by these software changes.

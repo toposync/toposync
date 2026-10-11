@@ -690,6 +690,11 @@ export type CameraOnvifEventItem = {
 
 export type CameraOnvifEventDescriptor = {
   topic: string;
+  qualified_topic?: string;
+  source?: Record<string, string>;
+  key?: Record<string, string>;
+  known?: boolean;
+  available?: boolean;
   item_name?: string;
   item_type?: string;
   is_property?: boolean;
@@ -706,6 +711,7 @@ export type CameraOnvifEventsResponse = {
   available?: boolean;
   error?: string;
   event_xaddr?: string;
+  observed_states?: CameraOnvifEventDescriptor[];
   boolean_states: CameraOnvifEventDescriptor[];
   events: CameraOnvifEventDescriptor[];
 };

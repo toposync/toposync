@@ -56,20 +56,24 @@ creating an area recipe does not enable speech or operate a device.
 - `POST /api/cameras/projection/map`
 - `POST /api/cameras/projection/solve`
 
-For static and preset-based views, `camera.camera_mapping` and the editor use `calibrated_views` as the canonical mapping model:
+Composition elements with `panorama_mapping` use its selected source, element
+and revision for ground projection and spatial video. Invalid selected references
+fail closed instead of reviving old view geometry. Attention consumes mapped rays,
+explicit region and return through the panorama services at fixed zoom; physical
+qualification remains independent of software delivery.
 
-- fixed camera: one default calibrated view with `pose_reference = null`
-- PTZ camera: one or more calibrated views bound to a numeric `pose_reference`; presets move the head but are not geometric proof
-- preferred projection model: `camera_ray_ground_v2`, with six fit and two independent check correspondences on a bounded ground plane
-- legacy projection model: `image_quad_on_world`; retained for existing configurations, not used by the new editor
-- stream scope: `main` and `sub` are compatible by default; `zoom` needs an explicit calibrated view/scope
-- mapping runtime: caches the solved mapper; it maps individual points only, returns `mapping.status=unmapped` outside the proven ground polygon, and never warps full frames
-- mapped tracking presets place `camera.camera_mapping` before `vision.track`, allowing `byte_world` to use per-detection `world_anchor` as a probabilistic association signal.
+`metric_calibrations` is a separate explicit record list for `camera_ray_ground_v2`
+lens, pose, stream scope and ground correspondence data. The editor can copy existing
+metric records without altering the original records. An explicit empty list is
+authoritative. Body pointing and metric projection retain their own validators;
+a panorama does not supply metric extrinsics. Older metric records remain readable
+until an explicit choice. Inline projection APIs retain their calibrated record
+payload for independent metric calculations.
 
 `/api/cameras/projection/map` is the public point-query endpoint. `/api/cameras/projection/solve`
 validates a v2 draft without persisting it. UI and extension
-code should use calibrated views; runtime control-point pairs are internal
-projection details derived from that canonical model.
+code should use the appropriate panorama or explicit metric reference; runtime
+control-point pairs remain internal projection details.
 
 ### Automatic source panoramas and preserved PTZ mapping
 

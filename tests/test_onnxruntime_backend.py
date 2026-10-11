@@ -257,6 +257,44 @@ def test_prepare_onnx_input_applies_rescale_factor_before_normalization() -> Non
     assert tensor[0, 2, 0, 0] == pytest.approx(-1.0, abs=1e-6)
 
 
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.float32, np.float64])
+@pytest.mark.parametrize("channels", [None, 1, 3, 4])
+@pytest.mark.parametrize("resize_mode", ["stretch", "letterbox"])
+@pytest.mark.parametrize("layout", ["nchw", "nhwc"])
+def test_prepare_onnx_input_preserves_pixels_when_conversion_follows_resize(
+    dtype, channels, resize_mode, layout, monkeypatch
+):
+    shape = (11, 17) if channels is None else (11, 17, channels)
+    frame = (np.random.default_rng(42).random(shape) * 255).astype(dtype)[::2, ::2]
+    manifest = ModelManifest.model_validate({
+        "model_id": "preprocess.detector", "display_name": "Preprocess Detector",
+        "task": "detection", "runtime": "onnxruntime", "artifact_format": "onnx",
+        "artifact_path": "/tmp/preprocess.onnx",
+        "input": {"width": 4, "height": 4, "layout": layout, "resize_mode": resize_mode,
+                  "color_order": "rgb", "pad_value": 114.25, "rescale_factor": 1 / 255,
+                  "normalization": {"mean": [0.1, 0.2, 0.3], "std": [0.5, 0.6, 0.7]}},
+        "postprocess": {"type": "generic_boxes"},
+    })
+    original = ort_backend_mod._frame_to_hwc_array
+    observed_dtypes = []
+
+    def observe(frame):
+        array = original(frame)
+        observed_dtypes.append(array.dtype)
+        return array
+
+    monkeypatch.setattr(ort_backend_mod, "_frame_to_hwc_array", observe)
+    actual, actual_meta = ort_backend_mod.prepare_onnx_input(frame, manifest)
+    assert observed_dtypes == [frame.dtype]
+    # The previous path rounded pixels before selecting/resizing them.
+    monkeypatch.setattr(ort_backend_mod, "_frame_to_hwc_array",
+                        lambda value: np.asarray(original(value), dtype=np.float32))
+    expected, expected_meta = ort_backend_mod.prepare_onnx_input(frame, manifest)
+    np.testing.assert_array_equal(actual, expected)
+    assert actual.dtype == np.float32
+    assert actual_meta == expected_meta
+
+
 def test_onnxruntime_classification_backend_runs_and_normalizes_logits(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
     model_path = _write_constant_classification_model(tmp_path / "constant_classifier.onnx")
     _write_classification_manifest(tmp_path / "constant_classifier.json", model_path)

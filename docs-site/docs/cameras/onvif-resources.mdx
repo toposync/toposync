@@ -1,0 +1,48 @@
+---
+title: ONVIF resources and camera events
+description: Discover camera resources and use qualified camera detection before local analysis.
+sidebar_position: 4
+---
+
+Open **Settings → Cameras → Technical information → ONVIF resources**. The consultation uses the saved connection and does not move the camera, capture video or run inference. Save connection changes before consulting it.
+
+Identification, video/audio profiles, published movement actions and limits, announced services and event descriptions are queried independently. A partial response retains the successful sections. Missing information remains unknown; an announced service does not certify every operation. Limits are published coordinates, not measured physical travel.
+
+**Observe events for 60 seconds** starts a bounded view of received messages and boolean properties. Closing or stopping it ends interface polling. The shared subscription remains available to other consumers and expires after 120 seconds without demand. The first property value synchronizes state; later value changes count as transitions even when a camera repeats `Initialized`. Duplicate values do not create occurrences. Source, key and topic namespace distinguish sensors. Undeclared vendor events can appear in this view without their meaning being integrated into a recipe.
+
+## People detection
+
+In the **People detection** recipe, checking **Use camera detection to start analysis** observes events while the option remains checked and the dialog is open. The checkbox stays visible even when observation is interrupted. **Refresh resources** updates the announced catalog; it does not start observation. The selector shows observed compatible boolean properties belonging to the selected ONVIF video source and using an integrated topic, with the topic and source details below each name. An interruption retains the selected signal and blocks confirmation until observation recovers. Changing the camera, source or signal requires new confirmation. A manually saved RTSP source must retain its profile token and its stream address must match the URI returned for that profile. Unmapped channels and vendor-specific meanings remain unavailable. This pilot supports processing in the main environment.
+
+For a verified RTSP retransmission, `origin.metadata.onvif_profile_binding` can record `profile_token`, `rtsp_url` (the configured relay) and `upstream_rtsp_url` (its confirmed camera origin). The server still compares that upstream address against the URI returned by the camera for the profile. Changing the relay address or profile invalidates the binding. Recheck it if the relay configuration changes; a name alone does not establish its origin. FLV inputs and unverified alternate channels are not qualified by this RTSP binding.
+
+`VideoSource/MotionAlarm` uses the standard `Source` identifier for its video source; supported rule-engine events use video-source or configuration tokens. Received vendor topics absent from the catalog remain diagnostic evidence. Observation interruptions identify the failed ONVIF operation without exposing credentials.
+
+Verify short passages, stationary people and reopening latency before confirming coverage. The camera signal is preliminary: visual detection continues afterward, and the local motion filter respects the ONVIF window. Active state keeps the window open without requiring repeated messages. Inactive state starts a closing delay; a new activation cancels closing and duplicate inactive messages do not extend it. The recipe defaults to 30 seconds, adjustable from 0 to 300 in its advanced settings. Capture retains at least five seconds after the first usable new frame, with a bounded acquisition wait when no frame arrives. Unknown, ambiguous, disconnected or unsynchronized states restore normal processing. Only a healthy known inactive state closes the recipe's capture demand. Other consumers may continue decoding the shared stream.
+
+Creating or previewing this recipe does not enable it. Existing pipelines are not migrated. The advanced ONVIF gate editor retains namespace, source and key; ambiguous legacy selections remain unknown until selected again.
+
+The advanced editor offers property state and declared occurrence modes. Occurrences extend a timed window per delivery, including distinct deliveries with identical values. Unknown event descriptions and property synchronization cannot become pulses. New generic controls default to ten seconds; saved controls retain their existing settings. Monotonic timers govern the window. For recipes requiring stationary presence, `camera.source.keep_capture_when_gate_closed` preserves capture while window metadata raises processing cadence; closing capture would lose the required evidence.
+
+Resources show successful reads, read failures and created subscriptions. A transient read disconnection retries the same subscription with bounded backoff, while renewal continues. After a prolonged gap, renewal and synchronization check the existing subscription before replacing it on failure. Successful creation or renewal alone does not establish read availability. An empty successful read proves transport, but after a gap the property remains unknown until synchronized. Properties received in the recovery batch are retained; states from before the gap are not restored. Recovery does not depend on a camera brand. Cleanup reports confirmed unsubscribe or relies on subscription expiry if confirmation fails.
+
+## Recipe compatibility
+
+| Recipe | Capture optimization |
+|---|---|
+| People detection | Pilot requiring source, signal and timing verification |
+| Visitor and doorbell | Capture continues to preserve the existing five-second correlation and visitor lifecycle; the event already limits downstream package analysis |
+| Area presence | Stationary presence requires continuous observation |
+| Area entry | Needs the same subject outside before crossing inside |
+| Group entry | Needs distinct subjects and the crossing window |
+| Individual people | Tracking continuity has not been qualified |
+| Grouped people and pets | Multiple categories and session continuity have not been qualified |
+| Proximity groups | Spatial relationships and stationary subjects need observation |
+| Stopped vehicle | Absence of movement cannot close the observation needed to establish a stop |
+| Stopped person | Same restriction for stationary people |
+| Person near vehicle | A person signal does not cover both categories and their relation |
+| Litter activity | An animal event does not prove species or behavior; small movements matter |
+| Cat drinking | Same restriction for small drinking movements |
+| Sound above reference | Visual events do not cover sound; listening continues independently |
+
+Fewer delivered frames establish reduced work for that consumer, not a measured global processor or accelerator gain. Compare inference count, latency and missed/false occurrences on known scenes before relying on the optimization for a particular camera and firmware.

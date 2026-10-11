@@ -255,7 +255,7 @@ function clipTriangleToPolygon(vertices: ProjectionClipVertex[], clipPolygon: Wo
   return out;
 }
 
-function applyClipToProjectionMesh(meshData: ProjectionMeshData, polygon: WorldPoint[] | null | undefined): ProjectionMeshData | null {
+export function applyClipToProjectionMesh(meshData: ProjectionMeshData, polygon: WorldPoint[] | null | undefined): ProjectionMeshData | null {
   const clipPolygon = sanitizeClipPolygon(polygon);
   if (!clipPolygon) return meshData;
   const positions: number[] = [];

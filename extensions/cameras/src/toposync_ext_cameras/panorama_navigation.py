@@ -86,7 +86,10 @@ def reference_probe_observations(model: dict, photographs: list, commands: list,
                 continue
             observations.append({"axis": axes[0], "direction": int(np.sign(velocity[axes[0]])),
                 "command_id": receipt["command_id"], "before_rotation": first.tolist(),
-                "after_rotation": last.tolist()})
+                "after_rotation": last.tolist(), "velocity": velocity[axes[0]],
+                "before_capture_id": before["id"], "after_capture_id": after["id"],
+                "capture_instance": before["capture_instance"], "generation": before["generation"],
+                "before_sequence": before["sequence"], "after_sequence": after["sequence"]})
         except (AttributeError, KeyError, TypeError, ValueError):
             continue
     return observations
@@ -635,7 +638,6 @@ class VisualNavigator:
         self.last_pulse_stationary = False
         self.pulse_limits: dict[str, float] = {}
         self.last_pulse_match: dict[str, Any] = {}
-        self.selected_native_reference: dict | None = None
 
     async def prepare_stopped_view(self) -> None:
         """Read position while qualifying the stopped image, before any pulse."""
@@ -910,26 +912,14 @@ class VisualNavigator:
         return result
 
     async def aim(
-        self, ray: Any, *, native_destination: dict | None = None, native_ray: Any = None,
-        native_references: list[dict] | None = None,
+        self, ray: Any, *, maximum_error_pixels: float = MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
     ) -> dict[str, Any]:
-        if (native_destination is None) != (native_ray is None):
-            raise PanoramaCaptureError("visual_native_reference_unconfirmed")
-        if native_destination is None:
-            located = await self.locate()
+        if type(maximum_error_pixels) not in (int, float) or not 0 < maximum_error_pixels <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
+            raise PanoramaCaptureError("invalid_arrival_limit")
+        located = await self.locate()
         reference = self.localizer.target_reference(ray)
         if reference is None:
             raise PanoramaCaptureError("visual_target_unreachable")
-        if native_destination is None and native_references:
-            selected = select_native_reference(self.localizer, located, ray, native_references)
-            if selected is not None:
-                self.selected_native_reference = selected
-                native_destination, native_ray = selected["destination"], selected["ray"]
-                await self.scanner.camera.bind_reference_destination(native_destination)
-        if native_destination is not None:
-            # The prepared point only shortens travel. The final ray still
-            # goes through the ordinary independent visual measurement below.
-            located = await self.approach_reference(native_destination, native_ray)
         route = reference_path(self.localizer, located["reference_id"], reference["id"])
         visible = (
             ray_to_image_pixel(ray, self.localizer.lens, rotation_matrix=located["rotation_matrix"])
@@ -1010,7 +1000,7 @@ class VisualNavigator:
             if (
                 final
                 and measured
-                and measured["center_error_pixels"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS
+                and measured["center_error_pixels"] <= maximum_error_pixels
             ):
                 final_measurement = measured
                 break
@@ -1034,13 +1024,13 @@ class VisualNavigator:
                 if self.scanner.capabilities.get("axes", {}).get(axis) is True
             ]
             if final and measured and axes and len(measured.get("error_pixels", [])) == 2:
-                component_limit = MAXIMUM_LIVE_CENTER_ERROR_PIXELS / np.sqrt(2)
+                component_limit = maximum_error_pixels / np.sqrt(2)
                 needed = [
                     axis
                     for index, axis in enumerate(("pan", "tilt"))
                     if axis in axes and abs(float(measured["error_pixels"][index])) > component_limit
                 ]
-                if not needed and measured["center_error_pixels"] > MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
+                if not needed and measured["center_error_pixels"] > maximum_error_pixels:
                     needed = [
                         max(
                             axes,
@@ -1065,7 +1055,7 @@ class VisualNavigator:
                 if np.linalg.norm(error + known_matrix @ known_step) <= np.linalg.norm(error) * .9:
                     deferred_axes, missing, axes = missing, [], known
             fine_control = bool(final and measured
-                and measured["center_error_pixels"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS * 4
+                and measured["center_error_pixels"] <= maximum_error_pixels * 4
                 and self.scanner.capabilities.get("velocity_supported"))
             if missing:
                 axis = max(missing, key=lambda name: abs(error[0 if name == "pan" else 1]))
@@ -1075,6 +1065,12 @@ class VisualNavigator:
                     getattr(self.localizer, "probe_observations", []),
                 )
                 amount *= probe_direction if probe_direction is not None else 1
+                from .panorama_approach import approach_pulse
+                approximation = getattr(self.localizer, "approach", {})
+                predicted = (approach_pulse(approximation, axis, np.asarray(target), np.asarray(located["rotation_matrix"]))
+                             if approximation.get("status") == "qualified" else None)
+                if predicted is not None and not near:
+                    amount = predicted
             else:
                 matrix = np.column_stack([self.response[axis] for axis in axes])
                 commands = correction_step(
@@ -1128,6 +1124,7 @@ class VisualNavigator:
                 "speed": pulse_speed,
                 "fine_response_qualified": fine_response_qualified,
                 "reference_probe_direction": probe_direction if missing else None,
+                "automatic_approach": bool(missing and predicted is not None and not near),
             }
             if pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED:
                 await self._pulse(axis, pulse_amount)
@@ -1148,7 +1145,7 @@ class VisualNavigator:
                     })
                     if (
                         measured
-                        and measured["center_error_pixels"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS
+                        and measured["center_error_pixels"] <= maximum_error_pixels
                     ):
                         final_measurement = measured
                         break
@@ -1539,6 +1536,19 @@ async def correct_reference(scanner: _Scan, reference: np.ndarray, result: dict)
         if remaining_corrections:
             terminal_state = "budget_exhausted"
     scanner.checkpoint["return_correction_state"] = terminal_state
+    replay = getattr(scanner, "_last_return_replay", None)
+    if terminal_state in {"rejected", "budget_exhausted"} and replay is not None:
+        try:
+            replay.value["return_correction_failure"] = trace[-1].get("reason", terminal_state) if trace else terminal_state
+            await scanner._preserve_replay(replay, correction_failed=True)
+            if replay.value.get("return_failure_replay_id"):
+                scanner.checkpoint["return_failure_replay"] = replay.value["return_failure_replay_id"]
+            elif not scanner.checkpoint.get("return_failure_replay"):
+                scanner.checkpoint["return_failure_replay_unavailable"] = True
+        except Exception:
+            scanner.checkpoint["return_failure_replay_unavailable"] = True
+    if replay is not None:
+        scanner._last_return_replay = None
     if callable(persist):
         await persist()
     return result

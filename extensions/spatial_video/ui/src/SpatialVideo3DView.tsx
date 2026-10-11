@@ -19,6 +19,7 @@ import type {
 import { areaClipSignature, controlPointSetIntersectsAreaClip } from "./areaClip";
 import { fetchCameraPtzPresets, fetchCameraPtzStatus, fetchLiveViews } from "./api";
 import { resolveProjectionCandidates } from "./candidates";
+import { usePanoramaGroundLayer } from "./panoramaGroundLayer";
 import { markerEntries, markerVideoStatus, type MarkerVideoStatus } from "./markers";
 import { controlPointSetProjectionSignature, mediaContentRectSignature, type ProjectionMeshDensity, type ProjectionStrategyId } from "./projection";
 import { createProjectionGeometry } from "./projectionGeometry";
@@ -867,6 +868,8 @@ export function SpatialVideo3DView({
     };
   }, [fitContentIfAllowed, requestRender]);
 
+  const panoramaLayer = usePanoramaGroundLayer(sceneRef, elements, elementTypesById, requestRender);
+
   useEffect(() => {
     const scene = sceneRef.current;
     const camera = cameraRef.current;
@@ -1228,10 +1231,11 @@ export function SpatialVideo3DView({
           }
         `}
       </style>
+      {panoramaLayer.ready > 0 ? <span role="status" data-testid="panorama-ground-status" style={{ position: "absolute", bottom: 12, left: 12, padding: "6px 10px", background: "#ffffff", color: "#20252b", borderRadius: 8, pointerEvents: "none" }}>{panoramaLayer.ready === 1 ? "Panorâmica salva" : `${panoramaLayer.ready} panorâmicas salvas`}</span> : null}
       <SpatialVideoCompatibilityNotice
-        loading={liveViewsLoading}
-        error={liveViewsError}
-        hasCompatibleProjection={candidates.length > 0}
+        loading={liveViewsLoading || panoramaLayer.loading}
+        error={panoramaLayer.error || (panoramaLayer.ready ? null : liveViewsError)}
+        hasCompatibleProjection={candidates.length > 0 || panoramaLayer.ready > 0}
       />
     </div>
   );

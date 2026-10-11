@@ -43,16 +43,17 @@ def known_points() -> list[dict]:
     for index, (x, z) in enumerate(TARGETS):
         pan = math.atan2(z, x)
         tilt = math.atan2(-3, math.hypot(x, z))
-        points.append({"id": f"known-{index + 1}", "role": "fit" if index < 6 else "check", "world": {"x": x, "z": z}, "panorama": {"x": (pan / math.pi + 1) / 2, "y": 0.5 - tilt / math.pi}})
+        points.append({"id": f"known-{index + 1}", "world": {"x": x, "z": z}, "panorama": {"x": (pan / math.pi + 1) / 2, "y": 0.5 - tilt / math.pi}})
     return points
 
 
 def fixture_config() -> dict:
-    return {
+    config = {
         "schema_version": 1,
         "active_composition_id": COMPOSITION_ID,
         "compositions": [{"id": COMPOSITION_ID, "name": "Validação simulada", "elements": [
             {"id": "simulated-floor", "type": "com.toposync.structural.area", "name": "Chão sintético", "props": {"vertices": [{"x": 0, "z": -5}, {"x": 10, "z": -5}, {"x": 10, "z": 5}, {"x": 0, "z": 5}], "fill": "#67887b", "opacity": 1}},
+            {"id": "panorama-clip-area", "type": "com.toposync.structural.area", "name": "Recorte de teste", "props": {"vertices": [{"x": 3, "z": -3}, {"x": 6, "z": -3}, {"x": 6, "z": 3}, {"x": 3, "z": 3}], "fill": "#67887b", "opacity": 0}},
             {"id": ELEMENT_ID, "type": "com.toposync.cameras.camera", "name": "Câmera simulada", "position": {"x": 0, "y": 3, "z": 0}, "props": {"camera_id": CAMERA_ID, "camera_name": "Câmera simulada", "view_mode": "ceiling"}},
             *[{"id": f"target-{index + 1}", "type": "com.toposync.structural.area", "name": f"Lugar {index + 1}", "props": {"vertices": [{"x": x - .13, "z": z - .13}, {"x": x + .13, "z": z - .13}, {"x": x + .13, "z": z + .13}, {"x": x - .13, "z": z + .13}], "fill": "#f4b54a" if index < 6 else "#5edce5", "opacity": 1}} for index, (x, z) in enumerate(TARGETS)],
         ]}],
@@ -64,6 +65,13 @@ def fixture_config() -> dict:
         }]}}},
         "pipelines": [],
     }
+
+    sources = config["settings"]["extensions"]["com.toposync.cameras"]["devices"][0]["sources"]
+    second = copy.deepcopy(sources[0])
+    second.update(id="synthetic-detail", name="Detalhe sintético", view_id="synthetic-detail", is_default=False, metadata={})
+    second["origin"]["rtsp_url"] = "rtsp://127.0.0.1:1/synthetic-detail-only"
+    sources.append(second)
+    return config
 
 
 def write_saved_source_panorama(data_dir: Path, config: dict) -> None:

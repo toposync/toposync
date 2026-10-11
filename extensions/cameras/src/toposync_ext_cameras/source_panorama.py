@@ -47,6 +47,7 @@ _FILE_TYPES = {
     "report": ("application/json", ".json"),
 }
 _JOB_PUBLIC = {
+    "quick_approach",
     "operation",
     "capture_goal",
     "id",
@@ -344,6 +345,7 @@ _ISSUE_MESSAGES = {
     "source_binding_unverified": "Não foi possível confirmar que esta transmissão pertence à câmera selecionada.",
     "direct_source_binding_unverified": "Não foi possível confirmar uma conexão alternativa para esta mesma transmissão.",
     "direct_source_unavailable": "A conexão alternativa com esta transmissão não está disponível.",
+    "motion_automation_unqualified": "Confirme que o rastreamento, a patrulha e o retorno automático estão desligados antes de confirmar o controle exclusivo nas configurações da câmera.",
     "external_automation_active": "Uma automação da câmera está ativa. Interrompa essa automação antes de gerar a panorâmica.",
     "control_unavailable": "Não foi possível obter o controle da câmera para esta captura.",
     "position_unavailable": "A posição atual da câmera não pôde ser consultada.",
@@ -384,6 +386,13 @@ class _Input(BaseModel):
 class CreateSourcePanorama(_Input):
     idempotency_key: str = Field(min_length=8, max_length=160, pattern=r"^[a-zA-Z0-9_.:-]+$")
     operation: Literal["capture", "verify_control"] = "capture"
+    verification_check_limit: int | None = Field(default=None, ge=1, le=12, strict=True)
+
+    @model_validator(mode="after")
+    def verification_only(self) -> CreateSourcePanorama:
+        if self.verification_check_limit is not None and self.operation != "verify_control":
+            raise ValueError("A check limit requires control verification")
+        return self
 
 
 class PanoramaCrop(_Input):
@@ -708,6 +717,7 @@ def _active_artifact_is_current(
     camera_id: str,
     source_id: str,
     current_identity: str,
+    current_geometry_identity: str | None = None,
 ) -> bool:
     if not isinstance(artifact, dict) or artifact.get("status") not in {"ready", "partial"}:
         return False
@@ -731,7 +741,7 @@ def _active_artifact_is_current(
     return (
         artifact.get("camera_id") == camera_id
         and artifact.get("source_id") == source_id
-        and artifact.get("_identity") == current_identity
+        and _artifact_identity_matches(artifact, current_identity, current_geometry_identity)
         and _artifact_quality_approved(artifact)
         and _semantic_token(artifact.get("algorithm_version")) is not None
         and _semantic_token(coverage.get("provenance")) is not None
@@ -989,6 +999,42 @@ def _identity(camera: dict[str, Any], source: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(context, sort_keys=True, default=str).encode()).hexdigest()
 
 
+
+def _geometry_identity(camera: dict[str, Any], source: dict[str, Any]) -> str:
+    """Versioned image identity; acquisition still uses the full operational fence.
+
+    Remove only fields known not to change rays. Resolution, codec, source
+    address/profile and mount remain significant; old artifacts are never
+    assigned this identity retroactively without capture provenance.
+    """
+    camera = copy.deepcopy(camera)
+    source = copy.deepcopy(source)
+    camera.pop("clock_domain", None)
+    if isinstance(camera.get("onvif"), dict):
+        camera["onvif"].pop("event_xaddr", None)
+    source.pop("ingest", None)
+    origin = source.get("origin")
+    if isinstance(origin, dict) and isinstance(origin.get("metadata"), dict):
+        # Event-profile evidence does not change the configured image source.
+        origin["metadata"].pop("onvif_profile_binding", None)
+    if isinstance(source.get("video"), dict):
+        source["video"].pop("fps", None)
+    return "geometry-v1:" + _identity(camera, source)
+
+
+def _artifact_identity_matches(
+    artifact: dict[str, Any], current_identity: str | None,
+    current_geometry_identity: str | None = None,
+) -> bool:
+    if "_geometry_identity" in artifact:
+        geometry = artifact["_geometry_identity"]
+        return bool(isinstance(geometry, str) and geometry.startswith("geometry-v1:")
+                    and current_geometry_identity is not None
+                    and geometry == current_geometry_identity)
+    # Missing provenance is not evidence that an old operational change was safe.
+    return current_identity is not None and artifact.get("_identity") == current_identity
+
+
 def _preserve_panorama_references(
     current: dict[str, Any], proposed: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1083,6 +1129,7 @@ class SourcePanoramaService:
         reference_coordinator: PanoramaReferenceCoordinator | None = None,
         acquisition_policy: dict[str, Any] | None = None,
     ) -> None:
+        self.app = app
         self.services, self.authorize, self.read_settings = services, authorize, read_settings
         self.store = app.state.config_store
         register_filter = getattr(self.store, "register_extension_settings_patch_filter", None)
@@ -1118,6 +1165,8 @@ class SourcePanoramaService:
             ):
                 continue
             if job.get("status") in _ACTIVE:
+                if (job.get("quick_approach") or {}).get("status") == "preparing":
+                    job["quick_approach"].update(status="interrupted", reason="process_interrupted", physical_state="unknown")
                 processing_interrupted = (
                     bool(job.get("_processing_only"))
                     or job.get("status") == "processing"
@@ -1183,7 +1232,7 @@ class SourcePanoramaService:
             "acquisition": (("completed" if (job.get("_acquisition_policy") or {}).get("version") == 4 else "sufficient") if required_region_captures(checkpoint)
                             else "running" if acquiring else "pending" if not checkpoint else "incomplete"),
             "reconstruction": job.get("_reconstruction_status", "pending"),
-            "return": ("verified" if job.get("physical_state") == "restored"
+            "return": ("verified" if job.get("_capture_return_state", job.get("physical_state")) == "restored"
                        else "running" if job.get("physical_state") == "returning" and job.get("status") in _ACTIVE
                        else "unverified" if return_attempted else "pending"),
         }
@@ -1872,14 +1921,17 @@ class SourcePanoramaService:
         reference: dict[str, Any] | None = None,
         *,
         current_identity: str | None = None,
+        current_geometry_identity: str | None = None,
     ) -> dict[str, Any]:
         result = {key: value for key, value in artifact.items() if not key.startswith("_")}
+        if isinstance(result.get("approach"), dict):
+            result["approach"] = {key: result["approach"].get(key) for key in ("version", "status", "reason", "method")}
         if reference and reference.get("artifact_id") == artifact["id"]:
             result.update(
                 crop=reference.get("crop", result["crop"]),
                 crop_revision=reference.get("crop_revision", 1),
             )
-        result["stale"] = artifact.get("_identity") != current_identity
+        result["stale"] = not _artifact_identity_matches(artifact, current_identity, current_geometry_identity)
         result["stale_reason"] = (
             ("source_unavailable" if current_identity is None else "source_changed")
             if result["stale"]
@@ -1891,6 +1943,7 @@ class SourcePanoramaService:
         self._authorize(request, camera_id)
         _, camera, source = await self._context(camera_id, source_id, request)
         current_identity = _identity(camera, source)
+        current_geometry_identity = _geometry_identity(camera, source)
         pointer = self._pointer(source)
         output: dict[str, Any] = {
             "camera_id": camera_id,
@@ -1909,7 +1962,8 @@ class SourcePanoramaService:
                     artifact = self._artifact(str(reference["artifact_id"]))
                     if artifact["camera_id"] == camera_id and artifact["source_id"] == source_id:
                         output[name] = self._public_artifact(
-                            artifact, reference, current_identity=current_identity
+                            artifact, reference, current_identity=current_identity,
+                            current_geometry_identity=current_geometry_identity,
                         )
                 except HTTPException:
                     pass  # A missing historical file must not prevent recovery.
@@ -1930,7 +1984,8 @@ class SourcePanoramaService:
                     artifact = self._artifact(latest["artifact_id"])
                     if not output["active"] or output["active"]["id"] != artifact["id"]:
                         output["candidate"] = self._public_artifact(
-                            artifact, current_identity=current_identity
+                            artifact, current_identity=current_identity,
+                            current_geometry_identity=current_geometry_identity,
                         )
                 except HTTPException:
                     pass
@@ -1939,6 +1994,7 @@ class SourcePanoramaService:
             camera_id=camera_id,
             source_id=source_id,
             current_identity=current_identity,
+            current_geometry_identity=current_geometry_identity,
         )
         output["replacement_pending"] = not pointer.get("active") and output["candidate_selectable"]
         return output
@@ -1950,6 +2006,7 @@ class SourcePanoramaService:
         camera_id: str,
         source_id: str,
         current_identity: str,
+        current_geometry_identity: str | None = None,
     ) -> bool:
         candidate = pointer.get("candidate")
         artifact_id = candidate.get("artifact_id") if isinstance(candidate, dict) else None
@@ -1965,7 +2022,7 @@ class SourcePanoramaService:
             and (job.get("_acquisition_policy") or {}).get("version") == 4
             and artifact.get("camera_id") == camera_id
             and artifact.get("source_id") == source_id
-            and artifact.get("_identity") == current_identity
+            and _artifact_identity_matches(artifact, current_identity, current_geometry_identity)
             and artifact.get("status") in {"ready", "partial"}
             and _artifact_quality_approved(artifact)
             and _artifact_files_are_readable(artifact, self.root / "artifacts")
@@ -1978,6 +2035,7 @@ class SourcePanoramaService:
         pointer: dict[str, Any],
         *,
         current_identity: str,
+        current_geometry_identity: str | None = None,
         selection: SelectSourcePanorama | None = None,
     ) -> dict[str, Any]:
         """Replacing an active panorama requires an explicit, versioned selection."""
@@ -1998,6 +2056,7 @@ class SourcePanoramaService:
                 camera_id=camera_id,
                 source_id=source_id,
                 current_identity=current_identity,
+                current_geometry_identity=current_geometry_identity,
             )
         ):
             if selection is not None:
@@ -2032,6 +2091,7 @@ class SourcePanoramaService:
             source_id,
             pointer,
             current_identity=_identity(camera, source),
+            current_geometry_identity=_geometry_identity(camera, source),
             selection=selection,
         )
         return await self.get_source(request, camera_id, source_id)
@@ -2124,7 +2184,8 @@ class SourcePanoramaService:
                     source_id,
                     body.idempotency_key,
                 ):
-                    if job.get("operation", "capture") != body.operation:
+                    if (job.get("operation", "capture") != body.operation
+                            or job.get("_verification_check_limit") != body.verification_check_limit):
                         raise _error("idempotency_conflict", "Esta solicitação já iniciou outra operação.")
                     return {"job": self._public_job(job)}
             job_id = uuid.uuid4().hex
@@ -2146,6 +2207,7 @@ class SourcePanoramaService:
                 "status": "queued",
                 "phase": "queued",
                 "operation": body.operation,
+                "_verification_check_limit": body.verification_check_limit,
                 "captures_accepted": 0,
                 "physical_state": "unknown",
                 "can_resume": False,
@@ -2153,6 +2215,7 @@ class SourcePanoramaService:
                 "issues": [],
                 "_idempotency_key": body.idempotency_key,
                 "_identity": _identity(camera, source),
+                "_geometry_identity": _geometry_identity(camera, source),
                 "_expected_pointer": self._pointer(source),
                 "_checkpoint": None,
                 "_captures": [],
@@ -2322,6 +2385,8 @@ class SourcePanoramaService:
                    if job.get("_acquisition_policy") is not None else {}),
                 **({"verify_control": True}
                    if job.get("operation") == "verify_control" and not return_only else {}),
+                **({"verification_check_limit": job["_verification_check_limit"]}
+                   if job.get("_verification_check_limit") is not None and not return_only else {}),
             )
         finally:
             self.cameras.pop(job["id"], None)
@@ -2580,12 +2645,13 @@ class SourcePanoramaService:
                         and bool(verification.get("checks"))
                         and all(check.get("status") == "verified" for check in verification["checks"])
                     )
+                    limited = verification.get("status") == "limited" and job["physical_state"] == "restored"
                     job.update(
-                        status="verified" if verified else "failed",
+                        status="verified" if verified else "partial" if limited else "failed",
                         phase="control_verified" if verified else "control_unconfirmed",
                         can_resume=False,
                     )
-                    if not verified:
+                    if not verified and not limited:
                         job["error"] = {
                             "code": "visual_control_unverified",
                             "message": "Não foi possível confirmar os movimentos e o retorno desta câmera.",
@@ -2865,6 +2931,25 @@ class SourcePanoramaService:
             "_identity": job["_identity"],
             "_scan_coverage": _safe(scan.get("coverage", {})),
         }
+        if "_geometry_identity" in job:
+            artifact["_geometry_identity"] = job["_geometry_identity"]
+        from .panorama_navigation import reference_probe_observations
+        from .panorama_approach import build_approach
+        checkpoint = job.get("_checkpoint") or {}
+        photographs = job.get("_captures") or checkpoint.get("captures", [])
+        attempts = list((checkpoint.get("diagnostics") or {}).get("attempts") or [])
+        for photograph in photographs:
+            replay = photograph.get("observation_replay_id")
+            if isinstance(replay, str) and re.fullmatch(r"replay-accepted-[a-f0-9]{32}", replay):
+                record = self._read(self._job_directory(job) / f"{replay}.json") or {}
+                if record.get("complete") is True and isinstance(record.get("attempt"), dict):
+                    attempts.append(record["attempt"])
+        model = self._read(self._private_path(output, safe_files["model"])) or {}
+        try:
+            observations = reference_probe_observations(model, photographs, checkpoint.get("region_commands", []), attempts)
+            artifact["approach"] = build_approach(model, observations, attempts, job.get("_geometry_identity", job["_identity"]))
+        except (KeyError, TypeError, ValueError):
+            artifact["approach"] = {"version": 1, "status": "unavailable", "reason": "invalid_response_evidence"}
         if region_status is not None:
             artifact.update(capture_goal="initial_region", region_status=region_status)
             if regional_version in {2, 3, 4}:
@@ -2906,6 +2991,7 @@ class SourcePanoramaService:
             camera_id=job["camera_id"],
             source_id=job["source_id"],
             current_identity=job["_identity"],
+            current_geometry_identity=job.get("_geometry_identity"),
         )
         candidate_reason = _replacement_candidate_reason(
             artifact,
@@ -3204,7 +3290,8 @@ class SourcePanoramaService:
         await self._update_pointer(camera_id, source_id, expected, replacement)
         return {
             "artifact": self._public_artifact(
-                artifact, reference, current_identity=_identity(camera, source)
+                artifact, reference, current_identity=_identity(camera, source),
+                current_geometry_identity=_geometry_identity(camera, source),
             )
         }
 
@@ -3302,11 +3389,13 @@ def register_source_panorama_routes(
         service._authorize(request, artifact["camera_id"])
         reference = None
         current_identity = None
+        current_geometry_identity = None
         try:
             _, camera, source = await service._context(
                 artifact["camera_id"], artifact["source_id"], request
             )
             current_identity = _identity(camera, source)
+            current_geometry_identity = _geometry_identity(camera, source)
             reference = next(
                 (
                     value
@@ -3319,7 +3408,8 @@ def register_source_panorama_routes(
             pass
         return {
             "artifact": service._public_artifact(
-                artifact, reference, current_identity=current_identity
+                artifact, reference, current_identity=current_identity,
+                current_geometry_identity=current_geometry_identity,
             )
         }
 

@@ -308,6 +308,10 @@ export type ElementType = {
     api: HostApi;
   }) => import("react").ReactNode;
   renderEditorModal?: (args: {
+    /** Composition owning the element, for contextual navigation and return. */
+    compositionId?: string;
+    /** Transient action selected by the extension when opening this editor. */
+    initialAction?: string;
     element: CompositionElement;
     elements: CompositionElement[];
     elementTypesById: Record<string, ElementType>;
@@ -325,6 +329,8 @@ export type Viewport2DContext = {
   worldToScreen: (p: PlanePoint) => Vector2;
   screenToWorld: (p: Vector2) => PlanePoint;
   scale: number;
+  /** Centre this view without changing its scale or display rotation. */
+  centerOn?: (point: PlanePoint) => void;
 };
 
 export type BoundsXZ = {
@@ -434,6 +440,8 @@ export type Viewport2DReplicaProps = {
   initialCenter?: PlanePoint;
   /** Pixels per meter used with initialCenter. */
   initialScale?: number;
+  /** Initial visible span in metres on the shorter viewport axis; takes precedence over initialScale. */
+  initialSpan?: number;
   interactionMode?: "navigate" | "select";
   minScale?: number;
   maxScale?: number;

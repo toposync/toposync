@@ -26,6 +26,8 @@ import { Viewport2D } from "../Viewport2D";
 import { drawMeasurementLine2D, MEASUREMENT_LINE_ELEMENT_TYPE_ID } from "../editor/measurementLineElementType";
 
 type Props = {
+  initialEditingElementId?: string | null;
+  initialEditingAction?: string;
   activeNotification: Notification | null;
   notificationRenderers: NotificationRenderer[];
   compositionName: string;
@@ -217,6 +219,8 @@ function finiteOrder(value: number | undefined, fallback: number): number {
 }
 
 export function CompositionEditorScreen({
+  initialEditingElementId,
+  initialEditingAction,
   compositionName,
   activeNotification,
   notificationRenderers,
@@ -248,7 +252,8 @@ export function CompositionEditorScreen({
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
-  const [editingElementId, setEditingElementId] = useState<string | null>(null);
+  const [editingElementId, setEditingElementId] = useState<string | null>(initialEditingElementId ?? null);
+  const [editingInitialAction, setEditingInitialAction] = useState(initialEditingAction);
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [selectedToolId, setSelectedToolId] = useState<string>(CORE_TOOL_NAVIGATE_ID);
   const [isControlsOpen, setIsControlsOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 800px)").matches);
@@ -623,6 +628,10 @@ export function CompositionEditorScreen({
     [editingElementId, elements],
   );
   const editingType = editingElement ? elementTypesById[editingElement.type] ?? null : null;
+
+  useEffect(() => {
+    if (editingElement && editingType) setEditingInitialAction(undefined);
+  }, [editingElement, editingType]);
 
   useEffect(() => {
     setSelectedElementIds((prev) => {
@@ -1417,6 +1426,8 @@ export function CompositionEditorScreen({
         {editingElement ? (
           editingType?.renderEditorModal ? (
             editingType.renderEditorModal({
+              compositionId: activeCompositionId,
+              initialAction: editingInitialAction,
               element: editingElement,
               elements,
               elementTypesById,

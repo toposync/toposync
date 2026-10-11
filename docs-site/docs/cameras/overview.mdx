@@ -102,8 +102,8 @@ pipeline and cuts between cameras from notifications. That is a specialized
 workflow, not the normal camera live-view setup.
 
 [Semantic PTZ attention](ptz-attention.mdx) is a different workflow. It consumes
-explicit semantic event lifecycles, selects an allowed calibrated PTZ view, holds
-that view while the event remains active, and returns to a configured home view.
+explicit semantic event lifecycles, resolves a target inside the profile region
+through the selected panorama mapping, and returns to an explicit mapped point.
 It does not follow every moving object and does not infer criminal intent.
 
 ## Mapping {/* #mapping */}
@@ -119,7 +119,7 @@ context:
 See [Camera mapping](camera-mapping.mdx) for calibration, PTZ poses, and spatial
 video projection.
 
-Calibrated PTZ views are also the safe target set used by Semantic PTZ attention.
+Semantic PTZ attention starts in shadow with an explicit region and return point. Physical movement requires separate arrival and return qualification for the exact mapping.
 
 ## What to validate {/* #what-to-validate */}
 

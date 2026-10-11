@@ -73,6 +73,19 @@ def test_recent_signal_requires_fresh_matching_visual_evidence(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_first_property_value_is_not_an_occurrence_but_initialized_transition_is(monkeypatch):
+    clock, events, runtime, context = setup(monkeypatch)
+    async def scenario():
+        events.append({**signal(1, 100), "state_changed": False, "is_property": True})
+        assert await runtime.process_packet(frame(100), context) == []
+        clock[0] = 101
+        events.extend([{**signal(2, 101, False), "state_changed": True, "is_property": True},
+                       {**signal(3, 101), "operation": "Initialized", "state_changed": True, "is_property": True}])
+        accepted = await runtime.process_packet(frame(101), context)
+        assert accepted[0].payload["onvif_context"]["sequence"] == 3
+    asyncio.run(scenario())
+
+
 def test_signal_area_lifecycle_replay_and_single_notification(monkeypatch, tmp_path):
     clock, events, runtime, context = setup(monkeypatch)
     events.append(signal(1, 100))

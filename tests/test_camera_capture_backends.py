@@ -23,6 +23,31 @@ from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
 
+@pytest.mark.parametrize("scheme", ["http", "https", "rtsp"])
+def test_ffmpeg_http_capture_bounds_reads_and_samples_by_receipt_time(monkeypatch, scheme):
+    from types import SimpleNamespace
+    import toposync_ext_cameras.processing.frame_grabber as grabber
+
+    commands = []
+    monkeypatch.setattr(grabber.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+
+    def launch(args, **_kwargs):
+        commands.append(args)
+        return SimpleNamespace(stderr=None)
+
+    monkeypatch.setattr(grabber.subprocess, "Popen", launch)
+    reader = grabber.FfmpegFrameGrabber(f"{scheme}://example/stream", target_fps=1)
+    reader._start_process()
+    command = commands[0]
+    if scheme in {"http", "https"}:
+        assert command[command.index("-rw_timeout") + 1] == "8000000"
+        assert command[command.index("-use_wallclock_as_timestamps") + 1] == "1"
+        assert command.index("-use_wallclock_as_timestamps") < command.index("-i")
+    else:
+        assert "-use_wallclock_as_timestamps" not in command
+    assert command[command.index("-vf") + 1] == "fps=1.0"
+
+
 @pytest.mark.parametrize("chunk_size", [3, 8192, 131072])
 def test_mjpeg_reader_preserves_fragmented_frames_with_linear_marker_search(monkeypatch, chunk_size):
     from collections import deque

@@ -100,7 +100,7 @@ def live_observer_binding_issue(
     node_id: str = "",
     require_effective_binding: bool = False,
 ) -> ObserverBindingIssue | None:
-    if effective_mode(profile) != "live_preset":
+    if effective_mode(profile) not in {"live_preset", "live_panorama"}:
         return None
     matches = [
         binding

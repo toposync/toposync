@@ -133,7 +133,7 @@ def _frame_to_hwc_array(frame: Any) -> np.ndarray:
         array = np.repeat(array, 3, axis=2)
     elif array.shape[2] >= 4:
         array = array[:, :, :3]
-    return np.asarray(array, dtype=np.float32)
+    return array
 
 
 def _normalize_image(array: np.ndarray, manifest: ModelManifest) -> np.ndarray:
@@ -211,6 +211,8 @@ def prepare_onnx_input(frame: Any, manifest: ModelManifest) -> tuple[np.ndarray,
     image = _frame_to_hwc_array(frame)
     image = _normalize_color_order(image, manifest)
     image, preprocess_meta = _resize_image_for_manifest(image, manifest)
+    # Convert after resizing to avoid a full-resolution float32 temporary.
+    image = np.asarray(image, dtype=np.float32)
     image = _normalize_image(image, manifest)
     layout = str(manifest.input.layout or "nchw").strip().lower()
     if layout == "nchw":

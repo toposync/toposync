@@ -24,6 +24,7 @@ from .models import (
     ResolvedTarget,
     effective_mode,
     operator_profile_id,
+    target_in_region,
 )
 from .store import AttentionStore, ProfileNotFoundError
 
@@ -81,6 +82,8 @@ class _DeviceRuntime:
     next_renew_at: float = 0.0
     command_id: str = ""
     command_preset: str = ""
+    command_target_key: str = ""
+    navigation_task: asyncio.Task | None = None
     motion_epoch: int | str | None = None
     settle_deadline: float = 0.0
     focused_since: float | None = None
@@ -130,9 +133,13 @@ class PtzAttentionController:
         self._task: asyncio.Task[None] | None = None
         self._closed = False
 
-    def service_status(self) -> dict[str, bool]:
+    def service_status(self, profile: AttentionProfile | None = None) -> dict[str, bool]:
         known = getattr(self.services, "_services", {})
-        return {service_id: service_id in known for service_id in _LIVE_SERVICES}
+        required = _LIVE_SERVICES
+        if profile is not None and profile.panorama_element_id:
+            required = tuple(item for item in required if item != "cameras.views.resolve_target") + (
+                "cameras.panorama.resolve_target", "cameras.panorama.navigate_attention")
+        return {service_id: service_id in known for service_id in required}
 
     def has_service(self, service_id: str) -> bool:
         return bool(
@@ -486,7 +493,7 @@ class PtzAttentionController:
                     if not self.has_service("cameras.views.resolve_target")
                     else "target_unresolved"
                 )
-                if effective_mode(profile) == "live_preset":
+                if effective_mode(profile) in {"live_preset", "live_panorama"}:
                     await self._fault(profile, runtime, reason, intent=governed)
                 else:
                     self._record(
@@ -494,9 +501,9 @@ class PtzAttentionController:
                     )
                 return
 
-            if resolved.view_id not in profile.eligible_view_ids:
+            if resolved.panorama is None and resolved.view_id not in profile.eligible_view_ids:
                 reason = "resolved_view_not_eligible"
-                if effective_mode(profile) == "live_preset":
+                if effective_mode(profile) in {"live_preset", "live_panorama"}:
                     await self._fault(profile, runtime, reason, intent=governed)
                 else:
                     self._record(
@@ -600,7 +607,7 @@ class PtzAttentionController:
         profile = self._require_profile(profile_id)
         runtime = self._runtime_for(profile)
         async with self._lock_for(profile.ptz_device_id):
-            if runtime.recovery_required and effective_mode(profile) != "live_preset":
+            if runtime.recovery_required and effective_mode(profile) not in {"live_preset", "live_panorama"}:
                 runtime.fault = _RECOVERY_FAULT
                 self._set_state(runtime, "FAULT", self._clock())
                 self._record(
@@ -650,6 +657,7 @@ class PtzAttentionController:
                         else runtime.command_preset
                     ),
                     active_view_id=(active.resolved.view_id if active and active.resolved else ""),
+                    active_target=(active.resolved.panorama.model_dump(mode="json") if active and active.resolved and active.resolved.panorama else None),
                     active_priority=(active.intent.priority if active else None),
                     candidate_event_key=runtime.candidate_key,
                     candidate_preset_token=(
@@ -893,6 +901,13 @@ class PtzAttentionController:
             runtime.candidate_key = ""
             self._set_state(runtime, "IDLE", now)
             return
+        if profile.panorama_element_id and runtime.active_key:
+            active = runtime.events.get(runtime.active_key)
+            current = await self._resolve(profile, active.intent) if active else None
+            if (current is None or active.resolved is None or current.panorama is None or active.resolved.panorama is None
+                    or current.panorama.model_dump(exclude={"ray"}) != active.resolved.panorama.model_dump(exclude={"ray"})):
+                await self._fault(profile, runtime, "panorama_reference_changed")
+                return
         if profile.follow_view_updates:
             try:
                 snapshot = await self.services.call(
@@ -908,12 +923,12 @@ class PtzAttentionController:
             if snapshot.get("active_lease") is not None or snapshot.get("state") == "manual_override":
                 self._enter_manual_override(profile, runtime, "other_controller_active", now=now)
                 return
-        if effective_mode(profile) == "live_preset" and runtime.lease_id:
+        if effective_mode(profile) in {"live_preset", "live_panorama"} and runtime.lease_id:
             await self._renew_if_due(profile, runtime, now)
             if runtime.state == "FAULT":
                 return
         if runtime.state in {"ACQUIRING", "RETURNING"}:
-            if effective_mode(profile) == "live_preset":
+            if effective_mode(profile) in {"live_preset", "live_panorama"}:
                 await self._observe_move(profile, runtime, now)
             return
         if (
@@ -953,7 +968,7 @@ class PtzAttentionController:
         active = runtime.events.get(runtime.active_key)
         if active is not None and not active.open:
             replacement = self._best_event(
-                runtime, preset_token=active.resolved.preset_token if active.resolved else ""
+                runtime, target_key=active.resolved.target_key if active.resolved else ""
             )
             if replacement is not None:
                 old_key = runtime.active_key
@@ -1008,7 +1023,7 @@ class PtzAttentionController:
                     started = runtime.focused_started_monotonic
                     focused_since = runtime.focused_since
                     await self._begin_focus(profile, runtime, replacement, now, reason="follow_view_confirmed")
-                    if runtime.command_preset == replacement.resolved.preset_token:
+                    if runtime.command_target_key == replacement.resolved.target_key:
                         runtime.events[active.intent.key] = replacement
                         runtime.focused_started_monotonic = started
                         runtime.focused_since = focused_since
@@ -1017,7 +1032,7 @@ class PtzAttentionController:
             if (
                 best.resolved
                 and active.resolved
-                and best.resolved.preset_token == active.resolved.preset_token
+                and best.resolved.target_key == active.resolved.target_key
             ):
                 if best.intent.priority > active.intent.priority:
                     runtime.active_key = best.intent.key
@@ -1093,7 +1108,7 @@ class PtzAttentionController:
         resolved = await self._resolve(profile, intent)
         now = self._monotonic_clock()
         if (
-            resolved is None or resolved.view_id not in profile.eligible_view_ids
+            resolved is None or (resolved.panorama is None and resolved.view_id not in profile.eligible_view_ids)
             or resolved.confidence < profile.minimum_target_confidence
             or now - observed_monotonic >= profile.stale_timeout_seconds
         ):
@@ -1104,21 +1119,21 @@ class PtzAttentionController:
         tracked.last_seen_monotonic = max(tracked.last_seen_monotonic, observed_monotonic)
         tracked.intent = intent
         if runtime.active_key != intent.key:
-            if tracked.resolved is None or tracked.resolved.preset_token != resolved.preset_token:
+            if tracked.resolved is None or tracked.resolved.target_key != resolved.target_key:
                 tracked.opened_monotonic = now
             tracked.resolved = resolved
             await self._evaluate(profile, runtime, now)
             return
-        if tracked.resolved and resolved.preset_token == tracked.resolved.preset_token:
+        if tracked.resolved and resolved.target_key == tracked.resolved.target_key:
             tracked.following_view = None
             tracked.following_since = None
             tracked.following_confirmed = False
-        elif not tracked.following_view or tracked.following_view.preset_token != resolved.preset_token:
+        elif not tracked.following_view or tracked.following_view.target_key != resolved.target_key:
             tracked.following_view = resolved
             tracked.following_since = now
             tracked.following_confirmed = False
             self._record(profile, runtime, action="following_candidate", reason="following_view_observed", intent=intent,
-                         details={"view_id": resolved.view_id})
+                         details={"target": resolved.panorama.model_dump(mode="json")} if resolved.panorama else {"view_id": resolved.view_id})
         else:
             tracked.following_confirmed = now - tracked.following_since >= profile.candidate_confirm_seconds
         await self._evaluate(profile, runtime, now)
@@ -1153,7 +1168,7 @@ class PtzAttentionController:
         if (
             previous is not None
             and previous.resolved
-            and previous.resolved.preset_token == tracked.resolved.preset_token
+            and previous.resolved.target_key == tracked.resolved.target_key
         ):
             runtime.active_key = tracked.intent.key
             runtime.candidate_key = ""
@@ -1175,6 +1190,7 @@ class PtzAttentionController:
         runtime.focused_since = None
         runtime.focused_started_monotonic = None
         runtime.command_preset = tracked.resolved.preset_token
+        runtime.command_target_key = tracked.resolved.target_key
         runtime.movement_times.append(now)
 
         if effective_mode(profile) == "shadow":
@@ -1201,7 +1217,7 @@ class PtzAttentionController:
             return
 
         missing = [
-            service_id for service_id, available in self.service_status().items() if not available
+            service_id for service_id, available in self.service_status(profile).items() if not available
         ]
         if missing:
             await self._fault(
@@ -1222,6 +1238,15 @@ class PtzAttentionController:
                 now=self._clock(),
             )
             runtime.command_id = f"ptz_attention_{uuid.uuid4().hex}"
+            if tracked.resolved.panorama is not None:
+                runtime.navigation_task = asyncio.create_task(self.services.call(
+                    "cameras.panorama.navigate_attention", destination=tracked.resolved.panorama.model_dump(mode="json"),
+                    lease_id=runtime.lease_id, fence=runtime.fence, command_id=runtime.command_id))
+                runtime.settle_deadline = now + profile.settle_timeout_seconds
+                self._set_state(runtime, "ACQUIRING", now)
+                self._record(profile, runtime, action="move_submitted", reason=reason, intent=tracked.intent,
+                    details={"target": tracked.resolved.panorama.model_dump(mode="json")})
+                return
             response = await self.services.call(
                 "cameras.control.submit",
                 lease_id=runtime.lease_id,
@@ -1273,6 +1298,10 @@ class PtzAttentionController:
         *,
         reason: str,
     ) -> bool:
+        task, runtime.navigation_task = runtime.navigation_task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         runtime.active_key = ""
         runtime.candidate_key = ""
         runtime.focused_since = None
@@ -1306,7 +1335,7 @@ class PtzAttentionController:
                     action="shadow_return_home",
                     reason=reason,
                     preset_token=resolved.preset_token,
-                    details={"view_id": resolved.view_id},
+                    details={"target": resolved.panorama.model_dump(mode="json")} if resolved.panorama else {"view_id": resolved.view_id},
                 )
                 self._end_session(runtime, outcome="returned_home")
             released = await self._stop_and_release(runtime, profile=profile, emergency=False)
@@ -1324,7 +1353,7 @@ class PtzAttentionController:
             await self._fault(profile, runtime, "home_target_unresolved")
             return False
         missing = [
-            service_id for service_id, available in self.service_status().items() if not available
+            service_id for service_id, available in self.service_status(profile).items() if not available
         ]
         if missing:
             await self._fault(profile, runtime, f"live_services_missing: {', '.join(missing)}")
@@ -1342,6 +1371,16 @@ class PtzAttentionController:
                 )
             runtime.command_id = f"ptz_attention_{uuid.uuid4().hex}"
             runtime.command_preset = resolved.preset_token
+            runtime.command_target_key = resolved.target_key
+            if resolved.panorama is not None:
+                runtime.navigation_task = asyncio.create_task(self.services.call(
+                    "cameras.panorama.navigate_attention", destination=resolved.panorama.model_dump(mode="json"),
+                    lease_id=runtime.lease_id, fence=runtime.fence, command_id=runtime.command_id, returning=True))
+                runtime.settle_deadline = now + profile.settle_timeout_seconds
+                self._set_state(runtime, "RETURNING", now)
+                self._record(profile, runtime, action="return_home_submitted", reason=reason,
+                    details={"target": resolved.panorama.model_dump(mode="json")})
+                return True
             response = await self.services.call(
                 "cameras.control.submit",
                 lease_id=runtime.lease_id,
@@ -1393,6 +1432,9 @@ class PtzAttentionController:
     ) -> None:
         if now >= runtime.settle_deadline:
             await self._fault(profile, runtime, "movement_settle_timeout")
+            return
+        if profile.panorama_element_id:
+            await self._observe_panorama_move(profile, runtime, now)
             return
         try:
             snapshot = await self.services.call(
@@ -1456,6 +1498,9 @@ class PtzAttentionController:
             return
         if str(snapshot.get("motion_state") or "").strip().lower() != "stable":
             return
+        await self._complete_move(profile, runtime, now)
+
+    async def _complete_move(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float) -> None:
         if runtime.state == "RETURNING":
             released = await self._stop_and_release(runtime, profile=profile, emergency=False)
             if not released:
@@ -1500,10 +1545,74 @@ class PtzAttentionController:
             preset_token=tracked.resolved.preset_token,
         )
 
+    async def _observe_panorama_move(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float) -> None:
+        task = runtime.navigation_task
+        if task is None:
+            await self._fault(profile, runtime, "panorama_navigation_missing")
+            return
+        if not task.done():
+            try:
+                snapshot = await self.services.call("cameras.control.snapshot", camera_id=profile.camera_id,
+                    source_id=profile.source_id, ptz_device_id=profile.ptz_device_id, refresh_physical=False)
+                if self._snapshot_confirms_other_owner(runtime, snapshot):
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    runtime.navigation_task = None
+                    self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                elif not self._snapshot_owns_lease(runtime, snapshot) or snapshot.get("automation_ready") is not True:
+                    await self._fault(profile, runtime, "panorama_control_lost")
+            except Exception:
+                await self._fault(profile, runtime, "control_snapshot_unavailable")
+            return
+        try:
+            response = task.result()
+            evidence = response["evidence"]
+            measurement = evidence["measurement"]
+            error = measurement["center_error_pixels"]
+            freshness = resolve_frame_freshness(Packet.create(stream_id=runtime.command_id,
+                payload={"capture_evidence": evidence.get("capture_evidence")}), now_unix=self._clock())
+            destination = ResolvedTarget(panorama=response["destination"])
+            returning = runtime.state == "RETURNING"
+            if (response.get("command_id") != runtime.command_id
+                    or response.get("lease_id") != runtime.lease_id or response.get("fence") != runtime.fence
+                    or response.get("stop_confirmed") is not True or response.get("returning") is not returning
+                    or destination.target_key != runtime.command_target_key
+                    or evidence.get("verified") is not True or evidence.get("kind") != "visual_aim_verified"
+                    or type(error) not in (int, float) or not 0 <= error <= (3 if returning else 12)
+                    or freshness.age_seconds is None or not 0 <= freshness.age_seconds <= 1):
+                raise ValueError("unconfirmed visual arrival")
+            snapshot = await self.services.call("cameras.control.snapshot", camera_id=profile.camera_id,
+                source_id=profile.source_id, ptz_device_id=profile.ptz_device_id, refresh_physical=False)
+            if self._snapshot_confirms_other_owner(runtime, snapshot):
+                self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                return
+            if (not self._snapshot_owns_lease(runtime, snapshot) or snapshot.get("automation_ready") is not True
+                    or snapshot.get("geometry_safe") is not True or snapshot.get("motion_state") != "stable"
+                    or response.get("motion_epoch") is None or snapshot.get("motion_epoch") != response["motion_epoch"]):
+                raise ValueError("visual arrival no longer owns stopped control")
+        except asyncio.CancelledError:
+            await self._fault(profile, runtime, "panorama_navigation_cancelled")
+            return
+        except Exception:
+            await self._fault(profile, runtime, "panorama_arrival_unconfirmed")
+            return
+        runtime.navigation_task = None
+        await self._complete_move(profile, runtime, now)
+
     async def _resolve(
         self, profile: AttentionProfile, intent: AttentionIntent
     ) -> ResolvedTarget | None:
-        if intent.target is None or not self.has_service("cameras.views.resolve_target"):
+        if intent.target is None:
+            return None
+        if profile.panorama_element_id:
+            if intent.preferred_view_id:
+                return None
+            anchor = intent.target.world_anchor or (intent.target.world_envelope.center if intent.target.world_envelope else None)
+            radius = intent.target.world_envelope.radius_meters if intent.target.world_envelope else 0
+            if anchor is None or not target_in_region(anchor, profile.attention_region, radius):
+                return None
+            return await self._resolve_panorama(profile, intent.target.service_payload())
+        if not self.has_service("cameras.views.resolve_target"):
             return None
         try:
             raw = await self.services.call(
@@ -1520,7 +1629,31 @@ class PtzAttentionController:
         except Exception:
             return None
 
+    async def _resolve_panorama(self, profile: AttentionProfile, target: dict) -> ResolvedTarget | None:
+        if not self.has_service("cameras.panorama.resolve_target"):
+            return None
+        try:
+            raw = await self.services.call("cameras.panorama.resolve_target", camera_id=profile.camera_id,
+                source_id=profile.source_id, composition_id=profile.composition_id,
+                element_id=profile.panorama_element_id, target=target)
+            if not isinstance(raw, dict) or raw.get("status") != "ready":
+                return None
+            if any(raw.get(key) != value for key, value in {
+                "camera_id": profile.camera_id, "source_id": profile.source_id,
+                "composition_id": profile.composition_id, "element_id": profile.panorama_element_id,
+            }.items()):
+                return None
+            if effective_mode(profile) == "live_panorama" and raw.get("attention_qualified") is not True:
+                return None
+            return ResolvedTarget(panorama={key: raw[key] for key in (
+                "camera_id", "source_id", "composition_id", "element_id", "job_id", "revision")}
+                | {"ray": raw["target"]["ray"]}, confidence=0, reason="panorama_mapped")
+        except Exception:
+            return None
+
     async def _resolve_home(self, profile: AttentionProfile) -> ResolvedTarget | None:
+        if profile.panorama_element_id:
+            return await self._resolve_panorama(profile, {"world_anchor": profile.home_target.model_dump(exclude_none=True)})
         if not profile.home_view_id or not self.has_service("cameras.views.resolve_target"):
             return None
         try:
@@ -1715,6 +1848,10 @@ class PtzAttentionController:
         profile: AttentionProfile | None,
         emergency: bool,
     ) -> bool:
+        task, runtime.navigation_task = runtime.navigation_task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         if not runtime.lease_id:
             return True
         if runtime.fence is None:
@@ -1986,7 +2123,7 @@ class PtzAttentionController:
     ) -> bool:
         if runtime.recovery_required:
             return True
-        if profile is not None and effective_mode(profile) != "live_preset":
+        if profile is not None and effective_mode(profile) not in {"live_preset", "live_panorama"}:
             return False
         return bool(
             runtime.session_id or runtime.state in {"ACQUIRING", "FOCUSED", "GRACE", "RETURNING"}
@@ -2075,13 +2212,13 @@ class PtzAttentionController:
         )
 
     @staticmethod
-    def _best_event(runtime: _DeviceRuntime, *, preset_token: str = "") -> _TrackedEvent | None:
+    def _best_event(runtime: _DeviceRuntime, *, target_key: str = "") -> _TrackedEvent | None:
         candidates = [
             item
             for item in runtime.events.values()
             if item.open
             and item.resolved is not None
-            and (not preset_token or item.resolved.preset_token == preset_token)
+            and (not target_key or item.resolved.target_key == target_key)
         ]
         if not candidates:
             return None
@@ -2098,7 +2235,7 @@ class PtzAttentionController:
         runtime = self._devices.get(profile.ptz_device_id)
         if runtime is None:
             recovery_required = bool(
-                effective_mode(profile) == "live_preset"
+                effective_mode(profile) in {"live_preset", "live_panorama"}
                 and self.store.is_recovery_required(profile.ptz_device_id)
             )
             state: ControllerState = (
@@ -2181,8 +2318,12 @@ class PtzAttentionController:
 
     @staticmethod
     def _clear_command(runtime: _DeviceRuntime) -> None:
+        if runtime.navigation_task is not None:
+            runtime.navigation_task.cancel()
+            runtime.navigation_task = None
         runtime.command_id = ""
         runtime.command_preset = ""
+        runtime.command_target_key = ""
         runtime.motion_epoch = None
         runtime.settle_deadline = 0.0
 
@@ -2251,6 +2392,13 @@ class PtzAttentionController:
         details: dict[str, Any] | None = None,
     ) -> None:
         payload = dict(details or {})
+        if profile.panorama_element_id:
+            payload.pop("view_id", None)
+            if reason in {"same_preset", "same_preset_event_remains", "higher_priority_same_preset"}:
+                reason = "same_target"
+            tracked = runtime.events.get(intent.key) if runtime is not None and intent is not None else None
+            if tracked is not None and tracked.resolved is not None and tracked.resolved.panorama is not None:
+                payload.setdefault("target", tracked.resolved.panorama.model_dump(mode="json"))
         if intent is not None:
             payload.setdefault("event_type", intent.event_type)
         record = self.store.record_decision(

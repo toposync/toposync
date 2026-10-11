@@ -65,6 +65,14 @@ Ele é adequado para:
 Ele pode se tornar limitado quando várias câmeras decodificam vídeo e executam
 modelos de visão ao mesmo tempo, especialmente em dispositivos ARM pequenos.
 
+Os presets de presença em área e veículo parado continuam observando cenas
+estáticas. Durante o movimento e por seis segundos depois dele, processam até
+quatro imagens por segundo; no repouso, admitem uma imagem em intervalos de pelo
+menos um segundo. O intervalo real também depende da cadência de captura e da
+carga de processamento. Isso preserva a observação periódica de objetos imóveis.
+Pipelines compatíveis podem compartilhar o processamento inicial, mantendo
+rastreamento e notificações independentes.
+
 ## Processing servers {/* #processing-servers */}
 
 Use um processing server quando a máquina origin ou o add-on Home Assistant OS

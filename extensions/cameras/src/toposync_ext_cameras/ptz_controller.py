@@ -195,6 +195,7 @@ class _DeviceRuntime:
     lease_expiry_task: asyncio.Task[None] | None = None
     continuous_watchdog_task: asyncio.Task[None] | None = None
     command_results: OrderedDict[str, _CommandResult] = field(default_factory=OrderedDict)
+    last_automatic_stop: dict[str, Any] | None = None
     last_command_id: str = ""
     last_command_kind: str = ""
     last_preset_token: str = ""
@@ -782,6 +783,8 @@ class PtzController:
                     "stale_after_execution": not still_current,
                     "idempotent": False,
                     "command_elapsed_seconds": command_elapsed,
+                    "command_started_monotonic": command_started,
+                    "command_finished_monotonic": self._monotonic(),
                 }
                 if normalized_command["kind"] == "continuous_move":
                     payload["pulse_remaining_seconds"] = pulse_remaining
@@ -1072,6 +1075,7 @@ class PtzController:
             "state": local_snapshot["state"],
             "active_lease": local_snapshot["lease"],
             "last_command": last_command,
+            "last_automatic_stop": local_snapshot["last_automatic_stop"],
             "move_status": local_snapshot["move_status"],
             "pose": local_snapshot["pose"] or None,
             "updated_at": local_snapshot["updated_at"],
@@ -1789,6 +1793,7 @@ class PtzController:
         reason: str,
     ) -> None:
         error_text = ""
+        started = self._monotonic()
         try:
             await self._execute_stop_transport(
                 camera_id=camera_id,
@@ -1801,6 +1806,11 @@ class PtzController:
             error_text = str(exc).strip() or exc.__class__.__name__
 
         async with self._lock:
+            device.last_automatic_stop = {
+                "command_id": command_id, "fence": expected_fence, "reason": reason,
+                "started_monotonic": started, "finished_monotonic": self._monotonic(),
+                "accepted": not bool(error_text),
+            }
             if not self._stop_is_current_locked(
                 device,
                 expected_fence=expected_fence,
@@ -1984,6 +1994,7 @@ class PtzController:
             "state": device.state,
             "lease": device.lease.as_dict() if device.lease is not None else None,
             "last_command_id": device.last_command_id or None,
+            "last_automatic_stop": dict(device.last_automatic_stop) if device.last_automatic_stop else None,
             "last_command_kind": device.last_command_kind or None,
             "last_preset_token": device.last_preset_token or None,
             "last_error": device.last_error or None,

@@ -81,6 +81,7 @@ class VisionDetectConfig(BaseModel):
     max_objects_per_frame: int = Field(default=32, ge=1, le=512)
     inference_interval_seconds: float = Field(default=0.0, ge=0.0, le=60.0)
     input_artifact_name: str = ""
+    use_image_region: bool = False
 
     @field_validator("model_id", "input_artifact_name")
     @classmethod

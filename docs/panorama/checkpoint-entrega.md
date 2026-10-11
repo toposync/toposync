@@ -1,5 +1,82 @@
 # Panorâmica ao vivo — retorno preciso ainda reprovado, 04/10/2026
 
+## Acesso ao mapeamento na configuração — 10/10/2026
+
+A panorâmica pertence aos detalhes da fonte selecionada. A seção de mapeamento
+oferece ações separadas para abrir a composição e abrir o mapeamento do elemento;
+quando há vários elementos da câmera, a escolha é explícita. A abertura respeita
+alterações não salvas e não inicia aquisição nem movimentação. Os estados de
+imagem, compatibilidade, cobertura e controle continuam independentes. O novo
+acesso não modifica a geometria nem os critérios de aceite físico.
+
+
+## Validação visual do mapeamento — 10/10/2026
+
+O fluxo atual substitui os seis ajustes e duas conferências descritos no histórico
+abaixo. Quatro pares utilizáveis iniciam a projeção; todos os controles completos
+participam do ajuste. Divergências geram avisos e a pessoa aceita explicitamente
+a revisão que atende ao seu uso. A prévia de edição não persiste nem ativa dados.
+
+Ghost points acompanham hover e consultas por clique, toque e teclado. O alvo
+fixado permanece durante navegação e refinamento. Rotação muda apenas a vista.
+Posições extrapoladas continuam na interface e no pipeline, identificadas por
+observação; raios sem interseção não recebem coordenadas fabricadas. Textura no
+chão conserva extensão finita e recortes de apresentação.
+
+Aceite visual não habilita apontamento físico. Verificações operacionais de
+posição, fonte, revisão e suporte para comandos continuam separadas. Testes
+sintéticos de software não qualificam precisão física, cobertura, reconstrução
+ou retorno mecânico. Os resultados físicos abaixo conservam seus limites.
+
+
+## Ajuste contínuo do mapeamento — 10/10/2026
+
+O mapeamento usa uma única tela, com ambas as vistas e ativação direta. Selecionar
+um local define a edição do par; concluir sua seleção retorna à consulta sem
+apagar o rascunho. Mensagens de previsão têm espaço próprio abaixo das vistas.
+Alvos fixados podem ser centralizados explicitamente em cada painel, mantendo
+zoom e rotação. A atualização do alvo na composição acompanha o desenho da vista
+sem alterar sua área de rolagem. Estas mudanças substituem o wizard e a alternância
+de vistas descritos nas entradas históricas abaixo; não mudam a geometria ou os
+requisitos físicos.
+
+
+## Usabilidade do mapeamento — 08/10/2026
+
+Clique e toque curto marcam os dois lados do par; uma única confirmação salva.
+Arrastar sobre um marcador usa a navegação da imagem, sem selecionar outro par.
+No celular, panorâmica e composição têm alternância explícita e indicam qual
+lado já foi marcado. Confirmar e cancelar permanecem fora da rolagem.
+
+A revisão mantém os mapas visíveis, enquadrados e sem edição dos pontos.
+Ativar mapeamento é uma ação explícita; editar pontos preserva a versão ativa.
+Os textos distinguem rascunho salvo, mapa ativo e retorno às opções da câmera.
+Essas mudanças de interface não ampliam o aceite físico documentado abaixo.
+
+## Mapeamento de panorâmica salva na composição — 07/10/2026
+
+A preparação da imagem fica na câmera; a composição abre o wizard de seis
+pares de ajuste e dois de conferência. Sem imagem compatível, a entrada leva
+à câmera e conserva o contexto de retorno. Revisão do mapa, correção dos
+pares e restrição por área não exigem apontamento físico.
+
+Novas aquisições registram uma identidade geométrica versionada, separada
+da proteção operacional de captura. Mudanças de taxa de quadros, ingestão,
+domínio de relógio e endereço de eventos não invalidam essa geometria.
+Fonte, montagem, resolução e codec continuam significativos. Artefatos antigos
+sem essa proveniência não são migrados nem declarados compatíveis por inferência.
+
+As vistas 360 em duas e três dimensões projetam a panorâmica salva somente no
+suporte validado, respeitando sua máscara, recorte de apresentação e área da
+composição. A amostragem usa raios esféricos; a imagem salva é identificada
+como tal e não representa vídeo ao vivo.
+
+Ensaios locais sintéticos demonstraram oito pares, ativação, recuperação de
+edição, conflito, teclado, toque e aplicação/remoção do recorte nos pixels
+renderizados das duas vistas. Essas evidências não qualificam cobertura total,
+precisão física, captura ou retorno mecânico. O retorno físico continua com
+o estado documentado abaixo; esta mudança não altera seus critérios de aceite.
+
 ## Resposta temporal e retorno — 04/10/2026
 
 Na revisão carregada `6a780f1b`, uma saída horizontal nominal de 0,025 por
@@ -494,3 +571,136 @@ Verificação focal: transições, ordenação de estado, epoch e traduções ap
 O elemento de câmera mantém duas entradas: calibração pela panorâmica salva e mapeamento do chão com geometria métrica. O editor antigo de calibração, seu diálogo de poses e auxiliares privados sem consumidores foram removidos; os componentes ativos e seus controles de evidência permanecem iguais. Esta simplificação não altera os critérios de cobertura, precisão ou retorno físico.
 
 No mapeamento do chão, imagem e planta passam a ocupar uma coluna em telas estreitas. Os marcadores acompanham o redimensionamento da imagem, inclusive suas faixas vazias, e os campos permanecem dentro dos cartões. Fonte, parâmetros medidos da lente e validação continuam acessíveis; a adaptação de layout não modifica pontos salvos nem aprova geometria.
+
+
+## 08/10/2026 — preparação opcional e nova validação física
+
+A captura agora tenta preparar uma referência de aproximação rápida somente depois de publicar uma panorâmica qualificada e confirmar o retorno. A tarefa de captura é a proprietária dessa preparação; leitura de estado e reabertura da página não iniciam movimento. Falha da referência não invalida a imagem, e uma referência de candidata continua vinculada àquela imagem e revisão. Interrupções não reiniciam essa preparação automaticamente.
+
+A interface diferencia incompatibilidade da panorâmica, conflito de revisão, permissão e conexão. A preparação manual fica em uma seção recolhível. Botões indisponíveis têm cursor e aparência próprios, sem animação de interação; transformações de posicionamento dos marcadores são preservadas.
+
+Ensaios físicos realizados na instância reiniciada, sem alterar a configuração:
+
+- Frente (`b1faec4d073a40159e71bb5a9ff21844`): preparação bloqueada por rastreamento automático ativo, confirmado por leitura do equipamento. Nenhuma captura qualificada.
+- Garagem (`13ab2adb2609419a8581154c741e30e9`): movimento observado; parada confirmada. Retorno não aprovado: erro final de 17,08 pixels na análise de largura 960, acima do limite de 3 pixels. O pulso corretivo de 80 milissegundos cruzou a referência e aumentou o erro; não houve repetição cega nem relaxamento de limites.
+- Os catálogos de posições preexistentes foram comparados antes/depois e preservados nas duas câmeras.
+
+A integração de software não certifica aproximação rápida física, nova panorâmica nem mapeamento real na composição. Permanecem pendentes: liberar o controle exclusivo da Frente, resolver e qualificar o retorno da Garagem, gerar panorâmicas compatíveis, comparar tempos de aproximação e concluir seis pares de ajuste mais dois de conferência reais.
+
+
+## 09/10/2026 — proteção comum e evidência do retorno
+
+A aquisição do adaptador agora atualiza observações e exige a mesma qualificação de automações usada pela navegação e pela preparação de referência. Estado desconhecido sem confirmação explícita impede nova aquisição; automação ativa prevalece sobre confirmação salva. A limpeza de referências continua verificando propriedade/vínculo e não precisa adquirir controle de movimento. Stop permanece independente desse bloqueio.
+
+Recibos registram início/fim monotônicos da execução; Stop automático tem motivo, vínculo e resultado próprios, associados ao diagnóstico do scanner. Esses tempos não são timestamps físicos do motor. Uma reserva limitada a um replay adicional por trabalho preserva a correção reprovada depois da estabilização, mesmo com os replays ordinários já preenchidos; o identificador não substitui o replay original da observação.
+
+Validação: 1.258 testes da bateria de captura/controle/navegação/scanner/referências/fonte aprovados; verificações focais posteriores cobriram exposição do recibo do watchdog, limpeza sem aquisição, mensagem de automação desconhecida e identificação do replay reservado. Typecheck, compilação da extensão e diff-check aprovados. A compilação mantém o aviso existente de tamanho dos pacotes.
+
+Leitura nativa atual da Frente ainda reportou rastreamento ativo. Nenhum movimento novo foi executado nesta rodada. A qualificação física do controle, a nova panorâmica e a calibração real permanecem pendentes de condições operacionais verificadas; esta etapa não certifica hardware nem altera os limites de precisão.
+
+### Continuação após confirmação operacional — 09/10/2026
+
+Após o usuário ajustar a Frente, a leitura nativa confirmou rastreamento e retorno automático desligados. A confirmação humana atual da Garagem foi registrada pela API, sem outras alterações de configuração nessa operação.
+
+O ensaio pode agora limitar explicitamente a quantidade de verificações; uma rodada limitada não certifica o controle completo. As primeiras rodadas de um deslocamento/retorno passaram nas duas câmeras. Na sequência completa, a Frente passou em 12/12 verificações, com erro máximo de 2,637 pixels. A Garagem passou em duas e encerrou na terceira: retorno vertical com erro final de 6,420 pixels e resposta insuficiente ao pulso corretivo de 80 ms. Parada confirmada, retorno não confirmado; replay da correção preservado. Nenhuma captura nova da Garagem foi iniciada.
+
+A Frente produziu 21 imagens na captura `6604e5bea7b24ee39d52d60f1a5e45e0`, confirmou retorno e preparou automaticamente a referência rápida `11f4a33794a3554b86e1ceafb52c575e`. A imagem `a1e8cb95659c46198e1a76d10e1d5c13` foi inspecionada e adotada pela interface; a anterior foi preservada. Cobertura permanece parcial, sem certificação do alcance total. A referência permaneceu pronta após reinício; aceleração em trajetórias comparáveis ainda não foi medida.
+
+O wizard passou a enquadrar a área fotografada a partir da máscara também em rascunhos importados. A revisão dos pares ficou abaixo das imagens e a altura desktop foi ajustada para evitar que o rodapé cortasse a região de marcação. Conferência visual real em desktop e largura 390: sem transbordamento horizontal, alvos de pelo menos 44 pixels e estado desabilitado perceptível. Regressões focais: 8 testes do scanner, 5 da API de verificação e 45 da API de mapeamento aprovados; typecheck e build aprovados.
+
+A alternativa de retorno por posição nativa da Garagem não chegou a movimentar: oito posições ocupam os oito espaços anunciados, e a criação não foi confirmada. O catálogo anterior foi preservado. Liberação de uma posição preexistente aguarda autorização específica. O rascunho da Frente permanece sem pares até esclarecer a correspondência da casa com a planta; calibração real e entrega integrada continuam pendentes.
+
+### Prévia utilizável da Garagem — 09/10/2026
+
+Após o pedido explícito de visualizar uma panorâmica mesmo com retorno impreciso, uma aquisição limitada partiu do enquadramento atual estabilizado, usando a política existente e sem alterar tolerâncias. A captura `49446549149a4bc399b6f619f6cb63f2` preservou 19 fotografias, incluindo expansão inferior e ambos os lados. Duas ligações locais recusadas limitaram a cobertura; não foram aprovadas por exceção.
+
+A reconstrução `1146e50460ff44d093ddee52fa7faadc` passou na avaliação geométrica (percentil 95 do erro reservado: 1,349 pixels na largura 960). A imagem foi inspecionada, adotada pela interface e aberta no wizard da Garagem, compatível com a fonte atual. Mostra portão, carro e piso; tem cobertura parcial e marcas de horário repetidas na borda superior. A imagem anterior permanece salva, os oito presets não mudaram e as composições permanecem iguais ao registro inicial desta tarefa.
+
+O retorno terminou com parada confirmada e erro visual de 6,273 pixels, acima dos 3 pixels exigidos. Quatro correções reduziram o erro de 45,272 pixels até esse resultado, esgotando o orçamento existente. A resposta variável aos pulsos curtos permanece uma limitação observada, sem diagnóstico mecânico conclusivo. A aproximação rápida foi corretamente omitida por retorno não confirmado. A prévia pode ser marcada no wizard, mas não certifica retorno preciso, cobertura completa ou calibração real dos pares na composição.
+
+### Simplificação dos avisos e entrada no mapeamento — 09/10/2026
+
+Uma imagem compatível e qualificada com limitações passa a apresentar um aviso discreto, com explicações recolhidas sobre cobertura, retorno e aproximação rápida. Parada não confirmada, imagem incompatível e qualidade reprovada continuam visíveis. Candidatas sem avaliação de qualidade são explicitamente apresentadas para revisão, inclusive no recorte.
+
+O wizard inicia pelo entorno da câmera, ajustando a escala à dimensão do painel. A extensão inicial da vista usa o componente genérico existente e não altera coordenadas, geometria ou pontos. A troca entre pares preserva a navegação; uma marcação ainda vazia não provoca mais mensagem de recuperação de conteúdo.
+
+Validação de software: oito cenários de navegador aprovados em ambiente isolado, cobrindo seis pares de ajuste e duas conferências, ativação, reabertura, correção/desfazer, recortes 2D/3D, tela estreita em português e distinção entre limitações da imagem e parada incerta. Typecheck do frontend e da extensão, build da extensão e diff-check aprovados; permanece o aviso de tamanho dos pacotes. O simulador de fonte foi atualizado ao contrato existente de limpeza de referências gerenciadas.
+
+Conferência visual com a panorâmica real da Garagem em larguras de 320, 768, 1024 e 1440 pixels, sem transbordamento horizontal. Nenhum novo movimento ou captura física nesta etapa. Composições preservadas. A validação sintética não substitui a identificação e conferência dos pares físicos da Garagem, ainda pendentes.
+
+### Diagnóstico e revisão do mapeamento — 10/10/2026
+
+O estimador passa a refinar candidatos antes de rejeitar o consenso angular. Os limites de seis ajustes consistentes, 80% de consenso e 1° continuam iguais, e as conferências não participam do ajuste. Candidatos recusados conservam diferenças por ponto para diagnóstico, sem publicar projeção utilizável.
+
+O assistente mantém navegação de etapas e pontos visível acima das imagens, remoção próxima do ponto selecionado, conferências A/B, estados distintos para salvo e validado, diferenças angulares e acesso à revisão mesmo com ativação bloqueada. A ação desabilitada tem estilo e explicação visíveis. Rotação da composição, vistas, ampliação, deslocamento, expansão, teclado, toque, recuperação e substituição do ativo foram preservados.
+
+Validação de software: 38 testes de geometria e 45 da API aprovados; 31 cenários de navegador aprovados, sem repetição automática nem testes intermitentes na rodada aceita. Verificações de tipos do frontend e da extensão, recortes espaciais, compilação da extensão e documentação em inglês e português aprovadas. Permanece o aviso existente de tamanho dos pacotes. Testes de navegador usam fonte simulada; não qualificam hardware.
+
+Na instância real, os mesmos oito pontos do rascunho da Frente foram reavaliados, revisão 20 para 21, sem mudar suas coordenadas ou a composição. Os seis ajustes concordam dentro de 1°, mas as conferências A e B divergem 4,54° e 1,91°. O bloqueio agora informa essas pendências e oferece acesso direto aos pares. A divergência não estabelece se a causa está na marcação, nas medidas, no plano do piso ou na reconstrução da panorâmica. Nenhuma nova captura, movimento físico ou ativação foi realizada. A jornada real completa e a precisão física continuam pendentes.
+
+### Pontos fantasmas como exploração principal — 10/10/2026
+
+O assistente agora abre a exploração bidirecional após os seis ajustes e conserva previsões utilizáveis mesmo quando as conferências reprovam. A prévia de inspeção é identificada como provisória e tem elegibilidade própria; os critérios de ativação e a projeção em uso não foram relaxados. Geometria inválida, fonte incompatível, máscara ausente e revisão desatualizada continuam bloqueando a previsão. Marcar conferências independentes oculta as sugestões; a exploração pode ser retomada pela segunda etapa.
+
+As imagens ganharam espaço, o diagnóstico fica abaixo delas e o estado da prévia aparece junto da instrução. Hover, setas e toque em exploração consultam o cálculo sem criar pares; arrastar continua navegando. Rotação da composição, ampliação, deslocamento, expansão e contexto entre etapas foram preservados.
+
+Validação: 84 testes de geometria/API e 33 cenários de navegador aprovados, incluindo exploração com conferências reprovadas, rejeição da mesma solução pelo projetor de uso normal, quatro rotações, teclado, toque, máscaras, revisões, ativação simulada, recuperação, idiomas, ingress e recortes 2D/3D. Verificações de tipos, recortes e compilação da extensão aprovados; documentação compilada nos dois idiomas. Permanece o aviso de tamanho dos pacotes.
+
+Na Frente real, a previsão foi observada nos dois sentidos com o rascunho da revisão 21 ainda reprovado. O cursor sobre A na panorâmica produziu uma posição na composição; a consulta na composição produziu o marcador na imagem. Os hashes da configuração e do rascunho permanecem iguais aos anteriores à recarga. Nenhuma nova captura, movimento físico ou ativação foi executada. Essa inspeção comprova disponibilidade da interação, não precisão física do mapeamento.
+
+## Primeira etapa dos itens 11 e 12 — 10/10/2026
+
+Configurações passam a resumir referência visual, mapeamento e posicionamento por fonte/composição, com revisão validada pelo serviço ativo. Contagens antigas não certificam panorama; fontes ópticas distintas e seleção de elemento são preservadas. A identidade óptica continua disponível em informação avançada.
+
+Nova publicação guarda resposta causal local vinculada à geometria final. Reconstrução não prepara mais presets nem inicia movimento adicional. A interface dispensa preparação de pontos; navegação ao vivo não consome os antigos. Limpeza explícita e parada de recursos gerenciados permanecem disponíveis. Zoom óptico fixo, localização atual, orçamento e conferência independente de chegada são preservados.
+
+Existe suporte separado para referência métrica e resolução canônica de alvos sem movimento. Atenção não retorna silenciosamente a presets antigos diante de panorama ativo. A migração completa de execução da atenção permanece pendente do contrato físico qualificado.
+
+Estado de aceite: implementação parcial dos itens 11/12. Modelos candidatos de resposta não estão habilitados nas câmeras reais. Avaliação numérica dos registros históricos não demonstrou domínio preditivo qualificado; não houve nova captura, movimento, benchmark de hardware ou certificação de ganho nesta implementação. Cobertura visual e reconstrução pronta continuam distintas de cobertura física aceita. Registros internos e resultados detalhados permanecem fora do repositório.
+
+A criação privada de pontos nativos também foi retirada; a manutenção explícita conserva os registros existentes. No vídeo espacial 2D/3D, uma referência panorâmica selecionada impede a restauração de geometria antiga, mesmo quando inválida. As demais câmeras conservam suas camadas independentes. Verificador espacial, tipos e regressões de manutenção/API/navegação aprovados.
+
+
+## Estado atual — migração de atenção e consumidores, 10/10/2026
+
+A migração de software dos itens 11/12 está concluída para a jornada panorâmica.
+Perfis novos selecionam fonte, elemento/composição, região explícita e retorno
+mapeado. O operador usa o perfil; API, arbitragem, acompanhamento em simulação,
+prioridades, tempos, pausa, cancelamento e recuperação usam o alvo panorâmico.
+Perfis antigos permanecem para revisão explícita, sem inferência de destinos,
+reescrita em leitura ou comandos durante a migração. O painel está registrado em
+Configurações. Fontes ópticas e dados métricos preservam seus próprios contratos.
+
+O despacho visual reutiliza a concessão de atenção, sem segunda aquisição nem
+criação de presets. Aceite exige destino/comando/concessão/isolamento exatos,
+chegada visual recente de até 12 pixels, retorno de até 3 pixels, parada e época
+de movimento correspondentes. Mudança de revisão, captura vencida ou tomada de
+controle interrompem a operação. Zoom permanece fixo. O caminho de navegação
+não aceita parâmetros de atalhos por pontos nativos; manutenção explícita dos
+recursos antigos continua restrita à propriedade comprovada.
+
+O vídeo espacial e as áreas oferecidas pelo editor respeitam a referência
+panorâmica selecionada, sem recuperar camadas antigas quando inválida. A ação
+explícita de preservação métrica copia registros completos de lente/pose/solo
+para `metric_calibrations`, sem alterar os originais ou substituir referências
+já escolhidas. Referência vazia explícita é autoritativa. Nenhuma altura ou pose
+tridimensional é inferida da panorâmica.
+
+Validação: bateria integrada de 1.143 testes aprovada; após reforçar captura
+recente e intervenção durante navegação pendente, 116 testes de atenção
+aprovados. Três cenários de navegador cobrem criação em simulação em 1440/390
+pixels, bloqueio de modo físico e migração explícita de perfil antigo. Tipos,
+verificadores espaciais, traduções e compilação das extensões foram conferidos.
+Documentação do produto acompanha o contrato nos dois idiomas; resultados
+reproduzíveis e evidências estão no diretório externo da tarefa.
+
+Qualificação física separada e pendente. Não houve nova captura, movimento,
+alteração de configuração real, promoção de modelos, benchmark ou certificação
+de ganho nesta continuação. Uso físico exige qualificação de chegada e retorno
+vinculada à identidade da fonte, composição, artefato, geometria e revisão exatos.
+O aceite de software não encerra C4 nem comprova cobertura física ou precisão do
+equipamento. Nenhum commit, push ou deploy nesta etapa.
+
+## Disponibilidade espacial de eventos
+
+O caminho de mapeamento, tracking, agrupamento e notificações preserva motivos de indisponibilidade por objeto e distingue grupos parcialmente localizados. Uma posição anterior não substitui uma observação atual sem mapeamento. Encerramentos conservam a última evidência do sujeito; recuperação informa trajetória parcial e não liga pontos através da lacuna registrada. O diagnóstico do nó e a notificação exibem degradação espacial. Esse contrato de software não certifica precisão física nem reconstrói o histórico automaticamente.

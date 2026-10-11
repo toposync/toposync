@@ -211,7 +211,7 @@ video {
   cursor: pointer;
 }
 
-.main2dMarkerButton:hover {
+.main2dMarkerButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--borderStrong);
   background: rgba(15, 23, 48, 0.85);
 }
@@ -469,7 +469,7 @@ video {
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.10);
 }
 
-.pillButton:hover {
+.pillButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--borderStrong);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04));
 }
@@ -490,7 +490,7 @@ video {
   background: linear-gradient(180deg, rgba(251, 191, 36, 0.24), rgba(251, 191, 36, 0.10));
 }
 
-.pillButtonPrimary:hover {
+.pillButtonPrimary:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: rgba(251, 191, 36, 0.55);
   background: linear-gradient(180deg, rgba(251, 191, 36, 0.28), rgba(251, 191, 36, 0.12));
 }
@@ -501,7 +501,7 @@ video {
   background: linear-gradient(180deg, rgba(248, 113, 113, 0.16), rgba(248, 113, 113, 0.06));
 }
 
-.pillButtonDanger:hover {
+.pillButtonDanger:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: rgba(248, 113, 113, 0.6);
   background: linear-gradient(180deg, rgba(248, 113, 113, 0.20), rgba(248, 113, 113, 0.07));
 }
@@ -1399,7 +1399,7 @@ video {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--operator-group-color) 14%, transparent);
 }
 
-.pipelinesOperatorButton:hover {
+.pipelinesOperatorButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: color-mix(in srgb, var(--operator-group-color) 62%, var(--color-border-strong));
   background: color-mix(in srgb, var(--operator-group-color) 10%, var(--color-surface-frost));
 }
@@ -2858,7 +2858,7 @@ video {
   white-space: nowrap;
 }
 
-.chipButton:hover {
+.chipButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--borderStrong);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04));
 }
@@ -3170,7 +3170,7 @@ video {
   cursor: pointer;
 }
 
-.streamTransportDebugBackButton:hover {
+.streamTransportDebugBackButton:hover:not(:disabled):not([aria-disabled="true"]) {
   color: var(--color-text-primary);
   border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border-subtle));
   background: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface-solid));
@@ -4484,7 +4484,7 @@ video {
   appearance: none;
 }
 
-.cardButton:hover {
+.cardButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--borderStrong);
 }
 
@@ -4867,7 +4867,7 @@ video {
   overflow: hidden;
 }
 
-.notificationGalleryThumbButton:hover {
+.notificationGalleryThumbButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--borderStrong);
 }
 
@@ -5030,7 +5030,7 @@ video {
   font-size: 14px;
 }
 
-.iconButton:hover {
+.iconButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--borderStrong);
   background: rgba(255, 255, 255, 0.06);
 }
@@ -5045,7 +5045,7 @@ video {
   color: rgba(255, 244, 210, 0.92);
 }
 
-.iconButtonPrimary:hover {
+.iconButtonPrimary:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: rgba(251, 191, 36, 0.55);
   background: rgba(251, 191, 36, 0.10);
 }
@@ -5055,7 +5055,7 @@ video {
   color: rgba(254, 202, 202, 0.92);
 }
 
-.iconButtonDanger:hover {
+.iconButtonDanger:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: rgba(248, 113, 113, 0.6);
   background: rgba(248, 113, 113, 0.10);
 }
@@ -5104,7 +5104,7 @@ video {
   pointer-events: auto;
 }
 
-.fullscreenImageViewerButton:hover {
+.fullscreenImageViewerButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: rgba(255, 255, 255, 0.44);
   background: rgba(255, 255, 255, 0.12);
 }
@@ -5648,16 +5648,15 @@ video {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  cursor: pointer;
   font: inherit;
 }
 
 .settingsPanel .cameraMappingCompositionItem:hover {
   border-color: var(--color-accent-border);
-  background: rgba(20, 31, 57, 0.72);
+  background: var(--color-surface-frost-strong);
 }
 
-.settingsPanel .cameraMappingCompositionItem:focus-visible {
+.settingsPanel .cameraMappingCompositionItem:focus-within {
   outline: 2px solid var(--color-accent-border);
   outline-offset: 2px;
 }
@@ -5666,7 +5665,7 @@ video {
   min-width: 0;
 }
 
-.settingsPanel .cameraMappingCompositionAction {
+.settingsPanel .cameraMappingCompositionActions {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -5675,6 +5674,80 @@ video {
   font-size: 12px;
   font-weight: 720;
   white-space: nowrap;
+}
+
+.settingsPanel .cameraMappingCompositionActions .chipButton {
+  min-width: 44px;
+  min-height: 44px;
+  padding: var(--space-3);
+}
+
+.settingsPanel .cameraMappingElementSelect {
+  flex: 1 1 180px;
+  max-width: 280px;
+  min-height: 44px;
+}
+
+.cameraSettingsPanel,
+.cameraSettingsPanel .cameraSettingsSection,
+.cameraSettingsPanel .cameraSourceDetails {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.cameraSettingsPanel .settingsMain {
+  gap: var(--space-6);
+}
+
+.cameraSettingsPanel .modalSectionTitle {
+  margin: 0;
+}
+
+.cameraSettingsPanel .cameraTechnicalDetails {
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--space-3);
+}
+
+.cameraSettingsPanel .cameraTechnicalDetails summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cameraSettingsPanel .cameraTechnicalDetails summary::before {
+  content: "+";
+}
+
+.cameraSettingsPanel .cameraTechnicalDetails[open] summary::before {
+  content: "−";
+}
+
+.cameraSettingsPanel .cameraTechnicalDetails dd {
+  margin: var(--space-2) 0 0;
+  overflow-wrap: anywhere;
+}
+
+.cameraSettingsPanel .cameraAutomationConfirmation {
+  margin-top: var(--space-4);
+  gap: var(--space-2);
+}
+
+.cameraSettingsPanel .cameraAutomationLabel {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  cursor: pointer;
+  min-height: 44px;
+  padding-block: var(--space-2);
+  line-height: 1.5;
+}
+
+.cameraSettingsPanel .cameraAutomationLabel input {
+  flex-shrink: 0;
+  margin-top: 4px;
 }
 
 .settingsPanel .settingsSourceGrid {
@@ -5794,7 +5867,13 @@ video {
 
 .settingsPanel .cameraPipelinePresetCard:hover:not(:disabled) {
   border-color: var(--color-accent-border);
-  background: rgba(20, 31, 57, 0.72);
+  background: var(--color-surface-frost-strong);
+}
+
+.settingsPanel .cameraPipelinePresetCard:focus-visible,
+.cameraSettingsPanel summary:focus-visible {
+  outline: 2px solid var(--color-accent-border);
+  outline-offset: 2px;
 }
 
 .settingsPanel .cameraPipelinePresetCard:disabled {
@@ -6850,8 +6929,16 @@ video {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .settingsPanel .cameraMappingCompositionAction span {
-    display: none;
+  .settingsPanel .cameraMappingCompositionItem {
+    flex-wrap: wrap;
+  }
+
+  .settingsPanel .cameraMappingCompositionText {
+    flex: 1 1 100%;
+  }
+
+  .settingsPanel .cameraMappingElementSelect {
+    max-width: none;
   }
 }
 
@@ -6921,7 +7008,7 @@ video {
   gap: 10px;
 }
 
-.compositionSelectButton:hover {
+.compositionSelectButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--borderStrong);
 }
 
@@ -7151,7 +7238,7 @@ video {
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.dangerButton:hover {
+.dangerButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: rgba(248, 113, 113, 0.6);
   background: linear-gradient(180deg, rgba(248, 113, 113, 0.26), rgba(248, 113, 113, 0.12));
 }
@@ -7225,7 +7312,7 @@ video {
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.10);
 }
 
-.elementTypeButton:hover {
+.elementTypeButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--borderStrong);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04));
 }
@@ -7235,7 +7322,7 @@ video {
   background: linear-gradient(180deg, rgba(251, 191, 36, 0.20), rgba(255, 255, 255, 0.04));
 }
 
-.elementTypeButton:active {
+.elementTypeButton:active:not(:disabled):not([aria-disabled="true"]) {
   transform: translateY(1px);
 }
 
@@ -7261,7 +7348,7 @@ video {
   text-align: center;
 }
 
-.elementTypeButton:hover .toolIcon,
+.elementTypeButton:hover:not(:disabled):not([aria-disabled="true"]) .toolIcon,
 .elementTypeButton.isSelected .toolIcon {
   color: var(--color-text-primary);
 }
@@ -7345,11 +7432,11 @@ video {
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.layerDragHandle:hover {
+.layerDragHandle:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--borderStrong);
 }
 
-.layerDragHandle:active {
+.layerDragHandle:active:not(:disabled):not([aria-disabled="true"]) {
   cursor: grabbing;
   transform: translateY(1px);
 }
@@ -7378,7 +7465,7 @@ video {
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.layerToggleButton:hover {
+.layerToggleButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--borderStrong);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.03)),
@@ -7478,7 +7565,7 @@ video {
   box-shadow: 0 16px 44px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.layerMainButton:hover {
+.layerMainButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--borderStrong);
 }
 
@@ -7524,7 +7611,7 @@ video {
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.layerDeleteButton:hover {
+.layerDeleteButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: rgba(248, 113, 113, 0.6);
   background: linear-gradient(180deg, rgba(248, 113, 113, 0.28), rgba(248, 113, 113, 0.12));
 }
@@ -8122,38 +8209,38 @@ label.chipButton {
   border-radius: var(--radius-control);
 }
 
-.chipButton:hover,
-.pillButton:not(.pillButtonPrimary):not(.pillButtonDanger):hover,
-.iconButton:not(.iconButtonPrimary):not(.iconButtonDanger):hover,
-.sceneIconButton:hover,
-.layerDragHandle:hover,
-.layerToggleButton:hover,
-.elementTypeButton:hover,
-.layerMainButton:hover,
-.compositionSelectButton:hover {
+.chipButton:hover:not(:disabled):not([aria-disabled="true"]),
+.pillButton:not(.pillButtonPrimary):not(.pillButtonDanger):hover:not(:disabled):not([aria-disabled="true"]),
+.iconButton:not(.iconButtonPrimary):not(.iconButtonDanger):hover:not(:disabled):not([aria-disabled="true"]),
+.sceneIconButton:hover:not(:disabled):not([aria-disabled="true"]),
+.layerDragHandle:hover:not(:disabled):not([aria-disabled="true"]),
+.layerToggleButton:hover:not(:disabled):not([aria-disabled="true"]),
+.elementTypeButton:hover:not(:disabled):not([aria-disabled="true"]),
+.layerMainButton:hover:not(:disabled):not([aria-disabled="true"]),
+.compositionSelectButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--color-border-strong);
   background: var(--color-surface-frost);
   box-shadow: var(--shadow-elevation-2), var(--shadow-inner-highlight);
   transform: translateY(var(--hover-translate-y));
 }
 
-.pipelinesOperatorButton:hover {
+.pipelinesOperatorButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: color-mix(in srgb, var(--operator-group-color) 62%, var(--color-border-strong));
   background: color-mix(in srgb, var(--operator-group-color) 10%, var(--color-surface-frost));
 }
 
-.chipButton:active,
-.pillButton:active,
+.chipButton:active:not(:disabled):not([aria-disabled="true"]),
+.pillButton:active:not(:disabled):not([aria-disabled="true"]),
 .primaryButton:active:not(:disabled),
-.dangerButton:active,
-.iconButton:active,
-.sceneIconButton:active,
-.layerDragHandle:active,
-.layerToggleButton:active,
-.layerMainButton:active,
-.layerDeleteButton:active,
-.compositionSelectButton:active,
-.elementTypeButton:active {
+.dangerButton:active:not(:disabled):not([aria-disabled="true"]),
+.iconButton:active:not(:disabled):not([aria-disabled="true"]),
+.sceneIconButton:active:not(:disabled):not([aria-disabled="true"]),
+.layerDragHandle:active:not(:disabled):not([aria-disabled="true"]),
+.layerToggleButton:active:not(:disabled):not([aria-disabled="true"]),
+.layerMainButton:active:not(:disabled):not([aria-disabled="true"]),
+.layerDeleteButton:active:not(:disabled):not([aria-disabled="true"]),
+.compositionSelectButton:active:not(:disabled):not([aria-disabled="true"]),
+.elementTypeButton:active:not(:disabled):not([aria-disabled="true"]) {
   transform: translateY(var(--press-translate-y));
 }
 
@@ -8169,8 +8256,8 @@ label.chipButton {
 }
 
 .primaryButton:hover:not(:disabled),
-.pillButtonPrimary:hover,
-.iconButtonPrimary:hover {
+.pillButtonPrimary:hover:not(:disabled):not([aria-disabled="true"]),
+.iconButtonPrimary:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: color-mix(in srgb, var(--color-accent-teal) 65%, var(--color-accent-blue) 42%);
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--color-accent-teal) 88%, white), var(--color-accent-teal)),
@@ -8192,10 +8279,10 @@ label.chipButton {
   );
 }
 
-.dangerButton:hover,
-.pillButtonDanger:hover,
-.iconButtonDanger:hover,
-.layerDeleteButton:hover {
+.dangerButton:hover:not(:disabled):not([aria-disabled="true"]),
+.pillButtonDanger:hover:not(:disabled):not([aria-disabled="true"]),
+.iconButtonDanger:hover:not(:disabled):not([aria-disabled="true"]),
+.layerDeleteButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: color-mix(in srgb, var(--color-danger) 68%, transparent);
   background: linear-gradient(
     180deg,
@@ -8364,7 +8451,7 @@ select {
   box-shadow: none;
 }
 
-.main2dMarkerButton:hover {
+.main2dMarkerButton:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--color-border-strong);
   background: var(--color-surface-frost-strong);
 }
@@ -8710,4 +8797,25 @@ select {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 12px;
+}
+
+/* Disabled controls retain their label and hit area, but never advertise an action. */
+button:disabled,
+[role="button"][aria-disabled="true"],
+a[aria-disabled="true"] {
+  cursor: not-allowed !important;
+  opacity: 0.55 !important;
+  filter: grayscale(1) !important;
+  background: var(--color-surface-solid) !important;
+  color: var(--color-text-muted) !important;
+  border-color: var(--color-border-subtle) !important;
+  animation: none !important;
+  transition: none !important;
+  box-shadow: none !important;
+}
+.notificationSpatialStatus {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid #d97706;
+  font-size: 0.85rem;
 }

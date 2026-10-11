@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +13,15 @@ from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from ...pipelines.schemas import VisionTrackConfig
 from ..contracts import normalize_bbox01
 
+_OBSERVATION_FIELDS = ("frame_ts", "ts", "media", "source", "capture_evidence", "mapping")
+
+
+def _observation_scope(payload: dict[str, Any]) -> tuple[Any, ...]:
+    source = payload.get("source")
+    capture = payload.get("capture_evidence")
+    source = source if isinstance(source, dict) else {}
+    capture = capture if isinstance(capture, dict) else {}
+    return source.get("clock_domain"), capture.get("capture_instance"), capture.get("generation")
 
 def _packet_ts_seconds(packet: Packet, *, fallback: float | None = None) -> float:
     parsed = float(resolve_media_ts(packet))
@@ -134,6 +144,7 @@ class _EventState:
     tracklet_ids: set[str] = field(default_factory=set)
     last_seen_monotonic: float = 0.0
     last_seen_packet_ts: float | None = None
+    last_observation: dict[str, Any] = field(default_factory=dict)
     last_emit_monotonic: float = 0.0
     last_emit_packet_ts: float | None = None
     last_object: dict[str, Any] = field(default_factory=dict)
@@ -444,6 +455,7 @@ class TrackEventAssembler:
         state: _EventState,
         track: _TrackSnapshot,
         *,
+        packet: Packet,
         now_monotonic: float,
         packet_ts: float | None,
     ) -> dict[str, Any]:
@@ -452,11 +464,29 @@ class TrackEventAssembler:
         state.tracklet_ids.add(track.tracklet_id)
         state.last_seen_monotonic = now_monotonic
         state.last_seen_packet_ts = packet_ts
+        state.last_observation = {
+            key: deepcopy(packet.payload[key]) for key in _OBSERVATION_FIELDS if key in packet.payload
+        }
         object_data = self._object_for_state(state, track)
+        state.last_observation.pop("mapping", None)
+        if mapping := self._mapping_for_object(packet, object_data):
+            state.last_observation["mapping"] = mapping
         state.last_object = dict(object_data)
         state.last_bbox01 = track.bbox01
         state.last_world_anchor = dict(track.world_anchor) if track.world_anchor else None
         return object_data
+
+    def _mapping_for_object(self, packet: Packet, object_data: dict[str, Any]) -> dict[str, Any]:
+        raw = packet.payload.get("mapping")
+        mapping = deepcopy(raw) if isinstance(raw, dict) else {}
+        if mapping and not object_data.get("world_anchor") and mapping.get("status") != "unmapped":
+            # A frame-wide success cannot locate this object; retain failures.
+            projection = (object_data.get("metadata") or {}).get("world_projection")
+            mapping.update(status="unmapped", reason=(
+                projection.get("reason", "object_position_unavailable")
+                if isinstance(projection, dict) else "object_position_unavailable"
+            ))
+        return mapping
 
     def _subject_for_object(
         self,
@@ -525,6 +555,8 @@ class TrackEventAssembler:
         subject["lifecycle_epoch"] = self._lifecycle_epoch
         subject["lifecycle_sequence"] = int(state.event_code)
         object_world_anchor = object_data.get("world_anchor")
+        mapping = (dict(state.last_observation.get("mapping") or {}) if lifecycle == Lifecycle.CLOSE
+                   else self._mapping_for_object(packet, object_data))
         payload.pop("world", None)
         payload.pop("world_anchor", None)
         if isinstance(object_world_anchor, dict):
@@ -536,8 +568,10 @@ class TrackEventAssembler:
             except Exception:
                 pass
             payload["world_anchor"] = dict(object_world_anchor)
+        if mapping:
+            payload["mapping"] = mapping
+            subject["mapping"] = deepcopy(mapping)
         else:
-            # Mapping metadata inherited from the frame describes another object.
             payload.pop("mapping", None)
         payload.update(
             {
@@ -607,11 +641,16 @@ class TrackEventAssembler:
             object_data=object_data,
             state=state,
         )
+        if lifecycle == Lifecycle.CLOSE:
+            # A later empty frame expires the event but is not evidence of its subject.
+            for key in _OBSERVATION_FIELDS:
+                payload.pop(key, None)
+            payload.update(deepcopy(state.last_observation))
         return Packet.create(
             stream_id=state.stream_id,
             lifecycle=lifecycle,
             payload=payload,
-            artifacts=source_packet.artifacts,
+            artifacts={} if lifecycle == Lifecycle.CLOSE else source_packet.artifacts,
             metadata=metadata,
             parent_packet_id=source_packet.packet_id,
         )
@@ -743,9 +782,14 @@ class TrackEventAssembler:
                 used_event_ids=used_event_ids,
             )
             used_event_ids.add(state.event_id)
+            if (packet_ts is not None and state.last_seen_packet_ts is not None
+                    and packet_ts < state.last_seen_packet_ts
+                    and _observation_scope(packet.payload) == _observation_scope(state.last_observation)):
+                continue
             object_data = self._update_state(
                 state,
                 track,
+                packet=packet,
                 now_monotonic=now_monotonic,
                 packet_ts=packet_ts,
             )

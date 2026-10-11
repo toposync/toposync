@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
+import http.client
+from datetime import datetime
 import secrets
 import time
 import urllib.parse
@@ -23,6 +26,8 @@ from .client import (
     _findtext,
     _soap_fault_text,
     _parse_xml,
+    _read_soap_payload,
+    _NoSoapRedirects,
     _raise_if_fault,
     _wrap_envelope,
     _xml_escape,
@@ -36,6 +41,24 @@ WSNT_NS = "http://docs.oasis-open.org/wsn/b-2"
 WSTOP_NS = "http://docs.oasis-open.org/wsn/t-1"
 # Source operators may poll every 60 seconds; allow two intervals before releasing.
 _WATCH_IDLE_SECONDS = 120.0
+_PULL_RECOVERY_SECONDS = 120.0
+
+
+class OnvifTransientTransportError(OnvifError):
+    """A failed read does not necessarily invalidate the subscription."""
+
+
+def _transient_transport_error(error: BaseException) -> bool:
+    seen: set[int] = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, urllib.error.HTTPError):
+            return False
+        if isinstance(error, (ConnectionError, TimeoutError, http.client.RemoteDisconnected)):
+            return True
+        reason = getattr(error, "reason", None)
+        error = reason if isinstance(reason, BaseException) else error.__cause__
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +79,7 @@ class OnvifEventItemDescription:
 @dataclass(frozen=True, slots=True)
 class OnvifEventDescriptor:
     topic: str
+    qualified_topic: str = ""
     item_name: str = ""
     item_type: str = ""
     is_property: bool = False
@@ -71,6 +95,7 @@ class OnvifEventDescriptor:
     def as_dict(self) -> dict[str, Any]:
         return {
             "topic": self.topic,
+            "qualified_topic": self.qualified_topic,
             "item_name": self.item_name,
             "item_type": self.item_type,
             "is_property": self.is_property,
@@ -93,12 +118,18 @@ class OnvifPullPointSubscription:
 class OnvifEventMessage:
     sequence: int
     topic: str
+    qualified_topic: str = ""
     operation: str = ""
     utc_time: str = ""
     source: dict[str, str] = field(default_factory=dict)
     key: dict[str, str] = field(default_factory=dict)
     data: dict[str, str] = field(default_factory=dict)
     received_at_ts: float = 0.0
+    received_monotonic: float | None = None
+    is_property: bool | None = None
+    state_changed: bool = False
+    state_accepted: bool = False
+    session: int = 0
 
     def boolean_value(self, item_name: str = "") -> bool | None:
         wanted = str(item_name or "").strip()
@@ -114,12 +145,19 @@ class OnvifEventMessage:
         return {
             "sequence": int(self.sequence),
             "topic": self.topic,
+            "qualified_topic": self.qualified_topic,
             "operation": self.operation,
             "utc_time": self.utc_time,
             "source": dict(self.source),
             "key": dict(self.key),
             "data": dict(self.data),
             "received_at_ts": float(self.received_at_ts),
+            "received_age_seconds": (max(0.0, time.monotonic() - self.received_monotonic)
+                                     if self.received_monotonic is not None else None),
+            "is_property": self.is_property,
+            "state_changed": self.state_changed,
+            "state_accepted": self.state_accepted,
+            "session": self.session,
         }
 
 
@@ -140,6 +178,10 @@ class _OnvifBooleanState:
     value: bool | None = None
     last_event_ts: float = 0.0
     last_changed_ts: float = 0.0
+    last_active_ts: float = 0.0
+    last_active_monotonic: float | None = None
+    last_inactive_monotonic: float | None = None
+    last_camera_time: datetime | None = None
     operation: str = ""
     source: dict[str, str] = field(default_factory=dict)
     key: dict[str, str] = field(default_factory=dict)
@@ -148,6 +190,7 @@ class _OnvifBooleanState:
         return {
             "camera_id": camera_id,
             "topic": self.descriptor.topic,
+            "qualified_topic": self.descriptor.qualified_topic,
             "item_name": self.descriptor.item_name,
             "item_type": self.descriptor.item_type,
             "label": self.descriptor.label
@@ -156,6 +199,11 @@ class _OnvifBooleanState:
             "value": self.value,
             "last_event_ts": self.last_event_ts or None,
             "last_changed_ts": self.last_changed_ts or None,
+            "last_active_ts": self.last_active_ts or None,
+            "last_active_age_seconds": (max(0.0, time.monotonic() - self.last_active_monotonic)
+                                        if self.last_active_monotonic is not None else None),
+            "last_inactive_age_seconds": (max(0.0, time.monotonic() - self.last_inactive_monotonic)
+                                          if self.last_inactive_monotonic is not None else None),
             "operation": self.operation,
             "source": dict(self.source),
             "key": dict(self.key),
@@ -169,12 +217,23 @@ class _CameraEventRuntime:
     context: OnvifCameraEventContext
     descriptors: list[OnvifEventDescriptor] = field(default_factory=list)
     event_xaddr: str = ""
-    states: dict[tuple[str, str], _OnvifBooleanState] = field(default_factory=dict)
+    states: dict[tuple[Any, ...], _OnvifBooleanState] = field(default_factory=dict)
     events: deque[OnvifEventMessage] = field(default_factory=lambda: deque(maxlen=512))
     sequence: int = 0
     available: bool = False
+    watch_available: bool = False
+    session: int = 0
+    successful_pulls: int = 0
+    failed_pulls: int = 0
+    subscriptions: int = 0
+    transitions: int = 0
+    queue_overflows: int = 0
+    last_pull_ts: float = 0.0
+    recovering: bool = False
+    unsubscribe_status: str = "not_attempted"
     error: str = ""
     descriptors_loaded_at_ts: float = 0.0
+    descriptors_attempted_at_ts: float = 0.0
     started: bool = False
     last_consumer_monotonic: float = 0.0
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -352,11 +411,13 @@ def parse_get_event_properties(payload: bytes, *, soap_ns: str = SOAP12_NS) -> l
 
     descriptors: list[OnvifEventDescriptor] = []
 
-    def walk(node: ET.Element, path: list[str]) -> None:
+    def walk(node: ET.Element, path: list[str], qualified: list[str]) -> None:
         local = _local_name(node.tag)
         current_path = path
+        current_qualified = qualified
         if local not in {"TopicSet", "MessageDescription", "Documentation"}:
             current_path = [*path, local]
+            current_qualified = [*qualified, node.tag]
 
         for child in list(node):
             if _local_name(child.tag) == "MessageDescription":
@@ -370,6 +431,7 @@ def parse_get_event_properties(payload: bytes, *, soap_ns: str = SOAP12_NS) -> l
                         descriptors.append(
                             OnvifEventDescriptor(
                                 topic=topic,
+                                qualified_topic="/".join(current_qualified),
                                 item_name=item.name,
                                 item_type=item.type,
                                 is_property=is_property,
@@ -383,6 +445,7 @@ def parse_get_event_properties(payload: bytes, *, soap_ns: str = SOAP12_NS) -> l
                     descriptors.append(
                         OnvifEventDescriptor(
                             topic=topic,
+                            qualified_topic="/".join(current_qualified),
                             is_property=is_property,
                             label=humanize_onvif_event_label(topic, ""),
                             source_items=source_items,
@@ -391,14 +454,14 @@ def parse_get_event_properties(payload: bytes, *, soap_ns: str = SOAP12_NS) -> l
                         )
                     )
                 continue
-            walk(child, current_path)
+            walk(child, current_path, current_qualified)
 
-    walk(topic_set, [])
+    walk(topic_set, [], [])
 
     seen: set[tuple[str, str]] = set()
     unique: list[OnvifEventDescriptor] = []
     for descriptor in descriptors:
-        key = (descriptor.topic, descriptor.item_name)
+        key = (descriptor.qualified_topic or descriptor.topic, descriptor.item_name)
         if key in seen:
             continue
         seen.add(key)
@@ -406,11 +469,38 @@ def parse_get_event_properties(payload: bytes, *, soap_ns: str = SOAP12_NS) -> l
     return unique
 
 
+def _qualified_topics(payload: bytes) -> list[str]:
+    scopes: list[dict[str, str]] = []
+    pending: dict[str, str] = {}
+    topics: list[str] = []
+    for kind, value in ET.iterparse(io.BytesIO(payload), events=("start-ns", "start", "end")):
+        if kind == "start-ns":
+            prefix, uri = value
+            pending[prefix] = uri
+        elif kind == "start":
+            scopes.append({**(scopes[-1] if scopes else {}), **pending})
+            pending.clear()
+        else:
+            if _local_name(value.tag) == "Topic":
+                parts = []
+                for token in _text(value).split("/"):
+                    if ":" in token:
+                        prefix, local = token.split(":", 1)
+                        uri = scopes[-1].get(prefix)
+                        parts.append(f"{{{uri}}}{local}" if uri else token)
+                    else:
+                        parts.append(token)
+                topics.append("/".join(parts))
+            scopes.pop()
+    return topics
+
+
 def parse_pull_messages(payload: bytes, *, soap_ns: str = SOAP12_NS) -> list[OnvifEventMessage]:
     root = _parse_xml(payload)
     _raise_if_fault(root, soap_ns=soap_ns)
     out: list[OnvifEventMessage] = []
     now = time.time()
+    qualified_topics = iter(_qualified_topics(payload))
     for notification in root.iter():
         if _local_name(notification.tag) != "NotificationMessage":
             continue
@@ -436,6 +526,7 @@ def parse_pull_messages(payload: bytes, *, soap_ns: str = SOAP12_NS) -> list[Onv
             OnvifEventMessage(
                 sequence=0,
                 topic=topic,
+                qualified_topic=next(qualified_topics, ""),
                 operation=_attr(inner_message, "PropertyOperation"),
                 utc_time=_attr(inner_message, "UtcTime"),
                 source=_simple_items(_first_child_by_local(inner_message, "Source")),
@@ -543,6 +634,8 @@ async def _call_event_operation(
     operation: str,
     transport_cache: dict[tuple[str, str], tuple[str, str, str]] | None = None,
 ) -> tuple[bytes, str]:
+    from .capabilities import camera_service_address
+    camera_service_address(client.xaddr, url)
     last_error: Exception | None = None
     attempts = [(version, auth, "soap") for version in ("1.2", "1.1")
                 for auth in client._auth_attempts()]  # noqa: SLF001
@@ -551,6 +644,9 @@ async def _call_event_operation(
                         for version in ("1.2", "1.1") for auth in ("none", "digest", "text"))
     key = (url, operation)
     cached = transport_cache.get(key) if transport_cache is not None else None
+    if cached is None and transport_cache is not None and operation == "PullMessages":
+        # Synchronization already proved this subscription's SOAP/authentication route.
+        cached = transport_cache.get((url, "SetSynchronizationPoint"))
     if cached in attempts:
         attempts.remove(cached)
         attempts.insert(0, cached)
@@ -581,10 +677,14 @@ async def _call_event_operation(
                 transport_cache[key] = (version, auth, transport)
             return payload, ns
         except Exception as exc:  # noqa: BLE001
+            if operation == "PullMessages" and cached == (version, auth, transport) and _transient_transport_error(exc):
+                raise OnvifTransientTransportError("ONVIF read connection interrupted") from exc
             last_error = exc
             if transport_cache is not None:
                 transport_cache.pop(key, None)
-    raise OnvifError(str(last_error) if last_error else f"ONVIF {operation} failed")
+    if operation == "PullMessages" and last_error is not None and _transient_transport_error(last_error):
+        raise OnvifTransientTransportError("ONVIF read connection interrupted") from last_error
+    raise OnvifError(str(last_error) if last_error else f"ONVIF {operation} failed") from last_error
 
 
 def _wsa_action_for_operation(operation: str, soap_action: str | None) -> str:
@@ -622,15 +722,16 @@ def _http_post_soap_http_auth_sync(
     manager = urllib.request.HTTPPasswordMgrWithDefaultRealm()
     manager.add_password(None, url, username, password)
     opener = urllib.request.build_opener(
+        _NoSoapRedirects(),
         urllib.request.HTTPDigestAuthHandler(manager),
         urllib.request.HTTPBasicAuthHandler(manager),
     )
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
         with opener.open(req, timeout=max(0.5, float(timeout_s))) as resp:  # noqa: S310
-            return resp.read()
+            return _read_soap_payload(resp)
     except urllib.error.HTTPError as exc:
-        payload = exc.read() if hasattr(exc, "read") else b""
+        payload = _read_soap_payload(exc) if hasattr(exc, "read") else b""
         message = f"ONVIF HTTP error ({exc.code})"
         if payload:
             try:
@@ -863,11 +964,11 @@ class OnvifEventsClient:
         )
         return parse_pull_messages(payload, soap_ns=ns)
 
-    async def renew(self, subscription_xaddr: str, *, termination_time: str = "PT300S") -> None:
+    async def renew(self, subscription_xaddr: str, *, termination_time: str = "PT300S") -> OnvifPullPointSubscription:
         url = str(subscription_xaddr or "").strip()
         if not url:
             raise OnvifError("Missing ONVIF PullPoint subscription URL")
-        await _call_event_operation(
+        payload, ns = await _call_event_operation(
             self._client,
             url=url,
             body_xml=_wsnt_renew_body(termination_time),
@@ -875,6 +976,11 @@ class OnvifEventsClient:
             operation="Renew",
             transport_cache=self._transport_cache,
         )
+
+        root = _parse_xml(payload)
+        return OnvifPullPointSubscription(address=url,
+            current_time=_findtext(root, f".//{{{WSNT_NS}}}CurrentTime"),
+            termination_time=_findtext(root, f".//{{{WSNT_NS}}}TerminationTime"))
 
     async def unsubscribe(self, subscription_xaddr: str) -> None:
         url = str(subscription_xaddr or "").strip()
@@ -888,6 +994,19 @@ class OnvifEventsClient:
             operation="Unsubscribe",
             transport_cache=self._transport_cache,
         )
+
+
+def _renew_delay(subscription: OnvifPullPointSubscription | None) -> float:
+    if subscription is None or not subscription.current_time or not subscription.termination_time:
+        return 240.0
+    try:
+        duration = (datetime.fromisoformat(subscription.termination_time.replace("Z", "+00:00"))
+                    - datetime.fromisoformat(subscription.current_time.replace("Z", "+00:00"))).total_seconds()
+    except ValueError as exc:
+        raise OnvifError("Invalid subscription expiration") from exc
+    if duration <= 0:
+        raise OnvifError("Expired ONVIF subscription")
+    return max(0.1, min(240.0, duration * 0.8))
 
 
 class OnvifEventStateManager:
@@ -926,8 +1045,11 @@ class OnvifEventStateManager:
         return [descriptor.as_dict() for descriptor in runtime.descriptors
                 if descriptor.is_property and descriptor.is_boolean and descriptor.item_name]
 
-    async def list_descriptors(self, camera_id: str) -> dict[str, Any]:
+    async def list_descriptors(self, camera_id: str, *, refresh: bool = False) -> dict[str, Any]:
         runtime = await self._ensure_runtime(camera_id)
+        if refresh:
+            runtime.descriptors_loaded_at_ts = 0.0
+            runtime.descriptors_attempted_at_ts = 0.0
         await self._ensure_descriptors(runtime)
         return {
             "camera_id": runtime.context.camera_id,
@@ -935,6 +1057,11 @@ class OnvifEventStateManager:
             "available": bool(runtime.available or runtime.descriptors),
             "error": runtime.error,
             "event_xaddr": runtime.event_xaddr,
+            "queried_at": runtime.descriptors_loaded_at_ts,
+            "observation": "connected" if runtime.task is not None and not runtime.task.done() and runtime.watch_available else "not_observed",
+            "observed_states": [state.as_dict(camera_id=camera_id, available=runtime.watch_available, error="")
+                                for state in runtime.states.values()],
+            "transport": self._transport_status(runtime),
             "events": [descriptor.as_dict() for descriptor in runtime.descriptors],
             "boolean_states": [
                 descriptor.as_dict()
@@ -943,26 +1070,29 @@ class OnvifEventStateManager:
             ],
         }
 
-    async def snapshot(self, *, camera_id: str, topic: str, item_name: str) -> dict[str, Any]:
+    async def snapshot(self, *, camera_id: str, topic: str, item_name: str,
+                       qualified_topic: str = "", source: dict[str, str] | None = None,
+                       key: dict[str, str] | None = None) -> dict[str, Any]:
         runtime = await self._ensure_runtime(camera_id)
         await self._ensure_watch(runtime)
-        descriptor = self._find_descriptor(runtime, topic=topic, item_name=item_name)
-        key = (str(topic or "").strip(), str(item_name or "").strip())
-        state = runtime.states.get(key)
-        if state is None and descriptor is not None:
-            state = _OnvifBooleanState(descriptor=descriptor)
-        if state is None:
-            return {
-                "camera_id": runtime.context.camera_id,
-                "topic": str(topic or "").strip(),
-                "item_name": str(item_name or "").strip(),
-                "label": humanize_onvif_event_label(topic, item_name),
-                "known": False,
-                "value": None,
-                "available": bool(runtime.available),
-                "error": runtime.error or "ONVIF state descriptor not found",
-            }
-        return state.as_dict(camera_id=runtime.context.camera_id, available=runtime.available, error=runtime.error)
+        candidates = [state for state in runtime.states.values()
+                      if state.descriptor.topic == topic and state.descriptor.item_name == item_name
+                      and (not qualified_topic or state.descriptor.qualified_topic == qualified_topic)
+                      and (source is None or state.source == source)
+                      and (key is None or state.key == key)]
+        namespaces = {descriptor.qualified_topic for descriptor in runtime.descriptors
+                      if descriptor.topic == topic and descriptor.item_name == item_name}
+        if not qualified_topic and len(namespaces) > 1:
+            candidates = []
+        if len(candidates) == 1:
+            return {**candidates[0].as_dict(camera_id=runtime.context.camera_id,
+                                           available=runtime.watch_available, error=runtime.error),
+                    "session": runtime.session}
+        return {"camera_id": camera_id, "topic": topic, "item_name": item_name,
+                "known": False, "value": None, "available": runtime.watch_available,
+                "session": runtime.session,
+                "error": "Ambiguous ONVIF property; select its namespace, source and key" if len(candidates) > 1 or (not qualified_topic and len(namespaces) > 1)
+                         else runtime.error or "ONVIF property not synchronized"}
 
     async def recent_events(
         self,
@@ -980,11 +1110,26 @@ class OnvifEventStateManager:
         return {
             "camera_id": runtime.context.camera_id,
             "camera_name": runtime.context.camera_name,
-            "available": bool(runtime.available),
+            "available": bool(runtime.watch_available),
             "error": runtime.error,
             "last_sequence": int(runtime.sequence),
-            "events": [event.as_dict() for event in events],
+            "session": runtime.session,
+            "transport": self._transport_status(runtime),
+            "gap": bool(minimum and runtime.events and minimum < runtime.events[0].sequence - 1),
+            "events": [{**event.as_dict(), "ambiguous_topic": len({item.qualified_topic
+                        for item in runtime.descriptors if item.topic == event.topic}) > 1} for event in events],
+            "occurrence_descriptors": [item.as_dict() for item in runtime.descriptors if not item.is_property],
         }
+
+    @staticmethod
+    def _transport_status(runtime: _CameraEventRuntime) -> dict[str, Any]:
+        return {"status": "recovering" if runtime.recovering else (
+                    "observing" if runtime.watch_available else "waiting"),
+                "successful_pulls": runtime.successful_pulls, "failed_pulls": runtime.failed_pulls,
+                "subscriptions": runtime.subscriptions, "last_pull_at": runtime.last_pull_ts or None,
+                "received_messages": runtime.sequence, "transitions": runtime.transitions,
+                "queue_overflows": runtime.queue_overflows,
+                "unsubscribe": runtime.unsubscribe_status}
 
     async def _ensure_runtime(self, camera_id: str) -> _CameraEventRuntime:
         cid = str(camera_id or "").strip()
@@ -992,52 +1137,57 @@ class OnvifEventStateManager:
             raise OnvifError("camera_id is required")
         async with self._manager_lock:
             runtime = self._runtimes.get(cid)
-            if runtime is not None:
-                return runtime
             resolved = self._resolve_context(cid)
             if asyncio.iscoroutine(resolved):
                 resolved = await resolved
             if not isinstance(resolved, OnvifCameraEventContext):
                 raise OnvifError("Invalid ONVIF event camera context")
-            runtime = _CameraEventRuntime(context=resolved)
+            if runtime is not None and runtime.context == resolved:
+                return runtime
+            if runtime is not None:
+                runtime.stop_event.set()
+                if runtime.task is not None:
+                    runtime.task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await runtime.task
+            sequence = runtime.sequence if runtime is not None else 0
+            runtime = _CameraEventRuntime(context=resolved, sequence=sequence)
             self._runtimes[cid] = runtime
             return runtime
 
     async def _ensure_descriptors(self, runtime: _CameraEventRuntime) -> None:
         now = time.time()
         if (
-            runtime.descriptors
-            and runtime.descriptors_loaded_at_ts > 0.0
+            runtime.descriptors_loaded_at_ts > 0.0
             and (now - runtime.descriptors_loaded_at_ts) <= self._descriptors_ttl_s
         ):
             return
         async with runtime.lock:
             now = time.time()
+            if runtime.error and now - runtime.descriptors_attempted_at_ts < self._reconnect_backoff_s:
+                raise OnvifError("ONVIF discovery retry is backing off")
             if (
-                runtime.descriptors
-                and runtime.descriptors_loaded_at_ts > 0.0
+                runtime.descriptors_loaded_at_ts > 0.0
                 and (now - runtime.descriptors_loaded_at_ts) <= self._descriptors_ttl_s
             ):
                 return
+            runtime.descriptors_attempted_at_ts = time.time()
             try:
                 events_client = self._events_client(runtime.context)
                 event_xaddr = await events_client.resolve_event_xaddr(runtime.context.event_xaddr)
                 descriptors = await events_client.get_event_properties(event_xaddr)
             except Exception as exc:  # noqa: BLE001
                 runtime.available = False
-                runtime.error = f"{exc.__class__.__name__}: {exc}"
+                runtime.error = f"{exc.__class__.__name__}: ONVIF event transport unavailable"
                 raise
             runtime.event_xaddr = event_xaddr
             runtime.descriptors = descriptors
+            valid = {(item.qualified_topic or item.topic, item.item_name) for item in descriptors
+                     if item.is_property and item.is_boolean}
+            runtime.states = {key: state for key, state in runtime.states.items() if key[:2] in valid}
             runtime.descriptors_loaded_at_ts = time.time()
             runtime.available = True
             runtime.error = ""
-            for descriptor in descriptors:
-                if descriptor.is_property and descriptor.is_boolean and descriptor.item_name:
-                    runtime.states.setdefault(
-                        (descriptor.topic, descriptor.item_name),
-                        _OnvifBooleanState(descriptor=descriptor),
-                    )
 
     async def _ensure_watch(self, runtime: _CameraEventRuntime) -> None:
         await self._ensure_descriptors(runtime)
@@ -1085,41 +1235,92 @@ class OnvifEventStateManager:
     async def _pull_loop(self, runtime: _CameraEventRuntime) -> None:
         while not runtime.stop_event.is_set() and self._watch_has_demand(runtime):
             subscription_xaddr = ""
+            operation = "CreatePullPointSubscription"
             try:
                 events_client = self._events_client(runtime.context)
                 if not runtime.event_xaddr:
                     runtime.event_xaddr = await events_client.resolve_event_xaddr(runtime.context.event_xaddr)
                 subscription = await events_client.create_pull_point_subscription(runtime.event_xaddr)
                 subscription_xaddr = subscription.address
-                with contextlib.suppress(Exception):
-                    await events_client.set_synchronization_point(subscription_xaddr)
+                runtime.subscriptions += 1
+                runtime.session += 1
+                operation = "SetSynchronizationPoint"
+                await events_client.set_synchronization_point(subscription_xaddr)
                 runtime.available = True
+                runtime.watch_available = False
                 runtime.error = ""
-                last_renew_ts = time.time()
+                renew_at = time.monotonic() + _renew_delay(subscription)
+                last_progress = time.monotonic()
                 while not runtime.stop_event.is_set() and self._watch_has_demand(runtime):
-                    now = time.time()
-                    if (now - last_renew_ts) >= 240.0:
-                        with contextlib.suppress(Exception):
-                            await events_client.renew(subscription_xaddr)
-                        last_renew_ts = now
-                    messages = await events_client.pull_messages(
-                        subscription_xaddr,
-                        timeout_s=self._pull_timeout_s,
-                        message_limit=32,
-                    )
+                    remaining = renew_at - time.monotonic()
+                    if remaining <= 0 or (runtime.recovering and
+                            time.monotonic() - last_progress >= _PULL_RECOVERY_SECONDS):
+                        operation = "Renew"
+                        renewed = await events_client.renew(subscription_xaddr)
+                        renew_at = time.monotonic() + _renew_delay(renewed)
+                        last_progress = time.monotonic()
+                        if runtime.recovering:
+                            operation = "SetSynchronizationPoint"
+                            await events_client.set_synchronization_point(subscription_xaddr)
+                        remaining = renew_at - time.monotonic()
+                    operation = "PullMessages"
+                    try:
+                        messages = await events_client.pull_messages(
+                            subscription_xaddr,
+                            timeout_s=min(self._pull_timeout_s, max(0.1, remaining)),
+                            message_limit=32,
+                        )
+                    except OnvifTransientTransportError:
+                        runtime.failed_pulls += 1
+                        runtime.watch_available = False
+                        if not runtime.recovering:
+                            # Invalidate the gap once, before receiving the recovery batch.
+                            runtime.states.clear()
+                            runtime.session += 1
+                        runtime.recovering = True
+                        runtime.error = "ONVIF PullMessages connection interrupted; retrying the same subscription"
+                        await self._sleep_or_stop(runtime, min(1.0, self._reconnect_backoff_s))
+                        continue
+                    runtime.successful_pulls += 1
+                    runtime.last_pull_ts = time.time()
+                    last_progress = time.monotonic()
+                    if runtime.recovering:
+                        # Keep newly received properties; synchronize the still-unknown ones.
+                        self._record_messages(runtime, messages)
+                        operation = "SetSynchronizationPoint"
+                        await events_client.set_synchronization_point(subscription_xaddr)
+                        runtime.recovering = False
+                        runtime.watch_available = True
+                        runtime.error = ""
+                        continue
+                    runtime.recovering = False
+                    runtime.watch_available = True
+                    runtime.error = ""
                     self._record_messages(runtime, messages)
+                    if not messages:
+                        await self._sleep_or_stop(runtime, 0.1)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
                 runtime.available = False
-                runtime.error = f"{exc.__class__.__name__}: {exc}"
+                runtime.watch_available = False
+                if operation == "PullMessages" and not isinstance(exc, OnvifTransientTransportError):
+                    runtime.failed_pulls += 1
+                runtime.error = f"{exc.__class__.__name__}: ONVIF {operation} unavailable"
                 await self._sleep_or_stop(runtime, self._reconnect_backoff_s)
             finally:
                 # A new subscription must synchronize before old boolean state can be used.
+                runtime.available = False
+                runtime.watch_available = False
+                runtime.recovering = False
                 runtime.states.clear()
+                runtime.events.clear()
                 if subscription_xaddr:
-                    with contextlib.suppress(Exception):
+                    try:
                         await self._events_client(runtime.context).unsubscribe(subscription_xaddr)
+                        runtime.unsubscribe_status = "confirmed"
+                    except Exception:
+                        runtime.unsubscribe_status = "unconfirmed"
 
     async def _sleep_or_stop(self, runtime: _CameraEventRuntime, seconds: float) -> None:
         try:
@@ -1130,40 +1331,77 @@ class OnvifEventStateManager:
     def _record_messages(self, runtime: _CameraEventRuntime, messages: list[OnvifEventMessage]) -> None:
         if messages:
             runtime.available = True
+            runtime.watch_available = True
             runtime.error = ""
         for message in messages:
             runtime.sequence += 1
             event = OnvifEventMessage(
                 sequence=runtime.sequence,
                 topic=message.topic,
+                qualified_topic=message.qualified_topic,
                 operation=message.operation,
                 utc_time=message.utc_time,
                 source=dict(message.source),
                 key=dict(message.key),
                 data=dict(message.data),
                 received_at_ts=message.received_at_ts or time.time(),
+                received_monotonic=time.monotonic(),
             )
-            runtime.events.append(event)
-            self._update_states(runtime, event)
+            descriptors = [item for item in runtime.descriptors if item.topic == event.topic
+                           and (not item.qualified_topic or item.qualified_topic == event.qualified_topic)]
+            property_values = {item.is_property for item in descriptors}
+            changed, accepted = self._update_states(runtime, event)
+            runtime.transitions += int(changed)
+            runtime.queue_overflows += int(len(runtime.events) == runtime.events.maxlen)
+            runtime.events.append(replace(event, session=runtime.session, state_changed=changed, state_accepted=accepted,
+                                          is_property=next(iter(property_values)) if len(property_values) == 1 else None))
 
-    def _update_states(self, runtime: _CameraEventRuntime, event: OnvifEventMessage) -> None:
+    def _update_states(self, runtime: _CameraEventRuntime, event: OnvifEventMessage) -> tuple[bool, bool]:
+        changed = False
+        accepted = False
         for descriptor in runtime.descriptors:
-            if descriptor.topic != event.topic:
+            if descriptor.topic != event.topic or (descriptor.qualified_topic
+                    and descriptor.qualified_topic != event.qualified_topic):
                 continue
             if not descriptor.is_property or not descriptor.is_boolean or not descriptor.item_name:
                 continue
-            if descriptor.item_name not in event.data:
+            if descriptor.item_name not in event.data and event.operation.lower() != "deleted":
                 continue
             value = _parse_bool(event.data.get(descriptor.item_name))
-            if value is None:
+            if value is None and event.operation.lower() != "deleted":
                 continue
-            key = (descriptor.topic, descriptor.item_name)
+            key = (descriptor.qualified_topic or descriptor.topic, descriptor.item_name,
+                   tuple(sorted(event.source.items())), tuple(sorted(event.key.items())))
+            if key not in runtime.states and len(runtime.states) >= 512:
+                runtime.states.pop(next(iter(runtime.states)))
             state = runtime.states.setdefault(key, _OnvifBooleanState(descriptor=descriptor))
             now = event.received_at_ts or time.time()
+            try:
+                camera_time = datetime.fromisoformat(event.utc_time.replace("Z", "+00:00"))
+                if camera_time.tzinfo is None:
+                    camera_time = None
+            except ValueError:
+                camera_time = None
+            if camera_time is not None:
+                if state.last_camera_time is not None and camera_time < state.last_camera_time:
+                    continue
+                state.last_camera_time = camera_time
+            accepted = True
             if state.value is None or state.value != value:
                 state.last_changed_ts = now
+                changed = changed or state.value is not None
+                if value is False:
+                    state.last_inactive_monotonic = time.monotonic()
+            if event.operation.lower() == "deleted":
+                value = None
+                state.last_active_ts = 0.0
+                state.last_active_monotonic = None
+            elif value is True:
+                state.last_active_ts = now
+                state.last_active_monotonic = time.monotonic()
             state.value = value
             state.last_event_ts = now
             state.operation = event.operation
             state.source = dict(event.source)
             state.key = dict(event.key)
+        return changed, accepted

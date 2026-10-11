@@ -1,4 +1,6 @@
 const en = {
+  toolsTitle: "Audio tools",
+  toolsDescription: "Inspect audio samples with the camera extension’s local analysis tools.",
   title: "Analyze an audio sample",
   help: "Choose a WAV sample to inspect sound levels, frequencies and speech with the installed local model. This does not test camera audio capture. Nothing is played or saved.",
   file: "Audio sample",
@@ -33,6 +35,8 @@ const en = {
   unavailable: "Unavailable",
 };
 const pt: Record<keyof typeof en, string> = {
+  toolsTitle: "Ferramentas de áudio",
+  toolsDescription: "Analise amostras de áudio com as ferramentas locais da extensão de câmeras.",
   title: "Analisar amostra de áudio",
   help: "Escolha uma amostra WAV para analisar níveis, frequências e fala com o modelo local instalado. Isso não testa a captura de áudio da câmera. Nada é reproduzido ou salvo.",
   file: "Amostra de áudio",

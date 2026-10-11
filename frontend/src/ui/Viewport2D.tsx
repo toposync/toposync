@@ -41,6 +41,8 @@ type Props = {
   /** Optional camera-centered starting view, used by focused editor replicas. */
   initialCenter?: PlanePoint;
   initialScale?: number;
+  /** Initial visible span in metres on the shorter viewport axis; takes precedence over initialScale. */
+  initialSpan?: number;
   minScale?: number;
   maxScale?: number;
   displayRotationDegrees?: 0 | 90 | 180 | 270;
@@ -396,6 +398,7 @@ export function Viewport2D({
   initialFit,
   initialCenter,
   initialScale,
+  initialSpan,
   minScale = 18,
   maxScale = 240,
   displayRotationDegrees = 0,
@@ -418,6 +421,7 @@ export function Viewport2D({
   const initialFitRef = useRef<Props["initialFit"]>(initialFit);
   const initialCenterRef = useRef<PlanePoint | undefined>(initialCenter);
   const initialScaleRef = useRef<number | undefined>(initialScale);
+  const initialSpanRef = useRef<number | undefined>(initialSpan);
   const minScaleRef = useRef(minScale);
   const maxScaleRef = useRef(maxScale);
   const displayRotationDegreesRef = useRef<0 | 90 | 180 | 270>(
@@ -489,9 +493,10 @@ export function Viewport2D({
   useEffect(() => {
     initialCenterRef.current = initialCenter;
     initialScaleRef.current = initialScale;
+    initialSpanRef.current = initialSpan;
     initialFitAppliedRef.current = false;
     drawRef.current?.();
-  }, [initialCenter?.x, initialCenter?.z, initialScale]);
+  }, [initialCenter?.x, initialCenter?.z, initialScale, initialSpan]);
 
   useEffect(() => {
     minScaleRef.current = minScale;
@@ -722,7 +727,9 @@ export function Viewport2D({
         cameraRef.current = {
           cx: initialCenter.x,
           cz: initialCenter.z,
-          scale: clamp(initialScaleRef.current ?? 32, minScaleRef.current, maxScaleRef.current),
+          scale: clamp(initialSpanRef.current && Number.isFinite(initialSpanRef.current) && initialSpanRef.current > 0
+            ? Math.max(1, Math.min(width, height) - 32) / initialSpanRef.current
+            : initialScaleRef.current ?? 32, minScaleRef.current, maxScaleRef.current),
         };
         initialFitAppliedRef.current = true;
         return;
@@ -825,6 +832,7 @@ export function Viewport2D({
         dpr: window.devicePixelRatio || 1,
         worldToScreen,
         screenToWorld,
+        centerOn,
         scale,
       };
 
@@ -1338,6 +1346,12 @@ export function Viewport2D({
     ro.observe(canvasEl);
     resize();
 
+    function centerOn(point: PlanePoint) {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.z)) return;
+      cameraRef.current = { ...cameraRef.current, cx: point.x, cz: point.z };
+      requestDraw();
+    }
+
     function makeViewportContext(): Viewport2DContext {
       const w = canvasEl.clientWidth;
       const h = canvasEl.clientHeight;
@@ -1365,6 +1379,7 @@ export function Viewport2D({
         dpr: window.devicePixelRatio || 1,
         worldToScreen,
         screenToWorld,
+        centerOn,
         scale,
       };
     }

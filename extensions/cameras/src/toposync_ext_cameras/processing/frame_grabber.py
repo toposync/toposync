@@ -675,6 +675,11 @@ class FfmpegFrameGrabber:
         timeout_us = int(max(0, self._read_timeout_ms) * 1000)
         args: list[str] = [self._ffmpeg_path, "-hide_banner", "-loglevel", "error"]
 
+        if urllib.parse.urlsplit(self.rtsp_url).scheme.lower() in {"http", "https"}:
+            # HTTP MJPEG has no reliable frame timestamps; use receipt time before sampling.
+            args += ["-rw_timeout", str(timeout_us), "-use_wallclock_as_timestamps", "1",
+                     "-analyzeduration", "100000", "-probesize", "32768", "-threads", "1"]
+
         if str(self.rtsp_url).startswith("rtsp://"):
             args += [
                 "-timeout",

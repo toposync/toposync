@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+import pytest
 
 from toposync.runtime.config_store import ConfigStore, Pipeline, UserDataPaths
 from toposync.runtime.notifications import NotificationsRuntime
@@ -203,8 +204,9 @@ def _tracking_pipeline_graph(
     )
 
 
+@pytest.mark.parametrize("adaptive_cadence", [False, True])
 def test_orchestrator_runs_local_bundle_with_shared_detect_and_pipeline_local_tracking(
-    tmp_path: Path,
+    tmp_path: Path, adaptive_cadence: bool,
 ) -> None:
     async def scenario() -> None:
         counters: dict[str, Any] = {}
@@ -274,6 +276,27 @@ def test_orchestrator_runs_local_bundle_with_shared_detect_and_pipeline_local_tr
             sink_id="sink_b",
             sink_name="sink_b",
         )
+        if adaptive_cadence:
+            for graph, source_id, detect_id in (
+                (graph_a, "source_a", "detect_a"), (graph_b, "source_b", "detect_b")
+            ):
+                graph["nodes"].insert(1, {
+                    "id": "cadence", "operator": "core.velocity_throttle",
+                    "config": {"key_field": "stream_id", "moving_field": "metadata.motion_gate_open",
+                               "moving_interval_seconds": 0.01, "stopped_interval_seconds": 1.0},
+                })
+                edge = next(edge for edge in graph["edges"] if edge["to"]["node"] == detect_id)
+                edge["from"]["node"] = "cadence"
+                graph["edges"].append({
+                    "from": {"node": source_id, "port": "out"},
+                    "to": {"node": "cadence", "port": "in"},
+                    "maxsize": 1, "drop_policy": "latest_only",
+                })
+                normalized = build_pipeline_graph_v2(
+                    graph_uid=str(graph["uid"]), nodes=graph["nodes"], edges=graph["edges"]
+                )
+                graph.clear()
+                graph.update(normalized)
         await store.create_pipeline(Pipeline(name="final_a", graph=graph_a))
         await store.create_pipeline(Pipeline(name="final_b", graph=graph_b))
 
@@ -304,6 +327,12 @@ def test_orchestrator_runs_local_bundle_with_shared_detect_and_pipeline_local_tr
         detect_calls = int(counters.get("detect_calls", 0))
         assert source_frames <= 12
         assert detect_calls <= 12
+        if adaptive_cadence:
+            occurrences = status["local_bundle"]["node_occurrences"]
+            cadence_nodes = [items for items in occurrences.values()
+                             if any(item.get("node_id") == "cadence" for item in items)]
+            assert len(cadence_nodes) == 1
+            assert len(cadence_nodes[0]) == 2
 
         sink_counts = counters.get("sink_counts", {})
         assert int(sink_counts.get("sink_a", 0)) > 0

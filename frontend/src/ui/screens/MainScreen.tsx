@@ -465,6 +465,7 @@ export function MainScreen({
   const filter = notificationsFilter;
   const setFilter = onNotificationsFilterChange;
   const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
+  const [periodResetRevision, setPeriodResetRevision] = useState(0);
   const locations = useHistoryLocationOptions(isFilterPopoverOpen || Boolean(filter.dataFilter?.camera_id || filter.dataFilter?.area_id));
   const openNotificationSearch = () => {
     setFilter(previous => ({ ...previous, timeRange: resolveNotificationPeriod(previous.period) }));
@@ -1010,7 +1011,10 @@ export function MainScreen({
     });
   }, []);
 
-  const clearFilter = useCallback(() => setFilter({ ...DEFAULT_NOTIFICATIONS_FILTER }), []);
+  const clearFilter = useCallback(() => {
+    setFilter({ ...DEFAULT_NOTIFICATIONS_FILTER });
+    setPeriodResetRevision(previous => previous + 1);
+  }, []);
   const noteNotificationPaginationUserEngagement = useCallback(() => {
     notificationPaginationUserEngagedRef.current = true;
   }, []);
@@ -1366,7 +1370,7 @@ export function MainScreen({
                         onChange: value => setFilter(previous => ({ ...previous, extension: value ? { id: provider.id, value } : undefined })),
                       })}</React.Fragment>)}
                       {filter.extension && !notificationHistoryFilters.some(provider => provider.id === filter.extension?.id) ? <button type="button" className="chipButton" onClick={() => setFilter(previous => ({ ...previous, extension: undefined }))}>{t("core.ui.notifications.filter.unavailable_selection")}</button> : null}
-                      <HistoryPeriodFilter filter={filter} setFilter={setFilter} />
+                      <HistoryPeriodFilter key={periodResetRevision} filter={filter} setFilter={setFilter} />
                       <HistoryLocationFilter filter={filter} setFilter={setFilter} locations={locations} />
 
                       {historyAssistants.map(assistant => <button type="button" className="chipButton" key={assistant.id} onClick={() => setHistoryAssistantId(assistant.id)}>{resolveLocalizedString(assistant.name)}</button>)}

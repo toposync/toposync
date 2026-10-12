@@ -1075,7 +1075,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             replaceVisible: true,
             filter: notificationsRequestFilter,
             ranked: page.search?.mode === "semantic_visual" || page.search?.mode === "semantic_text",
-            resolvedOnServer: Boolean(notificationsRequestFilter.timeRange || page.search?.time_range || page.search?.reason === "installation_timezone_required"),
+            resolvedOnServer: Boolean((notificationsRequestFilter.timeRange && notificationsRequestFilter.query.trim()) || page.search?.time_range || page.search?.reason === "installation_timezone_required"),
           }),
         );
         setNotificationsSearchStatus(page.search);
@@ -1709,7 +1709,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           replaceVisible: false,
           filter,
           ranked: page.search?.mode === "semantic_visual" || page.search?.mode === "semantic_text",
-          resolvedOnServer: Boolean(filter.timeRange || page.search?.time_range || page.search?.reason === "installation_timezone_required"),
+          resolvedOnServer: Boolean((filter.timeRange && filter.query.trim()) || page.search?.time_range || page.search?.reason === "installation_timezone_required"),
         }),
       );
     } catch (err) {

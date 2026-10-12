@@ -226,3 +226,65 @@ test("semantic history signals changes without repeating inference automatically
   await page.getByRole('button',{name:'Refresh results',exact:true}).click();
   await expect.poll(() => reads).toBeGreaterThan(before);
 });
+
+test("reset clears an unapplied custom period and its validation error", async ({ page }) => {
+  await mockNotificationsApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Search events', exact: true }).click();
+  const period = page.getByRole('combobox', { name: 'Period', exact: true });
+  await period.selectOption('custom');
+  await page.getByLabel('Start date', { exact: true }).fill('2026-06-29');
+  await page.getByLabel('End date (inclusive)', { exact: true }).fill('2026-06-28');
+  await page.getByRole('button', { name: 'Apply interval', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await page.getByRole('button', { name: 'Reset to defaults', exact: true }).click();
+  await expect(period).toHaveValue('all');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await period.selectOption('custom');
+  await expect(page.getByLabel('Start date', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('End date (inclusive)', { exact: true })).toHaveValue('');
+});
+
+test("period-only history keeps both pages during realtime updates and excludes other days", async ({ page }) => {
+  await mockNotificationsApi(page);
+  const notifications = Array.from({ length: 80 }, (_, index) => ({
+    ...NOTIFICATIONS[0], id: `period-${index}`, title: `Period event ${index}`,
+    createdAt: new Date(Date.UTC(2026, 5, 28, 10, index)).toISOString(),
+  }));
+  let reads = 0;
+  await page.route(/\/api\/notifications(?:\?.*)?$/, route => {
+    reads++;
+    const params = new URL(route.request().url()).searchParams;
+    const next = params.has('before');
+    return route.fulfill({ json: { notifications: notifications.slice(next ? 0 : 40, next ? 40 : 80),
+      next_cursor: next ? null : Date.parse(notifications[40].createdAt) / 1000 } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Search events', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Period', exact: true }).selectOption('custom');
+  await page.getByLabel('Start date', { exact: true }).fill('2026-06-28');
+  await page.getByLabel('End date (inclusive)', { exact: true }).fill('2026-06-28');
+  await page.getByRole('button', { name: 'Apply interval', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  const list = page.locator('.railScroll').filter({ has: page.locator('.notificationCard') });
+  await list.hover();
+  await page.mouse.wheel(0, 10000);
+  await expect(page.locator('.notificationCard')).toHaveCount(80);
+  const before = reads;
+  await page.evaluate(items => {
+    const stream = window.__toposyncEventSources.find(source => /\/api\/notifications\/stream$/.test(source.url));
+    for (const notification of items) {
+      stream.onmessage(new MessageEvent('message', { data: JSON.stringify({ op: 'update', notification }) }));
+    }
+  }, [
+    { ...notifications[0], title: 'Updated older page event' },
+    { ...notifications[0], id: 'in-period', title: 'New in-period event' },
+    { ...notifications[0], id: 'outside-period', title: 'Outside period event', createdAt: '2026-06-27T10:00:00Z' },
+  ]);
+  await expect(page.getByText('Updated older page event', { exact: true })).toHaveCount(1);
+  await expect(page.getByText('New in-period event', { exact: true })).toHaveCount(1);
+  await page.waitForTimeout(800);
+  await expect(page.locator('.notificationCard')).toHaveCount(81);
+  await expect(page.getByText('Outside period event', { exact: true })).toHaveCount(0);
+  expect(reads).toBe(before);
+});

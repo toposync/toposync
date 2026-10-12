@@ -42,3 +42,22 @@ test("custom dates are inclusive civil days, including leap years and daylight s
     }
   } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
 });
+
+test("a skipped midnight does not shift the other civil day boundaries", () => {
+  const previous = process.env.TZ; process.env.TZ = "America/Sao_Paulo";
+  try {
+    const now = new Date("2018-11-04T12:00:00Z");
+    const cases = [
+      [{ preset: "today" }, "2018-11-04T01:00:00-02:00", "2018-11-05T00:00:00-02:00"],
+      [{ preset: "yesterday" }, "2018-11-03T00:00:00-03:00", "2018-11-04T01:00:00-02:00"],
+      [{ preset: "this_week" }, "2018-10-29T00:00:00-03:00", "2018-11-05T00:00:00-02:00"],
+      [{ preset: "last_week" }, "2018-10-22T00:00:00-03:00", "2018-10-29T00:00:00-03:00"],
+      [{ preset: "custom", start: "2018-11-04", end: "2018-11-04" }, "2018-11-04T01:00:00-02:00", "2018-11-05T00:00:00-02:00"],
+    ];
+    for (const [period, start, end] of cases) {
+      const range = resolve(period, now);
+      assert.equal(range.createdAfter, new Date(start).getTime() / 1000, period.preset);
+      assert.equal(range.createdBefore, new Date(end).getTime() / 1000, period.preset);
+    }
+  } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
+});

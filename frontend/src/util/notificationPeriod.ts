@@ -16,12 +16,12 @@ export function resolveNotificationPeriod(period?: NotificationPeriod, now = new
   let start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   let end = new Date(start);
   switch (period.preset) {
-    case "today": end.setDate(end.getDate() + 1); break;
-    case "yesterday": start.setDate(start.getDate() - 1); break;
+    case "today": end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1); break;
+    case "yesterday": start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1); break;
     case "this_week":
     case "last_week":
-      start.setDate(start.getDate() - (start.getDay() + 6) % 7 - (period.preset === "last_week" ? 7 : 0));
-      end = new Date(start); end.setDate(end.getDate() + 7); break;
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() + 6) % 7 - (period.preset === "last_week" ? 7 : 0));
+      end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7); break;
     case "this_month":
     case "last_month":
       start = new Date(now.getFullYear(), now.getMonth() - (period.preset === "last_month" ? 1 : 0), 1);
@@ -29,7 +29,7 @@ export function resolveNotificationPeriod(period?: NotificationPeriod, now = new
     case "custom":
       start = civilDate(period.start); end = civilDate(period.end);
       if (start > end) throw new Error("invalid_period");
-      end.setDate(end.getDate() + 1); break;
+      end = new Date(end.getFullYear(), end.getMonth(), end.getDate() + 1); break;
   }
   if (!Number.isFinite(start.getTime()) || start.getTime() < 0 || end <= start) throw new Error("invalid_period");
   return { createdAfter: start.getTime() / 1000, createdBefore: end.getTime() / 1000,

@@ -105,6 +105,8 @@ class TextHistorySearch:
         if not query or len(query) > 1000 or not 1 <= limit <= 50:
             raise ValueError("invalid_history_query")
         interpretation = None
+        if created_after is not None or created_before is not None:
+            query, _ = resolve_history_time(query, None, explicit_range=True)
         if created_after is None and created_before is None:
             settings = await self.config_store.get_settings() if self.config_store is not None else None
             query, interpretation = resolve_history_time(query, settings.core.get("timezone") if settings else None)
@@ -113,12 +115,12 @@ class TextHistorySearch:
             if interpretation:
                 created_after = interpretation["time_range"]["created_after"]
                 created_before = interpretation["time_range"]["created_before"]
-            if not query:
-                items, _ = await self.notifications.list(limit=limit + 1, priorities=priorities, types=types,
-                                                        created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids)
-                return {"notifications": items[:limit], "search": {"mode": "literal", "status": "ready",
-                    "returned_count": min(len(items), limit), "results_truncated": len(items) > limit,
-                    **(interpretation or {})}}
+        if not query:
+            items, _ = await self.notifications.list(limit=limit + 1, priorities=priorities, types=types,
+                                                    created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids)
+            return {"notifications": items[:limit], "search": {"mode": "literal", "status": "ready",
+                "returned_count": min(len(items), limit), "results_truncated": len(items) > limit,
+                **(interpretation or {})}}
         async with self.lock:
             try:
                 result = await self._semantic(query, limit, priorities, types, created_after, created_before, data_filter, notification_ids)

@@ -41,6 +41,28 @@ export function historyEndpoint(value: string): string {
   return `/api/vision/identities/${encodeURIComponent(identity)}/notifications?association=${association}`;
 }
 
+export function HistorySelectionSummary({ value, i18n }: { value: string; i18n: HostI18n }) {
+  const { t } = i18n.useI18n();
+  const [association, identity] = value.split(":");
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => {
+    let controller: AbortController | null = null;
+    const refresh = () => {
+      controller?.abort();
+      const current = new AbortController(); controller = current;
+      setName(null);
+      void read<GalleryData>("", current.signal).then(data => {
+        if (!current.signal.aborted) setName(data.identities.find(item => item.id === identity)?.name ?? null);
+      }).catch(() => { if (!current.signal.aborted) setName(null); });
+    };
+    refresh();
+    window.addEventListener("toposync:identity-gallery-changed", refresh);
+    window.addEventListener("focus", refresh);
+    return () => { controller?.abort(); window.removeEventListener("toposync:identity-gallery-changed", refresh); window.removeEventListener("focus", refresh); };
+  }, [identity]);
+  return <>{t("ext.vision.identity.historyPeople")}: {name ?? t("ext.vision.identity.historyMissing")} · {t(`ext.vision.identity.${association === "recognized" ? "historyRecognized" : "historyHuman"}`)}</>;
+}
+
 export function HistoryFilter({ value, onChange, i18n }: {
   value: string | null; onChange: (value: string | null) => void; i18n: HostI18n;
 }) {

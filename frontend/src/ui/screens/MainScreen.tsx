@@ -40,7 +40,9 @@ import {
   renderNotificationSpatialStatus,
   type NotificationImageItem,
 } from "../notifications/pipelinesNotifications";
-import { HistoryLocationFilter } from "../notifications/HistoryLocationFilter";
+import { HistoryLocationFilter, useHistoryLocationOptions } from "../notifications/HistoryLocationFilter";
+import { HistoryPeriodFilter } from "../notifications/HistoryPeriodFilter";
+import { resolveNotificationPeriod, type NotificationPeriod, type NotificationTimeRange } from "../../util/notificationPeriod";
 import { VisualHistoryPreparation } from "../notifications/VisualHistoryPreparation";
 import { StreamsDashboard } from "../streams/StreamsDashboard";
 import { navigate, replace, usePathname } from "../router";
@@ -217,6 +219,8 @@ export type Priority = "low" | "medium" | "high";
 const ALL_PRIORITIES: Priority[] = ["high", "medium", "low"];
 
 export type NotificationsFilter = {
+  period?: NotificationPeriod;
+  timeRange?: NotificationTimeRange;
   extension?: { id: string; value: string };
   dataFilter?: Record<string, string>;
   semantic?: boolean | "visual";
@@ -269,7 +273,14 @@ export function loadNotificationsFilter(): NotificationsFilter {
       : DEFAULT_NOTIFICATIONS_FILTER.priorities;
     const types = Array.isArray(parsed.types) ? parsed.types.filter((t): t is string => typeof t === "string" && t.length > 0) : [];
     const query = typeof parsed.query === "string" ? parsed.query : "";
+    let period: NotificationPeriod | undefined;
+    let timeRange: NotificationTimeRange | undefined;
+    try {
+      timeRange = resolveNotificationPeriod(parsed.period);
+      period = timeRange ? parsed.period : undefined;
+    } catch { /* Discard an invalid saved period, never invalid live input. */ }
     return {
+      period, timeRange,
       priorities: priorities.length > 0 ? priorities : DEFAULT_NOTIFICATIONS_FILTER.priorities,
       types,
       query,
@@ -284,6 +295,7 @@ export function loadNotificationsFilter(): NotificationsFilter {
 }
 
 function isFilterRestrictive(filter: NotificationsFilter): boolean {
+  if (filter.timeRange) return true;
   if (filter.priorities.length < ALL_PRIORITIES.length) return true;
   if (filter.extension) return true;
   if (filter.types.length > 0) return true;
@@ -414,7 +426,10 @@ export function MainScreen({
   onViewportReady,
 }: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
-  const timeRange = notificationsSearchStatus?.time_range;
+  const timeRange = notificationsFilter.timeRange ? {
+    timezone: notificationsFilter.timeRange.timezone,
+    created_after: notificationsFilter.timeRange.createdAfter, created_before: notificationsFilter.timeRange.createdBefore,
+  } : notificationsSearchStatus?.time_range;
   const timezoneRequired = notificationsSearchStatus?.reason === "installation_timezone_required";
   const visualSearchMessage = [
     t("core.ui.notifications.filter.visual_summary", { limit: notificationsSearchStatus?.scope_limit ?? 250 }),
@@ -450,6 +465,11 @@ export function MainScreen({
   const filter = notificationsFilter;
   const setFilter = onNotificationsFilterChange;
   const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
+  const locations = useHistoryLocationOptions(isFilterPopoverOpen || Boolean(filter.dataFilter?.camera_id || filter.dataFilter?.area_id));
+  const openNotificationSearch = () => {
+    setFilter(previous => ({ ...previous, timeRange: resolveNotificationPeriod(previous.period) }));
+    setIsFilterPopoverOpen(true);
+  };
   const [historyReturnId, setHistoryReturnId] = useState<string | null>(null);
   const [historyReturnError, setHistoryReturnError] = useState(false);
   useEffect(() => {
@@ -1246,6 +1266,17 @@ export function MainScreen({
 
 
                 <button
+                  ref={filterButtonRef}
+                  className={["iconButton", filterRestrictive ? "iconButtonPrimary" : ""].filter(Boolean).join(" ")}
+                  type="button"
+                  aria-label={t("core.ui.notifications.search_entry")}
+                  title={t("core.ui.notifications.search_entry")}
+                  aria-expanded={isFilterPopoverOpen}
+                  onClick={openNotificationSearch}
+                >
+                  <Icon name="magnifying-glass" />
+                </button>
+                <button
                   className="iconButton notificationsCollapseButton"
                   type="button"
                   aria-label={t("core.ui.notifications.aria_close", {}, "Close notifications")}
@@ -1257,19 +1288,8 @@ export function MainScreen({
               </div>
             </div>
 
-                <div className="notificationsSearchEntry">
+                {historyReturnId || isFilterPopoverOpen ? <div className="notificationsSearchEntry">
                   {historyReturnId && <button type="button" className="chipButton" disabled={notificationsLoading} onClick={() => void returnToHistoryOrigin()}>{t("core.ui.notifications.return_to_original")}</button>}
-                  <button
-                    ref={filterButtonRef}
-                    className={["pillButton", filterRestrictive ? "pillButtonPrimary" : ""].filter(Boolean).join(" ")}
-                    type="button"
-                    aria-label={t("core.ui.notifications.search_entry")}
-                    title={t("core.ui.notifications.search_entry")}
-                    aria-expanded={isFilterPopoverOpen}
-                    onClick={() => setIsFilterPopoverOpen((prev) => !prev)}
-                  >
-                    <Icon name="magnifying-glass" /> {t("core.ui.notifications.search_entry")}
-                  </button>
 
                   {isFilterPopoverOpen ? (
                     <Modal open title={t("core.ui.notifications.search_entry")} onClose={() => setIsFilterPopoverOpen(false)} panelStyle={{ width: "min(560px, calc(100vw - 28px))" }}><div className="notificationsSearchContent">
@@ -1304,7 +1324,7 @@ export function MainScreen({
                         </button>
                       ) : null}
                       <p id="notificationsSearchMode" className="muted" role="status">
-                        {timezoneRequired ? t("core.ui.notifications.filter.timezone_required") : notificationsSearchStatus?.mode === "semantic_visual"
+                        {filter.timeRange ? t("core.ui.notifications.period.precedence") : timezoneRequired ? t("core.ui.notifications.filter.timezone_required") : notificationsSearchStatus?.mode === "semantic_visual"
                           ? visualSearchMessage
                           : notificationsSearchStatus?.mode === "semantic_text"
                           ? t("core.ui.notifications.filter.semantic_scope", { limit: notificationsSearchStatus.scope_limit ?? 250, pending: notificationsSearchStatus.pending ?? 0 })
@@ -1346,7 +1366,8 @@ export function MainScreen({
                         onChange: value => setFilter(previous => ({ ...previous, extension: value ? { id: provider.id, value } : undefined })),
                       })}</React.Fragment>)}
                       {filter.extension && !notificationHistoryFilters.some(provider => provider.id === filter.extension?.id) ? <button type="button" className="chipButton" onClick={() => setFilter(previous => ({ ...previous, extension: undefined }))}>{t("core.ui.notifications.filter.unavailable_selection")}</button> : null}
-                      <HistoryLocationFilter filter={filter} setFilter={setFilter} />
+                      <HistoryPeriodFilter filter={filter} setFilter={setFilter} />
+                      <HistoryLocationFilter filter={filter} setFilter={setFilter} locations={locations} />
 
                       {historyAssistants.map(assistant => <button type="button" className="chipButton" key={assistant.id} onClick={() => setHistoryAssistantId(assistant.id)}>{resolveLocalizedString(assistant.name)}</button>)}
                       {!historyAssistants.length ? <p className="muted">{t("core.ui.notifications.assistant_unavailable")}</p> : null}
@@ -1395,19 +1416,30 @@ export function MainScreen({
                       </div>
                     </div></Modal>
                   ) : null}
-                </div>
+                </div> : null}
 
-            {filterRestrictive ? <div className="cardBody" role="status">
-              {t("core.ui.notifications.active_priorities", { priorities: filter.priorities.map(priority => t(`core.ui.notifications.filter.priority.${priority}`)).join(", ") || t("core.ui.notifications.filter.none") })}
-              {filter.query.trim() ? ` · ${filter.query.trim()}` : ""}
-              {filter.extension ? ` · ${t("core.ui.notifications.extension_filter_active")}` : ""}
+            {filterRestrictive ? <div className="notificationsActiveFilters" aria-label={t("core.ui.notifications.active_filters")}>
+              <span className="notificationsActiveFiltersTitle">{t("core.ui.notifications.active_filters")}</span>
+              <button type="button" className="chipButton notificationsActiveFilter" onClick={openNotificationSearch}>{t("core.ui.notifications.active_priorities", { priorities: filter.priorities.map(priority => t(`core.ui.notifications.filter.priority.${priority}`)).join(", ") || t("core.ui.notifications.filter.none") })}</button>
+              {filter.query.trim() && <button type="button" className="chipButton notificationsActiveFilter" onClick={openNotificationSearch}>{t("core.ui.notifications.filter.search")}: {filter.query.trim()}</button>}
+              {filter.period && <button type="button" className="chipButton notificationsActiveFilter" onClick={openNotificationSearch}>
+                {t("core.ui.notifications.period.title")}: {t(`core.ui.notifications.period.${filter.period.preset}`)}
+                {filter.period.preset === "custom" ? ` · ${filter.period.start} — ${filter.period.end}` : ""}
+              </button>}
+              {["camera_id", "area_id"].map((key, index) => filter.dataFilter?.[key] ? <button key={key} type="button" className="chipButton notificationsActiveFilter" onClick={openNotificationSearch}>
+                {t(`core.ui.notifications.location.${index === 0 ? "camera" : "area"}`)}: {locations.options[index]?.find(option => option.value === filter.dataFilter?.[key])?.label || t("core.ui.notifications.location.missing")}
+              </button> : null)}
+              {filter.extension && <button type="button" className="chipButton notificationsActiveFilter" onClick={openNotificationSearch}>
+                {notificationHistoryFilters.find(provider => provider.id === filter.extension?.id)?.renderSummary?.({ value: filter.extension.value }) ?? t("core.ui.notifications.extension_filter_active")}
+              </button>}
+              {filter.types.length > 0 && <button type="button" className="chipButton notificationsActiveFilter" onClick={openNotificationSearch}>{t("core.ui.notifications.filter.types")}: {filter.types.join(", ")}</button>}
             </div> : null}
             {historyReturnError ? <p role="alert" className="cardBody">{t("core.ui.notifications.original_unavailable")}</p> : null}
             {notificationsError ? <div className="cardBody" role="alert">{t("core.ui.notifications.filter.load_error")} <button type="button" className="chipButton" onClick={onNotificationsSearchRefresh}>{t("core.ui.notifications.location.retry")}</button></div> : null}
             {notificationsHistoryChanged ? <div className="notificationsSearchEntry" role="status">
               {t("core.ui.notifications.history_changed")} <button type="button" className="chipButton" disabled={notificationsLoading} onClick={onNotificationsSearchRefresh}>{t("core.ui.notifications.filter.refresh_search")}</button>
             </div> : null}
-            {timeSearchMessage && filter.query.trim() ? <div className="cardBody" role="status">{timeSearchMessage}</div> : null}
+            {timeSearchMessage && (filter.query.trim() || filter.timeRange) ? <div className="notificationsSearchEntry" role="status">{timeSearchMessage}</div> : null}
             {notificationsSearchStatus && !notificationsError && filter.semantic && filter.query.trim() && !timezoneRequired ? (
               <div className="cardBody" role="status">
                 {notificationsSearchStatus.mode === "semantic_visual"
@@ -1745,9 +1777,11 @@ export function MainScreen({
       </Modal>
 
       {historyAssistantId ? <Modal open title={t("core.ui.notifications.assistant_title")} onClose={() => setHistoryAssistantId(null)} panelStyle={{ width: "min(760px, calc(100vw - 28px))" }}>
+        {timeSearchMessage && <p>{timeSearchMessage}</p>}
         {historyAssistants.find(item => item.id === historyAssistantId)?.render({
           query: filter.query, dataFilter: filter.dataFilter, selection: filter.extension,
           priorities: filter.priorities, types: filter.types, visual: filter.semantic === "visual",
+          createdAfter: filter.timeRange?.createdAfter, createdBefore: filter.timeRange?.createdBefore,
           onOpenNotification: async id => {
             previousHistorySelection.current = activeNotificationId;
             await onOpenHistoryNotification(id);

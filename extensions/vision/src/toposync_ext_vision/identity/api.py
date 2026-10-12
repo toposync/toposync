@@ -252,6 +252,8 @@ def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
         if created_after is not None and created_before is not None and created_after >= created_before:
             raise HTTPException(422, "Notification time interval must have positive duration")
         interpretation = None
+        if created_after is not None or created_before is not None:
+            query, _ = resolve_history_time(query, None, explicit_range=True)
         if created_after is None and created_before is None:
             settings = await request.app.state.config_store.get_settings()
             query, interpretation = resolve_history_time(query, settings.core.get("timezone"))

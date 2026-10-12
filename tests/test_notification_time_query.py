@@ -52,3 +52,9 @@ def test_relative_period_at_either_end_has_the_same_meaning(phrase):
 @pytest.mark.parametrize("phrase", ["ontem gato hoje", "gato ontem cachorro", "hojemente gato"])
 def test_ambiguous_or_embedded_relative_period_remains_literal(phrase):
     assert resolve_history_time(phrase, "UTC") == (phrase, None)
+
+
+def test_explicit_interval_takes_precedence_without_installation_timezone():
+    assert resolve_history_time("gato no bebedouro ontem à tarde", None, explicit_range=True) == ("gato bebedouro", None)
+    assert resolve_history_time("hoje", None, explicit_range=True) == ("", None)
+    assert resolve_history_time("gato ontem cachorro", None, explicit_range=True) == ("gato ontem cachorro", None)

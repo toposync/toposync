@@ -1,13 +1,14 @@
 import React from "react";
 import type { ToposyncHost } from "@toposync/plugin-api";
 import { Gallery, NotificationIdentity, supportsRecognition } from "./Gallery";
-import { CategoryHistoryFilter, categoryHistoryEndpoint, DetectedCategorySummary, detectedCategoryCounts, HistoryFilter, historyEndpoint } from "./HistoryFilter";
+import { CategoryHistoryFilter, categoryHistoryEndpoint, DetectedCategorySummary, detectedCategoryCounts, HistoryFilter, historyEndpoint, HistorySelectionSummary } from "./HistoryFilter";
 import { ModelSetup } from "./ModelSetup";
 import { translations } from "./translations";
 export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(translations);
   host.registerNotificationHistoryFilter?.({
     id: "com.toposync.vision.categories", endpoint: categoryHistoryEndpoint,
+    renderSummary: ({ value }) => <>{host.i18n.t("ext.vision.identity.historyCategory")}: {host.i18n.t(`ext.vision.identity.${value}`)}</>,
     render: context => <CategoryHistoryFilter {...context} i18n={host.i18n} />,
   });
   host.registerNotificationDetailPanel?.({
@@ -16,6 +17,7 @@ export function activate(host: ToposyncHost): void {
   });
   host.registerNotificationHistoryFilter?.({
     id: "com.toposync.vision.identities", endpoint: historyEndpoint,
+    renderSummary: ({ value }) => <HistorySelectionSummary value={value} i18n={host.i18n} />,
     render: context => <HistoryFilter {...context} i18n={host.i18n} />,
     subscribe: invalidate => {
       window.addEventListener("toposync:identity-gallery-changed", invalidate);

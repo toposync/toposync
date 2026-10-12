@@ -24,7 +24,8 @@ def client_for(tmp_path, raw, *, mutate=None, denied=False):
         async def call(self, name, **kwargs):
             assert name == "ai.search_notifications"
             calls.append(kwargs)
-            items, _ = await runtime.list(priorities=kwargs.get("priorities"), types=kwargs.get("types"))
+            items, _ = await runtime.list(priorities=kwargs.get("priorities"), types=kwargs.get("types"),
+                created_after=kwargs.get("created_after"), created_before=kwargs.get("created_before"), data_filter=kwargs.get("data_filter"))
             return {"notifications": items, "search": {"results_truncated": True}}
 
     class Router:
@@ -102,6 +103,28 @@ def test_invalid_history_selection_never_calls_services(tmp_path, fields):
     client, calls, _ = client_for(tmp_path, lambda identifier: {})
     assert client.post("/api/ai/history/answer", json={"question": "gato", **fields}).status_code == 422
     assert calls == []
+
+
+@pytest.mark.parametrize("bounds", [{"created_after": -1}, {"created_after": "NaN"},
+    {"created_before": "Infinity"}, {"created_after": 200, "created_before": 100},
+    {"created_after": 100, "created_before": 100}])
+def test_invalid_history_period_never_calls_services(tmp_path, bounds):
+    client, calls, _ = client_for(tmp_path, lambda identifier: {})
+    assert client.post("/api/ai/history/answer", json={"question": "gato", **bounds}).status_code == 422
+    assert calls == []
+
+
+def test_period_is_rechecked_after_model_changes_source_time(tmp_path):
+    def move(runtime, record):
+        runtime.store._conn.execute("UPDATE notification SET created_at = created_at + 100 WHERE id=?", (record.id,))
+    client, calls, record = client_for(tmp_path, lambda identifier: {"citations": [
+        {"notification_id": identifier, "field": "title", "excerpt": "Gato na água"}]}, mutate=move)
+    start = record.created_at
+    result = client.post("/api/ai/history/answer", json={"question":"gato", "created_after":start,"created_before":start+1})
+    assert result.status_code == 200
+    assert calls[0]["created_after"] == start
+    assert result.json()["answer"]["status"] == "unavailable"
+    assert result.json()["notifications"] == []
 
 
 def test_private_identity_with_missing_vision_fails_closed(tmp_path):

@@ -52,6 +52,7 @@ import {
 } from "../util/api";
 import type { AppSettings, AuthUser, NotificationsCount } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
+import { resolveNotificationPeriod } from "../util/notificationPeriod";
 import { loadRemoteActivate } from "../util/moduleFederation";
 import { markToposyncPerformance } from "../util/performance";
 import {
@@ -245,6 +246,10 @@ function sortNotificationIdsByCreatedDesc(
 }
 
 function notificationMatchesDataFilter(notification: Notification, filter: NotificationsFilter): boolean {
+  if (filter.timeRange) {
+    const created = Date.parse(notification.createdAt ?? "") / 1000;
+    if (!Number.isFinite(created) || created < filter.timeRange.createdAfter || created >= filter.timeRange.createdBefore) return false;
+  }
   const data = asRecord(asRecord(notification.payload).data);
   return Object.entries(filter.dataFilter ?? {}).every(([path, expected]) => {
     let value: unknown = data;
@@ -276,7 +281,10 @@ function stringArraysEqual(left: readonly string[], right: readonly string[]): b
 }
 
 function notificationFilterFacetsEqual(left: NotificationsFilter, right: NotificationsFilter): boolean {
-  return left.extension?.id === right.extension?.id && left.extension?.value === right.extension?.value
+  return left.timeRange?.createdAfter === right.timeRange?.createdAfter && left.timeRange?.createdBefore === right.timeRange?.createdBefore
+    && left.timeRange?.timezone === right.timeRange?.timezone && left.period?.preset === right.period?.preset
+    && left.period?.start === right.period?.start && left.period?.end === right.period?.end
+    && left.extension?.id === right.extension?.id && left.extension?.value === right.extension?.value
     && stringArraysEqual(left.priorities, right.priorities) && stringArraysEqual(left.types, right.types)
     && Object.keys(left.dataFilter ?? {}).length === Object.keys(right.dataFilter ?? {}).length
     && Object.entries(left.dataFilter ?? {}).every(([key, value]) => right.dataFilter?.[key] === value);
@@ -1049,6 +1057,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           types: notificationsRequestFilter.types,
           query: notificationsRequestFilter.query,
           semantic: notificationsRequestFilter.semantic,
+          createdAfter: notificationsRequestFilter.timeRange?.createdAfter,
+          createdBefore: notificationsRequestFilter.timeRange?.createdBefore,
           dataFilter: notificationsRequestFilter.dataFilter,
           historyEndpoint: historyEndpoint(notificationsRequestFilter),
           signal: controller.signal,
@@ -1065,7 +1075,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             replaceVisible: true,
             filter: notificationsRequestFilter,
             ranked: page.search?.mode === "semantic_visual" || page.search?.mode === "semantic_text",
-            resolvedOnServer: Boolean(page.search?.time_range || page.search?.reason === "installation_timezone_required"),
+            resolvedOnServer: Boolean(notificationsRequestFilter.timeRange || page.search?.time_range || page.search?.reason === "installation_timezone_required"),
           }),
         );
         setNotificationsSearchStatus(page.search);
@@ -1681,6 +1691,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         dataFilter: filter.dataFilter,
         historyEndpoint: historyEndpoint(filter),
         semantic: filter.semantic,
+        createdAfter: filter.timeRange?.createdAfter,
+        createdBefore: filter.timeRange?.createdBefore,
         signal: controller.signal,
       });
       if (controller.signal.aborted || notificationsListRequestRef.current !== requestId) return;
@@ -1697,7 +1709,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           replaceVisible: false,
           filter,
           ranked: page.search?.mode === "semantic_visual" || page.search?.mode === "semantic_text",
-          resolvedOnServer: Boolean(page.search?.time_range || page.search?.reason === "installation_timezone_required"),
+          resolvedOnServer: Boolean(filter.timeRange || page.search?.time_range || page.search?.reason === "installation_timezone_required"),
         }),
       );
     } catch (err) {
@@ -1897,7 +1909,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           notificationsLoading={notificationsLoading}
           renderViews={Object.values(renderViewsById)}
           onNotificationsFilterChange={setNotificationsFilter}
-          onNotificationsSearchRefresh={() => setNotificationsRequestFilter({ ...notificationsFilter })}
+          onNotificationsSearchRefresh={() => {
+            const next = { ...notificationsFilter, timeRange: resolveNotificationPeriod(notificationsFilter.period) };
+            setNotificationsFilter(next); setNotificationsRequestFilter(next);
+          }}
           onSelectNotification={selectNotification}
           onLoadMoreNotifications={loadMoreNotifications}
           onNotificationsViewed={markNotificationsAsViewed}

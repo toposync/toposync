@@ -168,6 +168,9 @@ def test_relative_semantic_query_and_date_only_share_configured_timezone(tmp_pat
     day = asyncio.run(search.search(query="ontem"))
     assert day["search"]["status"] == "ready"
     assert len(calls) == 1  # A date-only filter does not load or call an embedding model.
+    explicit = asyncio.run(search.search(query="hoje", created_after=100, created_before=200))
+    assert explicit["search"]["status"] == "ready"
+    assert len(calls) == 1
 
 
 def test_history_route_requires_notification_read(tmp_path: Path) -> None:

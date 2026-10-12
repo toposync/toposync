@@ -98,6 +98,8 @@ def test_history_http_time_bounds_are_validated(tmp_path, monkeypatch):
         client.app.state.notifications.store.upsert(type="event", title="Gato no bebedouro", now=window["created_before"])
         result = client.get("/api/notifications", params={"query": "gato no bebedouro ontem à tarde"}).json()
         assert [item["id"] for item in result["notifications"]] == [cat.id]
+        explicit = client.get("/api/notifications", params={"query":"gato ontem", "created_after":window["created_after"], "created_before":window["created_before"]}).json()
+        assert [item["id"] for item in explicit["notifications"]] == [cat.id]
         result = client.get("/api/notifications", params={"data_filter": '{"camera_id":"absent"}'}).json()
         assert result["notifications"] == []
         assert client.get("/api/notifications", params={"data_filter": '{"camera_id":7}'}).status_code == 422
@@ -150,3 +152,16 @@ def test_history_options_cover_visible_corpus_with_latest_labels_and_no_silent_l
     assert store.data_options("camera_id", "camera_name") == options
     with pytest.raises(ValueError):
         store.data_options("camera_id[*]", "camera_name")
+
+
+def test_areas_with_equal_names_are_distinct_and_labels_do_not_fabricate_associations(tmp_path):
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    for area_id in ("north", "south"):
+        runtime.store.upsert(type="event", title="Gato", payload={"data":{"area_id":area_id,"area_label":"Jardim"}})
+    runtime.store.upsert(type="event", title="Sem vínculo", payload={"data":{"area_label":"Jardim","area_labels":["Jardim"]}})
+    options = runtime.store.data_options("area_id", "area_label")
+    assert {item["value"] for item in options} == {"north", "south"}
+    for option in options:
+        items, _ = runtime.list_sync(data_filter={"area_id":option["value"]})
+        assert len(items) == 1
+        assert items[0]["payload"]["data"]["area_id"] == option["value"]

@@ -57,7 +57,7 @@ export function AiHistorySearch({ context, i18n }: { context: Parameters<Notific
   useEffect(() => {
     operation.current?.abort(); operation.current = null;
     setResult(null); setError(""); setBusy(false);
-  }, [query, profile, identity, association, camera, area, mode]);
+  }, [query, profile, identity, association, camera, area, mode, context.createdAfter, context.createdBefore]);
   useEffect(() => {
     const invalidate = () => {
       operation.current?.abort(); operation.current = null;
@@ -79,6 +79,7 @@ export function AiHistorySearch({ context, i18n }: { context: Parameters<Notific
         method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
         body: JSON.stringify({ question: query.trim(), profile_id: profile || null,
           identity_id: identity || null, association, mode, priorities: context.priorities, types: context.types,
+          created_after: context.createdAfter, created_before: context.createdBefore,
           data_filter: { ...(camera ? { camera_id: camera } : {}), ...(area ? { area_id: area } : {}) } }),
       });
       if (!controller.signal.aborted) setResult(data);

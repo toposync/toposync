@@ -601,6 +601,7 @@ export type EditorTool = {
  */
 export type NotificationHistoryFilter = {
   id: string;
+  renderSummary?: (context: { value: string }) => import("react").ReactNode;
   render: (context: { value: string | null; onChange: (value: string | null) => void }) => import("react").ReactNode;
   endpoint: (value: string) => string;
   subscribe?: (invalidate: () => void) => () => void;
@@ -617,6 +618,8 @@ export type NotificationHistoryAssistant = {
     priorities: string[];
     types: string[];
     visual: boolean;
+    createdAfter?: number;
+    createdBefore?: number;
     onOpenNotification: (id: string) => Promise<void>;
   }) => import("react").ReactNode;
 };

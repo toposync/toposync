@@ -9,7 +9,7 @@ const source = fs.readFileSync(filename, "utf8");
 const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const names = new Set(["notificationHistoryRefreshMode","notificationMatchesDataFilter", "notificationMatchesFilter", "mergeNotificationPage", "upsertNotificationInState", "notificationFiltersEqual", "notificationFilterFacetsEqual", "stringArraysEqual"]);
 const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text));
-const context = {withoutEphemeralImage: value => value, sortNotificationIdsByCreatedDesc: ids => [...ids].sort(), asRecord: value => value && typeof value === "object" ? value : {}, notificationPriority: () => "medium"};
+const context = {Date, withoutEphemeralImage: value => value, sortNotificationIdsByCreatedDesc: ids => [...ids].sort(), asRecord: value => value && typeof value === "object" ? value : {}, notificationPriority: () => "medium"};
 vm.createContext(context);
 vm.runInContext(ts.transpileModule(functions.map(node => node.getText(ast)).join("\n"),
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
@@ -107,8 +107,8 @@ test("private selection with empty semantic query retains literal pagination", (
 const apiFilename = path.resolve(__dirname, "../src/util/api.ts");
 const apiAst = ts.createSourceFile(apiFilename, fs.readFileSync(apiFilename,"utf8"), ts.ScriptTarget.Latest, true);
 const listFunction = apiAst.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "listNotifications");
-function listContext(fetch) {
-  const value = {fetch,URLSearchParams}; vm.createContext(value);
+function listContext(fetch, resolveToposyncUrl = url => url) {
+  const value = {fetch,URLSearchParams,resolveToposyncUrl}; vm.createContext(value);
   vm.runInContext(ts.transpileModule(listFunction.getText(apiAst).replace("export ",""), {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,value);
   return value;
 }
@@ -140,4 +140,43 @@ test("refresh policy updates deterministic selections without rerunning models",
   assert.equal(context.notificationHistoryRefreshMode({...filter,semantic:"visual"},true),"automatic");
   assert.equal(context.notificationHistoryRefreshMode({...filter,semantic:true,query:"cat"},true),"manual");
   assert.equal(context.notificationHistoryRefreshMode({...filter,semantic:"visual",query:"cat",extension:{id:"categories",value:"cat"}},false),"manual");
+});
+
+test("explicit periods invalidate selections and keep realtime records inside the same half-open interval", () => {
+  const filter = {priorities:["medium"],types:[],query:"",period:{preset:"custom",start:"1970-01-01",end:"1970-01-01"},timeRange:{createdAfter:100,createdBefore:200,timezone:"UTC"}};
+  const record = {id:"one",title:"Gato",createdAt:new Date(100000).toISOString()};
+  assert.equal(context.notificationMatchesFilter(record,filter),true);
+  for (const seconds of [99,200,201]) assert.equal(context.notificationMatchesFilter({...record,createdAt:new Date(seconds*1000).toISOString()},filter),false);
+  assert.equal(context.notificationMatchesFilter({...record,createdAt:undefined},filter),false);
+  assert.equal(context.notificationFiltersEqual(filter,{...filter,timeRange:{...filter.timeRange,createdBefore:201}}),false);
+  const state = {byId:{one:record},visibleIds:["one"],resolvedOnServer:true};
+  assert.equal(context.upsertNotificationInState(state,{...record,createdAt:new Date(200000).toISOString()},filter).visibleIds.length,0);
+});
+
+test("all history endpoints and their next pages carry explicit time bounds", async () => {
+  const calls=[];
+  const api=listContext(async url => {calls.push(url);return {ok:true,json:async()=>({notifications:[],next_cursor:5})};});
+  for (const historyEndpoint of [undefined,"/api/vision/history/notifications?category=dog","/api/vision/identities/person/notifications?association=human"]) {
+    for (const semantic of [false,true,"visual"]) for (const before of [null,5]) {
+      await api.listNotifications({historyEndpoint,query:"gato",semantic,before,createdAfter:100,createdBefore:200});
+      const params=new URL(calls.at(-1),"http://local").searchParams;
+      assert.equal(params.get("created_after"),"100"); assert.equal(params.get("created_before"),"200");
+      assert.equal(params.get("before"),before===null?null:"5");
+    }
+  }
+});
+
+test("public and private time queries preserve Home Assistant ingress", async () => {
+  const {resolveToposyncUrl}=require("../packages/plugin-api/basePath.js");
+  const previous=global.window;
+  global.window={__TOPOSYNC_PUBLIC_BASE_PATH__:"/ingress/search",location:{origin:"http://local",href:"http://local/ingress/search/"}};
+  try {
+    const calls=[];
+    const api=listContext(async url=>{calls.push(url);return {ok:true,json:async()=>({notifications:[]})};},resolveToposyncUrl);
+    for (const historyEndpoint of [undefined,"/api/vision/identities/person/notifications?association=human"]) {
+      await api.listNotifications({historyEndpoint,query:"gato",createdAfter:100,createdBefore:200});
+      assert.ok(calls.at(-1).startsWith("/ingress/search/api/"));
+      assert.equal(new URL(calls.at(-1),"http://local").searchParams.get("created_before"),"200");
+    }
+  } finally { if (previous===undefined) delete global.window; else global.window=previous; }
 });

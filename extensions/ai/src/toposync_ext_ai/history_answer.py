@@ -6,7 +6,7 @@ import re
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from toposync.runtime.notifications.store import parse_data_filter
 
@@ -23,6 +23,14 @@ class HistoryQuestion(BaseModel):
     priorities: list[Literal["low", "medium", "high"]] | None = Field(default=None, max_length=3)
     types: list[str] = Field(default_factory=list, max_length=128)
     data_filter: dict[str, str] = Field(default_factory=dict)
+    created_after: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    created_before: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if self.created_after is not None and self.created_before is not None and self.created_after >= self.created_before:
+            raise ValueError("Notification time interval must have positive duration")
+        return self
 
     @field_validator("types")
     @classmethod
@@ -63,7 +71,8 @@ def install_history_answer_routes(app: FastAPI, services: Any, router: Any) -> N
         if body.priorities == []:
             return {"answer": {"status": "no_evidence", "citations": []}, "notifications": [],
                     "search": {"mode": "literal", "status": "ready", "reason": "no_priority_selected"}}
-        if re.search(r"\b(tarde|manhã|manha|noite|madrugada)\b", question, re.I) and not re.search(r"\b(hoje|ontem)\b", question, re.I):
+        explicit_range = body.created_after is not None or body.created_before is not None
+        if not explicit_range and re.search(r"\b(tarde|manhã|manha|noite|madrugada)\b", question, re.I) and not re.search(r"\b(hoje|ontem)\b", question, re.I):
             return {"answer": {"status": "needs_date", "message": "De qual dia? Indique hoje ou ontem e o período na consulta."}, "notifications": [], "search": {}}
         async def selection():
             try:
@@ -73,7 +82,8 @@ def install_history_answer_routes(app: FastAPI, services: Any, router: Any) -> N
                 raise HTTPException(503, "Identity history unavailable") from exc
         identity_selection = await selection() if body.identity_id else None
         parameters = {"query": question, "limit": 10, "data_filter": body.data_filter,
-                      "priorities": body.priorities, "types": body.types}
+                      "priorities": body.priorities, "types": body.types,
+                      "created_after": body.created_after, "created_before": body.created_before}
         if identity_selection is not None:
             parameters["notification_ids"] = identity_selection["notification_ids"]
         service = "ai.search_visual_notifications" if body.mode == "visual" else "ai.search_notifications"
@@ -92,7 +102,8 @@ def install_history_answer_routes(app: FastAPI, services: Any, router: Any) -> N
         async def current_sources():
             items, _ = await app.state.notifications.list(limit=10,
                 notification_ids=[item["id"] for item in result["notifications"]], data_filter=body.data_filter,
-                priorities=body.priorities, types=body.types)
+                priorities=body.priorities, types=body.types,
+                created_after=body.created_after, created_before=body.created_before)
             by_id = {item["id"]: item for item in items}
             return [by_id[item["id"]] for item in result["notifications"] if item["id"] in by_id]
         result["answer"] = {"status": "no_evidence", "citations": []}

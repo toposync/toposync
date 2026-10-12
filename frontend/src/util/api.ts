@@ -863,6 +863,8 @@ export type NotificationsPage = {
 export type NotificationPriority = "low" | "medium" | "high";
 
 export type NotificationsListParams = {
+  createdAfter?: number;
+  createdBefore?: number;
   historyEndpoint?: string;
   dataFilter?: Record<string, string>;
   semantic?: boolean | "visual";
@@ -1759,6 +1761,8 @@ export async function listNotifications(
   const params = new URLSearchParams(scopedQuery);
   if (endpoint) params.set("mode", listParams.semantic === "visual" ? "visual" : listParams.semantic ? "text" : "literal");
   if (listParams.before != null) params.set("before", String(listParams.before));
+  if (listParams.createdAfter != null) params.set("created_after", String(listParams.createdAfter));
+  if (listParams.createdBefore != null) params.set("created_before", String(listParams.createdBefore));
   params.set("limit", String(listParams.limit ?? limit));
   for (const priority of listParams.priorities ?? []) {
     params.append("priority", priority);
@@ -1771,7 +1775,7 @@ export async function listNotifications(
   if (query) params.set("query", query);
   if (listParams.semantic === "visual" && query) params.set("mode", "visual");
   const path = scopedPath || (listParams.semantic && query ? "/api/ai/history/search" : "/api/notifications");
-  const res = await fetch(`${path}?${params.toString()}`, { signal: listParams.signal });
+  const res = await fetch(resolveToposyncUrl(`${path}?${params.toString()}`), { signal: listParams.signal });
   if (!endpoint && listParams.semantic && query && res.status === 404) {
     const fallback = await listNotifications({ ...listParams, semantic: false });
     return { ...fallback, next_cursor: null, search: { mode: "literal", status: "degraded" } };
@@ -2828,7 +2832,7 @@ export async function getVisualHistorySetup(signal?: AbortSignal): Promise<Visua
 export type NotificationDataOption = { value: string; label: string | null };
 export async function getNotificationDataOptions(field: string, labelField: string, signal?: AbortSignal): Promise<NotificationDataOption[]> {
   const params = new URLSearchParams({ field, label_field: labelField });
-  const response = await fetch(`/api/notifications/data-options?${params}`, { signal });
+  const response = await fetch(resolveToposyncUrl(`/api/notifications/data-options?${params}`), { signal });
   if (!response.ok) throw new Error(`History options: ${response.status}`);
   return (await response.json()).options;
 }

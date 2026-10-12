@@ -35,6 +35,8 @@ def test_categories_scope_before_pagination_and_combine_with_existing_filters(cl
     assert [item["id"] for item in dog["notifications"]] == [mixed.id]
     cats = client.get("/api/vision/history/notifications", params={**params, "category": "cat", "created_after": 102, "created_before": 103}).json()
     assert [item["id"] for item in cats["notifications"]] == [cat.id]
+    explicit = client.get("/api/vision/history/notifications", params={**params, "category":"cat", "query":"hoje", "created_after":102, "created_before":103}).json()
+    assert [item["id"] for item in explicit["notifications"]] == [cat.id]
     assert not list(client.app.state.config_store.paths.data_dir.glob('identities/**/gallery.sqlite3'))
 
 

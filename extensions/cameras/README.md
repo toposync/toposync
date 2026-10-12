@@ -341,6 +341,54 @@ payload as local receipt evidence; it does not certify camera capture time or
 clock synchronization. Use `camera.onvif_state_gate` for a current boolean state,
 rather than interpreting buffered events as new activity.
 
+To suspend visual work between ONVIF windows without interrupting stationary
+observations, give `camera.source` an `observation_window_id` and leave
+`keep_capture_when_gate_closed=false`. Insert `camera.observation_hold` with the
+same `window_id` after category/area selection and before stationary or grouped
+event admission. Fresh tracked subjects retain demand before they qualify an
+event; waiting for an already confirmed stop would close capture too early.
+Every source and holder must run in the same local processing server. The scope
+includes camera and optical source, and separate holders cannot release each
+other's observations.
+
+The default visual grace is fifteen seconds, measured from capture publication,
+not from a recreated event envelope. It must exceed the longest observation
+interval and tolerate tracking gaps. Terminal subjects, stale/duplicate frames,
+shutdown and expiration cannot keep renewing capture. An ONVIF window still
+retains its configured closing tolerance and minimum usable-frame observation;
+unknown or unavailable ONVIF can continue through `fail_open=true`. When neither
+window nor visual demand remains, the source releases only its own capture lease,
+and detection and mapping receive no new frames. The frame metadata exposes
+`visual_observation_retained`; it does not turn an inactive ONVIF state into an
+active one. The existing idle visual cadence can still reduce inference while
+subjects are stationary. A subject that remains visibly present keeps its window
+open, so idle savings do not describe consumption during such an observation.
+
+This control does not certify ONVIF coverage: an object never reported by the
+camera while capture is suspended can be missed. Deterministic lifecycle tests
+and reduced CPU in a quiet interval do not prove physical recall. Mapping failure
+reasons remain attached to the existing spatial diagnostics, and mapped area
+admission still depends on valid geometry.
+
+For a vehicle that can approach the selected area after the ONVIF hint expires,
+retain moving/unknown-velocity observations on a parallel branch before area
+restriction as well. An existing `core.filter` with
+`payload.velocity.valid != True or payload.velocity.stopped != True`, followed by
+another holder for the same window, preserves that approach. The area branch
+then retains stationary observations. Stationary objects outside the selected
+area do not continually renew the moving branch.
+
+State gates can also accept explicit `activation_events` filters (qualified topic,
+data item, source and key). A fresh affirmative `Changed` message opens a bounded
+visual-attention window. This supports cameras that emit additional activity
+messages without declaring them in their event properties. It does not promote
+those messages into typed persistent states, category detections or confirmed
+occurrences. Initial synchronization, historical receipts, mismatched sources,
+namespace/key ambiguity and rejected property ordering cannot trigger a new
+window. Missing event transport retains the configured fail-open protection.
+Diagnostic `onvif` payloads distinguish `activation_hint` from the original
+property value. The existing qualified-property selection rules remain intact.
+
 Topic and item filters must come from the device's discovered event capabilities.
 The presence of an ONVIF event source does not prove that a particular camera
 reports a doorbell, package or visitor. Correlation with video still requires an

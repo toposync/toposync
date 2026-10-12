@@ -1,5 +1,15 @@
 # Panorâmica ao vivo — retorno preciso ainda reprovado, 04/10/2026
 
+## Suspensão do processamento entre observações — 11/10/2026
+
+A fonte pode liberar sua captura entre janelas ONVIF, preservando demanda visual
+de sujeitos recentes antes da confirmação de uma ocorrência. Assim, candidatos
+e veículos parados continuam sendo detectados e mapeados enquanto observados;
+encerramento e expiração permitem suspender ambas as etapas. Falhas espaciais
+mantêm seus motivos e não recebem coordenadas fabricadas. Essa redução não muda
+calibração, geometria ou proteção de comandos. Testes de ciclo de vida e consumo
+em intervalo inativo não qualificam cobertura ONVIF nem ausência de perdas físicas.
+
 ## Acesso ao mapeamento na configuração — 10/10/2026
 
 A panorâmica pertence aos detalhes da fonte selecionada. A seção de mapeamento

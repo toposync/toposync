@@ -26,9 +26,12 @@ from toposync.runtime.pipelines.images import (
 from toposync.runtime.pipelines.packet_contract import (
     build_media_descriptor,
     build_source_descriptor,
+    resolve_frame_freshness,
     resolve_media_ts,
     resolve_source_device_id,
+    resolve_source_id,
 )
+from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 from toposync.runtime.pipelines.operator_registry import (
     OperatorDiagnostic,
     OperatorRegistry,
@@ -54,6 +57,7 @@ from ..processing.motion import MotionDetector
 from ..processing.motion_bgsub import AdaptiveBackgroundMotionDetector
 from ..processing.motion_sample_bg import SampleBackgroundMotionDetector
 from ..source_health import get_global_source_health_store, source_health_source_id
+from ..observation_window import get_global_observation_window_store
 from ..onvif import OnvifClient, OnvifError, OnvifProfile
 from ..settings import (
     get_camera_device,
@@ -385,6 +389,21 @@ _ONVIF_STREAM_TTL_S = _read_env_float(
 _ONVIF_GATE_TELEMETRY_INTERVAL_S = 1.0
 
 
+class OnvifEventFilterConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str = ""
+    item_name: str = ""
+    qualified_topic: str = ""
+    source: dict[str, str] | None = None
+    key: dict[str, str] | None = None
+
+    @field_validator("topic", "item_name", mode="after")
+    @classmethod
+    def _trim(cls, value: str) -> str:
+        return str(value or "").strip()
+
+
 class OnvifStateGateConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -400,6 +419,7 @@ class OnvifStateGateConfig(BaseModel):
     hold_seconds: float = Field(default=5.0, ge=0.0, le=300.0, allow_inf_nan=False)
     poll_interval_ms: int = Field(default=500, ge=100, le=60_000)
     stream_id: str = ""
+    activation_events: list[OnvifEventFilterConfig] = Field(default_factory=list, max_length=16)
 
     @field_validator("camera_id", "topic", "item_name", "stream_id", mode="after")
     @classmethod
@@ -407,19 +427,14 @@ class OnvifStateGateConfig(BaseModel):
         return str(value or "").strip()
 
 
-class OnvifEventFilterConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    topic: str = ""
-    item_name: str = ""
-    qualified_topic: str = ""
-    source: dict[str, str] | None = None
-    key: dict[str, str] | None = None
-
-    @field_validator("topic", "item_name", mode="after")
-    @classmethod
-    def _trim(cls, value: str) -> str:
-        return str(value or "").strip()
+    @model_validator(mode="after")
+    def _validate_activation_events(self):
+        if self.activation_events and (self.mode != "state" or self.hold_seconds <= 0):
+            raise ValueError("Complementary activation events require state mode and a positive window")
+        for event in self.activation_events:
+            if not event.topic or not event.qualified_topic or not event.item_name or event.source is None or event.key is None:
+                raise ValueError("Activation hints require an explicit topic, namespace, item, source and key")
+        return self
 
 
 class OnvifEventSourceConfig(BaseModel):
@@ -698,10 +713,11 @@ class CameraSourceConfig(BaseModel):
     backend: str = "auto"
     fps: float | None = Field(default=None, ge=1.0, le=60.0)
     keep_capture_when_gate_closed: bool = False
+    observation_window_id: str = Field(default="", max_length=200)
     gate_min_observation_seconds: float = Field(default=0.0, ge=0.0, le=300.0, allow_inf_nan=False)
     poll_interval_ms: int = Field(default=20, ge=1, le=250)
 
-    @field_validator("camera_id", "source_id", "rtsp_url", mode="after")
+    @field_validator("camera_id", "source_id", "rtsp_url", "observation_window_id", mode="after")
     @classmethod
     def _trim(cls, value: str) -> str:
         return str(value or "").strip()
@@ -1178,9 +1194,21 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
         self._session: int | None = None
         self._pulse_sequence = 0
         self._started_at = time.time()
+        self._activation_sequence = 0
+        self._activation_session = None
+        self._activation_until = 0.0
+        self._activation_topic = ""
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         gate_open, payload = await self._resolve_gate_state()
+        if self._config.activation_events:
+            hint_open, hint_known = await self._resolve_activation_hints()
+            payload.update(activation_hint_open=hint_open, activation_hints_available=hint_known,
+                           activation_hint_topic=self._activation_topic or None,
+                           activation_hint_semantics="visual_attention_only")
+            if hint_open or (not hint_known and self._config.fail_open):
+                gate_open = True
+                payload["reason"] = "activation_hint" if hint_open else "activation_hints_unavailable"
         self._observe_gate_telemetry(context, gate_open=gate_open, payload=payload)
         if self._last_open is not None and self._last_open == gate_open:
             return None
@@ -1202,6 +1230,50 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
 
     async def idle_sleep(self, context) -> None:  # noqa: ANN001
         await context.sleep(max(0.1, float(self._config.poll_interval_ms) / 1000.0))
+
+    async def _resolve_activation_hints(self) -> tuple[bool, bool]:
+        try:
+            raw = await self._dependencies.services.call("cameras.onvif_events.recent_events",
+                camera_id=self._config.camera_id, after_sequence=self._activation_sequence, limit=64)
+        except Exception:
+            self._activation_until = 0.0
+            return False, False
+        if raw.get("session") != self._activation_session:
+            self._activation_until = 0.0
+            self._activation_session = raw.get("session")
+        if not raw.get("available") or raw.get("gap"):
+            self._activation_sequence = int(raw.get("last_sequence") or self._activation_sequence)
+            self._activation_until = 0.0
+            return False, False
+        now, clock = time.time(), time.monotonic()
+        for event in raw.get("events", []):
+            sequence = int(event.get("sequence") or 0)
+            if sequence <= self._activation_sequence:
+                continue
+            self._activation_sequence = sequence
+            receipt = event.get("received_at_ts")
+            if (type(receipt) not in (int, float) or not math.isfinite(receipt)
+                    or not self._started_at <= receipt <= now
+                    or str(event.get("operation") or "").lower() != "changed"
+                    or event.get("session", raw.get("session")) != raw.get("session")):
+                continue
+            if event.get("is_property") is True and event.get("state_accepted") is False:
+                continue
+            for selection in self._config.activation_events:
+                if any(event.get(key, {}) != wanted for key, wanted in (
+                    ("topic", selection.topic), ("qualified_topic", selection.qualified_topic),
+                    ("source", selection.source), ("key", selection.key),
+                )):
+                    continue
+                value, _ = _onvif_event_bool_with_item(event, item_name=selection.item_name)
+                if value is not self._config.open_when:
+                    continue
+                # Undeclared events wake visual inspection; they never assert a subject/category state.
+                self._activation_until = max(self._activation_until,
+                    clock + self._config.hold_seconds - (now - receipt))
+                self._activation_topic = selection.topic
+                break
+        return clock < self._activation_until, True
 
     def _observe_gate_telemetry(
         self, context: Any, *, gate_open: bool, payload: dict[str, Any]
@@ -1747,7 +1819,17 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 continue
 
     def _capture_gate_open(self) -> bool:
-        return self._gate_open or self._config.keep_capture_when_gate_closed or time.monotonic() < self._gate_observation_until
+        return (self._gate_open or self._config.keep_capture_when_gate_closed
+                or time.monotonic() < self._gate_observation_until or self._visual_observation_retained())
+
+    def _visual_observation_retained(self) -> bool:
+        if not self._config.observation_window_id:
+            return False
+        return get_global_observation_window_store().active((
+            self._camera_id or self._config.camera_id,
+            self._source_id or self._config.source_id,
+            self._config.observation_window_id,
+        ))
 
     async def _stop_grabber_if_needed(self) -> None:
         if self._grabber is None:
@@ -1992,6 +2074,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "camera_source_id": self._source_id or None,
                 "capture_backend": str(capture_metrics.get("backend") or ""),
                 "source_status": str(capture_metrics.get("source_status") or ""),
+                "visual_observation_retained": self._visual_observation_retained(),
                 **({"onvif_gate_open": self._gate_open or time.monotonic() < self._gate_observation_until,
                     "onvif_signal_open": self._gate_open,
                     "onvif_observation_retained": not self._gate_open and time.monotonic() < self._gate_observation_until}
@@ -2022,6 +2105,66 @@ class CameraSourceRuntime(SourceOperatorRuntime):
 
     async def shutdown(self) -> None:
         await self._stop_grabber_if_needed()
+
+
+class ObservationHoldConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    window_id: str = Field(default="observation", min_length=1, max_length=200)
+    hold_seconds: float = Field(default=15.0, gt=0.0, le=300.0, allow_inf_nan=False)
+
+
+class ObservationHoldRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]):
+        self._config = ObservationHoldConfig.model_validate(config)
+        self._owner = uuid.uuid4().hex
+        self._store = get_global_observation_window_store()
+        self._captures = {}
+        self._closed_subjects = ClosedSubjectLedger()
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        camera_id, source_id = resolve_source_device_id(packet), resolve_source_id(packet)
+        subject = packet.payload.get("subject")
+        if not camera_id or not source_id or not isinstance(subject, dict) or not subject.get("id"):
+            return [packet]
+        key = (str(packet.payload.get("source_stream_id") or packet.stream_id), camera_id, str(subject["id"]))
+        if self._closed_subjects.observe(key, subject, retain=False):
+            return [packet]
+        previous = self._captures.get(key)
+        evidence = packet.payload.get("capture_evidence")
+        if packet.lifecycle == Lifecycle.CLOSE:
+            if previous and isinstance(evidence, dict) and (
+                evidence.get("capture_instance"), evidence.get("generation")
+            ) != previous[:2]:
+                return [packet]
+            self._closed_subjects.close(key, subject)
+            self._captures.pop(key, None)
+            self._store.release(self._owner, key)
+            return [packet]
+        freshness = resolve_frame_freshness(packet, now_unix=time.time())
+        age = freshness.age_seconds
+        if age is None or age >= self._config.hold_seconds:
+            return [packet]
+        capture = (evidence["capture_instance"], evidence["generation"], evidence["sequence"], evidence["published_at"])
+        if previous and (capture[3] < previous[3] or (capture[0] == previous[0] and (
+            capture[1] < previous[1] or (capture[1] == previous[1] and capture[2] <= previous[2])
+        ))):
+            return [packet]
+        if self._closed_subjects.capacity_reached or (previous is None and len(self._captures) >= 4096):
+            if not getattr(self, "_capacity_reported", False):
+                context.metrics.record_error(RuntimeError("Visual observation retention capacity reached"))
+                self._capacity_reported = True
+            return [packet]
+        if self._closed_subjects.observe(key, subject):
+            return [packet]
+        self._captures[key] = capture
+        self._store.retain((camera_id, source_id, self._config.window_id), self._owner, key,
+                           seconds=self._config.hold_seconds - age)
+        return [packet]
+
+    async def shutdown(self) -> None:
+        self._store.release(self._owner)
+        self._captures.clear()
+        self._closed_subjects.clear()
 
 
 def _resolve_motion_roi(
@@ -3494,6 +3637,19 @@ def _camera_source_diagnostics(config: dict[str, Any], context: dict[str, Any]) 
 
 
 def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
+    registry.register_operator(
+        operator_id="camera.observation_hold",
+        description="Retain the named camera source window while fresh tracked subjects remain observed, including stationary candidates. Place after category/area selection and before event admission.",
+        config_model=ObservationHoldConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        defaults=ObservationHoldConfig().model_dump(),
+        capabilities=["camera", "gate_control"],
+        state_kind="stateful_per_subject",
+        share_strategy="never",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: ObservationHoldRuntime(config),
+    )
     registry.register_operator(
         operator_id="camera.onvif_state_gate",
         description="ONVIF observation window maintained by a property state or a declared occurrence.",

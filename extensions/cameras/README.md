@@ -469,3 +469,33 @@ In the existing audio recipe, expand **Compare another camera**, choose its enab
 The resulting pipeline appears under both cameras. It has two analysis branches, one correlator, one occurrence group and one notifier. Current RTSP sources still use receipt clocks, so they produce separate occurrences even in this recipe; selecting a pair does not establish synchronization.
 
 Notification details show each member progressively, with its observation state, baseline, analysis and optional private excerpt through the existing authorized clip endpoint. Audio is not preloaded. A notification interrupted by restart does not label its saved members as still observing.
+
+Stopped-object recipes preserve recent approach evidence from
+`camera.velocity_estimation` before area filtering. `core.stationary_event`
+consumes `arrival_evidence_field=payload.velocity.arrival_evidence`, bound to the
+subject, source and capture generation. It accepts this evidence only while
+fresh (five seconds by default); capture changes, invalid coordinates and real
+gaps reset it. Once accepted, arrival remains valid during continuous observation
+of that stop. A reset cannot import an older approach again. Legacy graphs can
+leave the field empty and continue recognizing arrival locally.
+
+Area selection exposes `area_observation_started_at`. Stopped recipes bind this
+to `observation_started_field` so reentry starts a new stationary candidate;
+observations outside the region cannot accumulate stationary duration inside it.
+The default recipe still requires three valid samples, 1.25 seconds and no more
+than 0.35 metres of candidate displacement. A previously parked subject without
+observed arrival does not qualify. Person-stopped recipes use the same contract.
+
+Velocity hysteresis keeps a moving subject moving until it slows to 80% of the
+configured limit (0.8 km/h for the recipe's 1 km/h default). This transitional
+state does not erase arrival or count as stopped. The stationary operator uses
+numeric velocity alone only when the boolean state is absent; a stopped flag
+with speed above its limit remains invalid. A zero threshold never alternates
+zero speed into movement. Generic velocity defaults remain unchanged.
+
+Compact `stationary.decision.*` telemetry distinguishes awaiting arrival,
+movement, insufficient samples/duration, excessive displacement, confirmation
+and unavailable evidence. Samples are limited to one per reason per second per
+operator; they are diagnostic markers, not exhaustive counts of subjects or
+proof of physical detection. No full frame logging is required. Gate occlusion
+and missing detections still cannot be treated as confirmed stops.

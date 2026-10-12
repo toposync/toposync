@@ -126,6 +126,8 @@ class StationaryEventConfig(BaseModel):
     min_valid_samples: int = Field(default=3, ge=1, le=10000)
     max_stationary_distance_m: float = Field(default=0.35, ge=0.0, le=10000.0)
     require_arrival: bool = Field(default=False)
+    arrival_evidence_field: str = Field(default="", description="Optional payload path to recent capture-bound movement evidence observed before filtering.")
+    observation_started_field: str = Field(default="", description="Optional payload timestamp marking entry into the selected observation region.")
     arrival_min_distance_m: float = Field(default=0.50, ge=0.0, le=10000.0)
     close_after_moving_seconds: float = Field(default=0.75, ge=0.0, le=3600.0)
     merge_moving_gap_seconds: float = Field(default=0.0, ge=0.0, le=3600.0)
@@ -141,6 +143,9 @@ class _StationaryEventState:
     candidate_position: tuple[float, float] | None = None
     sample_count: int = 0
     arrival_observed: bool = False
+    arrival_reset_at: float = float("-inf")
+    observation_started_at: float | None = None
+    decision: str = "awaiting_evidence"
     confirmed: bool = False
     moving_since: float | None = None
     last_event_packet: Packet | None = None
@@ -1066,6 +1071,7 @@ class StationaryEventRuntime(TransformOperatorRuntime):
         self._config = parsed
         self._state_by_key: dict[tuple[str, str, str], _StationaryEventState] = {}
         self._closed_subjects = ClosedSubjectLedger(capacity=parsed.maximum_subjects)
+        self._last_decision_telemetry: dict[str, float] = {}
 
     def _end_observation(self, state, reason):
         outputs = []
@@ -1077,6 +1083,8 @@ class StationaryEventRuntime(TransformOperatorRuntime):
                 last, lifecycle=Lifecycle.CLOSE, payload=payload,
                 packet_id=f"{last.packet_id}:stationary-close", parent_packet_id=last.packet_id,
             ))
+        state.arrival_reset_at = max(state.arrival_reset_at, state.last_timestamp)
+        state.decision = reason
         state.first_seen_at = None
         state.first_position = None
         state.arrival_observed = False
@@ -1128,6 +1136,20 @@ class StationaryEventRuntime(TransformOperatorRuntime):
         state.previous_stationary_timestamp = None
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:
+        outputs = await self._process_packet(packet, context)
+        observe = getattr(context, "observe_telemetry_numeric", None)
+        if callable(observe):
+            key = (str(packet.payload.get("source_stream_id") or packet.stream_id),
+                   str(packet.payload.get("camera_id") or ""), _resolve_key(packet, self._config.key_field))
+            state = self._state_by_key.get(key)
+            reason = state.decision if state is not None else "unavailable"
+            now = time.time()
+            if now - self._last_decision_telemetry.get(reason, float("-inf")) >= 1:
+                observe(f"stationary.decision.{reason}", 1.0, now_s=now)
+                self._last_decision_telemetry[reason] = now
+        return outputs
+
+    async def _process_packet(self, packet: Packet, context) -> list[Packet]:
         outputs = self._expire_observations()
         key = (
             str(packet.payload.get("source_stream_id") or packet.stream_id),
@@ -1183,6 +1205,7 @@ class StationaryEventRuntime(TransformOperatorRuntime):
         state = self._state_by_key.setdefault(key, _StationaryEventState())
         if now - state.last_timestamp > self._config.evidence_timeout_seconds:
             outputs.extend(self._end_observation(state, "evidence_gap"))
+        previous_timestamp = state.last_timestamp
         state.last_timestamp = now
         if capture is not None:
             state.capture = capture
@@ -1193,17 +1216,36 @@ class StationaryEventRuntime(TransformOperatorRuntime):
         stopped = _resolve_bool_field(packet, self._config.stopped_field)
         if position is None or valid is False or (stopped is None and speed is None):
             return outputs + self._end_observation(state, "unconfirmed")
+        started = _resolve_number_field(packet, self._config.observation_started_field)
+        if started is not None and started != state.observation_started_at:
+            if state.observation_started_at is not None:
+                state.last_timestamp = previous_timestamp
+                outputs.extend(self._end_observation(state, "region_reentry"))
+                state.last_timestamp = now
+            state.observation_started_at = started
         state.last_seen_monotonic = time.monotonic() - age
-        return outputs + self._process_observation(packet, state, now, position, speed, stopped)
+        outputs.extend(self._process_observation(packet, state, now, position, speed, stopped))
+        return outputs
 
     def _process_observation(self, packet, state, now, position, speed, stopped):
         if state.first_seen_at is None:
             state.first_seen_at = now
             state.first_position = position
-        is_stationary = bool(stopped is True or (speed is not None and speed <= self._config.max_speed_mps))
-        is_moving = bool(stopped is False or (speed is not None and speed > self._config.max_speed_mps))
-        if is_stationary and is_moving:
+        # A moving classifier may remain moving below its nominal threshold during hysteresis.
+        if stopped is True and speed is not None and speed > self._config.max_speed_mps:
             return self._end_observation(state, "unconfirmed")
+        is_moving = stopped is False or (stopped is None and speed is not None and speed > self._config.max_speed_mps)
+        is_stationary = not is_moving and (stopped is True or (speed is not None and speed <= self._config.max_speed_mps))
+        evidence = _deep_get(packet.payload, self._config.arrival_evidence_field.removeprefix("payload."))
+        if isinstance(evidence, dict) and state.capture is not None and _resolve_bool_field(packet, self._config.valid_field) is True:
+            observed = evidence.get("observed_at")
+            if (type(observed) in (int, float) and math.isfinite(observed)
+                    and state.arrival_reset_at < observed <= now
+                    and now - observed <= self._config.evidence_timeout_seconds
+                    and (evidence.get("capture_instance"), evidence.get("generation")) == state.capture[:2]
+                    and evidence.get("subject_id") == _resolve_key(packet, self._config.key_field)
+                    and evidence.get("source_stream_id") == str(packet.payload.get("source_stream_id") or packet.stream_id)):
+                state.arrival_observed = True
         if is_stationary and state.previous_stationary_timestamp is not None:
             state.stationary_seconds += now - state.previous_stationary_timestamp
         state.previous_stationary_timestamp = now if is_stationary else None
@@ -1213,6 +1255,7 @@ class StationaryEventRuntime(TransformOperatorRuntime):
             state.arrival_observed = True
 
         if state.confirmed:
+            state.decision = "moving" if is_moving else "confirmed"
             if (
                 is_stationary
                 and state.moving_since is not None
@@ -1261,6 +1304,7 @@ class StationaryEventRuntime(TransformOperatorRuntime):
             return []
 
         if not is_stationary:
+            state.decision = "moving"
             self._reset_candidate(state)
             return []
 
@@ -1273,6 +1317,7 @@ class StationaryEventRuntime(TransformOperatorRuntime):
         distance_m = _distance_m(state.candidate_position, position)
         stationary_seconds = max(0.0, now - float(state.candidate_since))
         if distance_m > self._config.max_stationary_distance_m:
+            state.decision = "excessive_displacement"
             state.candidate_since = now
             state.candidate_position = position
             state.sample_count = 1
@@ -1281,12 +1326,16 @@ class StationaryEventRuntime(TransformOperatorRuntime):
             return []
 
         if self._config.require_arrival and not state.arrival_observed:
+            state.decision = "awaiting_arrival"
             return []
         if state.sample_count < self._config.min_valid_samples:
+            state.decision = "insufficient_samples"
             return []
         if stationary_seconds < self._config.min_stationary_seconds:
+            state.decision = "insufficient_duration"
             return []
 
+        state.decision = "confirmed"
         state.confirmed = True
         state.moving_since = None
         annotated = self._annotate(

@@ -33,6 +33,7 @@ from toposync.runtime.pipelines.operator_registry import (
 from toposync.runtime.pipelines.packet_contract import (
     get_source_descriptor,
     resolve_media_ts,
+    resolve_frame_freshness,
     resolve_media_dimensions,
     resolve_source_device_id,
     resolve_source_id,
@@ -423,6 +424,8 @@ def _diagnostic_get(value: Any, key: str, default: Any = "") -> Any:
 
 def _area_restriction_expression_hints() -> list[Any]:
     return [
+        payload_path_hint("payload.area_observation_started_at", value_type="number",
+            description="Start of the current uninterrupted admission to the selected region."),
         payload_path_hint("payload.area_id", value_type="string", description="Primary matched area identifier when configured; never inferred from its label."),
         payload_path_hint(
             "payload.area_label",
@@ -442,6 +445,10 @@ def _area_restriction_expression_hints() -> list[Any]:
 
 def _velocity_expression_hints() -> list[Any]:
     return [
+        payload_path_hint(
+            "payload.velocity.arrival_evidence", value_type="object",
+            description="Recent movement within the same capture continuity; not a confirmed arrival or stop.",
+        ),
         payload_path_hint(
             "payload.velocity",
             value_type="object",
@@ -1425,6 +1432,7 @@ class VelocityEstimationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     stopped_speed_threshold: float = Field(default=0.04, ge=0.0, le=1000.0)
     min_elapsed_seconds: float = Field(default=0.001, ge=0.0001, le=10.0)
+    evidence_timeout_seconds: float = Field(default=5.0, gt=0.0, le=3600.0, allow_inf_nan=False)
     filter_mode: str = "annotate"
 
     @field_validator("filter_mode")
@@ -4897,6 +4905,7 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
         self._config = AreaRestrictionConfig.model_validate(config)
         self._dependencies = dependencies
         self._area_config_snapshot = None
+        self._observation_entries = {}
         self._unavailable_code = None
         self._areas = [
             (area, [(float(point.x), float(point.z)) for point in area.points])
@@ -4926,20 +4935,25 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
         return self._unavailable_code is None
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        key = _resolve_tracking_key(packet)
         if not await self._reference_available(context):
+            self._observation_entries.clear()
             return []
         mapping = packet.payload.get("mapping")
         if self._config.composition_id and (
             not isinstance(mapping, dict) or mapping.get("composition_id") != self._config.composition_id
         ):
+            self._observation_entries.pop(key, None)
             return []
         payload = dict(packet.payload)
         payload.pop("area_id", None)
+        payload.pop("area_observation_started_at", None)
         payload[self._config.output_area_labels_field] = []
         payload[self._config.output_area_label_field] = None
         packet = replace(packet, payload=payload)
         world = payload.get(self._config.world_field)
         if not isinstance(world, dict):
+            self._observation_entries.pop(key, None)
             return [] if self._config.drop_when_unmapped else [packet]
 
         try:
@@ -4948,16 +4962,35 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
             if not math.isfinite(x) or not math.isfinite(z):
                 raise ValueError("Nonfinite area position")
         except Exception:
+            self._observation_entries.pop(key, None)
             return [] if self._config.drop_when_unmapped else [packet]
 
         matched_areas = [
             area for area, points in self._areas if _point_in_polygon(x=x, z=z, polygon=points)
         ]
         if self._include and not any(area.name in self._include for area in matched_areas):
+            self._observation_entries.pop(key, None)
             return []
         if self._exclude and any(area.name in self._exclude for area in matched_areas):
+            self._observation_entries.pop(key, None)
             return []
 
+        if packet.lifecycle == Lifecycle.CLOSE:
+            self._observation_entries.pop(key, None)
+        elif packet.payload.get("event_id"):
+            now = _resolve_packet_time(packet, time_field="frame_ts")
+            evidence = packet.payload.get("capture_evidence")
+            evidence = evidence if isinstance(evidence, dict) else {}
+            scope = (evidence.get("capture_instance"), evidence.get("generation"))
+            previous = self._observation_entries.get(key)
+            if previous is None or previous[1] != scope:
+                if len(self._observation_entries) >= 4096:
+                    self._observation_entries = {k: v for k, v in self._observation_entries.items() if now - v[2] <= 5.0}
+                if len(self._observation_entries) >= 4096:
+                    return []
+                previous = (now, scope, now)
+            self._observation_entries[key] = (previous[0], scope, now)
+            payload["area_observation_started_at"] = previous[0]
         payload[self._config.output_area_labels_field] = [area.name for area in matched_areas]
         payload[self._config.output_area_label_field] = matched_areas[0].name if matched_areas else None
         if matched_areas and matched_areas[0].id is not None:
@@ -4978,6 +5011,10 @@ class _VelocityState:
     last_speed_mps: float = 0.0
     moving: bool = False
     ever_stopped: bool = False
+    capture: tuple[str, int, int] | None = None
+    published_at: float = float("-inf")
+    last_seen: float = 0.0
+    last_moving_at: float | None = None
 
 
 _VELOCITY_WINDOW_SECONDS = 0.8
@@ -5030,10 +5067,43 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
 
         now_ts = _resolve_packet_time(packet, time_field="frame_ts")
         state = self._state_by_key.get(key)
+        capture_evidence = packet.payload.get("capture_evidence")
+        capture = None
+        invalid_reason = None
+        if capture_evidence is not None:
+            freshness = resolve_frame_freshness(packet)
+            if freshness.age_seconds is None or freshness.age_seconds > self._config.evidence_timeout_seconds:
+                invalid_reason = "stale_capture"
+            else:
+                capture = (capture_evidence["capture_instance"], capture_evidence["generation"], capture_evidence["sequence"])
+                if state is not None and state.capture is not None and (
+                    capture_evidence["published_at"] < state.published_at or (capture[0] == state.capture[0] and (
+                        capture[1] < state.capture[1] or (capture[1] == state.capture[1] and capture[2] <= state.capture[2])
+                    ))
+                ) and packet.lifecycle != Lifecycle.CLOSE:
+                    return []
+        elif state is not None and state.capture is not None:
+            invalid_reason = "missing_capture"
+        if packet.lifecycle == Lifecycle.CLOSE and state is not None and state.capture is not None and capture is not None and capture[:2] != state.capture[:2]:
+            return []
+        if invalid_reason:
+            self._state_by_key.pop(key, None)
+            out_packet = self._annotate_packet(packet, speed=0, distance=0, elapsed=0, moving=False,
+                valid=False, ever_stopped=False, raw_speed=0, raw_distance=0, raw_elapsed=0,
+                raw_valid=False, window_seconds=_VELOCITY_WINDOW_SECONDS, reason=invalid_reason)
+            return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=False)
+        if state is not None and (
+            (capture is not None and state.capture is not None and capture[:2] != state.capture[:2])
+            or (state.samples and now_ts - state.samples[-1].ts > self._config.evidence_timeout_seconds)
+            or time.monotonic() - state.last_seen > self._config.evidence_timeout_seconds
+        ):
+            self._state_by_key.pop(key, None)
+            state = None
         ever_stopped = state.ever_stopped if state is not None else False
 
         world = packet.payload.get("world")
         if not isinstance(world, dict):
+            self._state_by_key.pop(key, None)
             last_moving = state.moving if state is not None else False
             last_speed = float(state.last_speed_mps) if state is not None else 0.0
             out_packet = self._annotate_packet(
@@ -5066,7 +5136,10 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         try:
             x = float(world.get("x"))
             z = float(world.get("z"))
+            if isinstance(world.get("x"), bool) or isinstance(world.get("z"), bool) or not math.isfinite(x) or not math.isfinite(z):
+                raise ValueError("Invalid world position")
         except Exception:
+            self._state_by_key.pop(key, None)
             last_moving = state.moving if state is not None else False
             last_speed = float(state.last_speed_mps) if state is not None else 0.0
             out_packet = self._annotate_packet(
@@ -5097,6 +5170,11 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
             )
 
         if state is None:
+            if len(self._state_by_key) >= 4096:
+                cutoff = time.monotonic() - self._config.evidence_timeout_seconds
+                self._state_by_key = {k: v for k, v in self._state_by_key.items() if v.last_seen >= cutoff}
+                if len(self._state_by_key) >= 4096:
+                    return []
             state = _VelocityState(samples=deque(maxlen=_VELOCITY_MAX_SAMPLES))
             self._state_by_key[key] = state
 
@@ -5130,6 +5208,9 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                 out_packet, valid=False, moving=False, ever_stopped=ever_stopped
             )
 
+        state.capture = capture
+        state.published_at = capture_evidence["published_at"] if capture is not None else float("-inf")
+        state.last_seen = time.monotonic()
         samples.append(_VelocitySample(x=float(x), z=float(z), ts=float(now_ts)))
         # Keep memory stable even if a stream stays open for a long time.
         while len(samples) > 1 and (now_ts - float(samples[0].ts)) > _VELOCITY_HISTORY_SECONDS:
@@ -5176,11 +5257,13 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                 if window_speed <= stop_threshold:
                     moving = False
             else:
-                if window_speed >= threshold:
+                if window_speed > 0 and window_speed >= threshold:
                     moving = True
             if not moving:
                 ever_stopped = True
 
+        if valid and moving and capture is not None:
+            state.last_moving_at = now_ts
         state.last_speed_mps = float(window_speed)
         state.moving = bool(moving)
         state.ever_stopped = bool(ever_stopped)
@@ -5232,7 +5315,15 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         reason: str,
     ) -> Packet:
         payload = dict(packet.payload)
+        state = self._state_by_key.get(_resolve_tracking_key(packet))
+        arrival = None
+        if valid and state is not None and state.capture is not None and state.last_moving_at is not None:
+            if 0 <= _resolve_packet_time(packet, time_field="frame_ts") - state.last_moving_at <= self._config.evidence_timeout_seconds:
+                arrival = {"observed_at": state.last_moving_at, "capture_instance": state.capture[0], "generation": state.capture[1],
+                           "subject_id": str((packet.payload.get("subject") or {}).get("id") or ""),
+                           "source_stream_id": str(packet.payload.get("source_stream_id") or packet.stream_id)}
         payload["velocity"] = {
+            "arrival_evidence": arrival,
             "speed": float(speed),
             "speed_mps": float(speed),
             "speed_kmh": float(speed * 3.6),
@@ -5533,7 +5624,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "filter", "area"],
         defaults=AreaRestrictionConfig().model_dump(),
         requires_payload_keys=["world"],
-        produces_payload_keys=["area_id", "area_label", "area_labels"],
+        produces_payload_keys=["area_id", "area_label", "area_labels", "area_observation_started_at"],
+        state_kind="stateful_per_subject",
+        ordering="per_key",
+        default_key_path="payload.subject.id",
         expression_hints=_area_restriction_expression_hints(),
         pressure_behavior="ignore",
         share_strategy="by_signature",

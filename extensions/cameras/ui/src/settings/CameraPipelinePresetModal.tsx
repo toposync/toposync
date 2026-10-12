@@ -750,6 +750,7 @@ export function CameraPipelinePresetModal({
                     type="number"
                     min="0"
                     step="0.1"
+                    aria-describedby={`${formId}-stopped-speed-help`}
                     value={String(stoppedSpeedKmh)}
                     onChange={(event) => {
                       const next = Number(event.target.value);
@@ -758,6 +759,7 @@ export function CameraPipelinePresetModal({
                     disabled={creating}
                   />
                 </div>
+                <p id={`${formId}-stopped-speed-help`} className="settingsStatusMuted">{t("ext.cameras.pipeline_preset.stopped_speed_help")}</p>
                 <div className="field">
                   <label className="label" htmlFor={`${formId}-min-stationary-seconds`}>{t("ext.cameras.pipeline_preset.min_stationary_seconds", {}, "Minimum stopped time (seconds)")}</label>
                   <input id={`${formId}-min-stationary-seconds`}

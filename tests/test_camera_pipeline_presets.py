@@ -1879,3 +1879,26 @@ def test_onvif_resource_api_preserves_authorization_and_sanitizes_errors(tmp_pat
         monkeypatch.setattr(AuthRuntime, "authorize", denied)
         for operation in ("capabilities", "observation", "events"):
             assert client.get(f"/api/cameras/cameras/cam1/onvif/{operation}").status_code == 403
+
+
+@pytest.mark.parametrize("preset", ["vehicle_stopped", "person_stopped"])
+@pytest.mark.parametrize("case", ["arrival", "deceleration"])
+def test_generated_stopped_recipe_preserves_arrival(tmp_path, monkeypatch, preset, case):
+    from test_stationary_arrival import replay
+    with _create_client(tmp_path, monkeypatch) as client:
+        _configure_camera(client)
+        _add_mapped_composition(client, with_area=True)
+        response = client.post("/api/cameras/cameras/cam1/pipelines/presets", json={
+            "preset": preset, "area_id": "area-1", "enabled": False,
+        })
+        assert response.status_code == 200, response.text
+        pipeline = client.get(f"/api/pipelines/{response.json()['pipeline_name']}").json()
+        stationary = _node_config(pipeline, "core.stationary_event")
+        assert stationary["arrival_evidence_field"] == "payload.velocity.arrival_evidence"
+        assert stationary["observation_started_field"] == "payload.area_observation_started_at"
+        velocity = _node_config(pipeline, "camera.velocity_estimation")
+    # Replay isolated from the HTTP application's background clocks and physical outputs.
+    positions = [-3, -1.55, -1.4, -1.4, -1.4, -1.4, -1.4] if case == "arrival" else [0, 1, 1.25, 1.25, 1.25, 1.25, 1.25]
+    outputs, _ = asyncio.run(replay(monkeypatch, positions, area=True,
+        stationary_config=stationary, velocity_config=velocity))
+    assert len([p for p in outputs if p.lifecycle == Lifecycle.OPEN]) == 1

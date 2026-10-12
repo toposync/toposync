@@ -5785,6 +5785,8 @@ class CamerasExtension(BaseExtension):
                             "min_valid_samples": 3,
                             "max_stationary_distance_m": 0.35,
                             "require_arrival": True,
+                            "arrival_evidence_field": "payload.velocity.arrival_evidence",
+                            "observation_started_field": "payload.area_observation_started_at",
                             "arrival_min_distance_m": 0.50,
                             "close_after_moving_seconds": 0.75,
                             "merge_moving_gap_seconds": 15.0,

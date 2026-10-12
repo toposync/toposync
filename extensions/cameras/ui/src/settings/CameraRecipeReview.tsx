@@ -88,7 +88,7 @@ function CameraRecipeReview({ graph, i18n }: { graph: unknown; i18n: HostI18n })
       {nodes.filter(node => ["ai.condition_filter", "vision.detect", "camera.area_occurrence", "core.stationary_event", "camera.audio_features", "vision.spatial_relation_event", "vision.group_events"].includes(node.operator) && !(hasSpatialRelation && node.operator === "vision.group_events")).map(node => <p key={node.id} style={{ margin: "8px 0 0" }}>
         {node.operator === "camera.audio_features" ? text("Som acima da referência fornecida. Suporte de áudio ainda não verificado.", "Sound above the supplied baseline. Audio support has not been verified.")
           : node.operator === "ai.condition_filter" ? String(node.config.condition_description || text("Condição sem descrição", "Condition has no description"))
-          : node.operator === "core.stationary_event" ? text("Parada observada", "Observed stop")
+          : node.operator === "core.stationary_event" ? (node.config.require_arrival ? text("Parada após chegada observada; exige evidência contínua", "Stop after observed arrival; requires continuous evidence") : text("Parada observada", "Observed stop"))
           : node.operator === "vision.spatial_relation_event" ? text("Proximidade observada", "Observed proximity")
           : node.operator === "vision.group_events" ? (node.config.mode === "proximity" ? text("Agrupamento por proximidade", "Grouping by proximity") : text("Atividade agrupada", "Grouped activity"))
           : node.operator === "camera.area_occurrence" ? `${node.config.mode === "entry" ? text("Entrada", "Entry") : text("Presença", "Presence")} · ${areaName(node)}`

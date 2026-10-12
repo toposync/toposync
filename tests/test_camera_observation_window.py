@@ -372,3 +372,56 @@ def test_capture_stop_retains_stationary_evidence_then_suspends_and_reopens(monk
         for other in other_sources:
             await other.shutdown()
     asyncio.run(scenario())
+
+
+def test_pre_area_arrival_confirms_after_onvif_closes(monkeypatch, clock_and_store, tmp_path):
+    from toposync_ext_cameras.pipelines.postprocess import AreaRestrictionRuntime, VelocityEstimationRuntime
+    async def scenario():
+        clock, store = clock_and_store
+        fake_time = SimpleNamespace(time=lambda: 1000 + clock.now, monotonic=lambda: clock.now)
+        monkeypatch.setattr('toposync.runtime.pipelines.operators_core.time', fake_time)
+        monkeypatch.setattr('toposync.runtime.pipelines.packet_contract.time', fake_time)
+        monkeypatch.setattr('toposync_ext_cameras.pipelines.postprocess.time', fake_time)
+        source = operators.CameraSourceRuntime({'camera_id': 'camera', 'source_id': 'wide',
+            'observation_window_id': 'front'}, PipelineRuntimeDependencies())
+        velocity = VelocityEstimationRuntime({'stopped_speed_threshold': 1 / 3.6})
+        movement = CoreFilterRuntime({'expression': 'payload.velocity.valid != True or payload.velocity.stopped != True'})
+        approach = operators.ObservationHoldRuntime({'window_id': 'front'})
+        hold = operators.ObservationHoldRuntime({'window_id': 'front'})
+        area = AreaRestrictionRuntime({'areas': [{'name': 'front', 'points': [
+            {'x': -1.5, 'z': 0}, {'x': 5, 'z': 0}, {'x': 5, 'z': 30}, {'x': -1.5, 'z': 30}]}],
+            'include_area_names': ['front']})
+        stationary = StationaryEventRuntime({'require_arrival': True,
+            'arrival_evidence_field': 'payload.velocity.arrival_evidence',
+            'observation_started_field': 'payload.area_observation_started_at'})
+        notifications = NotificationStore(tmp_path / 'notification.sqlite3')
+        records = []
+        async def persist(**values):
+            record = notifications.upsert(**values)
+            records.append(record)
+            return record
+        notify = NotifyRuntime({'dedupe_by_occurrence': True, 'include_payload_paths': ['stationary_event', 'world']},
+            PipelineRuntimeDependencies(notifications_upsert=persist))
+        context = SimpleNamespace(metrics=NodeRuntimeMetrics(), pipeline_name='controlled', node_id='notify')
+        events = []
+        for i, x in enumerate([-3, -1.55, -1.4, -1.4, -1.4, -1.4]):
+            clock.now = i
+            source._gate_open = i == 0
+            packet = observed(clock)
+            packet.payload.update(event_id='vehicle', frame_ts=1000 + i, world={'x': x, 'z': 21.0})
+            [packet] = await velocity.process_packet(packet, None)
+            for item in await movement.process_packet(packet, context):
+                await approach.process_packet(item, None)
+            for item in await area.process_packet(packet, None):
+                await hold.process_packet(item, None)
+                for event in await stationary.process_packet(item, None):
+                    events.append(event)
+                    await notify.process_packet(event, context)
+            assert source._capture_gate_open()
+        assert sum(event.lifecycle == Lifecycle.OPEN for event in events) == 1
+        assert records and records[0][0].payload['data']['world'] == {'x': -1.4, 'z': 21.0}
+        clock.now = 21
+        assert not source._capture_gate_open()
+        await approach.shutdown()
+        await hold.shutdown()
+    asyncio.run(scenario())

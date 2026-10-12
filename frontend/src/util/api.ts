@@ -1721,7 +1721,7 @@ export async function listCompositions(): Promise<CompositionsIndex> {
 
 export type GeographicMapConfiguration = {
   background: { id: string; name: string; url: string; attribution: string; nativeZoom: number };
-  geocoding: { name: string; host: string };
+  geocoding: { name: string; host: string; attribution: string };
 };
 export type GeographicPlace = { id: string; label: string; latitude: number; longitude: number };
 export function getGeographicCompositions(signal?: AbortSignal): Promise<Composition[]> {

@@ -53,7 +53,8 @@ test("canvas vertices, markers and inverse clicks share exact geographic project
 
 test("invalid trail positions split segments instead of bridging missing evidence", () => {
   const map = mapAt(reference.latitude, reference.longitude, 22);
-  const segments = projection.splitGeographicTrail(map, reference, [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: NaN, z: 0 }, { x: 3, z: 0 }, { x: 4, z: 0 }]);
+  const segments = projection.geographicTrail(reference, [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: NaN, z: 0 }, { x: 3, z: 0 }, { x: 4, z: 0 }])
+    .map(segment => segment.map(point => projection.projectLocation(map, point)));
   assert.equal(segments.length, 2);
   assert.equal(segments[0].length, 2);
   assert.equal(segments[1].length, 2);

@@ -11,29 +11,22 @@ import { geographicViewport, geographicTrail, projectGeographicPoint, projectLoc
 
 const GeographicNotificationPin = React.memo(Notification2DPinView);
 
-export type GeographicTarget = { compositionId: string; elementId: string; intent: "click" | "dblclick" | "longpress" };
+export type GeographicTarget = { compositionId: string; elementId: string };
 
-function ElementButton({ marker, onActivate }: { marker: Main2DMarker; onActivate: (intent: GeographicTarget["intent"]) => void }) {
-  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+function ElementButton({ marker, onActivate }: { marker: Main2DMarker; onActivate: () => void }) {
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pressed = useRef(false);
   const start = useRef<{ x: number; y: number } | null>(null);
   const cancelPress = () => { if (pressTimer.current) clearTimeout(pressTimer.current); pressTimer.current = null; };
-  useEffect(() => () => { cancelPress(); if (clickTimer.current) clearTimeout(clickTimer.current); }, []);
+  useEffect(() => cancelPress, []);
   return <button type="button" className={`geographicElementButton ${marker.state ? `is-${marker.state}` : ""}`} aria-label={marker.title} title={[marker.title, marker.subtitle].filter(Boolean).join(" · ")}
     onPointerDown={event => {
       pressed.current = false; start.current = { x: event.clientX, y: event.clientY };
-      pressTimer.current = setTimeout(() => { pressed.current = true; onActivate("longpress"); }, 550);
+      pressTimer.current = setTimeout(() => { pressed.current = true; onActivate(); }, 550);
     }}
     onPointerMove={event => { if (start.current && Math.hypot(event.clientX - start.current.x, event.clientY - start.current.y) > 8) { pressed.current = true; cancelPress(); } }}
     onPointerUp={cancelPress} onPointerCancel={() => { pressed.current = true; cancelPress(); }} onPointerLeave={cancelPress}
-    onClick={event => {
-      if (pressed.current) return;
-      if (event.detail === 0) { onActivate("click"); return; }
-      if (clickTimer.current) clearTimeout(clickTimer.current);
-      clickTimer.current = setTimeout(() => onActivate("click"), 260);
-    }}
-    onDoubleClick={() => { if (clickTimer.current) clearTimeout(clickTimer.current); onActivate("dblclick"); }}>
+    onClick={event => { if (event.detail === 0 || !pressed.current) onActivate(); }}>
     <Icon name={marker.icon || "circle-dot"} />
     <span className="geographicElementLabel">{marker.title}</span>
   </button>;
@@ -162,7 +155,7 @@ export function GeographicCompositionLayer({ map, composition, reference, elemen
   return <div className={`geographicCompositionLayer${selected ? " isSelected" : ""}`} data-composition-id={composition.id}>
     <canvas ref={canvas} aria-hidden="true" />
     {markers.map(marker => <div key={marker.elementId} className="geographicMarker" style={{ left: marker.screenX, top: marker.screenY }} data-element-id={marker.elementId}>
-      <ElementButton marker={marker} onActivate={intent => onActivate?.({ compositionId: composition.id, elementId: marker.elementId, intent })} />
+      <ElementButton marker={marker} onActivate={() => onActivate?.({ compositionId: composition.id, elementId: marker.elementId })} />
     </div>)}
     {pins.map(pin => <React.Fragment key={pin.notification.id}>
       {pin.segments.map((trail, index) => <svg className="notification2dTrail" key={index} aria-hidden="true"><polyline fill="none" stroke={pin.priority === "high" ? "#ef4444" : "#f59e0b"} strokeWidth="3" points={trail.map(point => `${point.x},${point.y}`).join(" ")} /></svg>)}

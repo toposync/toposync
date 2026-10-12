@@ -49,7 +49,7 @@ export function MainGeographicViewport({ compositionId, compositionName, georefe
     <GeographicMap compositions={compositions} activeCompositionId={compositionId} elementTypesById={elementTypesById} notifications={notifications}
       notificationRenderers={notificationRenderers} activeNotificationId={activeNotificationId} onNotification={onNotification} onImage={onImage}
       onActivate={target => {
-        if (target.compositionId === compositionId) onElementActivated(target.elementId, target.intent);
+        if (target.compositionId === compositionId) onElementActivated(target.elementId, "longpress");
         else { setActivationError(false); setPending(target); }
       }} />
     {compositions.some(item => !readGeoreference(item.meta?.georeference)) && <p className="geographicUnpositioned" role="status">

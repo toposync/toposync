@@ -82,7 +82,12 @@ test("address search is manual and navigation never changes composition metadata
   expect(searches).toBe(0);
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.getByRole("button", { name: "Allow and search", exact: true }).click();
+  await expect(page.locator(".leaflet-control-attribution").getByRole("link", { name: "OpenStreetMap", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Public square", exact: true }).click();
+  await expect(page.locator(".leaflet-control-attribution").getByRole("link", { name: "OpenStreetMap", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Allow external background", exact: true }).click();
+  await page.getByRole("button", { name: "Disable external background", exact: true }).click();
+  await expect(page.locator(".leaflet-control-attribution").getByRole("link", { name: "OpenStreetMap", exact: true })).toBeVisible();
   expect(await firstMetadata(request)).toEqual(before);
   await page.getByRole("button", { name: "Back to compositions", exact: true }).click();
   await expect(page.getByRole("button", { name: "First switch", exact: true })).toBeVisible();
@@ -122,17 +127,42 @@ test("detections, trails and details use their owning composition and update wit
   expect(commands).toHaveLength(0);
 });
 
-test("entity primary action executes once and another composition opens its own controls", async ({ page }) => {
+test("only explicit controls operate an entity and another composition opens its own controls", async ({ page }) => {
   await openMap(page);
   await page.getByRole("button", { name: "First switch", exact: true }).click();
+  await expect(page.getByRole("dialog").filter({ hasText: "switch.geographic-first" })).toBeVisible();
+  expect(commands).toHaveLength(0);
+  await page.getByRole("dialog").getByRole("button", { name: "Toggle", exact: true }).click();
   await expect.poll(() => commands.length).toBe(1);
   expect(commands[0].payload.entity_id).toBe("switch.geographic-first");
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Second switch", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Controls in another composition" })).toBeVisible();
   expect(commands).toHaveLength(1);
   await page.getByRole("button", { name: "Open composition controls", exact: true }).click();
   await expect(page.getByRole("dialog").filter({ hasText: "switch.geographic-second" })).toBeVisible();
   expect(commands).toHaveLength(1);
+});
+
+test("overlapping 44-pixel buttons offer a choice when centers are more than 22 pixels apart", async ({ page, request }) => {
+  const composition = await (await request.get(`${backend}/api/composition`)).json();
+  const original = composition.elements.find(element => element.id === "same-switch");
+  composition.elements.push({ ...original, id: "nearby-switch", name: "Nearby switch", position: { ...original.position, x: original.position.x + 3 } });
+  expect((await request.put(`${backend}/api/composition`, { data: composition })).ok()).toBe(true);
+  await page.route(/\/api\/notifications\?/, route => route.fulfill({ json: { notifications: [], next_cursor: null } }));
+  await openMap(page);
+  const first = await page.getByRole("button", { name: "First switch", exact: true }).boundingBox();
+  const nearby = await page.getByRole("button", { name: "Nearby switch", exact: true }).boundingBox();
+  const distance = Math.hypot(first.x - nearby.x, first.y - nearby.y);
+  expect(distance).toBeGreaterThan(22);
+  expect(distance).toBeLessThan(44);
+  await page.mouse.click((first.x + nearby.x + first.width) / 2, (first.y + nearby.y + first.height) / 2);
+  const choice = page.getByRole("dialog", { name: "Choose an element" });
+  await expect(choice).toBeVisible();
+  expect(commands).toHaveLength(0);
+  await choice.getByRole("button", { name: "First · nearby-switch", exact: true }).click();
+  await expect(page.getByRole("dialog").filter({ hasText: "switch.geographic-first" })).toBeVisible();
+  expect(commands).toHaveLength(0);
 });
 
 test("mobile layout, keyboard access and editor reuse permission without moving the house", async ({ page, request }) => {
@@ -180,7 +210,7 @@ test("search failures, empty results and revoked permission keep local controls 
 test("double click, long press and denied commands preserve the existing action modal", async ({ page }) => {
   await openMap(page);
   const target = page.getByRole("button", { name: "First switch", exact: true });
-  await target.dblclick();
+  await target.dblclick({ delay: 350 });
   await expect(page.getByRole("dialog")).toBeVisible();
   expect(commands).toHaveLength(0);
   await page.keyboard.press("Escape");
@@ -191,9 +221,24 @@ test("double click, long press and denied commands preserve the existing action 
   await page.mouse.up();
   expect(commands).toHaveLength(0);
   await page.keyboard.press("Escape");
+  await target.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  expect(commands).toHaveLength(0);
+  await page.keyboard.press("Escape");
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width / 2 + 40, bounds.y + bounds.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(commands).toHaveLength(0);
   await page.route("**/api/events/home_assistant.**", route => { commands.push(JSON.parse(route.request().postData())); return route.fulfill({ status: 403, json: { detail: "Permission denied" } }); });
   await target.click();
   await expect(page.getByRole("dialog")).toBeVisible();
+  expect(commands).toHaveLength(0);
+  await page.getByRole("dialog").getByRole("button", { name: "Toggle", exact: true }).click();
+  await expect(page.getByRole("dialog").getByText("Permission denied", { exact: true })).toBeVisible();
   expect(commands).toHaveLength(1);
 });
 

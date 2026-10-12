@@ -18,6 +18,11 @@ export function MapNavigation({ map, configuration, onHome }: {
   const search = useRef<AbortController | null>(null);
   const locationGeneration = useRef(0);
   const destination = useRef<L.CircleMarker | null>(null);
+  useEffect(() => {
+    const attribution = configuration.geocoding.attribution;
+    map.attributionControl.addAttribution(attribution);
+    return () => { map.attributionControl.removeAttribution(attribution); };
+  }, [map, configuration.geocoding.attribution]);
   useEffect(() => () => { search.current?.abort(); locationGeneration.current++; destination.current?.remove(); }, []);
   useEffect(() => {
     if (consent.decision !== true) { search.current?.abort(); setSearching(false); setResults(null); }

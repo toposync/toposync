@@ -29,7 +29,8 @@ The map permits zoom through level 22, enlarging native tiles above their
 available resolution. Greater enlargement does not add survey accuracy.
 
 Address search uses Nominatim and requests separate permission to send your
-search text. Search is submitted manually, with no autocomplete. The public
+search text. Search is submitted manually, with no autocomplete. Search attribution
+remains visible when the background is disabled. The public
 service has an aggregate limit of one request per second, requires identification
 and attribution, and must remain replaceable. Toposync caches up to 100 queries
 for one day and shares its request gate across processes using the same data
@@ -52,12 +53,13 @@ configuration. For example:
       "nativeZoom": 19
     },
     "geocoding_name": "Nominatim",
-    "geocoding_url": "https://nominatim.openstreetmap.org/search"
+    "geocoding_url": "https://nominatim.openstreetmap.org/search",
+    "geocoding_attribution": "© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"
   }
 }
 ```
 
-The supplied background attribution must include its required licence link.
+The supplied background and search attribution must include their required licence links.
 The built-in default does so. Geometry is independent of these settings. Google
 and Mapbox are not integrated; their future adapters must handle their own APIs,
 permissions, attribution and credentials.
@@ -68,8 +70,9 @@ The map shows locations and trails supplied by available spatial events. A
 recorded location does not prove current presence. Missing or expired location
 evidence is not replaced with a guessed position.
 
-Select a marker to open its event details or element action. Double click or
-press and hold an element to open its controls. Overlapping elements present a
+Select a marker to open its event details or element controls. Double click or
+press and hold also opens controls, without operating the device. Device commands
+require an explicit action inside the controls. Overlapping elements present a
 choice. Controls in another composition ask you to switch context first and
 retain existing permissions and confirmations. Opening or navigating the map
 does not operate hardware.

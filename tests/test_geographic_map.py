@@ -36,6 +36,7 @@ def test_reading_map_does_not_activate_or_rewrite_compositions(tmp_path, monkeyp
         assert "elements" not in client.get("/api/compositions").json()["compositions"][0]
         config = client.get("/api/maps/config").json()
         assert config["background"]["nativeZoom"] == 19
+        assert config["geocoding"]["attribution"] == geographic.DEFAULT_BACKGROUND["attribution"]
         assert "geocoding_url" not in config
 
 
@@ -96,7 +97,14 @@ def test_invalid_search_results_are_rejected(payload):
 
 
 def test_provider_configuration_can_change_without_geometry_changes():
-    config = geographic.map_configuration({"geographic_map": {"background": {"id": "another", "name": "Another", "url": "https://example.com/{z}/{x}/{y}", "nativeZoom": 18}, "geocoding_url": "https://example.com/search"}})
+    config = geographic.map_configuration({"geographic_map": {"background": {"id": "another", "name": "Another", "url": "https://example.com/{z}/{x}/{y}", "nativeZoom": 18}, "geocoding_url": "https://example.com/search", "geocoding_attribution": "Search provider licence"}})
     assert config["background"]["id"] == "another"
     assert config["geocoding"]["host"] == "example.com"
+    assert config["geocoding"]["attribution"] == "Search provider licence"
     assert "latitude" not in config
+
+
+@pytest.mark.parametrize("attribution", [None, "", " "])
+def test_invalid_geocoding_attribution_is_rejected(attribution):
+    with pytest.raises(ValueError):
+        geographic.map_configuration({"geographic_map": {"geocoding_attribution": attribution}})

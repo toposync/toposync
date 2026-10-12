@@ -17,7 +17,7 @@ def composition(identifier, name, longitude):
     return {"id": identifier, "name": name, "meta": {"georeference": {**REFERENCE, "longitude": longitude}}, "elements": [
         {"id": "floor", "name": "Synthetic floor", "type": "com.toposync.structural.area", "position": {"x": 5, "z": 5},
          "props": {"vertices": [{"x": 0, "z": 0}, {"x": 12, "z": 0}, {"x": 12, "z": 12}, {"x": 0, "z": 12}], "fill": "#67887b", "opacity": 1}},
-        {"id": "same-switch", "name": f"{name} switch", "type": "com.toposync.home_assistant.item", "position": {"x": 2, "z": 2},
+        {"id": "same-switch", "name": f"{name} switch", "type": "com.toposync.home_assistant.item", "position": {"x": 0, "z": 0},
          "props": {"server_id": "synthetic", "items": [{"kind": "entity", "id": f"switch.{identifier}"}], "primary_entity_id": f"switch.{identifier}", "primary_state": "off", "icon": "lightbulb"}},
     ]}
 

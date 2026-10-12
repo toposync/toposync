@@ -42,8 +42,11 @@ def map_configuration(core: dict) -> dict:
         raise ValueError("Invalid native map zoom")
     if urlsplit(background["url"]).scheme not in {"https", "http"}:
         raise ValueError("Invalid background service")
+    attribution = settings.get("geocoding_attribution", DEFAULT_BACKGROUND["attribution"])
+    if not isinstance(attribution, str) or not attribution.strip():
+        raise ValueError("Invalid geocoding attribution")
     return {"background": background, "geocoding": {"name": settings.get("geocoding_name", "Nominatim"),
-            "host": urlsplit(endpoint).netloc}, "geocoding_url": endpoint}
+            "host": urlsplit(endpoint).netloc, "attribution": attribution}, "geocoding_url": endpoint}
 
 
 def read_places(payload: object) -> list[dict]:

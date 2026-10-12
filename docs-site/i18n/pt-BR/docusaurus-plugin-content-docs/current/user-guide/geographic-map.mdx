@@ -31,7 +31,8 @@ O mapa permite ampliar até o nível 22, aumentando os blocos de imagem acima da
 resolução nativa disponível. Isso não acrescenta precisão topográfica.
 
 A busca de endereço usa Nominatim e pede uma autorização separada para enviar o
-texto informado. A busca é manual, sem preenchimento automático. O serviço público
+texto informado. A busca é manual, sem preenchimento automático. A atribuição
+da busca continua visível com o fundo desativado. O serviço público
 limita o tráfego agregado a uma requisição por segundo, exige identificação e
 atribuição e precisa continuar substituível. O Toposync armazena até 100 consultas
 por um dia e compartilha a limitação entre processos que usam o mesmo diretório
@@ -54,12 +55,13 @@ demais configurações. Exemplo:
       "nativeZoom": 19
     },
     "geocoding_name": "Nominatim",
-    "geocoding_url": "https://nominatim.openstreetmap.org/search"
+    "geocoding_url": "https://nominatim.openstreetmap.org/search",
+    "geocoding_attribution": "© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"
   }
 }
 ```
 
-A atribuição configurada para o fundo deve incluir o vínculo exigido para a
+A atribuição configurada para o fundo e para a busca deve incluir o vínculo exigido para a
 licença; o padrão embutido já faz isso. A geometria independe dessas configurações.
 Google e Mapbox não estão integrados: seus adaptadores futuros devem tratar as
 respectivas interfaces, autorizações, atribuição e credenciais.
@@ -70,8 +72,9 @@ O mapa mostra posições e rastros fornecidos pelos acontecimentos espaciais
 disponíveis. Uma posição registrada não confirma presença atual. Evidência de
 posição ausente ou expirada não é substituída por uma localização estimada.
 
-Selecione um marcador para abrir os detalhes do acontecimento ou a ação do
-elemento. Clique duas vezes ou mantenha pressionado para abrir seus controles.
+Selecione um marcador para abrir os detalhes do acontecimento ou os controles do
+elemento. Clique duplo e pressão longa também abrem os controles sem operar o
+dispositivo. Comandos exigem uma ação explícita dentro dos controles.
 Elementos sobrepostos apresentam uma escolha. Controles de outra composição
 pedem a troca explícita de contexto e preservam permissões e confirmações
 existentes. Abrir ou navegar pelo mapa não aciona hardware.

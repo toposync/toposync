@@ -96,7 +96,7 @@ export function GeographicMap({ compositions, activeCompositionId, elementTypesB
       if (!elementTypesById[candidate.type]) continue;
       try {
         const point = projectGeographicPoint(map, reference, elementTypesById[candidate.type]?.getMain2DMarker?.({ element: candidate }) ?? candidate.position);
-        if (point.distanceTo(origin) <= 22) nearby.push({ compositionId: composition.id, elementId: candidate.id, intent: target.intent });
+        if (point.distanceTo(origin) <= 44) nearby.push({ compositionId: composition.id, elementId: candidate.id });
       } catch { /* Invalid element positions cannot be selected. */ }
     }
     if (nearby.length > 1) setTargets(nearby); else onActivate(target);
@@ -112,7 +112,7 @@ export function GeographicMap({ compositions, activeCompositionId, elementTypesB
           const world = geographicToLocal({ lat: event.latlng.lat, lng: event.latlng.wrap().lng }, reference);
           const viewport = geographicViewport(map, reference, document.createElement("canvas"));
           for (const element of [...composition.elements].reverse())
-            if (elementTypesById[element.type]?.hitTest2D?.({ element, world, viewport })) selected.push({ compositionId: composition.id, elementId: element.id, intent: "click" });
+            if (elementTypesById[element.type]?.hitTest2D?.({ element, world, viewport })) selected.push({ compositionId: composition.id, elementId: element.id });
         } catch { /* Clicks outside a composition's domain do not target it. */ }
       }
       if (selected.length > 1) setTargets(selected); else if (selected[0]) onActivate(selected[0]);

@@ -34,10 +34,6 @@ export function geographicViewport(map: L.Map, reference: Georeference, canvas: 
   };
 }
 
-export function splitGeographicTrail(map: L.Map, reference: Georeference, trail: ReadonlyArray<{ x: number; z: number }>): Vector2[][] {
-  return geographicTrail(reference, trail).map(segment => segment.map(point => projectLocation(map, point)));
-}
-
 export function geographicTrail(reference: Georeference, trail: ReadonlyArray<{ x: number; z: number }>): Array<Array<{ lat: number; lng: number }>> {
   const segments: Array<Array<{ lat: number; lng: number }>> = [[]];
   for (const point of trail) {

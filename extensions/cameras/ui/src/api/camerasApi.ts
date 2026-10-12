@@ -515,9 +515,9 @@ export function finalizeCameraSourcePanoramaReplacement(cameraId: string, source
   return requestSourcePanorama(`${sourcePanoramaPath(cameraId, sourceId)}/finalize`, { method: "POST", signal, ...(selection ? { headers: { "content-type": "application/json" }, body: JSON.stringify(selection) } : {}) });
 }
 
-export async function createCameraSourcePanorama(cameraId: string, sourceId: string, idempotencyKey: string): Promise<import("../types").CameraSourcePanoramaJob> {
+export async function createCameraSourcePanorama(cameraId: string, sourceId: string, idempotencyKey: string, operation: "capture" | "capture_static" = "capture"): Promise<import("../types").CameraSourcePanoramaJob> {
   const result = await requestSourcePanorama<{ job: import("../types").CameraSourcePanoramaJob }>(`${sourcePanoramaPath(cameraId, sourceId)}/jobs`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotency_key: idempotencyKey }),
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotency_key: idempotencyKey, operation }),
   });
   return result.job;
 }

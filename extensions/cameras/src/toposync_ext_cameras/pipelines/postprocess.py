@@ -1398,16 +1398,16 @@ class AreaRestrictionConfig(BaseModel):
         return str(value or "").strip()
 
 
-def _area_restriction_reference_code(config, compositions):
+def _resolve_area_restriction_references(config, compositions):
     if not isinstance(compositions, list):
-        return "camera_area_unavailable"
-    changed = False
+        return None
+    areas = []
     for area in config.areas:
         current = resolve_composition_area(compositions, composition_id=config.composition_id, area_id=area.id)
         if current is None:
-            return "camera_area_unavailable"
-        changed = changed or current != area
-    return "camera_area_changed" if changed else None
+            return None
+        areas.append(current)
+    return areas
 
 
 def _area_restriction_diagnostics(config, context):
@@ -1417,13 +1417,11 @@ def _area_restriction_diagnostics(config, context):
     compositions = context.get("compositions")
     if compositions is None and not context.get("check_runtime_prerequisites"):
         return []
-    code = _area_restriction_reference_code(parsed, compositions)
-    if code is None:
+    if _resolve_area_restriction_references(parsed, compositions) is not None:
         return []
     return [OperatorDiagnostic(
-        severity="error", code=code,
-        message=("The selected map area has changed since this recipe was created."
-                 if code == "camera_area_changed" else "The selected map area is missing or no longer has a valid boundary."),
+        severity="error", code="camera_area_unavailable",
+        message="The selected map area is missing or no longer has a valid boundary.",
         suggestion="Create a new recipe using the current map area before enabling it.",
     )]
 
@@ -4481,6 +4479,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         localization = None
         pose = None
         profile, solution = job.get("profile"), job.get("solution")
+        planar = isinstance(solution, dict) and solution.get("type") == "panorama_image_plane_v1"
         _artifact_name, frame = resolve_image_artifact_for_data(packet, input_artifact_name=None)
         artifact = packet.artifacts.get(_artifact_name)
         geometry = artifact.metadata.get("image_geometry") if artifact else None
@@ -4500,24 +4499,30 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             if geometry is None:
                 return unmapped("panorama_source_geometry_changed")
             transformed = transformed or geometry.get("to_source") != [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
-            try:
-                localization = await services.call(
-                    "cameras.panorama.localize_frame", camera_id=camera_id, source_id=source_id,
-                    job_id=job["id"], revision=job["revision"], image=frame, capture_evidence=evidence,
-                    **({"image_geometry": geometry} if geometry is not None else {}),
-                )
-            except Exception:
-                return unmapped("panorama_visual_localization_failed")
-            if not isinstance(localization, dict) or localization.get("status") != "localized":
-                return unmapped((localization or {}).get("reason", "panorama_visual_localization_failed") if isinstance(localization, dict) else "panorama_visual_localization_failed")
-            binding = job["source_panorama"]
-            if (localization.get("capture_evidence") != evidence
-                or localization.get("source_artifact_id") != binding.get("id")
-                or localization.get("geometry_digest") != binding.get("geometry", {}).get("model_digest")
-                or localization.get("source_id") != source_id
-                or localization.get("revision") != job["revision"]):
-                return unmapped("panorama_frame_binding_mismatch")
-            profile = {"lens": localization.get("lens")}
+            if planar:
+                binding_geometry = job["source_panorama"].get("geometry", {})
+                # shortcut: movable cameras need visual framing proof; use an expanded reference for live projection.
+                if binding_geometry.get("framing") != "fixed":
+                    return unmapped("panorama_fixed_framing_required")
+            else:
+                try:
+                    localization = await services.call(
+                        "cameras.panorama.localize_frame", camera_id=camera_id, source_id=source_id,
+                        job_id=job["id"], revision=job["revision"], image=frame, capture_evidence=evidence,
+                        **({"image_geometry": geometry} if geometry is not None else {}),
+                    )
+                except Exception:
+                    return unmapped("panorama_visual_localization_failed")
+                if not isinstance(localization, dict) or localization.get("status") != "localized":
+                    return unmapped((localization or {}).get("reason", "panorama_visual_localization_failed") if isinstance(localization, dict) else "panorama_visual_localization_failed")
+                binding = job["source_panorama"]
+                if (localization.get("capture_evidence") != evidence
+                    or localization.get("source_artifact_id") != binding.get("id")
+                    or localization.get("geometry_digest") != binding.get("geometry", {}).get("model_digest")
+                    or localization.get("source_id") != source_id
+                    or localization.get("revision") != job["revision"]):
+                    return unmapped("panorama_frame_binding_mismatch")
+                profile = {"lens": localization.get("lens")}
         else:
             # Legacy numeric mode uses only the pose gate attached to this frame.
             raw_pose = packet.payload.get(self._config.pose_state_field)
@@ -4532,17 +4537,17 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                     and packet.metadata["ptz_motion_epoch"] != pose.motion_epoch)
             ):
                 return unmapped("panorama_pose_not_safe")
-        if not isinstance(profile, dict) or not isinstance(solution, dict):
+        if not isinstance(solution, dict) or (not planar and not isinstance(profile, dict)):
             return unmapped("panorama_invalid_calibration")
         quality = solution.get("quality")
         if not isinstance(quality, dict) or quality.get("status") != "ready":
             return unmapped("panorama_calibration_not_ready")
 
         try:
-            from ..processing.panorama_mapping import image_pixel_to_ray, map_ray_to_world, mapping_extrapolated, ray_to_panorama_pixel
+            from ..processing.panorama_mapping import image_pixel_to_ray, map_image_plane_point, map_ray_to_world, mapping_extrapolated, ray_to_panorama_pixel
 
-            lens = profile["lens"]
-            width, height = int(lens["width"]), int(lens["height"])
+            lens = None if planar else profile["lens"]
+            width, height = job["source_panorama"]["geometry"]["source_size"] if planar else (int(lens["width"]), int(lens["height"]))
             media = packet.payload.get("media")
             media = media if isinstance(media, dict) else {}
             dimensions = [
@@ -4586,6 +4591,17 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             def world_for_point(point: tuple[float, float] | None) -> tuple[dict[str, float] | None, dict]:
                 if point is None:
                     return None, {"status": "unavailable", "reason": "source_point_unavailable"}
+                if planar:
+                    if not all(math.isfinite(value) and 0 <= value <= 1 for value in point):
+                        return None, {"status": "unavailable", "reason": "source_point_unavailable"}
+                    world = map_image_plane_point(solution, *point, inverse=True)
+                    details = {"status": "estimated" if world is not None else "unavailable",
+                               "source_image_uv": list(point), "direction_reference": "source_image",
+                               "panorama_revision": job["revision"]}
+                    if world is None:
+                        return None, {**details, "reason": "no_ground_intersection"}
+                    details["extrapolated"] = mapping_extrapolated(solution, *world)
+                    return {"x": float(world[0]), "z": float(world[1])}, details
                 ray = image_pixel_to_ray(
                     point[0] * (width - 1), point[1] * (height - 1), lens, *angles,
                     rotation_matrix=localization["rotation_matrix"] if visual else None,
@@ -4666,13 +4682,13 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             "composition_id": composition_id,
             "calibrated_view_id": job.get("id"),
             "panorama_revision": job.get("revision"),
-            "pose_evidence": "visual_frame_rotation" if visual else "numeric_pose",
+            "pose_evidence": "fixed_source_frame" if planar else "visual_frame_rotation" if visual else "numeric_pose",
             "motion_epoch": pose.motion_epoch if pose is not None else None,
-            "projection_model": "panorama_ray_ground_v1",
+            "projection_model": "panorama_image_ground_v1" if planar else "panorama_ray_ground_v1",
             # Geometric acceptance is not a statistically calibrated confidence.
             "quality": {"status": "ready"},
         }
-        if visual:
+        if visual and not planar:
             payload["mapping"]["visual_localization"] = {
                 key: localization[key] for key in ("source_artifact_id", "geometry_digest", "capture_evidence",
                     "reference_id", "validation_matches", "validation_p95_pixels", "analysis_width")
@@ -4683,7 +4699,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             metadata.update(
                 calibrated_view_id=job.get("id"),
                 panorama_revision=job.get("revision"),
-                pose_evidence="visual_frame_rotation" if visual else "numeric_pose",
+                pose_evidence="fixed_source_frame" if planar else "visual_frame_rotation" if visual else "numeric_pose",
             )
         return replace(result, payload=payload, metadata=metadata)
 
@@ -4924,9 +4940,17 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
             configuration = None
         if configuration is None or configuration is not self._area_config_snapshot:
             self._area_config_snapshot = configuration
-            self._unavailable_code = _area_restriction_reference_code(
+            areas = _resolve_area_restriction_references(
                 self._config, configuration.compositions if configuration is not None else None,
             )
+            self._unavailable_code = "camera_area_unavailable" if areas is None else None
+            if areas is not None and areas != [area for area, _points in self._areas]:
+                # A changed boundary starts a new observation; old dwell time cannot carry over.
+                self._observation_entries.clear()
+                self._areas = [(area, [(point.x, point.z) for point in area.points]) for area in areas]
+                names = {saved.name: current.name for saved, current in zip(self._config.areas, areas)}
+                self._include = {names.get(name, name) for name in self._config.include_area_names}
+                self._exclude = {names.get(name, name) for name in self._config.exclude_area_names}
         metrics = getattr(context, "metrics", None)
         if metrics is not None:
             metrics.unavailable_reason = (

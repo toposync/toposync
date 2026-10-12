@@ -31,6 +31,7 @@ from PIL import Image
 from .processing.panorama_mapping import (
     _rotation_basis,
     estimate_panorama_mapping,
+    estimate_image_plane_mapping,
     image_pixel_to_ray,
     map_world_to_ray,
     map_ray_to_world,
@@ -418,9 +419,10 @@ class PanoramaService:
             control_available = bool(camera and camera.get("enabled", True)
                                      and camera.get("control", {}).get("type") == "onvif"
                                      and source and source.get("enabled", True) and camera_source_has_ptz(source))
+            control_available &= job["source_panorama"]["geometry"]["projection"] != "image_plane"
             result["permissions"]["can_verify_aim"] &= control_available
             result["permissions"]["aim_enabled"] &= control_available
-            result["physical_blockers"] = [] if self._validated(job) else ["visual_positioning_not_verified"]
+            result["physical_blockers"] = [] if self._validated(job) or job["source_panorama"]["geometry"]["projection"] == "image_plane" else ["visual_positioning_not_verified"]
         if isinstance(job.get("solution"), dict):
             preview = preview_panorama_mapping(job["solution"])
             try:
@@ -598,34 +600,49 @@ class PanoramaService:
             }
             model = self._read(paths["model"])
             quality = artifact.get("quality")
-            if (
-                not model
-                or artifact.get("algorithm_version") not in {
-                    "automatic_rotation_brown_v1",
-                    "automatic_rotation_brown_v2",
-                    "automatic_rotation_brown_v3",
-                }
-                or model.get("algorithm_version") != artifact["algorithm_version"]
-                or model.get("reference_frame")
-                != "estimated_presentation_right_down_forward_SO3_then_canonical_panorama_basis"
-                or model.get("status") != "estimated_for_visual_panorama_only"
-                or artifact.get("status") not in {"ready", "partial"}
-                or not isinstance(quality, dict)
-                or quality.get("status") != "ready"
-                or not isinstance(quality.get("reasons"), list)
-                or quality["reasons"]
-                or (
-                    "quality_approved" in artifact
-                    and artifact.get("quality_approved") is not True
-                )
-                or type(artifact.get("revision")) is not int
-                or artifact["revision"] < 1
-                or not model.get("captures")
-            ):
-                raise ValueError("Unsupported reconstruction geometry")
-            _rotation_basis(model["presentation"]["rotation_matrix"])
-            for capture in model["captures"]:
-                _rotation_basis(capture["rotation_matrix"])
+            planar = bool(model and model.get("projection") == "image_plane")
+            if planar:
+                from .processing.panorama_localization import frame_identity
+                if (artifact.get("algorithm_version") != "single_frame_v1"
+                        or model.get("algorithm_version") != "single_frame_v1"
+                        or artifact.get("projection") != "image_plane"
+                        or not isinstance(model.get("source_size"), list) or len(model["source_size"]) != 2
+                        or any(type(value) is not int or value < 2 for value in model["source_size"])
+                        or model.get("framing") not in {"fixed", "movable"}
+                        or frame_identity(model.get("capture_evidence")) is None
+                        or model.get("image_size") != [artifact.get("width"), artifact.get("height")]
+                        or not isinstance(quality, dict) or artifact.get("status") != "ready" or quality.get("status") != "ready"
+                        or quality.get("reasons") != [] or artifact.get("quality_approved") is not True):
+                    raise ValueError("Invalid image plane geometry")
+            else:
+                if (
+                    not model
+                    or artifact.get("algorithm_version") not in {
+                        "automatic_rotation_brown_v1",
+                        "automatic_rotation_brown_v2",
+                        "automatic_rotation_brown_v3",
+                    }
+                    or model.get("algorithm_version") != artifact["algorithm_version"]
+                    or model.get("reference_frame")
+                    != "estimated_presentation_right_down_forward_SO3_then_canonical_panorama_basis"
+                    or model.get("status") != "estimated_for_visual_panorama_only"
+                    or artifact.get("status") not in {"ready", "partial"}
+                    or not isinstance(quality, dict)
+                    or quality.get("status") != "ready"
+                    or not isinstance(quality.get("reasons"), list)
+                    or quality["reasons"]
+                    or (
+                        "quality_approved" in artifact
+                        and artifact.get("quality_approved") is not True
+                    )
+                    or type(artifact.get("revision")) is not int
+                    or artifact["revision"] < 1
+                    or not model.get("captures")
+                ):
+                    raise ValueError("Unsupported reconstruction geometry")
+                _rotation_basis(model["presentation"]["rotation_matrix"])
+                for capture in model["captures"]:
+                    _rotation_basis(capture["rotation_matrix"])
             width, height = artifact["width"], artifact["height"]
             if (
                 type(width) is not int
@@ -641,16 +658,19 @@ class PanoramaService:
                         raise ValueError(
                             "Image and coverage must use the same canonical dimensions"
                         )
+                    if planar and key == "coverage" and not np.all(np.asarray(image.convert("L")) == 255):
+                        raise ValueError("Static coverage must cover the captured frame")
             geometry = {
-                "projection": "equirectangular",
-                "reference_frame": "canonical_panorama",
-                "pixel_to_ray": "panorama_pixel_to_ray_v1",
+                "projection": "image_plane" if planar else "equirectangular",
+                "reference_frame": "source_image" if planar else "canonical_panorama",
+                "pixel_to_ray": None if planar else "panorama_pixel_to_ray_v1",
+                **({"source_size": model["source_size"], "framing": model["framing"]} if planar else {}),
                 "model_digest": _digest(model),
             }
         except (KeyError, TypeError, ValueError, OSError, HTTPException):
             raise _error(
                 "source_panorama_geometry_incompatible",
-                "This panorama has no compatible pixel-to-ray geometry; generate a compatible automatic panorama",
+                "This panorama has no compatible mapping geometry; prepare a compatible reference",
             ) from None
         reference = next((value for value in pointer.values()
                           if isinstance(value, dict) and value.get("artifact_id") == artifact_id), None)
@@ -703,6 +723,10 @@ class PanoramaService:
             )
         if job.get("source_panorama"):
             binding = job["source_panorama"]
+            if binding.get("geometry", {}).get("projection") == "image_plane":
+                active = (source.get("metadata", {}).get("panorama", {}).get("active") or {})
+                if active.get("artifact_id") != binding["id"]:
+                    raise _error("source_panorama_changed", "The static reference changed; review the mapping")
             current, _ = self._source_artifact(
                 camera,
                 source,
@@ -1360,10 +1384,13 @@ class PanoramaService:
                     "id": point.id,
                     "world_x": point.world.x,
                     "world_z": point.world.z,
-                    "ray": panorama_pixel_to_ray(point.panorama.x, point.panorama.y),
+                    **({"image_u": point.panorama.x, "image_v": point.panorama.y}
+                       if (job.get("source_panorama") or {}).get("geometry", {}).get("projection") == "image_plane"
+                       else {"ray": panorama_pixel_to_ray(point.panorama.x, point.panorama.y)}),
                 }
             )
-        solution = await asyncio.to_thread(estimate_panorama_mapping, geometry_points)
+        estimator = estimate_image_plane_mapping if (job.get("source_panorama") or {}).get("geometry", {}).get("projection") == "image_plane" else estimate_panorama_mapping
+        solution = await asyncio.to_thread(estimator, geometry_points)
         if preview:
             self._job(camera_id, job_id, body.revision)
             return await self._public({**job, "points": [point.model_dump() for point in body.points], "solution": solution})
@@ -1389,6 +1416,8 @@ class PanoramaService:
         return await self._public(job)
 
     def _target(self, job: dict[str, Any], world: dict[str, float]) -> dict[str, Any]:
+        if (job.get("source_panorama") or {}).get("geometry", {}).get("projection") == "image_plane":
+            raise _error("movement_not_applicable", "This reference is a single image without camera positioning")
         # Extrapolated observations do not widen the physical navigation envelope.
         if mapping_extrapolated(job.get("solution") or {}, world["x"], world["z"]):
             raise _error("outside_validated_region", "Choose a place inside the mapped region", 422)
@@ -1933,7 +1962,7 @@ class PanoramaService:
             "revision": job["revision"] if job else pointer.get("revision") if isinstance(pointer, dict) else draft["revision"] if draft else None,
             "reference": reference,
             "mapping": "active" if job else "draft" if draft and not reason else "review_required" if reason or active["applies"] or element.props.get("calibrated_views") or element.props.get("control_point_sets") else "absent",
-            "positioning": "available" if job and job["permissions"]["aim_enabled"] else "unqualified",
+            "positioning": "not_applicable" if ((job or draft or {}).get("source_panorama") or {}).get("geometry", {}).get("projection") == "image_plane" else "available" if job and job["permissions"]["aim_enabled"] else "unqualified",
             "reason": reason,
             "control_points_pairs": len((job or draft or {}).get("points", [])),
         }
@@ -1962,6 +1991,8 @@ class PanoramaService:
         if not active.get("job"):
             return {"status": "unavailable", "reason": active.get("reason", "active_mapping_required")}
         job = self.jobs[active["job"]["id"]]
+        if job["solution"].get("type") == "panorama_image_plane_v1":
+            return {"status": "unavailable", "reason": "movement_not_applicable"}
         world = (target.get("world") or target.get("world_anchor")) if isinstance(target, dict) else None
         if world is None and isinstance(target, dict) and isinstance(target.get("world_envelope"), dict):
             world = target["world_envelope"].get("center")
@@ -2181,6 +2212,8 @@ class PanoramaService:
 
     async def reference_localizer(self, camera_id: str, source_id: str, binding: dict) -> Any:
         """Share immutable descriptors between calibration and live viewing."""
+        if binding.get("geometry", {}).get("projection") == "image_plane":
+            raise _error("movement_not_applicable", "This reference is a single image without camera positioning")
         key = (binding["id"], binding["geometry"]["model_digest"])
         async with self._localization_lock:
             from .processing.panorama_localization import PanoramaLocalizer
@@ -2259,6 +2292,8 @@ class PanoramaService:
             )
         job = self._job(camera_id, pointer["job_id"], pointer["revision"])
         await self._current(job, request)
+        if job["solution"].get("type") == "panorama_image_plane_v1":
+            raise _error("movement_not_applicable", "A referência estática não controla movimento.")
         if not self._validated(job):
             raise _error(
                 "physical_checks_required", "The active mapping no longer has valid physical checks"

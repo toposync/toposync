@@ -1323,6 +1323,7 @@ def test_camera_pipeline_vehicle_stopped_builds_confirmed_stop_notification(
         assert _node_config(pipeline, "camera.motion_gate")["emit_when_idle"] is True
         assert _node_config(pipeline, "vision.track")["pause_when_gate_closed"] is False
         assert _node_config(pipeline, "core.category_gate")["categories"] == ["car", "truck", "bus", "motorcycle"]
+        assert _node_config(pipeline, "vision.track")["same_event_requires_same_class"] is True
         detect = _vision_detect_config(pipeline)
         assert detect.get("categories") == ["person", "dog", "cat", "car", "truck", "bus", "motorcycle"]
         assert detect.get("confidence_threshold") == 0.25

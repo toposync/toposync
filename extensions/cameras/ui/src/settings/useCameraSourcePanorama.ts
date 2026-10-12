@@ -19,6 +19,7 @@ export function useCameraSourcePanorama(cameraId: string, sourceId: string, enab
   const mutationGeneration = useRef(0);
   const operation = useRef<{ generation: number; name: string; jobId?: string } | null>(null);
   const mounted = useRef(true);
+  const pendingCaptureMode = useRef<"capture" | "capture_static">("capture");
   const idempotencyKey = useRef<string | null>(null);
   const previousJobAtStart = useRef<string | null>(null);
   const latestJobId = useRef<string | null>(null);
@@ -167,16 +168,17 @@ export function useCameraSourcePanorama(cameraId: string, sourceId: string, enab
     if (latestJob.current?.id === job.id && time(latestJob.current.updated_at) > time(job.updated_at)) return;
     latestJobId.current = job.id;
     latestJob.current = job;
-    setData((previous) => ({ camera_id: cameraId, source_id: sourceId, active: previous?.active ?? null, previous: previous?.previous ?? null, candidate: previous?.candidate ?? null, job }));
+    setData((previous) => ({ ...previous, camera_id: cameraId, source_id: sourceId, active: previous?.active ?? null, previous: previous?.previous ?? null, candidate: previous?.candidate ?? null, job }));
   }, [cameraId, sourceId]);
 
-  const start = useCallback(() => {
+  const start = useCallback((captureMode: "capture" | "capture_static" = "capture") => {
     // An uncertain create must reuse its key, even if the user clicks Retry.
-    if (!idempotencyKey.current) {
+    if (!idempotencyKey.current || pendingCaptureMode.current !== captureMode) {
+      pendingCaptureMode.current = captureMode;
       idempotencyKey.current = createUniqueId();
       previousJobAtStart.current = latestJobId.current;
     }
-    return perform("start", () => createCameraSourcePanorama(cameraId, sourceId, idempotencyKey.current!), (job) => {
+    return perform("start", () => createCameraSourcePanorama(cameraId, sourceId, idempotencyKey.current!, captureMode), (job) => {
       idempotencyKey.current = null;
       acceptJob(job);
     });

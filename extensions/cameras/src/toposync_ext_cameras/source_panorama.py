@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .panorama_reference import PanoramaReferenceCoordinator
 from .panorama_region import region_policy, region_progress, region_resume_error, required_region_captures
-from .settings import get_camera_device, get_camera_source
+from .settings import camera_source_has_ptz, get_camera_device, get_camera_source
 from .onvif.client import NORMALIZED_PAN_TILT_SPACES, NORMALIZED_ZOOM_POSITION_SPACE
 
 _EXTENSION = "com.toposync.cameras"
@@ -37,7 +37,7 @@ _JOBS = "/api/cameras/panorama-jobs"
 _ARTIFACTS = "/api/cameras/panorama-artifacts"
 _IDENTIFIER = re.compile(r"^[a-f0-9]{32}$")
 _ACTIVE = {"queued", "preparing", "exploring", "capturing", "returning", "processing", "stopping"}
-_PHYSICAL = {"unknown", "stopped", "restored", "returning", "stop_unconfirmed", "ownership_lost"}
+_PHYSICAL = {"unknown", "stopped", "restored", "returning", "stop_unconfirmed", "ownership_lost", "not_applicable"}
 _FILE_TYPES = {
     "panorama": ("image/png", ".png"),
     "thumbnail": ("image/jpeg", ".jpg"),
@@ -385,7 +385,7 @@ class _Input(BaseModel):
 
 class CreateSourcePanorama(_Input):
     idempotency_key: str = Field(min_length=8, max_length=160, pattern=r"^[a-zA-Z0-9_.:-]+$")
-    operation: Literal["capture", "verify_control"] = "capture"
+    operation: Literal["capture", "capture_static", "verify_control"] = "capture"
     verification_check_limit: int | None = Field(default=None, ge=1, le=12, strict=True)
 
     @model_validator(mode="after")
@@ -673,6 +673,10 @@ def _promotion_eligibility_reason(artifact: dict[str, Any]) -> str | None:
     """Require comparable evidence even when this would be the first active artifact."""
     if not _artifact_quality_approved(artifact):
         return "quality_not_approved"
+    if artifact.get("projection") == "image_plane":
+        return None if (artifact.get("status") == "ready"
+                        and artifact.get("algorithm_version") == "single_frame_v1"
+                        and artifact.get("coverage", {}).get("provenance") == "decoded_source_frame") else "coverage_evidence_missing"
     if artifact.get("status") not in {"ready", "partial"}:
         return "coverage_evidence_missing"
     algorithm = _semantic_token(artifact.get("algorithm_version"))
@@ -767,6 +771,8 @@ def _promotion_candidate_reason(
     if not active_is_current:
         return None
     assert active is not None
+    if artifact.get("projection") == "image_plane" or active.get("projection") == "image_plane":
+        return None if artifact.get("projection") == active.get("projection") else "comparison_incompatible"
     active_algorithm = _semantic_token(active.get("algorithm_version"))
     candidate_algorithm = _semantic_token(artifact.get("algorithm_version"))
     if active_algorithm is None or candidate_algorithm != active_algorithm:
@@ -1120,6 +1126,7 @@ class SourcePanoramaService:
         authorize: Any,
         read_settings: Any,
         camera_factory: Callable[..., Any] | None = None,
+        capture_frame: Callable[..., Any] | None = None,
         scan_runner: Callable[..., Any] | None = None,
         reconstruct_runner: Callable[..., Any] | None = None,
         max_job_bytes: int = _MAX_JOB_BYTES,
@@ -1138,6 +1145,7 @@ class SourcePanoramaService:
         self.root = self.store.paths.data_dir / "runtime" / "cameras" / "source-panorama"
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.camera_factory = camera_factory
+        self.capture_frame = capture_frame
         # No regional policy selects the full reachable-domain scanner. A
         # persisted legacy job always keeps its recorded regional policy.
         self.acquisition_policy = region_policy(acquisition_policy)
@@ -1175,8 +1183,8 @@ class SourcePanoramaService:
                 job.update(
                     status="interrupted",
                     phase="interrupted_processing" if processing_interrupted else "interrupted",
-                    physical_state=job.get("physical_state", "unknown")
-                    if processing_interrupted
+                    physical_state="not_applicable" if job.get("operation") == "capture_static" else job.get("physical_state", "unknown")
+                    if processing_interrupted or job.get("operation") == "capture_static"
                     else "unknown",
                     can_resume=self._can_resume(job),
                     error={
@@ -1301,10 +1309,14 @@ class SourcePanoramaService:
 
     @staticmethod
     def _can_resume(job: dict[str, Any]) -> bool:
+        if job.get("operation") == "capture_static":
+            return False
         return SourcePanoramaService._resume_unavailable_code(job) is None
 
     @staticmethod
     def _resume_unavailable_code(job: dict[str, Any]) -> str | None:
+        if job.get("operation") == "capture_static":
+            return None
         if job.get("operation") == "verify_control":
             return "resume_unavailable"
         if job.get("status") not in _ACTIVE and any(
@@ -1948,6 +1960,11 @@ class SourcePanoramaService:
         output: dict[str, Any] = {
             "camera_id": camera_id,
             "source_id": source_id,
+            "capture_modes": {
+                "single_frame": camera.get("enabled", True) and source.get("kind") == "video",
+                "scan": camera.get("enabled", True) and source.get("kind") == "video"
+                and camera.get("control", {}).get("type") == "onvif" and camera_source_has_ptz(source),
+            },
             "revision": int(pointer.get("revision", 0)),
             "active": None,
             "previous": None,
@@ -2019,7 +2036,8 @@ class SourcePanoramaService:
         job = self.jobs.get(str(artifact.get("_job_id") or ""))
         return bool(
             job
-            and (job.get("_acquisition_policy") or {}).get("version") == 4
+            and ((job.get("_acquisition_policy") or {}).get("version") == 4
+                 or artifact.get("projection") == "image_plane")
             and artifact.get("camera_id") == camera_id
             and artifact.get("source_id") == source_id
             and _artifact_identity_matches(artifact, current_identity, current_geometry_identity)
@@ -2028,7 +2046,7 @@ class SourcePanoramaService:
             and _artifact_files_are_readable(artifact, self.root / "artifacts")
         )
 
-    async def _promote_legacy_regional_candidate(
+    async def _promote_candidate(
         self,
         camera_id: str,
         source_id: str,
@@ -2086,7 +2104,7 @@ class SourcePanoramaService:
         self._authorize(request, camera_id, write=True)
         _, camera, source = await self._context(camera_id, source_id, request)
         pointer = self._pointer(source)
-        await self._promote_legacy_regional_candidate(
+        await self._promote_candidate(
             camera_id,
             source_id,
             pointer,
@@ -2173,8 +2191,10 @@ class SourcePanoramaService:
     async def create(
         self, request: Request, camera_id: str, source_id: str, body: CreateSourcePanorama
     ) -> dict[str, Any]:
-        self._authorize(request, camera_id, control=True, write=True)
+        self._authorize(request, camera_id, control=body.operation != "capture_static", write=True)
         settings, camera, source = await self._context(camera_id, source_id, request)
+        if not camera.get("enabled", True) or source.get("kind") != "video":
+            raise _error("video_source_required", "Escolha uma transmissão de vídeo habilitada.", 422)
         async with self.lock:
             if self.closed:
                 raise _error("service_stopping", "O serviço está sendo encerrado.", 503)
@@ -2188,6 +2208,8 @@ class SourcePanoramaService:
                             or job.get("_verification_check_limit") != body.verification_check_limit):
                         raise _error("idempotency_conflict", "Esta solicitação já iniciou outra operação.")
                     return {"job": self._public_job(job)}
+            if body.operation != "capture_static" and (camera.get("control", {}).get("type") != "onvif" or not camera_source_has_ptz(source)):
+                raise _error("movement_not_available", "Esta fonte permite captura única, mas não aquisição com movimento.", 422)
             job_id = uuid.uuid4().hex
             if body.operation == "capture":
                 self._admit(camera_id, reserve_storage=False)
@@ -2209,7 +2231,7 @@ class SourcePanoramaService:
                 "operation": body.operation,
                 "_verification_check_limit": body.verification_check_limit,
                 "captures_accepted": 0,
-                "physical_state": "unknown",
+                "physical_state": "not_applicable" if body.operation == "capture_static" else "unknown",
                 "can_resume": False,
                 "created_at": time.time(),
                 "issues": [],
@@ -2582,6 +2604,56 @@ class SourcePanoramaService:
             "issues": issues,
         }
 
+    async def _capture_static(self, job: dict[str, Any]) -> None:
+        import cv2
+        import numpy as np
+        from PIL import Image
+        from .processing.panorama_localization import frame_identity
+
+        if self.capture_frame is None:
+            raise _error("capture_unavailable", "O serviço de vídeo não está disponível.", 503)
+        job.update(status="capturing", phase="capturing", planned_captures=1)
+        self._save(job)
+        frame = await asyncio.wait_for(self.capture_frame(job["camera_id"], job["source_id"], job["id"]), 10)
+        image, evidence = (frame.get("image"), frame.get("capture_evidence")) if isinstance(frame, dict) else (None, None)
+        if (not isinstance(image, np.ndarray) or image.dtype != np.uint8
+                or image.ndim != 3 or image.shape[2] != 3 or min(image.shape[:2]) < 2
+                or frame_identity(evidence) is None):
+            raise _error("invalid_frame", "Não foi possível confirmar a imagem da transmissão.", 503)
+        _, camera, source = await self._context(job["camera_id"], job["source_id"])
+        if _identity(camera, source) != job["_identity"]:
+            raise _error("source_changed", "A transmissão mudou durante a captura.")
+        if job["id"] in self.cancelled:
+            raise asyncio.CancelledError
+        artifact_id = uuid.uuid4().hex
+        output = self._job_directory(job) / f"reconstruction-{artifact_id}"
+        output.mkdir(mode=0o700)
+        original = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        original.save(self._job_directory(job) / "source.png")
+        photograph = original.copy()
+        photograph.thumbnail((8192, 4096), Image.Resampling.LANCZOS)
+        width, height = photograph.size
+        photograph.save(output / "panorama.png")
+        photograph.thumbnail((640, 640), Image.Resampling.LANCZOS)
+        photograph.save(output / "thumbnail.jpg")
+        Image.new("L", (width, height), 255).save(output / "coverage.png")
+        model = {"projection": "image_plane", "algorithm_version": "single_frame_v1",
+                 "source_size": list(original.size), "image_size": [width, height],
+                 "capture_evidence": evidence,
+                 "framing": "movable" if camera_source_has_ptz(source) else "fixed"}
+        self._atomic(output / "model.json", model)
+        result = {"status": "ready", "width": width, "height": height,
+                  "algorithm_version": "single_frame_v1", "model": model,
+                  "quality": {"status": "ready", "reasons": []}, "_quality_approved": True,
+                  "coverage": {"pixel_ratio": 1, "provenance": "decoded_source_frame",
+                               "bounds_pixels": {"left": 0, "top": 0, "right": width, "bottom": height}},
+                  "files": {"panorama": "panorama.png", "thumbnail": "thumbnail.jpg",
+                            "coverage": "coverage.png", "model": "model.json", "report": "report.json"}}
+        self._atomic(output / "report.json", result)
+        job["captures_accepted"] = 1
+        artifact = await self._publish(job, {"complete": True}, result, output, artifact_id)
+        job.update(status="ready", phase="complete", artifact_id=artifact["id"], can_resume=False)
+
     async def _run(
         self, job: dict[str, Any], *, return_only: bool = False, process_only: bool = False
     ) -> None:
@@ -2590,6 +2662,10 @@ class SourcePanoramaService:
         if return_only and separate_outcomes:
             job["_return_attempted"] = True
         try:
+            if job.get("operation") == "capture_static":
+                async with self._queue_slot(job, self.acquisition):
+                    await self._capture_static(job)
+                return
             if process_only:
                 _, camera, source = await self._context(job["camera_id"], job["source_id"])
                 if _identity(camera, source) != job["_identity"]:
@@ -2925,7 +3001,8 @@ class SourcePanoramaService:
             "presentation": presentation,
             "coverage": coverage,
             "algorithm_version": result.get("algorithm_version", "unknown"),
-            "positioning_status": "not_validated",
+            "positioning_status": "not_applicable" if job.get("operation") == "capture_static" else "not_validated",
+            "projection": "image_plane" if job.get("operation") == "capture_static" else "equirectangular",
             "_files": safe_files,
             "_job_id": job["id"],
             "_identity": job["_identity"],
@@ -2946,8 +3023,11 @@ class SourcePanoramaService:
                     attempts.append(record["attempt"])
         model = self._read(self._private_path(output, safe_files["model"])) or {}
         try:
-            observations = reference_probe_observations(model, photographs, checkpoint.get("region_commands", []), attempts)
-            artifact["approach"] = build_approach(model, observations, attempts, job.get("_geometry_identity", job["_identity"]))
+            if artifact["projection"] == "image_plane":
+                artifact["approach"] = {"version": 1, "status": "unavailable", "reason": "movement_not_applicable"}
+            else:
+                observations = reference_probe_observations(model, photographs, checkpoint.get("region_commands", []), attempts)
+                artifact["approach"] = build_approach(model, observations, attempts, job.get("_geometry_identity", job["_identity"]))
         except (KeyError, TypeError, ValueError):
             artifact["approach"] = {"version": 1, "status": "unavailable", "reason": "invalid_response_evidence"}
         if region_status is not None:
@@ -3037,7 +3117,7 @@ class SourcePanoramaService:
         job = self._job(job_id)
         processing_only = bool(job.get("_processing_only")) or (
             job["status"] == "processing" and job_id not in self.cameras
-        )
+        ) or job.get("operation") == "capture_static"
         self._authorize(
             request, job["camera_id"], control=not processing_only, write=processing_only
         )
@@ -3264,6 +3344,8 @@ class SourcePanoramaService:
         artifact = self._artifact(body.artifact_id)
         if artifact["camera_id"] != camera_id or artifact["source_id"] != source_id:
             raise _error("unknown_artifact", "Esta panorâmica não pertence à transmissão.", 404)
+        if artifact.get("projection") == "image_plane" and body.crop.u_start + body.crop.u_width > 1 + 1e-9:
+            raise _error("invalid_crop", "A área útil deve permanecer dentro da imagem.", 422)
         expected = self._pointer(source)
         selected = next(
             (

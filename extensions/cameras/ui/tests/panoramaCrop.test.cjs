@@ -128,3 +128,16 @@ test("full image and invalid persisted crops have explicit meanings", () => {
   assert.deepEqual(adjustPanoramaCrop(FULL_PANORAMA_CROP, "move", 0.5, 0.5), FULL_PANORAMA_CROP);
   for (const invalid of [null, {}, { ...FULL_PANORAMA_CROP, u_width: 0 }, { ...FULL_PANORAMA_CROP, v_start: 0.2 }, { ...FULL_PANORAMA_CROP, u_start: NaN }]) assert.equal(validPanoramaCrop(invalid), false);
 });
+
+
+test("image plane selections clamp at finite edges and never create seam segments", () => {
+  const crop = { u_start: .7, u_width: .2, v_start: .2, v_height: .4 };
+  assert.equal(adjustPanoramaCrop(crop, "move", 1, 0, false).u_start, .8);
+  assert.equal(adjustPanoramaCrop(crop, "move", -1, 0, false).u_start, 0);
+  const west = adjustPanoramaCrop(crop, "w", -2, 0, false);
+  assert.equal(west.u_start, 0);
+  assert.ok(Math.abs(west.u_width - .9) < 1e-9);
+  const east = adjustPanoramaCrop(crop, "e", 2, 0, false);
+  assert.ok(Math.abs(east.u_width - .3) < 1e-9);
+  assert.deepEqual(panoramaCropSegments(crop, .5, false), [{ left: .7, width: .2 }]);
+});

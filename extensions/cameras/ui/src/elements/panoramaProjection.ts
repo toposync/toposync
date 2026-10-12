@@ -1,6 +1,6 @@
-/** Canonical spherical geometry only; viewport transforms belong to the editor. */
+/** Canonical source geometry; viewport transforms belong to the editor. */
 export type PanoramaProjectionSolution = {
-  type: "panorama_ray_plane_v1";
+  type: "panorama_ray_plane_v1" | "panorama_image_plane_v1";
   matrix: number[][] | null;
   inverse_matrix: number[][] | null;
   support_polygon: Array<[number, number]>;
@@ -9,10 +9,11 @@ export type PanoramaProjectionSolution = {
     reasons: string[];
     warnings?: string[];
     number_of_fit_points: number;
-    angular_threshold_radians: number;
-    median_fit_error_radians: number | null;
-    p95_fit_error_radians: number | null;
-    point_errors?: Array<{ id: string; error_radians: number }>;
+    angular_threshold_radians?: number;
+    image_threshold_uv?: number;
+    median_fit_error_radians?: number | null;
+    p95_fit_error_radians?: number | null;
+    point_errors?: Array<{ id: string; error_radians?: number; error_uv?: number }>;
     [key: string]: unknown;
   };
   preview: {
@@ -77,7 +78,7 @@ export function createPanoramaProjector(
   coverage: PanoramaCoverageMask | null | undefined,
 ): PanoramaProjector | null {
   const quality = solution?.quality;
-  if (!solution || solution.type !== "panorama_ray_plane_v1" || !quality
+  if (!solution || !["panorama_ray_plane_v1", "panorama_image_plane_v1"].includes(solution.type) || !quality
     || solution.preview?.eligible !== true || quality.status !== "ready"
     || !Array.isArray(quality.reasons) || quality.reasons.length
     || !Array.isArray(solution.preview.reasons) || solution.preview.reasons.length
@@ -113,6 +114,25 @@ export function createPanoramaProjector(
     && x >= 0 && x <= 1 && y >= 0 && y <= 1
     && coverage.data[Math.min(coverage.height - 1, Math.floor(y * coverage.height)) * coverage.width
       + Math.min(coverage.width - 1, Math.floor(x * coverage.width))] > 0;
+  if (solution.type === "panorama_image_plane_v1") {
+    const project = (transform: number[][], x: number, y: number): PanoramaPixel | null => {
+      if (!finite(x) || !finite(y)) return null;
+      const point = multiply(transform, [x, y, 1]);
+      if (!point.every(finite) || Math.abs(point[2]) < 1e-9) return null;
+      const result = { x: point[0] / point[2], y: point[1] / point[2] };
+      return finite(result.x) && finite(result.y) ? result : null;
+    };
+    return {
+      panoramaToWorld(point) {
+        const world = covered(point) ? project(inverse, point.x, point.y) : null;
+        return world ? { x: world.x, z: world.y } : null;
+      },
+      worldToPanorama(point) {
+        const image = project(matrix, point.x, point.z);
+        return image && covered(image) ? image : null;
+      },
+    };
+  }
   const rayToWorld = (ray: Vector): PanoramaWorldPoint | null => {
     const point = multiply(inverse, ray);
     // Same positive homogeneous scale/horizon guard as Python map_ray_to_world.

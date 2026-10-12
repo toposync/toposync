@@ -19,6 +19,14 @@ Mapping is also what makes 360 View possible: mapped live video can be projected
 over the composition.
 
 
+## Single-frame reference
+
+Every enabled video source can use **Use current frame** in its panorama settings, including sources without ONVIF or movement control. Toposync saves a fresh decoded frame, its identity and a full coverage mask. Select the useful area, then use the same composition mapping editor with at least four floor correspondences. Image coordinates remain relative to the full frame; a static crop cannot wrap across an edge.
+
+Sources with movement control also offer panorama acquisition over a larger region. Using the current frame remains an explicit alternative; a failed scan never changes capture mode automatically. Static references have no pointing or live panorama actions.
+
+The static mapping applies to the captured framing. Moving, zooming or physically repositioning the camera requires a new reference and mapping. Live detections from a fixed source use the planar transform with their frame identity and source geometry. A static reference from a source marked as movable can be mapped and projected as a saved image, but live detection projection requires an expanded reference with visual framing verification. No camera pose or lens parameters are inferred from the still image.
+
 ## Assisted calibration
 
 Open the camera element and choose **Map in composition**. Prepare a compatible saved panorama first if one is not available. You can also open **Settings → Cameras → Mapping** and use the mapping button beside the composition. If the camera appears more than once, choose the camera element first. The separate editor button opens the composition without starting mapping. Unsaved camera changes must be resolved before leaving settings.

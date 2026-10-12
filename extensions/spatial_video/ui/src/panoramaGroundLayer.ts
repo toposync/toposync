@@ -7,8 +7,7 @@ import { readAreaClipElementId, readAreaPolygon } from "./areaClip";
 import { applyClipToProjectionMesh } from "./projection";
 import type { ProjectionMeshData, WorldPoint } from "./types";
 
-/** The mesh limits world coverage; the fragment shader samples spherical rays,
- * so neither a global image homography nor interpolated panorama UVs are used. */
+/** The mesh limits world coverage; fragments sample the canonical source geometry. */
 export function panoramaGroundMesh(support: WorldPoint[], area: WorldPoint[] | null): ProjectionMeshData | null {
   const contour = support.map(point => new THREE.Vector2(point.x, point.z));
   const mesh: ProjectionMeshData = {
@@ -108,18 +107,28 @@ export function usePanoramaGroundLayer(
         side: THREE.DoubleSide,
         uniforms: {
           panorama: { value: texture }, coverage: { value: mask },
+          imagePlane: { value: job.solution!.type === "panorama_image_plane_v1" },
           rayMatrix: { value: new THREE.Matrix3().set(...matrix.flat() as [number, number, number, number, number, number, number, number, number]) },
           crop: { value: new THREE.Vector4(crop.u_start, crop.u_width, crop.v_start, crop.v_height) },
         },
         vertexShader: `varying vec2 world; void main() { world = position.xz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
         fragmentShader: `
-          uniform sampler2D panorama; uniform sampler2D coverage; uniform mat3 rayMatrix; uniform vec4 crop; varying vec2 world;
+          uniform sampler2D panorama; uniform sampler2D coverage; uniform mat3 rayMatrix; uniform vec4 crop; uniform bool imagePlane; varying vec2 world;
           void main() {
             vec3 ray = rayMatrix * vec3(world, 1.0);
+            vec2 canonical;
+            if (imagePlane) {
+              if (abs(ray.z) < 0.000000001) discard;
+              canonical = ray.xy / ray.z;
+              if (canonical.x < 0.0 || canonical.x > 1.0 || canonical.y < 0.0 || canonical.y > 1.0) discard;
+              if (canonical.x < crop.x || canonical.x > crop.x + crop.y) discard;
+            } else {
             float horizontal = length(ray.xy);
             float pan = horizontal > 0.0000001 ? atan(ray.y, ray.x) : 0.0;
-            vec2 canonical = vec2(fract((pan + 3.141592653589793) / 6.283185307179586), 0.5 - atan(ray.z, horizontal) / 3.141592653589793);
-            if (fract(canonical.x - crop.x + 1.0) > crop.y || canonical.y < crop.z || canonical.y > crop.z + crop.w) discard;
+            canonical = vec2(fract((pan + 3.141592653589793) / 6.283185307179586), 0.5 - atan(ray.z, horizontal) / 3.141592653589793);
+            if (fract(canonical.x - crop.x + 1.0) > crop.y) discard;
+            }
+            if (canonical.y < crop.z || canonical.y > crop.z + crop.w) discard;
             vec2 uv = vec2(canonical.x, 1.0 - canonical.y);
             if (texture2D(coverage, uv).r <= 0.0) discard;
             gl_FragColor = texture2D(panorama, uv);

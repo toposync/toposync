@@ -31,12 +31,37 @@ const compile = (code) => ts.transpileModule(code, {
 }).outputText;
 
 const graph = { nodes: [{ id: "unsaved-detector", operator: "vision.detect", config: { model_id: "rfdetr_det_medium" } }], edges: [] };
+
+test("saving an interactive branching graph preserves every link and node field", async () => {
+  const { context } = harness();
+  const branching = {
+    schema_version: 2, uid: "branched", revision: 4,
+    nodes: ["source", "area", "notify"].map((id) => ({ id, uid: `uid-${id}`, operator: id, config: { preserved: true } })),
+    edges: ["area", "notify"].map((id) => ({
+      uid: `source-${id}`, from: { node: "source", port: "out" }, to: { node: id, port: "in" },
+      queue: { max_items: 8, drop_policy: "block" }, backpressure: { mode: "pause_upstream" },
+      traffic: { modality: "data.event", semantic_class: "event", continuous: false },
+    })), limits: { preserved: true }, layout: { source: { x: 10, y: 20 } }, meta: { recipe: "vehicle" },
+  };
+  context.mode = "interactive";
+  context.interactiveWarning = "Legacy linear builder cannot represent this graph";
+  context.interactiveGraph = { graph: { nodes: [], edges: [] } };
+  context.draft.graph = branching;
+  await context.handleSave();
+  assert.equal(context.error, null);
+  assert.equal(context.putCalls.length, 1);
+  assert.deepEqual(context.putCalls[0].updated.graph, branching);
+  context.compilePipeline = async () => ({ alerts: [{ severity: "error", code: "invalid", message: "Invalid graph" }] });
+  await context.handleSave();
+  assert.equal(context.putCalls.length, 1, "Preserving topology must not bypass compilation validation");
+});
+
 function harness({ validationFailure = false, saveFailure = false, draftPresent = true } = {}) {
   const noop = () => {};
   const context = {
     React, Date, isAggregateHome: false, loading: false, error: null,
     draft: draftPresent ? { name: "unsaved-pose", enabled: true, processing_server_id: "local", graph: { nodes: [], edges: [] } } : null,
-    selected: { enabled: true },
+    selected: { enabled: true }, executionObservation: null,
     mode: "json", graphText: JSON.stringify(graph), topologyGraph: graph, topologyDirty: true,
     isDraftReadOnly: false, isPythonLocked: false, pythonText: "", interactiveWarning: null,
     recommendations: [], recommendationsError: null, recommendationsLoading: false,

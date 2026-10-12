@@ -701,7 +701,7 @@ function CameraEditor({
               ? "ext.cameras.mapping.active"
               : props.panorama_mapping || existingCalibratedViews.length
                 ? "ext.cameras.mapping.review_required" : "ext.cameras.mapping.absent")}
-            {activePanorama?.active ? ` · ${t(activePanorama.permissions?.aim_enabled
+            {activePanorama?.active ? ` · ${t(activePanorama.solution?.type === "panorama_image_plane_v1" ? "ext.cameras.mapping.positioning_not_applicable" : activePanorama.permissions?.aim_enabled
               ? "ext.cameras.mapping.positioning_available" : "ext.cameras.mapping.positioning_unqualified")}` : ""}
           </div>
 

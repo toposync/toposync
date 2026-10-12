@@ -586,7 +586,7 @@ export function CameraPanoramaMappingModal({ open, onClose, onOpenSettings, onAc
   const extrapolated = Boolean(projector && previewCursor && (ghostWorld || ghostImage) && !insideSupport(ghostWorld?.x ?? (previewCursor.from === "plan" ? previewCursor.point.x : 0), ghostWorld?.z ?? (previewCursor.from === "plan" ? previewCursor.point.z : 0), displaySolution?.support_polygon ?? []));
   const previewStatus = calculating ? "preview_pending_changes" : calculationError && needsCalculation ? calculationError : !projector ? completePoints.length >= MINIMUM_FIT_POINTS ? "preview_blocked" : "preview_unavailable" : previewCursor && !ghostImage && !ghostWorld ? "preview_outside" : previewOutsideViewport() ? "preview_offscreen" : extrapolated ? "preview_extrapolated" : "preview_available";
   const quality = displaySolution?.quality;
-  const pointError = (id: string) => quality?.point_errors?.some((entry) => entry.id === id && entry.error_radians > quality.angular_threshold_radians);
+  const pointError = (id: string) => quality?.point_errors?.some((entry) => entry.id === id && (displaySolution?.type === "panorama_image_plane_v1" ? (entry.error_uv ?? 0) > (quality.image_threshold_uv ?? Infinity) : (entry.error_radians ?? 0) > (quality.angular_threshold_radians ?? Infinity)));
   const reasons = quality?.reasons ?? [];
   const degrees = (radians: number) => (radians * 180 / Math.PI).toLocaleString(locale, { maximumFractionDigits: 2 });
   const incomplete = navigationPoints.some((point) => !point.panorama || !point.world);
@@ -595,7 +595,7 @@ export function CameraPanoramaMappingModal({ open, onClose, onOpenSettings, onAc
     {reasons.length ? <ul>{reasons.map((reason) => <li key={reason}>{t(`ext.cameras.panorama.reason_${reason}`, {}, text("diagnostic_unknown"))}</li>)}</ul> : <p>{text("approximate_fit")}</p>}
     {quality?.point_errors?.some((entry) => pointError(entry.id)) ? <details><summary>{text("diagnostic_title")}</summary><ul className="cameraPanoramaResiduals">{quality.point_errors.filter((entry) => pointError(entry.id)).map((entry) => {
       const point = navigationPoints.find((point) => point.id === entry.id);
-      return point ? <li key={entry.id}><button className="chipButton" onClick={() => selectPoint(point)}>{text("edit_place", { number: pointLabel(point, navigationPoints) })}</button> {text("diagnostic_error", { error: degrees(entry.error_radians) })}</li> : null;
+      return point ? <li key={entry.id}><button className="chipButton" onClick={() => selectPoint(point)}>{text("edit_place", { number: pointLabel(point, navigationPoints) })}</button> {text(displaySolution?.type === "panorama_image_plane_v1" ? "diagnostic_error_image" : "diagnostic_error", { error: displaySolution?.type === "panorama_image_plane_v1" ? ((entry.error_uv ?? 0) * 100).toLocaleString(locale, { maximumFractionDigits: 2 }) : degrees(entry.error_radians ?? 0) })}</li> : null;
     })}</ul></details> : null}
   </section> : null;
 

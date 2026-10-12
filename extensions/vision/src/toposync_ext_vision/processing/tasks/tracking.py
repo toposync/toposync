@@ -12,7 +12,7 @@ from toposync.runtime.pipelines.execution import (
     TransformOperatorRuntime,
 )
 from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
-from toposync.runtime.pipelines.packet_contract import resolve_media_ts
+from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness, resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 
@@ -73,6 +73,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         self._pause_started_by_source_stream: dict[str, float] = {}
         self._pause_accumulated_by_source_stream: dict[str, float] = {}
         self._last_packet_by_source_stream: dict[str, Packet] = {}
+        self._capture_by_source_stream: dict[str, tuple[str, int, int, float]] = {}
         self._telemetry_top_k = _read_env_int(
             "TOPOSYNC_TELEMETRY_VISION_TOP_K", 3, min_value=1, max_value=16
         )
@@ -552,8 +553,22 @@ class VisionTrackRuntime(TransformOperatorRuntime):
             if not out:
                 continue
             outputs.extend(out)
-            if any(item.lifecycle == Lifecycle.CLOSE for item in out):
-                self._clear_state_for_stream(source_stream_id)
+            # A single expired event must not reset the other tracks or their IDs.
+            for key, state in list(self._state_by_tracking_key.items()):
+                if (state.source_stream_id == source_stream_id
+                        and self._effective_age_seconds(state, now_monotonic=time.monotonic())
+                        >= self._parsed.close_after_seconds):
+                    self._state_by_tracking_key.pop(key, None)
+        return outputs
+
+    def _reset_stream(self, packet: Packet, context, *, reason: str) -> list[Packet]:
+        outputs = self._event_assembler.close_stream(packet)
+        self._clear_state_for_stream(packet.stream_id)
+        logger = getattr(context, "logger", None)
+        if logger is not None:
+            logger.info("Tracking reset: source=%s reason=%s capture=%s closed_events=%s",
+                        packet.stream_id, reason, self._capture_by_source_stream.get(packet.stream_id),
+                        len(outputs))
         return outputs
 
     async def run(self, context) -> None:  # noqa: ANN001
@@ -614,20 +629,47 @@ class VisionTrackRuntime(TransformOperatorRuntime):
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         now_monotonic = time.monotonic()
         source_stream_id = packet.stream_id
+        outputs: list[Packet] = []
+        evidence = packet.payload.get("capture_evidence")
+        previous = self._capture_by_source_stream.get(source_stream_id)
+        if evidence is not None:
+            if resolve_frame_freshness(packet).age_seconds is None:
+                return []
+            capture = (evidence["capture_instance"], evidence["generation"],
+                       evidence["sequence"], evidence["published_at"])
+            if previous is not None:
+                same_instance = capture[0] == previous[0]
+                same_generation = capture[:2] == previous[:2]
+                older_sequence = capture[2] < previous[2] or (
+                    capture[2] == previous[2] and packet.lifecycle != Lifecycle.CLOSE
+                )
+                if (capture[3] < previous[3]
+                        or (not same_instance and capture[3] == previous[3])
+                        or (same_instance and capture[1] < previous[1])
+                        or (same_generation and older_sequence)):
+                    return []
+                if capture[:2] != previous[:2]:
+                    if packet.lifecycle == Lifecycle.CLOSE:
+                        return []
+                    outputs.extend(self._reset_stream(packet, context, reason="capture_changed"))
+            self._capture_by_source_stream[source_stream_id] = capture
         if packet.lifecycle == Lifecycle.CLOSE:
-            outputs = self._event_assembler.close_stream(packet)
-            self._clear_state_for_stream(source_stream_id)
+            outputs.extend(self._reset_stream(packet, context, reason="source_closed"))
             self._last_packet_by_source_stream.pop(source_stream_id, None)
             return outputs
-        self._last_packet_by_source_stream[source_stream_id] = packet
+        if previous is not None and evidence is None:
+            return []
+        self._last_packet_by_source_stream[source_stream_id] = replace(packet, artifacts={})
 
         if bool(self._parsed.pause_when_gate_closed) and not self._motion_gate_open(packet):
             paused_for = self._mark_paused(source_stream_id, now_monotonic=now_monotonic)
             max_paused = float(self._parsed.max_paused_seconds)
-            if max_paused > 0.0 and paused_for >= max_paused:
-                self._clear_state_for_stream(source_stream_id)
+            if max_paused > 0.0 and paused_for >= max_paused and any(
+                state.source_stream_id == source_stream_id for state in self._state_by_tracking_key.values()
+            ):
+                outputs.extend(self._reset_stream(packet, context, reason="pause_timeout"))
             annotated = self._annotate_packet(packet, objects=[])
-            return await self._event_assembler.process_packet(annotated, context)
+            return outputs + await self._event_assembler.process_packet(annotated, context)
 
         self._mark_resumed(source_stream_id, now_monotonic=now_monotonic)
         detections = self._extract_detections(packet)
@@ -682,8 +724,8 @@ class VisionTrackRuntime(TransformOperatorRuntime):
             packet_ts=frame_ts if math.isfinite(frame_ts) else None,
         )
         if not annotated_packets:
-            return []
-        return await self._event_assembler.process_packet(annotated_packets[0], context)
+            return outputs
+        return outputs + await self._event_assembler.process_packet(annotated_packets[0], context)
 
     def _process_packet_annotate(
         self,

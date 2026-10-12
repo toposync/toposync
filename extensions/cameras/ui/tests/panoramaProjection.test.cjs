@@ -130,3 +130,22 @@ test("explicit quality gate rejects stale eligibility, unknown reasons and malfo
     assert.equal(createPanoramaProjector(solution, mask()), null, mutate.toString());
   }
 });
+
+
+test("image plane projects held-out coordinates with finite image edges", () => {
+  const solution = { ...structuredClone(vectors.solution), type: "panorama_image_plane_v1",
+    matrix: [[.1, 0, 0], [0, .1, 0], [0, 0, 1]],
+    inverse_matrix: [[10, 0, 0], [0, 10, 0], [0, 0, 1]] };
+  const projector = createPanoramaProjector(solution, mask());
+  assert.ok(projector);
+  for (const x of [0, .2, .53, 1]) for (const y of [0, .4, .81, 1]) {
+    const world = projector.panoramaToWorld({ x, y });
+    close(world.x, x * 10); close(world.z, y * 10);
+    const image = projector.worldToPanorama(world);
+    close(image.x, x); close(image.y, y);
+  }
+  assert.equal(projector.panoramaToWorld({ x: 1.01, y: .5 }), null);
+  assert.equal(projector.worldToPanorama({ x: -1, z: 5 }), null);
+  const coverage = mask(); coverage.data.fill(0);
+  assert.equal(createPanoramaProjector(solution, coverage).panoramaToWorld({ x: .5, y: .5 }), null);
+});

@@ -55,7 +55,8 @@ export function panoramaCropFromCorners(start: PanoramaPoint, end: PanoramaPoint
 }
 
 /** A periodic selection may be represented by two rectangles at the seam. */
-export function panoramaCropSegments(crop: CameraSourcePanoramaCrop, seamOffset: number): Array<{ left: number; width: number }> {
+export function panoramaCropSegments(crop: CameraSourcePanoramaCrop, seamOffset: number, periodic = true): Array<{ left: number; width: number }> {
+  if (!periodic) return [{ left: crop.u_start, width: crop.u_width }];
   if (crop.u_width >= 1) return [{ left: 0, width: 1 }];
   const left = wrapPanoramaCoordinate(crop.u_start - seamOffset);
   const width = Math.min(crop.u_width, 1 - left);
@@ -68,18 +69,18 @@ export function panoramaCropSeamOffset(crop: CameraSourcePanoramaCrop): number {
   return crop.u_width === 1 ? 0 : wrapPanoramaCoordinate(crop.u_start - (1 - crop.u_width) / 2);
 }
 
-export function adjustPanoramaCrop(crop: CameraSourcePanoramaCrop, handle: PanoramaCropHandle, horizontal: number, vertical: number): CameraSourcePanoramaCrop {
+export function adjustPanoramaCrop(crop: CameraSourcePanoramaCrop, handle: PanoramaCropHandle, horizontal: number, vertical: number, periodic = true): CameraSourcePanoramaCrop {
   if (handle === "move") return {
     ...crop,
-    u_start: crop.u_width === 1 ? 0 : wrapPanoramaCoordinate(crop.u_start + horizontal),
+    u_start: periodic ? crop.u_width === 1 ? 0 : wrapPanoramaCoordinate(crop.u_start + horizontal) : clamp(crop.u_start + horizontal, 0, 1 - crop.u_width),
     v_start: clamp(crop.v_start + vertical, 0, 1 - crop.v_height),
   };
   const next = { ...crop };
   if (handle.includes("w")) {
-    const delta = clamp(horizontal, crop.u_width - 1, crop.u_width - MINIMUM_EXTENT);
-    next.u_start = wrapPanoramaCoordinate(crop.u_start + delta);
+    const delta = clamp(horizontal, periodic ? crop.u_width - 1 : -crop.u_start, crop.u_width - MINIMUM_EXTENT);
+    next.u_start = periodic ? wrapPanoramaCoordinate(crop.u_start + delta) : crop.u_start + delta;
     next.u_width = crop.u_width - delta;
-  } else if (handle.includes("e")) next.u_width = clamp(crop.u_width + horizontal, MINIMUM_EXTENT, 1);
+  } else if (handle.includes("e")) next.u_width = clamp(crop.u_width + horizontal, MINIMUM_EXTENT, periodic ? 1 : 1 - crop.u_start);
   if (handle.includes("n")) {
     const delta = clamp(vertical, -crop.v_start, crop.v_height - MINIMUM_EXTENT);
     next.v_start = crop.v_start + delta;

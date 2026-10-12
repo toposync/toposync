@@ -28,6 +28,74 @@ BASE = "/api/cameras/cameras/simulated/sources/main/panorama"
 JOBS = "/api/cameras/panorama-jobs"
 
 
+@pytest.mark.parametrize("control_type", ["none", "onvif"])
+def test_static_capture_publishes_without_control_and_reopens(tmp_path, control_type):
+    import numpy as np
+
+    calls = []
+
+    async def capture_frame(camera_id, source_id, owner):
+        calls.append((camera_id, source_id))
+        return {"image": np.full((120, 200, 3), 80, dtype=np.uint8),
+                "capture_evidence": {"capture_instance": "static-test", "generation": 1, "sequence": 1}}
+
+    app, scanner, service, requirements = make_app(tmp_path, capture_frame=capture_frame)
+    config = asyncio.run(service.store.get_config())
+    config.settings.extensions["com.toposync.cameras"]["devices"][0]["control"] = {"type": control_type}
+    config.settings.extensions["com.toposync.cameras"]["devices"][0]["sources"][0]["origin"]["has_ptz"] = False
+    asyncio.run(service.store.save_config(config))
+    with TestClient(app) as client:
+        assert client.get(BASE).json()["capture_modes"] == {"single_frame": True, "scan": False}
+        unavailable = client.post(BASE + "/jobs", json={"idempotency_key": "movement", "operation": "capture"})
+        assert unavailable.status_code == 422
+        assert unavailable.json()["detail"]["code"] == "movement_not_available"
+        body = {"idempotency_key": "static-image", "operation": "capture_static"}
+        response = client.post(BASE + "/jobs", json=body, headers={"x-deny": "core:camera:control"})
+        assert response.status_code == 200, response.json()
+        job = wait_done(client, response.json()["job"])
+        assert job["status"] == "ready", job
+        assert job["physical_state"] == "not_applicable"
+        assert not any(job[key] for key in ("can_resume", "can_reconstruct", "can_cleanup", "can_return"))
+        active = client.get(BASE).json()["active"]
+        assert active["projection"] == "image_plane"
+        assert (active["width"], active["height"]) == (200, 120)
+        assert active["positioning_status"] == "not_applicable"
+        assert "solid_angle_ratio" not in active["coverage"]
+        crop = {"u_start": .8, "u_width": .4, "v_start": 0, "v_height": 1}
+        assert client.patch(f"{BASE}/crop", json={"artifact_id": active["id"], "expected_revision": 1, "crop": crop}).status_code == 422
+        assert client.post(BASE + "/jobs", json=body).json()["job"]["id"] == job["id"]
+        assert client.post(BASE + "/jobs", json={**body, "operation": "capture"}).status_code == 409
+        assert calls == [("simulated", "main")]
+        assert scanner.calls == scanner.moves == scanner.stops == scanner.returns == scanner.managed_cleanup_calls == 0
+    reopened, _, _, _ = make_app(tmp_path, capture_frame=capture_frame)
+    with TestClient(reopened) as client:
+        assert client.get(BASE).json()["active"]["id"] == active["id"]
+
+
+def test_static_capture_failure_preserves_active_reference(tmp_path):
+    import numpy as np
+
+    async def capture_frame(*args):
+        return {"image": np.zeros((40, 80, 3), dtype=np.uint8),
+                "capture_evidence": {"capture_instance": "static-test", "generation": 1, "sequence": 2}}
+
+    app, _, service, _ = make_app(tmp_path, capture_frame=capture_frame)
+    with TestClient(app) as client:
+        first = client.post(BASE + "/jobs", json={"idempotency_key": "static-good", "operation": "capture_static"})
+        assert first.status_code == 200, first.json()
+        wait_done(client, first.json()["job"])
+        active = client.get(BASE).json()["active"]["id"]
+
+        async def invalid_frame(*args):
+            return {"image": np.zeros((40, 80, 3), dtype=np.uint8), "capture_evidence": {}}
+
+        service.capture_frame = invalid_frame
+        second = client.post(BASE + "/jobs", json={"idempotency_key": "static-invalid", "operation": "capture_static"})
+        job = wait_done(client, second.json()["job"])
+        assert job["status"] == "failed" and job["error"]["code"] == "invalid_frame"
+        assert client.get(BASE).json()["active"]["id"] == active
+
+
 def test_operational_automation_qualification_does_not_stale_visual_artifact():
     camera = {
         "id": "camera",
@@ -274,6 +342,7 @@ def make_app(tmp_path: Path, fake: FakeScanner | None = None, **options: Any):
                         "origin": {
                             "type": "rtsp",
                             "rtsp_url": "rtsp://private:secret@fake.invalid/no-network",
+                            "has_ptz": True,
                         },
                         "metadata": {
                             "panorama_profile": {"legacy": "preserved"},
@@ -3886,3 +3955,32 @@ def test_capture_publishes_independent_approach_without_extra_device_preparation
     client.get(BASE)
     client.get(f"{JOBS}/{job['id']}")
     assert scanner.moves == moves
+
+
+@pytest.mark.parametrize("interruption", ["stop", "source_changed"])
+def test_static_capture_interruption_preserves_reference_without_physical_stop(tmp_path, interruption):
+    import numpy as np
+    event = asyncio.Event()
+
+    async def capture_frame(*arguments):
+        await event.wait()
+        return {"image": np.full((32, 64, 3), 80, np.uint8),
+                "capture_evidence": {"capture_instance": "static", "generation": 1, "sequence": 1}}
+
+    app, scanner, service, requirements = make_app(tmp_path, capture_frame=capture_frame)
+    with TestClient(app) as client:
+        created = client.post(BASE + "/jobs", json={"operation": "capture_static", "idempotency_key": "static-" + interruption}).json()["job"]
+        if interruption == "stop":
+            response = client.post(f"{JOBS}/{created['id']}/stop", headers={"x-deny": "core:camera:control"})
+            assert response.status_code == 200
+        else:
+            config = client.portal.call(service.store.get_config)
+            config.settings.extensions["com.toposync.cameras"]["devices"][0]["sources"][0]["origin"]["rtsp_url"] = "rtsp://synthetic.invalid/changed"
+            client.portal.call(service.store.save_config, config)
+        client.portal.call(event.set)
+        job = wait_done(client, created)
+        assert job["status"] == ("interrupted" if interruption == "stop" else "failed")
+        assert job["physical_state"] == "not_applicable"
+        assert client.get(BASE).json()["active"] is None
+        assert scanner.stops == scanner.moves == scanner.returns == 0
+        client.portal.call(service.shutdown)

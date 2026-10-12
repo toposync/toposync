@@ -107,8 +107,11 @@ for (const partial of [false, true]) test(`completed capture becomes the single 
   }));
   const section = await openPanorama(page);
 
-  await expect(section.getByText(partial ? "Panorama updated with partial coverage." : "Panorama updated.", { exact: true })).toBeVisible();
+  if (!partial) await expect(section.getByText("Panorama updated.", { exact: true })).toBeVisible();
   if (partial) {
+    const limitations = section.getByTestId("panorama-limitations");
+    await expect(limitations).toBeVisible();
+    await limitations.locator("summary").click();
     await expect(section.getByRole("button", { name: "Return to the starting view", exact: true })).toBeVisible();
     await expect(section.getByTestId("panorama-independent-outcomes")).not.toBeVisible();
   }
@@ -998,7 +1001,9 @@ test("photographed bounds fit presentation while whole image and keyboard crop k
   await expect(picture).toHaveAttribute("style", /width: 100%;.*height: 100%;/);
   await section.getByRole("button", { name: "Photographed area", exact: true }).click();
   await expect(picture).toHaveAttribute("style", /width: 200%;.*height: 200%;/);
+  await section.getByText("Details", { exact: true }).click();
   await expect(section.getByRole("link", { name: "Download original image", exact: true })).toHaveAttribute("href", before.active.image_url);
+  await section.getByText("Details", { exact: true }).click();
   await section.getByRole("button", { name: "Select useful area", exact: true }).click();
   let editor = page.getByTestId("panorama-crop-editor");
   const stage = editor.getByRole("group", { name: /^Useful area: 100% of image width and 100% of image height/ });
@@ -1292,4 +1297,90 @@ test("automatic approach status keeps the image usable and removes manual point 
   await expect(section.getByTestId("panorama-approach-status")).toContainText("No qualified automatic approach");
   await expect(section.getByRole("img", { name: "Saved camera panorama", exact: true })).toBeVisible();
   await expect(section.getByRole("button", { name: /Prepare.*point/i })).toHaveCount(0);
+});
+
+
+for (const width of [1440, 390]) test(`fixed source captures a single image and saves a finite useful area without motion controls at ${width} pixels`, async ({ page, request }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  await fixture(request, "scenario", { scenario: "static" });
+  const section = await openPanorama(page);
+  await expect(section.getByRole("button", { name: "Use current frame", exact: true })).toBeEnabled();
+  await section.getByRole("button", { name: "Use current frame", exact: true }).click();
+  await expect.poll(async () => (await state(request)).job?.status).toBe("ready");
+  await expect(section.getByRole("img", { name: "Saved camera panorama", exact: true })).toBeVisible();
+  await expect(section.getByRole("button", { name: /Generate.*panorama/ })).toHaveCount(0);
+  await expect(section.getByRole("button", { name: /Live panorama|Inspect retired/ })).toHaveCount(0);
+  const source = await state(request);
+  expect(source.active.projection).toBe("image_plane");
+  expect(source.job.physical_state).toBe("not_applicable");
+  const evidence = await (await request.get(`${backend}${fixturePath}`)).json();
+  expect(evidence.events).toEqual([{ event: "capture_static", camera_id: source.camera_id, source_id: source.source_id }]);
+  await section.getByRole("button", { name: "Select useful area", exact: true }).click();
+  const editor = page.getByTestId("panorama-crop-editor");
+  await expect(editor.locator(".sourcePanoramaStrip img")).toHaveCount(1);
+  await expect(editor.getByRole("button", { name: /seam/i })).toHaveCount(0);
+  const stage = editor.locator(".sourcePanoramaCropStage");
+  const box = await stage.boundingBox();
+  await stage.click({ position: { x: box.width * .15, y: box.height * .2 } });
+  await expect(editor.getByText("Now select the opposite corner.", { exact: true })).toBeVisible();
+  await stage.click({ position: { x: box.width * .85, y: box.height * .8 } });
+  await editor.getByRole("button", { name: "Save useful area", exact: true }).click();
+  await expect(page.getByTestId("panorama-crop-dialog")).toHaveCount(0);
+  const saved = (await state(request)).active;
+  expect(saved.crop.u_start + saved.crop.u_width).toBeLessThanOrEqual(1);
+  expect(saved.crop.u_width).toBeCloseTo(.7, 1);
+  await page.reload();
+  await expect(section.getByRole("button", { name: "Edit useful area", exact: true })).toBeVisible();
+  await screenshot(page, `static-single-frame-crop-${width}`);
+});
+
+
+test("static spatial shader preserves perspective at interior pixels and finite crop edges", async ({ page }) => {
+  await page.goto("/");
+  const source = await fs.readFile(path.resolve(__dirname, "../extensions/spatial_video/ui/src/panoramaGroundLayer.ts"), "utf8");
+  const fragment = source.match(/fragmentShader: `([\s\S]*?)`/)[1];
+  const pixels = await page.evaluate(fragment => {
+    const canvas = document.createElement("canvas"); canvas.width = 32; canvas.height = 32;
+    const gl = canvas.getContext("webgl", { preserveDrawingBuffer: true });
+    if (!gl) throw new Error("WebGL unavailable");
+    const program = gl.createProgram();
+    for (const [type, source] of [[gl.VERTEX_SHADER, "attribute vec2 position; varying vec2 world; void main(){world=(position+1.0)*5.0;gl_Position=vec4(position,0.0,1.0);}"], [gl.FRAGMENT_SHADER, "precision highp float;" + fragment]]) {
+      const shader = gl.createShader(type); gl.shaderSource(shader, source); gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+      gl.attachShader(program, shader);
+    }
+    gl.linkProgram(program); if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+    gl.useProgram(program);
+    const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, "position"); gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+    for (const [unit, name] of [[0, "panorama"], [1, "coverage"]]) {
+      const data = new Uint8Array(256 * 256 * 4);
+      for (let row = 0; row < 256; row++) for (let column = 0; column < 256; column++) {
+        const offset = (row * 256 + column) * 4;
+        data.set(name === "coverage" ? [255,255,255,255] : [column,255-row,0,255], offset);
+      }
+      gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 256, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+      for (const parameter of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, parameter, gl.NEAREST);
+      for (const parameter of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, parameter, gl.CLAMP_TO_EDGE);
+      gl.uniform1i(gl.getUniformLocation(program, name), unit);
+    }
+    gl.uniform1i(gl.getUniformLocation(program, "imagePlane"), 1);
+    gl.uniformMatrix3fv(gl.getUniformLocation(program, "rayMatrix"), false, [.06,.002,.01,.003,.05,.02,.2,.15,1]);
+    const render = crop => {
+      gl.clear(gl.COLOR_BUFFER_BIT); gl.uniform4fv(gl.getUniformLocation(program, "crop"), crop); gl.drawArrays(gl.TRIANGLES, 0, 6);
+      const result = new Uint8Array(32 * 32 * 4); gl.readPixels(0, 0, 32, 32, gl.RGBA, gl.UNSIGNED_BYTE, result); return Array.from(result);
+    };
+    return { full: render([0,1,0,1]), crop: render([.2,.3,.2,.6]) };
+  }, fragment);
+  for (let row = 0; row < 32; row++) for (let column = 0; column < 32; column++) {
+    const x = (column + .5) / 32 * 10, z = (row + .5) / 32 * 10;
+    const u = (.06 * x + .003 * z + .2) / (.01 * x + .02 * z + 1);
+    const v = (.002 * x + .05 * z + .15) / (.01 * x + .02 * z + 1);
+    const offset = (row * 32 + column) * 4;
+    expect(Math.abs(pixels.full[offset] - Math.floor(u * 256))).toBeLessThanOrEqual(1);
+    expect(Math.abs(pixels.full[offset + 1] - Math.floor(v * 256))).toBeLessThanOrEqual(1);
+    expect(pixels.crop[offset + 3]).toBe(u >= .2 && u <= .5 && v >= .2 && v <= .8 ? 255 : 0);
+  }
 });

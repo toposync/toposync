@@ -19,6 +19,14 @@ vê e como pontos da imagem se relacionam com o mundo.
 Mapeamento também é o que torna a Visão 360 possível: vídeo ao vivo mapeado pode
 ser projetado sobre a composição.
 
+## Referência de imagem única
+
+Toda fonte de vídeo habilitada pode usar **Usar imagem atual** nas configurações da panorâmica, inclusive sem ONVIF ou controle de movimento. O Toposync salva uma imagem recente do decodificador, sua identificação e uma máscara de cobertura integral. Selecione a área útil e use o mesmo editor de mapeamento da composição, com pelo menos quatro correspondências no chão. As coordenadas permanecem relativas à imagem completa; o recorte estático não atravessa uma borda para reaparecer na outra.
+
+Fontes com controle de movimento também oferecem aquisição de uma região maior. Usar a imagem atual continua sendo uma alternativa explícita; uma varredura que falha não troca o modo automaticamente. Referências estáticas não oferecem apontamento nem panorâmica ao vivo.
+
+O mapeamento estático vale para o enquadramento capturado. Movimentar, aplicar zoom ou reposicionar fisicamente a câmera exige nova referência e novo mapeamento. Detecções ao vivo de uma fonte fixa usam a transformação plana com a identificação do quadro e a geometria da fonte. Uma referência estática de uma fonte marcada como móvel permite mapear e projetar a imagem salva; projetar detecções ao vivo exige uma referência ampliada com verificação visual do enquadramento. A imagem única não fornece pose nem parâmetros de lente.
+
 ## Calibração assistida
 
 Abra o elemento de câmera e escolha **Mapear na composição**. Prepare primeiro uma panorâmica salva compatível caso ainda não exista. Você também pode abrir **Configurações → Câmeras → Mapeamento** e usar o botão de mapeamento ao lado da composição. Se a câmera aparecer mais de uma vez, escolha primeiro o elemento da câmera. O botão separado de editor abre a composição. Alterações não salvas nas câmeras precisam ser resolvidas antes de sair das configurações.

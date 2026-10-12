@@ -449,3 +449,71 @@ def test_mapped_detection_metadata_survives_installed_tracker():
         assert track["world_anchor"] == pytest.approx({"x": x, "z": 0}, abs=1e-8)
         assert track["metadata"]["world_projection"]["extrapolated"] is extrapolated
         assert track["metadata"]["world_projection"]["panorama_revision"] == job["revision"]
+
+
+def _static_runtime_case(change=None):
+    import numpy as np
+    from toposync.runtime.pipelines.runtime import Artifact
+    from toposync.runtime.pipelines.image_geometry import image_geometry
+    from toposync_ext_cameras.processing.panorama_mapping import estimate_image_plane_mapping
+
+    job = _job()
+    job.pop("profile")
+    job["source_panorama"] = {"id": "artifact", "geometry": {"projection": "image_plane", "framing": "fixed", "source_size": [101, 101]}}
+    job["solution"] = estimate_image_plane_mapping([
+        {"id": str(index), "image_u": u, "image_v": v, "world_x": u * 10, "world_z": v * 10}
+        for index, (u, v) in enumerate([(.1, .1), (.9, .1), (.9, .9), (.1, .9)])])
+    packet = _packet()
+    packet.payload.pop("pan_tilt_zoom_state")
+    packet.metadata.clear()
+    evidence = {"capture_instance": "static", "generation": 1, "sequence": 5}
+    packet.payload["capture_evidence"] = evidence
+    packet = packet.with_artifact(Artifact(name="main", data=np.zeros((101, 101, 3), np.uint8),
+        metadata={"image_geometry": image_geometry(101, 101, evidence)}))
+    if change:
+        change(job, packet)
+    return _run(packet, {"applies": True, "job": job})
+
+
+def test_static_runtime_projects_without_pose_lens_or_visual_rotation():
+    result = _static_runtime_case()
+    assert result.payload["world_anchor"] == pytest.approx({"x": 5, "z": 5})
+    assert result.payload["mapping"]["pose_evidence"] == "fixed_source_frame"
+    assert result.payload["mapping"]["projection_model"] == "panorama_image_ground_v1"
+    for key in ("detections", "tracks", "segmentations"):
+        assert result.payload["vision"][key][0]["world_anchor"] == pytest.approx({"x": 5, "z": 5})
+    assert "panorama_ray" not in result.payload["world_projection"]
+
+
+@pytest.mark.parametrize("change,reason", [
+    (lambda job, packet: job["source_panorama"]["geometry"].update(framing="movable"), "panorama_fixed_framing_required"),
+    (lambda job, packet: packet.payload.update(capture_evidence={}), "panorama_frame_identity_missing"),
+    (lambda job, packet: job["source_panorama"]["geometry"].update(source_size=[200, 100]), "panorama_source_geometry_changed"),
+    (lambda job, packet: packet.artifacts["main"].metadata["image_geometry"].update(capture_evidence={}), "panorama_frame_binding_mismatch"),
+])
+def test_static_runtime_discards_stale_positions_when_reference_is_unusable(change, reason):
+    _assert_unmapped(_static_runtime_case(change), reason)
+
+
+@pytest.mark.parametrize("has_anchor", [True, False])
+def test_static_runtime_uses_source_anchors_on_transformed_frames(has_anchor):
+    import numpy as np
+    from toposync.runtime.pipelines.runtime import Artifact
+    from toposync.runtime.pipelines.image_geometry import image_geometry
+
+    def change(job, packet):
+        evidence = packet.payload["capture_evidence"]
+        geometry = image_geometry(101, 101, evidence)
+        geometry.update(image_size=[51, 51], to_source=[[.5, 0, .2], [0, .5, .3], [0, 0, 1]])
+        packet.artifacts["main"] = Artifact(name="main", data=np.zeros((51, 51, 3), np.uint8), metadata={"image_geometry": geometry})
+        packet.payload["frame_crop"] = {"synthetic": True}
+        if has_anchor:
+            packet.payload["subject"] = {"source_anchor": {"uv": [.4, .6], "capture_evidence": evidence}}
+            for key in ("detections", "tracks", "segmentations"):
+                packet.payload["vision"][key][0]["source_anchor"] = {"uv": [.4, .6], "capture_evidence": evidence}
+
+    result = _static_runtime_case(change)
+    if has_anchor:
+        assert result.payload["world_anchor"] == pytest.approx({"x": 4, "z": 6})
+    else:
+        _assert_unmapped(result, "outside_calibrated_ground")

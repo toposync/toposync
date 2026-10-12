@@ -463,6 +463,12 @@ def make_app(data_dir: Path):
             service.camera_factory = fixture.camera_factory
             service.scan_runner = fixture.scan
             service.reconstruct_runner = fixture.reconstruct
+
+            async def capture_frame(camera_id, source_id, owner):
+                fixture.events.append({"event": "capture_static", "camera_id": camera_id, "source_id": source_id})
+                return {"image": photograph(), "capture_evidence": {"capture_instance": "browser-static", "generation": 1, "sequence": 1}}
+
+            service.capture_frame = capture_frame
             yield
             await service.shutdown()
 
@@ -482,6 +488,7 @@ def make_app(data_dir: Path):
     async def scenario(body: ScenarioBody):
         if body.scenario not in {
             "ready",
+            "static",
             "partial",
             "hold",
             "failed",
@@ -502,6 +509,12 @@ def make_app(data_dir: Path):
             "malformed_reasons",
         }:
             raise HTTPException(400, "Unknown synthetic quality reason")
+        if body.scenario == "static":
+            def fixed_source(settings):
+                settings["devices"][0]["control"] = {"type": "none"}
+                settings["devices"][0]["sources"][0]["origin"]["has_ptz"] = False
+                return settings
+            await app.state.config_store.update_extension_settings(EXTENSION, fixed_source)
         fixture.scenario = body.scenario
         fixture.telemetry = body.telemetry
         fixture.quality = body.quality

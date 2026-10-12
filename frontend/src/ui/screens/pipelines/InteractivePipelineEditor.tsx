@@ -168,7 +168,7 @@ export function PipelineStorageCard({
   };
 
   return (
-    <div className="pipelinesStorageCard">
+    <div className="card pipelinesStorageCard">
       <div className="pipelinesStorageHeader">
         <div>
           <div className="pipelinesStorageTitle">{t("core.ui.pipelines.storage.title", {}, "Storage")}</div>

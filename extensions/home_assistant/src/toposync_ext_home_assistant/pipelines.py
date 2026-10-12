@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from datetime import datetime, timezone
+import hashlib
 import re
 from typing import Any, Literal
 
@@ -286,7 +287,9 @@ class HomeAssistantNotifyRuntime(SinkRuntime):
     def _tag(self, packet: Packet) -> str | None:
         rendered = _render_template(packet, self._config.tag_template).strip()
         if rendered:
-            return rendered[:512]
+            # APNs limits collapse identifiers to 64 bytes, including multibyte text.
+            encoded = rendered.encode("utf-8")
+            return rendered if len(encoded) <= 64 else hashlib.sha256(encoded).hexdigest()
         return None
 
     def _event_key(self, packet: Packet) -> str:

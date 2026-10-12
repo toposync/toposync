@@ -951,7 +951,43 @@ video {
 .pipelinesEditorInner {
   min-width: 0;
   display: grid;
-  gap: 12px;
+  gap: var(--space-6);
+}
+
+.pipelinesEditorIdentity {
+  flex: 1 1 280px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.pipelinesAdvancedEditor {
+  min-width: 0;
+}
+
+.pipelinesAdvancedEditor > summary {
+  cursor: pointer;
+  width: fit-content;
+}
+
+.pipelinesAdvancedEditor > summary:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 2px;
+}
+
+.pipelinesAdvancedContent {
+  display: grid;
+  gap: var(--space-6);
+  padding-top: var(--space-4);
+  min-width: 0;
+}
+
+.pipelinesConnectionControls {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
 }
 
 .pipelinesEditorHeader {
@@ -963,7 +999,6 @@ video {
 
 .pipelinesEditorTitle {
   min-width: 0;
-  padding-top: var(--space-2);
   overflow-wrap: anywhere;
   font-weight: 800;
   font-size: 18px;
@@ -997,19 +1032,6 @@ video {
   white-space: normal;
 }
 
-.pipelinesEditorControls {
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 10px 12px;
-  background: rgba(12, 18, 37, 0.55);
-  box-shadow: var(--shadow);
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
 .pipelinesInlineToggle {
   min-height: var(--control-height-m);
   display: inline-flex;
@@ -1018,7 +1040,7 @@ video {
   padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  background: rgba(15, 23, 48, 0.45);
+  background: var(--color-surface-frost);
   color: var(--text);
   font-size: 13px;
   font-weight: 650;
@@ -1034,7 +1056,7 @@ video {
 
 .pipelinesControlField {
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
   min-width: 0;
   font-size: 13px;
   color: var(--muted);
@@ -1608,13 +1630,11 @@ video {
   line-height: 1.4;
 }
 
-.pipelinesStorageCard {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: rgba(15, 23, 48, 0.48);
+.card.pipelinesStorageCard {
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  min-width: 0;
 }
 
 .pipelinesStorageInlinePanel {
@@ -1631,13 +1651,19 @@ video {
 .pipelinesStorageLayerRow {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-4);
   min-width: 0;
 }
 
 .pipelinesStorageHeader {
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-start;
+}
+
+.pipelinesStorageHeader > div:first-child {
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .pipelinesStorageTitle,
@@ -1661,14 +1687,14 @@ video {
 .pipelinesStorageUsageMain {
   flex: 1 1 260px;
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
 .pipelinesStorageUsageText {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-2);
   font-size: 13px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -1684,8 +1710,8 @@ video {
   height: 8px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--color-border-subtle);
+  border: 1px solid var(--color-border-subtle);
 }
 
 .pipelinesStorageMiniBar {
@@ -1707,8 +1733,10 @@ video {
 
 .pipelinesStorageLimitField {
   display: grid;
-  gap: 6px;
-  min-width: min(220px, 100%);
+  gap: var(--space-2);
+  flex: 0 1 220px;
+  min-width: 0;
+  max-width: 100%;
   font-size: 12px;
   color: var(--muted);
 }
@@ -1718,19 +1746,19 @@ video {
   border-radius: 10px;
   font-size: 12px;
   line-height: 1.35;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--color-border-subtle);
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-surface-frost);
 }
 
 .pipelinesStorageNotice.isWarn {
-  color: color-mix(in srgb, var(--color-warning) 88%, var(--text));
+  color: var(--text);
   border-color: color-mix(in srgb, var(--color-warning) 38%, transparent);
   background: color-mix(in srgb, var(--color-warning) 10%, transparent);
 }
 
 .pipelinesStorageNotice.isDanger {
-  color: color-mix(in srgb, var(--color-danger) 90%, var(--text));
+  color: var(--text);
   border-color: color-mix(in srgb, var(--color-danger) 38%, transparent);
   background: color-mix(in srgb, var(--color-danger) 10%, transparent);
 }
@@ -1741,10 +1769,10 @@ video {
 }
 
 .pipelinesStorageLayerRow {
-  padding: 9px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
   border-radius: 10px;
-  background: rgba(12, 18, 37, 0.34);
+  background: transparent;
 }
 
 .pipelinesStorageLayerMain {
@@ -1759,12 +1787,11 @@ video {
   font-weight: 750;
   color: var(--text);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .pipelinesStorageLayerMeta {
+  overflow-wrap: anywhere;
   font-size: 12px;
   color: var(--muted);
   line-height: 1.35;
@@ -1781,7 +1808,7 @@ video {
   min-width: 0;
   padding: 8px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-surface-frost);
   display: grid;
   gap: 3px;
 }
@@ -2641,11 +2668,11 @@ video {
     grid-template-columns: 1fr;
   }
 
-  .pipelinesEditorControls {
-    align-items: stretch;
+  .pipelinesEditorInner,
+  .pipelinesAdvancedContent {
+    gap: var(--space-4);
   }
 
-  .pipelinesInlineToggle,
   .pipelinesControlField,
   .pipelinesModeField {
     flex: 1 1 100%;
@@ -8031,7 +8058,6 @@ video {
 
 .card,
 .railNotifications,
-.pipelinesEditorControls,
 .pipelinesInteractiveToolbar,
 .pipelinesStepCard,
 .pipelinesOperatorConfigCard,

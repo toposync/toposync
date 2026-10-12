@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time as dt_time, timedelta
 from typing import Any, Literal
 
@@ -11,6 +12,7 @@ from .execution import SourceOperatorRuntime, TransformOperatorRuntime
 from .operator_registry import OperatorRegistry
 from .runtime import Lifecycle, Packet
 from .safe_expression import SafeExpression
+from .subject_lifecycle import ClosedSubjectLedger
 
 try:
     from zoneinfo import ZoneInfo
@@ -304,7 +306,8 @@ class CategoryGateRuntime(TransformOperatorRuntime):
         parsed = CategoryGateConfig.model_validate(config)
         self._mode = parsed.mode
         self._categories = set(parsed.categories)
-        self._allowed_by_stream: dict[str, bool] = {}
+        self._last_accepted: dict[tuple[str, str, str], Packet] = {}
+        self._closed_subjects = ClosedSubjectLedger()
 
     def _matches(self, packet: Packet) -> bool:
         if not self._categories:
@@ -317,30 +320,55 @@ class CategoryGateRuntime(TransformOperatorRuntime):
         return category in self._categories
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
-        stream_key = packet.stream_id
-        if packet.lifecycle == Lifecycle.OPEN:
-            allowed = self._matches(packet)
-            self._allowed_by_stream[stream_key] = allowed
-            if allowed:
-                return [packet]
+        subject = packet.payload.get("subject")
+        subject = subject if isinstance(subject, dict) else {}
+        key = (str(packet.payload.get("source_stream_id") or packet.stream_id),
+               str(packet.payload.get("camera_id") or ""), str(subject.get("id") or packet.stream_id))
+        if self._closed_subjects.observe(key, subject, retain=False):
             _record_filtered(context)
             return []
-
-        if packet.lifecycle == Lifecycle.CLOSE:
-            allowed = self._allowed_by_stream.pop(stream_key, self._matches(packet))
-            if allowed:
-                return [packet]
+        previous = self._last_accepted.get(key)
+        allowed = self._matches(packet)
+        if packet.lifecycle == Lifecycle.CLOSE or (previous is not None and not allowed):
+            self._closed_subjects.close(key, subject)
+            self._last_accepted.pop(key, None)
+            if previous is not None:
+                closed = self._with_lifecycle(previous, Lifecycle.CLOSE)
+                if not allowed:
+                    closed.metadata["category_gate_end_reason"] = "category_rejected"
+                    logger = getattr(context, "logger", None)
+                    if logger is not None:
+                        logger.info("Category rejected: source=%s subject=%s previous=%s current=%s",
+                                    key[0], key[2], _resolve_packet_category(previous),
+                                    _resolve_packet_category(packet))
+                return [closed]
             _record_filtered(context)
             return []
+        if not allowed:
+            _record_filtered(context)
+            return []
+        if self._closed_subjects.capacity_reached or (
+            previous is None and len(self._last_accepted) >= self._closed_subjects.capacity
+        ):
+            raise RuntimeError("Category gate subject capacity reached; restart the pipeline to resume new subjects")
+        if self._closed_subjects.observe(key, subject):
+            _record_filtered(context)
+            return []
+        lifecycle = Lifecycle.OPEN if previous is None else Lifecycle.UPDATE
+        output = self._with_lifecycle(packet, lifecycle) if packet.lifecycle != lifecycle else packet
+        # Terminal packets retain observation data, never image buffers or later evidence.
+        self._last_accepted[key] = replace(output, payload=deepcopy(output.payload),
+                                           metadata=deepcopy(output.metadata), artifacts={})
+        return [output]
 
-        allowed = self._allowed_by_stream.get(stream_key)
-        if allowed is None:
-            allowed = self._matches(packet)
-            self._allowed_by_stream[stream_key] = allowed
-        if allowed:
-            return [packet]
-        _record_filtered(context)
-        return []
+    @staticmethod
+    def _with_lifecycle(packet: Packet, lifecycle: Lifecycle) -> Packet:
+        payload = deepcopy(packet.payload)
+        if isinstance(payload.get("subject"), dict):
+            payload["subject"]["lifecycle"] = lifecycle.value
+        metadata = {**packet.metadata, "subject_lifecycle": lifecycle.value}
+        return Packet.create(stream_id=packet.stream_id, lifecycle=lifecycle, payload=payload,
+                             artifacts=packet.artifacts, metadata=metadata, parent_packet_id=packet.packet_id)
 
 
 class CoreFilterConfig(BaseModel):

@@ -414,11 +414,14 @@ def preview_panorama_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
         count = _finite(quality.get("number_of_fit_points"))
         if quality.get("status") != "ready" or count != int(count) or not 4 <= count <= 64:
             reasons.append("insufficient_consistent_geometry")
-        median, percentile, threshold = (_finite(quality.get(key)) for key in ("median_fit_error_radians", "p95_fit_error_radians", "angular_threshold_radians"))
-        if not 0 <= median <= percentile <= math.pi or not 0 < threshold < math.pi / 4:
+        planar = mapping.get("type") == "panorama_image_plane_v1"
+        keys = ("median_fit_error_uv", "p95_fit_error_uv", "image_threshold_uv") if planar else ("median_fit_error_radians", "p95_fit_error_radians", "angular_threshold_radians")
+        median, percentile, threshold = (_finite(quality.get(key)) for key in keys)
+        invalid_quality = (not 0 <= median <= percentile or not 0 < threshold < 1) if planar else (not 0 <= median <= percentile <= math.pi or not 0 < threshold < math.pi / 4)
+        if invalid_quality:
             reasons.append("invalid_quality")
         matrix, inverse = (np.asarray(mapping.get(key), dtype=float) for key in ("matrix", "inverse_matrix"))
-        if (mapping.get("type") != "panorama_ray_plane_v1" or matrix.shape != (3, 3)
+        if (mapping.get("type") not in {"panorama_ray_plane_v1", "panorama_image_plane_v1"} or matrix.shape != (3, 3)
                 or inverse.shape != (3, 3) or not np.isfinite(matrix).all()
                 or not np.isfinite(inverse).all() or np.linalg.cond(matrix) > 1e12
                 or not np.allclose(matrix @ inverse, np.eye(3), atol=1e-6, rtol=0)
@@ -434,6 +437,61 @@ def preview_panorama_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
     except (AttributeError, TypeError, ValueError, np.linalg.LinAlgError):
         reasons.append("invalid_quality")
     return {"eligible": not reasons, "status": "blocked" if reasons else "ready", "reasons": list(dict.fromkeys(reasons))}
+
+
+def estimate_image_plane_mapping(points: list[dict[str, Any]]) -> dict[str, Any]:
+    from .mapping import ControlPointPair, HomographyEstimationConfig, estimate_homography_world_to_image
+
+    if len(points) > 64:
+        raise ValueError("At most 64 calibration points are supported")
+    parsed = [{"id": point["id"], "world": [_finite(point["world_x"]), _finite(point["world_z"])],
+               "image": [_finite(point["image_u"]), _finite(point["image_v"])]} for point in points]
+    if (any(not isinstance(point["id"], str) or not point["id"] for point in parsed)
+            or len({point["id"] for point in parsed}) != len(parsed)
+            or any(not 0 <= value <= 1 for point in parsed for value in point["image"])):
+        raise ValueError("Invalid image plane controls")
+    quality = {"status": "incomplete", "reasons": [], "warnings": [], "number_of_fit_points": len(parsed),
+               "image_threshold_uv": .01, "median_fit_error_uv": None, "p95_fit_error_uv": None, "point_errors": []}
+    result = {"type": "panorama_image_plane_v1", "matrix": None, "inverse_matrix": None,
+              "support_polygon": [], "quality": quality}
+    if len(parsed) < 4:
+        quality["reasons"] = ["at_least_four_fit_points_required"]
+    elif len({tuple(point["world"]) for point in parsed}) != len(parsed) or len({tuple(point["image"]) for point in parsed}) != len(parsed):
+        quality.update(status="review", reasons=["duplicate_fit_positions"])
+    else:
+        try:
+            if abs(_polygon_area(_convex_hull([tuple(point["image"]) for point in parsed]))) <= 1e-9:
+                raise ValueError("Collinear image controls")
+            estimate = estimate_homography_world_to_image([
+                ControlPointPair(image_u=point["image"][0], image_v=point["image"][1],
+                                 world_x=point["world"][0], world_z=point["world"][1]) for point in parsed], config=HomographyEstimationConfig(method="dlt"))
+            matrix = estimate.H_world_to_image
+            inverse = np.linalg.inv(matrix)
+            support = _convex_hull([tuple(point["world"]) for point in parsed])
+            if (np.linalg.cond(matrix) > 1e12 or not np.isfinite(inverse).all()
+                    or abs(_polygon_area(support)) <= 1e-9):
+                raise ValueError("Unstable image plane")
+            predicted = np.column_stack(([point["world"] for point in parsed], np.ones(len(parsed)))) @ matrix.T
+            if np.any(np.abs(predicted[:, 2]) < 1e-9):
+                raise ValueError("Controls on projective horizon")
+            errors = np.linalg.norm(predicted[:, :2] / predicted[:, 2, None] - np.array([point["image"] for point in parsed]), axis=1)
+            quality.update(status="ready", median_fit_error_uv=float(np.median(errors)),
+                           p95_fit_error_uv=float(np.percentile(errors, 95)),
+                           warnings=["approximate_fit"] if np.any(errors > .01) else [],
+                           point_errors=[{"id": point["id"], "error_uv": float(error)} for point, error in zip(parsed, errors, strict=True)])
+            result.update(matrix=matrix.tolist(), inverse_matrix=inverse.tolist(), support_polygon=[list(point) for point in support])
+        except (ValueError, np.linalg.LinAlgError):
+            quality.update(status="review", reasons=["insufficient_consistent_geometry"])
+    return {**result, "preview": preview_panorama_mapping(result)}
+
+
+def map_image_plane_point(mapping: dict[str, Any], x: float, y: float, *, inverse: bool = False) -> tuple[float, float] | None:
+    from .mapping import apply_homography
+
+    if mapping.get("type") != "panorama_image_plane_v1" or not preview_panorama_mapping(mapping)["eligible"]:
+        return None
+    point = apply_homography(mapping["inverse_matrix" if inverse else "matrix"], _finite(x), _finite(y))
+    return point if point is not None and all(math.isfinite(value) for value in point) else None
 
 
 def estimate_panorama_mapping(

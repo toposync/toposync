@@ -212,6 +212,15 @@ def make_app(data_dir: Path):
             for name in ("acquire", "renew", "submit", "snapshot", "release", "emergency_stop"):
                 application.state.services.register(f"cameras.control.{name}", getattr(camera, name))
             application.state.camera_panorama.capture_snapshot = camera.capture
+
+            async def static_frame(*arguments):
+                image = np.full((400, 640, 3), (95, 126, 112), np.uint8)
+                for index, (u, v) in enumerate([(.25, .25), (.75, .25), (.75, .75), (.25, .75)]):
+                    cv2.circle(image, (int(u * 640), int(v * 400)), 9, (60, 184, 255), -1)
+                    cv2.putText(image, str(index + 1), (int(u * 640) + 11, int(v * 400) - 7), cv2.FONT_HERSHEY_SIMPLEX, .6, (255, 255, 255), 2)
+                return {"image": image, "capture_evidence": {"capture_instance": "browser-static", "generation": 1, "sequence": 1}}
+
+            application.state.camera_source_panorama.capture_frame = static_frame
             yield
 
     app.router.lifespan_context = lifespan
@@ -219,6 +228,18 @@ def make_app(data_dir: Path):
     @app.get("/api/__panorama_fixture")
     async def evidence():
         return {"synthetic": True, "camera_id": CAMERA_ID, "element_id": ELEMENT_ID, "source_id": "synthetic-wide", "source_artifact_id": SOURCE_ARTIFACT_ID, "source_artifact_revision": 1, "profile": PROFILE, "points": known_points(), "commands": camera.commands, "pose": camera.pose}
+
+    @app.post("/api/__panorama_fixture/static")
+    async def static_source():
+        def update(settings):
+            device = settings["devices"][0]
+            device["control"] = {"type": "none"}
+            source = device["sources"][0]
+            source["origin"]["has_ptz"] = False
+            source["metadata"] = {}
+            return settings
+        await app.state.config_store.update_extension_settings("com.toposync.cameras", update)
+        return {"synthetic": True}
 
     @app.post("/api/__panorama_fixture/reset")
     async def reset():
@@ -229,6 +250,14 @@ def make_app(data_dir: Path):
             shutil.rmtree(service.root / identifier)
         service.jobs.clear()
         camera.__init__()
+        await app.state.config_store.update_extension_settings("com.toposync.cameras",
+            lambda _settings: fixture_config()["settings"]["extensions"]["com.toposync.cameras"])
+        write_saved_source_panorama(data_dir, fixture_config())
+        source_service = app.state.camera_source_panorama
+        if source_service.tasks:
+            raise HTTPException(409, "Wait for synthetic capture to finish")
+        source_service.jobs.clear()
+        source_service.cancelled.clear()
         from toposync.runtime.config_store import Composition
         await app.state.config_store.set_active_composition(Composition.model_validate(fixture_config()["compositions"][0]))
         return {"synthetic": True, "reset": True}

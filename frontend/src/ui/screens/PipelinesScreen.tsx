@@ -552,15 +552,9 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     if (!draft) return { ok: false, message: t("core.ui.pipelines.error.no_selection") };
 
     if (mode === "interactive") {
-      if (interactiveWarning) {
-        return {
-          ok: false,
-          message: t(
-            "core.ui.pipelines.editor.error.non_linear_interactive_save_blocked",
-            {},
-            "This graph is not compatible with interactive editing. Switch to JSON mode before saving so the existing links are preserved.",
-          ),
-        };
+      if (interactiveWarning && isRecord(draft.graph)) {
+        // The topology editor preserves branching graphs; only the legacy step builder is linear.
+        return { ok: true, graph: draft.graph };
       }
       if (!interactiveGraph.graph) {
         return { ok: false, message: interactiveGraph.error || t("core.ui.pipelines.editor.error.interactive_graph_invalid") };
@@ -1133,7 +1127,20 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                 </div>
               ) : null}
               <div className="pipelinesEditorHeader">
-                <div className="pipelinesEditorTitle">{draft.display_name || draft.name}</div>
+                <div className="pipelinesEditorIdentity">
+                  <div className="pipelinesEditorTitle">{draft.display_name || draft.name}</div>
+                  <label className="pipelinesInlineToggle">
+                    <input
+                      id="pipeline-enabled"
+                      name="pipeline_enabled"
+                      type="checkbox"
+                      checked={draft.enabled !== false}
+                      disabled={isDraftReadOnly}
+                      onChange={(event) => setDraft((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))}
+                    />
+                    <span>{t("core.ui.pipelines.form.enabled")}</span>
+                  </label>
+                </div>
                 <div className="pipelinesEditorActions">
                   <button
                     className="pillButton pillButtonPrimary"
@@ -1294,94 +1301,85 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               </div>
                 : recommendations.some(alert => alert.severity === "error" || alert.code === "operator_diagnostics_failed")
                   ? <p className="pipelinesHint" role="status">{t("core.ui.pipelines.disabled_with_issues")}</p> : null}
-              <div className="pipelinesEditorControls">
-                <label className="pipelinesInlineToggle">
-                  <input
-                    id="pipeline-enabled"
-                    name="pipeline_enabled"
-                    type="checkbox"
-                    checked={draft.enabled !== false}
-                    disabled={isDraftReadOnly}
-                    onChange={(event) => setDraft((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))}
-                  />
-                  <span>{t("core.ui.pipelines.form.enabled")}</span>
-                </label>
-              </div>
 
-              <details key={draft.name} open={reviewPanels.some(panel => panel.supports(topologyGraph)) ? undefined : true}>
+              <details className="pipelinesAdvancedEditor" key={draft.name} open={reviewPanels.some(panel => panel.supports(topologyGraph)) ? undefined : true}>
                 <summary onKeyDown={(event) => {
                   if (event.key === " ") event.stopPropagation();
                 }}>{t("core.ui.pipelines.advanced_editor")}</summary>
-                {pipelineIngestNotices.map((message) => (
-                  <div className="pipelinesAlertRow isInfo" key={message}>
-                    <div className="pipelinesAlertBadge">{t("core.ui.pipelines.ingest.badge")}</div>
-                    <div className="pipelinesAlertText">
-                      <div className="pipelinesAlertMessage">{message}</div>
-                    </div>
+                <div className="pipelinesAdvancedContent">
+                  <div className="pipelinesConnectionControls">
+                    {pipelineIngestNotices.map((message) => (
+                      <div className="pipelinesAlertRow isInfo" key={message}>
+                        <div className="pipelinesAlertBadge">{t("core.ui.pipelines.ingest.badge")}</div>
+                        <div className="pipelinesAlertText">
+                          <div className="pipelinesAlertMessage">{message}</div>
+                        </div>
+                      </div>
+                    ))}
+                    <label className="pipelinesControlField pipelinesProcessingServerField">
+                      <span>{t("core.ui.pipelines.form.processing_server")}</span>
+                      <div className="pipelinesControlRow">
+                        <select
+                          className="pipelinesSelect"
+                          id="pipeline-processing-server"
+                          name="processing_server_id"
+                          value={draft.processing_server_id ?? "local"}
+                          disabled={isDraftReadOnly}
+                          onChange={(event) =>
+                            setDraft((prev) => (prev ? { ...prev, processing_server_id: event.target.value } : prev))
+                          }
+                        >
+                          {servers.map((server) => (
+                            <option key={server.id} value={server.id}>
+                              {server.id}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </label>
                   </div>
-                ))}
-                <label className="pipelinesControlField pipelinesProcessingServerField">
-                  <span>{t("core.ui.pipelines.form.processing_server")}</span>
-                  <div className="pipelinesControlRow">
-                    <select
-                      className="pipelinesSelect"
-                      id="pipeline-processing-server"
-                      name="processing_server_id"
-                      value={draft.processing_server_id ?? "local"}
-                      disabled={isDraftReadOnly}
-                      onChange={(event) =>
-                        setDraft((prev) => (prev ? { ...prev, processing_server_id: event.target.value } : prev))
-                      }
-                    >
-                      {servers.map((server) => (
-                        <option key={server.id} value={server.id}>
-                          {server.id}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="pipelinesEditorPanel">
+                    <TopologyView
+                      pipelineName={draft.name}
+                      graph={topologyGraph}
+                      graphText={graphText}
+                      operatorsById={operatorsById}
+                      camerasIndex={camerasIndex}
+                      processingServerId={draft?.processing_server_id ?? "local"}
+                      onOpenProcessingServers={onOpenProcessingServers}
+                      operatorPanels={operatorPanels}
+                      onOpenTelemetryField={isDraftReadOnly ? undefined : openTelemetryFieldInspector}
+                      alerts={recommendations}
+                      runtimeInfo={selectedRuntimeGraphInfo}
+                      runtimeStatus={topologyRuntimeStatus}
+                      editable={!isDraftReadOnly && !isPythonLocked}
+                      dirty={topologyDirty}
+                      validationLoading={topologyValidationLoading || recommendationsLoading}
+                      validationError={topologyValidationError}
+                      validationSuccessAt={topologyValidationSuccessAt}
+                      onChangeGraph={applyTopologyGraphChange}
+                      onValidate={() => {
+                        void validateActiveGraph();
+                      }}
+                      onDiscard={discardTopologyChanges}
+                    />
                   </div>
-                </label>
-              <div className="pipelinesEditorPanel">
-                <TopologyView
-                  pipelineName={draft.name}
-                  graph={topologyGraph}
-                  graphText={graphText}
-                  operatorsById={operatorsById}
-                  camerasIndex={camerasIndex}
-                  processingServerId={draft?.processing_server_id ?? "local"}
-                  onOpenProcessingServers={onOpenProcessingServers}
-                  operatorPanels={operatorPanels}
-                  onOpenTelemetryField={isDraftReadOnly ? undefined : openTelemetryFieldInspector}
-                  alerts={recommendations}
-                  runtimeInfo={selectedRuntimeGraphInfo}
-                  runtimeStatus={topologyRuntimeStatus}
-                  editable={!isDraftReadOnly && !isPythonLocked}
-                  dirty={topologyDirty}
-                  validationLoading={topologyValidationLoading || recommendationsLoading}
-                  validationError={topologyValidationError}
-                  validationSuccessAt={topologyValidationSuccessAt}
-                  onChangeGraph={applyTopologyGraphChange}
-                  onValidate={() => {
-                    void validateActiveGraph();
-                  }}
-                  onDiscard={discardTopologyChanges}
-                />
-              </div>
 
-              <PipelineTelemetryOverviewCard
-                pipelineName={draft?.name ?? null}
-                steps={interactiveSteps}
-                externalRefreshNonce={telemetryResetNonce}
-                resetting={telemetryResetting}
-                onReset={resetTelemetryAndStats}
-              />
-              <PipelineStorageCard
-                pipelineName={draft?.name ?? null}
-                limitBytes={pipelineStorageLimitBytes}
-                onUpdateLimitBytes={updatePipelineStorageLimitBytes}
-                steps={interactiveSteps}
-                readOnly={isDraftReadOnly}
-              />
+                  <PipelineTelemetryOverviewCard
+                    pipelineName={draft?.name ?? null}
+                    steps={interactiveSteps}
+                    externalRefreshNonce={telemetryResetNonce}
+                    resetting={telemetryResetting}
+                    onReset={resetTelemetryAndStats}
+                  />
+                  <PipelineStorageCard
+                    pipelineName={draft?.name ?? null}
+                    limitBytes={pipelineStorageLimitBytes}
+                    onUpdateLimitBytes={updatePipelineStorageLimitBytes}
+                    steps={interactiveSteps}
+                    readOnly={isDraftReadOnly}
+                  />
+                </div>
               </details>
             </div>
             )}

@@ -403,6 +403,13 @@ class TrackEventAssembler:
             state = self._events_by_id.get(mapped_event_id)
             if (
                 state is not None
+                and state.opened
+                and (not self._config.same_event_requires_same_class or state.label == track.label)
+                and not (state.active_tracklet_id != track.tracklet_id
+                         and state.active_tracklet_id in current_tracklet_ids)
+                and (state.active_tracklet_id == track.tracklet_id or self._match_score(
+                    state, track, now_monotonic=now_monotonic, packet_ts=packet_ts,
+                ) is not None)
                 and state.event_id not in used_event_ids
                 and self._age_seconds(state, now_monotonic=now_monotonic, packet_ts=packet_ts)
                 <= float(self._config.stitch_gap_seconds)
@@ -459,6 +466,10 @@ class TrackEventAssembler:
         now_monotonic: float,
         packet_ts: float | None,
     ) -> dict[str, Any]:
+        if state.active_tracklet_id and state.active_tracklet_id != track.tracklet_id:
+            previous_key = self._tracklet_key(state.source_stream_id, state.active_tracklet_id)
+            if self._event_id_by_tracklet_key.get(previous_key) == state.event_id:
+                self._event_id_by_tracklet_key.pop(previous_key, None)
         state.label = track.label
         state.active_tracklet_id = track.tracklet_id
         state.tracklet_ids.add(track.tracklet_id)
@@ -691,11 +702,9 @@ class TrackEventAssembler:
         now_monotonic: float,
         packet_ts: float | None,
         current_tracklet_ids: set[str],
-        seen_event_ids: set[str],
     ) -> list[Packet]:
         outputs: list[Packet] = []
         close_after_seconds = float(self._config.close_after_seconds)
-        stitch_gap_seconds = max(close_after_seconds, float(self._config.stitch_gap_seconds))
         for event_id, state in list(self._events_by_id.items()):
             if state.source_stream_id not in {
                 _normalize_string(packet.payload.get("source_stream_id"))
@@ -703,8 +712,6 @@ class TrackEventAssembler:
                 or packet.stream_id,
                 packet.stream_id,
             }:
-                continue
-            if state.event_id in seen_event_ids:
                 continue
             if state.active_tracklet_id and state.active_tracklet_id not in current_tracklet_ids:
                 state.active_tracklet_id = None
@@ -715,26 +722,23 @@ class TrackEventAssembler:
             )
             if age_seconds < close_after_seconds:
                 continue
-            object_data = dict(state.last_object)
-            if object_data and state.opened:
-                outputs.append(
-                    self._build_event_packet(
-                        packet,
-                        lifecycle=Lifecycle.CLOSE,
-                        object_data=object_data,
-                        state=state,
-                    )
-                )
-                state.opened = False
-                state.active_tracklet_id = None
-            if age_seconds >= stitch_gap_seconds:
-                self._events_by_id.pop(event_id, None)
-                for tracklet_id in list(state.tracklet_ids):
-                    self._event_id_by_tracklet_key.pop(
-                        self._tracklet_key(state.source_stream_id, tracklet_id),
-                        None,
-                    )
+            outputs.extend(self._close_event(packet, state, reason="idle_timeout"))
         return outputs
+
+    def _close_event(self, packet: Packet, state: _EventState, *, reason: str) -> list[Packet]:
+        self._events_by_id.pop(state.event_id, None)
+        for tracklet_id in state.tracklet_ids:
+            key = self._tracklet_key(state.source_stream_id, tracklet_id)
+            if self._event_id_by_tracklet_key.get(key) == state.event_id:
+                self._event_id_by_tracklet_key.pop(key, None)
+        if not state.opened:
+            return []
+        state.opened = False
+        closed = self._build_event_packet(
+            packet, lifecycle=Lifecycle.CLOSE, object_data=dict(state.last_object), state=state,
+        )
+        closed.metadata["vision_track_end_reason"] = reason
+        return [closed]
 
     def close_stream(self, packet: Packet) -> list[Packet]:
         """Close and forget only the disconnected source, without image evidence."""
@@ -742,20 +746,7 @@ class TrackEventAssembler:
         for event_id, state in list(self._events_by_id.items()):
             if state.source_stream_id != packet.stream_id:
                 continue
-            if state.opened:
-                outputs.append(
-                    self._build_event_packet(
-                        packet,
-                        lifecycle=Lifecycle.CLOSE,
-                        object_data=dict(state.last_object),
-                        state=state,
-                    )
-                )
-            self._events_by_id.pop(event_id, None)
-            for tracklet_id in state.tracklet_ids:
-                self._event_id_by_tracklet_key.pop(
-                    self._tracklet_key(state.source_stream_id, tracklet_id), None
-                )
+            outputs.extend(self._close_event(packet, state, reason="source_reset"))
         return outputs
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
@@ -771,9 +762,29 @@ class TrackEventAssembler:
         tracks = self._extract_tracks(packet)
         current_tracklet_ids = {item.tracklet_id for item in tracks}
         used_event_ids: set[str] = set()
-        outputs: list[Packet] = []
+        # Expire before matching: a closed identity must never be resurrected.
+        outputs = self._close_expired_events(
+            packet, now_monotonic=now_monotonic, packet_ts=packet_ts,
+            current_tracklet_ids=current_tracklet_ids,
+        )
 
         for track in tracks:
+            key = self._tracklet_key(track.source_stream_id, track.tracklet_id)
+            previous = self._events_by_id.get(self._event_id_by_tracklet_key.get(key, ""))
+            if previous is not None:
+                if (packet_ts is not None and previous.last_seen_packet_ts is not None
+                        and packet_ts < previous.last_seen_packet_ts
+                        and _observation_scope(packet.payload) == _observation_scope(previous.last_observation)):
+                    continue
+                if (self._config.same_event_requires_same_class and previous.label != track.label
+                        and not (previous.active_tracklet_id != track.tracklet_id
+                                 and previous.active_tracklet_id in current_tracklet_ids)):
+                    outputs.extend(self._close_event(packet, previous, reason="category_changed"))
+                    logger = getattr(context, "logger", None)
+                    if logger is not None:
+                        logger.info("Track category changed: source=%s tracklet=%s event=%s previous=%s current=%s",
+                                    track.source_stream_id, track.tracklet_id, previous.event_id,
+                                    previous.label, track.label)
             state = self._state_for_track(
                 track,
                 now_monotonic=now_monotonic,
@@ -821,13 +832,4 @@ class TrackEventAssembler:
                 )
             )
 
-        outputs.extend(
-            self._close_expired_events(
-                packet,
-                now_monotonic=now_monotonic,
-                packet_ts=packet_ts,
-                current_tracklet_ids=current_tracklet_ids,
-                seen_event_ids=used_event_ids,
-            )
-        )
         return outputs

@@ -1,4 +1,11 @@
 const en = {
+  capture_static: "Use current frame",
+  diagnostic_video_source_required: "Choose an enabled video source.",
+  diagnostic_movement_not_available: "Use the current frame: movement acquisition is unavailable for this source.",
+  static_image: "Single source image",
+  static_help: "Capture one frame, select the useful area and map it. The reference remains valid while the camera framing stays unchanged.",
+  coverage_current_frame: "Coverage limited to the captured frame",
+  movement_not_applicable: "No movement required",
   approach_qualified: "Automatic approach available in the verified region.",
   approach_candidate: "Acquisition response saved. Automatic approach still requires physical verification.",
   approach_unavailable: "No qualified automatic approach. Positioning uses fresh visual observations.",
@@ -433,6 +440,13 @@ const en = {
 };
 
 const pt: Record<keyof typeof en, string> = {
+  capture_static: "Usar imagem atual",
+  diagnostic_video_source_required: "Escolha uma fonte de vídeo habilitada.",
+  diagnostic_movement_not_available: "Use a imagem atual: a aquisição com movimento não está disponível nesta fonte.",
+  static_image: "Imagem única da fonte",
+  static_help: "Capture uma imagem, selecione a área útil e faça o mapeamento. A referência permanece válida enquanto o enquadramento da câmera não mudar.",
+  coverage_current_frame: "Cobertura limitada à imagem capturada",
+  movement_not_applicable: "Sem necessidade de movimento",
   approach_qualified: "Aproximação automática disponível na região verificada.",
   approach_candidate: "Resposta da aquisição salva. A aproximação automática ainda precisa de verificação física.",
   approach_unavailable: "Sem aproximação automática qualificada. O posicionamento usa observações visuais atuais.",

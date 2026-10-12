@@ -1835,3 +1835,33 @@ test("camera settings mapping activates the target composition before opening it
     await request.delete(`${backend}/api/compositions/${other.id}`);
   }
 });
+
+
+for (const width of [1440, 390]) test(`single-frame panorama maps four pairs, activates and reopens without camera control at ${width} pixels`, async ({ page, request }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  expect((await request.post(`${backend}/api/__panorama_fixture/static`)).ok()).toBeTruthy();
+  const sourcePath = `/api/cameras/cameras/${cameraId}/sources/synthetic-wide/panorama`;
+  const capture = await request.post(`${backend}${sourcePath}/jobs`, { data: { operation: "capture_static", idempotency_key: "browser-static" } });
+  expect(capture.ok()).toBeTruthy();
+  await expect.poll(async () => (await (await request.get(`${backend}${sourcePath}`)).json()).job?.status).toBe("ready");
+  const wizard = await openWizard(page);
+  await focusCamera(wizard);
+  const pairs = [
+    { panorama: { x: .25, y: .25 }, world: { x: 3, z: -2 } },
+    { panorama: { x: .75, y: .25 }, world: { x: 7, z: -2 } },
+    { panorama: { x: .75, y: .75 }, world: { x: 7, z: 2 } },
+    { panorama: { x: .25, y: .75 }, world: { x: 3, z: 2 } },
+  ];
+  for (const point of pairs) { await enterPoint(wizard, point); await savePoint(page, wizard); }
+  await expect(wizard.getByRole("button", { name: "Use this mapping", exact: true })).toBeEnabled();
+  await wizard.getByRole("button", { name: "Use this mapping", exact: true }).click();
+  await expect.poll(async () => (await currentJob(request))?.active).toBe(true);
+  const job = await currentJob(request);
+  expect(job.solution.type).toBe("panorama_image_plane_v1");
+  expect(job.permissions.can_verify_aim).toBe(false);
+  expect((await fixture(request)).commands).toEqual([]);
+  await page.reload();
+  await openWizard(page);
+  await expect(wizard.getByRole("heading", { name: "Your camera is mapped", exact: true })).toBeVisible();
+  await screenshot(page, `single-frame-active-mapping-${width}`);
+});

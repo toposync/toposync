@@ -1,6 +1,8 @@
 const { test, expect } = require("@playwright/test");
+const { installPipelineEditorFixture } = require("./fixtures/pipeline-editor");
 
 test.beforeEach(async ({ page }) => {
+  await installPipelineEditorFixture(page);
   await page.addInitScript(() => {
     localStorage.setItem("toposync.locale", "en");
     localStorage.setItem("toposync.theme", "default");
@@ -37,7 +39,7 @@ test("collapsed pipeline list stays out of keyboard navigation and Escape restor
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
   await toggle.focus();
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeFocused();
+  await expect(page.locator("#pipeline-enabled")).toBeFocused();
   await expect(createName).toBeHidden();
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
@@ -46,7 +48,7 @@ test("collapsed pipeline list stays out of keyboard navigation and Escape restor
   await expect(toggle).toBeFocused();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeFocused();
+  await expect(page.locator("#pipeline-enabled")).toBeFocused();
   await page.setViewportSize({ width: 1280, height: 900 });
   await expect(createName).toBeVisible();
 });

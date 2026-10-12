@@ -477,3 +477,57 @@ def test_camera_capture_service_observe_reports_sequence_without_frames() -> Non
         assert hub.release_calls == ["front:main:auto"]
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("decoder_failure", [False, True])
+def test_static_panorama_uses_shared_decoder_and_releases_its_lease(tmp_path, monkeypatch, decoder_failure):
+    import json
+    import numpy as np
+    from fastapi.testclient import TestClient
+    from source_panorama_browser_fixture import fixture_config
+    from toposync_ext_cameras.processing.frame_grabber import _LatestFrameBuffer
+    import toposync_ext_cameras.plugin as plugin
+    from toposync.app import create_app
+
+    buffer = _LatestFrameBuffer()
+    hub = _Hub()
+    hub.grabber.get_latest_sample = buffer.get_sample
+    original_acquire = hub.acquire
+
+    async def acquire(**arguments):
+        grabber = await original_acquire(**arguments)
+        buffer.set(np.full((24, 32, 3), 100, np.uint8), time.time(),
+                   source_received_at=time.time(), source_received_monotonic=time.monotonic())
+        return grabber
+
+    hub.acquire = acquire
+    service = _service(hub=hub)
+    if decoder_failure:
+        async def unavailable(*arguments, **keywords):
+            raise RuntimeError("Synthetic decoder failure")
+        service.get_latest = unavailable
+    monkeypatch.setattr(plugin, "get_global_camera_capture_service", lambda: service)
+    configuration = fixture_config()
+    camera = configuration["settings"]["extensions"]["com.toposync.cameras"]["devices"][0]
+    camera["control"] = {"type": "none"}
+    camera["sources"][0]["origin"]["has_ptz"] = False
+    (tmp_path / "config.json").write_text(json.dumps(configuration))
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
+    app = create_app()
+    with TestClient(app) as client:
+        path = f"/api/cameras/cameras/{camera['id']}/sources/{camera['sources'][0]['id']}/panorama"
+        response = client.post(path + "/jobs", json={"operation": "capture_static", "idempotency_key": "shared-decoder"})
+        assert response.status_code == 200, response.text
+        identifier = response.json()["job"]["id"]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            job = client.get(f"/api/cameras/panorama-jobs/{identifier}").json()["job"]
+            if job["status"] in {"ready", "failed"}:
+                break
+            time.sleep(.01)
+        assert job["status"] == ("failed" if decoder_failure else "ready"), job
+        active = client.get(path).json()["active"]
+        assert active is None if decoder_failure else active["width"] == 32
+        assert len(hub.acquire_calls) == len(hub.release_calls) == 1
+        assert not service._leases

@@ -1490,3 +1490,79 @@ def test_draft_keeps_partial_visual_reference_separate_from_mapping(environment)
     assert result["reference"] == "partial" and result["mapping"] == "draft"
     assert result["positioning"] == "unqualified"
     assert controller.commands == [] and controller.snapshot_calls == 0
+
+
+def test_single_frame_reference_maps_activates_and_reopens_without_motor(environment):
+    from toposync_ext_cameras.source_panorama import register_source_panorama_routes
+
+    client, controller, service = environment
+    config = client.portal.call(service.store.get_config)
+    camera = config.settings.extensions["com.toposync.cameras"]["devices"][0]
+    camera["control"] = {"type": "none"}
+    camera["sources"][0]["metadata"].pop("panorama_profile", None)
+    client.portal.call(service.store.save_config, config)
+
+    async def capture_frame(*arguments):
+        return {"image": np.full((120, 200, 3), 80, np.uint8),
+                "capture_evidence": {"capture_instance": "synthetic", "generation": 1, "sequence": 1}}
+
+    source_service = register_source_panorama_routes(client.app, services=service.services,
+        authorize=service.authorize, read_settings=service.read_settings, capture_frame=capture_frame)
+    source_path = "/api/cameras/cameras/simulated/sources/main/panorama"
+    response = client.post(source_path + "/jobs", json={"operation": "capture_static", "idempotency_key": "single-frame"})
+    assert response.status_code == 200, response.text
+    identifier = response.json()["job"]["id"]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        captured = client.get(f"/api/cameras/panorama-jobs/{identifier}").json()["job"]
+        if captured["status"] in {"ready", "failed"}:
+            break
+        time.sleep(.01)
+    assert captured["status"] == "ready", captured
+    artifact = client.get(source_path).json()["active"]
+    response = client.post(BASE, json={"element_id": "camera-element", "source_id": "main",
+        "source_artifact_id": artifact["id"], "source_artifact_revision": artifact["revision"]})
+    assert response.status_code == 200, response.text
+    job = response.json()
+    assert job["source_panorama"]["geometry"]["projection"] == "image_plane"
+    points = [{"id": str(index), "panorama": {"x": u, "y": v}, "world": {"x": u * 10, "z": v * 10}}
+              for index, (u, v) in enumerate([(.1, .1), (.9, .1), (.9, .9), (.1, .9)])]
+    response = client.put(f"{BASE}/{job['id']}/points", json={"revision": job["revision"], "points": points})
+    assert response.status_code == 200, response.text
+    job = response.json()
+    assert job["solution"]["type"] == "panorama_image_plane_v1"
+    assert job["solution"]["preview"]["eligible"]
+    response = client.post(f"{BASE}/{job['id']}/activate", json={"revision": job["revision"]})
+    assert response.status_code == 200, response.text
+    job = response.json()
+    assert job["active"] and not job["permissions"]["aim_enabled"]
+    for route, body in [(f"{BASE}/{job['id']}/check", {"revision": job["revision"], "point_id": "0"}),
+                        (f"{BASE}/aim", {"element_id": "camera-element", "world": {"x": 2, "z": 2}})]:
+        response = client.post(route, json=body)
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "movement_not_applicable"
+    assert not controller.commands and controller.snapshot_calls == 0
+    app, reopened_controller = make_panorama_app(service.store.paths.data_dir.parent)
+    with TestClient(app) as reopened:
+        restored = reopened.get(f"{BASE}/{job['id']}").json()
+        assert restored["active"] and restored["solution"] == job["solution"]
+        reopened.portal.call(app.state.camera_panorama.shutdown)
+    assert not reopened_controller.commands
+    response = client.post(source_path + "/jobs", json={"operation": "capture_static", "idempotency_key": "replacement-frame"})
+    replacement_id = response.json()["job"]["id"]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if client.get(f"/api/cameras/panorama-jobs/{replacement_id}").json()["job"]["status"] == "ready":
+            break
+        time.sleep(.01)
+    active = client.portal.call(lambda: service.get_active(camera_id="simulated", source_id="main", composition_id="yard"))
+    assert active["applies"] and active.get("job") is None
+    assert active["reason"] == "source_panorama_changed"
+    replacement = client.get(source_path).json()["active"]
+    from PIL import Image
+    Image.new("L", (replacement["width"], replacement["height"]), 0).save(source_service.root / "artifacts" / replacement["id"] / "coverage.png")
+    response = client.post(BASE, json={"element_id": "camera-element", "source_id": "main",
+        "source_artifact_id": replacement["id"], "source_artifact_revision": replacement["revision"]})
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "source_panorama_geometry_incompatible"
+    client.portal.call(source_service.shutdown)

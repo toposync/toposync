@@ -22,7 +22,7 @@ RESTRICTION = {
 
 
 @pytest.mark.parametrize("case, expected", [
-    ("valid", []), ("moved", ["camera_area_changed"]), ("renamed", ["camera_area_changed"]),
+    ("valid", []), ("moved", []), ("renamed", []),
     ("removed", ["camera_area_unavailable"]), ("replaced", ["camera_area_unavailable"]),
     ("invalid", ["camera_area_unavailable"]), ("unavailable_context", ["camera_area_unavailable"]),
     ("metadata_only", []), ("inline", []),
@@ -55,7 +55,7 @@ def test_area_filter_requires_the_selected_definition(case, expected):
     assert all(item.severity == "error" for item in diagnostics)
 
 
-def test_changed_area_abstains_instead_of_filtering_with_an_old_polygon(tmp_path):
+def test_area_filter_follows_current_boundary_and_rejects_missing_references(tmp_path):
     async def scenario():
         store = ConfigStore(paths=UserDataPaths(
             data_dir=tmp_path, config_path=tmp_path / "config.json", files_dir=tmp_path / "files",
@@ -70,28 +70,51 @@ def test_changed_area_abstains_instead_of_filtering_with_an_old_polygon(tmp_path
         runtime = AreaRestrictionRuntime(RESTRICTION, PipelineRuntimeDependencies(config_store=store))
         context = SimpleNamespace(metrics=NodeRuntimeMetrics())
 
-        async def observe(timestamp, composition_id="yard"):
-            packet = observation(timestamp)
+        async def observe(timestamp, composition_id="yard", x=1):
+            packet = observation(timestamp, x=x)
+            packet.payload["event_id"] = "tracked-subject"
             packet.payload["mapping"] = {"composition_id": composition_id}
             return await runtime.process_packet(packet, context)
 
         [packet] = await observe(1)
         assert packet.payload["area_id"] == "selected"
+        assert await observe(2, x=3) == []
+        selected = composition()
+        for point in selected["elements"][0]["props"]["vertices"]:
+            if point["x"] == 2:
+                point["x"] = 4
+        await save(selected)
+        [expanded] = await observe(3, x=3)
+        assert expanded.payload["area_observation_started_at"] == 3
+        [continued] = await observe(4, x=3)
+        assert continued.payload["area_observation_started_at"] == 3
+        selected["elements"][0]["props"]["opacity"] = 0.5
+        await save(selected)
+        [metadata_only] = await observe(4.5, x=3)
+        assert metadata_only.payload["area_observation_started_at"] == 3
+        selected["elements"][0]["name"] = "Área alterada"
+        await save(selected)
+        [renamed] = await observe(5, x=3)
+        assert renamed.payload["area_label"] == "Área alterada"
+        assert renamed.payload["area_observation_started_at"] == 5
+        excluded = AreaRestrictionRuntime(
+            {**RESTRICTION, "include_area_names": [], "exclude_area_names": RESTRICTION["include_area_names"]},
+            PipelineRuntimeDependencies(config_store=store),
+        )
+        assert await excluded.process_packet(renamed, context) == []
+        await save(composition())
+        assert await observe(6, x=3) == []
+        assert len(await observe(7)) == 1
         assert await observe(2, "another-composition") == []
-        for edit in ("moved", "renamed", "removed", "replaced"):
+        for edit in ("removed", "replaced"):
             selected = composition()
-            if edit == "moved":
-                selected["elements"][0]["props"]["vertices"][0]["x"] += 10
-            elif edit == "renamed":
-                selected["elements"][0]["name"] = "Área alterada"
-            elif edit == "removed":
+            if edit == "removed":
                 selected["elements"] = []
             else:
                 selected["elements"][0]["id"] = "replacement"
             await save(selected)
             assert await observe(3) == []
-            code = "camera_area_changed" if edit in {"moved", "renamed"} else "camera_area_unavailable"
-            assert context.metrics.unavailable_reason == f"core.ui.pipelines.alerts.{code}.message"
+            assert context.metrics.unavailable_reason == "core.ui.pipelines.alerts.camera_area_unavailable.message"
         await save(composition())
         assert len(await observe(4)) == 1
         assert context.metrics.unavailable_reason is None

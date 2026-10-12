@@ -9,6 +9,8 @@ import numpy as np
 import pytest
 
 from toposync_ext_cameras.processing.panorama_mapping import (
+    estimate_image_plane_mapping,
+    map_image_plane_point,
     estimate_panorama_mapping,
     image_pixel_to_ray,
     map_ray_to_world,
@@ -22,6 +24,29 @@ from toposync_ext_cameras.processing.panorama_mapping import (
     ray_to_pan_tilt,
     render_panorama,
 )
+
+
+def test_image_plane_mapping_recovers_independent_projective_points():
+    matrix = np.array([[.03, .002, .3], [.001, .04, .2], [.001, .002, 1]])
+
+    def image(x, z):
+        vector = matrix @ [x, z, 1]
+        return vector[:2] / vector[2]
+
+    points = [{"id": str(index), "world_x": x, "world_z": z,
+               "image_u": image(x, z)[0], "image_v": image(x, z)[1]}
+              for index, (x, z) in enumerate([(0, 0), (8, 0), (8, 8), (0, 8), (4, 0), (0, 4)])]
+    solution = estimate_image_plane_mapping(points)
+    assert solution["preview"]["eligible"], solution
+    assert "angular_threshold_radians" not in solution["quality"]
+    for x in np.linspace(.1, 7.9, 9):
+        for z in np.linspace(.2, 7.8, 7):
+            uv = map_image_plane_point(solution, x, z)
+            assert uv == pytest.approx(image(x, z), abs=1e-8)
+            assert map_image_plane_point(solution, *uv, inverse=True) == pytest.approx((x, z), abs=1e-8)
+    collinear = [{**point, "world_z": 0, "image_v": .2} for point in points]
+    assert not estimate_image_plane_mapping(collinear)["preview"]["eligible"]
+    assert not estimate_image_plane_mapping(points[:3])["preview"]["eligible"]
 
 
 def _ground_ray(x: float, z: float, *, height: float = 3.0) -> list[float]:

@@ -83,6 +83,8 @@ export function CameraSourcePanoramaSection({ ui, cameraId, sourceId, cameraName
   const job = data?.job;
   const running = isPanoramaJobRunning(job);
   const artifact = (showCandidate ? data?.candidate : data?.active) ?? data?.active ?? data?.candidate ?? null;
+  const staticImage = artifact?.projection === "image_plane";
+  const canScan = data?.capture_modes?.scan === true;
   const jobArtifact = [data?.active, data?.candidate].find((item) => item && item.id === job?.artifact_id);
   const isCandidate = (item: CameraSourcePanoramaArtifact | null | undefined) => Boolean(item && data?.candidate?.id === item.id && data?.active?.id !== item.id);
   const jobReview = panoramaReviewReason(jobArtifact, isCandidate(jobArtifact));
@@ -97,7 +99,7 @@ export function CameraSourcePanoramaSection({ ui, cameraId, sourceId, cameraName
   const processingOnly = job?.status === "processing" || ["queued_processing", "reconstructing", "stopping_processing", "interrupted_processing"].includes(job?.phase ?? "");
   const canStop = job && running && (processingOnly ? job.status !== "stopping" : (job.status !== "stopping" || physicalUnconfirmed) && !ownershipLost);
   const canReconstruct = job && !running && job.can_reconstruct === true && ["failed", "interrupted", "partial"].includes(job.status);
-  const canStart = enabled && Boolean(data) && !running && !editingArtifact && !busy;
+  const canStart = enabled && data?.capture_modes?.single_frame === true && !running && !editingArtifact && !busy;
   const canReturn = job && !running && job.can_return === true && !ownershipLost;
   const canCleanup = job && !running && job.can_cleanup === true;
   const cleanupNotice = notice === "cleanup_completed" || notice === "cleanup_pending";
@@ -116,13 +118,13 @@ export function CameraSourcePanoramaSection({ ui, cameraId, sourceId, cameraName
   const phaseKey = job?.phase === "preparing_reference" ? "preparing_reference" : job?.operation === "verify_control" && job.status === "failed" ? "control_unconfirmed" : jobReview && ["ready", "partial"].includes(job?.status ?? "") ? "review" : regionReady && job?.status === "partial" ? "region_ready" : ["queued_processing", "stopping_processing", "interrupted_processing"].includes(job?.phase ?? "") ? job?.phase : capturing && job ? capturePhase(job) : job?.status;
   const continuingAroundPendingRegion = capturing && (job?.coverage_progress?.regions_pending ?? 0) > 0
     && job?.coverage_progress?.continued_after_recovery === true && ["pan", "step"].includes(job?.coverage_progress?.stage ?? "");
-  const cameraFact = physicalUnconfirmed || ownershipLost ? "camera_stop_unconfirmed"
+  const cameraFact = job?.operation === "capture_static" ? "movement_not_applicable" : physicalUnconfirmed || ownershipLost ? "camera_stop_unconfirmed"
     : running && !processingOnly ? job?.status === "returning" ? "camera_returning" : "camera_capture_active"
       : job?.physical_state === "restored" ? "returned" : job?.physical_state === "stopped" ? "camera_stopped" : "camera_stop_unconfirmed";
   const completedArtifactBands = artifact && artifact.capture_goal !== "initial_region" ? confirmedArtifactBands(artifact) : null;
-  const coverageFact = artifact?.capture_goal === "initial_region" ? "coverage_initial_region" : artifact?.coverage?.acquisition_complete === true ? "coverage_confirmed"
+  const coverageFact = staticImage ? "coverage_current_frame" : artifact?.capture_goal === "initial_region" ? "coverage_initial_region" : artifact?.coverage?.acquisition_complete === true ? "coverage_confirmed"
     : artifact?.coverage?.acquisition_complete === false ? "coverage_pending" : "coverage_unknown";
-  const presentationFact = artifact?.presentation?.status === "verified" ? "presentation_verified"
+  const presentationFact = staticImage ? "static_image" : artifact?.presentation?.status === "verified" ? "presentation_verified"
     : artifact?.presentation?.status === "unverified" ? "presentation_unverified" : "presentation_unknown";
   const duration = job?.estimated_remaining_seconds;
   const minutes = duration != null && Number.isFinite(duration) && duration > 0 ? Math.max(1, Math.ceil(duration / 60)) : null;
@@ -266,10 +268,10 @@ export function CameraSourcePanoramaSection({ ui, cameraId, sourceId, cameraName
         <div className="sourcePanoramaActions">
           {isCandidate(artifact) && data?.candidate_selectable ? <button className="primaryButton" type="button" disabled={Boolean(busy) || running} onClick={() => void selectCandidate().then((result) => { if (result) setShowCandidate(false); })}>{text("use_panorama")}</button> : null}
           <button className={isCandidate(artifact) ? "chipButton" : "primaryButton"} type="button" ref={editButton} disabled={Boolean(busy) || running} onClick={() => openEditor(artifact)}>{text(cropped ? "edit_crop" : "select_crop")}</button>
-          {!isCandidate(artifact) && onOpenLive ? <button className="chipButton" type="button" onClick={() => onOpenLive(artifact)}>{t("ext.cameras.recipe.panorama_live")}</button> : null}
+          {!staticImage && !isCandidate(artifact) && onOpenLive ? <button className="chipButton" type="button" onClick={() => onOpenLive(artifact)}>{t("ext.cameras.recipe.panorama_live")}</button> : null}
         </div>
       </> : !running && !loading ? <div className="sourcePanoramaEmpty"><i className="fa-solid fa-panorama" aria-hidden="true" /><h3>{text("empty_title")}</h3><p>{text("empty_help")}</p></div> : null}
-      {artifact ? <p role="status" className="cardMeta" data-testid="panorama-approach-status">{text(artifact.approach?.status === "qualified" ? "approach_qualified" : artifact.approach?.status === "candidate" ? "approach_candidate" : "approach_unavailable")}</p> : null}
+      {artifact && !staticImage ? <p role="status" className="cardMeta" data-testid="panorama-approach-status">{text(artifact.approach?.status === "qualified" ? "approach_qualified" : artifact.approach?.status === "candidate" ? "approach_candidate" : "approach_unavailable")}</p> : null}
       {data?.active && nativeReferences?.length && !isCandidate(artifact) && !editingArtifact ? <details className="sourcePanoramaJob" data-testid="panorama-native-references">
         <summary>{text("native_cleanup")}</summary>
         {activeReference ? <button className="chipButton" type="button" disabled={actionBusy === "stop" || activeReference?.status === "stopping"} onClick={() => void operateReference(data.active!, "stop", activeReference.id)}>{text("native_stop")}</button> : null}
@@ -282,7 +284,7 @@ export function CameraSourcePanoramaSection({ ui, cameraId, sourceId, cameraName
         {!showJob && job?.outcomes ? <div data-testid="panorama-independent-outcomes">{(["acquisition", "reconstruction", "return"] as const).map((stage) => <p key={stage}><strong>{text(`outcome_${stage}`)}: </strong>{text(`outcome_${job.outcomes![stage]}`)}</p>)}</div> : null}
         {!showJob && resumeUnavailableCode ? <p>{diagnostic(resumeUnavailableCode)}</p> : null}
         {!showJob && canReconstruct ? <div className="sourcePanoramaReconstruct"><button className="chipButton" type="button" disabled={Boolean(busy || editingArtifact)} onClick={() => void operate(job!.id, "reconstruct")}>{text(busy === "reconstruct" ? "reconstruct_starting" : "reconstruct")}</button><p className="cardMeta">{text("reconstruct_hint")}</p></div> : null}
-        {data?.active ? <button className="chipButton" type="button" onClick={inspectNativeResources}>{text("native_inspect")}</button> : null}
+        {data?.active?.projection !== "image_plane" && data?.active ? <button className="chipButton" type="button" onClick={inspectNativeResources}>{text("native_inspect")}</button> : null}
         {nativeError ? <p role="status">{text("native_connection_error")}</p> : null}
         {artifact ? <dl className="sourcePanoramaFacts" aria-label={text("result_facts")} data-testid="panorama-result-facts">
           <div><dt>{text("fact_image")}</dt><dd data-testid="panorama-image-state">{text(imageReview ? "image_needs_review" : "image_available")}</dd></div>
@@ -291,7 +293,7 @@ export function CameraSourcePanoramaSection({ ui, cameraId, sourceId, cameraName
           <div><dt>{text("fact_camera")}</dt><dd data-testid="panorama-camera-state">{text(cameraFact)}</dd></div>
         </dl> : null}
         {job?.telemetry ? <CameraPanoramaTelemetry telemetry={job.telemetry} text={text} locale={locale} /> : null}
-        {artifact ? <><p>{text("complete_definition")}</p><p>{text("positioning_not_validated")}</p></> : null}
+        {artifact ? staticImage ? <p>{text("static_help")}</p> : <><p>{text("complete_definition")}</p><p>{text("positioning_not_validated")}</p></> : null}
         {artifact ? <div className="sourcePanoramaActions"><a className="chipButton" href={resolveToposyncUrl(artifact.image_url)} download>{text("download_full")}</a>{cropped ? <button type="button" className="chipButton" disabled={exporting} onClick={() => void downloadCrop()}>{text(exporting ? "exporting" : "download_crop")}</button> : null}</div> : null}
         {exportError ? <p className="sourcePanoramaError" role="alert">{text("export_failed")}</p> : null}
         {issueCodes.length ? <ul>{issueCodes.map((code, index) => <li key={index}>{diagnostic(code)}</li>)}</ul> : job?.issues?.length ? <p>{text("diagnostic_unknown")}</p> : null}
@@ -300,7 +302,7 @@ export function CameraSourcePanoramaSection({ ui, cameraId, sourceId, cameraName
         {cleanupNotice ? <p className={notice === "cleanup_completed" ? "sourcePanoramaSuccess" : "sourcePanoramaNotice"} role="status">{text(notice)}</p> : null}
         {artifact ? <a className="chipButton" href={resolveToposyncUrl(`/api/cameras/panorama-artifacts/${encodeURIComponent(artifact.id)}`)} target="_blank" rel="noreferrer">{text("open_report")}</a> : null}
       </details> : null}
-      {!running && !editingArtifact && busy !== "reconstruct" ? <div className="sourcePanoramaFooter">{!artifact || physicalUnconfirmed ? <p className="cardMeta">{text(physicalUnconfirmed ? "new_capture_after_uncertain_stop" : "movement_notice")}</p> : null}<button type="button" className={artifact ? "chipButton" : "primaryButton"} disabled={!canStart} onClick={() => { setNotice(""); void start(); }}>{text(busy === "start" ? "starting" : physicalUnconfirmed ? "generate_again" : artifact ? "update_panorama" : "generate")}</button></div> : null}
+      {!running && !editingArtifact && busy !== "reconstruct" ? <div className="sourcePanoramaFooter">{!artifact || physicalUnconfirmed ? <p className="cardMeta">{text(!canScan ? "static_help" : physicalUnconfirmed ? "new_capture_after_uncertain_stop" : "movement_notice")}</p> : null}<button type="button" className={artifact ? "chipButton" : "primaryButton"} disabled={!canStart} onClick={() => { setNotice(""); void start(canScan ? "capture" : "capture_static"); }}>{text(busy === "start" ? "starting" : !canScan ? "capture_static" : physicalUnconfirmed ? "generate_again" : artifact ? "update_panorama" : "generate")}</button>{canScan ? <button type="button" className="chipButton" disabled={!canStart} onClick={() => { setNotice(""); void start("capture_static"); }}>{text("capture_static")}</button> : null}</div> : null}
     </div>
   </section>;
 }

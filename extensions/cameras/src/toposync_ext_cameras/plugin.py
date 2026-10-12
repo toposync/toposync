@@ -5150,12 +5150,30 @@ class CamerasExtension(BaseExtension):
                 resolve_onvif=_resolve_ptz_operation_context,
             )
 
+        async def _source_panorama_frame(camera_id: str, source_id: str, job_id: str) -> dict[str, Any]:
+            from .capture_service import CameraCaptureRequest
+
+            request = CameraCaptureRequest(owner_id=f"panorama:{job_id}", camera_id=camera_id, source_id=source_id)
+            started_at = time.time()
+            lease = await capture_service.open(request, _capture_dependencies())
+            try:
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline:
+                    sample = await capture_service.get_latest(lease.lease_id, min_frame_ts=started_at)
+                    if sample.fresh and not sample.released and sample.frame is not None:
+                        return {"image": sample.frame.copy(), "capture_evidence": sample.capture_evidence}
+                    await asyncio.sleep(0.025)
+                raise HTTPException(status_code=503, detail={"code": "fresh_frame_unavailable", "message": "Não foi possível obter uma imagem recente."})
+            finally:
+                await capture_service.release(lease.lease_id)
+
         source_panorama_service = register_source_panorama_routes(
             app,
             services=services,
             authorize=_require_auth,
             read_settings=_read_ext_settings,
             camera_factory=_source_panorama_camera_factory,
+            capture_frame=_source_panorama_frame,
             reference_coordinator=panorama_reference_coordinator,
             acquisition_policy=REGION_POLICY,
         )
@@ -5549,6 +5567,7 @@ class CamerasExtension(BaseExtension):
                         "continue_confidence_threshold": 0.25,
                         "close_after_seconds": 10.0,
                         "stitch_gap_seconds": 30.0,
+                        "same_event_requires_same_class": True,
                         "default_interval_seconds": 0.25,
                         "use_world_anchor": "auto",
                         "world_match_distance_meters": 3.0,

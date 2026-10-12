@@ -437,7 +437,7 @@ export type CameraContextCameraElement = {
     revision: number | null;
     reference: "available" | "partial" | "incompatible" | "absent";
     mapping: "active" | "draft" | "review_required" | "absent";
-    positioning: "available" | "unqualified";
+    positioning: "available" | "unqualified" | "not_applicable";
     reason: string | null;
     control_points_pairs: number;
   };
@@ -726,7 +726,8 @@ export type CameraSourcePanoramaArtifact = {
     axis_divergence_degrees_p95?: number | null;
   } | null;
   approach?: { version: number; status: "candidate" | "qualified" | "unavailable"; reason: string };
-  positioning_status: "not_validated";
+  projection?: "image_plane" | "equirectangular";
+  positioning_status: "not_validated" | "not_applicable";
   stale?: boolean;
   stale_reason?: "source_changed" | "source_unavailable" | null;
 };
@@ -759,7 +760,7 @@ export type CameraSourcePanoramaJob = {
   quick_approach?: { status: "preparing" | "ready" | "unavailable" | "interrupted"; reason?: string; preparation_id?: string; physical_state?: string };
   outcomes?: CameraSourcePanoramaOutcomes;
   capture_goal?: "initial_region" | "reachable_domain";
-  operation?: "capture" | "verify_control";
+  operation?: "capture" | "capture_static" | "verify_control";
   control_checks_passed?: number;
   coverage_progress?: {
     primary_complete: boolean;
@@ -805,7 +806,7 @@ export type CameraSourcePanoramaJob = {
   planned_captures?: number | null;
   estimated_remaining_seconds?: number | null;
   error?: { code: string; message: string } | null;
-  physical_state: "unknown" | "stopped" | "restored" | "returning" | "stop_unconfirmed" | "ownership_lost";
+  physical_state: "not_applicable" | "unknown" | "stopped" | "restored" | "returning" | "stop_unconfirmed" | "ownership_lost";
   artifact_id?: string | null;
   preview_url?: string | null;
   can_resume: boolean;
@@ -821,6 +822,7 @@ export type CameraSourcePanoramaJob = {
 };
 
 export type CameraSourcePanorama = {
+  capture_modes?: { single_frame: boolean; scan: boolean };
   camera_id: string;
   source_id: string;
   revision?: number;

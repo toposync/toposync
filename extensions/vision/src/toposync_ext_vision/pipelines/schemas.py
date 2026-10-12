@@ -163,7 +163,10 @@ class VisionTrackConfig(BaseModel):
     open_confidence_threshold: float = Field(default=0.50, ge=0.0, le=1.0)
     continue_confidence_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
     close_after_seconds: float = Field(default=10.0, ge=0.05, le=300.0)
-    stitch_gap_seconds: float = Field(default=30.0, ge=0.05, le=3600.0)
+    stitch_gap_seconds: float = Field(
+        default=30.0, ge=0.05, le=3600.0,
+        description="Maximum gap for associating fragments of an open event. Closed events never reopen.",
+    )
     pause_when_gate_closed: bool = True
     max_paused_seconds: float = Field(
         default=900.0,
@@ -182,7 +185,11 @@ class VisionTrackConfig(BaseModel):
         le=2.0,
         description="Normalized image-plane center distance allowed when stitching tracklets.",
     )
-    same_event_requires_same_class: bool = True
+    same_event_requires_same_class: bool = Field(
+        default=True,
+        description="Split an event when its category changes, including an existing tracklet. "
+        "When false, categories may change within an event; category filters still apply to every observation.",
+    )
     event_id_prefix: str = "evt"
 
     @field_validator("tracker_id")

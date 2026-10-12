@@ -1,5 +1,20 @@
 # Panorâmica ao vivo — retorno preciso ainda reprovado, 04/10/2026
 
+
+## Referência estática por fonte — 12/10/2026
+
+Fontes de vídeo podem publicar uma imagem única com geometria plana pelo serviço
+de captura compartilhada, sem controle de movimento ou reconstrução esférica.
+Recorte, quatro correspondências, revisão ativa e projeção da imagem salva usam
+os mesmos recursos do mapeamento panorâmico. A fonte com movimento pode escolher
+essa alternativa explicitamente; sua panorâmica ampliada continua disponível.
+
+Cobertura integral significa apenas o quadro capturado. Referências estáticas
+não habilitam apontamento ou navegação física. Detecções de fontes fixas exigem
+identidade do quadro e geometria válida; uma fonte marcada como móvel exige
+verificação visual do enquadramento para projeção ao vivo. Validação sintética
+não qualifica dispositivo, precisão física nem cobertura além da imagem.
+
 ## Suspensão do processamento entre observações — 11/10/2026
 
 A fonte pode liberar sua captura entre janelas ONVIF, preservando demanda visual

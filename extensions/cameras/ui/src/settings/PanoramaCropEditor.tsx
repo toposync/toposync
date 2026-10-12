@@ -12,7 +12,7 @@ export type PanoramaTranslate = (key: string, parameters?: Record<string, unknow
 export function PanoramaImage({ ui, text, artifact, crop = FULL_PANORAMA_CROP, label, errorLabel }: {
   ui: HostUi;
   text: PanoramaTranslate;
-  artifact: Pick<CameraSourcePanoramaArtifact, "width" | "height" | "image_url">;
+  artifact: Pick<CameraSourcePanoramaArtifact, "width" | "height" | "image_url" | "projection">;
   crop?: CameraSourcePanoramaCrop;
   label: string;
   errorLabel: string;
@@ -30,7 +30,7 @@ export function PanoramaImage({ ui, text, artifact, crop = FULL_PANORAMA_CROP, l
     </div>
     <ui.NavigableViewport className="sourcePanoramaPreviewViewport" label={label} contentKey={`${artifact.image_url}:${crop.u_start}:${crop.u_width}:${crop.v_start}:${crop.v_height}`} contentSize={{ width: artifact.width * crop.u_width, height: artifact.height * crop.v_height }} controllerRef={controller} onViewChange={(state) => setZoom(state.zoom)}>
     <div className="sourcePanoramaImage" role="img" aria-label={label} style={{ aspectRatio: ratio, width: "100%", height: "100%" }}>
-    {[0, 1].map((copy) => <img key={copy} src={resolveToposyncUrl(artifact.image_url)} alt="" aria-hidden="true" draggable={false} onError={() => setFailed(true)} style={{ width: `${100 / crop.u_width}%`, height: `${100 / crop.v_height}%`, left: `${(copy - crop.u_start) * 100 / crop.u_width}%`, top: `${-crop.v_start * 100 / crop.v_height}%` }} />)}
+    {(artifact.projection === "image_plane" ? [0] : [0, 1]).map((copy) => <img key={copy} src={resolveToposyncUrl(artifact.image_url)} alt="" aria-hidden="true" draggable={false} onError={() => setFailed(true)} style={{ width: `${100 / crop.u_width}%`, height: `${100 / crop.v_height}%`, left: `${(copy - crop.u_start) * 100 / crop.u_width}%`, top: `${-crop.v_start * 100 / crop.v_height}%` }} />)}
     </div>
     </ui.NavigableViewport>
     <p className="cardMeta">{text("navigation_help")}</p>
@@ -51,7 +51,7 @@ export async function exportPanoramaCrop(artifact: CameraSourcePanoramaArtifact,
     const context = canvas.getContext("2d");
     if (!context) throw new Error("panorama_canvas_unavailable");
     let destination = 0;
-    for (const segment of panoramaCropSegments(crop, 0)) {
+    for (const segment of panoramaCropSegments(crop, 0, artifact.projection !== "image_plane")) {
       const destinationWidth = segment.width / crop.u_width * canvas.width;
       context.drawImage(image, segment.left * image.naturalWidth, crop.v_start * image.naturalHeight, segment.width * image.naturalWidth, crop.v_height * image.naturalHeight, destination, 0, destinationWidth, canvas.height);
       destination += destinationWidth;
@@ -79,10 +79,11 @@ export function PanoramaCropEditor({ ui, artifact, busy, saveDisabled = false, c
   onSave: (crop: CameraSourcePanoramaCrop) => Promise<boolean>;
   onClose: () => void;
 }): React.ReactElement {
+  const periodic = artifact.projection !== "image_plane";
   const initialCrop = validPanoramaCrop(artifact.crop) ? artifact.crop : FULL_PANORAMA_CROP;
   const [crop, setCrop] = useState<CameraSourcePanoramaCrop>(initialCrop);
   const cropRef = useRef(crop);
-  const [seamOffset, setSeamOffset] = useState(() => panoramaCropSeamOffset(initialCrop));
+  const [seamOffset, setSeamOffset] = useState(() => periodic ? panoramaCropSeamOffset(initialCrop) : 0);
   const [history, setHistory] = useState<CameraSourcePanoramaCrop[]>([]);
   const [drawMode, setDrawMode] = useState(true);
   const [firstCorner, setFirstCorner] = useState<PanoramaPoint | null>(null);
@@ -145,7 +146,7 @@ export function PanoramaCropEditor({ ui, artifact, busy, saveDisabled = false, c
     if (!current.moved) return;
     update(current.handle === "draw"
       ? panoramaCropFromCorners(current.start, target, seamOffset)
-      : adjustPanoramaCrop(current.original, current.handle, deltaX, deltaY), false);
+      : adjustPanoramaCrop(current.original, current.handle, deltaX, deltaY, periodic), false);
   }
 
   function finish(event: React.PointerEvent, cancelled = false) {
@@ -179,7 +180,7 @@ export function PanoramaCropEditor({ ui, artifact, busy, saveDisabled = false, c
   }
 
   function adjust(handle: PanoramaCropHandle, horizontal: number, vertical: number) {
-    update(adjustPanoramaCrop(cropRef.current, handle, horizontal, vertical));
+    update(adjustPanoramaCrop(cropRef.current, handle, horizontal, vertical, periodic));
     setDrawMode(false);
     setFirstCorner(null);
   }
@@ -196,8 +197,8 @@ export function PanoramaCropEditor({ ui, artifact, busy, saveDisabled = false, c
     adjust(handle, horizontal, vertical);
   }
 
-  const segments = panoramaCropSegments(crop, seamOffset);
-  const displayedStart = crop.u_width === 1 ? 0 : wrapPanoramaCoordinate(crop.u_start - seamOffset);
+  const segments = panoramaCropSegments(crop, seamOffset, periodic);
+  const displayedStart = periodic ? crop.u_width === 1 ? 0 : wrapPanoramaCoordinate(crop.u_start - seamOffset) : crop.u_start;
   const percentage = new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 0 }).format;
   const selectionLabel = text("selection_description", { width: percentage(crop.u_width), height: percentage(crop.v_height) });
   return createPortal(<dialog ref={dialog} className="sourcePanorama sourcePanoramaDialog" data-testid="panorama-crop-dialog" aria-label={`${contextLabel} · ${text("crop_title")}`} onCancel={(event) => { event.preventDefault(); requestClose(); }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); requestClose(); } }}>
@@ -220,20 +221,20 @@ export function PanoramaCropEditor({ ui, artifact, busy, saveDisabled = false, c
       controllerRef={navigation} interactionMode={navigating ? "navigate" : "interact"} onNavigationStart={cancelGesture}
       onViewChange={(state) => { setZoom(state.zoom); setScale(state.scale); }}>
       <div className={`sourcePanoramaCropStage${drawMode ? " isDrawing" : ""}`} ref={stage} style={{ width: "100%", height: "100%", aspectRatio: artifact.width / artifact.height }} role="group" aria-label={selectionLabel} tabIndex={0} onKeyDown={(event) => key(event, "move")} onPointerDown={(event) => begin(event, "draw")} onPointerMove={move} onPointerUp={(event) => finish(event)} onPointerCancel={(event) => finish(event, true)} onLostPointerCapture={(event) => finish(event, true)}>
-        <div className="sourcePanoramaStrip" style={{ transform: `translateX(${-seamOffset * 50}%)` }}>{[0, 1].map((copy) => <img key={copy} src={resolveToposyncUrl(artifact.image_url)} alt="" aria-hidden="true" draggable={false} onError={() => setImageError(true)} />)}</div>
+        <div className="sourcePanoramaStrip" style={{ width: periodic ? "200%" : "100%", transform: `translateX(${-seamOffset * 50}%)` }}>{(periodic ? [0, 1] : [0]).map((copy) => <img key={copy} style={{ width: periodic ? "50%" : "100%" }} src={resolveToposyncUrl(artifact.image_url)} alt="" aria-hidden="true" draggable={false} onError={() => setImageError(true)} />)}</div>
         <svg className="sourcePanoramaCropMask" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
           <path fillRule="evenodd" d={`M0 0H1000V1000H0Z ${segments.map((segment) => `M${segment.left * 1000} ${crop.v_start * 1000}h${segment.width * 1000}v${crop.v_height * 1000}h${-segment.width * 1000}Z`).join(" ")}`} />
         </svg>
         {segments.map((segment, index) => <div key={index} className="sourcePanoramaSelection" style={{ left: `${segment.left * 100}%`, top: `${crop.v_start * 100}%`, width: `${segment.width * 100}%`, height: `${crop.v_height * 100}%`, cursor: drawMode ? "crosshair" : "move" }} onPointerDown={(event) => begin(event, drawMode ? "draw" : "move")} />)}
         {!drawMode && !navigating && HANDLES.map((handle) => {
           const unwrapped = displayedStart + crop.u_width * handle.horizontal;
-          const horizontal = unwrapped > 1 ? wrapPanoramaCoordinate(unwrapped) : unwrapped;
+          const horizontal = periodic && unwrapped > 1 ? wrapPanoramaCoordinate(unwrapped) : unwrapped;
           return <button key={handle.key} type="button" className="sourcePanoramaHandle" style={{ left: `clamp(${22 / scale}px, ${horizontal * 100}%, calc(100% - ${22 / scale}px))`, top: `clamp(${22 / scale}px, ${(crop.v_start + crop.v_height * handle.vertical) * 100}%, calc(100% - ${22 / scale}px))`, cursor: `${handle.key}-resize` }} aria-label={text(`handle_${handle.key}`)} disabled={busy} onPointerDown={(event) => begin(event, handle.key)} onKeyDown={(event) => key(event, handle.key)} />;
         })}
         {firstCorner ? <span className="sourcePanoramaFirstCorner" style={{ left: `${firstCorner.x * 100}%`, top: `${firstCorner.y * 100}%` }} aria-hidden="true" /> : null}
       </div>
     </ui.NavigableViewport>
-    <div className="sourcePanoramaActions"><span className="cardMeta">{text("seam_help")}</span><button type="button" className="iconButton" aria-label={text("seam_left")} onClick={() => { setSeamOffset((value) => wrapPanoramaCoordinate(value + 0.125)); setFirstCorner(null); }}>←</button><button type="button" className="iconButton" aria-label={text("seam_right")} onClick={() => { setSeamOffset((value) => wrapPanoramaCoordinate(value - 0.125)); setFirstCorner(null); }}>→</button></div>
+    {periodic ? <div className="sourcePanoramaActions"><span className="cardMeta">{text("seam_help")}</span><button type="button" className="iconButton" aria-label={text("seam_left")} onClick={() => { setSeamOffset((value) => wrapPanoramaCoordinate(value + 0.125)); setFirstCorner(null); }}>←</button><button type="button" className="iconButton" aria-label={text("seam_right")} onClick={() => { setSeamOffset((value) => wrapPanoramaCoordinate(value - 0.125)); setFirstCorner(null); }}>→</button></div> : null}
     <details><summary>{text("adjust_selection")}</summary><p className="cardMeta">{text("keyboard_help")}</p><div className="sourcePanoramaActions" role="group" aria-label={text("move_selection")}>
       {([[-0.01, 0, "left", "←"], [0.01, 0, "right", "→"], [0, -0.01, "up", "↑"], [0, 0.01, "down", "↓"]] as const).map(([horizontal, vertical, direction, symbol]) => <button type="button" className="iconButton" key={direction} disabled={busy || imageError} aria-label={text(`move_${direction}`)} onClick={() => adjust("move", horizontal, vertical)}>{symbol}</button>)}
       <button type="button" className="chipButton" disabled={busy || imageError} onClick={() => adjust("e", -0.01, 0)}>{text("narrower")}</button><button type="button" className="chipButton" disabled={busy || imageError} onClick={() => adjust("e", 0.01, 0)}>{text("wider")}</button>

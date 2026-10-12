@@ -110,6 +110,17 @@ function elements(root) {
   return [root, ...elements(root.props?.children)];
 }
 
+test("review panels keep diagnostics collapsed without hiding the header activation control", () => {
+  const { context, render } = harness();
+  context.reviewPanels = [{ id: "review", supports: () => true, render: () => React.createElement("p", null, "Review fixture") }];
+  const nodes = elements(render());
+  const advanced = nodes.find(node => node.props?.className === "pipelinesAdvancedEditor");
+  assert.equal(advanced.props.open, undefined);
+  assert.ok(!elements(advanced).some(node => node.props?.id === "pipeline-enabled"));
+  const header = nodes.find(node => node.props?.className === "pipelinesEditorHeader");
+  assert.equal(elements(header).filter(node => node.props?.id === "pipeline-enabled").length, 1);
+});
+
 function assertEditorPreserved(tree, context) {
   const nodes = elements(tree);
   assert.ok(nodes.some((node) => node.props?.className === "pipelinesEditorInner"));

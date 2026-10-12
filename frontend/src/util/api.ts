@@ -1444,7 +1444,7 @@ async function _parseHttpError(res: Response, fallback: string): Promise<string>
 
 async function requestJson<T>(input: string, init: RequestInit | undefined, fallback: string): Promise<T> {
   const res = await fetch(input, init);
-  if (!res.ok) throw new Error(await _parseHttpError(res, fallback));
+  if (!res.ok) throw Object.assign(new Error(await _parseHttpError(res, fallback)), { status: res.status });
   return res.json();
 }
 
@@ -1717,6 +1717,21 @@ export async function patchCompositionMeta(id: string, changes: Record<string, u
 
 export async function listCompositions(): Promise<CompositionsIndex> {
   return requestJson<CompositionsIndex>("/api/compositions", undefined, "Failed to list compositions");
+}
+
+export type GeographicMapConfiguration = {
+  background: { id: string; name: string; url: string; attribution: string; nativeZoom: number };
+  geocoding: { name: string; host: string };
+};
+export type GeographicPlace = { id: string; label: string; latitude: number; longitude: number };
+export function getGeographicCompositions(signal?: AbortSignal): Promise<Composition[]> {
+  return requestJson("/api/maps/compositions", { signal }, "Failed to load map compositions");
+}
+export function getGeographicMapConfiguration(signal?: AbortSignal): Promise<GeographicMapConfiguration> {
+  return requestJson("/api/maps/config", { signal }, "Failed to load map configuration");
+}
+export function searchGeographicPlaces(query: string, language: string, signal: AbortSignal): Promise<GeographicPlace[]> {
+  return requestJson("/api/maps/search", { ...jsonRequest("POST", { query, language }), signal }, "Failed to search address");
 }
 
 export async function createComposition(name: string): Promise<Composition> {

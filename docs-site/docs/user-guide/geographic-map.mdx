@@ -1,0 +1,75 @@
+---
+title: Geographic map
+description: Position compositions and view their elements and spatial events on a geographic map.
+sidebar_position: 2
+---
+
+# Geographic map
+
+Choose **Map** in the main screen's rendering selector to view geographically
+positioned compositions together. Compositions without a position are listed
+separately. Their internal coordinates and camera calibration remain unchanged.
+
+To position a composition, open its editor and choose **Map**. Find the region,
+click to set the origin or drag the cross, then adjust orientation and scale.
+**Save position** commits the change. Another concurrent edit to the same origin
+must be resolved by reopening the map.
+
+**Address or place** and **My location** navigate the map without moving or
+saving the composition. **Back to compositions** returns to the configured
+positions. Device location requires browser permission and a secure context;
+Home Assistant's iframe policy may also restrict it.
+
+## External services
+
+OpenStreetMap supplies the optional background. The browser asks before loading
+it and remembers your choice for this provider and Toposync installation.
+Disabling the background stops new requests; local compositions remain visible.
+The map permits zoom through level 22, enlarging native tiles above their
+available resolution. Greater enlargement does not add survey accuracy.
+
+Address search uses Nominatim and requests separate permission to send your
+search text. Search is submitted manually, with no autocomplete. The public
+service has an aggregate limit of one request per second, requires identification
+and attribution, and must remain replaceable. Toposync caches up to 100 queries
+for one day and shares its request gate across processes using the same data
+directory. Separate installations do not share this gate: use a suitable hosted
+or self-hosted service before deploying beyond a contained installation.
+Review the [Nominatim policy](https://operations.osmfoundation.org/policies/nominatim/)
+and [OpenStreetMap tile policy](https://operations.osmfoundation.org/policies/tiles/).
+
+Administrators can replace the raster background or Nominatim-compatible search
+endpoint through `settings.core.geographic_map` in `config.json`, preserving other
+configuration. For example:
+
+```json
+{
+  "geographic_map": {
+    "background": {
+      "id": "openstreetmap",
+      "name": "OpenStreetMap",
+      "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      "nativeZoom": 19
+    },
+    "geocoding_name": "Nominatim",
+    "geocoding_url": "https://nominatim.openstreetmap.org/search"
+  }
+}
+```
+
+The supplied background attribution must include its required licence link.
+The built-in default does so. Geometry is independent of these settings. Google
+and Mapbox are not integrated; their future adapters must handle their own APIs,
+permissions, attribution and credentials.
+
+## Events and controls
+
+The map shows locations and trails supplied by available spatial events. A
+recorded location does not prove current presence. Missing or expired location
+evidence is not replaced with a guessed position.
+
+Select a marker to open its event details or element action. Double click or
+press and hold an element to open its controls. Overlapping elements present a
+choice. Controls in another composition ask you to switch context first and
+retain existing permissions and confirmations. Opening or navigating the map
+does not operate hardware.

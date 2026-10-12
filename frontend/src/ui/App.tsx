@@ -1882,6 +1882,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       ) : screen === "main" ? (
         <MainScreen
           compositionName={composition.name}
+          georeference={composition.meta?.georeference}
           compositions={compositions}
           activeCompositionId={activeCompositionId}
           compositionLoaded={compositionLoaded}

@@ -32,6 +32,7 @@ import { Icon } from "../Icon";
 import { Viewport3D } from "../Viewport3D";
 import { MainViewport2D } from "../main2d/MainViewport2D";
 import { MainViewportVector2D } from "../main2d/MainViewportVector2D";
+import { MainGeographicViewport } from "../geographic/MainGeographicViewport";
 import {
   notificationImageItems,
   notificationDescription,
@@ -49,6 +50,7 @@ import { navigate, replace, usePathname } from "../router";
 
 type Props = {
   compositionName: string;
+  georeference: unknown;
   compositions: CompositionSummary[];
   activeCompositionId: string;
   compositionLoaded: boolean;
@@ -304,7 +306,7 @@ function isFilterRestrictive(filter: NotificationsFilter): boolean {
   return false;
 }
 
-type BuiltinRenderMode = "3d" | "2d" | "vector2d" | "streams" | "camera-live";
+type BuiltinRenderMode = "3d" | "2d" | "vector2d" | "streams" | "camera-live" | "geographic";
 type RenderMode = BuiltinRenderMode | string;
 
 const CAMERA_LIVE_BASE_PATH = "/cameras/live";
@@ -313,7 +315,7 @@ const LAST_CAMERA_LIVE_VIEW_STORAGE_KEY = "toposync.streams.last_live_view_id.v1
 const STREAMS_OVERLAY_IDLE_MS = 2500;
 const LIVE_VIEWS_REFRESH_MS = 15000;
 
-const BUILTIN_RENDER_MODES = new Set<string>(["3d", "2d", "vector2d", "streams", "camera-live"]);
+const BUILTIN_RENDER_MODES = new Set<string>(["3d", "2d", "vector2d", "streams", "camera-live", "geographic"]);
 
 function isBuiltinRenderMode(value: string): value is BuiltinRenderMode {
   return BUILTIN_RENDER_MODES.has(value);
@@ -383,6 +385,7 @@ function errorMessage(error: unknown): string {
 
 export function MainScreen({
   compositionName,
+  georeference,
   compositions,
   activeCompositionId,
   compositionLoaded,
@@ -1047,7 +1050,7 @@ export function MainScreen({
   );
 
   const renderModeLabel =
-    renderMode === "3d"
+    renderMode === "geographic" ? t("core.map.map") : renderMode === "3d"
       ? t("core.ui.render_modal.option_3d.title", {}, "3D")
       : renderMode === "2d"
         ? t("core.ui.render_modal.option_2d.title", {}, "2D (Image)")
@@ -1106,7 +1109,16 @@ export function MainScreen({
         />
       ) : (
         <>
-          {renderMode === "2d" ? (
+          {renderMode === "geographic" ? (
+            <div className={`registeredRenderView${notificationsOpen ? " withNotifications" : ""}`}>
+            <MainGeographicViewport compositionId={activeCompositionId} compositionName={compositionName} georeference={georeference}
+              elements={elements} elementTypesById={elementTypesById} notifications={activeNotification && !notifications.some(item => item.id === activeNotification.id) ? [...notifications, activeNotification] : notifications}
+              notificationRenderers={notificationRenderers} activeNotificationId={activeNotificationId}
+              onActivateComposition={onActivateComposition} onElementActivated={handleElementActivated}
+              onNotification={id => { onSelectNotification(id); setIsNotificationDetailsOpen(true); }}
+              onImage={args => setImageModal({ ...args, title: args.title ?? t("core.ui.image_preview") })} />
+            </div>
+          ) : renderMode === "2d" ? (
             <MainViewport2D
               elements={elements}
               elementTypesById={elementTypesById}
@@ -1569,7 +1581,7 @@ export function MainScreen({
         )}
       </div>
 
-      {!isLiveCameraRenderMode(renderMode) && !viewportLoadingMessage && elements.length === 0 ? (
+      {!isLiveCameraRenderMode(renderMode) && renderMode !== "geographic" && !viewportLoadingMessage && elements.length === 0 ? (
         <div className="emptyHint">
           <div className="card">
             <div className="cardTitle">{t("core.ui.empty_title")}</div>
@@ -1584,6 +1596,11 @@ export function MainScreen({
         onClose={() => setIsRenderModalOpen(false)}
       >
         <div className="choiceList">
+          <button type="button" className={["choiceItem", renderMode === "geographic" ? "isSelected" : ""].filter(Boolean).join(" ")}
+            onClick={() => { setRenderMode("geographic"); setIsRenderModalOpen(false); }}>
+            <span className="choiceTitle">{t("core.map.map")}</span>
+            <span className="choiceDesc">{t("core.map.render_description")}</span>
+          </button>
           <div
             className={["choiceItem", renderMode === "3d" ? "isSelected" : ""].filter(Boolean).join(" ")}
             role="button"

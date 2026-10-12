@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import os
 import re
+import sqlite3
 import threading
 import uuid
 from collections import deque
@@ -26,6 +27,7 @@ from toposync.extensions import run_extension_shutdown_callbacks
 from toposync.extensions.manager import ExtensionManager
 from toposync.runtime.auth import AuthContext, AuthRuntime
 from toposync.runtime.device_store import DeviceStore
+from toposync.runtime.geographic import GeographicRateLimit, GeographicSearch, GeographicSearchRequest, map_configuration
 from toposync.runtime.notifications.time_query import resolve_history_time
 from toposync.runtime.event_bus import EventBus, EventOutcome
 from toposync.runtime.config_store import (
@@ -4618,6 +4620,39 @@ def create_app() -> FastAPI:
             active_composition_id=active_id,
             compositions=[CompositionSummary(id=c.id, name=c.name) for c in compositions],
         )
+
+    @app.get("/api/maps/compositions", response_model=list[Composition])
+    async def geographic_compositions(request: Request) -> list[Composition]:
+        _require(request, action="core:compositions:read")
+        _active_id, compositions = await request.app.state.config_store.list_compositions()
+        return [item.model_copy(update={"meta": {"georeference": item.meta.get("georeference")}})
+                for item in compositions]
+
+    @app.get("/api/maps/config")
+    async def geographic_configuration(request: Request) -> dict:
+        _require(request, action="core:compositions:read")
+        settings = await request.app.state.config_store.get_settings()
+        try:
+            config = map_configuration(settings.core)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(status_code=503, detail="map_configuration_invalid") from exc
+        return {key: value for key, value in config.items() if key != "geocoding_url"}
+
+    @app.post("/api/maps/search")
+    async def geographic_search(request: Request, body: GeographicSearchRequest) -> list[dict]:
+        _require(request, action="core:compositions:read")
+        query = body.query.strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="map_query_required")
+        store = request.app.state.config_store
+        try:
+            config = map_configuration((await store.get_settings()).core)
+            return await asyncio.to_thread(GeographicSearch(store.paths.data_dir / "geographic-search.sqlite3").search,
+                                           config["geocoding_url"], query, body.language)
+        except GeographicRateLimit as exc:
+            raise HTTPException(status_code=429, detail="map_search_rate_limit", headers={"Retry-After": "2"}) from exc
+        except (ValueError, TypeError, KeyError, OSError, sqlite3.Error) as exc:
+            raise HTTPException(status_code=502, detail="map_search_unavailable") from exc
 
     @app.post("/api/compositions", response_model=Composition)
     async def create_composition(request: Request, body: CreateCompositionRequest) -> Composition:

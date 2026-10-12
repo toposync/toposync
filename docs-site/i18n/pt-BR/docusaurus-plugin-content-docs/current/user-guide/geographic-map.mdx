@@ -1,0 +1,77 @@
+---
+title: Mapa geográfico
+description: Posicione composições e visualize seus elementos e acontecimentos espaciais no mapa geográfico.
+sidebar_position: 2
+---
+
+# Mapa geográfico
+
+Escolha **Mapa** no seletor de renderização da tela principal para visualizar
+as composições posicionadas geograficamente. Composições sem posição aparecem
+identificadas separadamente. As coordenadas internas e a calibração das câmeras
+permanecem preservadas.
+
+Para posicionar uma composição, abra seu editor e escolha **Mapa**. Encontre a
+região, clique para definir a origem ou arraste a cruz, e ajuste orientação e
+escala. **Salvar posição** confirma a alteração. Uma edição concorrente da
+mesma origem precisa ser resolvida reabrindo o mapa.
+
+**Endereço ou lugar** e **Minha localização** apenas navegam pelo mapa.
+Não reposicionam nem salvam a composição. **Voltar às composições** retorna
+às posições configuradas. A localização do dispositivo exige permissão do
+navegador e uma conexão segura; a política de permissões do quadro incorporado
+do Home Assistant também pode restringi-la.
+
+## Serviços externos
+
+O OpenStreetMap fornece o fundo opcional. O navegador pergunta antes de carregá-lo
+e lembra a escolha para esse provedor e essa instalação do Toposync. Desativar
+o fundo interrompe novas requisições; as composições locais continuam visíveis.
+O mapa permite ampliar até o nível 22, aumentando os blocos de imagem acima da
+resolução nativa disponível. Isso não acrescenta precisão topográfica.
+
+A busca de endereço usa Nominatim e pede uma autorização separada para enviar o
+texto informado. A busca é manual, sem preenchimento automático. O serviço público
+limita o tráfego agregado a uma requisição por segundo, exige identificação e
+atribuição e precisa continuar substituível. O Toposync armazena até 100 consultas
+por um dia e compartilha a limitação entre processos que usam o mesmo diretório
+de dados. Instalações separadas não compartilham essa limitação: use um serviço
+contratado adequado ou uma instância própria antes de ampliar a implantação.
+Consulte a [política do Nominatim](https://operations.osmfoundation.org/policies/nominatim/)
+e a [política dos blocos de imagem do OpenStreetMap](https://operations.osmfoundation.org/policies/tiles/).
+
+Administradores podem substituir o fundo raster ou o destino de busca compatível
+com Nominatim por `settings.core.geographic_map` em `config.json`, preservando as
+demais configurações. Exemplo:
+
+```json
+{
+  "geographic_map": {
+    "background": {
+      "id": "openstreetmap",
+      "name": "OpenStreetMap",
+      "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      "nativeZoom": 19
+    },
+    "geocoding_name": "Nominatim",
+    "geocoding_url": "https://nominatim.openstreetmap.org/search"
+  }
+}
+```
+
+A atribuição configurada para o fundo deve incluir o vínculo exigido para a
+licença; o padrão embutido já faz isso. A geometria independe dessas configurações.
+Google e Mapbox não estão integrados: seus adaptadores futuros devem tratar as
+respectivas interfaces, autorizações, atribuição e credenciais.
+
+## Acontecimentos e controles
+
+O mapa mostra posições e rastros fornecidos pelos acontecimentos espaciais
+disponíveis. Uma posição registrada não confirma presença atual. Evidência de
+posição ausente ou expirada não é substituída por uma localização estimada.
+
+Selecione um marcador para abrir os detalhes do acontecimento ou a ação do
+elemento. Clique duas vezes ou mantenha pressionado para abrir seus controles.
+Elementos sobrepostos apresentam uma escolha. Controles de outra composição
+pedem a troca explícita de contexto e preservam permissões e confirmações
+existentes. Abrir ou navegar pelo mapa não aciona hardware.

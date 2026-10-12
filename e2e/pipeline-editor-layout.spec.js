@@ -86,6 +86,7 @@ test("keyboard disclosure keeps activation available and hidden content out of T
   await page.keyboard.press("Space");
   await expect(page.locator("#pipeline-processing-server")).toBeVisible();
   await page.locator("#pipeline-enabled").focus();
+  await expect(page.locator("#pipeline-enabled")).toHaveCSS("outline-style", "solid");
   await page.keyboard.press("Space");
   await expect(page.locator("#pipeline-enabled")).toBeChecked();
   expect(fixture.saves).toHaveLength(0);

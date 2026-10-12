@@ -31,6 +31,7 @@ async function installPipelineEditorFixture(page) {
     "/api/processing-servers": { servers: [{ id: "local", name: "Local" }] },
     "/api/processing-servers/local/status": { ok: true, status: {} },
     "/api/cameras/index": { cameras: [{ id: "fixture", name: "Câmera simulada", sources: [{ id: "main", name: "Entrada", ingest: { mode: "direct" } }] }] },
+    "/api/cameras/cameras/fixture/contexts": { camera_id: "fixture", compositions: [] },
     "/api/pipelines/operators": { operators: ["camera.source", "core.store_images"].map(id => ({
       id, description: id, inputs: id === "camera.source" ? [] : [{ name: "in", type: "frame" }],
       outputs: [{ name: "out", type: "frame" }], capabilities: [], defaults: {}, config_schema: {}, share_strategy: "never",

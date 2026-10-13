@@ -11,6 +11,7 @@ import type {
 
 import { isAbortError } from "../../util/api";
 import { i18n } from "../../util/i18n";
+import { NotificationFraming, fitNotificationPoints, pinPoints } from "../notifications/notificationFraming";
 import { Notification2DPinView } from "../notifications/Notification2DPinView";
 import { Icon } from "../Icon";
 import { Modal } from "../Modal";
@@ -77,6 +78,9 @@ export function MainViewportVector2D({
 }: Props): React.ReactElement {
   const { t } = i18n.useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const notificationFramingRef = useRef(new NotificationFraming());
+  const notificationViewportSizeRef = useRef({ width: 0, height: 0 });
+  notificationFramingRef.current.select(`${compositionId}:${activeNotification?.id ?? ""}`);
   const fitTransformRef = useRef<ViewTransform>({ scale: 1, x: 0, y: 0 });
   const isPanningRef = useRef(false);
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
@@ -200,19 +204,11 @@ export function MainViewportVector2D({
     );
     const next = computeFitTransform(viewportWidth, viewportHeight, stageWidth, stageHeight);
     fitTransformRef.current = next;
-    setTransformImmediately(next);
+    if (!notificationFramingRef.current.preserveView) setTransformImmediately(next);
   }, [setTransformImmediately, stageHeight, stageWidth]);
 
   useLayoutEffect(() => {
     recomputeFit();
-  }, [recomputeFit]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const observer = new ResizeObserver(() => recomputeFit());
-    observer.observe(container);
-    return () => observer.disconnect();
   }, [recomputeFit]);
 
   const markersStage = useMemo<Main2DMarkerStage[]>(() => {
@@ -319,6 +315,7 @@ export function MainViewportVector2D({
   const handleWheel = useCallback(
     (event: React.WheelEvent) => {
       event.preventDefault();
+      notificationFramingRef.current.interact();
       const container = containerRef.current;
       if (!container) return;
 
@@ -368,6 +365,7 @@ export function MainViewportVector2D({
 
   const handlePointerMove = useCallback((event: React.PointerEvent) => {
     if (!isPanningRef.current) return;
+    notificationFramingRef.current.interact();
     const last = lastPointerRef.current;
     if (!last) return;
     const dx = event.clientX - last.x;
@@ -462,16 +460,42 @@ export function MainViewportVector2D({
     const screenX = transform.x + stage.x * transform.scale;
     const screenY = transform.y + stage.y * transform.scale;
 
-    let trail: Array<{ x: number; y: number }> | undefined;
-    if (pinData.trail && pinData.trail.length >= 2) {
-      trail = pinData.trail.map((p) => {
-        const s = projectWorldToStage({ x: p.x, z: p.z }, bounds, stageWidth, stageHeight);
-        return { x: transform.x + s.x * transform.scale, y: transform.y + s.y * transform.scale };
-      });
-    }
-
-    return { screenX, screenY, trail, priority: pinData.priority, closed: pinData.closed };
+    const project = (point: { x: number; z: number }) => {
+      const stage = projectWorldToStage(point, bounds, stageWidth, stageHeight);
+      return { x: transform.x + stage.x * transform.scale, y: transform.y + stage.y * transform.scale };
+    };
+    const trails = (pinData.trails ?? (pinData.trail ? [pinData.trail] : [])).map(segment => segment.map(project));
+    return { screenX, screenY, trails, priority: pinData.priority, closed: pinData.closed };
   }, [bounds, notificationOverlay, stageHeight, stageWidth, transform, stateVersion]);
+
+  const frameNotification = useCallback((force = false) => {
+    const container = containerRef.current;
+    const pin = notificationOverlay?.pin();
+    const framing = notificationFramingRef.current;
+    if (!container || !pin || !framing.canFit(force)) return;
+    const points = pinPoints(pin).map(point => projectWorldToStage(point, bounds, stageWidth, stageHeight));
+    const next = fitNotificationPoints(container.clientWidth, container.clientHeight,
+      [...points, { x: 0, y: 0 }, { x: stageWidth, y: stageHeight }]);
+    if (!next) return;
+    framing.didFit();
+    fitTransformRef.current = next;
+    setTransformImmediately(next);
+  }, [bounds, notificationOverlay, stageWidth, stageHeight, setTransformImmediately]);
+  useEffect(() => { frameNotification(); }, [frameNotification, stateVersion]);
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(() => {
+      const previous = notificationViewportSizeRef.current;
+      const next = { width: container.clientWidth, height: container.clientHeight };
+      const resized = previous.width !== next.width || previous.height !== next.height;
+      notificationViewportSizeRef.current = next;
+      recomputeFit();
+      if (resized && notificationFramingRef.current.canFitResize) frameNotification(true);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [recomputeFit, frameNotification]);
 
   const vectorViewBox = useMemo(() => {
     const viewBox = computeMain2DVectorViewBox({
@@ -552,13 +576,16 @@ export function MainViewportVector2D({
       </div>
 
       <div className="main2dButtonsOverlay">
-        {notificationPin ? (
+        {notificationPin ? <button className="notificationFrameButton" type="button"
+        onPointerDown={event => event.stopPropagation()}
+        onClick={() => frameNotification(true)}>{t("core.ui.notifications.frame_selection", {}, "Frame occurrence")}</button> : null}
+      {notificationPin ? (
           <Notification2DPinView
             screenX={notificationPin.screenX}
             screenY={notificationPin.screenY}
             priority={notificationPin.priority}
             closed={notificationPin.closed}
-            trail={notificationPin.trail}
+            trails={notificationPin.trails}
           />
         ) : null}
         {markerEntries.map((entry) => {

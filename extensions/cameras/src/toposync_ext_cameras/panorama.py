@@ -507,6 +507,29 @@ class PanoramaService:
         ]
         return _digest(sorted(geometry, key=lambda item: item["id"]))
 
+    @staticmethod
+    def _composition_binding(composition: Any, camera_element: Any) -> dict[str, Any]:
+        # Area contours select observations; their planar centre is not a calibration reference.
+        geometry = []
+        geometry_keys = {"vertices", "points", "width", "height", "depth", "length",
+                         "scale", "url", "image_url", "asset_id", "file_id", "src",
+                         "elevation", "closed"}
+        for element in composition.elements:
+            if element.id != camera_element.id and element.props.get("camera_id"):
+                continue
+            area = element.type == "com.toposync.structural.area"
+            props = {key: value for key, value in element.props.items() if key in geometry_keys}
+            position = element.position.model_dump()
+            if area:
+                for key in ("vertices", "points", "width", "depth", "length", "closed"):
+                    props.pop(key, None)
+                position = {"y": position["y"]}
+            geometry.append({"id": element.id, "type": element.type,
+                             "position": position, "rotation": element.rotation.model_dump(),
+                             "props": props})
+        return {"version": 2, "composition_id": composition.id,
+                "geometry": sorted(geometry, key=lambda item: item["id"])}
+
     async def _context(
         self, camera_id: str, element_id: str, *, request: Request | None = None
     ) -> tuple[Any, Any, dict[str, Any]]:
@@ -699,10 +722,12 @@ class PanoramaService:
         self, job: dict[str, Any], composition: Any, element: Any, camera: dict[str, Any]
     ) -> None:
         source = get_camera_source(camera, source_id=job["source_id"], enabled_only=True)
-        if (
-            composition.id != job["composition_id"]
-            or self._composition_digest(composition, element) != job["_composition_digest"]
-        ):
+        binding = self._composition_binding(composition, element)
+        saved_binding = job.get("_composition_binding")
+        if (composition.id != job["composition_id"]
+            or (saved_binding is not None and saved_binding != binding)
+            or (saved_binding is None
+                and self._composition_digest(composition, element) != job["_composition_digest"])):
             raise _error(
                 "composition_changed",
                 "The composition geometry changed; capture and validate a new mapping",
@@ -736,6 +761,11 @@ class PanoramaService:
             )
             if current["geometry"] != binding["geometry"]:
                 raise _error("source_panorama_changed", "The saved panorama geometry changed")
+        if saved_binding is None:
+            # Upgrade only a demonstrably valid legacy context, without changing its solution/checks.
+            updated = {**job, "_composition_binding": self._composition_binding(composition, element)}
+            self._save(updated)
+            job.update(updated)
 
     def _job(self, camera_id: str, job_id: str, revision: int | None = None) -> dict[str, Any]:
         job = self.jobs.get(job_id)
@@ -931,6 +961,7 @@ class PanoramaService:
                 "error": None,
                 "updated_at": time.time(),
                 "_composition_digest": self._composition_digest(composition, element),
+                "_composition_binding": self._composition_binding(composition, element),
                 "_source_digest": self._source_digest(camera, source),
                 "_captures": [],
                 "_base_mapping": element.props.get("panorama_mapping"),

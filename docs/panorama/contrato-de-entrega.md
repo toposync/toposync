@@ -146,3 +146,13 @@ Resultado final separado em: aquisição/cobertura, reconstrução, disponibilid
 ## 9. Etapa local autorizada em 15/09/2026
 
 Implementar e validar localmente a cobertura bilateral/inferior e a preservação limitada da primeira recusa decisiva. Nenhuma câmera deve ser acessada ou movimentada nesta etapa. Encerrar no checkpoint pronto para aceitação física, com protocolo executável para uma aquisição na Garagem e uma na Frente. A autorização de ensaios anteriores não é autorização para executá-los nesta etapa.
+
+## Vínculo de calibração e áreas de interesse — 12/10/2026
+
+Editar o contorno ou o centro plano de uma área de interesse não altera os
+pontos da solução calibrada. A assinatura versionada de composição separa
+essas edições da câmera, fonte e geometria material. A revisão integral da
+composição continua sendo conferida pelos consumidores da área. Calibrações
+antigas só recebem o novo vínculo após conferir o contexto anterior completo;
+um hash divergente continua bloqueado. Nenhuma conversão recalcula a solução
+ou promove verificações de precisão e apontamento físico.

@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "module": "CommonJS",
+    "esModuleInterop": true,
     "moduleResolution": "Node",
     "noEmit": false,
     "outDir": ".test-dist",
@@ -9,6 +10,8 @@
     "types": []
   },
   "include": [
+    "src/ui/notifications/notificationFraming.test.ts",
+    "src/ui/notifications/pipelinesNotifications.test.ts",
     "src/ui/main2d/shared.ts",
     "src/ui/main2d/effectDelta.ts",
     "src/ui/main2d/shared.test.ts"

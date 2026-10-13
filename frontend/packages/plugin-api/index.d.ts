@@ -114,6 +114,8 @@ export type NotificationOverlayPointerEvent = {
 
 export type Notification3DOverlay = {
   object: import("three").Object3D;
+  /** Bounds of valid spatial evidence, excluding decorative marker geometry. */
+  bounds?: () => { minX: number; maxX: number; minZ: number; maxZ: number } | null;
   /**
    * Called before a rendered frame. Return true while the overlay needs
    * continuous frames; return false when it can sleep until the host is
@@ -132,6 +134,8 @@ export type Notification2DPin = {
   z: number;
   /** Optional history of past world positions. Drawn as a polyline beneath the pin. */
   trail?: ReadonlyArray<{ x: number; z: number }>;
+  /** Independent subjects and continuous segments; never connect separate entries. */
+  trails?: ReadonlyArray<ReadonlyArray<{ x: number; z: number }>>;
   /** Used by the host to tint the pin (cyan/medium by default, red/high, gray/low). */
   priority?: "low" | "medium" | "high";
   /** When true the host dims the pin to indicate the notification was closed. */

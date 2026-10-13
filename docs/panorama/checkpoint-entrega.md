@@ -1,5 +1,25 @@
 # Panorâmica ao vivo — retorno preciso ainda reprovado, 04/10/2026
 
+## Edição de regiões de interesse — 12/10/2026
+
+A assinatura de composição versão 2 preserva a calibração ao editar vértices
+e centro no plano das áreas de interesse. Câmera, fonte, referências da cena,
+elevação e geometria da área fora desse plano continuam protegidas. Remover
+ou substituir elementos permanece uma mudança incompatível. A revisão integral
+do mapa continua disponível às regras de área, independentemente desse vínculo.
+
+Registros antigos recebem o vínculo novo somente quando a assinatura anterior,
+a fonte e a referência salva ainda correspondem ao contexto atual. A migração
+persiste o vínculo sem recalcular solução ou transferir verificações físicas.
+Testes de API e projeção conferem preservação e bloqueios; não qualificam precisão,
+cobertura ou apontamento físico. Notificações conservam trajetórias separadas
+por sujeito, com lacunas explícitas, e enquadram evidências nas três vistas.
+Falhas recuperadas antes da publicação conservam seus motivos no histórico
+e no diagnóstico da notificação. Resize reenquadra uma seleção ainda não
+navegada manualmente; os buffers de trajetória 3D são reutilizados. O orçamento
+de transporte omite primeiro imagens temporárias e solicita atualização por
+HTTP para metadados maiores, preservando a evidência armazenada.
+
 
 ## Referência estática por fonte — 12/10/2026
 

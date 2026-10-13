@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -64,7 +65,7 @@ def test_mapping_failure_and_recovery_reach_persisted_notification(tmp_path, mon
             packet = replace(packet, payload={**packet.payload, "frame_ts": 100 + index,
                 "vision": {"detections": [detection]}, "media": {**packet.payload["media"], "ts": 100 + index},
                 "source": {**packet.payload["source"], "clock_domain": "fixture"},
-                "capture_evidence": {"capture_instance": "fixture", "generation": 1, "sequence": index}})
+                "capture_evidence": {"capture_instance": "fixture", "generation": 1, "sequence": index + 1, "published_at": time.time() - 10 + index}})
             mapped = (await mapping.process_packet(packet, context))[0]
             assert (metrics.unavailable_reason is None) == healthy
             events = await tracking.process_packet(mapped, context)
@@ -87,7 +88,8 @@ def test_mapping_failure_and_recovery_reach_persisted_notification(tmp_path, mon
             assert last["data"]["mapping"]["reason"] == "camera_configuration_changed"
         # A later unrelated frame must not replace the subject's last evidence.
         terminal = replace(packet, lifecycle=Lifecycle.CLOSE,
-                           payload={"mapping": {"status": "unmapped", "reason": "unrelated_frame"}})
+                           payload={"capture_evidence": packet.payload["capture_evidence"],
+                                    "mapping": {"status": "unmapped", "reason": "unrelated_frame"}})
         clock[0] += 10
         await deliver(await tracking.process_packet(terminal, context))
         clock[0] += 10

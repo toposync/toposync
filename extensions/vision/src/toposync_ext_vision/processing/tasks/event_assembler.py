@@ -4,11 +4,12 @@ import math
 import time
 import uuid
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
+from toposync.runtime.pipelines.spatial_history import SpatialHistory
 
 from ...pipelines.schemas import VisionTrackConfig
 from ..contracts import normalize_bbox01
@@ -150,6 +151,7 @@ class _EventState:
     last_object: dict[str, Any] = field(default_factory=dict)
     last_bbox01: tuple[float, float, float, float] | None = None
     last_world_anchor: dict[str, float] | None = None
+    spatial_history: SpatialHistory = field(default_factory=SpatialHistory)
 
 
 class TrackEventAssembler:
@@ -485,6 +487,12 @@ class TrackEventAssembler:
         state.last_object = dict(object_data)
         state.last_bbox01 = track.bbox01
         state.last_world_anchor = dict(track.world_anchor) if track.world_anchor else None
+        observation = {**packet.payload, "subject": self._subject_for_object(
+            lifecycle=Lifecycle.UPDATE, object_data=object_data, state=state),
+            "mapping": state.last_observation.get("mapping", {}),
+            "world": track.world_anchor, "world_anchor": track.world_anchor}
+        observation.pop("spatial_history", None)
+        state.spatial_history.observe(replace(packet, lifecycle=Lifecycle.UPDATE, payload=observation))
         return object_data
 
     def _mapping_for_object(self, packet: Packet, object_data: dict[str, Any]) -> dict[str, Any]:
@@ -558,6 +566,7 @@ class TrackEventAssembler:
             "tracklet_ids": sorted(state.tracklet_ids),
         }
         payload["vision"] = vision
+        payload["spatial_history"] = state.spatial_history.snapshot()
         subject = self._subject_for_object(
             lifecycle=lifecycle,
             object_data=object_data,

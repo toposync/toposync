@@ -26,6 +26,29 @@ def _clear_ephemeral(subscription: _Subscription) -> None:
 
 
 class EventBroadcaster:
+    max_event_bytes = 512 * 1024
+
+    @classmethod
+    def _bounded_event(cls, event: dict[str, Any]) -> dict[str, Any]:
+        def fits(value):
+            return len(json.dumps(value, allow_nan=False).encode("utf-8")) <= cls.max_event_bytes
+
+        if fits(event):
+            return event
+        notification = event.get("notification")
+        if isinstance(notification, dict) and "ephemeralImage" in notification:
+            notification = {key: value for key, value in notification.items() if key != "ephemeralImage"}
+            notification["payload"] = {
+                **(notification.get("payload") or {}),
+                "ephemeral_image_status": {"status": "unavailable", "reason": "image_transport_byte_limit"},
+            }
+            event = {**event, "notification": notification}
+            if fits(event):
+                return event
+        # Preserve durable history in storage. Fetch it over HTTP instead of
+        # silently dropping an oversized live update or shortening its evidence.
+        return {"op": "resync"}
+
     def __init__(self, *, max_queue_size: int = 250) -> None:
         self._subscribers: dict[asyncio.Queue[dict[str, Any]], _Subscription] = {}
         self._max_queue_size = max(50, int(max_queue_size))
@@ -60,6 +83,8 @@ class EventBroadcaster:
         self, event: dict[str, Any], *, ephemeral_image: dict[str, Any] | None = None,
         include_global: bool = True,
     ) -> None:
+        if not self._subscribers:
+            return
         notification = event.get("notification")
         notification_id = notification.get("id") if isinstance(notification, dict) else None
         # A separate argument prevents transient bytes from entering stored/public records.
@@ -67,23 +92,27 @@ class EventBroadcaster:
         validated_unix_ms = time.time() * 1000
         image = self._bounded_image(ephemeral_image, now_ms=validated_unix_ms)
         deadline = validated_monotonic + (image["expiresAt"] - validated_unix_ms) / 1000 if image else 0
+        outgoing_event = self._bounded_event(event)
+        image_event = self._bounded_event({**event, "notification": {**notification, "ephemeralImage": image}}) if image and isinstance(notification, dict) else None
         for q, subscription in list(self._subscribers.items()):
             if subscription.notification_id is not None:
                 if subscription.notification_id != notification_id:
                     continue
             elif not include_global:
                 continue
-            outgoing = event
+            outgoing = outgoing_event
             if subscription.include_ephemeral_image:
                 _clear_ephemeral(subscription)
                 if image is not None and isinstance(notification, dict) and time.monotonic() < deadline:
-                    transient = {**notification, "ephemeralImage": image}
-                    subscription.transient = transient
-                    outgoing = {**event, "notification": transient}
-                    subscription.expiry = asyncio.get_running_loop().call_later(
-                        max(0.0, deadline - time.monotonic()),
-                        _clear_ephemeral, subscription,
-                    )
+                    outgoing = image_event or outgoing_event
+                    if isinstance(outgoing.get("notification"), dict) and outgoing["notification"].get("ephemeralImage"):
+                        transient = dict(outgoing["notification"])
+                        subscription.transient = transient
+                        outgoing = {**outgoing, "notification": transient}
+                        subscription.expiry = asyncio.get_running_loop().call_later(
+                            max(0.0, deadline - time.monotonic()),
+                            _clear_ephemeral, subscription,
+                        )
             try:
                 q.put_nowait(outgoing)
             except asyncio.QueueFull:

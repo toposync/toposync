@@ -139,3 +139,36 @@ camera.source
 The important part is not the canvas. It is that the shared edge into
 `vision.detect` has a visible queue policy and backpressure behavior before the
 expensive model runs.
+
+## Spatial histories across cadence limits {/* #spatial-histories */}
+
+Tracking events accumulate mapped observations before their update interval.
+Grouping keeps independent member histories before its own interval; the core
+throttle operators carry those snapshots through notification cadence limits.
+Existing recipes receive this behavior without extra nodes, capture, inference,
+image storage, or changed intervals. The notification's representative group pin
+remains distinct from the individual trajectories.
+
+`payload.spatial_history` version 1 contains `trails` keyed by `subject_id`. Each
+point carries finite `x`, `z`, media `ts`, `composition_id`, and a provenance
+`scope`. A `gap_before` starts a new segment after missing mapping or changed
+capture, calibration, composition, or category. Duplicate and older observations
+within a scope are ignored. CLOSE carries the last observations without treating
+its delivery time or unrelated image as new evidence, and releases runtime state.
+
+Histories retain at most 512 points per subject, 2048 per occurrence, and 64
+subjects. Limiters hold at most 128 stream histories. Limits preserve the first
+and most recent points, expose `truncated`, and mark discarded intervals as gaps.
+This is bounded in-memory evidence, not a frame journal: an abrupt restart can
+lose unpublished history. Old notifications retain their original simple trail.
+Two-dimensional overlays expose independent `trails`; three-dimensional overlays
+may expose evidence `bounds` for selection framing. Updates do not override manual
+navigation. These contracts do not certify physical mapping accuracy or detection
+coverage.
+
+Mapping gaps retain bounded failure reasons even when mapping recovers before
+the next published update. Notification streams use a combined 512 KiB budget:
+temporary images are omitted first, with `image_transport_byte_limit`; if durable
+metadata itself exceeds the budget, a `resync` requests the complete notification
+over HTTP. Stored trajectories are not shortened to fit a live message. Resizing
+an untouched selection refits its evidence; manual navigation remains in control.

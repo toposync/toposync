@@ -44,7 +44,7 @@ export function GeographicCompositionLayer({ map, composition, reference, elemen
   const { t } = i18n.useI18n();
   const canvas = useRef<HTMLCanvasElement>(null);
   const overlays = useRef(new Map<string, { overlay: Notification2DOverlay; notification: Notification; renderer: NotificationRenderer }>());
-  const projected = useRef(new Map<string, { reference: Georeference; x: number; z: number; worldTrail: ReadonlyArray<{ x: number; z: number }>;
+  const projected = useRef(new Map<string, { reference: Georeference; x: number; z: number; worldTrails: ReadonlyArray<ReadonlyArray<{ x: number; z: number }>>;
     position: { lat: number; lng: number }; trail: Array<Array<{ lat: number; lng: number }>> }>());
   const [markers, setMarkers] = useState<ScreenMarker[]>([]);
   const [pins, setPins] = useState<ScreenPin[]>([]);
@@ -134,12 +134,12 @@ export function GeographicCompositionLayer({ map, composition, reference, elemen
         try {
           const pin = overlay.pin();
           if (!pin) { projected.current.delete(id); continue; }
-          const worldTrail = pin.trail ?? [];
+          const worldTrails = pin.trails ?? (pin.trail ? [pin.trail] : []);
           let cached = projected.current.get(id);
           if (!cached || cached.reference !== reference || cached.x !== pin.x || cached.z !== pin.z
-            || cached.worldTrail.length !== worldTrail.length || worldTrail.some((point, index) => point.x !== cached!.worldTrail[index].x || point.z !== cached!.worldTrail[index].z)) {
-            cached = { reference, x: pin.x, z: pin.z, worldTrail: worldTrail.map(point => ({ x: point.x, z: point.z })),
-              position: localToGeographic(pin, reference), trail: geographicTrail(reference, worldTrail) };
+            || cached.worldTrails.length !== worldTrails.length || worldTrails.some((segment, index) => segment.length !== cached!.worldTrails[index].length || segment.some((point, pointIndex) => point.x !== cached!.worldTrails[index][pointIndex].x || point.z !== cached!.worldTrails[index][pointIndex].z))) {
+            cached = { reference, x: pin.x, z: pin.z, worldTrails: worldTrails.map(segment => segment.map(point => ({ x: point.x, z: point.z }))),
+              position: localToGeographic(pin, reference), trail: worldTrails.flatMap(segment => geographicTrail(reference, segment)) };
             projected.current.set(id, cached);
           }
           const screen = projectLocation(map, cached.position);

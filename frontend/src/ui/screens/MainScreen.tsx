@@ -1091,6 +1091,7 @@ export function MainScreen({
           </div>
         </div>
       ) : renderMode === "3d" ? (
+        <div className={`registeredRenderView notificationSpatialViewport${notificationsOpen ? " withNotifications" : ""}`}>
         <Viewport3D
           elements={elements}
           elementTypesById={elementTypesById}
@@ -1107,6 +1108,7 @@ export function MainScreen({
             });
           }}
         />
+        </div>
       ) : (
         <>
           {renderMode === "geographic" ? (
@@ -1119,6 +1121,7 @@ export function MainScreen({
               onImage={args => setImageModal({ ...args, title: args.title ?? t("core.ui.image_preview") })} />
             </div>
           ) : renderMode === "2d" ? (
+            <div className={`registeredRenderView notificationSpatialViewport${notificationsOpen ? " withNotifications" : ""}`}>
             <MainViewport2D
               elements={elements}
               elementTypesById={elementTypesById}
@@ -1127,7 +1130,9 @@ export function MainScreen({
               activeNotification={activeNotification}
               activeNotificationRenderer={activeNotificationRenderer}
             />
+            </div>
           ) : renderMode === "vector2d" ? (
+            <div className={`registeredRenderView notificationSpatialViewport${notificationsOpen ? " withNotifications" : ""}`}>
             <MainViewportVector2D
               elements={elements}
               elementTypesById={elementTypesById}
@@ -1136,6 +1141,7 @@ export function MainScreen({
               activeNotification={activeNotification}
               activeNotificationRenderer={activeNotificationRenderer}
             />
+            </div>
           ) : activeRenderView ? (
             <div className={`registeredRenderView${notificationsOpen ? " withNotifications" : ""}`}>
               {activeRenderView.render({

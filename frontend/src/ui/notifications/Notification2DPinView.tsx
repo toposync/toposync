@@ -22,6 +22,7 @@ type Props = {
   closed?: boolean;
   /** Optional trail points already projected to screen-space pixels. */
   trail?: ReadonlyArray<{ x: number; y: number }>;
+  trails?: ReadonlyArray<ReadonlyArray<{ x: number; y: number }>>;
 };
 
 // Smooth teardrop: tip at (0, 0), circle center at (0, -140), radius 70.
@@ -30,17 +31,17 @@ type Props = {
 // so the straight sides leave the tip and meet the arc tangentially — no kink.
 const PIN_PATH = "M 0 0 L -60.62 -105 A 70 70 0 1 1 60.62 -105 Z";
 
-export function Notification2DPinView({ screenX, screenY, priority, closed, trail }: Props): React.ReactElement {
+export function Notification2DPinView({ screenX, screenY, priority, closed, trail, trails }: Props): React.ReactElement {
   const tone = priority ?? "medium";
   const color = PRIORITY_COLOR[tone];
   const trailColor = TRAIL_COLOR[tone];
   const reactId = useId();
   const gradId = `n2dp-grad-${reactId.replace(/:/g, "")}`;
 
-  const trailPath =
-    trail && trail.length >= 2
-      ? trail.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ")
-      : null;
+  const trailPath = (trails ?? (trail ? [trail] : []))
+    .filter(segment => segment.length >= 2)
+    .map(segment => segment.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" "))
+    .join(" ");
 
   return (
     <>

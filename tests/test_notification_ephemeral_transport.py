@@ -24,6 +24,57 @@ def event(identifier="selected", sequence=1):
     return {"op": "update", "notification": {"id": identifier, "payload": {"sequence": sequence}}}
 
 
+def test_combined_history_and_real_image_budget_preserves_durable_update():
+    import numpy as np
+    from test_notification_image import packet
+    from test_spatial_history import observation
+    from toposync.runtime.pipelines import notification_image
+    from toposync.runtime.pipelines.spatial_history import SpatialHistory
+
+    history = SpatialHistory()
+    for identity in range(4):
+        for index in range(600):
+            history.observe(observation(1791900000 + index * .2, str(identity), x=index * .013, z=identity * .41))
+    value = event()
+    value["notification"]["payload"]["spatial_history"] = history.snapshot()
+
+    async def scenario():
+        broadcaster = EventBroadcaster()
+        queue = broadcaster.subscribe(notification_id="selected", include_ephemeral_image=True)
+        source = packet(600, 600)
+        source.artifacts["main"].data[:] = np.random.default_rng(1).integers(0, 256, size=(600, 600, 3), dtype=np.uint8)
+        with patch.object(notification_image.time, "time", lambda: 1000.1):
+            descriptor, reason = notification_image.build_ephemeral_notification_image(source, "")
+            assert reason == "ready"
+            assert len(json.dumps({**value, "notification": {**value["notification"], "ephemeralImage": descriptor}})) > broadcaster.max_event_bytes
+            broadcaster.publish(value, ephemeral_image=descriptor)
+            delivered = queue.get_nowait()
+        assert len(json.dumps(delivered).encode()) <= broadcaster.max_event_bytes
+        assert delivered["notification"]["payload"]["spatial_history"] == history.snapshot()
+        assert delivered["notification"]["payload"]["ephemeral_image_status"]["reason"] == "image_transport_byte_limit"
+        assert "ephemeralImage" not in delivered["notification"]
+        assert "ephemeral_image_status" not in value["notification"]["payload"]
+        broadcaster.unsubscribe(queue)
+
+    asyncio.run(scenario())
+
+
+def test_oversized_durable_event_requests_resync_without_shortening_history():
+    async def scenario():
+        broadcaster = EventBroadcaster()
+        selected = broadcaster.subscribe(notification_id="selected", include_ephemeral_image=True)
+        global_queue = broadcaster.subscribe()
+        value = event()
+        value["notification"]["payload"]["history"] = "x" * broadcaster.max_event_bytes
+        broadcaster.publish(value)
+        assert selected.get_nowait() == global_queue.get_nowait() == {"op": "resync"}
+        assert len(value["notification"]["payload"]["history"]) == broadcaster.max_event_bytes
+        broadcaster.unsubscribe(selected)
+        broadcaster.unsubscribe(global_queue)
+
+    asyncio.run(scenario())
+
+
 def test_images_require_explicit_realtime_opt_in():
     assert NotifyConfig().include_ephemeral_image is False
     assert NotifyConfig(include_ephemeral_image=True).realtime is True

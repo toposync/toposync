@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { NotificationFraming } from "./notifications/notificationFraming";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
@@ -15,6 +16,7 @@ import type {
 } from "@toposync/plugin-api";
 
 import { DEFAULT_THEME_ID } from "../util/theme";
+import { i18n } from "../util/i18n";
 
 type Props = {
   elements: CompositionElement[];
@@ -348,6 +350,7 @@ export function Viewport3D({
   const autoFitLastBoundsRef = useRef<THREE.Box3 | null>(null);
   const autoFitLastCheckTsRef = useRef<number>(0);
   const requestRenderRef = useRef<(() => void) | null>(null);
+  const notificationFramingRef = useRef(new NotificationFraming());
 
   const [focusedElementId, setFocusedElementId] = useState<string | null>(null);
   const focusHelperRef = useRef<THREE.BoxHelper | null>(null);
@@ -375,6 +378,28 @@ export function Viewport3D({
     elementTypesByIdRef.current = elementTypesById;
   }, [elementTypesById]);
 
+  function frameNotification(force = false): void {
+    const framing = notificationFramingRef.current;
+    const notification = activeNotificationRef.current;
+    framing.select(`${compositionIdRef.current ?? ""}:${notification?.id ?? ""}`);
+    const evidenceBounds = notificationOverlayRef.current?.bounds?.();
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!notification || !camera || !controls || !evidenceBounds || !framing.canFit(force)) return;
+    if (!Object.values(evidenceBounds).every(Number.isFinite)) return;
+    const bounds = new THREE.Box3(
+      new THREE.Vector3(evidenceBounds.minX - 0.8, 0, evidenceBounds.minZ - 0.8),
+      new THREE.Vector3(evidenceBounds.maxX + 0.8, 1.2, evidenceBounds.maxZ + 0.8),
+    );
+    const contextBounds = computeTrackedBounds(trackedRef.current);
+    if (contextBounds) bounds.union(contextBounds);
+    fitCameraAngledOverview(camera, controls, bounds);
+    framing.didFit();
+    autoFitUntilRef.current = 0;
+    lastAutoFitCompositionIdRef.current = compositionIdRef.current ?? null;
+    requestRenderRef.current?.();
+  }
+
   function syncNotificationOverlay(): void {
     const overlay = notificationOverlayRef.current;
     const scene = sceneRef.current;
@@ -383,6 +408,7 @@ export function Viewport3D({
     if (!scene || !renderer || !camera) return;
 
     const notification = activeNotificationRef.current;
+    notificationFramingRef.current.select(`${compositionIdRef.current ?? ""}:${notification?.id ?? ""}`);
     const rendererDef = activeNotificationRendererRef.current;
     const create3DOverlay = rendererDef?.create3DOverlay;
     const currentCompositionId = compositionIdRef.current ?? null;
@@ -409,6 +435,7 @@ export function Viewport3D({
 
     if (!needsRecreate) {
       overlay.update?.(notification);
+      frameNotification();
       requestRenderRef.current?.();
       return;
     }
@@ -434,7 +461,7 @@ export function Viewport3D({
           view: viewRef.current,
           elements,
           compositionId: currentCompositionId ?? undefined,
-          requestRender: () => requestRenderRef.current?.(),
+          requestRender: () => { frameNotification(); requestRenderRef.current?.(); },
         },
         notification,
         actions,
@@ -451,6 +478,7 @@ export function Viewport3D({
       notificationOverlayRendererIdRef.current = rendererDef.id;
       notificationOverlayCompositionIdRef.current = currentCompositionId;
       notificationOverlayElementsRef.current = elements;
+      frameNotification();
       requestRenderRef.current?.();
     } catch (err) {
       console.warn("[notificationOverlay]", err);
@@ -553,6 +581,7 @@ export function Viewport3D({
     controlsRef.current = controls;
 
     const handleControlsStart = () => {
+      notificationFramingRef.current.interact();
       userInteractedWithCameraRef.current = true;
       autoFitUntilRef.current = 0;
       requestRenderRef.current?.();
@@ -598,6 +627,7 @@ export function Viewport3D({
       labelRenderer.setSize(w, h);
       camera.aspect = h > 0 ? w / h : 1;
       camera.updateProjectionMatrix();
+      if (notificationFramingRef.current.canFitResize) frameNotification(true);
       requestRender();
     }
 
@@ -623,7 +653,7 @@ export function Viewport3D({
 
       const now = Date.now();
       const autoFitUntil = autoFitUntilRef.current;
-      if (autoFitUntil && now <= autoFitUntil && !userInteractedWithCameraRef.current) {
+      if (autoFitUntil && now <= autoFitUntil && !userInteractedWithCameraRef.current && !notificationFramingRef.current.preserveView) {
         wantsNextFrame = true;
         const lastCheckTs = autoFitLastCheckTsRef.current;
         if (!lastCheckTs || now - lastCheckTs >= AUTO_FIT_THROTTLE_MS) {
@@ -674,9 +704,8 @@ export function Viewport3D({
     rendererRef.current = renderer;
     cameraRef.current = camera;
     sceneRef.current = scene;
-    syncNotificationOverlay();
-
     resize();
+    syncNotificationOverlay();
     const ro = new ResizeObserver(resize);
     ro.observe(containerEl);
 
@@ -888,6 +917,10 @@ export function Viewport3D({
       controls.removeEventListener("end", handleControlsEnd);
       controls.dispose();
       controlsRef.current = null;
+      notificationFramingRef.current.reset();
+      lastAutoFitCompositionIdRef.current = null;
+      userInteractedWithCameraRef.current = false;
+      autoFitUntilRef.current = 0;
 
       if (notificationOverlayRef.current) {
         scene.remove(notificationOverlayRef.current.object);
@@ -1053,7 +1086,7 @@ export function Viewport3D({
 
     const fitKey = compositionId ?? null;
     const controls = controlsRef.current;
-    if (controls && !userInteractedWithCameraRef.current && lastAutoFitCompositionIdRef.current !== fitKey) {
+    if (controls && !notificationFramingRef.current.preserveView && !userInteractedWithCameraRef.current && lastAutoFitCompositionIdRef.current !== fitKey) {
       const bounds = computeTrackedBounds(tracked);
       if (bounds) {
         fitCameraAngledOverview(camera, controls, bounds);
@@ -1178,5 +1211,10 @@ export function Viewport3D({
     }
   }
 
-  return <div className="viewportRoot" ref={containerRef} tabIndex={0} onKeyDown={handleKeyDown} />;
+  return <div className="viewportRoot" ref={containerRef} tabIndex={0} onKeyDown={handleKeyDown}>
+    {activeNotification ? <button type="button" className="notificationFrameButton"
+      onPointerDown={event => event.stopPropagation()} onClick={() => frameNotification(true)}>
+      {i18n.t("core.ui.notifications.frame_selection", {}, "Frame occurrence")}
+    </button> : null}
+  </div>;
 }

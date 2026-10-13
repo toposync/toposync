@@ -10,6 +10,7 @@ from typing import Any
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
+from toposync.runtime.pipelines.spatial_history import SpatialHistory
 
 from ...pipelines.schemas import VisionGroupEventsConfig
 from ..contracts import normalize_bbox01
@@ -219,6 +220,7 @@ class _GroupState:
     last_bbox01: tuple[float, float, float, float] | None = None
     last_world_envelope: dict[str, Any] | None = None
     last_observation: dict[str, Any] = field(default_factory=dict)
+    spatial_history: SpatialHistory = field(default_factory=SpatialHistory)
 
 
 class VisionGroupEventsRuntime(TransformOperatorRuntime):
@@ -608,6 +610,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                 },
             }
         )
+        payload["spatial_history"] = group.spatial_history.snapshot()
         if trigger is not None:
             payload["member_subject"] = dict(trigger.subject)
         terminal = lifecycle == Lifecycle.CLOSE or (trigger is not None and trigger.lifecycle == Lifecycle.CLOSE)
@@ -703,6 +706,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
         if packet_ts is not None:
             group.last_seen_packet_ts = max(packet_ts, group.last_seen_packet_ts or packet_ts)
         group.camera_id = member.camera_id or group.camera_id
+        group.spatial_history.observe(member.packet, subject_id=member.event_id, world=member.world_anchor)
         existing = group.members.get(member.event_id)
         first_seen = existing.first_seen_packet_ts if existing else packet_ts
         recognition = member.packet.payload.get("recognition")

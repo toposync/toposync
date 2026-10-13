@@ -664,7 +664,7 @@ def test_assisted_draft_does_not_reuse_changed_geometry(environment) -> None:
     body, _ = saved_source_panorama(client, service)
     body["reuse_draft"] = True
     first = client.post(BASE, json=body).json()
-    service.jobs[first["id"]]["_composition_digest"] = "old-composition"
+    service.jobs[first["id"]]["_composition_binding"] = {"version": 0}
     second = client.post(BASE, json=body).json()
     assert second["id"] != first["id"]
     assert len(service.jobs) == 2
@@ -1072,6 +1072,63 @@ def test_active_mapping_invalidates_geometry_but_preserves_cosmetic_edits(enviro
         BASE + "/aim", json={"element_id": "camera-element", "world": {"x": 4, "z": 0}}
     )
     assert response.status_code == 409 and len(controller.commands) == before
+
+
+def test_area_contour_preserves_mapping_but_elevation_does_not(environment) -> None:
+    client, controller, service = environment
+
+    async def edit_area(*, create=False, elevation=False):
+        config = (await service.store.get_config()).model_copy(deep=True)
+        if create:
+            config.compositions[1].elements.append(CompositionElement(
+                id="interest", type="com.toposync.structural.area",
+                props={"vertices": [{"x": 0, "z": 0}, {"x": 2, "z": 0}, {"x": 0, "z": 2}]}))
+        else:
+            area = config.compositions[1].elements[-1]
+            area.position.x = 10
+            area.position.z = 20
+            area.props["vertices"][1]["x"] = 12
+            if elevation:
+                area.position.y = 1
+        await service.store.save_config(config)
+
+    client.portal.call(lambda: edit_area(create=True))
+    job = confirm_checks(client, fit_job(client))
+    assert client.post(f"{BASE}/{job['id']}/activate", json={"revision": job["revision"]}).status_code == 200
+    client.portal.call(edit_area)
+    active = client.portal.call(lambda: service.get_active(camera_id="simulated", source_id="main", composition_id="yard"))
+    assert active["job"]["id"] == job["id"]
+    assert active["job"]["solution"]["matrix"] == job["solution"]["matrix"]
+    client.portal.call(lambda: edit_area(elevation=True))
+    assert client.portal.call(lambda: service.get_active(camera_id="simulated", source_id="main", composition_id="yard")) == {"applies": True, "reason": "composition_changed"}
+
+
+@pytest.mark.parametrize("divergent", [False, True])
+def test_legacy_composition_binding_upgrades_only_verified_context(environment, divergent) -> None:
+    client, _, service = environment
+    job = fit_job(client)
+    saved = service.jobs[job["id"]]
+    saved.pop("_composition_binding")
+    if divergent:
+        saved["_composition_digest"] = "unknown-context"
+    result = client.get(f"{BASE}/{job['id']}").json()
+    assert result["solution"]["preview"]["eligible"] is not divergent
+    assert ("_composition_binding" in saved) is not divergent
+    if not divergent:
+        persisted = json.loads((service.root / job["id"] / "job.json").read_text())
+        assert persisted["_composition_binding"] == saved["_composition_binding"]
+        assert persisted["solution"] == saved["solution"]
+
+
+def test_legacy_binding_does_not_upgrade_an_invalid_source(environment) -> None:
+    client, _, service = environment
+    job = fit_job(client)
+    saved = service.jobs[job["id"]]
+    saved.pop("_composition_binding")
+    saved["_source_digest"] = "incompatible-source"
+    result = client.get(f"{BASE}/{job['id']}").json()
+    assert result["solution"]["preview"]["reasons"] == ["camera_configuration_changed"]
+    assert "_composition_binding" not in saved
 
 
 def test_active_reference_conflict_and_restore_are_atomic_without_movement(environment) -> None:

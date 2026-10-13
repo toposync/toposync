@@ -36,6 +36,7 @@ from .packet_contract import (
     resolve_source_id,
 )
 from .runtime import Artifact, Lifecycle, Packet
+from .spatial_history import SpatialHistory
 from .storage import (
     PipelineStorageLayerLimit,
     PipelineStorageLimits,
@@ -1042,6 +1043,7 @@ class _NotifyState:
     historical_evidence: dict[str, Any] = field(default_factory=dict)
     spatial_status: dict[str, Any] = field(default_factory=dict)
     mapping_gap: bool = False
+    spatial_history: SpatialHistory = field(default_factory=SpatialHistory)
 
     def event(self) -> dict[str, Any]:
         duration = self.last_ts - self.started_ts
@@ -1142,14 +1144,20 @@ class NotifyRuntime(SinkRuntime):
                 state.last_ts = max(state.last_ts, sample_ts)
         self._state.move_to_end(dedupe_key)
 
-        changed = False
+        previous_history = state.spatial_history.snapshot()
+        state.spatial_history.observe(packet)
+        changed = previous_history != state.spatial_history.snapshot()
         world_point = _resolve_packet_world_point(packet)
         mapping = packet.payload.get("mapping")
         if (isinstance(mapping, dict) or world_point is not None
+                or state.spatial_history.had_mapping_gaps
                 or (state.spatial_status and packet.lifecycle != Lifecycle.CLOSE)):
             mapping = mapping if isinstance(mapping, dict) else {}
             degraded = world_point is None or mapping.get("status") in {"unmapped", "partial"}
             failure_reasons = list(state.spatial_status.get("failure_reasons") or [])
+            for reason in state.spatial_history.failure_reasons:
+                if reason not in failure_reasons and len(failure_reasons) < 16:
+                    failure_reasons.append(reason)
             if degraded:
                 reasons = mapping.get("reasons")
                 reasons = reasons if isinstance(reasons, list) and reasons else [mapping.get("reason") or "mapping_evidence_missing"]
@@ -1161,7 +1169,8 @@ class NotifyRuntime(SinkRuntime):
                 "status": "degraded" if degraded else "ready",
                 "reason": mapping.get("reason", "mapping_evidence_missing") if degraded else None,
                 "composition_id": mapping.get("composition_id"),
-                "had_mapping_gaps": bool(state.spatial_status.get("had_mapping_gaps") or degraded),
+                "had_mapping_gaps": bool(state.spatial_status.get("had_mapping_gaps") or degraded
+                                         or state.spatial_history.had_mapping_gaps),
                 "failure_reasons": failure_reasons,
             }
             if spatial_status != state.spatial_status:
@@ -1355,6 +1364,7 @@ class NotifyRuntime(SinkRuntime):
                 name: art.reference for name, art in packet.artifacts.items() if art.reference and not art.private
             },
             "trail": list(state.trail),
+            "spatial_history": state.spatial_history.snapshot(),
             **({"spatial_status": dict(state.spatial_status)} if state.spatial_status else {}),
             "stored_images": state.stored_images,
             "data": data,
@@ -1426,6 +1436,7 @@ class NotifyRuntime(SinkRuntime):
                         "reason": "shutdown_synthesized",
                         "event": state.event(),
                         "trail": list(state.trail),
+                        "spatial_history": state.spatial_history.snapshot(),
                         **({"spatial_status": dict(state.spatial_status)} if state.spatial_status else {}),
                         **({"data": {"historical_evidence": state.historical_evidence}}
                            if self._config.historical_evidence_paths else {}),

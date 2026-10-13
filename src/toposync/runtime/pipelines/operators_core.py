@@ -23,6 +23,7 @@ from .images import MAIN_ARTIFACT_NAME
 from .operator_registry import OperatorRegistry, payload_path_hint
 from .packet_contract import build_media_descriptor, build_source_descriptor, resolve_frame_freshness
 from .subject_lifecycle import ClosedSubjectLedger
+from .spatial_history import SpatialHistoryByStream
 from .runtime import Artifact, Lifecycle, Packet
 from .operators_control import register_control_operators
 from .operators_distributed import register_distributed_operators
@@ -871,9 +872,11 @@ class ThrottleRuntime(TransformOperatorRuntime):
         self._key_field = parsed.key_field.strip() or "stream_id"
         self._last_emit: dict[str, float] = {}
         self._pending_stored_images_by_key: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        self._spatial_history = SpatialHistoryByStream()
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         key = _resolve_key(packet, self._key_field)
+        packet = self._spatial_history.process(key, packet)
         now = time.monotonic()
         if packet.lifecycle == Lifecycle.OPEN:
             self._pending_stored_images_by_key.pop(key, None)
@@ -903,9 +906,11 @@ class VelocityThrottleRuntime(TransformOperatorRuntime):
         self._last_emit_by_key: dict[str, float] = {}
         self._last_moving_by_key: dict[str, bool] = {}
         self._pending_stored_images_by_key: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        self._spatial_history = SpatialHistoryByStream()
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         key = _resolve_key(packet, self._key_field)
+        packet = self._spatial_history.process(key, packet)
         now = time.monotonic()
         if packet.lifecycle == Lifecycle.OPEN:
             self._pending_stored_images_by_key.pop(key, None)

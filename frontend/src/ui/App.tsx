@@ -1184,7 +1184,14 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     activeNotificationFetchAbortRef.current?.abort();
     const controller = new AbortController();
     activeNotificationFetchAbortRef.current = controller;
-    void getNotification(activeNotificationId, { signal: controller.signal })
+    let refreshPending = false;
+    let refreshRequested = false;
+    const refreshSelectedNotification = () => {
+      if (closed) return;
+      if (refreshPending) { refreshRequested = true; return; }
+      refreshPending = true;
+      refreshRequested = false;
+      void getNotification(activeNotificationId, { signal: controller.signal })
       .then((notif) => {
         if (controller.signal.aborted) return;
         upsertNotification(notif, "update");
@@ -1194,8 +1201,12 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         console.warn("Failed to fetch active notification", err);
       })
       .finally(() => {
+        refreshPending = false;
         if (activeNotificationFetchAbortRef.current === controller) activeNotificationFetchAbortRef.current = null;
+        if (refreshRequested) refreshSelectedNotification();
       });
+    };
+    refreshSelectedNotification();
 
     // Keep this selected-notification stream separate from the global list stream above.
     // Changing selection should only replace this stream, not the global notification stream.
@@ -1205,8 +1216,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     es.onmessage = (ev) => {
       if (closed) return;
       try {
-        if (typeof ev.data !== "string" || ev.data.length > 512 * 1024) { imageSession.clear(); return; }
+        if (typeof ev.data !== "string" || ev.data.length > 512 * 1024) { imageSession.clear(); refreshSelectedNotification(); return; }
         const parsed = JSON.parse(ev.data ?? "{}") as { op?: string; notification?: Notification };
+        if (parsed.op === "resync") { imageSession.clear(); refreshSelectedNotification(); return; }
         const op = parsed.op === "update" ? "update" : "insert";
         const notif = parsed.notification;
         if (!notif || typeof notif.id !== "string" || notif.id !== activeNotificationId) { imageSession.clear(); return; }

@@ -325,7 +325,7 @@ function resolveUnscopedTrailPoints(notification: Notification): WorldPoint[] | 
   const rawTrail = payload.trail;
   if (Array.isArray(rawTrail)) {
     const out: WorldPoint[] = [];
-    for (const entry of rawTrail) {
+    for (const entry of rawTrail.slice(-512)) {
       const point = resolveTrailEntryPoint(entry, fallbackCompositionId);
       if (!point) continue;
       out.push(point);
@@ -342,11 +342,54 @@ function resolveTrailPoints(notification: Notification, compositionId: string | 
   return compositionId && points?.length && points.every(point => point.compositionId === compositionId) ? points : null;
 }
 
-function latestContinuousTrail(points: WorldPoint[]): WorldPoint[] {
-  for (let index = points.length - 1; index >= 0; index -= 1) {
-    if (points[index]?.gapBefore) return points.slice(index);
+function splitTrail(points: WorldPoint[]): WorldPoint[][] {
+  const segments: WorldPoint[][] = [];
+  for (const point of points) {
+    if (!segments.length || point.gapBefore) segments.push([]);
+    segments[segments.length - 1]!.push(point);
   }
-  return points;
+  return segments;
+}
+
+function resolveSpatialEvidence(notification: Notification, compositionId: string | undefined) {
+  if (!compositionId) return null;
+  const history = asRecord(asRecord(notification.payload).spatial_history);
+  const trails: WorldPoint[][] = [];
+  if (history.version === 1 && Array.isArray(history.trails)) {
+    let remaining = 2048;
+    for (const raw of history.trails.slice(0, 64)) {
+      const record = asRecord(raw);
+      if (!Array.isArray(record.points)) continue;
+      let segment: WorldPoint[] = [];
+      let scope = "";
+      for (const rawPoint of record.points.slice(0, Math.min(512, remaining))) {
+        remaining -= 1;
+        const point = normalizeWorldPoint(rawPoint, null);
+        const nextScope = asString(asRecord(rawPoint).scope, "");
+        if (!point || point.compositionId !== compositionId) {
+          if (segment.length) trails.push(segment);
+          segment = []; scope = "";
+          continue;
+        }
+        if (point.gapBefore || (scope && scope !== nextScope)) {
+          if (segment.length) trails.push(segment);
+          segment = [];
+        }
+        segment.push(point); scope = nextScope;
+      }
+      if (segment.length) trails.push(segment);
+    }
+  } else {
+    const legacy = resolveTrailPoints(notification, compositionId);
+    if (legacy) trails.push(...splitTrail(legacy));
+  }
+  const representative = resolveWorldPoint(notification);
+  const legacy = resolveTrailPoints(notification, compositionId);
+  const head = representative?.compositionId === compositionId ? representative
+    : legacy?.[legacy.length - 1] ?? trails.flat().slice(-1)[0];
+  // Reject unscoped or conflicting legacy trails rather than borrowing a current map.
+  if (history.version !== 1 && !legacy) return null;
+  return head ? { head, trails } : null;
 }
 
 export function renderNotificationSpatialStatus(notification: Notification): React.ReactNode {
@@ -356,11 +399,14 @@ export function renderNotificationSpatialStatus(notification: Notification): Rea
   const spatial = asRecord(payload.spatial_status);
   const mapping = asRecord(data.mapping);
   if (notification.type !== "pipelines.tracking" && !data.camera_id && !Object.keys(mapping).length && !Object.keys(spatial).length) return null;
+  const history = asRecord(payload.spatial_history);
+  const truncated = history.truncated === true || (Array.isArray(history.trails) && history.trails.some(trail => asRecord(trail).truncated === true));
   const points = resolveUnscopedTrailPoints(notification);
   const degraded = spatial.status === "degraded" || ["unmapped", "partial"].includes(asString(mapping.status, ""));
   const missing = !points?.length;
-  if (!degraded && !missing && spatial.had_mapping_gaps !== true) return null;
-  const reason = asString(spatial.reason, "") || asString(mapping.reason, "");
+  if (!degraded && !missing && spatial.had_mapping_gaps !== true && !truncated) return null;
+  const recordedReasons = Array.isArray(spatial.failure_reasons) ? spatial.failure_reasons : [];
+  const reason = asString(spatial.reason, "") || asString(mapping.reason, "") || asString(recordedReasons.slice(-1)[0], "");
   const label = missing ? "unavailable" : degraded ? "degraded" : "partial";
   const explanation = reason === "camera_configuration_changed" ? "configuration_changed"
     : reason === "composition_changed" || reason === "panorama_composition_mismatch" ? "composition_changed"
@@ -368,8 +414,9 @@ export function renderNotificationSpatialStatus(notification: Notification): Rea
     : reason.includes("outside") || reason === "no_ground_intersection" || reason === "source_point_unavailable" ? "outside_coverage"
     : reason.includes("localization") ? "localization_failed" : "unknown";
   return <div className="notificationSpatialStatus" role="status">
-    <strong>{i18n.t(`core.ui.notifications.spatial.${label}`)}</strong>
-    {missing || degraded ? <div>{i18n.t(`core.ui.notifications.spatial.reason.${explanation}`)}</div> : null}
+    {missing || degraded || spatial.had_mapping_gaps === true ? <strong>{i18n.t(`core.ui.notifications.spatial.${label}`)}</strong> : null}
+    {truncated ? <div>{i18n.t("core.ui.notifications.spatial.truncated")}</div> : null}
+    {missing || degraded || (spatial.had_mapping_gaps === true && reason) ? <div>{i18n.t(`core.ui.notifications.spatial.reason.${explanation}`)}</div> : null}
   </div>;
 }
 
@@ -400,25 +447,21 @@ function createPipelines3DOverlay(
   notification: Notification,
   actions: NotificationOverlayActions,
 ): Notification3DOverlay | null {
-  const trail = resolveTrailPoints(notification, ctx.compositionId);
-  if (!trail?.length) return null;
+  const initialEvidence = resolveSpatialEvidence(notification, ctx.compositionId);
+  if (!initialEvidence) return null;
+  let evidence = initialEvidence;
 
   const { THREE } = ctx;
   const group = new THREE.Group();
 
-  const maxPoints = 512;
-  const trailPoints: import("three").Vector3[] = [];
-  const TRAIL_RADIUS = 0.045;
-  const TRAIL_RADIAL_SEGMENTS = 8;
-  let lastX: number | null = null;
-  let lastZ: number | null = null;
-
   const initialPriorityHex = priorityHex(notificationPriority(notification));
-  const trailMaterial = new THREE.MeshBasicMaterial({ color: initialPriorityHex, transparent: true, opacity: 0.9 });
+  const trailMaterial = new THREE.LineBasicMaterial({ color: initialPriorityHex, transparent: true, opacity: 0.9 });
   trailMaterial.depthTest = false;
   trailMaterial.depthWrite = false;
-  let trailGeometry: import("three").BufferGeometry = new THREE.BufferGeometry();
-  const trailMesh = new THREE.Mesh(trailGeometry, trailMaterial);
+  const trailGeometry = new THREE.BufferGeometry();
+  const trailAttribute = new THREE.Float32BufferAttribute(new Float32Array(2048 * 6), 3);
+  trailGeometry.setAttribute("position", trailAttribute);
+  const trailMesh = new THREE.LineSegments(trailGeometry, trailMaterial);
   trailMesh.frustumCulled = false;
   trailMesh.renderOrder = 10_000;
   group.add(trailMesh);
@@ -507,47 +550,20 @@ function createPipelines3DOverlay(
   let closedDim = 1;
   let elapsed = 0;
 
-  function replaceTrailGeometry(nextGeometry: import("three").BufferGeometry): void {
-    trailGeometry.dispose();
-    trailGeometry = nextGeometry;
-    trailMesh.geometry = trailGeometry;
-  }
-
-  function rebuildTrailGeometry(): void {
-    if (trailPoints.length < 2) {
-      replaceTrailGeometry(new THREE.BufferGeometry());
-      return;
-    }
-    const curve = new THREE.CatmullRomCurve3(trailPoints, false, "centripetal");
-    const segments = Math.max(8, Math.min(768, (trailPoints.length - 1) * 8));
-    replaceTrailGeometry(new THREE.TubeGeometry(curve, segments, TRAIL_RADIUS, TRAIL_RADIAL_SEGMENTS, false));
-  }
-
-  function writeTrail(points: Array<{ x: number; z: number }>): void {
-    trailPoints.length = 0;
-    lastX = null;
-    lastZ = null;
-
-    const eps2 = 0.000_001;
-    const start = points.length > maxPoints ? points.length - maxPoints : 0;
-    for (let i = start; i < points.length; i += 1) {
-      const { x, z } = points[i]!;
-      if (lastX != null && lastZ != null) {
-        const dx = x - lastX;
-        const dz = z - lastZ;
-        if (dx * dx + dz * dz <= eps2) continue;
+  function writeEvidence(next: NonNullable<ReturnType<typeof resolveSpatialEvidence>>): void {
+    evidence = next;
+    const vertices: number[] = [];
+    for (const segment of next.trails) {
+      for (let index = 1; index < segment.length; index += 1) {
+        const a = segment[index - 1]!;
+        const b = segment[index]!;
+        vertices.push(a.x, 0.055, a.z, b.x, 0.055, b.z);
       }
-
-      lastX = x;
-      lastZ = z;
-
-      trailPoints.push(new THREE.Vector3(x, 0.055, z));
-      if (trailPoints.length >= maxPoints) break;
     }
-
-    rebuildTrailGeometry();
-
-    if (lastX != null && lastZ != null) markerGroup.position.set(lastX, 0, lastZ);
+    trailAttribute.array.set(vertices);
+    trailAttribute.needsUpdate = true;
+    trailGeometry.setDrawRange(0, vertices.length / 3);
+    markerGroup.position.set(next.head.x, 0, next.head.z);
   }
 
   function applyStyleFromNotification(next: Notification): void {
@@ -573,11 +589,19 @@ function createPipelines3DOverlay(
     haloMat.opacity = closed ? 0.25 : 0.6;
   }
 
-  writeTrail(latestContinuousTrail(trail));
+  writeEvidence(initialEvidence);
   applyStyleFromNotification(notification);
 
   return {
     object: group,
+    bounds: () => {
+      if (!group.visible) return null;
+      const points = [evidence.head, ...evidence.trails.flat()];
+      return {
+        minX: Math.min(...points.map(point => point.x)), maxX: Math.max(...points.map(point => point.x)),
+        minZ: Math.min(...points.map(point => point.z)), maxZ: Math.max(...points.map(point => point.z)),
+      };
+    },
     tick: (deltaSeconds) => {
       if (!group.visible) return false;
       elapsed += deltaSeconds;
@@ -596,9 +620,9 @@ function createPipelines3DOverlay(
       return true;
     },
     update: (next) => {
-      const nextTrail = resolveTrailPoints(next, ctx.compositionId);
-      group.visible = Boolean(nextTrail?.length);
-      if (nextTrail?.length) writeTrail(latestContinuousTrail(nextTrail));
+      const nextEvidence = resolveSpatialEvidence(next, ctx.compositionId);
+      group.visible = Boolean(nextEvidence);
+      if (nextEvidence) writeEvidence(nextEvidence);
       applyStyleFromNotification(next);
     },
     onPointerEvent: (event) => {
@@ -729,10 +753,9 @@ function createPipelines2DOverlay(
   let current: Notification = notification;
 
   function compute(): Notification2DPin | null {
-    const trail = resolveTrailPoints(current, ctx.compositionId);
-    if (!trail?.length) return null;
-    const last = trail[trail.length - 1] ?? null;
-    if (!last) return null;
+    const evidence = resolveSpatialEvidence(current, ctx.compositionId);
+    if (!evidence) return null;
+    const last = evidence.head;
 
     const payload = asRecord(current.payload);
     const lifecycle = asString(payload.lifecycle, "").trim().toLowerCase();
@@ -741,7 +764,7 @@ function createPipelines2DOverlay(
     return {
       x: last.x,
       z: last.z,
-      trail: latestContinuousTrail(trail).map((p) => ({ x: p.x, z: p.z })),
+      trails: evidence.trails.map(segment => segment.map(point => ({ x: point.x, z: point.z }))),
       priority: notificationPriority(current),
       closed,
     };

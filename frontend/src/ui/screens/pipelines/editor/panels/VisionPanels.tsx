@@ -17,7 +17,7 @@ import { HuggingFaceImportModal } from "../../../../HuggingFaceImportModal";
 import { i18n } from "../../../../../util/i18n";
 import { LocalBuildConsentModal } from "../../../../LocalBuildConsentModal";
 import { Modal } from "../../../../Modal";
-import { pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
+import { pipelinesReactSelectStyles, buildYoloCategoryOptions } from "../../constants";
 import type { InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 import { textConfigValue } from "../../utils";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
@@ -712,11 +712,12 @@ export function VisionGroupEventsConfigCard({
     ? categoriesRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
     : [];
   const categoryOptions = useMemo<SelectOption[]>(() => {
-    const known = new Set(YOLO_CATEGORY_OPTIONS.map((item) => item.value));
+    const defaults = buildYoloCategoryOptions(t);
+    const known = new Set(defaults.map((item) => item.value));
     const extras = categories
       .filter((value) => !known.has(value))
       .map((value) => ({ value, label: value }));
-    return [...YOLO_CATEGORY_OPTIONS, ...extras];
+    return [...defaults, ...extras];
   }, [categories]);
   const selectedCategories = useMemo(
     () => categoryOptions.filter((option) => categories.includes(option.value)),
@@ -762,6 +763,8 @@ export function VisionGroupEventsConfigCard({
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.yolo.categories")}</span>
         <Select
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           classNamePrefix="pipelinesReactSelect"
           styles={pipelinesReactSelectStyles}
           isMulti
@@ -1328,11 +1331,12 @@ export function VisionConfigCard({
   }, [modelId, resolvedProcessingServerId]);
 
   const categoryOptions = useMemo<SelectOption[]>(() => {
-    const known = new Set(YOLO_CATEGORY_OPTIONS.map((item) => item.value));
+    const defaults = buildYoloCategoryOptions(t);
+    const known = new Set(defaults.map((item) => item.value));
     const extras = categories
       .filter((value) => !known.has(value))
       .map((value) => ({ value, label: value }));
-    return [...YOLO_CATEGORY_OPTIONS, ...extras];
+    return [...defaults, ...extras];
   }, [categories]);
   const basicCategoryValues = useMemo(() => {
     const values = [...BASIC_CATEGORY_VALUES, ...categories.filter((value) => !BASIC_CATEGORY_VALUES.includes(value))];
@@ -1848,6 +1852,8 @@ export function VisionConfigCard({
               <span>{t("core.ui.pipelines.panels.yolo.model_id")}</span>
               {showAdvanced ? (
                 <Select<VisionModelOption, false>
+                  noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+                  loadingMessage={() => t("core.ui.pipelines.select.loading")}
                   aria-label={t("core.ui.pipelines.panels.yolo.model_id")}
                   styles={pipelinesReactSelectStyles as any}
                   options={modelOptions}
@@ -2419,6 +2425,8 @@ export function VisionConfigCard({
             <span>{t("core.ui.pipelines.panels.yolo.categories")}</span>
             {showAdvanced ? (
               <Select<SelectOption, true>
+                noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+                loadingMessage={() => t("core.ui.pipelines.select.loading")}
                 isMulti
                 styles={pipelinesReactSelectStyles}
                 options={categoryOptions}

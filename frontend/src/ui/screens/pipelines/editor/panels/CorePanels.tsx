@@ -18,7 +18,7 @@ import {
   buildPacketArtifactSuggestions,
   buildScheduleWeekdayOptions,
   pipelinesReactSelectStyles,
-  YOLO_CATEGORY_OPTIONS,
+  buildYoloCategoryOptions,
 } from "../../constants";
 import type { InteractiveStep, SelectOption } from "../../types";
 import { isRecord, safeJsonParse, textConfigValue } from "../../utils";
@@ -78,6 +78,8 @@ export function ScheduleGateConfigCard({ config, showAdvanced, onUpdateConfig }:
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.schedule_gate.days")}</span>
         <Select<SelectOption, true>
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           isMulti
           styles={pipelinesReactSelectStyles}
           options={weekdayOptions}
@@ -153,7 +155,8 @@ export function CategoryGateConfigCard({ config, onUpdateConfig }: CategoryGateP
   const categories = Array.isArray(categoriesRaw)
     ? categoriesRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
     : [];
-  const selectedCategoryOptions = categories.map((value) => YOLO_CATEGORY_OPTIONS.find((opt) => opt.value === value) ?? { value, label: value });
+  const categoryOptions = buildYoloCategoryOptions(t);
+  const selectedCategoryOptions = categories.map((value) => categoryOptions.find((opt) => opt.value === value) ?? { value, label: value });
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -175,9 +178,12 @@ export function CategoryGateConfigCard({ config, onUpdateConfig }: CategoryGateP
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.category_gate.categories")}</span>
         <CreatableSelect<SelectOption, true>
+          formatCreateLabel={(value) => t("core.ui.pipelines.select.create", { value })}
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           isMulti
           styles={pipelinesReactSelectStyles}
-          options={YOLO_CATEGORY_OPTIONS}
+          options={categoryOptions}
           value={selectedCategoryOptions}
           placeholder={t("core.ui.pipelines.panels.category_gate.categories_placeholder")}
           onChange={(value: MultiValue<SelectOption>) => {
@@ -217,16 +223,17 @@ export function FilterConfigCard({ config, steps, index, operatorsById, onUpdate
   const categories = Array.isArray(categoriesRaw)
     ? categoriesRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
     : [];
-  const selectedCategoryOptions = categories.map((value) => YOLO_CATEGORY_OPTIONS.find((opt) => opt.value === value) ?? { value, label: value });
+  const categoryOptions = buildYoloCategoryOptions(t);
+  const selectedCategoryOptions = categories.map((value) => categoryOptions.find((opt) => opt.value === value) ?? { value, label: value });
 
   const lifecyclesRaw = (config as any).lifecycles;
   const lifecycles = Array.isArray(lifecyclesRaw)
     ? lifecyclesRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
     : [];
   const lifecycleOptions: SelectOption[] = [
-    { value: "open", label: "open" },
-    { value: "update", label: "update" },
-    { value: "close", label: "close" },
+    { value: "open", label: t("core.ui.pipelines.lifecycle.open") },
+    { value: "update", label: t("core.ui.pipelines.lifecycle.update") },
+    { value: "close", label: t("core.ui.pipelines.lifecycle.close") },
   ];
   const selectedLifecycleOptions = lifecycles.map((value) => lifecycleOptions.find((opt) => opt.value === value) ?? { value, label: value });
 
@@ -330,9 +337,12 @@ export function FilterConfigCard({ config, steps, index, operatorsById, onUpdate
         <label className="pipelinesLabel">
           <span>{t("core.ui.pipelines.panels.filter.categories")}</span>
           <CreatableSelect<SelectOption, true>
+            formatCreateLabel={(value) => t("core.ui.pipelines.select.create", { value })}
+            noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+            loadingMessage={() => t("core.ui.pipelines.select.loading")}
             isMulti
             styles={pipelinesReactSelectStyles}
-            options={YOLO_CATEGORY_OPTIONS}
+            options={categoryOptions}
             value={selectedCategoryOptions}
             placeholder={t("core.ui.pipelines.panels.filter.categories_placeholder")}
             onChange={(value: MultiValue<SelectOption>) => {
@@ -347,6 +357,8 @@ export function FilterConfigCard({ config, steps, index, operatorsById, onUpdate
         <label className="pipelinesLabel">
           <span>{t("core.ui.pipelines.panels.filter.lifecycles")}</span>
           <Select<SelectOption, true>
+            noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+            loadingMessage={() => t("core.ui.pipelines.select.loading")}
             isMulti
             styles={pipelinesReactSelectStyles}
             options={lifecycleOptions}
@@ -364,6 +376,9 @@ export function FilterConfigCard({ config, steps, index, operatorsById, onUpdate
         <label className="pipelinesLabel">
           <span>{t("core.ui.pipelines.panels.filter.artifacts")}</span>
           <CreatableSelect<SelectOption, true>
+            formatCreateLabel={(value) => t("core.ui.pipelines.select.create", { value })}
+            noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+            loadingMessage={() => t("core.ui.pipelines.select.loading")}
             isMulti
             styles={pipelinesReactSelectStyles}
             options={packetArtifactSuggestions}
@@ -791,6 +806,8 @@ export function CinematicDirectorConfigCard({
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.cinematic_director.behavior")}</span>
         <Select<SelectOption, false>
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           styles={pipelinesReactSelectStyles}
           options={behaviorOptions}
           value={selectedBehaviorOption}
@@ -825,6 +842,8 @@ export function CinematicDirectorConfigCard({
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.cinematic_director.primary_camera")}</span>
             <Select<SelectOption, false>
+              noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+              loadingMessage={() => t("core.ui.pipelines.select.loading")}
               styles={pipelinesReactSelectStyles}
               options={cinematicCameraSelectOptions}
               value={selectedPrimaryCameraOption}
@@ -858,6 +877,8 @@ export function CinematicDirectorConfigCard({
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.cinematic_director.cameras_scope")}</span>
         <Select<SelectOption, false>
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           styles={pipelinesReactSelectStyles}
           options={cameraModeOptions}
           value={selectedCameraModeOption}
@@ -887,6 +908,8 @@ export function CinematicDirectorConfigCard({
         <label className="pipelinesLabel">
           <span>{t("core.ui.pipelines.panels.cinematic_director.camera_ids")}</span>
           <Select<SelectOption, true>
+            noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+            loadingMessage={() => t("core.ui.pipelines.select.loading")}
             isMulti
             styles={pipelinesReactSelectStyles}
             options={cinematicCameraSelectOptions}
@@ -919,6 +942,8 @@ export function CinematicDirectorConfigCard({
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.cinematic_director.priority_minimum")}</span>
         <Select<SelectOption, false>
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           styles={pipelinesReactSelectStyles}
           options={priorityMinimumOptionsWithCustom}
           value={selectedPriorityMinimumOption}
@@ -1542,6 +1567,9 @@ export function StoreImagesConfigCard({
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.store_images.input_artifact", {}, "Image")}</span>
         <CreatableSelect<SelectOption, false>
+          formatCreateLabel={(value) => t("core.ui.pipelines.select.create", { value })}
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           styles={pipelinesReactSelectStyles}
           options={artifactOptions}
           value={selectedArtifactOption}
@@ -2229,6 +2257,8 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.notify.payload_paths")}</span>
             <CreatableSelect<SelectOption, true>
+              noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+              loadingMessage={() => t("core.ui.pipelines.select.loading")}
               isMulti
               aria-label={t("core.ui.pipelines.panels.notify.payload_paths")}
               styles={pipelinesReactSelectStyles}
@@ -2548,6 +2578,8 @@ export function HomeAssistantBooleanStateConfigCard({ config, showAdvanced, onUp
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.home_assistant_boolean_state.existing_entity")}</span>
             <Select<SelectOption, false>
+              noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+              loadingMessage={() => t("core.ui.pipelines.select.loading")}
               styles={pipelinesReactSelectStyles}
               options={inputBooleanOptions}
               value={selectedInputBoolean}
@@ -2804,6 +2836,9 @@ export function HomeAssistantNotifyConfigCard({ config, showAdvanced, onUpdateCo
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.home_assistant_notify.target")}</span>
         <CreatableSelect<SelectOption, false>
+          formatCreateLabel={(value) => t("core.ui.pipelines.select.create", { value })}
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           styles={pipelinesReactSelectStyles}
           options={notifyServiceOptions}
           value={selectedNotifyServiceOption}

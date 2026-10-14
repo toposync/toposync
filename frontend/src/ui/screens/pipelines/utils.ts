@@ -75,6 +75,8 @@ export function humanizeIdentifier(raw: string): string {
 
 export function prettyConfigKeyLabel(key: string): string {
   const raw = String(key || "").trim();
+  const localized = i18n.t(`core.ui.pipelines.config_field.${raw}`, {}, "");
+  if (localized) return localized;
   const lower = raw.toLowerCase();
 
   if (lower.endsWith("_seconds")) return `${humanizeIdentifier(raw.slice(0, -8))} (seconds)`;

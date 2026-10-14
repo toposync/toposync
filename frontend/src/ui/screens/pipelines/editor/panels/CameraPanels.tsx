@@ -114,6 +114,8 @@ export function CameraSourceConfigCard({
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.camera_source.camera")}</span>
         <Select<SelectOption, false>
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           styles={pipelinesReactSelectStyles}
           options={cameraSelectOptions}
           value={selectedCameraOption}
@@ -151,6 +153,8 @@ export function CameraSourceConfigCard({
         <label className="pipelinesLabel">
           <span>{t("core.ui.pipelines.panels.camera_source.source", {}, "Fonte da câmera")}</span>
           <Select<SelectOption, false>
+            noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+            loadingMessage={() => t("core.ui.pipelines.select.loading")}
             styles={pipelinesReactSelectStyles}
             options={sourceOptions}
             value={selectedSourceOption}
@@ -339,6 +343,8 @@ export function OnvifStateGateConfigCard({
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.onvif.camera")}</span>
         <Select<SelectOption, false>
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           styles={pipelinesReactSelectStyles}
           options={cameraSelectOptions}
           value={selectedCameraOption}
@@ -359,6 +365,8 @@ export function OnvifStateGateConfigCard({
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.onvif.condition")}</span>
         <Select<OnvifEventOption, false>
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           styles={onvifSingleSelectStyles}
           options={conditionOptions}
           value={selectedCondition}
@@ -469,6 +477,8 @@ export function OnvifEventSourceConfigCard({
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.onvif.camera")}</span>
         <Select<SelectOption, false>
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           styles={pipelinesReactSelectStyles}
           options={cameraSelectOptions}
           value={selectedCameraOption}
@@ -489,6 +499,8 @@ export function OnvifEventSourceConfigCard({
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.onvif.events")}</span>
         <Select<OnvifEventOption, true>
+          noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+          loadingMessage={() => t("core.ui.pipelines.select.loading")}
           styles={onvifMultiSelectStyles}
           options={eventOptions}
           value={selectedOptions}
@@ -612,6 +624,8 @@ export function AreaRestrictionConfigCard({
         <label className="pipelinesLabel">
           <span>{t("core.ui.pipelines.panels.area_restriction.areas")}</span>
           <Select<CameraAreaOption, true>
+            noOptionsMessage={() => t("core.ui.pipelines.select.no_options")}
+            loadingMessage={() => t("core.ui.pipelines.select.loading")}
             isMulti
             styles={pipelinesReactSelectStyles as unknown as StylesConfig<CameraAreaOption, true>}
             options={cameraAreaOptions}

@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { pipelineOperatorTranslations } from "./pipelineOperatorTranslations";
 
 export type Locale = "en" | "pt-BR";
 
@@ -26,6 +27,7 @@ const STORAGE_KEY = "toposync.locale";
 
 const translationsByLocale: Record<Locale, Translations> = {
   en: {
+    ...pipelineOperatorTranslations.en,
     "core.ui.editor.show_controls": "Show tools and layers",
     "core.ui.editor.hide_controls": "Hide tools and layers",
     "core.ui.editor.tools_and_layers": "Tools and layers",
@@ -2749,6 +2751,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.settings.nav.access.desc": "Manage users.",
   },
   "pt-BR": {
+    ...pipelineOperatorTranslations["pt-BR"],
     "core.ui.editor.show_controls": "Mostrar ferramentas e camadas",
     "core.ui.editor.hide_controls": "Recolher ferramentas e camadas",
     "core.ui.editor.tools_and_layers": "Ferramentas e camadas",

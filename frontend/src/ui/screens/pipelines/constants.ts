@@ -522,7 +522,9 @@ const YOLO_CATEGORY_VALUES = [
   "toothbrush",
 ];
 
-export const YOLO_CATEGORY_OPTIONS: SelectOption[] = YOLO_CATEGORY_VALUES.map((value) => ({ value, label: value }));
+export function buildYoloCategoryOptions(t: TranslateFn): SelectOption[] {
+  return YOLO_CATEGORY_VALUES.map((value) => ({ value, label: t(`core.ui.pipelines.panels.yolo.category.${value}`, {}, value) }));
+}
 
 type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
 

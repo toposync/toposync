@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type * as L from "leaflet";
 import type { ElementType, Main2DMarker, Notification, Notification2DOverlay, Notification2DPin, NotificationRenderer } from "@toposync/plugin-api";
 import type { Composition } from "../../util/api";
@@ -6,7 +6,7 @@ import { localToGeographic, type Georeference } from "../../util/georeference";
 import { i18n } from "../../util/i18n";
 import { Icon } from "../Icon";
 import { Notification2DPinView } from "../notifications/Notification2DPinView";
-import { orderElementsForMain2D } from "../main2d/shared";
+import { clusterMain2DMarkers, orderElementsForMain2D } from "../main2d/shared";
 import { geographicViewport, geographicTrail, projectGeographicPoint, projectLocation } from "./projection";
 
 const GeographicNotificationPin = React.memo(Notification2DPinView);
@@ -35,13 +35,15 @@ function ElementButton({ marker, onActivate }: { marker: Main2DMarker; onActivat
 type ScreenMarker = Main2DMarker & { elementId: string; screenX: number; screenY: number };
 type ScreenPin = Notification2DPin & { notification: Notification; screenX: number; screenY: number; segments: Array<Array<{ x: number; y: number }>> };
 
-export function GeographicCompositionLayer({ map, composition, reference, elementTypesById, notifications, notificationRenderers, activeNotificationId, selected, onActivate, onNotification, onImage }: {
+export function GeographicCompositionLayer({ map, composition, reference, elementTypesById, notifications, notificationRenderers, activeNotificationId, selected, onChooseElements, onActivate, onNotification, onImage }: {
   map: L.Map; composition: Composition; reference: Georeference; elementTypesById: Record<string, ElementType>;
   notifications: Notification[]; notificationRenderers: NotificationRenderer[]; activeNotificationId?: string | null; selected: boolean;
+  onChooseElements?: (targets: GeographicTarget[]) => void;
   onActivate?: (target: GeographicTarget) => void; onNotification?: (id: string) => void;
   onImage?: (args: { url: string; title?: string; subtitle?: string }) => void;
 }): React.ReactElement {
-  const { t } = i18n.useI18n();
+  const { t, locale } = i18n.useI18n();
+  const selectedNotifications = useMemo(() => notifications.filter(item => item.id === activeNotificationId), [notifications, activeNotificationId]);
   const canvas = useRef<HTMLCanvasElement>(null);
   const overlays = useRef(new Map<string, { overlay: Notification2DOverlay; notification: Notification; renderer: NotificationRenderer }>());
   const projected = useRef(new Map<string, { reference: Georeference; x: number; z: number; worldTrails: ReadonlyArray<ReadonlyArray<{ x: number; z: number }>>;
@@ -56,9 +58,9 @@ export function GeographicCompositionLayer({ map, composition, reference, elemen
     return () => { for (const item of overlays.current.values()) item.overlay.dispose?.(); overlays.current.clear(); projected.current.clear(); };
   }, [composition.id, composition.elements, notificationRenderers]);
   useEffect(() => {
-    const visible = new Set(notifications.map(item => item.id));
+    const visible = new Set(selectedNotifications.map(item => item.id));
     for (const [id, item] of overlays.current) if (!visible.has(id)) { item.overlay.dispose?.(); overlays.current.delete(id); projected.current.delete(id); }
-    for (const notification of notifications) {
+    for (const notification of selectedNotifications) {
       const renderer = notificationRenderers.find(item => item.type === notification.type);
       if (!renderer?.create2DOverlay) continue;
       const current = overlays.current.get(notification.id);
@@ -79,7 +81,7 @@ export function GeographicCompositionLayer({ map, composition, reference, elemen
       }
     }
     invalidate();
-  }, [notifications, notificationRenderers, composition.id, composition.elements, invalidate, onImage]);
+  }, [selectedNotifications, notificationRenderers, composition.id, composition.elements, invalidate, onImage]);
   useEffect(() => {
     const unsubscribers: Array<() => void> = [];
     for (const element of composition.elements) {
@@ -116,11 +118,8 @@ export function GeographicCompositionLayer({ map, composition, reference, elemen
             const point = viewport.worldToScreen(element.position);
             context.fillStyle = "#1673c9"; context.beginPath(); context.arc(point.x, point.y, 5, 0, Math.PI * 2); context.fill();
           }
-          if (onActivate && definition) {
-            const marker = definition.getMain2DMarker?.({ element }) ?? {
-              x: element.position.x, z: element.position.z,
-              title: element.name || (typeof definition.name === "string" ? definition.name : t(definition.name.key)),
-            };
+          const marker = definition?.getMain2DMarker?.({ element });
+          if (onActivate && marker) {
             const screen = projectGeographicPoint(map, reference, marker);
             if (screen.x >= -44 && screen.y >= -44 && screen.x <= width + 44 && screen.y <= height + 44)
               nextMarkers.push({ ...marker, elementId: element.id, screenX: screen.x, screenY: screen.y });
@@ -152,19 +151,25 @@ export function GeographicCompositionLayer({ map, composition, reference, elemen
     schedule(); map.on("move zoom resize", schedule); output.addEventListener("toposync:invalidate", schedule);
     return () => { cancelAnimationFrame(frame); map.off("move zoom resize", schedule); output.removeEventListener("toposync:invalidate", schedule); };
   }, [map, composition, reference, elementTypesById, selected, onActivate, version, t]);
+  const markerGroups = useMemo(() => clusterMain2DMarkers({
+    markers: markers.map(marker => ({ ...marker, id: marker.elementId, stageX: marker.screenX, stageY: marker.screenY })),
+    transform: { x: 0, y: 0, scale: 1 }, thresholdPx: 44, clusterTitle: count => t("core.map.devices", { count }),
+  }), [markers, t]);
+  const eventLabel = (notification: Notification) => [notification.title, notification.createdAt && Number.isFinite(Date.parse(notification.createdAt)) ? new Date(notification.createdAt).toLocaleString(locale) : ""].filter(Boolean).join(" · ");
   return <div className={`geographicCompositionLayer${selected ? " isSelected" : ""}`} data-composition-id={composition.id}>
     <canvas ref={canvas} aria-hidden="true" />
-    {markers.map(marker => <div key={marker.elementId} className="geographicMarker" style={{ left: marker.screenX, top: marker.screenY }} data-element-id={marker.elementId}>
-      <ElementButton marker={marker} onActivate={() => onActivate?.({ compositionId: composition.id, elementId: marker.elementId })} />
+    {markerGroups.map(marker => <div key={marker.id} className="geographicMarker" style={{ left: marker.screenX, top: marker.screenY }}>
+      {marker.kind === "single" ? <ElementButton marker={marker} onActivate={() => onActivate?.({ compositionId: composition.id, elementId: marker.elementId })} /> :
+        <button type="button" className="geographicElementButton geographicCluster" aria-label={marker.title} onClick={() => onChooseElements?.(marker.markers.map(item => ({ compositionId: composition.id, elementId: item.elementId })))}><Icon name="layer-group" /><strong>{marker.markers.length}</strong></button>}
     </div>)}
-    {pins.map(pin => <React.Fragment key={pin.notification.id}>
-      {pin.segments.map((trail, index) => <svg className="notification2dTrail" key={index} aria-hidden="true"><polyline fill="none" stroke={pin.priority === "high" ? "#ef4444" : "#f59e0b"} strokeWidth="3" points={trail.map(point => `${point.x},${point.y}`).join(" ")} /></svg>)}
-      <div className={`geographicPinPosition${activeNotificationId === pin.notification.id && !pin.closed ? " isActive" : ""}`} style={{ left: pin.screenX, top: pin.screenY }}>
-        <GeographicNotificationPin screenX={0} screenY={0} priority={pin.priority} closed={pin.closed} />
-      </div>
-      {onNotification && <button className={`geographicNotificationTarget${activeNotificationId === pin.notification.id ? " isSelected" : ""}`} type="button"
-        style={{ left: pin.screenX, top: pin.screenY }} aria-label={pin.notification.title} title={pin.notification.title}
-        data-notification-id={pin.notification.id} onClick={() => onNotification(pin.notification.id)} />}
+    {pins.filter(pin => pin.notification.id === activeNotificationId).map(pin => <React.Fragment key={pin.notification.id}>
+      {pin.segments.map((trail, index) => <svg className="notification2dTrail" key={index} aria-hidden="true"><polyline fill="none" stroke={pin.priority === "high" ? "#ef4444" : pin.priority === "low" ? "#9aa4b2" : "#f59e0b"} opacity={1} strokeWidth={3} points={trail.map(point => `${point.x},${point.y}`).join(" ")} /></svg>)}
+        <div className={`geographicPinPosition${activeNotificationId === pin.notification.id && !pin.closed ? " isActive" : ""}`} style={{ left: pin.screenX, top: pin.screenY }}>
+          <GeographicNotificationPin screenX={0} screenY={0} priority={pin.priority} closed={pin.closed} />
+        </div>
+        {onNotification && <button className={`geographicNotificationTarget${activeNotificationId === pin.notification.id ? " isSelected" : ""}`} type="button"
+          style={{ left: pin.screenX, top: pin.screenY }} aria-label={eventLabel(pin.notification)} title={eventLabel(pin.notification)}
+          data-notification-id={pin.notification.id} onClick={() => onNotification(pin.notification.id)} />}
     </React.Fragment>)}
   </div>;
 }

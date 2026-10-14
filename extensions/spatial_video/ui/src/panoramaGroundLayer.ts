@@ -40,11 +40,13 @@ function loadImage(url: string, signal: AbortSignal): Promise<HTMLImageElement> 
   });
 }
 
+export type PanoramaProjectionIssue = { elementId: string; name: string; message: string };
+
 export function usePanoramaGroundLayer(
   sceneRef: RefObject<THREE.Scene | null>, elements: CompositionElement[],
   elementTypes: Record<string, ElementType>, requestRender: () => void,
-): { ready: number; loading: boolean; error: string | null } {
-  const [state, setState] = useState({ ready: 0, loading: false, error: null as string | null });
+): { ready: number; loading: boolean; issues: PanoramaProjectionIssue[] } {
+  const [state, setState] = useState({ ready: 0, loading: false, issues: [] as PanoramaProjectionIssue[] });
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
@@ -60,7 +62,7 @@ export function usePanoramaGroundLayer(
         && typeof pointer.source_id === "string"
         ? [{ element, pointer: { job_id: pointer.job_id, revision: pointer.revision, source_id: pointer.source_id } }] : [];
     });
-    setState({ ready: 0, loading: mapped.length > 0, error: null });
+    setState({ ready: 0, loading: mapped.length > 0, issues: [] });
     void Promise.allSettled(mapped.map(async ({ element, pointer }) => {
       const cameraId = String(element.props.camera_id || "");
       const job = await requestJson<CameraPanoramaJob>(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/panorama/${encodeURIComponent(pointer.job_id)}`, { signal: controller.signal });
@@ -141,8 +143,12 @@ export function usePanoramaGroundLayer(
       requestRender();
     })).then(results => {
       if (controller.signal.aborted) return;
-      const failure = results.find(result => result.status === "rejected") as PromiseRejectedResult | undefined;
-      setState({ ready: group.children.length, loading: false, error: failure ? String(failure.reason?.message || "Não foi possível carregar o mapeamento panorâmico.") : null });
+      const issues = results.flatMap((result, index) => result.status === "rejected" ? [{
+        elementId: mapped[index].element.id,
+        name: mapped[index].element.name || String(mapped[index].element.props.camera_name || "Câmera sem nome"),
+        message: String(result.reason?.message || "Não foi possível carregar o mapeamento panorâmico."),
+      }] : []);
+      setState({ ready: group.children.length, loading: false, issues });
       requestRender();
     });
     return () => { controller.abort(); scene.remove(group); dispose.forEach(cleanup => cleanup()); requestRender(); };

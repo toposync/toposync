@@ -1,3 +1,4 @@
+import type { HostI18n } from "@toposync/plugin-api";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
@@ -359,7 +360,7 @@ function SpatialNotificationPinView({
   );
 }
 
-export function SpatialVideoView({
+export function SpatialVideoView({ i18n, onConfigureElement,
   elements,
   elementTypesById,
   compositionId,
@@ -367,7 +368,7 @@ export function SpatialVideoView({
   activeNotification,
   activeNotificationRenderer,
   onElementActivated,
-}: RenderViewContext): React.ReactElement {
+}: RenderViewContext & { i18n: HostI18n }): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -870,7 +871,7 @@ export function SpatialVideoView({
     <div
       ref={containerRef}
       className="viewportRoot"
-      style={{ position: "relative", overflow: "hidden", background: "var(--color-bg, #0f172a)" }}
+      style={{ position: "relative", overflow: "hidden", background: "var(--color-canvas2d-background)" }}
       onWheel={handleWheel}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -983,10 +984,11 @@ export function SpatialVideoView({
           </button>
         ))}
       </div>
-      {panoramaLayer.ready > 0 ? <span role="status" data-testid="panorama-ground-status" style={{ position: "absolute", bottom: 12, left: 12, padding: "6px 10px", background: "#ffffff", color: "#20252b", borderRadius: 8, pointerEvents: "none" }}>{panoramaLayer.ready === 1 ? "Panorâmica salva" : `${panoramaLayer.ready} panorâmicas salvas`}</span> : null}
+      {panoramaLayer.ready > 0 ? <span role="status" data-testid="panorama-ground-status" style={{ position: "absolute", bottom: 12, left: 12, padding: "6px 10px", background: "var(--color-surface-solid)", color: "var(--color-text-primary)", borderRadius: 8, pointerEvents: "none" }}>{i18n.t("ext.spatial_video.saved_count", { count: panoramaLayer.ready })}</span> : null}
       <SpatialVideoCompatibilityNotice
         loading={liveViewsLoading || panoramaLayer.loading}
-        error={panoramaLayer.error || (panoramaLayer.ready ? null : liveViewsError)}
+        error={liveViewsError}
+        issues={panoramaLayer.issues} i18n={i18n} onConfigure={onConfigureElement}
         hasCompatibleProjection={candidates.length > 0 || panoramaLayer.ready > 0}
       />
     </div>

@@ -65,6 +65,9 @@
   --frost-saturate: 140%;
   --frost-brightness: 108%;
 
+  --color-action-background: #087873;
+  --color-action-hover: #06645f;
+  --color-action-text: #ffffff;
   --color-accent-teal: #0ea5a4;
   --color-accent-blue: #3b82f6;
   --gradient-accent: linear-gradient(135deg, var(--color-accent-teal), var(--color-accent-blue));

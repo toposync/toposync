@@ -8274,22 +8274,18 @@ label.chipButton {
 .primaryButton,
 .pillButtonPrimary,
 .iconButtonPrimary {
-  color: var(--color-text-inverted);
-  border-color: color-mix(in srgb, var(--color-accent-teal) 45%, var(--color-accent-blue) 24%);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-accent-teal) 84%, white), var(--color-accent-teal)),
-    linear-gradient(135deg, color-mix(in srgb, var(--color-accent-teal) 86%, transparent), color-mix(in srgb, var(--color-accent-blue) 40%, transparent));
-  box-shadow: var(--shadow-elevation-2), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  color: var(--color-action-text);
+  border-color: var(--color-action-background);
+  background: var(--color-action-background);
+  box-shadow: var(--shadow-elevation-1);
 }
-
 .primaryButton:hover:not(:disabled),
 .pillButtonPrimary:hover:not(:disabled):not([aria-disabled="true"]),
 .iconButtonPrimary:hover:not(:disabled):not([aria-disabled="true"]) {
-  border-color: color-mix(in srgb, var(--color-accent-teal) 65%, var(--color-accent-blue) 42%);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-accent-teal) 88%, white), var(--color-accent-teal)),
-    linear-gradient(135deg, color-mix(in srgb, var(--color-accent-teal) 90%, transparent), color-mix(in srgb, var(--color-accent-blue) 46%, transparent));
-  box-shadow: var(--shadow-elevation-3), inset 0 1px 0 rgba(255, 255, 255, 0.32);
+  color: var(--color-action-text);
+  background: var(--color-action-hover);
+  border-color: var(--color-action-hover);
+  box-shadow: var(--shadow-elevation-1);
   transform: translateY(var(--hover-translate-y));
 }
 
@@ -8763,20 +8759,17 @@ select {
   }
 }
 
-.georeferenceEditor {
-  display: grid;
-  gap: 20px;
-}
-
-.georeferenceMap { position: relative; height: min(65vh, 640px); min-height: 360px; }
-@media (max-width: 800px) {
-  .georeferenceMap { height: min(65vh, 560px); min-height: 340px; }
-}
-
-.georeferenceEditor > p,
-.georeferenceEditor .field {
-  margin: 0;
-}
+/* Keep one preview mounted while the controls scroll. */
+.georeferenceEditor { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); gap: 20px; height: min(760px, 82dvh); overflow: hidden; }
+.georeferencePreview { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: 8px; }
+.georeferencePreview p, .georeferenceEditor .field { margin: 0; }
+.georeferenceMap { position: relative; flex: 1; min-height: 0; overflow: auto; }
+.georeferenceMap .geographicNavigation { display: contents; }
+.georeferenceMap .geographicToolbar { gap: 4px; padding: 4px; }
+.georeferenceMap .geographicToolbar summary { font-size: 11px; padding-inline: 0; gap: 4px; }
+.georeferenceMap .geographicNavigation > button { width: 44px; padding: 0; }
+.georeferenceMap .geographicNavigation > button span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.georeferenceEditor > form { overflow: auto; min-height: 0; align-content: start; }
 
 .geographicMapRoot { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .geographicMapStage { position: relative; flex: 1; min-height: 180px; overflow: hidden; isolation: isolate; }
@@ -8793,7 +8786,14 @@ select {
 .geographicResults { list-style: none; margin: 8px 0; padding: 0; max-height: 160px; overflow: auto; }
 .geographicResults button { width: 100%; text-align: left; white-space: normal; }
 .geographicResults li + li { margin-top: 4px; }
-.geographicError, .geographicUnpositioned { margin: 0; padding: 8px 12px; background: var(--panel); }
+.geographicError { position: absolute; left: 12px; bottom: 28px; z-index: 600; max-width: calc(100% - 24px); box-sizing: border-box; margin: 0; padding: 8px 12px; background: var(--panel); font-size: 12px; border-radius: var(--radius-control); pointer-events: none; }
+.geographicRecenter { position: absolute; top: 12px; left: 12px; z-index: 600; }
+.geographicOptions { position: absolute; top: 12px; right: 12px; z-index: 600; }
+.geographicOptions summary { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; cursor: pointer; color: var(--text); background: var(--color-surface-solid); border: 1px solid var(--border); border-radius: var(--radius-control); box-shadow: var(--shadow-elevation-1); list-style: none; }
+.geographicOptions summary::-webkit-details-marker { display: none; }
+.geographicOptions summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.geographicOptions > button, .geographicOptions > p { position: absolute; right: 0; top: 52px; width: max-content; max-width: min(280px, calc(100vw - 48px)); background: var(--color-surface-solid); }
+.geographicOptions > p { top: 100px; padding: 12px; border-radius: var(--radius-control); font-size: 12px; }
 .geographicMainViewport { display: flex; flex-direction: column; box-sizing: border-box; }
 .geographicMainViewport > .geographicMapRoot { flex: 1; }
 .geographicCompositionLayer { position: absolute; inset: 0; pointer-events: none; z-index: 450; }
@@ -8906,3 +8906,91 @@ a[aria-disabled="true"] {
     bottom: min(68vh, calc(100vh - 120px));
   }
 }
+
+/* Spatial workspace: quiet structure, explicit investigation, usable small screens. */
+.geographicToolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 12px; }
+.geographicNavigation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.geographicToolbar details { position: relative; }
+.geographicToolbar summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: var(--radius-control, 14px); }
+.geographicToolbar summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.geographicToolbar details[open] { flex: 1 1 100%; }
+.geographicToolbar details[open] summary { border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+.geographicPermission p { max-width: 70ch; font-size: 13px; }
+.geographicSearch { padding-block: 8px; }
+.geographicLeaflet { background: var(--color-canvas2d-background); }
+.geographicCluster { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.geographicCluster { width: auto; min-width: 44px; padding: 6px; border-radius: 14px; }
+.geographicEventCluster:focus-visible, .geographicElementButton:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.geographicChoices button { height: auto; display: grid; gap: 4px; text-align: left; padding: 12px; white-space: normal; }
+.geographicNotificationTarget.isSelected { outline: 3px solid var(--text); outline-offset: 3px; }
+.geographicAnchor { font-size: 24px; color: var(--accent); background: var(--color-surface-solid); border: 2px solid var(--accent); border-radius: 50%; text-shadow: none; box-sizing: border-box; }
+.geographicMapStage .leaflet-bar a { background: var(--color-surface-solid); color: var(--text); border-color: var(--border); }
+.geographicMapStage .leaflet-bar { border: 1px solid var(--borderStrong); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-elevation-1); }
+.georeferenceEditor > form { display: grid; gap: 16px; min-width: 0; }
+.georeferenceEditor > form > p { margin: 0; }
+.georeferenceMap .geographicMapStage { min-height: 150px; }
+.georeferenceFields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.georeferenceFields > p { margin: 0 0 12px; }
+.georeferencePositionMode { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.georeferenceActions { position: sticky; bottom: 0; background: var(--color-surface-solid); z-index: 3; padding-block: 12px; }
+.georeferenceControls input[type="range"] { accent-color: var(--accent); }
+.georeferenceControls input[aria-invalid="true"] { border-color: var(--color-danger, #b91c1c); }
+.geographicListToggle, .geographicSelection { display: none; }
+.railNotifications .notificationCard { box-shadow: none; border-radius: 12px; }
+.railNotifications .notificationCardThumb { box-shadow: none; border-radius: 8px; }
+.railNotifications .notificationCardTitle { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.compositionRow, .compositionsSettingsRow { box-shadow: none; }
+.compositionEditorRoot .layerDeleteButton { background: transparent; box-shadow: none; color: var(--textMuted); }
+.compositionEditorRoot .layerDeleteButton:hover { color: var(--color-danger, #b91c1c); }
+.compositionEditorRoot .layerMainButton { box-shadow: none; }
+@media (max-width: 720px) {
+  .geographicScreen { --map-selection-height: min(220px, 34dvh); }
+  .geographicScreen:not(.notificationsExpanded) .railNotifications > .railScroll,
+  .geographicScreen:not(.notificationsExpanded) .notificationsActiveFilters { display: none; }
+  .geographicScreen:not(.notificationsExpanded) .geographicSelection { display: grid; gap: 8px; padding: 8px 12px; overflow: auto; }
+  .geographicSelectionDetails { display: flex; gap: 10px; align-items: center; text-align: left; color: inherit; font: inherit; border: 0; background: transparent; padding: 0; min-height: 44px; }
+  .geographicSelectionDetails img { width: 48px; height: 56px; object-fit: cover; border-radius: 8px; }
+  .geographicSelectionDetails span { display: grid; gap: 4px; min-width: 0; }
+  .geographicSelectionDetails strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; }
+  .geographicSelectionDetails time, .geographicSelectionDetails small { font-size: 12px; color: var(--textMuted); }
+  .geographicFilterSummary { border: 0; background: transparent; color: var(--accent); font: inherit; min-height: 44px; }
+  .geographicScreen .geographicListToggle { display: inline-flex; }
+  .geographicScreen .overlayLeft.isOpen { height: var(--map-selection-height); top: auto; bottom: 0; }
+  .geographicScreen .notificationSpatialViewport.withNotifications { bottom: var(--map-selection-height); }
+  .geographicScreen.notificationsExpanded .overlayLeft.isOpen { height: calc(100dvh - 84px); }
+  .geographicScreen.notificationsExpanded .notificationSpatialViewport.withNotifications { bottom: var(--map-selection-height); }
+  .geographicScreen .geographicToolbar { gap: 4px 8px; padding: 4px 8px; }
+  .geographicToolbar .chipButton { font-size: 12px; padding-inline: 8px; }
+  .georeferenceEditor { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(200px, 48%) minmax(0, 1fr); gap: 12px; height: 80dvh; }
+  .georeferencePreview > p { display: none; }
+  .georeferencePreview { gap: 0; }
+  .georeferenceMap .geographicMapStage { min-height: 100px; }
+  .georeferencePositionMode { flex: none; font-size: 13px; }
+  .georeferenceEditor > form { padding-inline: 2px; }
+  .georeferenceControls { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .georeferenceActions { display: grid; grid-template-columns: 44px 1fr 1fr; gap: 8px; }
+  .georeferenceActions button { padding-inline: 6px; font-size: 12px; }
+  .georeferenceUndoLabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+}
+
+.compositionPositionStatus { display: block; color: var(--textMuted); font-weight: 400; font-size: 12px; margin-top: 4px; }
+.renderViewGroupTitle { font-size: 14px; margin: 16px 0 4px; color: var(--textMuted); }
+.renderViewOption > button { width: 100%; text-align: left; color: inherit; font: inherit; }
+.renderViewOption .choiceTitle, .renderViewOption .choiceDesc { display: block; }
+.renderViewAvailability { padding: 0 12px 12px; font-size: 13px; }
+.spatialProjectionNotice { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; padding: 24px; z-index: 5; }
+.spatialProjectionNotice.isPartial { inset: auto 12px 52px auto; padding: 0; max-width: min(440px, calc(100% - 24px)); }
+.spatialProjectionNoticeBody { pointer-events: auto; width: min(480px, 100%); max-height: 65dvh; overflow: auto; box-sizing: border-box; padding: 16px; color: var(--text); background: var(--color-surface-solid); border: 1px solid var(--borderStrong); border-radius: var(--radius-panel); box-shadow: var(--shadow-elevation-1); }
+.spatialProjectionNoticeBody p { margin: 8px 0; line-height: 1.45; font-size: 13px; }
+.spatialProjectionNoticeBody summary { cursor: pointer; min-height: 44px; align-content: center; }
+.spatialProjectionNoticeBody ul { list-style: none; padding: 0; margin: 0; }
+.spatialProjectionNoticeBody li { padding-block: 12px; border-top: 1px solid var(--border); }
+.spatialProjectionNoticeBody button { min-height: 44px; }
+@media (max-width: 720px) {
+  .geographicScreen > .overlayTopRight { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) repeat(3, 44px); gap: 4px; left: 8px; right: 8px; width: auto; }
+  .geographicScreen > .overlayTopRight > button { min-width: 0; width: 100%; height: 44px; padding-inline: 6px; }
+  .geographicScreen .notificationSpatialViewport { top: 64px; }
+}
+.geographicNotificationTarget.isSelected { z-index: 2; }
+.choiceList > button.choiceItem { text-align: left; color: inherit; font: inherit; }
+.choiceList > button.choiceItem > span { display: block; }

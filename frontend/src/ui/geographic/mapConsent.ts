@@ -38,6 +38,6 @@ export function useMapConsent(service: string): { decision: boolean | null; pers
     window.addEventListener("storage", storage);
     return () => { window.removeEventListener(changedEvent, update); window.removeEventListener("storage", storage); };
   }, [key]);
-  return { decision: selection.key === key ? selection.decision : null, persistent,
+  return { decision: selection.key === key ? selection.decision : readMapConsent(key), persistent,
     choose: allowed => { setPersistent(saveMapConsent(key, allowed)); setSelection({ key, decision: allowed }); } };
 }

@@ -6,6 +6,7 @@ import { onvifTranslations } from "./settings/onvifTranslations";
 
 export const camerasTranslations = {
   en: {
+    "ext.cameras.mapping.unknown": "Mapping status unavailable. Open mapping to retry.",
     "ext.cameras.settings.device": "Camera",
     "ext.cameras.settings.technical.title": "Technical information",
     "ext.cameras.settings.technical.connection": "Connection",
@@ -248,7 +249,7 @@ export const camerasTranslations = {
     "ext.cameras.panorama.link_title": "Connect the places you recognize",
     "ext.cameras.panorama.check_title": "Now let the camera show the result",
     "ext.cameras.panorama.finish_title": "Review your mapping",
-    "ext.cameras.panorama.active_title": "Your camera is mapped",
+    "ext.cameras.panorama.active_title": "Active mapping",
     "ext.cameras.panorama.active_help": "The mapping is in use. Choose Edit points to make changes.",
     "ext.cameras.panorama.finish_help": "Does the result meet your needs? You can adjust it again later.",
     "ext.cameras.panorama.pair_help": "Pick recognizable places on the same floor, such as a pillar base or a corner of the paving.",
@@ -837,6 +838,7 @@ export const camerasTranslations = {
     "ext.cameras.action.loading": "Loading...",
   },
   "pt-BR": {
+    "ext.cameras.mapping.unknown": "Estado do mapeamento indisponível. Abra o mapeamento para consultar novamente.",
     "ext.cameras.mapping.degraded": "Processamento espacial degradado: não foi possível localizar um ou mais objetos. Consulte o motivo registrado no mapeamento.",
     "ext.cameras.settings.device": "Câmera",
     "ext.cameras.settings.technical.title": "Informações técnicas",
@@ -1079,7 +1081,7 @@ export const camerasTranslations = {
     "ext.cameras.panorama.link_title": "Ligue os lugares que você reconhece",
     "ext.cameras.panorama.check_title": "Agora, deixe a câmera mostrar o resultado",
     "ext.cameras.panorama.finish_title": "Revise seu mapeamento",
-    "ext.cameras.panorama.active_title": "Sua câmera está mapeada",
+    "ext.cameras.panorama.active_title": "Mapeamento ativo",
     "ext.cameras.panorama.active_help": "O mapeamento está em uso. Para alterá-lo, escolha Editar pontos.",
     "ext.cameras.panorama.finish_help": "O resultado atende ao que você precisa? Você pode ajustá-lo novamente depois.",
     "ext.cameras.panorama.pair_help": "Escolha lugares reconhecíveis no mesmo piso, como a base de um pilar ou um canto do pavimento.",

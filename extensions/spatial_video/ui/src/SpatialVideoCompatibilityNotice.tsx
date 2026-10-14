@@ -1,79 +1,33 @@
-import React from "react";
+import React, { useState } from "react";
+import type { HostI18n } from "@toposync/plugin-api";
+import type { PanoramaProjectionIssue } from "./panoramaGroundLayer";
 
 type Props = {
   loading: boolean;
   error: string | null;
+  issues: PanoramaProjectionIssue[];
   hasCompatibleProjection: boolean;
+  i18n: HostI18n;
+  onConfigure?: (elementId?: string, initialAction?: string) => void;
 };
 
-export function SpatialVideoCompatibilityNotice({ loading, error, hasCompatibleProjection }: Props): React.ReactElement | null {
-  if (!loading && !error && hasCompatibleProjection) return null;
-
-  const isEmpty = !loading && !error && !hasCompatibleProjection;
-  const title = loading
-    ? "Carregando transmissões mapeadas..."
-    : error
-      ? "Falha ao carregar transmissões"
-      : "Nada compatível para projetar";
-  const body = loading
-    ? "Verificando câmeras com transmissão ativa e mapeamento nesta composição."
-    : error
-      ? error
-      : "Mapeie uma panorâmica salva na composição ou configure uma transmissão com uma vista calibrada para projetar a imagem nesta visualização.";
-
-  return (
-    <div
-      role={isEmpty || error ? "alert" : "status"}
-      style={{
-        position: "absolute",
-        inset: 0,
-        display: "grid",
-        placeItems: "center",
-        pointerEvents: "none",
-        zIndex: 5,
-        padding: 24,
-      }}
-    >
-      <div
-        className="card"
-        style={{
-          width: "min(480px, 100%)",
-          padding: 18,
-          display: "grid",
-          gap: 10,
-          border: isEmpty ? "1px solid rgba(251,191,36,0.45)" : undefined,
-          background: "rgba(15,23,42,0.86)",
-          boxShadow: "0 18px 48px rgba(0,0,0,0.36)",
-        }}
-      >
-        <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-          <div
-            aria-hidden="true"
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 999,
-              display: "grid",
-              placeItems: "center",
-              color: error ? "rgb(254,202,202)" : isEmpty ? "rgb(253,230,138)" : "rgb(186,230,253)",
-              background: error ? "rgba(127,29,29,0.72)" : isEmpty ? "rgba(120,53,15,0.64)" : "rgba(12,74,110,0.64)",
-              border: "1px solid rgba(226,232,240,0.18)",
-              flex: "0 0 auto",
-            }}
-          >
-            <i className={`fa-solid fa-${loading ? "spinner" : error ? "triangle-exclamation" : "video-slash"}`} />
-          </div>
-          <div style={{ display: "grid", gap: 6, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, color: "rgba(248,250,252,0.96)" }}>{title}</div>
-            <div style={{ color: "rgba(203,213,225,0.86)", lineHeight: 1.45 }}>{body}</div>
-            {isEmpty ? (
-              <div style={{ color: "rgba(148,163,184,0.92)", fontSize: 13, lineHeight: 1.45 }}>
-                Confira se o elemento de câmera desta composição está vinculado à câmera correta, se existe uma transmissão ativa para ela e se o conjunto de pontos selecionado está completo.
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </div>
+export function SpatialVideoCompatibilityNotice({ loading, error, issues, hasCompatibleProjection, i18n, onConfigure }: Props): React.ReactElement | null {
+  const { t } = i18n.useI18n();
+  const [expanded, setExpanded] = useState(false);
+  if (!loading && !error && !issues.length && hasCompatibleProjection) return null;
+  const partial = hasCompatibleProjection;
+  const title = t(`ext.spatial_video.notice_${loading ? "loading" : partial ? "partial" : error || issues.length ? "failed" : "empty"}`);
+  return <div role={loading ? "status" : "alert"} className={`spatialProjectionNotice${partial ? " isPartial" : ""}`}>
+    <div className="spatialProjectionNoticeBody" onPointerDown={event => event.stopPropagation()} onWheel={event => event.stopPropagation()}>
+      <strong><i className={`fa-solid fa-${loading ? "spinner" : "circle-info"}`} aria-hidden="true" /> {title}</strong>
+      {!loading && <p>{t(partial ? "ext.spatial_video.notice_partial_help" : "ext.spatial_video.notice_empty_help")}</p>}
+      {issues.length > 0 && <details open={expanded || !partial} onToggle={event => setExpanded(event.currentTarget.open)}><summary>{t("ext.spatial_video.affected", { count: issues.length })}</summary><ul>
+        {issues.map(issue => <li key={issue.elementId}><strong>{issue.name}</strong><p>{issue.message}</p>
+          {onConfigure && <button type="button" className="chipButton" onClick={() => onConfigure(issue.elementId, "panorama-mapping")}>{t("ext.spatial_video.review_mapping")}</button>}
+        </li>)}
+      </ul></details>}
+      {error && <details><summary>{t("ext.spatial_video.stream_error")}</summary><p>{error}</p></details>}
+      {!loading && !partial && !issues.length && onConfigure && <button type="button" className="chipButton" onClick={() => onConfigure()}>{t("ext.spatial_video.configure")}</button>}
     </div>
-  );
+  </div>;
 }

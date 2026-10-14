@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { CompositionElement, ElementType, Notification, NotificationRenderer } from "@toposync/plugin-api";
 import { getGeographicCompositions, type Composition } from "../../util/api";
-import { readGeoreference } from "../../util/georeference";
 import { i18n } from "../../util/i18n";
 import { Modal } from "../Modal";
-import { GeographicMap } from "./GeographicMap";
+import { GeographicMap, type GeographicView } from "./GeographicMap";
 import type { GeographicTarget } from "./GeographicCompositionLayer";
 
-export function MainGeographicViewport({ compositionId, compositionName, georeference, elements, elementTypesById, notifications, notificationRenderers, activeNotificationId, onActivateComposition, onElementActivated, onNotification, onImage }: {
+export function MainGeographicViewport({ viewState, compositionId, compositionName, georeference, elements, elementTypesById, notifications, notificationRenderers, activeNotificationId, onActivateComposition, onElementActivated, onNotification, onImage }: {
+  viewState?: React.MutableRefObject<GeographicView | null>;
   compositionId: string; compositionName: string; georeference: unknown; elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>; notifications: Notification[]; notificationRenderers: NotificationRenderer[]; activeNotificationId?: string | null;
   onActivateComposition: (id: string) => Promise<Composition>;
@@ -45,16 +45,14 @@ export function MainGeographicViewport({ compositionId, compositionName, georefe
     onElementActivated(target.elementId, "longpress");
   }, [compositionId, elements, onElementActivated]);
   return <div className="viewportRoot geographicMainViewport">
+    {activationError && !pending && <p role="alert">{t("core.map.activation_failed")}</p>}
     {error && <p role="alert">{t("core.map.compositions_failed")}</p>}
-    <GeographicMap compositions={compositions} activeCompositionId={compositionId} elementTypesById={elementTypesById} notifications={notifications}
+    <GeographicMap viewState={viewState} compositions={compositions} activeCompositionId={compositionId} elementTypesById={elementTypesById} notifications={notifications}
       notificationRenderers={notificationRenderers} activeNotificationId={activeNotificationId} onNotification={onNotification} onImage={onImage}
       onActivate={target => {
         if (target.compositionId === compositionId) onElementActivated(target.elementId, "longpress");
         else { setActivationError(false); setPending(target); }
       }} />
-    {compositions.some(item => !readGeoreference(item.meta?.georeference)) && <p className="geographicUnpositioned" role="status">
-      {t("core.map.unpositioned_list", { names: compositions.filter(item => !readGeoreference(item.meta?.georeference)).map(item => item.name).join(", ") })}
-    </p>}
     <Modal open={pending !== null} title={t("core.map.other_composition")} onClose={() => { if (!activating) setPending(null); }}>
       <p>{t("core.map.switch_context", { name: compositions.find(item => item.id === pending?.compositionId)?.name ?? "" })}</p>
       {activationError && <p role="alert">{t("core.map.activation_failed")}</p>}

@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import type { Composition, CompositionSummary } from "../util/api";
 import { i18n } from "../util/i18n";
 import { Modal } from "./Modal";
+import { useCompositionPositions } from "./geographic/useCompositionPositions";
 import { Icon } from "./Icon";
 
 type Props = {
@@ -10,6 +11,8 @@ type Props = {
   compositions: CompositionSummary[];
   activeCompositionId: string;
   onClose: () => void;
+  requirePosition?: boolean;
+  onPosition?: (id: string) => Promise<void>;
   onActivate: (compositionId: string) => Promise<Composition>;
   onCreate: (name: string) => Promise<Composition>;
   onRename: (compositionId: string, name: string) => Promise<Composition>;
@@ -25,6 +28,8 @@ export function CompositionSelectorModal({
   onCreate,
   onRename,
   onDelete,
+  onPosition,
+  requirePosition = false,
 }: Props): React.ReactElement | null {
   const { t } = i18n.useI18n();
   const [newName, setNewName] = useState("");
@@ -34,6 +39,7 @@ export function CompositionSelectorModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const positions = useCompositionPositions(open);
   const canDelete = compositions.length > 1;
 
   const sorted = useMemo(
@@ -67,6 +73,10 @@ export function CompositionSelectorModal({
 
   async function handleActivate(compositionId: string) {
     if (busy) return;
+    if (requirePosition && positions?.[compositionId] === false) {
+      setError(t("core.map.selection_unpositioned", { name: compositions.find(item => item.id === compositionId)?.name ?? "" }));
+      return;
+    }
     if (compositionId === activeCompositionId) {
       onClose();
       return;
@@ -209,7 +219,7 @@ export function CompositionSelectorModal({
                 onClick={() => void handleActivate(c.id)}
                 disabled={busy || isConfirmingDelete}
               >
-                <span className="compositionName">{mainLabel}</span>
+                <span className="compositionName">{mainLabel}{!isConfirmingDelete && positions?.[c.id] !== undefined && <small className="compositionPositionStatus">{t(positions[c.id] ? "core.map.positioned" : "core.map.not_positioned")}</small>}</span>
                 {isActive && !isConfirmingDelete ? (
                   <span className="compositionBadge">
                     <Icon name="check" />
@@ -218,6 +228,8 @@ export function CompositionSelectorModal({
               </button>
 
               <div className="compositionActions">
+                {onPosition && !isConfirmingDelete && <button type="button" className="iconButton" disabled={busy} aria-label={`${t("core.map.position")}: ${c.name}`} title={t("core.map.position")}
+                  onClick={async () => { setBusy(true); setError(null); try { await onPosition(c.id); onClose(); } catch (reason) { setError(reason instanceof Error ? reason.message : t("core.map.activation_failed")); } finally { setBusy(false); } }}><Icon name="map-location-dot" /></button>}
                 {isConfirmingDelete ? (
                   <>
                     <button

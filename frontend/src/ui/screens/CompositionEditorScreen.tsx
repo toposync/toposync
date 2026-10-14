@@ -249,7 +249,7 @@ export function CompositionEditorScreen({
   onDeleteComposition,
 }: Props): React.ReactElement {
   const { locale, t } = i18n.useI18n();
-  const [isMapOpen, setIsMapOpen] = useState(false);
+  const [isMapOpen, setIsMapOpen] = useState(initialEditingAction === "georeference");
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
   const [editingElementId, setEditingElementId] = useState<string | null>(initialEditingElementId ?? null);
@@ -863,7 +863,7 @@ export function CompositionEditorScreen({
           <Icon name={isControlsOpen ? "chevron-left" : "chevron-right"} />
           {t("core.ui.editor.tools_and_layers")}: {resolveLocalizedString(toolsById[selectedToolId]?.name)}
         </button>
-        <button className="chipButton" type="button" onClick={() => setIsMapOpen(true)}>{t("core.map.map")}</button>
+        <button className="chipButton" type="button" onClick={() => setIsMapOpen(true)}><Icon name="map-location-dot" /> {t("core.map.position")}</button>
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
           {t("core.ui.rendering")}: 2D
         </button>
@@ -1412,6 +1412,7 @@ export function CompositionEditorScreen({
         compositions={compositions}
         activeCompositionId={activeCompositionId}
         onClose={() => setIsCompositionModalOpen(false)}
+        onPosition={async id => { if (id !== activeCompositionId) await onActivateComposition(id); setIsMapOpen(true); }}
         onActivate={onActivateComposition}
         onCreate={onCreateComposition}
         onRename={onRenameComposition}

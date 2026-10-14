@@ -1,3 +1,4 @@
+import type { GeographicView } from "./geographic/GeographicMap";
 import { StreamingAvailabilityBoundary, StreamingAvailabilityContext, type StreamingAvailability } from "./streams/StreamingAvailability";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
@@ -432,6 +433,8 @@ function upsertNotificationInState(
 export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElement {
   const pathname = usePathname();
   const [screen, setScreen] = useState<Screen>("main");
+  const geographicView = useRef<GeographicView | null>(null);
+  const editorReturnPath = useRef<string | null>(null);
   const [editorReturnElementId, setEditorReturnElementId] = useState<string | null>(null);
   const [editorInitialAction, setEditorInitialAction] = useState<string | undefined>(undefined);
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
@@ -1793,19 +1796,20 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
 
   const lastNonSettingsPathRef = useRef<string>("/");
   useEffect(() => {
-    if (!normalizedPathname.startsWith("/settings")) lastNonSettingsPathRef.current = normalizedPathname;
-  }, [normalizedPathname]);
+    if (screen === "main" && !normalizedPathname.startsWith("/settings")) lastNonSettingsPathRef.current = normalizedPathname;
+  }, [normalizedPathname, screen]);
 
   const openSettings = useCallback(() => navigate("/settings"), []);
   const openPipelinesSettings = useCallback(() => navigate("/settings/pipelines"), []);
   const openProcessingServersSettings = useCallback(() => navigate("/settings/processing-servers"), []);
   const openAccessSettings = useCallback(() => navigate("/settings/access"), []);
   const openCompositionEditorFromSettings = useCallback((elementId?: string, initialAction?: string) => {
+    editorReturnPath.current = normalizedPathname;
     setEditorReturnElementId(elementId ?? null);
     setEditorInitialAction(initialAction);
     replace("/");
     setScreen("editor");
-  }, []);
+  }, [normalizedPathname]);
 
   useEffect(() => {
     if (normalizedPathname.startsWith("/settings")) {
@@ -1933,7 +1937,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           onNotificationsViewed={markNotificationsAsViewed}
           api={host.api}
           updateElement={updateElement}
-          onEditComposition={() => setScreen("editor")}
+          geographicView={geographicView}
+          onEditComposition={(initialAction, elementId) => { editorReturnPath.current = null; setEditorReturnElementId(elementId ?? null); setEditorInitialAction(initialAction); setScreen("editor"); }}
           onOpenPipelines={openPipelinesSettings}
           onOpenSettings={openSettings}
           onActivateComposition={activateCompositionById}
@@ -1981,6 +1986,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             setEditorReturnElementId(null);
             setEditorInitialAction(undefined);
             setScreen("main");
+            if (editorReturnPath.current) replace(editorReturnPath.current);
+            editorReturnPath.current = null;
           }}
           onOpenSettings={openSettings}
           onActivateComposition={activateCompositionById}

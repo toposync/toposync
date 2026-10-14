@@ -1,3 +1,4 @@
+import type { GeographicView } from "../geographic/GeographicMap";
 import { StreamingAvailabilityContext } from "../streams/StreamingAvailability";
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
@@ -84,7 +85,8 @@ type Props = {
   onNotificationsViewed: () => void;
   api: HostApi;
   updateElement: (elementId: string, patch: CompositionElementPatch) => void;
-  onEditComposition: () => void;
+  geographicView: React.MutableRefObject<GeographicView | null>;
+  onEditComposition: (initialAction?: string, elementId?: string) => void;
   onOpenPipelines: () => void;
   onOpenSettings: () => void;
   onActivateComposition: (compositionId: string) => Promise<Composition>;
@@ -419,6 +421,7 @@ export function MainScreen({
   onNotificationsViewed,
   api,
   updateElement,
+  geographicView,
   onEditComposition,
   onOpenPipelines,
   onOpenSettings,
@@ -464,6 +467,8 @@ export function MainScreen({
   const [failedNotificationImageUrls, setFailedNotificationImageUrls] = useState<Set<string>>(() => new Set());
   const [fullscreenNotificationImageOpen, setFullscreenNotificationImageOpen] = useState(false);
   const [fullscreenNotificationImageIndex, setFullscreenNotificationImageIndex] = useState(0);
+  const selectedNotificationRef = useRef<HTMLButtonElement | null>(null);
+  const [notificationsExpanded, setNotificationsExpanded] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
   const filter = notificationsFilter;
   const setFilter = onNotificationsFilterChange;
@@ -510,6 +515,9 @@ export function MainScreen({
     return readLastCameraLiveViewId();
   });
   const [streamsOverlayVisible, setStreamsOverlayVisible] = useState(true);
+  useEffect(() => {
+    if (renderMode === "geographic" && notificationsExpanded) selectedNotificationRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeNotificationId, notificationsExpanded, renderMode]);
   const notificationScrollRef = useRef<HTMLDivElement | null>(null);
   const notificationSentinelRef = useRef<HTMLDivElement | null>(null);
   const streamsOverlayTimerRef = useRef<number | null>(null);
@@ -603,6 +611,7 @@ export function MainScreen({
     [activeNotificationRaw, notificationsNowMs],
   );
 
+  const selectedThumbnail = activeNotification ? notificationThumbnailUrl(activeNotification) : null;
   const activeNotificationImages = useMemo(() => {
     if (!activeNotification) return [];
     return notificationImageItems(activeNotification).filter((item) => !failedNotificationImageUrls.has(item.url.trim()));
@@ -1082,7 +1091,7 @@ export function MainScreen({
   }, [onViewportReady, viewportLoadingMessage]);
 
   return (
-    <div className="screenRoot">
+    <div className={`screenRoot${renderMode === "geographic" ? " geographicScreen" : ""}${notificationsExpanded ? " notificationsExpanded" : ""}`}>
       {viewportLoadingMessage ? (
         <div className="viewportRoot mainViewportLoadingRoot">
           <div className="mainViewportLoadingCard">
@@ -1112,12 +1121,12 @@ export function MainScreen({
       ) : (
         <>
           {renderMode === "geographic" ? (
-            <div className={`registeredRenderView${notificationsOpen ? " withNotifications" : ""}`}>
-            <MainGeographicViewport compositionId={activeCompositionId} compositionName={compositionName} georeference={georeference}
+            <div className={`registeredRenderView notificationSpatialViewport${notificationsOpen ? " withNotifications" : ""}`}>
+            <MainGeographicViewport viewState={geographicView} compositionId={activeCompositionId} compositionName={compositionName} georeference={georeference}
               elements={elements} elementTypesById={elementTypesById} notifications={activeNotification && !notifications.some(item => item.id === activeNotification.id) ? [...notifications, activeNotification] : notifications}
               notificationRenderers={notificationRenderers} activeNotificationId={activeNotificationId}
               onActivateComposition={onActivateComposition} onElementActivated={handleElementActivated}
-              onNotification={id => { onSelectNotification(id); setIsNotificationDetailsOpen(true); }}
+              onNotification={id => { onSelectNotification(id); setNotificationsOpen(true); setNotificationsExpanded(false); }}
               onImage={args => setImageModal({ ...args, title: args.title ?? t("core.ui.image_preview") })} />
             </div>
           ) : renderMode === "2d" ? (
@@ -1145,6 +1154,7 @@ export function MainScreen({
           ) : activeRenderView ? (
             <div className={`registeredRenderView${notificationsOpen ? " withNotifications" : ""}`}>
               {activeRenderView.render({
+                onConfigureElement: (id, action) => onEditComposition(action, id),
                 compositionId: activeCompositionId,
                 compositionName,
                 elements,
@@ -1248,7 +1258,7 @@ export function MainScreen({
             type="button"
             aria-label={t("core.actions.edit")}
             title={t("core.actions.edit")}
-            onClick={onEditComposition}
+            onClick={() => onEditComposition()}
           >
             <Icon name="pen-to-square" />
           </button>
@@ -1268,6 +1278,8 @@ export function MainScreen({
         {notificationsOpen ? (
           <div className="rail railNotifications">
             <div className="railHeader">
+              {renderMode === "geographic" && <button type="button" className="iconButton geographicListToggle" aria-expanded={notificationsExpanded}
+                aria-label={t(notificationsExpanded ? "core.map.events_compact" : "core.map.events_expand")} onClick={() => setNotificationsExpanded(value => !value)}><Icon name={notificationsExpanded ? "chevron-down" : "chevron-up"} /></button>}
               <div className="railTitle">{t("core.ui.notifications")}</div>
               <div className="row">
                 <button
@@ -1440,6 +1452,17 @@ export function MainScreen({
                   ) : null}
                 </div> : null}
 
+            {renderMode === "geographic" && <div className="geographicSelection">
+              {activeNotification ? <>
+                <button type="button" className="geographicSelectionDetails" onClick={() => setIsNotificationDetailsOpen(true)}>
+                  {selectedThumbnail && !failedNotificationImageUrls.has(selectedThumbnail.trim()) && <img src={selectedThumbnail} alt="" onError={() => setFailedNotificationImageUrls(previous => new Set([...previous, selectedThumbnail.trim()]))} />}
+                  <span><strong>{activeNotification.title}</strong><time>{formatDateTimeShort(locale, activeNotification.createdAt ?? activeNotification.updatedAt)}</time>
+                    <small>{t(visibleNotifications.some(item => item.id === activeNotification.id) ? "core.map.selected_event" : "core.map.selected_outside_results")}</small></span>
+                </button>
+                {renderNotificationSpatialStatus(activeNotification)}
+              </> : <button type="button" className="chipButton" onClick={() => setNotificationsExpanded(true)}>{t("core.map.select_event")}</button>}
+              {filterRestrictive && <button type="button" className="geographicFilterSummary" onClick={openNotificationSearch}><Icon name="filter" /> {t("core.ui.notifications.active_filters")}</button>}
+            </div>}
             {filterRestrictive ? <div className="notificationsActiveFilters" aria-label={t("core.ui.notifications.active_filters")}>
               <span className="notificationsActiveFiltersTitle">{t("core.ui.notifications.active_filters")}</span>
               <button type="button" className="chipButton notificationsActiveFilter" onClick={openNotificationSearch}>{t("core.ui.notifications.active_priorities", { priorities: filter.priorities.map(priority => t(`core.ui.notifications.filter.priority.${priority}`)).join(", ") || t("core.ui.notifications.filter.none") })}</button>
@@ -1508,9 +1531,11 @@ export function MainScreen({
                     className={["card", "cardButton", "notificationCard", isActive ? "isActive" : ""].filter(Boolean).join(" ")}
                     type="button"
                     key={n.id}
+                    ref={isActive ? selectedNotificationRef : undefined}
                     onClick={() => {
                       onSelectNotification(n.id);
-                      if (shouldAutoCloseNotificationsAfterSelect()) {
+                      if (renderMode === "geographic") { setNotificationsExpanded(false); }
+                      else if (shouldAutoCloseNotificationsAfterSelect()) {
                         setNotificationsOpen(false);
                         setNotificationImageIndex(0);
                         setIsNotificationDetailsOpen(true);
@@ -1536,7 +1561,7 @@ export function MainScreen({
                           {notificationDetailPanels.filter((panel) => panel.supports(n)).map((panel) => (
                             <React.Fragment key={panel.id}>{panel.renderSummary?.(n)}</React.Fragment>
                           ))}
-                          {renderer ? (
+                          {notificationDetailPanels.some(panel => panel.replacesRendererSummary && panel.supports(n)) ? renderNotificationSpatialStatus(n) : renderer ? (
                             <div className="notificationCardRenderer">{renderer.render(n)}</div>
                           ) : n.description ? (
                             <div className="notificationCardDesc">{n.description}</div>
@@ -1602,142 +1627,43 @@ export function MainScreen({
         onClose={() => setIsRenderModalOpen(false)}
       >
         <div className="choiceList">
-          <button type="button" className={["choiceItem", renderMode === "geographic" ? "isSelected" : ""].filter(Boolean).join(" ")}
-            onClick={() => { setRenderMode("geographic"); setIsRenderModalOpen(false); }}>
-            <span className="choiceTitle">{t("core.map.map")}</span>
-            <span className="choiceDesc">{t("core.map.render_description")}</span>
-          </button>
-          <div
-            className={["choiceItem", renderMode === "3d" ? "isSelected" : ""].filter(Boolean).join(" ")}
-            role="button"
-            tabIndex={0}
-            onClick={() => {
-              setRenderMode("3d");
-              setIsRenderModalOpen(false);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                setRenderMode("3d");
-                setIsRenderModalOpen(false);
-              }
-            }}
-          >
-            <div className="choiceTitle">{t("core.ui.render_modal.option_3d.title")}</div>
-            <div className="choiceDesc">{t("core.ui.render_modal.option_3d.desc")}</div>
-          </div>
-          <div
-            className={["choiceItem", renderMode === "2d" ? "isSelected" : ""].filter(Boolean).join(" ")}
-            role="button"
-            tabIndex={0}
-            onClick={() => {
-              setRenderMode("2d");
-              setIsRenderModalOpen(false);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                setRenderMode("2d");
-                setIsRenderModalOpen(false);
-              }
-            }}
-          >
-            <div className="choiceTitle">{t("core.ui.render_modal.option_2d.title")}</div>
-            <div className="choiceDesc">{t("core.ui.render_modal.option_2d.desc")}</div>
-          </div>
-          <div
-            className={["choiceItem", renderMode === "vector2d" ? "isSelected" : ""].filter(Boolean).join(" ")}
-            role="button"
-            tabIndex={0}
-            onClick={() => {
-              setRenderMode("vector2d");
-              setIsRenderModalOpen(false);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                setRenderMode("vector2d");
-                setIsRenderModalOpen(false);
-              }
-            }}
-          >
-            <div className="choiceTitle">{t("core.ui.render_modal.option_vector2d.title", {}, "2D (Plan)")}</div>
-            <div className="choiceDesc">
-              {t("core.ui.render_modal.option_vector2d.desc", {}, "Use a clean floor-plan view for spaces, icons, and states.")}
-            </div>
-          </div>
-          {streamingAvailability !== "loading" && streamingAvailability !== "unavailable" && <>
-          <div
-            className={["choiceItem", renderMode === "streams" ? "isSelected" : ""].filter(Boolean).join(" ")}
-            role="button"
-            tabIndex={0}
-            onClick={() => {
-              setRenderMode("streams");
-              setIsRenderModalOpen(false);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                setRenderMode("streams");
-                setIsRenderModalOpen(false);
-              }
-            }}
-          >
-            <div className="choiceTitle">{t("core.ui.render_modal.option_streams.title", {}, "Camera Grid")}</div>
-            <div className="choiceDesc">
-              {t("core.ui.render_modal.option_streams.desc", {}, "Watch enabled cameras in a paged grid.")}
-            </div>
-          </div>
-          <div
-            className={["choiceItem", renderMode === "camera-live" ? "isSelected" : ""].filter(Boolean).join(" ")}
-            role="button"
-            tabIndex={0}
-            onClick={() => {
-              setRenderMode("camera-live");
-              setIsRenderModalOpen(false);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                setRenderMode("camera-live");
-                setIsRenderModalOpen(false);
-              }
-            }}
-          >
-            <div className="choiceTitle">{t("core.ui.render_modal.option_camera_live.title", {}, "Live Camera")}</div>
-            <div className="choiceDesc">
-              {t("core.ui.render_modal.option_camera_live.desc", {}, "Focus on one live camera with a shareable link.")}
-            </div>
-          </div>
-          </>}
-          {orderedRenderViews.map((view) => {
-            const title = renderViewText(view.name, view.id);
-            const desc = renderViewText(view.description, "");
-            return (
-              <div
-                key={view.id}
-                className={["choiceItem", renderMode === view.id ? "isSelected" : ""].filter(Boolean).join(" ")}
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  setRenderMode(view.id);
-                  setIsRenderModalOpen(false);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    setRenderMode(view.id);
-                    setIsRenderModalOpen(false);
-                  }
-                }}
-              >
-                <div className="choiceTitle">{title}</div>
-                {desc ? <div className="choiceDesc">{desc}</div> : null}
-              </div>
-            );
+          {(["space", "cameras", "panorama"] as const).map(group => {
+            const views = orderedRenderViews.filter(view => (view.group ?? "space") === group);
+            const builtins = group === "space" ? ["geographic", "3d", "2d", "vector2d"]
+              : group === "cameras" && streamingAvailability !== "loading" && streamingAvailability !== "unavailable" ? ["streams", "camera-live"] : [];
+            if (!views.length && !builtins.length) return null;
+            return <React.Fragment key={group}>
+              <h3 className="renderViewGroupTitle">{t(`core.map.${group === "panorama" ? "projection" : group === "cameras" ? "camera" : "space"}_group`)}</h3>
+              {builtins.map(mode => <button key={mode} type="button" className={`choiceItem${renderMode === mode ? " isSelected" : ""}`}
+                onClick={() => { setRenderMode(mode); setIsRenderModalOpen(false); }}>
+                <span className="choiceTitle">{t(mode === "geographic" ? "core.map.map" : `core.ui.render_modal.option_${mode.replace("-", "_")}.title`)}</span>
+                <span className="choiceDesc">{t(mode === "geographic" ? "core.map.render_description" : `core.ui.render_modal.option_${mode.replace("-", "_")}.desc`)}</span>
+              </button>)}
+              {views.map(view => {
+                const availability = view.availability?.({ elements });
+                return <div key={view.id} className="renderViewOption">
+                  <button type="button" className={`choiceItem${renderMode === view.id ? " isSelected" : ""}`} disabled={availability?.available === false}
+                    onClick={() => { setRenderMode(view.id); setIsRenderModalOpen(false); }}>
+                    <span className="choiceTitle">{renderViewText(view.name, view.id)}</span>
+                    <span className="choiceDesc">{renderViewText(view.description, "")}</span>
+                  </button>
+                  {availability && <div className="renderViewAvailability"><p className="muted">{renderViewText(availability.reason, "")}</p>
+                    {!availability.available && <button className="chipButton" type="button" onClick={() => { setIsRenderModalOpen(false); onEditComposition(availability.initialAction, availability.elementId); }}>{t("core.actions.edit")}</button>}
+                  </div>}
+                </div>;
+              })}
+            </React.Fragment>;
           })}
         </div>
       </Modal>
 
       <CompositionSelectorModal
+        requirePosition={renderMode === "geographic"}
         open={isCompositionModalOpen}
         compositions={compositions}
         activeCompositionId={activeCompositionId}
         onClose={() => setIsCompositionModalOpen(false)}
+        onPosition={async id => { if (id !== activeCompositionId) await onActivateComposition(id); onEditComposition("georeference"); }}
         onActivate={onActivateComposition}
         onCreate={onCreateComposition}
         onRename={onRenameComposition}

@@ -1,3 +1,4 @@
+import { StationaryObservationSummary, supportsStationaryObservation, stationaryObservationTranslations } from "./notifications/StationaryObservationSummary";
 import React from "react";
 import { VisualRegionPanel, visualRegionTranslations } from "./pipelines/VisualRegionPanel";
 import {
@@ -33,6 +34,9 @@ export function activate(host: ToposyncHost): void {
       <label className="pipelinesLabel"><span>{i18n.t("ext.cameras.visual_region.duration")}</span><input type="number" min={0} max={3600} step={.1} value={Number(config.minimum_duration_seconds ?? 1)} onChange={event => updateConfig({ minimum_duration_seconds: Number(event.target.value) })} /></label>
     </div> });
   host.i18n.registerTranslations(camerasTranslations);
+  host.i18n.registerTranslations(stationaryObservationTranslations);
+  host.registerNotificationDetailPanel?.({ id: "com.toposync.cameras.stationary-summary", supports: supportsStationaryObservation,
+    replacesRendererSummary: true, renderSummary: notification => <StationaryObservationSummary notification={notification} i18n={host.i18n} />, render: () => null });
   host.i18n.registerTranslations(humanObservationTranslations);
   host.i18n.registerTranslations(audioHistoryTranslations);
   host.registerNotificationDetailPanel?.({ id: "com.toposync.cameras.audio", supports: supportsAudioObservation,
@@ -40,6 +44,7 @@ export function activate(host: ToposyncHost): void {
   host.registerNotificationRenderer(createHumanObservationRenderer(host));
   host.registerRenderView({
     id: "com.toposync.cameras.live-panorama",
+    group: "cameras",
     name: { key: "ext.cameras.live_panorama.title", fallback: "Panorâmica ao vivo" },
     description: { key: "ext.cameras.live_panorama.description", fallback: "Vídeo atual sobre o panorama capturado, com apontamento visual." },
     icon: "video", order: 35,

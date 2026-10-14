@@ -504,6 +504,7 @@ function CameraEditor({
     if (initialAction === "panorama-mapping") setIsPanoramaMappingOpen(true);
   }, [initialAction]);
   const [legacyPanoramaContext, setLegacyPanoramaContext] = useState<CameraPanoramaContext | null>(null);
+  const [panoramaContextStatus, setPanoramaContextStatus] = useState<"loading" | "ready" | "unknown">("loading");
   const [activePanorama, setActivePanorama] = useState<CameraPanoramaJob | null>(null);
 
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndex | null>(null);
@@ -512,6 +513,7 @@ function CameraEditor({
   useEffect(() => {
     setLegacyPanoramaContext(null);
     setActivePanorama(null);
+    setPanoramaContextStatus(selectedCameraId ? "loading" : "ready");
     if (!selectedCameraId) return;
     const controller = new AbortController();
     void fetchCameraPanoramaContext(selectedCameraId, element.id, controller.signal)
@@ -524,7 +526,8 @@ function CameraEditor({
           if (!controller.signal.aborted) setActivePanorama(active);
         }
       })
-      .catch(() => { /* A saved mapping reference remains available if context cannot load. */ });
+      .then(() => { if (!controller.signal.aborted) setPanoramaContextStatus("ready"); })
+      .catch(() => { if (!controller.signal.aborted) setPanoramaContextStatus("unknown"); });
     return () => controller.abort();
   }, [selectedCameraId, element.id]);
 
@@ -697,7 +700,7 @@ function CameraEditor({
         <label className="label">{t("ext.cameras.panorama.mapping_label")}</label>
         <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div className="cardMeta">
-            {t(activePanorama?.active && activePanorama.permissions?.can_activate
+            {t(panoramaContextStatus === "loading" ? "ext.cameras.action.loading" : panoramaContextStatus === "unknown" ? "ext.cameras.mapping.unknown" : activePanorama?.active && activePanorama.permissions?.can_activate
               ? "ext.cameras.mapping.active"
               : props.panorama_mapping || existingCalibratedViews.length
                 ? "ext.cameras.mapping.review_required" : "ext.cameras.mapping.absent")}

@@ -750,6 +750,12 @@ equipamento. Nenhum commit, push ou deploy nesta etapa.
 
 O caminho de mapeamento, tracking, agrupamento e notificações preserva motivos de indisponibilidade por objeto e distingue grupos parcialmente localizados. Uma posição anterior não substitui uma observação atual sem mapeamento. Encerramentos conservam a última evidência do sujeito; recuperação informa trajetória parcial e não liga pontos através da lacuna registrada. O diagnóstico do nó e a notificação exibem degradação espacial. Esse contrato de software não certifica precisão física nem reconstrói o histórico automaticamente.
 
+## Interface de mapas e projeções — 13/10/2026
+
+O mapeamento oferece alternância entre panorâmica e composição em telas estreitas, mantendo as duas vistas montadas e seus estados de navegação. No seletor, referências configuradas são pré-condições; fontes e cobertura continuam verificadas ao abrir a projeção. Falhas panorâmicas identificam a fonte afetada e dão acesso ao seu mapeamento, preservando as camadas disponíveis. Carregamento e impossibilidade de consultar o estado não são tratados como reprovação geométrica.
+
+Validação de interface: alternância móvel e abertura contextual observadas no navegador, com regressões de foco, traduções e ciclo de vida aprovadas. A inspeção da composição real exibiu uma panorâmica salva e identificou geometria indisponível de outra fonte sem bloquear a cena. Não foram executados movimentos, nova captura ou ativação de calibração. Essa entrega não certifica precisão física, cobertura ou qualificação métrica.
+
 ### Região visual no pipeline e prévia de áreas — 14/10/2026
 
 Implementado o operador `camera.panorama_region`, com desenho sobre referência

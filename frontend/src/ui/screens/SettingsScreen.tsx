@@ -1,3 +1,4 @@
+import { useCompositionPositions } from "../geographic/useCompositionPositions";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import type { GraphicsQuality, HostApi, RenderViewDefinition, SettingsPanel, ThemeDefinition, WallHeightPreset } from "@toposync/plugin-api";
@@ -153,6 +154,7 @@ export function SettingsScreen({
 }: Props): React.ReactElement {
   const { t, locale, setLocale } = i18n.useI18n();
   const [activePanelId, setActivePanelId] = useState<string>(() => loadActivePanelId(CORE_PANEL_ID));
+  const compositionPositions = useCompositionPositions(activePanelId === COMPOSITIONS_PANEL_ID);
   const [draftExtensions, setDraftExtensions] = useState<Record<string, Record<string, unknown>>>(() => settings.extensions ?? {});
   const [dirtyExtensions, setDirtyExtensions] = useState<Record<string, boolean>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -567,6 +569,7 @@ export function SettingsScreen({
     backendAvailable,
     canDeleteComposition,
     compositionActionId,
+    compositionPositions,
     compositionError,
     confirmDeleteCompositionId,
     editingCompositionId,
@@ -1092,6 +1095,7 @@ export function SettingsScreen({
                   }
                 >
                   <span className="compositionsSettingsName">{mainLabel}</span>
+                  {compositionPositions?.[composition.id] !== undefined && <span className="compositionsSettingsMeta">{t(compositionPositions[composition.id] ? "core.map.positioned" : "core.map.not_positioned")}</span>}
                   <span className="compositionsSettingsMeta">
                     {isActive
                       ? t("core.ui.settings.compositions.active")
@@ -1100,6 +1104,8 @@ export function SettingsScreen({
                 </button>
 
                 <div className="compositionsSettingsActions">
+                  {!isConfirmingDelete && <button type="button" className="iconButton" disabled={busy || !backendAvailable} title={t("core.map.position")} aria-label={`${t("core.map.position")}: ${composition.name}`}
+                    onClick={() => requestOpenSettingsCompositionEditor(composition.id, undefined, "georeference")}><Icon name="map-location-dot" /></button>}
                   {isConfirmingDelete ? (
                     <>
                       <button

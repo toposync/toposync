@@ -180,6 +180,8 @@ export type NotificationRenderer = {
 
 /** Adds authorized details without replacing a notification's image or overlays. */
 export type NotificationDetailPanel = {
+  /** Present a structured card summary; full details and original payload remain unchanged. */
+  replacesRendererSummary?: boolean;
   id: string;
   supports: (notification: Notification) => boolean;
   render: (notification: Notification) => import("react").ReactNode;
@@ -562,6 +564,7 @@ export type HostUi = {
 };
 
 export type RenderViewContext = {
+  onConfigureElement?: (elementId?: string, initialAction?: string) => void;
   compositionId: string;
   compositionName: string;
   elements: CompositionElement[];
@@ -583,6 +586,11 @@ export type RenderViewToolbarSelector = {
 };
 
 export type RenderViewDefinition = {
+  group?: "space" | "cameras" | "panorama";
+  /** Preconditions only: an available view still validates its sources when opened. */
+  availability?: (context: { elements: CompositionElement[] }) => {
+    available: boolean; reason: LocalizedString; elementId?: string; initialAction?: string;
+  };
   id: string;
   name: LocalizedString;
   description?: LocalizedString;

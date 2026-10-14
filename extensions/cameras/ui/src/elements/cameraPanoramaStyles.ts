@@ -15,10 +15,11 @@ export const cameraPanoramaStyles = `
 .cameraPanoramaPanel > .modalHeader .iconButton { min-width: 44px; min-height: 44px; }
 .cameraPanoramaPanel > .modalBody { padding: clamp(16px, 2vw, 24px); }
 .cameraPanoramaContent { display: flex; flex-direction: column; gap: var(--space-4); overflow-y: auto; min-height: 0; scroll-padding-block: 16px; padding: 2px; }
-:root[data-toposync-base-theme="topo-day"] .cameraPanoramaMapping .primaryButton { color: var(--color-text-primary); }
+
 .cameraPanoramaMapping :focus-visible { outline: 2px solid var(--color-accent-teal); outline-offset: 3px; }
 .cameraPanoramaInstruction { flex-shrink: 0; margin-bottom: var(--space-4); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) var(--space-4); background: var(--color-accent-background-soft); border-radius: var(--radius-control); }
 .cameraPanoramaInstruction h2 { font-size: var(--font-size-16); margin: 0 0 var(--space-1); }
+.cameraPanoramaViewSwitch { display: none; }
 .cameraPanoramaViews { flex-shrink: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .cameraPanoramaView { overflow: clip; min-width: 0; border: 1px solid var(--color-border-strong); border-radius: var(--radius-panel); background: var(--color-surface-solid); }
 .cameraPanoramaView.isAwaiting { border-color: var(--color-accent-teal); box-shadow: 0 0 0 1px var(--color-accent-border); }
@@ -66,7 +67,12 @@ button.cameraPanoramaMarker { pointer-events: none; }
 
   .cameraPanoramaInstruction { padding: var(--space-3); gap: var(--space-2); }
   .cameraPanoramaPointNavigation { gap: var(--space-1); }
+  .cameraPanoramaViewSwitch { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .cameraPanoramaViewSwitch [aria-pressed="true"] { border-color: var(--color-accent-teal); background: var(--color-accent-background-soft); }
   .cameraPanoramaViews { grid-template-columns: minmax(0, 1fr); }
+  .cameraPanoramaViews > section { grid-area: 1 / 1; }
+  .cameraPanoramaViews.mobile-image > section:nth-child(2), .cameraPanoramaViews.mobile-plan > section:nth-child(1) { visibility: hidden; pointer-events: none; }
+
   .cameraPanoramaViewport { height: 270px; }
   .cameraPanoramaImage.hasCoverage { min-height: 0; }
 }

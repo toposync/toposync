@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import * as L from "leaflet";
 import { searchGeographicPlaces, type GeographicMapConfiguration, type GeographicPlace } from "../../util/api";
 import { i18n } from "../../util/i18n";
+import { Icon } from "../Icon";
 import { useMapConsent } from "./mapConsent";
 
 export function MapNavigation({ map, configuration, onHome }: {
@@ -62,6 +63,8 @@ export function MapNavigation({ map, configuration, onHome }: {
     }, { timeout: 10000, maximumAge: 30000, enableHighAccuracy: true });
   }
   return <div className="geographicNavigation">
+    <button className="chipButton" type="button" title={t("core.map.home")} onClick={() => { destination.current?.remove(); destination.current = null; onHome(); }}><Icon name="house" /><span>{t("core.map.home")}</span></button>
+    <details className="geographicSearchDisclosure"><summary><Icon name="magnifying-glass" /> {t("core.map.search_toggle")}</summary>
     <form className="geographicSearch" onSubmit={event => {
       event.preventDefault();
       if (consent.decision === true) void findPlaces(); else if (query.trim()) setPermissionOpen(true);
@@ -72,7 +75,7 @@ export function MapNavigation({ map, configuration, onHome }: {
         }} /></label>
       <button className="chipButton" type="submit" disabled={searching || !query.trim()}>{t(searching ? "core.map.searching" : "core.map.search")}</button>
       <button className="chipButton" type="button" disabled={locating} onClick={locate}>{t(locating ? "core.map.locating" : "core.map.my_location")}</button>
-      <button className="chipButton" type="button" onClick={() => { destination.current?.remove(); destination.current = null; onHome(); }}>{t("core.map.home")}</button>
+
     </form>
     {permissionOpen && <div className="geographicPermission" role="alert">
       <p>{t("core.map.search_consent", { provider: configuration.geocoding.name, host: configuration.geocoding.host })}</p>
@@ -88,5 +91,6 @@ export function MapNavigation({ map, configuration, onHome }: {
     {message && <p role="status">{t(message)}</p>}
     {!consent.persistent && <p role="status">{t("core.map.permission_session")}</p>}
     {consent.decision === true && <button className="geographicServiceButton" type="button" onClick={() => { consent.choose(false); search.current?.abort(); }}>{t("core.map.revoke_search")}</button>}
+    </details>
   </div>;
 }

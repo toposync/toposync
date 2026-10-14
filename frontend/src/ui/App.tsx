@@ -72,6 +72,7 @@ import {
 import { getPreviousPathname, navigate, replace, usePathname } from "./router";
 import { Viewport2D } from "./Viewport2D";
 import { NavigableViewport } from "./NavigableViewport";
+import { ImageMaskEditor } from "./screens/pipelines/editor/panels/ImageDrawModals";
 import { CropRectangleDrawModal } from "./screens/pipelines/editor/panels/ImageDrawModals";
 import { createMeasurementLineElementType } from "./editor/measurementLineElementType";
 import { builtinNotificationRenderers, notificationPriority } from "./notifications/pipelinesNotifications";
@@ -793,6 +794,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           navigate("/");
         },
         NavigableViewport,
+        ImageMaskEditor,
         CameraRegionEditor: ({ open, cameraId, sourceId, values, onChange, onClose, onSnapshotBindingChange, onConfirm }) => sourceId ? (
           <CropRectangleDrawModal open={open} onClose={onClose} units="percent" values={values} onChange={onChange}
             snapshotSource={{ kind: "camera", cameraId, sourceId }} onSnapshotBindingChange={onSnapshotBindingChange} onConfirm={onConfirm} />

@@ -75,7 +75,7 @@ type Props = {
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 
-export function OperatorConfigPanel({
+function BuiltinOperatorConfigPanel({
   step,
   index,
   steps,
@@ -98,24 +98,6 @@ export function OperatorConfigPanel({
   onOpenTelemetryField,
 }: Props): React.ReactElement | null {
   const operatorId = step.operatorId;
-  const extensionPanel = operatorPanels[operatorId];
-  if (extensionPanel) {
-    return (
-      <>
-        {extensionPanel.render({
-          i18n,
-          operatorId,
-          stepUid: step.uid,
-          nodeId: step.nodeId,
-          processingServerId: processingServerId || "local",
-          config,
-          showAdvanced,
-          updateConfig: (patch) => onUpdateConfig((prev) => ({ ...prev, ...patch })),
-          replaceConfig: (next) => onUpdateConfig(() => next),
-        })}
-      </>
-    );
-  }
 
   if (operatorId === "core.schedule_gate") {
     return <ScheduleGateConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
@@ -421,4 +403,16 @@ export function OperatorConfigPanel({
   }
 
   return null;
+}
+
+export function OperatorConfigPanel(props: Props): React.ReactElement | null {
+  const panel = props.operatorPanels?.[props.step.operatorId];
+  const extension = panel?.render({
+    i18n, operatorId: props.step.operatorId, stepUid: props.step.uid, nodeId: props.step.nodeId,
+    processingServerId: props.processingServerId || "local", cameraId: props.interactiveCameraId,
+    config: props.config, showAdvanced: props.showAdvanced,
+    updateConfig: patch => props.onUpdateConfig(previous => ({ ...previous, ...patch })),
+    replaceConfig: next => props.onUpdateConfig(() => next),
+  });
+  return <>{(!panel || panel.placement === "after") && <BuiltinOperatorConfigPanel {...props} />}{extension}</>;
 }

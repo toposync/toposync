@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { CameraSnapshotBinding } from "@toposync/plugin-api";
+import type { CameraSnapshotBinding, ImageMaskEditorProps } from "@toposync/plugin-api";
 
 import { fetchCameraSnapshotWithEvidence, fetchPipelinePreviewFrame, fetchRtspSnapshot, type PipelinePreviewFrameRequest } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
 import { Icon } from "../../../../Icon";
 import { Modal } from "../../../../Modal";
+import { NavigableViewport } from "../../../../NavigableViewport";
 
 export type SnapshotSource =
   | { kind: "camera"; cameraId: string; sourceId?: string }
@@ -1072,7 +1073,7 @@ export function PrivacyRegionDrawModal({
 type MotionMaskMode = "include" | "exclude";
 type MotionMaskTool = "paint" | "erase";
 type MotionMaskPoint01 = [number, number];
-type MotionMaskStroke = { op: MotionMaskTool; points01: MotionMaskPoint01[] };
+type MotionMaskStroke = { op: MotionMaskTool; points01: MotionMaskPoint01[]; diameter01?: number };
 
 function normalizeMotionMaskMode(value: unknown): MotionMaskMode {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -1114,7 +1115,7 @@ function normalizeMotionMaskStrokes(value: unknown): MotionMaskStroke[] {
       if (points01.length >= 50_000) break;
     }
     if (points01.length === 0) continue;
-    out.push({ op, points01 });
+    out.push({ op, points01, ...(Number.isFinite(stroke.diameter01) ? { diameter01: stroke.diameter01 } : {}) });
     if (out.length >= 1024) break;
   }
   return out;
@@ -1137,11 +1138,13 @@ function redrawMotionMaskCanvas(
     brushDiameter01,
     mode,
     strokes,
+    wrapHorizontal = false,
   }: {
     dims: ImageDims;
     brushDiameter01: number;
     mode: MotionMaskMode;
     strokes: MotionMaskStroke[];
+    wrapHorizontal?: boolean;
   },
 ): void {
   const ctx = canvas.getContext("2d");
@@ -1162,11 +1165,26 @@ function redrawMotionMaskCanvas(
 
   for (const stroke of strokes) {
     if (!stroke.points01 || stroke.points01.length === 0) continue;
+    const strokeDiameter = stroke.diameter01 == null ? diameter : Math.max(1, Math.round(stroke.diameter01 * Math.min(dims.width, dims.height)));
+    const radius = Math.max(1, Math.floor(strokeDiameter / 2));
+    ctx.lineWidth = strokeDiameter;
     const op = stroke.op === "erase" ? "erase" : "paint";
     ctx.globalCompositeOperation = op === "erase" ? "destination-out" : "source-over";
     ctx.strokeStyle = op === "erase" ? "rgba(0,0,0,1)" : color;
     ctx.fillStyle = ctx.strokeStyle;
 
+    if (wrapHorizontal) {
+      let previous = [stroke.points01[0]![0] * scaleX, stroke.points01[0]![1] * scaleY];
+      for (const point of [stroke.points01[0]!, ...stroke.points01.slice(1)]) {
+        const current = [previous[0]! + ((point[0] * scaleX - previous[0]! + dims.width / 2) % dims.width + dims.width) % dims.width - dims.width / 2, point[1] * scaleY];
+        for (let offset = Math.floor(-Math.max(previous[0]!, current[0]!) / dims.width); offset <= Math.ceil((dims.width - Math.min(previous[0]!, current[0]!)) / dims.width); offset++) {
+          ctx.beginPath(); ctx.moveTo(previous[0]! + offset * dims.width, previous[1]!); ctx.lineTo(current[0]! + offset * dims.width, current[1]!); ctx.stroke();
+          for (const end of [previous, current]) { ctx.beginPath(); ctx.arc(end[0]! + offset * dims.width, end[1]!, radius, 0, Math.PI * 2); ctx.fill(); }
+        }
+        previous = current;
+      }
+      continue;
+    }
     const first = stroke.points01[0]!;
     const x0 = first[0] * scaleX;
     const y0 = first[1] * scaleY;
@@ -1193,6 +1211,10 @@ function redrawMotionMaskCanvas(
 }
 
 type MotionMaskDrawModalProps = {
+  imageUrl?: string;
+  title?: string;
+  perStroke?: boolean;
+  wrapHorizontal?: boolean;
   open: boolean;
   onClose: () => void;
   snapshotSource: SnapshotSource | null;
@@ -1209,17 +1231,31 @@ type MotionMaskDrawState = {
   points01: MotionMaskPoint01[];
 };
 
+export function ImageMaskEditor(props: ImageMaskEditorProps): React.ReactElement | null {
+  return <MotionMaskDrawModal open={props.open} onClose={props.onClose} imageUrl={props.imageUrl} title={props.title}
+    wrapHorizontal={props.wrapHorizontal} snapshotSource={null} mode="include" brushDiameter01={.05} perStroke strokes={props.strokes}
+    onApply={({ strokes }) => props.onApply(strokes.map(stroke => ({ ...stroke, diameter01: stroke.diameter01 ?? .05 })))} />;
+}
+
 export function MotionMaskDrawModal({
+  imageUrl, title, perStroke = false, wrapHorizontal = false,
   open,
   onClose,
   snapshotSource,
   mode: initialMode,
-  brushDiameter01,
+  brushDiameter01: initialDiameter,
   strokes: initialStrokes,
   onApply,
 }: MotionMaskDrawModalProps): React.ReactElement | null {
   const { t } = i18n.useI18n();
-  const snapshot = useSnapshotObjectUrl(open, snapshotSource);
+  const fetched = useSnapshotObjectUrl(open, snapshotSource);
+  const snapshot = imageUrl ? { ...fetched, url: imageUrl, loading: false, error: null } : fetched;
+  const [diameter, setDiameter] = useState(initialDiameter);
+  const brushDiameter01 = perStroke ? diameter : initialDiameter;
+  const [navigate, setNavigate] = useState(false);
+  const [hasPaint, setHasPaint] = useState(false);
+  const [drawingLimit, setDrawingLimit] = useState(false);
+  const [cursor, setCursor] = useState<MotionMaskPoint01>([.5, .5]);
 
   const [dims, setDims] = useState<ImageDims | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -1251,6 +1287,7 @@ export function MotionMaskDrawModal({
     setDraftMode(normalizeMotionMaskMode(initialMode));
     setTool("paint");
     setDraftStrokes(normalizeMotionMaskStrokes(initialStrokes));
+    setDrawingLimit(false);
   }, [open, initialMode, initialStrokes]);
 
   useEffect(() => {
@@ -1259,14 +1296,19 @@ export function MotionMaskDrawModal({
     if (!canvas) return;
     if (canvas.width !== dims.width) canvas.width = dims.width;
     if (canvas.height !== dims.height) canvas.height = dims.height;
-    redrawMotionMaskCanvas(canvas, { dims, brushDiameter01, mode: draftMode, strokes: draftStrokes });
-  }, [open, dims, brushDiameter01, draftMode, draftStrokes]);
+    redrawMotionMaskCanvas(canvas, { dims, brushDiameter01, mode: draftMode, strokes: draftStrokes, wrapHorizontal });
+    if (perStroke) {
+      const pixels = canvas.getContext("2d")?.getImageData(0, 0, canvas.width, canvas.height).data;
+      setHasPaint(Boolean(pixels?.some((value, index) => index % 4 === 3 && value > 0)));
+    }
+  }, [open, dims, brushDiameter01, draftMode, draftStrokes, perStroke, wrapHorizontal]);
 
-  const canInteract = open && Boolean(snapshot.url) && Boolean(dims);
+  const canInteract = open && Boolean(snapshot.url) && Boolean(dims) && !navigate;
   const snapshotError = snapshot.loading ? null : snapshot.error;
   const showNoSnapshot = !snapshot.loading && !snapshot.url && !snapshotError;
 
   const clear = useCallback(() => {
+    setDrawingLimit(false);
     setDraftStrokes([]);
     const canvas = canvasRef.current;
     if (canvas) {
@@ -1276,13 +1318,19 @@ export function MotionMaskDrawModal({
   }, []);
 
   const apply = useCallback(() => {
+    if (perStroke) {
+      const canvas = canvasRef.current;
+      const pixels = canvas?.getContext("2d")?.getImageData(0, 0, canvas.width, canvas.height).data;
+      if (!pixels?.some((value, index) => index % 4 === 3 && value > 0)) return;
+    }
     onApply({ mode: draftMode, strokes: normalizeMotionMaskStrokes(draftStrokes) });
     onClose();
-  }, [draftMode, draftStrokes, onApply, onClose]);
+  }, [draftMode, draftStrokes, onApply, onClose, perStroke]);
 
   const onCanvasPointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       if (!canInteract || !dims) return;
+      if (perStroke && (draftStrokes.length >= 1024 || draftStrokes.reduce((count, stroke) => count + stroke.points01.length, 0) >= 100_000)) { setDrawingLimit(true); return; }
       if (drawStateRef.current) return;
       event.preventDefault();
       event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -1295,7 +1343,7 @@ export function MotionMaskDrawModal({
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext("2d");
       if (ctx) {
-        const diameter = computeBrushDiameterPx(dims, brushDiameter01);
+        const diameter = perStroke ? Math.max(1, Math.round(brushDiameter01 * Math.min(dims.width, dims.height))) : computeBrushDiameterPx(dims, brushDiameter01);
         const radius = Math.max(1, Math.floor(diameter / 2));
         ctx.globalCompositeOperation = op === "erase" ? "destination-out" : "source-over";
         ctx.fillStyle = op === "erase" ? "rgba(0,0,0,1)" : motionMaskOverlayColor(draftMode);
@@ -1321,11 +1369,13 @@ export function MotionMaskDrawModal({
       const xPx = p01.x * Math.max(1, dims.width - 1);
       const yPx = p01.y * Math.max(1, dims.height - 1);
 
-      const diameter = computeBrushDiameterPx(dims, brushDiameter01);
+      const diameter = perStroke ? Math.max(1, Math.round(brushDiameter01 * Math.min(dims.width, dims.height))) : computeBrushDiameterPx(dims, brushDiameter01);
       const samplePx = Math.max(1, Math.round(Math.max(1, diameter / 2) / 3));
       const dx = xPx - drawState.lastPx.x;
       const dy = yPx - drawState.lastPx.y;
       if (dx * dx + dy * dy < samplePx * samplePx) return;
+
+      if (perStroke && (drawState.points01.length >= 50_000 || draftStrokes.reduce((count, stroke) => count + stroke.points01.length, 0) + drawState.points01.length >= 100_000)) { setDrawingLimit(true); return; }
 
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext("2d");
@@ -1344,7 +1394,7 @@ export function MotionMaskDrawModal({
       drawState.lastPx = { x: xPx, y: yPx };
       if (drawState.points01.length < 50_000) drawState.points01.push([p01.x, p01.y]);
     },
-    [brushDiameter01, dims, draftMode],
+    [brushDiameter01, dims, draftMode, perStroke, draftStrokes],
   );
 
   const onCanvasPointerUp = useCallback(
@@ -1356,18 +1406,18 @@ export function MotionMaskDrawModal({
       drawStateRef.current = null;
       if (drawState.points01.length === 0) return;
       setDraftStrokes((prev) => {
-        const next = [...prev, { op: drawState.op, points01: drawState.points01 }];
+        const next = [...prev, { op: drawState.op, points01: drawState.points01, ...(perStroke ? { diameter01: brushDiameter01 } : {}) }];
         if (next.length > 1024) return next.slice(-1024);
         return next;
       });
     },
-    [],
+    [perStroke, brushDiameter01],
   );
 
   return (
     <Modal
       open={open}
-      title={t("core.ui.pipelines.panels.image_draw.modal_title.motion_mask")}
+      title={title ?? t("core.ui.pipelines.panels.image_draw.modal_title.motion_mask")}
       onClose={onClose}
       panelStyle={{
         width: "min(1200px, calc(100vw - 28px))",
@@ -1376,12 +1426,13 @@ export function MotionMaskDrawModal({
       }}
       bodyStyle={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden", flex: 1, minHeight: 0 }}
     >
+      {drawingLimit && <div role="alert">{t("core.ui.pipelines.panels.visual_region.limit")}</div>}
       <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_draw.motion_mask_instructions")}</div>
         <div className="rowWrap" style={{ gap: 8 }}>
-          <button className="chipButton" type="button" onClick={snapshot.refresh} disabled={!open || snapshot.loading}>
+          {!imageUrl && <button className="chipButton" type="button" onClick={snapshot.refresh} disabled={!open || snapshot.loading}>
             {t("core.ui.pipelines.panels.image_draw.refresh")}
-          </button>
+          </button>}
           <button className="chipButton" type="button" onClick={clear} disabled={!canInteract || draftStrokes.length === 0}>
             {t("core.ui.pipelines.panels.image_draw.reset")}
           </button>
@@ -1390,7 +1441,7 @@ export function MotionMaskDrawModal({
 
       <div className="rowWrap" style={{ gap: 10, alignItems: "center", justifyContent: "space-between" }}>
         <div className="rowWrap" style={{ gap: 8, alignItems: "center" }}>
-          <label className="pipelinesLabel" style={{ margin: 0 }}>
+          {!perStroke && <label className="pipelinesLabel" style={{ margin: 0 }}>
             <span>{t("core.ui.pipelines.panels.image_draw.motion_mask.mode")}</span>
             <select
               className="pipelinesSelect"
@@ -1402,7 +1453,12 @@ export function MotionMaskDrawModal({
               <option value="include">{t("core.ui.pipelines.panels.motion_gate.mask.mode.include")}</option>
               <option value="exclude">{t("core.ui.pipelines.panels.motion_gate.mask.mode.exclude")}</option>
             </select>
-          </label>
+          </label>}
+          {perStroke && <>
+            <label>{t("core.ui.pipelines.panels.visual_region.brush")} <input type="range" min="0.005" max="0.25" step="0.005" value={diameter} onChange={event => setDiameter(Number(event.target.value))} /></label>
+            <button className="chipButton" type="button" onClick={() => { setDrawingLimit(false); setDraftStrokes(previous => previous.slice(0, -1)); }} disabled={!draftStrokes.length}>{t("core.ui.pipelines.panels.visual_region.undo")}</button>
+            <button className="chipButton" type="button" aria-pressed={navigate} onClick={() => setNavigate(value => !value)}>{t("core.ui.pipelines.panels.visual_region.navigate")}</button>
+          </>}
 
 	          <div className="rowWrap" style={{ gap: 6 }}>
 	            <button
@@ -1434,7 +1490,7 @@ export function MotionMaskDrawModal({
           <div className="pipelinesHint">
             {t("core.ui.pipelines.panels.motion_gate.mask.strokes_count", { count: draftStrokes.length })}
           </div>
-          <button className="primaryButton" type="button" onClick={apply} disabled={!canInteract}>
+          <button className="primaryButton" type="button" onClick={apply} disabled={!canInteract || (perStroke && !hasPaint)}>
             {t("core.ui.pipelines.panels.image_draw.apply")}
           </button>
           <button className="chipButton" type="button" onClick={onClose}>
@@ -1462,13 +1518,14 @@ export function MotionMaskDrawModal({
 	        }}
 	      >
 	        {snapshot.url ? (
+          <MaskViewport enabled={perStroke} dims={dims} imageUrl={snapshot.url} navigate={navigate} onNavigate={() => { drawStateRef.current = null; setDraftStrokes(previous => [...previous]); }}>
 	          <div
 	            style={{
 	              position: "relative",
 	              display: "inline-block",
 	              margin: "auto",
-	              width: renderDims?.width,
-	              height: renderDims?.height,
+	              width: perStroke ? dims?.width : renderDims?.width,
+	              height: perStroke ? dims?.height : renderDims?.height,
 	            }}
 	          >
 	            <img
@@ -1492,12 +1549,27 @@ export function MotionMaskDrawModal({
               draggable={false}
             />
 
+            {perStroke && <span aria-hidden style={{ position: "absolute", pointerEvents: "none", left: `${cursor[0] * 100}%`, top: `${cursor[1] * 100}%`, border: "2px solid white", outline: "1px solid black", width: 10, height: 10, borderRadius: "50%", transform: "translate(-50%, -50%)", zIndex: 1 }} />}
             <canvas
               ref={canvasRef}
               onPointerDown={onCanvasPointerDown}
               onPointerMove={onCanvasPointerMove}
               onPointerUp={onCanvasPointerUp}
-              onPointerCancel={onCanvasPointerUp}
+              tabIndex={perStroke ? 0 : undefined}
+              aria-label={perStroke ? t("core.ui.pipelines.panels.visual_region.keyboard") : undefined}
+              onKeyDown={event => {
+                if (!perStroke || !canInteract) return;
+                const offset = event.shiftKey ? .05 : .01;
+                if (event.key.startsWith("Arrow")) {
+                  event.preventDefault(); event.stopPropagation();
+                  setCursor(([x, y]) => [clamp01(x + (event.key === "ArrowRight" ? offset : event.key === "ArrowLeft" ? -offset : 0)), clamp01(y + (event.key === "ArrowDown" ? offset : event.key === "ArrowUp" ? -offset : 0))]);
+                } else if (event.key === "Enter") {
+                  event.preventDefault(); event.stopPropagation();
+                  if (draftStrokes.length >= 1024 || draftStrokes.reduce((count, stroke) => count + stroke.points01.length, 0) >= 100_000) { setDrawingLimit(true); return; }
+                  setDraftStrokes(previous => [...previous, { op: tool, points01: [cursor], diameter01: brushDiameter01 }]);
+                }
+              }}
+              onPointerCancel={perStroke ? () => { drawStateRef.current = null; setDraftStrokes(previous => [...previous]); } : onCanvasPointerUp}
               style={{
                 position: "absolute",
                 inset: 0,
@@ -1511,6 +1583,7 @@ export function MotionMaskDrawModal({
               }}
             />
           </div>
+          </MaskViewport>
         ) : showNoSnapshot ? (
           <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.no_snapshot")}</div>
         ) : (
@@ -1900,4 +1973,10 @@ export function PerspectiveCropDrawModal({
       </div>
     </Modal>
   );
+}
+
+function MaskViewport({ enabled, dims, imageUrl, navigate, onNavigate, children }: { enabled: boolean; dims: ImageDims | null; imageUrl: string; navigate: boolean; onNavigate: () => void; children: React.ReactNode }): React.ReactElement {
+  const { t } = i18n.useI18n();
+  if (!enabled) return <>{children}</>;
+  return <NavigableViewport contentSize={dims ?? { width: 1, height: 1 }} contentKey={imageUrl} interactionMode={navigate ? "navigate" : "interact"} onNavigationStart={onNavigate} label={t("core.ui.pipelines.panels.image_draw.image")} style={{ width: "100%", height: "100%", minHeight: 200 }}>{children}</NavigableViewport>;
 }

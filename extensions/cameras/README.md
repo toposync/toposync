@@ -499,3 +499,50 @@ and unavailable evidence. Samples are limited to one per reason per second per
 operator; they are diagnostic markers, not exhaustive counts of subjects or
 proof of physical detection. No full frame logging is required. Gate occlusion
 and missing detections still cannot be treated as confirmed stops.
+
+### Regions on a saved panorama
+
+`camera.panorama_region` filters detections using a region painted on the saved
+camera/source panorama, including a static image reference. Its panel reuses the
+motion-mask drawing surface, with per-stroke brush sizes, erasing, undo and zoom.
+The default policy observes the region whenever it is visible; ONVIF and a
+composition are not required for passive observation.
+
+Choose the base, center, minimum overlap or whole detection as the spatial
+criterion. The reference identifier, revision and geometry remain pinned to the
+saved region. Replacing the panorama does not silently relocate an existing
+region; editing against the replacement begins a new drawing.
+
+Image matching checks independent correspondences and local support. Cropped
+pixels, stale frames, uncertain borders, unsupported geometry and failed matching
+are indeterminate, never confirmed absence. Image-plane matching assumes a
+locally consistent projective scene; parallax, moving furniture and lighting
+changes can make it abstain. This is not a guarantee of physical containment or
+pool safety.
+
+The `out` port contains accepted detections. Connect **`observations`** to
+`camera.region_occurrence` for presence or observed entry: it retains outside and
+indeterminate evidence needed to close/reset temporal events. An entry requires
+observed outside evidence first. Downstream notification and storage remain
+ordinary pipeline operators.
+
+**Check in image** displays a recorded frame with the projected region. It uses
+a recent compatible pipeline decision when available, otherwise explicitly shows
+a framing-only preview. Reviewing it never runs notification/storage actions or
+requests camera movement. The existing area filter still selects areas created
+in the composition; its preview resolves composition and area identifiers and
+does not provide a second area editor or change that filter's runtime semantics.
+
+Optional framing requests reuse the existing attention arbitration. They require
+one qualified live-panorama profile for the exact source/reference, an enabled
+`visual_region` event policy, and confirmation that native tracking is disabled.
+Manual control and other priorities can interrupt the request; regions that
+cannot fit are refused. An accepted request does not certify actual visibility:
+the subsequent image must still qualify. Stopping the pipeline releases its
+request. No attention profile or physical calibration is created automatically.
+
+Execution is currently local. Remote activation and preview are explicitly
+unavailable until reference artifacts and evaluation can be qualified on that
+executor. Automated checks use synthetic images and mocked camera services;
+physical alignment, night scenes and PTZ return accuracy require camera-specific
+acceptance before relying on the result.

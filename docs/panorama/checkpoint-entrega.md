@@ -749,3 +749,20 @@ equipamento. Nenhum commit, push ou deploy nesta etapa.
 ## Disponibilidade espacial de eventos
 
 O caminho de mapeamento, tracking, agrupamento e notificações preserva motivos de indisponibilidade por objeto e distingue grupos parcialmente localizados. Uma posição anterior não substitui uma observação atual sem mapeamento. Encerramentos conservam a última evidência do sujeito; recuperação informa trajetória parcial e não liga pontos através da lacuna registrada. O diagnóstico do nó e a notificação exibem degradação espacial. Esse contrato de software não certifica precisão física nem reconstrói o histórico automaticamente.
+
+### Região visual no pipeline e prévia de áreas — 14/10/2026
+
+Implementado o operador `camera.panorama_region`, com desenho sobre referência
+salva esférica ou de imagem única, critérios espaciais, correspondência visual e
+saída de observações para `camera.region_occurrence`. O filtro por área continua
+selecionando áreas da composição por identificador e oferece prévia observacional.
+O editor reaproveita a superfície de máscara de movimento; não há outro editor
+de pipelines. Referência substituída não move silenciosamente o desenho salvo.
+
+Enquadramento opcional usa o controlador de atenção existente, condicionado a
+perfil qualificado para a mesma referência e confirmação sobre tracking nativo.
+Execução remota permanece bloqueada sem qualificação dos artefatos no executor.
+Validação automatizada e de navegador usa imagens sintéticas e serviços simulados.
+Não houve movimento físico nem habilitação de pipelines reais nesta entrega;
+precisão física, iluminação noturna e retorno mecânico continuam pendentes de
+aceite por câmera. Esta implementação não certifica cobertura ou segurança física.

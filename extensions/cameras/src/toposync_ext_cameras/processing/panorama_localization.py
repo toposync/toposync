@@ -209,6 +209,7 @@ def fit_frame_rotation(
         "validation_matches": int(holdout.sum()),
         "validation_p95_pixels": percentile,
         "analysis_width": min(width, ANALYSIS_WIDTH),
+        "support_pixels": current[validation].tolist(),
     }
 
 

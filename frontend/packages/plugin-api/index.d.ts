@@ -212,6 +212,7 @@ export type PipelineReviewPanel = {
 export type PipelineOperatorPanel = {
   id: string;
   operatorId: string;
+  placement?: "replace" | "after";
   render: (args: {
     i18n: HostI18n;
     operatorId: string;
@@ -219,6 +220,7 @@ export type PipelineOperatorPanel = {
     nodeId: string;
     /** Execution host chosen by this pipeline; older hosts may omit this field. */
     processingServerId?: string;
+    cameraId?: string;
     config: Record<string, unknown>;
     showAdvanced: boolean;
     updateConfig: (patch: Record<string, unknown>) => void;
@@ -527,6 +529,16 @@ export type CameraSnapshotBinding = {
   height: number;
 };
 
+export type ImageMaskEditorProps = {
+  wrapHorizontal?: boolean;
+  open: boolean;
+  imageUrl: string;
+  title: string;
+  strokes: { op: "paint" | "erase"; points01: [number, number][]; diameter01: number }[];
+  onApply: (strokes: ImageMaskEditorProps["strokes"]) => void;
+  onClose: () => void;
+};
+
 export type CameraRegionEditorProps = {
   open: boolean;
   cameraId: string;
@@ -540,6 +552,7 @@ export type CameraRegionEditorProps = {
 };
 
 export type HostUi = {
+  ImageMaskEditor: import("react").ComponentType<ImageMaskEditorProps>;
   openNotificationHistory?: (selection: { id: string; value: string }, returnToNotification?: string) => void;
   /** Draw a region in percent on a snapshot of the explicitly selected source. */
   CameraRegionEditor?: (props: CameraRegionEditorProps) => import("react").ReactNode;

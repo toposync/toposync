@@ -20,17 +20,20 @@ from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from .pipelines.postprocess import AreaRestrictionPolygon, _point_in_polygon, resolve_composition_area
 
 
-class AreaOccurrenceConfig(BaseModel):
+class OccurrenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    area: AreaRestrictionPolygon | None = None
-    composition_id: str = ""
-    categories: list[Literal["person", "dog", "cat"]] = Field(default_factory=lambda: ["person", "dog", "cat"])
     mode: Literal["presence", "entry"] = "presence"
     minimum_duration_seconds: float = Field(default=1.0, ge=0, le=3600)
     update_interval_seconds: float = Field(default=0.0, ge=0, le=3600)
     evidence_timeout_seconds: float = Field(default=5.0, gt=0, le=3600)
     maximum_subjects: int = Field(default=128, ge=1, le=4096)
     visit_window_seconds: float = Field(default=300.0, gt=0, le=86400)
+
+
+class AreaOccurrenceConfig(OccurrenceConfig):
+    area: AreaRestrictionPolygon | None = None
+    composition_id: str = ""
+    categories: list[Literal["person", "dog", "cat"]] = Field(default_factory=lambda: ["person", "dog", "cat"])
 
     @field_validator("area")
     @classmethod
@@ -198,23 +201,11 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         state.last_timestamp = timestamp
         state.capture = capture
         state.published_at = evidence["published_at"]
-        world = packet.payload.get("world")
-        try:
-            mapping = packet.payload.get("mapping")
-            if self.config.composition_id and (
-                not isinstance(mapping, dict) or mapping.get("composition_id") != self.config.composition_id
-            ):
-                raise ValueError("Position does not belong to the selected composition")
-            if type(world["x"]) not in (int, float) or type(world["z"]) not in (int, float):
-                raise ValueError("World coordinates must be finite numbers")
-            x, z = float(world["x"]), float(world["z"])
-        except (TypeError, ValueError, KeyError):
-            x = z = float("nan")
-        if (not math.isfinite(x) or not math.isfinite(z) or subject.get("category") not in self.config.categories):
+        inside = self._classify(packet, subject)
+        if inside is None:
             state.inside = None
             return outputs + self._close(key, state, "unconfirmed")
         state.last_seen = time.monotonic() - freshness.age_seconds
-        inside = _point_in_polygon(x=x, z=z, polygon=self.polygon)
         previous_inside = state.inside
         state.inside = inside
         if not inside:
@@ -238,6 +229,23 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         state.last_emitted_at = timestamp
         return outputs + [self._event(key, state, lifecycle, "confirmed")]
 
+    def _classify(self, packet, subject):
+        world = packet.payload.get("world")
+        try:
+            mapping = packet.payload.get("mapping")
+            if self.config.composition_id and (
+                not isinstance(mapping, dict) or mapping.get("composition_id") != self.config.composition_id
+            ):
+                raise ValueError("Position does not belong to the selected composition")
+            if type(world["x"]) not in (int, float) or type(world["z"]) not in (int, float):
+                raise ValueError("World coordinates must be finite numbers")
+            x, z = float(world["x"]), float(world["z"])
+        except (TypeError, ValueError, KeyError):
+            x = z = float("nan")
+        if not math.isfinite(x) or not math.isfinite(z) or subject.get("category") not in self.config.categories:
+            return None
+        return _point_in_polygon(x=x, z=z, polygon=self.polygon)
+
     def _event(self, key, state, lifecycle, status):
         packet = state.last_packet
         timestamp = resolve_media_ts(packet)
@@ -253,7 +261,7 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         subject = dict(packet.payload["subject"])
         subject.update({"type": "event", "id": identity, "lifecycle": lifecycle.value, "started_ts": state.started_at})
         duration = resolve_media_ts(packet) - state.started_at
-        category = {"person": "Pessoa", "dog": "Cão", "cat": "Gato"}[subject["category"]]
+        category = {"person": "Pessoa", "dog": "Cão", "cat": "Gato"}.get(subject.get("category"), str(subject.get("category") or "Objeto"))
         action = "entrada observada" if self.config.mode == "entry" else "presença observada"
         description = f"{category}: {action} na área {self.area.name}. Evidência por {duration:.1f} segundos."
         if len(state.visits) > 1:

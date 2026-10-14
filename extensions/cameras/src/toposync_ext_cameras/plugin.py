@@ -1517,12 +1517,16 @@ class CamerasExtension(BaseExtension):
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
         from .audio_api import install_audio_routes, install_audio_clip_routes
         from .audio_pipeline import register_audio_operator
+        from .pipelines.visual_region import register_visual_region_operator
+        from .pipelines.region_occurrence import register_region_occurrence_operator
 
         install_audio_routes(app)
         install_audio_clip_routes(app)
         registry = getattr(app.state, "pipeline_operator_registry", None)
         if isinstance(registry, OperatorRegistry):
             register_camera_pipeline_operators(registry)
+            register_visual_region_operator(registry)
+            register_region_occurrence_operator(registry)
             register_audio_operator(registry)
             register_area_occurrence_operator(registry)
             register_recent_onvif_event_operator(registry)
@@ -5178,6 +5182,8 @@ class CamerasExtension(BaseExtension):
             acquisition_policy=REGION_POLICY,
         )
         panorama_service.camera_factory = _source_panorama_camera_factory
+        from .visual_regions import register_visual_region_routes
+        register_visual_region_routes(app, panorama_service, source_panorama_service, services)
         from .live_panorama import register_live_panorama_routes
         live_panorama_service = register_live_panorama_routes(app, panorama_service, source_panorama_service)
         register_extension_shutdown_callback(app, live_panorama_service.shutdown)

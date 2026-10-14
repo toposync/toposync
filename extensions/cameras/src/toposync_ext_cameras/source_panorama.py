@@ -1783,8 +1783,16 @@ class SourcePanoramaService:
         return artifact
 
     @staticmethod
-    def _referenced_artifacts(settings: dict[str, Any], camera_id: str) -> set[str]:
+    def _referenced_artifacts(settings: dict[str, Any], camera_id: str, pipelines=()) -> set[str]:
         protected: set[str] = set()
+        for pipeline in pipelines:
+            for node in pipeline.graph.get("nodes", []):
+                config = node.get("config") or {}
+                if node.get("operator") != "camera.panorama_region" or config.get("camera_id") != camera_id:
+                    continue
+                artifact_id = (config.get("reference") or {}).get("artifact_id")
+                if isinstance(artifact_id, str) and _IDENTIFIER.fullmatch(artifact_id):
+                    protected.add(artifact_id)
         for camera in settings.get("devices", []):
             if not isinstance(camera, dict) or str(camera.get("id")) != camera_id:
                 continue
@@ -1825,7 +1833,7 @@ class SourcePanoramaService:
             )
             self._save(job)
 
-    def _prune_superseded_camera_data(
+    async def _prune_superseded_camera_data(
         self, settings: dict[str, Any], camera_id: str
     ) -> None:
         camera_jobs = [
@@ -1850,7 +1858,9 @@ class SourcePanoramaService:
             ):
                 latest_by_source[source_id] = job
         protected_job_ids = {job["id"] for job in latest_by_source.values()}
-        protected_artifact_ids = self._referenced_artifacts(settings, camera_id)
+        configuration = await self.store.get_config()
+        protected_artifact_ids = self._referenced_artifacts(settings, camera_id, configuration.pipelines)
+        protected_job_ids.update(job["id"] for job in camera_jobs if job.get("artifact_id") in protected_artifact_ids)
         for job in latest_by_source.values():
             artifact_id = str(job.get("artifact_id") or "")
             if _IDENTIFIER.fullmatch(artifact_id):

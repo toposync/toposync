@@ -599,29 +599,12 @@ export function AreaRestrictionConfigCard({
   onUpdateConfig,
 }: AreaRestrictionProps): React.ReactElement {
   const { t } = i18n.useI18n();
-  const areaNamesRaw = (config as any).include_area_names;
-  const selectedAreaKeys = Array.isArray(areaNamesRaw)
-    ? areaNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
-    : [];
-  const cameraAreaOptionByName = React.useMemo(() => {
-    const optionByName = new Map<string, CameraAreaOption>();
-    for (const option of cameraAreaOptions) {
-      if (!optionByName.has(option.areaName)) optionByName.set(option.areaName, option);
-    }
-    return optionByName;
-  }, [cameraAreaOptions]);
-  const selectedAreaOptions = selectedAreaKeys.map(
-    (value) =>
-      cameraAreaOptionByName.get(value) ?? {
-        value: `missing:${value}`,
-        label: value,
-        compositionId: "",
-        areaId: "",
-        areaName: value,
-        points: [],
-      },
-  );
-  const invalidAreaSelections = selectedAreaKeys.filter((value) => !cameraAreaOptionByName.has(value));
+  const selectedAreas = Array.isArray(config.areas) ? config.areas as { id?: string; name: string }[] : [];
+  const compositionId = String(config.composition_id || "");
+  const selectedAreaOptions = selectedAreas.map(area =>
+    cameraAreaOptions.find(option => option.compositionId === compositionId && option.areaId === area.id)
+    ?? { value: `missing:${area.id || area.name}`, label: area.name, compositionId, areaId: area.id || "", areaName: area.name, points: [] });
+  const invalidAreaSelections = selectedAreaOptions.filter(option => !option.points.length).map(option => option.label);
 
   return (
     <>
@@ -632,6 +615,7 @@ export function AreaRestrictionConfigCard({
             isMulti
             styles={pipelinesReactSelectStyles as unknown as StylesConfig<CameraAreaOption, true>}
             options={cameraAreaOptions}
+            isOptionDisabled={option => selectedAreaOptions.length > 0 && option.compositionId !== compositionId}
             value={selectedAreaOptions}
             isDisabled={!interactiveCameraId || !activeCameraContexts || Boolean(activeCameraContextsError) || cameraAreaOptions.length === 0}
             placeholder={
@@ -640,6 +624,8 @@ export function AreaRestrictionConfigCard({
             onChange={(value: MultiValue<CameraAreaOption>) => {
               const selectedOptions = value.map((item) => ({
                 areaName: String(item.areaName || "").trim(),
+                areaId: item.areaId,
+                compositionId: item.compositionId,
                 points: Array.isArray(item.points)
                   ? item.points
                       .map((point) => {
@@ -653,9 +639,11 @@ export function AreaRestrictionConfigCard({
               const includeAreaNames = Array.from(new Set(selectedOptions.map((item) => item.areaName).filter(Boolean)));
               onUpdateConfig((prev) => ({
                 ...prev,
+                composition_id: selectedOptions[0]?.compositionId || "",
                 areas: selectedOptions
                   .filter((item) => item.areaName && item.points.length >= 3)
                   .map((item) => ({
+                    id: item.areaId,
                     name: item.areaName,
                     points: item.points.map((point) => ({ x: point.x, z: point.z })),
                   })),

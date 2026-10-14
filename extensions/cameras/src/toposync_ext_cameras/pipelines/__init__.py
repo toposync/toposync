@@ -26,6 +26,10 @@ from .postprocess import (
 
 def register_camera_pipeline_operators(registry):  # noqa: ANN001
     register_camera_core_pipeline_operators(registry)
+    from .visual_region import register_visual_region_operator
+    register_visual_region_operator(registry)
+    from .region_occurrence import register_region_occurrence_operator
+    register_region_occurrence_operator(registry)
     try:
         from toposync_ext_vision.pipelines import register_vision_pipeline_operators
     except Exception:

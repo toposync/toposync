@@ -1,0 +1,94 @@
+const { test, expect } = require('@playwright/test');
+const path = require('node:path');
+const { installPipelineEditorFixture, openPipelineEditor } = require('./fixtures/pipeline-editor');
+
+const reference = { id: 'saved', revision: 1, image_url: '/fixture-panorama.svg', width: 960, height: 540, framing_available: false, geometry: { model_digest: 'geometry' } };
+const image = '<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="#9cac9a"/><path d="M0 270H960M480 0V540" stroke="#30493e" stroke-width="6"/><rect x="300" y="180" width="300" height="150" fill="#ded8ca"/></svg>';
+
+for (const theme of ["topo-day", "topo-night"]) for (const width of [390, 768, 1440]) {
+  test(`${theme}: saved region drawing, preview and persistence at ${width}px`, async ({ page }, info) => {
+    const portuguese = width === 768;
+    const label = (english, translated) => portuguese ? translated : english;
+    const fixture = await installPipelineEditorFixture(page);
+    fixture.pipeline.graph.nodes = [fixture.pipeline.graph.nodes[0], { id: 'region', operator: 'camera.panorama_region', config: { camera_id: 'fixture', source_id: 'main', name: 'Niche', reference: null, strokes: [], criterion: 'base', minimum_overlap: .25, framing: 'passive', evidence_timeout_seconds: 5 } }];
+    fixture.pipeline.graph.edges = [{ from: { node: 'source', port: 'out' }, to: { node: 'region', port: 'in' } }];
+    await page.addInitScript(({ theme, portuguese }) => { localStorage.setItem('toposync.locale', portuguese ? 'pt-BR' : 'en'); localStorage.setItem('toposync.theme', theme); }, { theme, portuguese });
+    await page.setViewportSize({ width, height: 1000 });
+    await page.route('**/api/extensions', route => route.fulfill({ json: [{ id: 'com.toposync.cameras', name: 'Cameras', version: 'test', frontend: { kind: 'module-federation', remote_entry_url: '/fixture-assets/remoteEntry.js', scope: 'cameras', module: './activate' } }] }));
+    await page.route('**/fixture-assets/*', route => route.fulfill({ path: path.resolve(__dirname, '../extensions/cameras/src/toposync_ext_cameras/static', path.basename(new URL(route.request().url()).pathname)), contentType: 'application/javascript' }));
+    await page.route('**/fixture-panorama.svg', route => route.fulfill({ body: image, contentType: 'image/svg+xml' }));
+    await page.route('**/api/pipelines/operators', route => route.fulfill({ json: { operators: ['camera.source', 'camera.panorama_region'].map(id => ({ id, description: id, inputs: id === 'camera.source' ? [] : [{name:'in'}], outputs: [{name:'out'}, ...(id === 'camera.panorama_region' ? [{name:'observations'}] : [])], capabilities:[], defaults:{}, config_schema:{}, share_strategy:'never' })) } }));
+    await page.route('**/api/cameras/live-panorama', route => route.fulfill({ json: { choices: [{ camera_id:'fixture',camera_name:'Fixture',source_id:'main',source_name:'Main',kind:'active',reason:null,artifact:reference }] } }));
+    await page.route('**/visual-region-reference', route => route.fulfill({json:reference}));
+    await page.route('**/api/cameras/visual-regions/preview', route => route.fulfill({ json: { image:'data:image/svg+xml;base64,' + Buffer.from(image).toString('base64'), classification:'observed',visibility:{state:'partial'},detection_available:false } }));
+    const errors=[]; page.on('pageerror',error=>errors.push(error.message));
+    await openPipelineEditor(page);
+    await page.locator('.react-flow__node[data-id="region"]').click();
+    await page.getByRole('button', {name:label('Draw on panorama', 'Desenhar na panorâmica'),exact:true}).click();
+    const modal=page.getByRole('dialog').last();
+    await expect(modal).toBeVisible();
+    const canvas=modal.locator('canvas');
+    await expect(canvas).toBeVisible();
+    await expect(canvas).toHaveAttribute("width", "960");
+    await expect(modal.getByRole('button',{name:label('Apply', 'Aplicar'),exact:true})).toBeDisabled();
+    await canvas.focus();
+    await page.keyboard.press('Enter');
+    await expect(modal.getByRole('button',{name:label('Apply', 'Aplicar'),exact:true})).toBeEnabled();
+    await modal.getByRole('button',{name:label('Undo', 'Desfazer'),exact:true}).click();
+    await expect(modal.getByRole('button',{name:label('Apply', 'Aplicar'),exact:true})).toBeDisabled();
+    const box=await canvas.boundingBox();
+    await page.mouse.move(box.x+box.width*.4,box.y+box.height*.4);
+    await page.mouse.down();
+    await page.mouse.move(box.x+box.width*.6,box.y+box.height*.6,{steps:8});
+    await page.mouse.up();
+    await modal.locator('input[type="range"]').fill("0.1");
+    await expect(modal.getByRole('button',{name:label('Apply', 'Aplicar'),exact:true})).toHaveCSS('background-color','rgb(8, 120, 115)');
+    await page.screenshot({path:info.outputPath("drawing.png")});
+    await modal.getByRole('button',{name:label('Apply', 'Aplicar'),exact:true}).click();
+    await expect(modal).toBeHidden();
+    await page.getByRole('button',{name:label('Check in image', 'Conferir na imagem'),exact:true}).click();
+    await expect(page.getByText(label('Region partially in image', 'Região parcialmente na imagem'),{exact:true})).toBeVisible();
+    await page.screenshot({path:info.outputPath('preview.png')});
+    await page.keyboard.press('Escape');
+    await page.getByRole('button',{name:label('Save', 'Salvar'),exact:true}).click();
+    await expect.poll(()=>fixture.saves.length).toBe(1);
+    const saved=fixture.saves[0].graph.nodes.find(node=>node.operator==='camera.panorama_region').config;
+    expect(saved.reference.artifact_id).toBe('saved');
+    expect(saved.strokes).toHaveLength(1);
+    expect(saved.strokes[0].diameter01).toBe(.05);
+    expect(errors).toEqual([]);
+    expect(fixture.unexpected).toEqual([]);
+  });
+}
+
+test('area filter selects a composition area and previews without a drawing editor', async ({page}) => {
+  const fixture=await installPipelineEditorFixture(page);
+  fixture.pipeline.graph.nodes=[fixture.pipeline.graph.nodes[0],{id:'area',operator:'camera.area_restriction',config:{areas:[],composition_id:'',include_area_names:[],exclude_area_names:[]}}];
+  fixture.pipeline.graph.edges=[{from:{node:'source',port:'out'},to:{node:'area',port:'in'}}];
+  await page.addInitScript(()=>localStorage.setItem('toposync.locale','en'));
+  await page.route('**/api/extensions',route=>route.fulfill({json:[{id:'com.toposync.cameras',name:'Cameras',version:'test',frontend:{kind:'module-federation',remote_entry_url:'/fixture-assets/remoteEntry.js',scope:'cameras',module:'./activate'}}]}));
+  await page.route('**/fixture-assets/*',route=>route.fulfill({path:path.resolve(__dirname,'../extensions/cameras/src/toposync_ext_cameras/static',path.basename(new URL(route.request().url()).pathname)),contentType:'application/javascript'}));
+  await page.route('**/api/pipelines/operators',route=>route.fulfill({json:{operators:['camera.source','camera.area_restriction'].map(id=>({id,description:id,inputs:id==='camera.source'?[]:[{name:'in'}],outputs:[{name:'out'}],capabilities:[],defaults:{},config_schema:{},share_strategy:'never'}))}}));
+  await page.route('**/api/cameras/cameras/fixture/contexts',route=>route.fulfill({json:{camera_id:'fixture',compositions:[{id:'home',name:'Home',areas:[{id:'pool',name:'Pool',vertices:[{x:0,z:0},{x:2,z:0},{x:2,z:2},{x:0,z:2}]}]}]}}));
+  await page.route('**/api/cameras/live-panorama',route=>route.fulfill({json:{choices:[{camera_id:'fixture',camera_name:'Fixture',source_id:'main',source_name:'Main',kind:'active',reason:null,artifact:reference}]}}));
+  const previews=[];
+  await page.route('**/api/cameras/areas/preview',route=>{
+    previews.push(route.request().postDataJSON());
+    return route.fulfill({json:{image:'data:image/svg+xml;base64,'+Buffer.from(image).toString('base64'),classification:'observed',visibility:{state:'full'},detection_available:false}});
+  });
+  await openPipelineEditor(page);
+  await page.locator('.react-flow__node[data-id="area"]').click();
+  await page.locator('.pipelinesOperatorConfigCard input[role="combobox"]').fill('Pool');
+  await page.getByRole('option',{name:'Home / Pool'}).click();
+  await expect(page.getByRole('button',{name:'Draw on panorama',exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'Check in image',exact:true}).click();
+  await expect(page.getByText('Entire region in image',{exact:true})).toBeVisible();
+  expect(previews).toEqual([{camera_id:'fixture',source_id:'main',composition_id:'home',area_ids:['pool']}]);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button',{name:'Save',exact:true}).click();
+  await expect.poll(()=>fixture.saves.length).toBe(1);
+  const config=fixture.saves[0].graph.nodes.find(node=>node.id==='area').config;
+  expect(config.areas[0].id).toBe('pool');
+  expect(config.composition_id).toBe('home');
+  expect(fixture.unexpected).toEqual([]);
+});

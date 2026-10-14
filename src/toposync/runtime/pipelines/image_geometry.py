@@ -54,11 +54,21 @@ def transformed_geometry(artifact: Any, forward: Any, width: int, height: int) -
     step = np.asarray(forward, dtype=float)
     if step.shape != (3, 3) or not np.isfinite(step).all():
         return {}
+    inverse = np.linalg.inv(step)
+    domains = [
+        {"size": domain["size"], "matrix": (np.asarray(domain["matrix"]) @ inverse).tolist()}
+        for domain in geometry.get("valid_domains", [])
+    ]
+    if not np.array_equal(step, np.eye(3)) or [width, height] != [shape[1], shape[0]]:
+        domains.append({"size": [shape[1], shape[0]], "matrix": inverse.tolist()})
+    if len(domains) > 64:
+        return {}
     return {
         "image_geometry": {
             **geometry,
             "image_size": [width, height],
-            "to_source": (matrix @ np.linalg.inv(step)).tolist(),
+            "to_source": (matrix @ inverse).tolist(),
+            **({"valid_domains": domains} if domains else {}),
         }
     }
 

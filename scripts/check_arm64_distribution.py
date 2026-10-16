@@ -182,7 +182,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Validate Toposync distribution on linux/arm64 with Docker/QEMU."
     )
     parser.add_argument("--platform", default="linux/arm64")
-    parser.add_argument("--package-spec", default="toposync-streaming==0.8.0")
+    parser.add_argument("--package-spec", default="toposync-streaming==0.9.0")
     parser.add_argument("--image-tag", default="toposync:arm64-test")
     parser.add_argument("--install-wheel", default="/wheelhouse/toposync_streaming-*.whl")
     parser.add_argument("--apt-packages", default="ffmpeg")

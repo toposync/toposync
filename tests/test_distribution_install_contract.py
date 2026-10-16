@@ -62,3 +62,20 @@ def test_ptz_attention_build_configuration_is_sdist_portable() -> None:
     package_root = extension_root / "src" / "toposync_ext_ptz_attention"
     assert (package_root / "extension.json").is_file()
     assert (package_root / "static" / "remoteEntry.js").is_file()
+
+
+def test_all_extension_build_hooks_are_sdist_portable() -> None:
+    for manifest in sorted((ROOT / "extensions").glob("*/pyproject.toml")):
+        config = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        custom_hook = (
+            config.get("tool", {})
+            .get("hatch", {})
+            .get("build", {})
+            .get("hooks", {})
+            .get("custom", {})
+            .get("path")
+        )
+        if custom_hook:
+            hook_path = (manifest.parent / custom_hook).resolve()
+            assert hook_path.is_relative_to(manifest.parent.resolve()), manifest
+            assert hook_path.is_file(), manifest

@@ -16,7 +16,7 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.hooks.custom]
-path = "../../hatch_build_extension_ui.py"
+path = "hatch_build.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/toposync_ext_models"]

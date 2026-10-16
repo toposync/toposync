@@ -6,7 +6,9 @@ from toposync_ext_vision.plugin import VisionExtension
 from test_extension_manager_compatibility import _FakeEntryPoint, _load_manager
 
 
-@pytest.mark.parametrize("core_version,accepted", [("0.8.0", False), ("0.9.0.dev0", True)])
+@pytest.mark.parametrize(
+    "core_version,accepted", [("0.8.0", False), ("0.9.0.dev0", False), ("0.9.0", True)]
+)
 def test_vision_checks_real_manifest_before_setup(monkeypatch, core_version, accepted):
     setup_calls = []
 
@@ -15,7 +17,8 @@ def test_vision_checks_real_manifest_before_setup(monkeypatch, core_version, acc
             setup_calls.append(True)
 
     manager = _load_manager(
-        entry_points=[_FakeEntryPoint("vision", Probe)], monkeypatch=monkeypatch,
+        entry_points=[_FakeEntryPoint("vision", Probe)],
+        monkeypatch=monkeypatch,
         core_version=core_version,
     )
     assert bool(setup_calls) is accepted

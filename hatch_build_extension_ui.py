@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
@@ -10,14 +11,13 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict[str, object]) -> None:
         extension_root = Path(self.root)
-        extension_name = extension_root.name
+        project = tomllib.loads((extension_root / "pyproject.toml").read_text(encoding="utf-8"))[
+            "project"
+        ]
+        extension_name = project["name"].removeprefix("toposync-ext-").replace("-", "_")
         ui_package = extension_root / "ui" / "package.json"
         static_entry = (
-            extension_root
-            / "src"
-            / f"toposync_ext_{extension_name}"
-            / "static"
-            / "remoteEntry.js"
+            extension_root / "src" / f"toposync_ext_{extension_name}" / "static" / "remoteEntry.js"
         )
 
         npm = shutil.which("npm")

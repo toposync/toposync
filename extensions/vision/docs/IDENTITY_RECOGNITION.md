@@ -153,7 +153,7 @@ Use the [offline evaluation protocol](IDENTITY_EVALUATION.md) to validate a froz
 
 ## Paired development packages
 
-This development snapshot uses core and vision version `0.9.0.dev0`; it is not a published stable release. Vision requires core `>=0.9.0.dev0` both in wheel metadata and its extension manifest. The existing installer pins the running core during extension resolution, so installing this vision package on an older core is rejected before replacement. The extension manager also rejects an incompatible core before setup. Upgrade the paired core package before enabling this vision version; a wheel built from the older `0.8.0` core does not implement private artifacts or the bounded process executor used here.
+Core and vision use version `0.9.0` in this release. Vision requires core `>=0.9.0` both in wheel metadata and its extension manifest. The existing installer pins the running core during extension resolution, so installing this vision package on an older core is rejected before replacement. The extension manager also rejects an incompatible core before setup. Upgrade the paired core package before enabling this vision version; a wheel built from the older `0.8.0` core does not implement private artifacts or the bounded process executor used here.
 
 
 ## Authorized identity selection for history

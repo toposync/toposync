@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import tomllib
+import pytest
 from pathlib import Path
 from types import ModuleType
 
@@ -42,6 +43,24 @@ def test_distribution_workflow_validates_extension_wheels() -> None:
     assert wheel_check in workflow
     assert workflow.index("npm run build:extensions") < workflow.index(wheel_check)
     assert workflow.index(wheel_check) < workflow.index(distribution_smoke)
+
+
+@pytest.mark.parametrize("missing_vision_frontend", [False, True])
+def test_distribution_smoke_requires_declared_vision_frontend(missing_vision_frontend) -> None:
+    smoke = _load_distribution_smoke_script()
+    payload = []
+    for extension_id in smoke.EXPECTED_EXTENSION_IDS:
+        item = {"id": extension_id}
+        if extension_id in smoke.EXPECTED_FRONTEND_REMOTES:
+            item["frontend"] = {"remote_entry_url": smoke.EXPECTED_FRONTEND_REMOTES[extension_id]}
+        payload.append(item)
+    vision_path = smoke.EXPECTED_FRONTEND_REMOTES["com.toposync.vision"]
+    if missing_vision_frontend:
+        next(item for item in payload if item["id"] == "com.toposync.vision").pop("frontend")
+        with pytest.raises(RuntimeError, match="missing frontend metadata"):
+            smoke._assert_extensions(payload)
+    else:
+        assert vision_path in smoke._assert_extensions(payload)
 
 
 def test_ptz_attention_build_configuration_is_sdist_portable() -> None:

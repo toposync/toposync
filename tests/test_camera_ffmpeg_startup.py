@@ -76,7 +76,7 @@ def test_ffmpeg_stop_interrupts_reopen_wait_without_starting_another_process(
         ("http://localhost/fixture.mjpg", False),
     ],
 )
-def test_ffmpeg_startup_options_are_input_scoped_and_rtsp_only(
+def test_ffmpeg_startup_options_are_input_scoped_for_network_sources(
     monkeypatch: pytest.MonkeyPatch, source: str, is_rtsp: bool
 ) -> None:
     commands: list[list[str]] = []
@@ -112,7 +112,7 @@ def test_ffmpeg_startup_options_are_input_scoped_and_rtsp_only(
         assert command[input_index + 1] == source
         options = {"-analyzeduration": "100000", "-probesize": "32768", "-threads": "1"}
         for option, value in options.items():
-            if is_rtsp:
+            if is_rtsp or source.startswith("http"):
                 assert command.count(option) == 1
                 index = command.index(option)
                 assert index < input_index

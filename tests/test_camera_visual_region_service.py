@@ -184,6 +184,8 @@ def test_framing_rejects_changed_revision_and_ambiguous_profiles(tmp_path):
 @pytest.mark.parametrize('region_count', [1, 4, 8])
 def test_regions_share_frame_matching_and_bound_caches(tmp_path, monkeypatch, region_count):
     from toposync_ext_cameras.processing.planar_localization import PlanarLocalizer
+    fixed_now = time.time()
+    monkeypatch.setattr(time, 'time', lambda: fixed_now)
     async def scenario():
         service, config, image, evidence, _ = setup(tmp_path)
         calls = []

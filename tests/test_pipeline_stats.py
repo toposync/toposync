@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from toposync.runtime.config_store import Pipeline
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.pipelines import (
     Lifecycle,
     OperatorRegistry,
@@ -126,7 +127,12 @@ def test_pipeline_runtime_records_step_output_counts() -> None:
                 },
             ],
         }
-        pipeline = Pipeline(name="stats_runtime_pipeline", graph=graph)
+        pipeline = Pipeline(
+            name="stats_runtime_pipeline",
+            graph=build_pipeline_graph_v2(
+                graph_uid="stats_runtime_pipeline", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
 
         stats_store = PipelineStatsStore(window_seconds=24 * 60 * 60, bucket_seconds=60)
@@ -187,7 +193,14 @@ def test_pipeline_runtime_emits_output_observability_without_stats_store() -> No
                 },
             ],
         }
-        pipeline = Pipeline(name="observability_runtime_pipeline", graph=graph)
+        pipeline = Pipeline(
+            name="observability_runtime_pipeline",
+            graph=build_pipeline_graph_v2(
+                graph_uid="observability_runtime_pipeline",
+                nodes=graph["nodes"],
+                edges=graph["edges"],
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
 
         records: list[dict[str, Any]] = []
@@ -202,7 +215,9 @@ def test_pipeline_runtime_emits_output_observability_without_stats_store() -> No
             if record.get("type") != RECORD_STATS_NODE_OUTPUT:
                 continue
             node_id = str(record.get("node_id") or "")
-            outputs_by_node[node_id] = outputs_by_node.get(node_id, 0) + int(record.get("value") or 0)
+            outputs_by_node[node_id] = outputs_by_node.get(node_id, 0) + int(
+                record.get("value") or 0
+            )
         assert outputs_by_node["source"] == 3
         assert outputs_by_node["sink"] == 3
 

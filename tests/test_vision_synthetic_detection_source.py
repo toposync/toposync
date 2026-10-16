@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from toposync.runtime.config_store import Pipeline
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.pipelines import (
     Lifecycle,
@@ -161,12 +162,25 @@ def test_synthetic_detection_source_maps_tracks_and_notifies_world_pin(tmp_path)
                 },
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "map", "port": "in"}},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "map", "port": "in"},
+                    "traffic": {
+                        "modality": "video.frame",
+                        "semantic_class": "frame",
+                        "continuous": True,
+                    },
+                },
                 {"from": {"node": "map", "port": "out"}, "to": {"node": "track", "port": "in"}},
                 {"from": {"node": "track", "port": "out"}, "to": {"node": "notify", "port": "in"}},
             ],
         }
-        pipeline = Pipeline(name="lab_synthetic_person_pin_360", graph=graph)
+        pipeline = Pipeline(
+            name="lab_synthetic_person_pin_360",
+            graph=build_pipeline_graph_v2(
+                graph_uid="lab_synthetic_person_pin_360", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         runtime = PipelineRuntime(
             compiled=PipelineGraphCompiler(registry).compile_pipeline(pipeline),
             registry=registry,

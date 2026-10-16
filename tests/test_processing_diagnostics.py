@@ -99,7 +99,10 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert "pose" in vision["recommendations"]
     assert isinstance(vision["official_shortlists"].get("classification"), list)
     assert isinstance(vision["official_shortlists"].get("detection"), list)
-    assert any(item.get("model_id") == "rfdetr_det_small" for item in vision["official_shortlists"]["detection"])
+    assert any(
+        item.get("model_id") == "rfdetr_det_small"
+        for item in vision["official_shortlists"]["detection"]
+    )
     assert isinstance(vision["official_shortlists"].get("segmentation"), list)
     assert isinstance(vision["official_shortlists"].get("pose"), list)
     assert isinstance(vision["task_catalogs"].get("classification"), dict)
@@ -109,21 +112,34 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert isinstance(vision["local_builder"], dict)
     assert "supported" in vision["local_builder"]
     assert isinstance(vision["local_builder"].get("candidates"), list)
-    assert any(item.get("model_id") == "rfdetr_det_small" for item in vision["local_builder"]["candidates"])
+    assert any(
+        item.get("model_id") == "rfdetr_det_small" for item in vision["local_builder"]["candidates"]
+    )
     detection_items = vision["task_catalogs"]["detection"].get("items")
     assert isinstance(detection_items, list)
-    assert any(item.get("availability") in {"available", "manifest_only", "incompatible"} for item in detection_items)
+    assert any(
+        item.get("availability") in {"available", "manifest_only", "incompatible"}
+        for item in detection_items
+    )
     assert any(isinstance(item.get("capabilities"), list) for item in detection_items)
-    assert any(item.get("acquisition_mode") in {"guided_upload", "auto_download", "local_build_assisted"} for item in detection_items)
+    assert any(
+        item.get("acquisition_mode") in {"guided_upload", "auto_download", "local_build_assisted"}
+        for item in detection_items
+    )
     assert any(isinstance(item.get("acquisition"), dict) for item in detection_items)
     assert any(item.get("artifact_format") == "onnx" for item in detection_items)
     assert any(isinstance(item.get("accelerator_ids"), list) for item in detection_items)
-    assert any(str(item.get("input", {}).get("dtype") or "") == "float32" for item in detection_items)
+    assert any(
+        str(item.get("input", {}).get("dtype") or "") == "float32" for item in detection_items
+    )
     assert any("install_supported" in item for item in detection_items)
     assert any("install_reason" in item for item in detection_items)
     assert any("local_build_supported" in item for item in detection_items)
     assert any("local_build_reason" in item for item in detection_items)
-    assert vision["task_catalogs"]["pose"].get("items") == []
+    assert {item["model_id"] for item in vision["task_catalogs"]["pose"]["items"]} == {
+        "mediapipe_pose_33",
+        "rtmpose_halpe26",
+    }
     assert isinstance(vision["install_jobs"], list)
     assert isinstance(vision["origin_metrics"], dict)
     assert isinstance(vision["origin_metrics"].get("jobs_by_source_kind"), dict)

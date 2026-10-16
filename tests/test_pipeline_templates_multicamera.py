@@ -8,6 +8,7 @@ import pytest
 
 from toposync.app import create_app
 from toposync.runtime.config_store import Pipeline
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 import toposync.extensions.manager as ext_manager_mod
 
 
@@ -64,11 +65,11 @@ def test_apply_template_to_multiple_cameras_creates_pipelines(
         _save_camera_devices(client, "cam-a", "cam-b")
         template = Pipeline(
             name="alerts_template",
-            enabled=True,
+            enabled=False,
             editor_mode="interactive",
-            graph={
-                "schema_version": 1,
-                "nodes": [
+            graph=build_pipeline_graph_v2(
+                graph_uid="alerts_template",
+                nodes=[
                     {
                         "id": "source",
                         "operator": "camera.source",
@@ -76,13 +77,18 @@ def test_apply_template_to_multiple_cameras_creates_pipelines(
                     },
                     {"id": "sink", "operator": "core.sink", "config": {}},
                 ],
-                "edges": [
+                edges=[
                     {
                         "from": {"node": "source", "port": "out"},
                         "to": {"node": "sink", "port": "in"},
+                        "traffic": {
+                            "modality": "video.frame",
+                            "semantic_class": "frame",
+                            "continuous": True,
+                        },
                     },
                 ],
-            },
+            ),
         ).model_dump(mode="json")
         res = client.post("/api/pipelines", json=template)
         assert res.status_code == 201, res.text
@@ -132,11 +138,11 @@ def test_apply_template_conflict_skip(tmp_path: Path, monkeypatch: pytest.Monkey
         _save_camera_devices(client, "cam-a")
         template = Pipeline(
             name="alerts_template",
-            enabled=True,
+            enabled=False,
             editor_mode="interactive",
-            graph={
-                "schema_version": 1,
-                "nodes": [
+            graph=build_pipeline_graph_v2(
+                graph_uid="alerts_template",
+                nodes=[
                     {
                         "id": "source",
                         "operator": "camera.source",
@@ -144,13 +150,18 @@ def test_apply_template_conflict_skip(tmp_path: Path, monkeypatch: pytest.Monkey
                     },
                     {"id": "sink", "operator": "core.sink", "config": {}},
                 ],
-                "edges": [
+                edges=[
                     {
                         "from": {"node": "source", "port": "out"},
                         "to": {"node": "sink", "port": "in"},
+                        "traffic": {
+                            "modality": "video.frame",
+                            "semantic_class": "frame",
+                            "continuous": True,
+                        },
                     },
                 ],
-            },
+            ),
         ).model_dump(mode="json")
         res = client.post("/api/pipelines", json=template)
         assert res.status_code == 201

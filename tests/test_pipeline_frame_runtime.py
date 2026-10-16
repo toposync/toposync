@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import pytest
 
 from toposync.runtime.config_store import Pipeline
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines import (
     Artifact,
@@ -194,7 +195,12 @@ def test_runtime_respects_bounded_channels_and_drop_control() -> None:
                 },
             ],
         }
-        pipeline = Pipeline(name="stage4_drop_control", graph=graph)
+        pipeline = Pipeline(
+            name="stage4_drop_control",
+            graph=build_pipeline_graph_v2(
+                graph_uid="stage4_drop_control", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         snapshot = await runtime.run_for(1.5)
@@ -269,7 +275,12 @@ def test_throttle_and_debounce_preserve_open_and_close_packets() -> None:
                 {"from": {"node": "debounce", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         }
-        pipeline = Pipeline(name="stage4_lifecycle_flow", graph=graph)
+        pipeline = Pipeline(
+            name="stage4_lifecycle_flow",
+            graph=build_pipeline_graph_v2(
+                graph_uid="stage4_lifecycle_flow", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.35)
@@ -319,9 +330,7 @@ def test_motion_gate_uses_hold_without_emitting_close(monkeypatch: pytest.Monkey
             lifecycle=Lifecycle.UPDATE,
             payload={},
             artifacts={
-                "main": Artifact(
-                    name="main", data=object(), mime_type="application/octet-stream"
-                ),
+                "main": Artifact(name="main", data=object(), mime_type="application/octet-stream"),
                 "aux": Artifact(
                     name="aux",
                     data=object(),
@@ -398,9 +407,7 @@ def test_motion_bgsub_adaptive_uses_hold_and_filters_when_inactive(
             lifecycle=Lifecycle.UPDATE,
             payload={},
             artifacts={
-                "main": Artifact(
-                    name="main", data=object(), mime_type="application/octet-stream"
-                ),
+                "main": Artifact(name="main", data=object(), mime_type="application/octet-stream"),
                 "aux": Artifact(
                     name="aux",
                     data=object(),
@@ -466,9 +473,7 @@ def test_motion_bgsub_adaptive_can_emit_idle_packets(monkeypatch: pytest.MonkeyP
             lifecycle=Lifecycle.UPDATE,
             payload={},
             artifacts={
-                "main": Artifact(
-                    name="main", data=object(), mime_type="application/octet-stream"
-                ),
+                "main": Artifact(name="main", data=object(), mime_type="application/octet-stream"),
             },
         )
 
@@ -522,9 +527,7 @@ def test_motion_bgsub_adaptive_requires_activation_frames(monkeypatch: pytest.Mo
             lifecycle=Lifecycle.UPDATE,
             payload={},
             artifacts={
-                "main": Artifact(
-                    name="main", data=object(), mime_type="application/octet-stream"
-                ),
+                "main": Artifact(name="main", data=object(), mime_type="application/octet-stream"),
             },
         )
 

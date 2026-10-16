@@ -8,7 +8,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from toposync.runtime.config_store import AppSettings, ConfigStore, UserDataPaths
-from toposync.runtime.pipelines import OperatorRegistry, PipelineGraphCompiler, register_builtin_operators
+from toposync.runtime.pipelines import (
+    OperatorRegistry,
+    PipelineGraphCompiler,
+    register_builtin_operators,
+)
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cinematic.api import create_cinematic_router
 from toposync_ext_cinematic.constants import OPERATOR_ID_DIRECTOR_SOURCE
@@ -82,7 +86,9 @@ def _create_client(tmp_path: Path) -> TestClient:
     register_cinematic_pipeline_operators(registry)
 
     services = ServiceRegistry()
-    services.register("notifications.list", lambda **_kwargs: {"notifications": [], "next_cursor": None})
+    services.register(
+        "notifications.list", lambda **_kwargs: {"notifications": [], "next_cursor": None}
+    )
     services.register("cameras.catalog.list", lambda **_kwargs: {"cameras": []})
     services.register("cameras.capture.open", lambda **_kwargs: {"lease_id": "lease"})
     services.register("cameras.capture.get_latest", lambda **_kwargs: {"frame": None})
@@ -123,10 +129,11 @@ def test_cinematic_wizard_graph_uses_demand_director_publish_chain() -> None:
         OPERATOR_ID_DIRECTOR_SOURCE,
         "stream.publish_video",
     ]
-    assert graph["edges"][0]["maxsize"] == 1
-    assert graph["edges"][0]["drop_policy"] == "drop_oldest"
-    assert graph["edges"][1]["maxsize"] == 1
-    assert graph["edges"][1]["drop_policy"] == "latest_only"
+    assert graph["schema_version"] == 2
+    assert graph["edges"][0]["queue"]["max_items"] == 1
+    assert graph["edges"][0]["queue"]["drop_policy"] == "drop_oldest"
+    assert graph["edges"][1]["queue"]["max_items"] == 1
+    assert graph["edges"][1]["queue"]["drop_policy"] == "latest_only"
     assert graph["nodes"][0]["config"]["demand_scope"] == "transmission"
     assert graph["nodes"][0]["config"]["output_id"] == ""
     assert graph["nodes"][0]["config"]["quality_profile_id"] == ""
@@ -195,7 +202,9 @@ def test_cinematic_wizard_endpoint_creates_primary_behavior_pipeline(tmp_path: P
         assert body["primary_camera_id"] == "front"
         assert body["camera_ids"] == ["front", "side"]
 
-        pipeline_model = asyncio.run(client.app.state.config_store.get_pipeline("cinematic_primary"))
+        pipeline_model = asyncio.run(
+            client.app.state.config_store.get_pipeline("cinematic_primary")
+        )
         assert pipeline_model is not None
         pipeline = pipeline_model.model_dump(mode="json")
         director_config = _node_config(pipeline, OPERATOR_ID_DIRECTOR_SOURCE)

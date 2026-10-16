@@ -17,6 +17,7 @@ from toposync.runtime.pipelines import (
     register_builtin_operators,
 )
 from toposync.runtime.pipelines.safe_expression import SafeExpression, SafeExpressionError
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
 
@@ -68,6 +69,11 @@ def test_core_filter_expression_is_lifecycle_safe() -> None:
                 {
                     "from": {"node": "source", "port": "out"},
                     "to": {"node": "filter", "port": "in"},
+                    "traffic": {
+                        "modality": "video.frame",
+                        "semantic_class": "frame",
+                        "continuous": True,
+                    },
                     "maxsize": 32,
                     "drop_policy": "drop_oldest",
                 },
@@ -79,7 +85,12 @@ def test_core_filter_expression_is_lifecycle_safe() -> None:
                 },
             ],
         }
-        pipeline = Pipeline(name="core_filter_lifecycle_safe", graph=graph)
+        pipeline = Pipeline(
+            name="core_filter_lifecycle_safe",
+            graph=build_pipeline_graph_v2(
+                graph_uid="core_filter_lifecycle_safe", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.25)
@@ -127,11 +138,24 @@ def test_core_filter_drops_entire_stream_when_open_filtered() -> None:
                 {"id": "sink", "operator": "test.collect_sink", "config": {}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "filter", "port": "in"}},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "filter", "port": "in"},
+                    "traffic": {
+                        "modality": "video.frame",
+                        "semantic_class": "frame",
+                        "continuous": True,
+                    },
+                },
                 {"from": {"node": "filter", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         }
-        pipeline = Pipeline(name="core_filter_drop_stream", graph=graph)
+        pipeline = Pipeline(
+            name="core_filter_drop_stream",
+            graph=build_pipeline_graph_v2(
+                graph_uid="core_filter_drop_stream", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.25)
@@ -160,7 +184,12 @@ def test_core_filter_rejects_unsafe_expression() -> None:
             {"from": {"node": "filter", "port": "out"}, "to": {"node": "sink", "port": "in"}},
         ],
     }
-    pipeline = Pipeline(name="core_filter_unsafe", graph=graph)
+    pipeline = Pipeline(
+        name="core_filter_unsafe",
+        graph=build_pipeline_graph_v2(
+            graph_uid="core_filter_unsafe", nodes=graph["nodes"], edges=graph["edges"]
+        ),
+    )
     with pytest.raises(GraphCompileError):
         PipelineGraphCompiler(registry).compile_pipeline(pipeline)
 
@@ -220,10 +249,23 @@ def test_core_filter_can_be_used_before_camera_source(monkeypatch: pytest.Monkey
                     "from": {"node": "filter", "port": "out"},
                     "to": {"node": "camera", "port": "gate"},
                 },
-                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+                {
+                    "from": {"node": "camera", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "traffic": {
+                        "modality": "video.frame",
+                        "semantic_class": "frame",
+                        "continuous": True,
+                    },
+                },
             ],
         }
-        pipeline = Pipeline(name="core_filter_before_camera", graph=graph)
+        pipeline = Pipeline(
+            name="core_filter_before_camera",
+            graph=build_pipeline_graph_v2(
+                graph_uid="core_filter_before_camera", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.25)

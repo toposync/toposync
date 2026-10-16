@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from toposync.runtime.config_store import Pipeline
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.pipelines import Lifecycle, OperatorRegistry, PipelineGraphCompiler
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.runtime import Packet
@@ -51,11 +52,19 @@ def test_home_assistant_boolean_state_managed_mode_uses_lifecycle_and_dedupes() 
             _context(),
         )
         await runtime.process_packet(
-            Packet.create(stream_id="onvif:garage:motion", lifecycle=Lifecycle.UPDATE, payload={"camera_id": "garage"}),
+            Packet.create(
+                stream_id="onvif:garage:motion",
+                lifecycle=Lifecycle.UPDATE,
+                payload={"camera_id": "garage"},
+            ),
             _context(),
         )
         await runtime.process_packet(
-            Packet.create(stream_id="onvif:garage:motion", lifecycle=Lifecycle.CLOSE, payload={"camera_id": "garage"}),
+            Packet.create(
+                stream_id="onvif:garage:motion",
+                lifecycle=Lifecycle.CLOSE,
+                payload={"camera_id": "garage"},
+            ),
             _context(),
         )
 
@@ -89,10 +98,18 @@ def test_home_assistant_boolean_state_keeps_on_until_all_streams_close() -> None
     )
 
     async def _run() -> None:
-        await runtime.process_packet(Packet.create(stream_id="event:a", lifecycle=Lifecycle.UPDATE), _context())
-        await runtime.process_packet(Packet.create(stream_id="event:b", lifecycle=Lifecycle.OPEN), _context())
-        await runtime.process_packet(Packet.create(stream_id="event:a", lifecycle=Lifecycle.CLOSE), _context())
-        await runtime.process_packet(Packet.create(stream_id="event:b", lifecycle=Lifecycle.CLOSE), _context())
+        await runtime.process_packet(
+            Packet.create(stream_id="event:a", lifecycle=Lifecycle.UPDATE), _context()
+        )
+        await runtime.process_packet(
+            Packet.create(stream_id="event:b", lifecycle=Lifecycle.OPEN), _context()
+        )
+        await runtime.process_packet(
+            Packet.create(stream_id="event:a", lifecycle=Lifecycle.CLOSE), _context()
+        )
+        await runtime.process_packet(
+            Packet.create(stream_id="event:b", lifecycle=Lifecycle.CLOSE), _context()
+        )
 
     asyncio.run(_run())
 
@@ -158,8 +175,12 @@ def test_home_assistant_boolean_state_existing_input_boolean_mode_uses_services(
     )
 
     async def _run() -> None:
-        await runtime.process_packet(Packet.create(stream_id="event:1", lifecycle=Lifecycle.OPEN), _context())
-        await runtime.process_packet(Packet.create(stream_id="event:1", lifecycle=Lifecycle.CLOSE), _context())
+        await runtime.process_packet(
+            Packet.create(stream_id="event:1", lifecycle=Lifecycle.OPEN), _context()
+        )
+        await runtime.process_packet(
+            Packet.create(stream_id="event:1", lifecycle=Lifecycle.CLOSE), _context()
+        )
 
     asyncio.run(_run())
 
@@ -197,7 +218,9 @@ def test_home_assistant_boolean_state_shutdown_turns_managed_state_off() -> None
     )
 
     async def _run() -> None:
-        await runtime.process_packet(Packet.create(stream_id="event:1", lifecycle=Lifecycle.OPEN), _context())
+        await runtime.process_packet(
+            Packet.create(stream_id="event:1", lifecycle=Lifecycle.OPEN), _context()
+        )
         await runtime.shutdown()
 
     asyncio.run(_run())
@@ -212,9 +235,9 @@ def test_home_assistant_boolean_state_compiles_after_onvif_event_source() -> Non
     register_home_assistant_pipeline_operators(registry)
     pipeline = Pipeline(
         name="onvif_to_ha",
-        graph={
-            "schema_version": 1,
-            "nodes": [
+        graph=build_pipeline_graph_v2(
+            graph_uid="onvif_to_ha",
+            nodes=[
                 {
                     "id": "onvif",
                     "operator": "camera.onvif_event_source",
@@ -230,8 +253,8 @@ def test_home_assistant_boolean_state_compiles_after_onvif_event_source() -> Non
                     },
                 },
             ],
-            "edges": [{"from": {"node": "onvif", "port": "out"}, "to": {"node": "ha", "port": "in"}}],
-        },
+            edges=[{"from": {"node": "onvif", "port": "out"}, "to": {"node": "ha", "port": "in"}}],
+        ),
     )
 
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)

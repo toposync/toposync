@@ -10,6 +10,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from toposync.runtime.config_store import Pipeline
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.pipelines import (
     Artifact,
     Lifecycle,
@@ -354,7 +355,12 @@ def test_vision_track_splits_two_objects_and_closes_lifecycle() -> None:
             sink_id="sink",
             sink_name="tracking_sink",
         )
-        pipeline = Pipeline(name="stage5_tracking_split", graph=graph)
+        pipeline = Pipeline(
+            name="stage5_tracking_split",
+            graph=build_pipeline_graph_v2(
+                graph_uid="stage5_tracking_split", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.6)
@@ -384,9 +390,14 @@ def test_vision_track_splits_two_objects_and_closes_lifecycle() -> None:
             }
             assert len(correlation_ids) == 1
             assert all(item.payload.get("event_id") == event_id for item in event_packets)
-            assert all(item.payload.get("subject", {}).get("id") == event_id for item in event_packets)
+            assert all(
+                item.payload.get("subject", {}).get("id") == event_id for item in event_packets
+            )
             assert all(item.payload.get("tracking_id") is None for item in event_packets)
-            assert all(str(item.payload.get("tracklet_id") or "").startswith("trk:camera:test:") for item in event_packets)
+            assert all(
+                str(item.payload.get("tracklet_id") or "").startswith("trk:camera:test:")
+                for item in event_packets
+            )
 
         source_frames = int(counters.get("source_frames", 0))
         detect_calls = int(counters.get("detect_calls", 0))
@@ -457,13 +468,13 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
                 {
                     "id": "track",
                     "operator": "vision.track",
-                        "config": {
-                            "tracker_id": "byte_world",
-                            "default_interval_seconds": 0.0,
-                            "close_after_seconds": 0.12,
-                            "stitch_gap_seconds": 0.35,
-                        },
+                    "config": {
+                        "tracker_id": "byte_world",
+                        "default_interval_seconds": 0.0,
+                        "close_after_seconds": 0.12,
+                        "stitch_gap_seconds": 0.35,
                     },
+                },
                 {
                     "id": "crop",
                     "operator": "vision.crop_objects",
@@ -494,7 +505,14 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
                 {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}},
             ],
         }
-        pipeline = Pipeline(name="tracked_object_crop_notifications", graph=graph)
+        pipeline = Pipeline(
+            name="tracked_object_crop_notifications",
+            graph=build_pipeline_graph_v2(
+                graph_uid="tracked_object_crop_notifications",
+                nodes=graph["nodes"],
+                edges=graph["edges"],
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.6)
@@ -551,9 +569,7 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
         assert len(notification_lifecycles) == 3
         for lifecycles in notification_lifecycles.values():
             assert {"open", "close"}.issubset(lifecycles)
-        assert {next(iter(ids)) for ids in notification_event_ids.values()} == set(
-            grouped_by_event
-        )
+        assert {next(iter(ids)) for ids in notification_event_ids.values()} == set(grouped_by_event)
         assert set(stored_paths_by_event) == set(grouped_by_event)
         for event_id, paths in stored_paths_by_event.items():
             assert paths
@@ -594,7 +610,12 @@ def test_vision_track_matches_fast_non_overlapping_boxes() -> None:
             sink_id="sink",
             sink_name="tracking_sink",
         )
-        pipeline = Pipeline(name="stage5_tracking_non_overlap", graph=graph)
+        pipeline = Pipeline(
+            name="stage5_tracking_non_overlap",
+            graph=build_pipeline_graph_v2(
+                graph_uid="stage5_tracking_non_overlap", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.35)
@@ -644,7 +665,9 @@ def test_vision_track_keeps_same_identity_across_a_short_gap() -> None:
                 node["config"]["max_gap_seconds"] = 0.08
         pipeline = Pipeline(
             name="stage5_tracking_gap",
-            graph=graph,
+            graph=build_pipeline_graph_v2(
+                graph_uid="tracking_short_gap", nodes=graph["nodes"], edges=graph["edges"]
+            ),
         )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
@@ -711,7 +734,12 @@ def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
                 {"from": {"node": "track", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         }
-        pipeline = Pipeline(name="stage5_tracking_annotate", graph=graph)
+        pipeline = Pipeline(
+            name="stage5_tracking_annotate",
+            graph=build_pipeline_graph_v2(
+                graph_uid="stage5_tracking_annotate", nodes=graph["nodes"], edges=graph["edges"]
+            ),
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.25)
@@ -778,8 +806,18 @@ def test_bundle_runtime_shares_single_detect_but_keeps_tracking_state_per_pipeli
         )
         report = PipelineGraphCompiler(registry).compile_many(
             [
-                Pipeline(name="final_a", graph=graph_one),
-                Pipeline(name="final_b", graph=graph_two),
+                Pipeline(
+                    name="final_a",
+                    graph=build_pipeline_graph_v2(
+                        graph_uid="final_a", nodes=graph_one["nodes"], edges=graph_one["edges"]
+                    ),
+                ),
+                Pipeline(
+                    name="final_b",
+                    graph=build_pipeline_graph_v2(
+                        graph_uid="final_b", nodes=graph_two["nodes"], edges=graph_two["edges"]
+                    ),
+                ),
             ],
         )
         bundle_runtime = PipelineBundleRuntime(
@@ -859,8 +897,18 @@ def test_bundle_runtime_shares_detect_but_keeps_tracking_state_when_channel_poli
         )
         report = PipelineGraphCompiler(registry).compile_many(
             [
-                Pipeline(name="final_a", graph=graph_one),
-                Pipeline(name="final_b", graph=graph_two),
+                Pipeline(
+                    name="final_a",
+                    graph=build_pipeline_graph_v2(
+                        graph_uid="final_a", nodes=graph_one["nodes"], edges=graph_one["edges"]
+                    ),
+                ),
+                Pipeline(
+                    name="final_b",
+                    graph=build_pipeline_graph_v2(
+                        graph_uid="final_b", nodes=graph_two["nodes"], edges=graph_two["edges"]
+                    ),
+                ),
             ],
         )
         bundle_runtime = PipelineBundleRuntime(

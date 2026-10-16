@@ -228,7 +228,12 @@ def test_identity_models_use_existing_catalog_acquisition_and_runtime_inventory(
     from toposync_ext_vision.registry.installer import VisionModelInstallManager
 
     registry = build_default_model_registry()
-    identifiers = {"opencv_yunet_2023mar", "opencv_sface_2021dec", "open_noodle_pet_small"}
+    identifiers = {
+        "opencv_yunet_2023mar",
+        "opencv_sface_2021dec",
+        "open_noodle_pet_small",
+        "clip_multilingual_history",
+    }
     for identifier in identifiers:
         registry.get_manifest(identifier).artifact_path = str(tmp_path / (identifier + ".onnx"))
     backends = collect_vision_runtime_backends()
@@ -250,6 +255,9 @@ def test_identity_models_use_existing_catalog_acquisition_and_runtime_inventory(
         )
     assert {item["model_id"] for item in items} == identifiers
     assert all(item["acquisition_supported"] for item in items)
-    assert all(item["acquisition"]["explicit_consent_required"] for item in items)
+    for item in items:
+        assert item["acquisition"]["explicit_consent_required"] is (
+            item["model_id"] != "clip_multilingual_history"
+        )
     assert all(item["license"]["dataset_notes"] for item in items)
     assert not any(Path(item["artifact_path"]).exists() for item in items)

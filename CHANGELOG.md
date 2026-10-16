@@ -17,6 +17,9 @@
 
 ### Upgrade Notes
 
+- Pipeline graphs now require schema version 2. Version 1 graphs are rejected;
+  export and back up existing configurations and migrate graphs before upgrading.
+  The `build_pipeline_graph_v2` helper supports constructing version 2 graphs.
 - PTZ Attention is included in the application bundles. Physical operation still
   requires explicit configuration and qualification; package installation does not
   qualify a camera or authorize movement.

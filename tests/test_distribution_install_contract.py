@@ -40,6 +40,7 @@ def test_distribution_workflow_validates_extension_wheels() -> None:
     wheel_check = "python scripts/check_extension_wheels.py"
     distribution_smoke = "python scripts/test_distribution_install.py"
     assert wheel_check in workflow
+    assert workflow.index("npm run build:extensions") < workflow.index(wheel_check)
     assert workflow.index(wheel_check) < workflow.index(distribution_smoke)
 
 

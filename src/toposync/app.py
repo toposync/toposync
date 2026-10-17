@@ -1783,6 +1783,13 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/api/auth/ingress-proxy", status_code=204)
+    async def ingress_proxy_auth(request: Request) -> Response:
+        auth: AuthRuntime = request.app.state.auth
+        if not auth.is_authenticated_ingress_proxy_request(request):
+            raise HTTPException(status_code=403, detail="Authenticated ingress proxy required")
+        return Response(status_code=204)
+
     @app.get("/api/auth/status", response_model=AuthStatusResponse)
     async def auth_status(request: Request) -> AuthStatusResponse:
         auth: AuthRuntime = request.app.state.auth

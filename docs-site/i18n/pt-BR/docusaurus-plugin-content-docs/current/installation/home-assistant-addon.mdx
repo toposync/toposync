@@ -1,14 +1,72 @@
 ---
-title: Home Assistant Add-on
-description: "Instale o Toposync dentro do Home Assistant OS com add-on supervisionado, ingress na sidebar e acesso direto opcional."
+title: Complementos do Home Assistant
+description: "Instale o TopoSync completo no Home Assistant ou acesse uma instância remota existente pelo Ingress."
 keywords: ["toposync", "local-first", "automação residencial", "Home Assistant OS", "add-on", "instalação"]
 image: /img/social-card.png
 sidebar_position: 9
 ---
 
-# Home Assistant Add-on {/* #home-assistant-addon */}
+# Complementos do Home Assistant {/* #home-assistant-addon */}
 
-Instalação para rodar o Toposync dentro do Home Assistant.
+Escolha o complemento conforme sua instalação:
+
+- **TopoSync Full Application** instala e executa a aplicação completa dentro do Home Assistant, com processamento e dados locais.
+- **TopoSync Remote Instance** acessa uma instalação existente em outro lugar. Processamento e dados permanecem nessa instância, inclusive quando ela está em outra máquina virtual no mesmo computador físico.
+
+Os dois estão no mesmo repositório. O complemento de instância remota não depende do complemento de aplicação completa.
+
+## Acesse uma instância remota
+
+Instale **TopoSync Remote Instance** quando o TopoSync estiver no Ubuntu/Docker ou
+em outro servidor. O acesso passa pelo Ingress do Home Assistant. O complemento
+não instala nem atualiza a aplicação remota.
+
+O servidor precisa implementar `/api/auth/ingress-proxy`. O complemento verifica
+esse acesso autenticado antes de encaminhar requisições e rejeita instalações
+sem esse suporte. Os pacotes e imagens publicados na versão 0.9.0 ainda não o incluem.
+
+Crie uma conta local proprietária por acesso direto protegido **antes** de ativar
+a autenticação híbrida, para recuperar o acesso se o Home Assistant ficar indisponível.
+Gere uma credencial dedicada com
+`python3 -c 'import secrets; print(secrets.token_urlsafe(48))'` e configure o processo
+ou contêiner remoto:
+
+```yaml
+environment:
+  TOPOSYNC_AUTH_MODE: home_assistant_hybrid
+  TOPOSYNC_AUTH_INGRESS_PROXY_TOKEN: "${TOPOSYNC_INGRESS_PROXY_TOKEN}"
+  TOPOSYNC_AUTH_INGRESS_TRUSTED_IPS: "${TOPOSYNC_INGRESS_PROXY_SOURCE}"
+  TOPOSYNC_STREAMING_HLS_PUBLIC_MODE: proxy
+  FORWARDED_ALLOW_IPS: ""
+```
+
+Use a credencial gerada e o endereço de origem efetivamente visto pelo TopoSync,
+considerando o Docker ou outro proxy HTTPS. A credencial aceita 32–256 letras,
+números, sublinhados ou hífens. Os endereços permitidos devem ser explícitos;
+`*` é rejeitado. A credencial continua obrigatória quando vários clientes
+compartilham a origem. Desativar a confiança nos endereços encaminhados do Uvicorn
+preserva o endereço da conexão nessa verificação.
+
+Na configuração de **TopoSync Remote Instance**, preencha `server_url` com a origem
+HTTPS do servidor e `proxy_token` com a mesma credencial. A verificação do certificado
+permanece ativa. `allow_http` destina-se somente a um túnel privado criptografado
+já existente. `localhost` aponta para o próprio complemento, mesmo que as máquinas
+virtuais estejam no mesmo servidor físico.
+
+O painel é restrito a administradores do Home Assistant. Eles recebem o papel
+proprietário (`owner`) por padrão; não há mapeamento automático das permissões.
+O acesso direto mantém a autenticação local do TopoSync. Prefira HLS pelo Ingress;
+RTSP e o transporte de mídia WebRTC exigem configuração própria. Configure a
+extensão Home Assistant e o backup dos dados remotos separadamente.
+
+Os campos estão disponíveis em inglês e português brasileiro. Os nomes da loja
+e da barra lateral permanecem em inglês. Os campos obrigatórios começam vazios:
+preencha os dados da sua instância, salve e inicie o complemento.
+
+Consulte o [guia da instância remota em português](https://github.com/toposync/toposync-homeassistant-addon/blob/main/toposync_proxy/DOCS.pt-BR.md)
+para instalação, troca da credencial e solução de problemas.
+
+As seções seguintes descrevem **TopoSync Full Application**.
 
 ## Para Quem É
 
@@ -46,11 +104,11 @@ https://github.com/toposync/toposync-homeassistant-addon
 
 Depois:
 
-1. Abra o add-on `Toposync`.
+1. Abra o complemento **TopoSync Full Application**.
 2. Clique em `Install`.
 3. Clique em `Start`.
 4. Ative `Start on boot`, se quiser iniciar junto com o Home Assistant.
-5. Abra `Toposync` pela sidebar.
+5. Abra **TopoSync Full Application** pela barra lateral.
 
 ## Como Rodar
 
@@ -68,7 +126,7 @@ Use a tela do add-on para:
 
 ### Pela Sidebar
 
-Abra `Toposync` na sidebar do Home Assistant.
+Abra **TopoSync Full Application** na barra lateral do Home Assistant.
 
 Esse é o caminho padrão. A UI e a API passam pelo ingress do Home Assistant.
 
@@ -140,7 +198,7 @@ No Home Assistant:
 
 1. Abra `Settings`.
 2. Abra `Add-ons`.
-3. Abra `Toposync`.
+3. Abra **TopoSync Full Application**.
 4. Clique em `Update`, quando disponível.
 5. Reinicie o add-on depois da atualização.
 
@@ -152,7 +210,7 @@ No Home Assistant:
 
 1. Abra `Settings`.
 2. Abra `Add-ons`.
-3. Abra `Toposync`.
+3. Abra **TopoSync Full Application**.
 4. Pare o add-on.
 5. Clique em `Uninstall`.
 

@@ -161,7 +161,10 @@ def build_playback_plan_response(
     contract = urls.network_contract
     home_assistant_proxy_hls = (
         contract is not None
-        and contract.environment == "home_assistant_addon"
+        and (
+            contract.environment == "home_assistant_addon"
+            or contract.public_base_path.startswith("/api/hassio_ingress/")
+        )
         and contract.public_hls_mode == "proxy"
     )
     hls_output = _best_hls_output(urls=urls, quality_profile_id=quality_profile_id)

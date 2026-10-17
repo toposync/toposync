@@ -6,6 +6,7 @@ from urllib import parse as urllib_parse
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from toposync.runtime.config_store import ConfigStore, UserDataPaths
 from toposync_ext_streaming.api.routes import create_streaming_router
@@ -458,9 +459,11 @@ def test_engine_status_uses_hls_proxy_url_when_contract_requests_proxy(
     assert payload["network_contract"]["public_hls_mode"] == "proxy"
 
 
+@pytest.mark.parametrize("deployment_target", ["home_assistant_addon", "generic"])
 def test_ingress_hls_url_contract_uses_public_base_path(
     tmp_path: Path,
     monkeypatch,  # noqa: ANN001
+    deployment_target: str,
 ) -> None:
     requested_urls: list[str] = []
 
@@ -475,8 +478,11 @@ def test_ingress_hls_url_contract_uses_public_base_path(
         )
         return _UrlOpenResponse(body)
 
-    monkeypatch.setenv("TOPOSYNC_DEPLOYMENT_TARGET", "home_assistant_addon")
-    monkeypatch.setenv("TOPOSYNC_EXPECTED_DIRECT_API_PORT", "18756")
+    monkeypatch.setenv("TOPOSYNC_DEPLOYMENT_TARGET", deployment_target)
+    if deployment_target == "home_assistant_addon":
+        monkeypatch.setenv("TOPOSYNC_EXPECTED_DIRECT_API_PORT", "18756")
+    else:
+        monkeypatch.delenv("TOPOSYNC_EXPECTED_DIRECT_API_PORT", raising=False)
     monkeypatch.setenv("TOPOSYNC_STREAMING_HLS_PUBLIC_MODE", "proxy")
     monkeypatch.setattr("toposync_ext_streaming.api.routes.urllib_request.urlopen", fake_urlopen)
     engine_manager = _EngineManagerStub(data_dir=tmp_path / "data")
@@ -501,6 +507,15 @@ def test_ingress_hls_url_contract_uses_public_base_path(
         )
         assert urls_res.status_code == 200
         payload = urls_res.json()
+        from toposync_ext_streaming.api.models import TransmissionUrlsResponse
+        from toposync_ext_streaming.api.playback_plan import build_playback_plan_response
+
+        plan = build_playback_plan_response(
+            transmission_id=transmission_id,
+            client="web",
+            urls=TransmissionUrlsResponse.model_validate(payload),
+        )
+        assert plan.transports[0].transport == "hls"
         signed_url = payload["outputs"][0]["url"]
         assert signed_url.startswith(
             "/api/hassio_ingress/session-token/api/streams/media/hls/ingress-main/index.m3u8?media_token="

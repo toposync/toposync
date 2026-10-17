@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add authenticated Home Assistant remote-instance access with a dedicated proxy
+  credential, explicit trusted sources and preserved Home Assistant user identity.
+- Prefer proxied HLS for remote instances opened through Home Assistant ingress.
+- Document the separate Full Application and Remote Instance add-ons, including
+  setup, recovery access and Portuguese configuration guidance.
+- Published 0.9.0 packages and images do not include this remote proxy contract.
+
 ## 0.9.0 - 2026-10-16
 
 ### Added

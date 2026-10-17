@@ -98,8 +98,9 @@ def test_hybrid_auth_blocks_first_setup_from_direct_access(tmp_path: Path, monke
     assert pipelines.status_code == 401
 
 
+@pytest.mark.parametrize("proxy_token", ["", "remote-proxy-token-" + "a" * 32])
 def test_hybrid_auth_allows_direct_login_when_local_user_exists(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proxy_token: str
 ) -> None:
     from toposync.runtime.auth import AuthRuntime
 
@@ -113,6 +114,7 @@ def test_hybrid_auth_allows_direct_login_when_local_user_exists(
         password="password123",
     )
 
+    monkeypatch.setenv("TOPOSYNC_AUTH_INGRESS_PROXY_TOKEN", proxy_token)
     with _create_ingress_client(tmp_path, monkeypatch, mode="home_assistant_hybrid") as client:
         login = client.post(
             "/api/auth/login",
@@ -123,6 +125,84 @@ def test_hybrid_auth_allows_direct_login_when_local_user_exists(
     assert login.status_code == 200
     assert login.json()["user"]["username"] == "owner"
     assert pipelines.status_code == 200
+
+
+@pytest.mark.parametrize("mode", ["home_assistant_hybrid", "home_assistant_ingress"])
+def test_remote_proxy_preserves_each_ingress_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    token = "remote-proxy-token-" + "a" * 32
+    monkeypatch.setenv("TOPOSYNC_AUTH_INGRESS_PROXY_TOKEN", token)
+    with _create_ingress_client(tmp_path, monkeypatch, mode=mode) as client:
+        for user_id in ("first-user", "second-user"):
+            headers = {"x-toposync-ingress-token": token, "x-remote-user-id": user_id}
+            assert client.get("/api/auth/ingress-proxy", headers=headers).status_code == 204
+            response = client.get("/api/auth/status", headers=headers)
+            assert response.json()["user"]["id"] == user_id
+            assert token not in response.text
+            assert not client.cookies
+
+
+@pytest.mark.parametrize("supplied_token", ["", "wrong-token", "non-ascii-\N{SNOWMAN}"])
+def test_remote_proxy_rejects_forged_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supplied_token: str
+) -> None:
+    monkeypatch.setenv("TOPOSYNC_AUTH_INGRESS_PROXY_TOKEN", "a" * 48)
+    headers = [
+        (b"x-toposync-ingress-token", supplied_token.encode("utf-8")),
+        (b"x-remote-user-id", b"forged-owner"),
+    ]
+    with _create_ingress_client(tmp_path, monkeypatch, mode="home_assistant_hybrid") as client:
+        assert client.get("/api/auth/ingress-proxy", headers=headers).status_code == 403
+        assert client.get("/api/pipelines", headers=headers).status_code == 401
+        assert client.get("/api/auth/status", headers=headers).json()["authenticated"] is False
+
+
+def test_remote_proxy_token_does_not_replace_origin_or_identity_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = "a" * 48
+    monkeypatch.setenv("TOPOSYNC_AUTH_INGRESS_PROXY_TOKEN", token)
+    headers = {"x-toposync-ingress-token": token, "x-remote-user-id": "ha-owner"}
+    with _create_ingress_client(
+        tmp_path, monkeypatch, mode="home_assistant_hybrid", trusted_ips="192.0.2.5"
+    ) as client:
+        assert client.get("/api/auth/ingress-proxy", headers=headers).status_code == 403
+        assert client.get("/api/pipelines", headers=headers).status_code == 401
+    with _create_ingress_client(tmp_path, monkeypatch, mode="home_assistant_hybrid") as client:
+        headers.pop("x-remote-user-id")
+        assert client.get("/api/auth/ingress-proxy", headers=headers).status_code == 403
+
+
+def test_existing_ingress_does_not_advertise_remote_proxy_authentication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _create_ingress_client(tmp_path, monkeypatch) as client:
+        headers = {"x-remote-user-id": "ha-owner"}
+        assert client.get("/api/auth/status", headers=headers).json()["authenticated"] is True
+        assert client.get("/api/auth/ingress-proxy", headers=headers).status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("token", "trusted_ips", "mode"),
+    [
+        ("short", "testclient", "hybrid"),
+        ("a" * 48, "*", "hybrid"),
+        ("a" * 48, "", "hybrid"),
+        ("a" * 48, ", ,", "hybrid"),
+        ("a" * 48, "testclient", "enforced"),
+    ],
+)
+def test_remote_proxy_rejects_unsafe_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, token: str, trusted_ips: str, mode: str
+) -> None:
+    from toposync.runtime.auth import AuthRuntime
+
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", mode)
+    monkeypatch.setenv("TOPOSYNC_AUTH_INGRESS_PROXY_TOKEN", token)
+    monkeypatch.setenv("TOPOSYNC_AUTH_INGRESS_TRUSTED_IPS", trusted_ips)
+    with pytest.raises(ValueError, match="Ingress proxy"):
+        AuthRuntime(data_dir=tmp_path / "data")
 
 
 def test_ingress_owner_can_pair_local_access_user(

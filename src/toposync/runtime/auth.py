@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -1388,6 +1389,19 @@ class AuthRuntime:
             os.getenv("TOPOSYNC_AUTH_INGRESS_ENFORCE_TRUSTED"),
             default=True,
         )
+        self._ingress_proxy_token = str(os.getenv("TOPOSYNC_AUTH_INGRESS_PROXY_TOKEN") or "")
+        if self._ingress_proxy_token:
+            if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", self._ingress_proxy_token):
+                raise ValueError("Ingress proxy token must contain 32–256 URL-safe characters")
+            if self.mode not in {"ingress", "hybrid"}:
+                raise ValueError("Ingress proxy authentication requires ingress or hybrid mode")
+            self._ingress_trusted_ips = set(
+                _parse_text_list_env(os.getenv("TOPOSYNC_AUTH_INGRESS_TRUSTED_IPS"))
+            )
+            if not self._ingress_trusted_ips or "*" in self._ingress_trusted_ips:
+                raise ValueError(
+                    "Ingress proxy authentication requires explicit trusted IPs without wildcards"
+                )
         # Optional credentials for service-to-service authentication (e.g. extension sync).
         self._streaming_sync_username = str(
             os.getenv("TOPOSYNC_STREAMING_SYNC_USERNAME") or ""
@@ -1575,9 +1589,20 @@ class AuthRuntime:
         host = self._request_client_host(request)
         if not host:
             return False
-        if "*" in self._ingress_trusted_ips:
-            return True
-        return host in self._ingress_trusted_ips
+        if "*" not in self._ingress_trusted_ips and host not in self._ingress_trusted_ips:
+            return False
+        if self._ingress_proxy_token:
+            return hmac.compare_digest(
+                self._ingress_proxy_token.encode("utf-8"),
+                request.headers.get("x-toposync-ingress-token", "").encode("utf-8"),
+            )
+        return True
+
+    def is_authenticated_ingress_proxy_request(self, request: Request) -> bool:
+        return (
+            bool(self._ingress_proxy_token)
+            and self._principal_from_ingress_headers(request) is not None
+        )
 
     def _principal_from_ingress_headers(self, request: Request) -> AuthPrincipal | None:
         if not self._is_trusted_ingress_request(request):

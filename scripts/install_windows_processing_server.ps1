@@ -30,7 +30,7 @@ param(
     [ValidateSet("auto", "cpu", "directml", "cuda")]
     [string]$Bundle = "auto",
 
-    [string]$Version = "0.9.0",
+    [string]$Version = "0.10.0",
 
     [bool]$PreferLocalPackages = $true,
 

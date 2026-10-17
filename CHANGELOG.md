@@ -1,13 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 - 2026-10-17
 
 - Add authenticated Home Assistant remote-instance access with a dedicated proxy
   credential, explicit trusted sources and preserved Home Assistant user identity.
 - Prefer proxied HLS for remote instances opened through Home Assistant ingress.
 - Document the separate Full Application and Remote Instance add-ons, including
   setup, recovery access and Portuguese configuration guidance.
-- Published 0.9.0 packages and images do not include this remote proxy contract.
+- Remote instance access requires Toposync 0.10.0 or newer. Existing 0.9.0 installations must be upgraded before configuring the connection.
+- Configure a local recovery account, a dedicated proxy credential and explicit trusted sources before enabling remote ingress. Existing local and full add-on authentication remains unchanged when no proxy credential is configured.
+- Back up the remote data directory before upgrading. Rolling back to 0.9.0 disables access through the remote instance add-on; direct local login remains available.
 
 ## 0.9.0 - 2026-10-16
 

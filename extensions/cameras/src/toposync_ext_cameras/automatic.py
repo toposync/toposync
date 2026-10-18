@@ -360,10 +360,19 @@ def plan_observation(*, intent, configuration):
             },
             tail,
         )
+    evidence_keys = [
+        field for operator, field in (
+            ("camera.frame_occurrence", "frame_occurrence"),
+            ("camera.region_occurrence", "region_occurrence"),
+            ("camera.area_occurrence", "area_occurrence"),
+            ("core.stationary_event", "stationary_event"),
+            ("vision.entity_activity", "entity_activity"),
+        ) if any(node["operator"] == operator for node in nodes)
+    ]
     contract = {
         "type": "packet",
         "version": 1,
-        "payload_keys": ["subject", "camera_id"],
+        "payload_keys": ["subject", "camera_id", "frame_ts", *evidence_keys],
         "artifacts": [],
     }
     operators = {node["id"]: node["operator"] for node in nodes}

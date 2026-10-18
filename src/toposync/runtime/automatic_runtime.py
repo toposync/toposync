@@ -235,6 +235,11 @@ class AutomaticController:
                         "description": "{{subject.category}}",
                         "dedupe_by_occurrence": True,
                         "dedupe_key_template": "{{subject.id}}",
+                        "include_payload_paths": next(
+                            (output["contract"]["payload_keys"]
+                             for output in graph.get("meta", {}).get("outputs", [])
+                             if output["key"] == "automatic." + original.id), []
+                        ),
                     },
                 }
             else:

@@ -6,6 +6,9 @@ import { onvifTranslations } from "./settings/onvifTranslations";
 
 export const camerasTranslations = {
   en: {
+    "ext.cameras.automatic.add": "Add activity with this camera",
+    "ext.cameras.automatic.scope": "Open Automatic with this saved camera selected. Review the place and observation before saving.",
+    "ext.cameras.automatic.save_first": "Save the camera before adding an activity.",
     "ext.cameras.mapping.unknown": "Mapping status unavailable. Open mapping to retry.",
     "ext.cameras.settings.device": "Camera",
     "ext.cameras.settings.technical.title": "Technical information",
@@ -838,6 +841,9 @@ export const camerasTranslations = {
     "ext.cameras.action.loading": "Loading...",
   },
   "pt-BR": {
+    "ext.cameras.automatic.add": "Adicionar atividade com esta câmera",
+    "ext.cameras.automatic.scope": "Abra Automático com esta câmera salva selecionada. Revise o lugar e a observação antes de salvar.",
+    "ext.cameras.automatic.save_first": "Salve a câmera antes de adicionar uma atividade.",
     "ext.cameras.mapping.unknown": "Estado do mapeamento indisponível. Abra o mapeamento para consultar novamente.",
     "ext.cameras.mapping.degraded": "Processamento espacial degradado: não foi possível localizar um ou mais objetos. Consulte o motivo registrado no mapeamento.",
     "ext.cameras.settings.device": "Câmera",

@@ -47,3 +47,17 @@ export function sameAutomaticTarget(scope: AutomaticScope, target: AutomaticTarg
     ? scope.composition_id === target.scope.composition_id && scope.area_id === target.scope.area_id
     : scope.camera_ids[0] === target.scope.camera_ids[0]);
 }
+
+export function automaticDraft(snapshot: AutomaticSnapshot, locale: string, targetId?: string): AutomaticIntent | null {
+  const place = targetId ? snapshot.targets.find(item => item.id === targetId) : snapshot.targets[0];
+  if (!place) return null;
+  const observation = snapshot.catalog.find(item => item.kind === "observation" && item.available && item.scopes?.includes(place.scope.kind));
+  if (!observation) return null;
+  return {
+    id: crypto.randomUUID().replace(/-/g, ""), revision: 1,
+    name: `${observation.title[locale] || observation.title.en || observation.id} · ${place.name}`,
+    capability: observation.id, scope: structuredClone(place.scope), requested: true,
+    owner_id: "", condition: {}, consequence: { capability: "core.record", parameters: {} },
+    customizations: {}, consents: [],
+  };
+}

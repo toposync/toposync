@@ -272,6 +272,45 @@ def observed(camera="a", sequence=1, *, lifecycle=Lifecycle.OPEN, entity="vehicl
     )
 
 
+def test_automatic_result_keeps_observed_duration_through_manual_projection_and_record():
+    from types import SimpleNamespace
+    from toposync.runtime.pipelines.demands import DemandRequest, ResourceDemandRegistry
+    from test_pipeline_notify_timing import sink
+
+    async def scenario():
+        planned = plan_observation(intent=intent("vision.presence"), configuration=configuration())
+        producer = Pipeline(name="automatic_presence", enabled=False, graph=planned["graph"])
+        demands = ResourceDemandRegistry(lambda *_: True, compiler=PipelineGraphCompiler(registry()))
+        demands.bind([producer])
+        key, (_, output, revision) = next(iter(demands.outputs.items()))
+        demand = demands.open("fixture", DemandRequest(
+            consumer_id="manual", purpose="manual", result_key=key,
+            contract=output.contract, production_revision=revision,
+            payload_keys=output.contract.payload_keys,
+        ))
+        occurrence = FrameOccurrenceRuntime({"categories": ["car"], "minimum_duration_seconds": 1})
+        notify, records = sink({"update_interval_seconds": 0, "include_payload_paths": output.contract.payload_keys})
+        try:
+            for timestamp in (10, 11, 12):
+                raw = observed(sequence=timestamp)
+                raw = replace(raw, payload={**raw.payload, "frame_ts": timestamp})
+                for event in await occurrence.process_packet(raw, None):
+                    projected = demands.project(demand.id, event)
+                    assert projected is not None
+                    assert "frame_occurrence" in projected.payload
+                    assert not projected.artifacts
+                    await notify.process_packet(projected, SimpleNamespace(pipeline_name="fixture", node_id="record"))
+            event = records[-1]["payload"]["event"]
+            assert event["duration_status"] == "observed" and event["time_basis"] == "media"
+            assert event["duration_seconds"] == 2
+            assert records[-1]["payload"]["data"]["frame_occurrence"]["duration_seconds"] == 2
+        finally:
+            demands.release(demand.id)
+            await notify.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_frame_duration_requires_fresh_observation_and_never_invents_a_stop(monkeypatch):
     async def scenario():
         runtime = FrameOccurrenceRuntime({"categories": ["car"], "minimum_duration_seconds": 2})

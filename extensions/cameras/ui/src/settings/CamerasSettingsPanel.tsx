@@ -1238,6 +1238,12 @@ function CamerasSettingsPanelContent({
               <div className="card" data-testid="camera-device-settings">
                 <div className="cardBody">
                   <h2 className="modalSectionTitle">{t("ext.cameras.settings.device", {}, "Câmera")}</h2>
+                  <button className="chipButton" type="button" disabled={!activeCameraPersisted}
+                    title={!activeCameraPersisted ? t("ext.cameras.automatic.save_first") : undefined}
+                    onClick={() => navigateInApp(`/settings?${new URLSearchParams({ panel: "__automatic__", automatic_target: `camera:${activeCamera.id}` })}`)}>
+                    {t("ext.cameras.automatic.add")}
+                  </button>
+                  <p className="settingsDescription">{t("ext.cameras.automatic.scope")}</p>
                   <div className="rowWrap">
                     <div className="field" style={{ flex: 2, minWidth: 220 }}>
                       <label className="label">{t("ext.cameras.settings.camera_name", {}, "Nome da câmera")}</label>

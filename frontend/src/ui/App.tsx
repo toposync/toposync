@@ -1991,6 +1991,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             editorReturnPath.current = null;
           }}
           onOpenSettings={openSettings}
+          onOpenAutomatic={targetId => navigate(`/settings?${new URLSearchParams({ panel: "__automatic__", automatic_target: targetId })}`)}
           onActivateComposition={activateCompositionById}
           onCreateComposition={createNewComposition}
           onRenameComposition={renameExistingComposition}

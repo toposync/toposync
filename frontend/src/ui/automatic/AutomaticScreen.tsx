@@ -2,7 +2,7 @@ import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 import React, { useEffect, useRef, useState } from "react";
 import { fetchAutomatic, previewAutomatic, saveAutomatic, useAutomaticInFlow } from "../../util/api";
 import { i18n } from "../../util/i18n";
-import { replaceAutomaticIntent, sameAutomaticTarget } from "../../util/automatic";
+import { automaticDraft, replaceAutomaticIntent, sameAutomaticTarget } from "../../util/automatic";
 import type { AutomaticConfiguration, AutomaticField, AutomaticIntent, AutomaticPreview, AutomaticSnapshot, AutomaticTarget } from "../../util/automatic";
 import { automaticText, AutomaticMessage } from "./messages";
 
@@ -19,6 +19,8 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange, operatorPanels }: 
   const [editing, setEditing] = useState<{ intent: AutomaticIntent; configuration: AutomaticConfiguration; activate: boolean } | null>(null);
   const [review, setReview] = useState<{ configuration: AutomaticConfiguration; preview: AutomaticPreview } | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const shortcutHandled = useRef(false);
+  const shortcutTarget = useRef(new URLSearchParams(window.location.search).get("automatic_target"));
   const dirty = Boolean(editing || review);
   useEffect(() => { onDirtyChange(dirty); return () => onDirtyChange(false); }, [dirty, onDirtyChange]);
   useEffect(() => {
@@ -36,6 +38,15 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange, operatorPanels }: 
         const next = await fetchAutomatic(abort.signal);
         if (abort.signal.aborted) return;
         setSnapshot(previous => !previous || next.configuration.revision >= previous.configuration.revision ? next : previous);
+        if (shortcutTarget.current && !shortcutHandled.current) {
+          shortcutHandled.current = true;
+          const location = new URL(window.location.href);
+          location.searchParams.delete("automatic_target");
+          window.history.replaceState(window.history.state, "", location.pathname + location.search + location.hash);
+          const intent = automaticDraft(next, locale, shortcutTarget.current);
+          if (intent) setEditing({ intent, configuration: next.configuration, activate: false });
+          else setError(t("shortcutUnavailable"));
+        }
         timer = setTimeout(load, 3000);
       } catch (reason) {
         if (!abort.signal.aborted) { setErrorDuringLoad(true); setError(reason instanceof Error ? reason.message : t("loadError")); }
@@ -78,16 +89,10 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange, operatorPanels }: 
   const consequence = consequences.find(item => item.id === draft?.consequence.capability);
   const update = (values: Partial<AutomaticIntent>) => { setEditing(current => current && { ...current, intent: { ...current.intent, ...values } }); setReview(null); };
   const begin = (activate = false) => {
-    const place = targets[0];
-    const first = observations.find(item => item.available && item.scopes?.includes(place?.scope.kind));
-    if (!place || !first) return;
+    const intent = automaticDraft(snapshot, locale);
+    if (!intent) return;
     setError(null); setReview(null);
-    setEditing({ configuration, activate, intent: {
-      id: crypto.randomUUID().replace(/-/g, ""), revision: 1,
-      name: `${title(first.title, first.id)} · ${place.name}`, capability: first.id,
-      scope: structuredClone(place.scope), requested: true, owner_id: "", condition: {},
-      consequence: { capability: "core.record", parameters: {} }, customizations: {}, consents: [],
-    } });
+    setEditing({ configuration, activate, intent });
   };
   const choosePlace = (place: AutomaticTarget) => {
     const next = capability?.scopes?.includes(place.scope.kind) ? capability : observations.find(item => item.available && item.scopes?.includes(place.scope.kind));

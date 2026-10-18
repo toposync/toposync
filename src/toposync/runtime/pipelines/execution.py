@@ -581,11 +581,16 @@ class PipelineRuntime:
                         self.logger.exception("Failed to dispose candidate runtime")
             raise
         commit = asyncio.create_task(self._commit_reconciliation(candidate))
-        try:
-            await asyncio.shield(commit)
-        except asyncio.CancelledError:
-            await commit
-            raise
+        cancelled = False
+        # Once retirement starts, even repeated caller cancellation must finish the swap.
+        while not commit.done():
+            try:
+                await asyncio.shield(commit)
+            except asyncio.CancelledError:
+                cancelled = True
+        commit.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def _commit_reconciliation(self, candidate: PipelineRuntime) -> None:
         compiled = candidate.compiled

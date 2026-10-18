@@ -125,6 +125,7 @@ class PipelinesOrchestrator:
         self._inboxes: dict[str, BoundedChannel[dict[str, Any]]] = {}
         self._servers: dict[str, _ServerHandle] = {}
         self._last_sig: str = ""
+        self._failed_local_plan: tuple[str, str] | None = None
         self._last_settings_sig: str = ""
         self._last_remote_sig: str = ""
         self._last_error: str | None = None
@@ -153,6 +154,7 @@ class PipelinesOrchestrator:
         await self._runtime_deps_base.execution_scheduler.shutdown()
 
     def trigger_reload(self) -> None:
+        self._failed_local_plan = None
         self._activation_retry_requested = bool(self._activation_errors)
         self._reload.set()
 
@@ -289,6 +291,9 @@ class PipelinesOrchestrator:
             separators=(",", ":"),
         )
 
+        if self._failed_local_plan == (desired_sig, settings_sig):
+            return
+
         preflight_required = (
             desired_sig != self._last_sig
             or self._activation_retry_requested
@@ -343,14 +348,17 @@ class PipelinesOrchestrator:
                 )
             return
 
-        self._last_sig = desired_sig
-        self._last_settings_sig = settings_sig
-
         if local:
-            await self._start_local_bundle(local, catalog=[*pipelines, *[p for p in desired if p.name not in {item.name for item in pipelines}]])
+            if not await self._start_local_bundle(local, catalog=[*pipelines, *[p for p in desired if p.name not in {item.name for item in pipelines}]]):
+                self._failed_local_plan = (desired_sig, settings_sig)
+                return
         elif self._local_bundle is not None:
             await self._local_bundle.runtime.stop()
             self._local_bundle = None
+
+        self._last_sig = desired_sig
+        self._failed_local_plan = None
+        self._last_settings_sig = settings_sig
 
         remote_sig = json.dumps({
             "groups": {sid: [pipeline.model_dump(mode="json") for pipeline in group] for sid, group in remote_groups.items()},
@@ -523,9 +531,13 @@ class PipelinesOrchestrator:
             await handle.runtime.stop()
             self._local_bundle = None
             return
-        await handle.runtime.reconcile(CompilationReport(survivors, {}))
-        names = {pipeline.name for pipeline in survivors}
-        handle.pipelines = [pipeline for pipeline in handle.pipelines if pipeline.name in names]
+        report = CompilationReport(survivors, {})
+        try:
+            await handle.runtime.reconcile(report)
+        finally:
+            if handle.runtime.report is report:
+                names = {pipeline.name for pipeline in survivors}
+                handle.pipelines = [pipeline for pipeline in handle.pipelines if pipeline.name in names]
 
     async def _start_local_bundle(self, pipelines: list[Pipeline], *, catalog: list[Pipeline]) -> bool:
         try:
@@ -543,7 +555,9 @@ class PipelinesOrchestrator:
                 self._last_error = "Local plan preparation failed"
                 logger.warning("local plan preparation failed (%s)", type(exc).__name__)
                 return False
-            self._local_bundle.pipelines = list(pipelines)
+            finally:
+                if self._local_bundle.runtime.report is report:
+                    self._local_bundle.pipelines = list(pipelines)
             if self._last_error and self._last_error.startswith("Local plan"):
                 self._last_error = None
             return True

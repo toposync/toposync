@@ -234,8 +234,12 @@ class PipelineBundleRuntime:
             pipeline_stats_node_occurrences=_build_bundle_stats_node_occurrences(plan=plan),
             inspection_node_occurrences=_inspection_occurrences(plan),
             pipeline_graph_limits_by_pipeline={pipeline.name: dict(pipeline.limits) for pipeline in report.pipelines})
-        await self._runtime.reconcile(plan.merged_pipeline, dependencies)
-        self.report, self.plan, self.dependencies = report, plan, dependencies
+        try:
+            await self._runtime.reconcile(plan.merged_pipeline, dependencies)
+        finally:
+            # Cancellation can propagate after the physical swap has committed.
+            if self._runtime.compiled is plan.merged_pipeline:
+                self.report, self.plan, self.dependencies = report, plan, dependencies
 
     async def run_for(self, duration_s: float) -> dict[str, Any]:
         await self._runtime.run_for(duration_s)

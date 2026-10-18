@@ -182,3 +182,39 @@ def test_revoked_producer_is_released_even_if_next_consumer_preparation_fails(tm
             await orchestrator.stop()
 
     asyncio.run(scenario())
+
+
+def test_failed_preparation_requires_changed_plan_or_explicit_reload(tmp_path):
+    async def scenario():
+        registry, created, _, pipeline = resources()
+        paths = UserDataPaths(
+            data_dir=tmp_path, config_path=tmp_path / "config.json", files_dir=tmp_path / "files"
+        )
+        store = ConfigStore(paths=paths)
+        await store.create_pipeline(pipeline("fail", enabled=True))
+        orchestrator = PipelinesOrchestrator(
+            config_store=store,
+            operator_registry=registry,
+            compiler=PipelineGraphCompiler(registry),
+            notifications=NotificationsRuntime(data_dir=tmp_path / "notifications"),
+            files_dir=paths.files_dir,
+            runtime_dependencies=PipelineRuntimeDependencies(),
+        )
+        try:
+            await orchestrator._reconcile()
+            await orchestrator._reconcile()
+            assert len(created) == 1 and created[0].stopped == 1
+            assert orchestrator._last_sig == ""
+            orchestrator.trigger_reload()
+            await orchestrator._reconcile()
+            await orchestrator._reconcile()
+            assert len(created) == 2 and created[1].stopped == 1
+            await store.replace_pipeline("fail", pipeline("a", enabled=True))
+            await orchestrator._reconcile()
+            await asyncio.sleep(0)
+            assert created[-1].identity == "a" and created[-1].started == 1
+            assert orchestrator._last_sig and orchestrator._failed_local_plan is None
+        finally:
+            await orchestrator.stop()
+
+    asyncio.run(scenario())

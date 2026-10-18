@@ -52,7 +52,7 @@ def _spatial_context(packet: Packet) -> IdentitySpatialContext:
         return unavailable("mapping_anchor_mismatch")
     composition = text(mapping.get("composition_id"))
     calibration = text(mapping.get("calibrated_view_id"))
-    revision = mapping.get("panorama_revision")
+    revision = mapping.get("panorama_revision") or mapping.get("map_revision")
     revision = (
         str(revision) if type(revision) is int and abs(revision) < 10**511 else text(revision)
     )

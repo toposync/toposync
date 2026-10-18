@@ -4303,6 +4303,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             payload["world_anchor"] = dict(world_anchor)
             mapping_payload: dict[str, Any] = {
                 "status": "mapped",
+                "map_revision": map_revision,
                 "u": float(point[0]),
                 "v": float(point[1]),
                 "composition_id": composition_id,
@@ -4736,15 +4737,13 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 if not valid_sets:
                     continue
                 revision = None
-                if self._config.attach_metric_camera:
-                    from ..processing.composition_revision import composition_revision
+                from ..processing.composition_revision import composition_revision
 
-                    try:
-                        # Bind exactly the snapshot that supplied the calibration,
-                        # not a later store read after asynchronous pose resolution.
-                        revision = composition_revision(composition)
-                    except (ValueError, TypeError):
-                        pass  # No verified map display; legacy mapping is unchanged.
+                try:
+                    # Bind exactly the snapshot that supplied the calibration.
+                    revision = composition_revision(composition)
+                except (ValueError, TypeError):
+                    pass  # Unversioned geometry cannot establish multicamera continuity.
                 self._resolved_sets_cache[cache_key] = (cfg, composition.id, valid_sets, revision)
                 return composition.id, valid_sets, revision
 

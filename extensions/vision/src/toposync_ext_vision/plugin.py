@@ -29,13 +29,14 @@ class VisionExtension(BaseExtension):
         self._identity_store = None
         self._identity_maintenance_task = None
         self._identity_lock = threading.Lock()
+        self._association_repository = None
 
     def capabilities(self) -> dict[str, Any]:
         return {
             "auth": {
                 "action": "core:extension:use",
                 "resource_type": "core:extension",
-                "api_prefixes": ["/api/vision/identities", "/api/vision/history"],
+                "api_prefixes": ["/api/vision/identities", "/api/vision/history", "/api/vision/associations"],
             }
         }
 
@@ -87,11 +88,24 @@ class VisionExtension(BaseExtension):
         from .history import create_history_router
 
         app.include_router(create_identity_router(identity_store))
+        from .association_api import AssociationRepository, create_association_router
+
+        def association_repository():
+            if configured_data_dir is None:
+                raise RuntimeError("association requires an explicit data directory")
+            with self._identity_lock:
+                if self._association_repository is None:
+                    self._association_repository = AssociationRepository(Path(configured_data_dir) / "vision-associations")
+                return self._association_repository
+
+        services.register("vision.association.store", lambda *, config: association_repository().get(config=config))
+        app.include_router(create_association_router(association_repository, identity_store))
         app.include_router(create_history_router())
         services.register("vision.identity.store", identity_store)
         services.register("vision.identity.history_selection", partial(identity_history_selection, get_store=identity_store))
 
         def maintain_existing_gallery():
+            association_repository().maintain()
             # Reopen existing galleries after restart without creating one for unused installations.
             store = identity_store(create=False)
             if store is not None:

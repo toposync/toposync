@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "kind": "test_oracles_never_feed_to_product",
+  "cases": [
+    {
+      "identifier": "F01",
+      "related_tests": [
+        "T03",
+        "T04",
+        "T28"
+      ],
+      "expected": {
+        "entity_observation_partitions": {
+          "participant_1": [
+            "observation-f8dfd2eae22e",
+            "observation-3b8d45cbce6c",
+            "observation-39cbf11b24b3",
+            "observation-e05da2db3aaa",
+            "observation-51c5b70c54d3",
+            "observation-bbab8e3aaf0e",
+            "observation-617150365590",
+            "observation-c6b89dd32bcd"
+          ],
+          "participant_2": [
+            "observation-310fc1d999b8",
+            "observation-9f442b99e78c",
+            "observation-142875c13bf4",
+            "observation-d03df3e863b7",
+            "observation-c412da827eae",
+            "observation-8cf7727cd450",
+            "observation-d8e22677c89e",
+            "observation-7bda4bf3c039"
+          ],
+          "participant_3": [
+            "observation-29b3df873fcd",
+            "observation-b9fe9c14d1d9",
+            "observation-062387a034f2",
+            "observation-1d360b76775f",
+            "observation-252f94ca3f42",
+            "observation-9f69348c3dfc",
+            "observation-ac940396d73a",
+            "observation-28a0c874b996"
+          ]
+        },
+        "identity_by_partition": {
+          "participant_1": "synthetic-identity-1",
+          "participant_2": "synthetic-identity-2",
+          "participant_3": null
+        },
+        "identity_evidence_camera": "garage",
+        "identity_available_from_seconds": 3.0,
+        "group_members_before_split": [
+          "participant_1",
+          "participant_2",
+          "participant_3"
+        ],
+        "split_at_seconds": 6.0,
+        "separate_member": "participant_3",
+        "reunited_at_seconds": 7.0,
+        "invariant": "Não acessar nomes participant_N do oráculo pelo algoritmo; também reconhecer retroativamente só nos trechos autorizados."
+      }
+    },
+    {
+      "identifier": "F02",
+      "related_tests": [
+        "T05",
+        "T07",
+        "T33"
+      ],
+      "expected": {
+        "required_behavior": "abstain_from_forced_cross_camera_identity",
+        "forbidden_accepted_pairs": [
+          [
+            "front-ambiguous-1",
+            "garage-ambiguous-1"
+          ],
+          [
+            "front-ambiguous-1",
+            "garage-ambiguous-2"
+          ],
+          [
+            "front-ambiguous-2",
+            "garage-ambiguous-1"
+          ],
+          [
+            "front-ambiguous-2",
+            "garage-ambiguous-2"
+          ]
+        ],
+        "allowed": "Novas entidades locais sem nome e candidatos incertos, sem impossível físico fabricado."
+      }
+    }
+  ]
+}

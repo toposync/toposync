@@ -4,8 +4,13 @@ import { Gallery, NotificationIdentity, supportsRecognition } from "./Gallery";
 import { CategoryHistoryFilter, categoryHistoryEndpoint, DetectedCategorySummary, detectedCategoryCounts, HistoryFilter, historyEndpoint, HistorySelectionSummary } from "./HistoryFilter";
 import { ModelSetup } from "./ModelSetup";
 import { translations } from "./translations";
+import { manualResultTranslations } from "./ManualAssociationResult";
+import { Association, associationTranslations } from "./Association";
 export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(translations);
+  host.i18n.registerTranslations(associationTranslations);
+  host.i18n.registerTranslations(manualResultTranslations);
+  host.registerPipelineOperatorPanel({ id: "vision.associate_entities.panel", operatorId: "vision.associate_entities", render: context => <Association i18n={context.i18n} config={context.config} updateConfig={context.updateConfig} /> });
   host.registerNotificationHistoryFilter?.({
     id: "com.toposync.vision.categories", endpoint: categoryHistoryEndpoint,
     renderSummary: ({ value }) => <>{host.i18n.t("ext.vision.identity.historyCategory")}: {host.i18n.t(`ext.vision.identity.${value}`)}</>,

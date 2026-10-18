@@ -1,6 +1,6 @@
 ---
 title: Home Assistant add-ons
-description: "Install the full TopoSync application in Home Assistant, or connect to an existing remote instance through ingress."
+description: "Install the full Toposync application in Home Assistant, or connect to an existing remote instance through ingress."
 keywords: ["toposync", "local-first", "home automation", "Home Assistant OS", "add-on", "installation"]
 image: /img/social-card.png
 sidebar_position: 9
@@ -10,18 +10,18 @@ sidebar_position: 9
 
 Choose the add-on that matches your installation:
 
-- **TopoSync Full Application** installs and runs TopoSync inside Home Assistant, including processing and application data.
-- **TopoSync Remote Instance** connects to TopoSync already installed elsewhere. Processing and data stay on that instance, including when it runs in another virtual machine on the same physical host.
+- **Toposync Full Application** installs and runs Toposync inside Home Assistant, including processing and application data.
+- **Toposync Remote Instance** connects to Toposync already installed elsewhere. Processing and data stay on that instance, including when it runs in another virtual machine on the same physical host.
 
 Both are in the same repository. The remote instance add-on does not require the full application add-on.
 
 ## Connect to a remote instance
 
-Choose **TopoSync Remote Instance** from the same add-on repository when TopoSync runs on
+Choose **Toposync Remote Instance** from the same add-on repository when Toposync runs on
 Ubuntu/Docker or another server. The proxy opens that instance through Home
 Assistant ingress; processing and application data stay on the external server.
 
-Use TopoSync **0.10.0 or newer**, which includes `/api/auth/ingress-proxy`. The proxy checks
+Use Toposync **0.10.0 or newer**, which includes `/api/auth/ingress-proxy`. The proxy checks
 this authenticated endpoint before forwarding requests and rejects builds
 without this support. It does not install or upgrade the external server.
 Published 0.9.0 packages and images do not include this contract.
@@ -42,35 +42,36 @@ environment:
 ```
 
 Set the token to the generated credential and the trusted source to the exact
-peer address observed by TopoSync after Docker or an upstream HTTPS proxy. The
+peer address observed by Toposync after Docker or an upstream HTTPS proxy. The
 token requires 32–256 letters, digits, underscores or hyphens. Explicit source
 addresses are mandatory; wildcard trust is rejected when a proxy token is set.
 The token is required even when multiple clients share that source address.
 Disabling Uvicorn's forwarded address trust preserves the connection's peer
 address for this check.
 
-In **TopoSync Remote Instance**, configure `server_url` with the server's HTTPS origin
+In **Toposync Remote Instance**, configure `server_url` with the server's HTTPS origin
 and `proxy_token` with the same credential. Certificate verification stays
 enabled. The `allow_http` option is only for an existing encrypted private
 tunnel. `localhost` in the add-on refers to its own container, including when
 the server and Home Assistant are virtual machines on the same host.
 
 The panel is restricted to Home Assistant administrators. Ingress identities
-retain the existing default TopoSync `owner` role; Home Assistant roles are not
-automatically mapped. Direct access still uses local TopoSync authentication.
+retain the existing default Toposync `owner` role; Home Assistant roles are not
+automatically mapped. Direct access still uses local Toposync authentication.
 HLS is the preferred video transport through ingress; RTSP and WebRTC media
 require separate network configuration. Configure the external Home Assistant
 extension and back up the external data separately.
 
 Configuration fields are available in English and Brazilian Portuguese. The store
 and sidebar names remain in English. Both required fields start empty: use the
-address and credential of your own instance, save, then start the add-on.
+address and credential of your own instance, save, then start the add-on. The sidebar
+entry appears as **Toposync Remote**.
 
 See the [remote instance setup guide](https://github.com/toposync/toposync-homeassistant-addon/blob/main/toposync_proxy/DOCS.md)
 or [guia em português](https://github.com/toposync/toposync-homeassistant-addon/blob/main/toposync_proxy/DOCS.pt-BR.md)
 for installation, credential rotation and troubleshooting.
 
-The following sections describe **TopoSync Full Application**.
+The following sections describe **Toposync Full Application**.
 
 ## Who this is for
 
@@ -108,11 +109,11 @@ https://github.com/toposync/toposync-homeassistant-addon
 
 Then:
 
-1. Open the **TopoSync Full Application** add-on.
+1. Open the **Toposync Full Application** add-on.
 2. Click `Install`.
 3. Click `Start`.
 4. Enable `Start on boot` if you want it to start with Home Assistant.
-5. Open **TopoSync Full Application** from the sidebar.
+5. Open **Toposync Full Application** from the sidebar.
 
 ## How to run
 
@@ -130,7 +131,7 @@ Use the add-on page to:
 
 ### From the sidebar
 
-Open **TopoSync Full Application** in the Home Assistant sidebar.
+Open **Toposync Full Application** in the Home Assistant sidebar.
 
 This is the default path. The UI and API go through Home Assistant ingress.
 
@@ -202,7 +203,7 @@ In Home Assistant:
 
 1. Open `Settings`.
 2. Open `Add-ons`.
-3. Open **TopoSync Full Application**.
+3. Open **Toposync Full Application**.
 4. Click `Update` when available.
 5. Restart the add-on after the update.
 
@@ -214,7 +215,7 @@ In Home Assistant:
 
 1. Open `Settings`.
 2. Open `Add-ons`.
-3. Open **TopoSync Full Application**.
+3. Open **Toposync Full Application**.
 4. Stop the add-on.
 5. Click `Uninstall`.
 

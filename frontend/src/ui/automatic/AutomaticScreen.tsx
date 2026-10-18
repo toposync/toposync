@@ -2,7 +2,7 @@ import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 import React, { useEffect, useRef, useState } from "react";
 import { fetchAutomatic, previewAutomatic, saveAutomatic, useAutomaticInFlow } from "../../util/api";
 import { i18n } from "../../util/i18n";
-import { automaticDraft, replaceAutomaticIntent, sameAutomaticTarget } from "../../util/automatic";
+import { automaticDraft, replaceAutomaticIntent, replaceAutomaticResources, sameAutomaticTarget } from "../../util/automatic";
 import type { AutomaticConfiguration, AutomaticField, AutomaticIntent, AutomaticPreview, AutomaticSnapshot, AutomaticTarget } from "../../util/automatic";
 import { automaticText, AutomaticMessage } from "./messages";
 
@@ -148,7 +148,7 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange, operatorPanels }: 
       <fieldset disabled={busy} style={{ display: "grid", gap: 12, minWidth: 0 }}><legend>{t("what")}</legend>
         <label className="field"><span>{t("what")}</span><select className="input" value={draft.capability} onChange={event => update({ capability: event.target.value, condition: { ...draft.condition, resource_parameters: {} }, customizations: {}, consents: [] })}>{observations.filter(item => item.id === draft.capability || item.scopes?.includes(draft.scope.kind)).map(item => <option key={item.id} value={item.id} disabled={!item.available}>{title(item.title, item.id)}{!item.available ? ` · ${t("unavailable")}` : ""}</option>)}</select></label>
         {renderFields(capability?.fields, draft.condition, condition => update({ condition }))}
-        {!!capability?.resource_fields?.length && <details open><summary>{t("refinements")}</summary><p>{title(capability.resource_hint, "")}</p>{renderFields(capability.resource_fields, draft.condition.resource_parameters || {}, resource_parameters => update({ condition: { ...draft.condition, resource_parameters } }))}</details>}
+        {!!capability?.resource_fields?.length && <details open><summary>{t("refinements")}</summary><p>{title(capability.resource_hint, "")}</p>{capability.resource_operator ? renderOperator(capability.resource_operator, draft.condition.resource_parameters || {}, resource_parameters => update(replaceAutomaticResources(draft, capability, resource_parameters))) : renderFields(capability.resource_fields, draft.condition.resource_parameters || {}, resource_parameters => update(replaceAutomaticResources(draft, capability, resource_parameters)))}</details>}
         {Object.keys(draft.customizations).length > 0 && <p>{t("customizations")}: {Object.keys(draft.customizations).join(", ")}</p>}
       </fieldset>
       <fieldset disabled={busy} style={{ display: "grid", gap: 12, minWidth: 0 }}><legend>{t("when")}</legend>

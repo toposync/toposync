@@ -1,5 +1,5 @@
 declare const require: any;
-import { automaticDraft, type AutomaticSnapshot, type AutomaticScope } from "./automatic";
+import { automaticDraft, replaceAutomaticResources, type AutomaticSnapshot, type AutomaticScope } from "./automatic";
 
 const test = require("node:test").test;
 const assert = require("node:assert/strict");
@@ -36,4 +36,30 @@ test("missing or unsupported shortcut targets never fall back to another camera"
   assert.equal(automaticDraft(snapshot, "en", "deleted-camera"), null);
   assert.equal(automaticDraft({ ...snapshot, catalog: [] }, "en", "area:floor:garage"), null);
   assert.equal(automaticDraft(snapshot, "en")?.scope.camera_ids[0], "camera:a");
+});
+
+test("new activities prefer a basic observation regardless of extension catalog order", () => {
+  const basic = snapshot.catalog[0];
+  const external = { ...basic, id: "ai.context", required_consents: ["external"] };
+  const advanced = { ...basic, id: "vision.pose", advanced: true };
+  const catalog = [external, advanced, basic];
+  assert.equal(automaticDraft({ ...snapshot, catalog }, "en")?.capability, basic.id);
+  const onlyExternal = automaticDraft({ ...snapshot, catalog: [external] }, "en")!;
+  assert.equal(onlyExternal.capability, external.id);
+  assert.deepEqual(onlyExternal.consents, []);
+});
+
+test("detail changes preserve duration and consent; changing the AI profile requires a new specific choice", () => {
+  const intent = automaticDraft(snapshot, "en")!;
+  intent.condition = { minimum_duration_seconds: 27, resource_parameters: { profile_id: "first", confidence_threshold: .5 } };
+  intent.consents = ["external", "recognition"];
+  const before = structuredClone(intent);
+  const capability = { ...snapshot.catalog[0], required_consents: ["external"], resource_consent_fields: ["profile_id"] };
+  const refined = replaceAutomaticResources(intent, capability, { profile_id: "first", confidence_threshold: .8 });
+  assert.deepEqual(refined.consents, intent.consents);
+  assert.equal(refined.condition.minimum_duration_seconds, 27);
+  assert.deepEqual(refined.consequence, intent.consequence);
+  const changedProfile = replaceAutomaticResources(refined, capability, { profile_id: "second", confidence_threshold: .8 });
+  assert.deepEqual(changedProfile.consents, ["recognition"]);
+  assert.deepEqual(intent, before);
 });

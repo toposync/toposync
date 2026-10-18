@@ -141,7 +141,11 @@ def register_automatic_capabilities(services):
             }.get(name)
             if schema:
                 entry["resource_parameters_schema"] = schema.model_json_schema()
+            eligible = {"pose": {"person"}, "gestures": {"person"}, "recognition": {"person", "dog", "cat"}}.get(name)
+            if eligible:
+                entry["fields"][0]["choices"] = [choice for choice in entry["fields"][0]["choices"] if choice["value"] in eligible]
             if name in {"pose", "gestures", "segmentation"}:
+                entry["operators"].append("vision.observation_detail")
                 task = "segmentation" if name == "segmentation" else "pose"
                 limit = "max_instances_per_frame" if task == "segmentation" else "max_poses_per_frame"
                 entry["resource_fields"] = [
@@ -163,6 +167,11 @@ def register_automatic_capabilities(services):
                     "en": "Selecting a model does not install it. Activation checks its availability; details do not change the activity duration or destination.",
                     "pt-BR": "Selecionar um modelo não o instala. A ativação verifica sua disponibilidade; o detalhe não altera a duração nem o destino da atividade.",
                 }
+                if name == "segmentation":
+                    entry["resource_hint"] = {
+                        "en": "Publishes the selected subject's contour locally, without mask images. Selecting a model does not install it.",
+                        "pt-BR": "Publica localmente o contorno do sujeito selecionado, sem imagens de máscara. Selecionar um modelo não o instala.",
+                    }
             entries.append(entry)
         return entries
 

@@ -1030,6 +1030,16 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                        if self._config.bind_subject_context else {}),
                 }
         payload["ai"] = ai_payload
+        payload["condition_annotation"] = {
+            key: ai_payload["condition_filter"][key]
+            for key in ("status", "observable", "reason", "condition_description", "description",
+                        "matches", "confidence", "profile_id", "provider_id", "model", "subject_context")
+            if key in ai_payload["condition_filter"]
+        }
+        payload["condition_annotation"].update(
+            camera_id=packet.payload.get("camera_id"), frame_ts=packet.payload.get("frame_ts"),
+            subject_id=(packet.payload.get("subject") or {}).get("id"),
+        )
         return replace(packet, payload=payload)
 
 

@@ -321,8 +321,10 @@ def _vision_model_diagnostics(task: str) -> Any:
 
 def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
     from ..association_runtime import register_association_operator
+    from ..observation_detail import register_observation_detail_operator
 
     register_association_operator(registry)
+    register_observation_detail_operator(registry)
     if registry.get("vision.gesture_recognize") is None:
         registry.register_operator(
             operator_id="vision.gesture_recognize",

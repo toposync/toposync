@@ -72,12 +72,33 @@ class AiExtension(BaseExtension):
 
         services.register("automatic.catalog.ai", lambda: [{
             "id": "ai.context", "kind": "observation", "extension_id": EXTENSION_ID,
-            "title": {"en": "Contextual condition", "pt-BR": "Condição contextual"},
+            "title": {"en": "Contextual annotation", "pt-BR": "Anotação contextual"},
             "scopes": ["camera", "image_region", "physical_area"],
-            "operators": ["camera.source", "vision.detect", "vision.track", "ai.condition_filter"],
+            "operators": ["camera.source", "vision.detect", "vision.track", "vision.crop_objects", "ai.condition_filter"],
             "planner": "automatic.plan.camera_observation", "advanced": True,
             "required_features": ["tracking"], "required_consents": ["external"],
             "resource_parameters_schema": AiConditionFilterConfig.model_json_schema(),
+            "resource_operator": "ai.condition_filter",
+            "resource_consent_fields": ["profile_id"],
+            "resource_hint": {
+                "en": "Sends only the selected subject's crop to the chosen profile. Unknown evidence does not cancel the activity. No fallback provider is used.",
+                "pt-BR": "Envia somente o recorte do sujeito selecionado ao perfil escolhido. Evidência desconhecida não cancela a atividade. Não usa provedor alternativo.",
+            },
+            "fields": [{"name": "categories", "type": "multiple", "default": ["person"],
+                        "title": {"en": "Observe", "pt-BR": "Observar"}, "choices": [
+                            {"value": value, "title": {"en": en, "pt-BR": pt}}
+                            for value, en, pt in [("person", "People", "Pessoas"), ("car", "Cars", "Carros"),
+                                                 ("dog", "Dogs", "Cães"), ("cat", "Cats", "Gatos")]
+                        ]}],
+            "resource_fields": [
+                {"name": name, "type": kind, "default": default, "title": {"en": en, "pt-BR": pt}}
+                for name, kind, default, en, pt in [
+                    ("condition_description", "text", "", "Visual question", "Pergunta visual"),
+                    ("profile_id", "text", "", "AI profile", "Perfil de IA"),
+                    ("confidence_threshold", "number", .5, "Minimum confidence", "Confiança mínima"),
+                    ("evaluation_interval_seconds", "number", 5, "Evaluation interval (seconds)", "Intervalo de avaliação (segundos)"),
+                ]
+            ],
         }])
 
         config_store = getattr(app.state, "config_store", None)

@@ -93,6 +93,17 @@ def plan_observation(*, intent, configuration):
 
     if reason:
         return unavailable(reason)
+    eligible_categories = {
+        "vision.pose": {"person"}, "vision.gestures": {"person"},
+        "vision.recognition": {"person", "dog", "cat"},
+    }.get(intent.capability)
+    if eligible_categories is not None and not set(condition.categories) <= eligible_categories:
+        return unavailable("category_not_supported")
+    if intent.capability == "ai.context":
+        if not all(str(condition.resource_parameters.get(field) or "").strip() for field in ("profile_id", "condition_description")):
+            return unavailable("ai_question_and_profile_required")
+        if condition.resource_parameters.get("concurrency_policy") == "fallback":
+            raise ValueError("Automatic contextual annotation does not authorize fallback providers")
     if (
         intent.capability in {"vision.entry", "vision.stationary", "vision.route"}
         and intent.scope.kind == "camera"
@@ -190,6 +201,8 @@ def plan_observation(*, intent, configuration):
             },
             tail,
         )
+        if intent.capability in {"vision.pose", "vision.gestures"}:
+            tail = add(prefix + "detail", "vision.pose_estimate", condition.resource_parameters, tail)
         if area:
             tail = add(
                 prefix + "mapping",
@@ -212,6 +225,8 @@ def plan_observation(*, intent, configuration):
             },
             tail,
         )
+        if intent.capability == "vision.gestures":
+            tail = add(prefix + "gesture", "vision.gesture_recognize", {"output_mode": "annotate"}, tail)
         endpoints.append(tail)
     tail = endpoints[0]
     for index, endpoint in enumerate(endpoints[1:]):
@@ -336,22 +351,23 @@ def plan_observation(*, intent, configuration):
             {**condition.resource_parameters, "enabled": True},
             tail,
         )
-    elif intent.capability in {"vision.pose", "vision.gestures", "vision.segmentation"}:
-        operator = (
-            "vision.segment_instances"
-            if intent.capability == "vision.segmentation"
-            else "vision.pose_estimate"
-        )
-        tail = add("detail", operator, condition.resource_parameters, tail)
-        if intent.capability == "vision.gestures":
-            tail = add("gesture", "vision.gesture_recognize", {"output_mode": "events"}, tail)
+    elif intent.capability == "vision.segmentation":
+        tail = add("detail", "vision.segment_instances", {
+            **condition.resource_parameters, "attach_polygons": True, "attach_mask_artifacts": False,
+        }, tail)
     elif intent.capability == "ai.context":
+        tail = add("subject_image", "vision.crop_objects", {
+            "bbox_field": "subject.bbox01", "fallback_to_detections": False,
+            "missing_policy": "pass_through", "preserve_scene": False, "padding_ratio": 0,
+            "output_artifact_name": "automatic_subject",
+        }, tail)
         tail = add(
             "condition",
             "ai.condition_filter",
             {
                 **condition.resource_parameters,
-                "emit_mode": "occurrence",
+                "emit_mode": "annotate",
+                "input_artifact_name": "automatic_subject",
                 "failure_policy": "drop",
                 "fallback_profile_ids": [],
                 "fallback_on_low_confidence": False,
@@ -360,6 +376,8 @@ def plan_observation(*, intent, configuration):
             },
             tail,
         )
+    if intent.capability in {"vision.pose", "vision.gestures", "vision.segmentation"}:
+        tail = add("public_detail", "vision.observation_detail", {"kind": intent.capability.split(".")[1]}, tail)
     evidence_keys = [
         field for operator, field in (
             ("camera.frame_occurrence", "frame_occurrence"),
@@ -367,6 +385,9 @@ def plan_observation(*, intent, configuration):
             ("camera.area_occurrence", "area_occurrence"),
             ("core.stationary_event", "stationary_event"),
             ("vision.entity_activity", "entity_activity"),
+            ("vision.recognize_identity", "recognition"),
+            ("vision.observation_detail", "vision_observation"),
+            ("ai.condition_filter", "condition_annotation"),
         ) if any(node["operator"] == operator for node in nodes)
     ]
     contract = {

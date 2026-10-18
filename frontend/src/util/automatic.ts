@@ -27,7 +27,8 @@ export type AutomaticCapability = {
   title: Record<string, string>; scopes?: AutomaticScope["kind"][];
   available: boolean; required_consents: string[]; advanced?: boolean;
   missing_operators: string[]; fields?: AutomaticField[];
-  resource_fields?: AutomaticField[]; resource_hint?: Record<string, string>;
+  resource_fields?: AutomaticField[]; resource_hint?: Record<string, string>; resource_operator?: string;
+  resource_consent_fields?: string[];
   configuration_panels?: Array<{ operator: string; field: string; minimum_sources: number }>;
 };
 export type AutomaticActivity = { state: string; reason: string | null; requested?: boolean; sources: AutomaticSource[]; limitations?: string[]; last_result?: { at: number; received: number } };
@@ -43,6 +44,12 @@ export function replaceAutomaticIntent(configuration: AutomaticConfiguration, in
   return { ...configuration, intents: exists ? configuration.intents.map(item => item.id === intent.id ? intent : item) : [...configuration.intents, intent] };
 }
 
+export function replaceAutomaticResources(intent: AutomaticIntent, capability: AutomaticCapability, parameters: Record<string, unknown>): AutomaticIntent {
+  const consentChanged = capability.resource_consent_fields?.some(field => intent.condition.resource_parameters?.[field] !== parameters[field]);
+  return { ...intent, condition: { ...intent.condition, resource_parameters: parameters },
+    consents: consentChanged ? intent.consents.filter(consent => !capability.required_consents.includes(consent)) : intent.consents };
+}
+
 export function sameAutomaticTarget(scope: AutomaticScope, target: AutomaticTarget): boolean {
   return scope.kind === target.scope.kind && (scope.kind === "physical_area"
     ? scope.composition_id === target.scope.composition_id && scope.area_id === target.scope.area_id
@@ -52,7 +59,8 @@ export function sameAutomaticTarget(scope: AutomaticScope, target: AutomaticTarg
 export function automaticDraft(snapshot: AutomaticSnapshot, locale: string, targetId?: string): AutomaticIntent | null {
   const place = targetId ? snapshot.targets.find(item => item.id === targetId) : snapshot.targets[0];
   if (!place) return null;
-  const observation = snapshot.catalog.find(item => item.kind === "observation" && item.available && item.scopes?.includes(place.scope.kind));
+  const observations = snapshot.catalog.filter(item => item.kind === "observation" && item.available && item.scopes?.includes(place.scope.kind));
+  const observation = observations.find(item => !item.advanced && item.required_consents.length === 0) || observations[0];
   if (!observation) return null;
   return {
     id: crypto.randomUUID().replace(/-/g, ""), revision: 1,

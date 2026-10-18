@@ -232,9 +232,11 @@ def test_detail_catalog_and_parameters_preserve_duration_scope_and_consequence(m
     before = plan_observation(intent=original, configuration=configuration())["graph"]
     after = plan_observation(intent=refined, configuration=configuration())["graph"]
     changed = [node["id"] for node, other in zip(before["nodes"], after["nodes"], strict=True) if node != other]
-    assert changed == ["detail"]
-    detail = next(node for node in after["nodes"] if node["id"] == "detail")
-    assert detail["config"] == {"model_id": "fixture_" + task, limit: 3}
+    detail_id = "detail" if task == "segmentation" else "camera_0_detail"
+    assert changed == [detail_id]
+    detail = next(node for node in after["nodes"] if node["id"] == detail_id)
+    assert detail["config"]["model_id"] == "fixture_" + task
+    assert detail["config"][limit] == 3
     assert refined.scope == original.scope and refined.consequence == original.consequence
     assert refined.consents == original.consents == []
     assert refined.condition["minimum_duration_seconds"] == 27

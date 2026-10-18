@@ -6,7 +6,7 @@ from typing import Any
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, resolve_image_artifact_for_data
-from toposync.runtime.pipelines.runtime import Artifact, Packet
+from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 
 from ...pipelines.schemas import VisionSegmentInstancesConfig
@@ -158,8 +158,9 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
                 if isinstance(value, list):
                     raw_sources.extend(value)
         subject = packet.payload.get("subject")
-        if isinstance(subject, dict):
-            raw_sources.append(subject)
+        if isinstance(subject, dict) and subject.get("id"):
+            # A subject packet must not borrow hints from other detections in the shared image.
+            raw_sources = [subject]
 
         hints: list[dict[str, Any]] = []
         seen: set[tuple[str, tuple[float, float, float, float]]] = set()
@@ -259,6 +260,8 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
         instances: list[SegmentationInstance],
     ) -> list[tuple[SegmentationInstance, dict[str, Any] | None]]:
         if not hints:
+            if (packet.payload.get("subject") or {}).get("id"):
+                return []
             return [(instance, None) for instance in instances]
 
         selected: list[tuple[SegmentationInstance, dict[str, Any] | None]] = []
@@ -291,6 +294,7 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
         object_focused = bool(
             str(packet.payload.get("tracking_id") or "").strip()
             or str(packet.payload.get("event_id") or "").strip()
+            or (packet.payload.get("subject") or {}).get("id")
         )
         if object_focused:
             return []
@@ -375,6 +379,9 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
         item = self._serialize_contract_instance(instance)
         item.update(
             {
+                "actor_subject_id": (packet.payload.get("subject") or {}).get("id"),
+                "camera_id": packet.payload.get("camera_id"),
+                "frame_ts": packet.payload.get("frame_ts"),
                 "tracking_id": (hint or {}).get("tracking_id")
                 or str(packet.payload.get("tracking_id") or "").strip()
                 or None,
@@ -434,6 +441,8 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
         return replace(packet, payload=payload, metadata=metadata)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        if packet.lifecycle == Lifecycle.CLOSE:
+            return [packet]
         selected_artifact_name, frame = resolve_image_artifact_for_data(
             packet,
             input_artifact_name=self._parsed.input_artifact_name,

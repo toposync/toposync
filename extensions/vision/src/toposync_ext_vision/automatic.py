@@ -2,11 +2,13 @@
 
 from .identity.pipelines import RecognizeIdentityConfig
 from .pipelines.schemas import VisionPoseEstimateConfig, VisionSegmentInstancesConfig
+from .registry.manifests import build_default_model_registry
 
 
 def register_automatic_capabilities(services):
     def catalog():
         entries = []
+        models = build_default_model_registry()
         for name, en, pt, extra, scopes in [
             ("presence", "Presence", "Presença", [], ["camera", "image_region", "physical_area"]),
             ("entry", "Observed entry", "Entrada observada", [], ["image_region", "physical_area"]),
@@ -139,6 +141,28 @@ def register_automatic_capabilities(services):
             }.get(name)
             if schema:
                 entry["resource_parameters_schema"] = schema.model_json_schema()
+            if name in {"pose", "gestures", "segmentation"}:
+                task = "segmentation" if name == "segmentation" else "pose"
+                limit = "max_instances_per_frame" if task == "segmentation" else "max_poses_per_frame"
+                entry["resource_fields"] = [
+                    {
+                        "name": "model_id", "type": "select", "required": True,
+                        "title": {"en": "Local model", "pt-BR": "Modelo local"},
+                        "choices": [
+                            {"value": model.model_id, "title": {"en": model.display_name or model.model_id}}
+                            for model in models.list_manifests(task=task)
+                        ],
+                    },
+                    {
+                        "name": limit, "type": "number", "default": 16,
+                        "minimum": 1, "maximum": 512, "step": 1,
+                        "title": {"en": "Maximum subjects per image", "pt-BR": "Máximo de sujeitos por imagem"},
+                    },
+                ]
+                entry["resource_hint"] = {
+                    "en": "Selecting a model does not install it. Activation checks its availability; details do not change the activity duration or destination.",
+                    "pt-BR": "Selecionar um modelo não o instala. A ativação verifica sua disponibilidade; o detalhe não altera a duração nem o destino da atividade.",
+                }
             entries.append(entry)
         return entries
 

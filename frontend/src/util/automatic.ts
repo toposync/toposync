@@ -19,14 +19,15 @@ export type AutomaticConfiguration = {
   defaults: Record<string, Record<string, any>>; blocked_camera_ids: string[];
   denied_features: Record<string, string[]>;
 };
-export type AutomaticField = { name: string; type: "text" | "number" | "multiple";
-  title: Record<string, string>; default?: any; minimum?: number; maximum?: number;
+export type AutomaticField = { name: string; type: "text" | "number" | "multiple" | "select";
+  title: Record<string, string>; default?: any; minimum?: number; maximum?: number; step?: number; required?: boolean;
   choices?: Array<{ value: string; title: Record<string, string> }> };
 export type AutomaticCapability = {
   id: string; kind: "observation" | "consequence"; extension_id: string;
   title: Record<string, string>; scopes?: AutomaticScope["kind"][];
   available: boolean; required_consents: string[]; advanced?: boolean;
   missing_operators: string[]; fields?: AutomaticField[];
+  resource_fields?: AutomaticField[]; resource_hint?: Record<string, string>;
   configuration_panels?: Array<{ operator: string; field: string; minimum_sources: number }>;
 };
 export type AutomaticActivity = { state: string; reason: string | null; requested?: boolean; sources: AutomaticSource[]; limitations?: string[]; last_result?: { at: number; received: number } };

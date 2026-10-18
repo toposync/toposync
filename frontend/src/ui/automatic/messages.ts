@@ -1,4 +1,5 @@
 const messages = {
+  refinements: ["Refinements", "Refinamentos"],
   shortcutUnavailable: ["This saved camera or area is unavailable for Automatic. Save its configuration or enable the required extension before trying again.", "Esta câmera ou área salva está indisponível para Automático. Salve sua configuração ou habilite a extensão necessária antes de tentar novamente."],
   reviewFlow: ["Review changed result", "Revisar resultado alterado"],
   reviewFlowHint: ["The activity changed. Review its place and observation above before reconnecting this manual flow. Its other steps and pause state are preserved.", "A atividade mudou. Revise o lugar e a observação acima antes de reconectar este fluxo manual. Suas outras etapas e seu estado de pausa serão preservados."],

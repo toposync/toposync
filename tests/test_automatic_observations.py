@@ -202,6 +202,46 @@ def test_shared_detection_and_independent_conditions_use_one_physical_prefix():
     assert sum(node.operator_id == "camera.frame_occurrence" for node in merged.nodes) == 2
 
 
+@pytest.mark.parametrize("capability,task,limit", [
+    ("vision.pose", "pose", "max_poses_per_frame"),
+    ("vision.gestures", "pose", "max_poses_per_frame"),
+    ("vision.segmentation", "segmentation", "max_instances_per_frame"),
+])
+def test_detail_catalog_and_parameters_preserve_duration_scope_and_consequence(monkeypatch, capability, task, limit):
+    from types import SimpleNamespace
+    from toposync.runtime.services import ServiceRegistry
+    from toposync_ext_vision import automatic
+
+    class Models:
+        def list_manifests(self, *, task):
+            return [SimpleNamespace(model_id="fixture_" + task, display_name="Fixture " + task)]
+
+    monkeypatch.setattr(automatic, "build_default_model_registry", Models)
+    services = ServiceRegistry()
+    automatic.register_automatic_capabilities(services)
+    catalog = asyncio.run(services.call("automatic.catalog.vision"))
+    entry = next(item for item in catalog if item["id"] == capability)
+    fields = entry["resource_fields"]
+    assert fields[0]["type"] == "select" and fields[0]["required"]
+    assert fields[0]["choices"] == [{"value": "fixture_" + task, "title": {"en": "Fixture " + task}}]
+    assert fields[1]["name"] == limit and fields[1]["step"] == 1
+    original = intent(capability, minimum_duration_seconds=27)
+    refined = original.model_copy(update={"condition": {
+        **original.condition, "resource_parameters": {"model_id": "fixture_" + task, limit: 3},
+    }})
+    before = plan_observation(intent=original, configuration=configuration())["graph"]
+    after = plan_observation(intent=refined, configuration=configuration())["graph"]
+    changed = [node["id"] for node, other in zip(before["nodes"], after["nodes"], strict=True) if node != other]
+    assert changed == ["detail"]
+    detail = next(node for node in after["nodes"] if node["id"] == "detail")
+    assert detail["config"] == {"model_id": "fixture_" + task, limit: 3}
+    assert refined.scope == original.scope and refined.consequence == original.consequence
+    assert refined.consents == original.consents == []
+    assert refined.condition["minimum_duration_seconds"] == 27
+    compiled = PipelineGraphCompiler(registry()).compile_many([Pipeline(name="detail", graph=after)])
+    assert len(compiled.pipelines) == 1
+
+
 @pytest.mark.parametrize("capability", ["vision.stationary", "vision.route", "vision.presence"])
 def test_two_camera_one_intent_uses_m3_and_removing_camera_preserves_intent(capability):
     value = intent(

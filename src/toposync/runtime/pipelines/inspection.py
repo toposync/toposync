@@ -88,6 +88,7 @@ class _Session:
     images: dict[str, tuple[int, Any]] = field(default_factory=dict)
     image_bytes: int = 0
     captures: dict[str, tuple[str, int]] = field(default_factory=dict)
+    last_frames: dict[tuple[str, str], tuple[str, int, int, float]] = field(default_factory=dict)
     retired_captures: deque[tuple[str, str, int]] = field(default_factory=lambda: deque(maxlen=128))
     owner: str = ""
     motion_windows: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -206,6 +207,7 @@ class PipelineInspectionStore:
             session.nodes.clear()
             session.motion_windows.clear()
             session.motion_captures.clear()
+            session.last_frames.clear()
 
     def expire(self) -> None:
         now = self.clock()
@@ -263,6 +265,10 @@ class PipelineInspectionStore:
             ):
                 continue
             reference = frame_reference(packet) if packet else None
+            now = self.clock()
+            expires_at = now + self.maximum_age
+            if reference and reference["published_at"] is not None:
+                expires_at = min(expires_at, reference["published_at"] + self.maximum_age)
             if reference:
                 capture = (reference["capture_instance"], reference["generation"])
                 source_key = (
@@ -272,14 +278,23 @@ class PipelineInspectionStore:
                 )
                 if (source_key, *capture) in session.retired_captures:
                     continue
-                previous = session.nodes[node].frame
-                if (
-                    previous
-                    and previous["capture_instance"] == capture[0]
-                    and (reference["generation"], reference["sequence"])
-                    < (previous["generation"], previous["sequence"])
-                ):
+                current_capture = session.captures.get(source_key)
+                if current_capture and current_capture[0] == capture[0] and capture[1] < current_capture[1]:
                     continue
+                frame_key = (node, source_key)
+                previous = session.last_frames.get(frame_key)
+                if previous and previous[:2] == capture:
+                    if reference["sequence"] < previous[2]:
+                        continue
+                    if reference["sequence"] == previous[2]:
+                        if previous[3] <= now:
+                            continue
+                        expires_at = min(expires_at, previous[3])
+                if frame_key not in session.last_frames and len(session.last_frames) >= self.maximum_items:
+                    self.close(token)
+                    continue
+                # Keep the sequence fence after visual expiry; duplicate packets cannot renew it.
+                session.last_frames[frame_key] = (*capture, reference["sequence"], expires_at)
                 if session.captures.get(source_key) != capture:
                     if source_key in session.captures:
                         if len(session.retired_captures) >= self.maximum_items:
@@ -323,10 +338,6 @@ class PipelineInspectionStore:
                         continue
                     session.captures[source_key] = capture
             session.sequence += 1
-            now = self.clock()
-            expires_at = now + self.maximum_age
-            if reference and reference["published_at"] is not None:
-                expires_at = min(expires_at, reference["published_at"] + self.maximum_age)
             values: dict[str, Any] = dict(
                 node_id=node,
                 physical_node_id=physical,

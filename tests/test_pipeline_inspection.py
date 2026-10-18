@@ -323,6 +323,81 @@ def test_motion_maximum_is_aggregated_before_snapshot_sampling():
     assert store.snapshot(token).nodes[0].motion["maximum"] == 0.05
 
 
+@pytest.mark.parametrize("late_sequence", [1, 2])
+def test_expiration_does_not_allow_an_old_or_duplicate_frame_to_reappear(late_sequence):
+    clock = Clock()
+    store = PipelineInspectionStore(clock=clock)
+    token = store.open("demo", "revision", {"detect": "vision.detect"})
+    frame = np.zeros((10, 20, 3), dtype=np.uint8)
+
+    def untimed(sequence):
+        value = packet(sequence)
+        value.payload["capture_evidence"].pop("published_at")
+        return value
+
+    observe(store, value=untimed(2), frame=frame)
+    clock.now += 1.1
+    assert store.snapshot(token).nodes[0].state == "expired"
+    observe(store, value=untimed(late_sequence), frame=frame)
+    assert not store.snapshot(token).nodes[0].image_available
+    assert not store.sessions[token].images
+    observe(store, value=untimed(3), frame=frame)
+    assert store.snapshot(token).nodes[0].image_available
+    store.close(token)
+
+
+def test_an_unseen_older_generation_cannot_replace_the_current_capture_after_expiry():
+    clock = Clock()
+    store = PipelineInspectionStore(clock=clock)
+    token = store.open("demo", "revision", {"detect": "vision.detect"})
+    frame = np.zeros((10, 20, 3), dtype=np.uint8)
+    observe(store, value=packet(2, generation=2), frame=frame)
+    clock.now += 1.1
+    assert store.snapshot(token).nodes[0].state == "expired"
+    late = packet(99, generation=1)
+    late.payload["capture_evidence"].pop("published_at")
+    observe(store, value=late, frame=frame)
+    assert not store.snapshot(token).nodes[0].image_available
+    assert store.sessions[token].captures["None/synthetic"] == ("capture", 2)
+    store.close(token)
+
+
+def test_repeated_sessions_cancel_old_timers_and_unobserved_sessions_expire():
+    async def scenario():
+        store = PipelineInspectionStore()
+        store.lease_seconds = 0.02
+        for _ in range(50):
+            token = store.open("demo", "revision", {"detect": "vision.detect"})
+            session = store.sessions[token]
+            for _ in range(20):
+                previous_timer = session.timer
+                store.snapshot(token)
+                assert previous_timer.cancelled()
+            store.close(token)
+            assert session.timer.cancelled() and not store.sessions
+            assert not session.images and not session.last_frames
+        token = store.open("demo", "revision", {"detect": "vision.detect"})
+        await asyncio.sleep(0.04)
+        assert token not in store.sessions
+
+    asyncio.run(scenario())
+
+
+def test_sequence_fences_remain_bounded_when_a_node_sees_many_sources():
+    store = PipelineInspectionStore(clock=Clock())
+    token = store.open("demo", "revision", {"detect": "vision.detect", "sink": "core.sink"})
+    session = store.sessions[token]
+    for index in range(128):
+        store.observe(
+            pipeline="demo", node="detect" if index % 2 else "sink", physical="local",
+            operator="test", producer_epoch="runtime", revision="revision", state="received",
+            packet=packet(source={"source_id": f"source-{index // 2}"}),
+        )
+    assert len(session.last_frames) == 128 and len(session.captures) == 64
+    observe(store, value=packet(source={"source_id": "one-more"}))
+    assert token not in store.sessions and not session.last_frames
+
+
 @pytest.mark.parametrize("observing", [False, True])
 @pytest.mark.parametrize("reject", [False, True])
 def test_real_runtime_detector_gate_inspection_is_passive(observing, reject):

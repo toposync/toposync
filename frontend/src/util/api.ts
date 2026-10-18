@@ -168,16 +168,16 @@ export type Pipeline = {
   graph: unknown;
 };
 
-export async function openPipelineInspection(name: string): Promise<import("@toposync/plugin-api").InspectionSnapshot> {
-  return requestJson(resolveToposyncUrl(`/api/pipelines/${encodeURIComponent(name)}/inspection`), { method: "POST" }, "Inspection unavailable");
+export async function openPipelineInspection(name: string, options: AbortableRequestOptions = {}): Promise<import("@toposync/plugin-api").InspectionSnapshot> {
+  return requestJson(resolveToposyncUrl(`/api/pipelines/${encodeURIComponent(name)}/inspection`), { method: "POST", signal: options.signal }, "Inspection unavailable");
 }
 
-export async function getPipelineInspection(session: string): Promise<import("@toposync/plugin-api").InspectionSnapshot> {
-  return requestJson(resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(session)}`), undefined, "Inspection unavailable");
+export async function getPipelineInspection(session: string, options: AbortableRequestOptions = {}): Promise<import("@toposync/plugin-api").InspectionSnapshot> {
+  return requestJson(resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(session)}`), { signal: options.signal }, "Inspection unavailable");
 }
 
 export async function closePipelineInspection(session: string): Promise<void> {
-  await fetch(resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(session)}`), { method: "DELETE", credentials: "same-origin" });
+  await fetch(resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(session)}`), { method: "DELETE", credentials: "same-origin", signal: AbortSignal.timeout(2500) });
 }
 
 export type PipelineAlert = {

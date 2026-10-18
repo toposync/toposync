@@ -15,6 +15,7 @@ export function PipelineInspectionPanel() {
   const [snapshot, setSnapshot] = useState<InspectionSnapshot | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingPipelines, setLoadingPipelines] = useState(false);
   const [visible, setVisible] = useState(!document.hidden);
   const [now, setNow] = useState(Date.now());
   const [loadedImage, setLoadedImage] = useState("");
@@ -24,33 +25,50 @@ export function PipelineInspectionPanel() {
     return () => document.removeEventListener("visibilitychange", changed);
   }, []);
   useEffect(() => {
-    if (!open) return;
+    if (!open || !visible) { setLoadingPipelines(false); return; }
     let canceled = false;
-    setLoading(true); setError(false);
-    listPipelines().then(items => { if (!canceled) setPipelines(items); })
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 2500);
+    setLoadingPipelines(true); setError(false); setPipelines([]);
+    listPipelines({ signal: controller.signal }).then(items => { if (!canceled && !controller.signal.aborted) setPipelines(items); })
       .catch(() => { if (!canceled) setError(true); })
-      .finally(() => { if (!canceled) setLoading(false); });
-    const timer = window.setInterval(() => setNow(Date.now()), 100);
-    return () => { canceled = true; window.clearInterval(timer); };
-  }, [open]);
+      .finally(() => { window.clearTimeout(timeout); if (!canceled) setLoadingPipelines(false); });
+    return () => { canceled = true; controller.abort(); window.clearTimeout(timeout); };
+  }, [open, visible]);
   useEffect(() => {
-    setSnapshot(null); setLoadedImage("");
+    if (!open || !visible) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [open, visible]);
+  useEffect(() => {
+    setSnapshot(null); setLoadedImage(""); setLoading(false); setError(false);
     if (!open || !visible || !selected) return;
-    let canceled = false, session = "", timer = 0;
-    setError(false); setLoading(true);
+    let canceled = false, session = "", released = false, timer = 0, timeout = 0;
+    const controller = new AbortController();
+    const release = () => {
+      if (session && !released) { released = true; void closePipelineInspection(session).catch(() => {}); }
+    };
+    setLoading(true);
     async function poll() {
+      timeout = window.setTimeout(() => controller.abort(), 2500);
       try {
-        const value = session ? await getPipelineInspection(session) : await openPipelineInspection(selected);
+        const options = { signal: controller.signal };
+        const value = session ? await getPipelineInspection(session, options) : await openPipelineInspection(selected, options);
         session = value.session;
-        if (canceled) { void closePipelineInspection(session).catch(() => {}); return; }
+        if (canceled) { release(); return; }
+        if (controller.signal.aborted) throw new Error("inspection_timeout");
         setSnapshot(value); setLoading(false);
         timer = window.setTimeout(poll, 400);
       } catch {
+        release();
         if (!canceled) { setSnapshot(null); setLoadedImage(""); setError(true); setLoading(false); }
+      } finally {
+        window.clearTimeout(timeout);
       }
     }
     void poll();
-    return () => { canceled = true; window.clearTimeout(timer); if (session) void closePipelineInspection(session).catch(() => {}); };
+    return () => { canceled = true; controller.abort(); window.clearTimeout(timer); window.clearTimeout(timeout); release(); };
   }, [open, visible, selected]);
   const current = snapshot?.nodes.find(node => node.image_available && node.expires_at !== null && node.expires_at * 1000 > now);
   const image = current && snapshot ? resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(snapshot.session)}/images/${encodeURIComponent(current.node_id)}/${current.image_sequence}`) : "";
@@ -65,7 +83,7 @@ export function PipelineInspectionPanel() {
           {pipelines.map(pipeline => <option key={pipeline.name} value={pipeline.name}>{pipeline.display_name || pipeline.name}</option>)}
         </select>
       </label>
-      {error ? <p role="alert">{t("inspection.failed")}</p> : loading ? <p role="status">{t("inspection.loading")}</p> : !pipelines.length ? <p>{t("inspection.empty")}</p> : !snapshot ? <p>{t("inspection.waiting")}</p> : null}
+      {error ? <p role="alert">{t("inspection.failed")}</p> : loading || loadingPipelines ? <p role="status">{t("inspection.loading")}</p> : !pipelines.length ? <p>{t("inspection.empty")}</p> : !snapshot ? <p>{t("inspection.waiting")}</p> : null}
       <div className="pipelineInspectionGrid">
         <section aria-label={t("inspection.frame")}>
           <h3>{t("inspection.frame")}</h3>

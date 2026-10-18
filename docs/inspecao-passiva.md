@@ -23,6 +23,8 @@ O painel usa snapshots completos, substituindo o estado anterior, sem uma fila d
 
 Resultados visuais expiram em até um segundo, sem renovar a idade da captura. A sessão sem consultas termina em três segundos. Fechar o painel ou ocultar a aba libera a sessão visual; a análise continua. Uma alteração de configuração exige reabrir a inspeção. Falta de instrumento, capacidade ou permissão é indicada, sem reconstruir o pipeline para preencher o painel.
 
+Consultas pendentes são canceladas ao fechar, ocultar ou trocar a seleção e têm prazo de 2,5 segundos. Falhas encerram a consulta sem repetição automática. A proteção contra sequências antigas permanece após a expiração visual; até 128 pares etapa/origem são acompanhados por sessão.
+
 ## API local
 
 - `POST /api/pipelines/{nome}/inspection`: abre uma sessão passiva com snapshot inicial.

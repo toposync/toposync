@@ -13,9 +13,9 @@ async function request<T>(path: string, signal: AbortSignal, body?: unknown): Pr
   return result;
 }
 
-export function VisualRegionPanel({ host, config, updateConfig, processingServerId, cameraId, area = false }: {
+export function VisualRegionPanel({ host, config, updateConfig, processingServerId, cameraId, area = false, purpose }: {
   host: ToposyncHost; config: Record<string, unknown>; updateConfig: (patch: Record<string, unknown>) => void;
-  processingServerId?: string; cameraId?: string; area?: boolean;
+  processingServerId?: string; cameraId?: string; area?: boolean; purpose?: "automatic" | "manual";
 }): React.ReactElement {
   const { t } = host.i18n.useI18n();
   const [choices, setChoices] = useState<Choice[]>([]);
@@ -96,7 +96,7 @@ export function VisualRegionPanel({ host, config, updateConfig, processingServer
         </select></label>
         {config.criterion === "overlap" && <label className="pipelinesLabel"><span>{label("overlap_amount")}</span><input type="number" min={1} max={100} value={Math.round(Number(config.minimum_overlap ?? .25) * 100)} onChange={event => updateConfig({ minimum_overlap: Math.min(100, Math.max(1, Number(event.target.value))) / 100 })} /></label>}
         <label className="pipelinesLabel"><span>{label("framing")}</span><select className="pipelinesSelect" value={String(config.framing || "passive")} onChange={event => updateConfig({ framing: event.target.value, native_tracking_disabled_confirmed: false })}>
-          <option value="passive">{label("passive")}</option><option value="maintain" disabled={!reference?.framing_available}>{label("maintain")}</option>
+          <option value="passive">{label("passive")}</option><option value="maintain" disabled={purpose === "automatic" || !reference?.framing_available}>{label("maintain")}</option>
         </select></label>
         {!reference?.framing_available && <p className="pipelinesStepHint">{label("framing_unavailable")}</p>}
         {config.framing === "maintain" && <label><input type="checkbox" checked={config.native_tracking_disabled_confirmed === true} onChange={event => updateConfig({ native_tracking_disabled_confirmed: event.target.checked })} />{label("tracking_disabled")}</label>}

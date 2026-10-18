@@ -7,7 +7,7 @@ export type AutomaticScope = {
   region?: Record<string, unknown> | null;
 };
 export type AutomaticSource = { camera_id: string; camera_name: string; source_id: string; source_name: string; clock_domain: string; coverage: string };
-export type AutomaticTarget = { id: string; name: string; scope: AutomaticScope; sources: AutomaticSource[]; reason: string | null };
+export type AutomaticTarget = { id: string; name: string; scope: AutomaticScope; sources: AutomaticSource[]; reason: string | null; scope_operator?: string; preparations?: Record<string, Record<string, unknown>> };
 export type AutomaticIntent = {
   id: string; revision: number; name: string; capability: string; scope: AutomaticScope;
   requested: boolean; owner_id: string; condition: Record<string, any>;
@@ -27,6 +27,7 @@ export type AutomaticCapability = {
   title: Record<string, string>; scopes?: AutomaticScope["kind"][];
   available: boolean; required_consents: string[]; advanced?: boolean;
   missing_operators: string[]; fields?: AutomaticField[];
+  configuration_panels?: Array<{ operator: string; field: string; minimum_sources: number }>;
 };
 export type AutomaticActivity = { state: string; reason: string | null; requested?: boolean; sources: AutomaticSource[]; limitations?: string[]; last_result?: { at: number; received: number } };
 export type AutomaticSnapshot = {

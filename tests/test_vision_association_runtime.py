@@ -117,7 +117,7 @@ def test_real_operator_batches_and_deduplicates_with_bounded_shutdown(tmp_path):
 
 
 @pytest.mark.parametrize("revoked", [False, True])
-def test_end_of_input_flushes_final_batch_unless_revoked(tmp_path, revoked):
+def test_idle_input_flushes_batch_but_revocation_discards_it(tmp_path, revoked):
     async def scenario():
         repository = AssociationRepository(tmp_path)
         services = ServiceRegistry()
@@ -125,15 +125,18 @@ def test_end_of_input_flushes_final_batch_unless_revoked(tmp_path, revoked):
         runtime = AssociationRuntime(
             config().model_dump(), PipelineRuntimeDependencies(services=services)
         )
-        inputs = iter([packet(), None])
+        inputs = asyncio.Queue()
+        inputs.put_nowait(packet())
         cancel = asyncio.Event()
         emitted = []
 
         async def read():
-            item = next(inputs)
-            if item is None and revoked:
-                cancel.set()
-            return item
+            try:
+                return await asyncio.wait_for(inputs.get(), 0.005)
+            except asyncio.TimeoutError:
+                if revoked:
+                    cancel.set()
+                return None
 
         async def emit(item):
             emitted.append(item)
@@ -141,8 +144,19 @@ def test_end_of_input_flushes_final_batch_unless_revoked(tmp_path, revoked):
         context = SimpleNamespace(
             read=read, emit=emit, cancel_event=cancel, inspect=lambda *a, **kw: None
         )
-        await asyncio.wait_for(runtime.run(context), 1)
-        assert len(emitted) == (0 if revoked else 1)
+        task = asyncio.create_task(runtime.run(context))
+        try:
+            await asyncio.sleep(0.15)
+            assert len(emitted) == (0 if revoked else 1)
+            assert task.done() == revoked
+            if not revoked:
+                inputs.put_nowait(packet(stamp=1))
+                await asyncio.sleep(0.15)
+                assert len(emitted) == 2
+                assert not task.done()
+        finally:
+            cancel.set()
+            await asyncio.wait_for(task, 1)
         assert runtime.store.owner is None
 
     asyncio.run(scenario())

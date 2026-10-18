@@ -18,6 +18,7 @@ from toposync.runtime.pipelines import (
     register_builtin_operators,
 )
 from toposync.runtime.pipelines.runtime import Lifecycle
+from toposync.runtime.pipelines.operators_core import StationaryEventRuntime
 from toposync.runtime.pipelines.shared_runtime import build_merged_pipeline_plan
 from toposync_ext_cameras.automatic import plan_observation
 from toposync_ext_cameras.area_events import register_area_occurrence_operator
@@ -311,6 +312,43 @@ def test_entity_activity_deduplicates_views_without_merging_different_entities()
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("kind", ["presence", "stationary"])
+def test_derived_episodes_remain_bounded_and_closed_after_many_visits(kind):
+    async def scenario():
+        producer = (FrameOccurrenceRuntime({"categories": ["car"], "minimum_duration_seconds": 0})
+                    if kind == "presence" else StationaryEventRuntime({
+                        "min_stationary_seconds": 0, "min_valid_samples": 1,
+                        "require_arrival": False, "close_after_moving_seconds": 0,
+                    }))
+        activity = EntityActivityRuntime({"scope": "garage", "maximum_entities": 2})
+        delayed = None
+        for episode in range(1200):
+            emitted = []
+            for inside in (True, False):
+                for camera in ("a", "b"):
+                    value = observed(camera, sequence=episode * 2 + (1 if inside else 2), lifecycle=Lifecycle.UPDATE)
+                    value.payload["world"] = {"x": 0, "z": 0}
+                    value.payload["velocity"] = {"valid": True, "stopped": inside, "speed_mps": 0 if inside else 2}
+                    if not inside:
+                        value.payload["subject"]["bbox01"] = [2, 2, 3, 3]
+                    for output in await producer.process_packet(value, None):
+                        if delayed is None:
+                            delayed = output
+                        emitted += await activity.process_packet(output, None)
+            assert [p.lifecycle for p in emitted] == [Lifecycle.OPEN, Lifecycle.UPDATE, Lifecycle.CLOSE]
+            assert len({p.payload["event_id"] for p in emitted}) == 1
+            assert not activity.closed.capacity_reached
+            assert len(activity.closed) == 1
+        assert not activity.entities
+        # Refresh delivery freshness, not the producer's terminal occurrence coordinates.
+        replay = replace(delayed, payload={**delayed.payload, "capture_evidence": {
+            **delayed.payload["capture_evidence"], "published_at": time.time(),
+        }})
+        assert await activity.process_packet(replay, None) == []
+
+    asyncio.run(scenario())
+
+
 def test_route_retains_observed_origin_across_an_explicit_handoff_gap():
     async def scenario():
         runtime = EntityActivityRuntime({"scope": "garage", "mode": "route"})
@@ -494,7 +532,54 @@ def test_targets_expose_places_and_source_references_without_capture_credentials
         "password": "private-secret"
     }
     targets = observation_targets(configuration=config)
-    assert {target["scope"]["kind"] for target in targets} == {"camera", "physical_area"}
+    assert {target["scope"]["kind"] for target in targets} == {
+        "camera",
+        "physical_area",
+        "image_region",
+    }
     area = next(target for target in targets if target["scope"]["kind"] == "physical_area")
     assert {source["camera_id"] for source in area["sources"]} == {"a", "b"}
     assert "private-secret" not in str(targets)
+
+
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("clock_domain", "unknown", "association_clock_unverified"),
+        ("clock_uncertainty_seconds", None, "association_uncertainty_unverified"),
+        ("position_error_metres", None, "association_uncertainty_unverified"),
+        ("coordinate_reference", "other-floor", "association_coordinate_mismatch"),
+        ("identity_policy", "keep_confirmed_identity", "anonymous_continuity_required"),
+    ],
+)
+def test_multicamera_preparation_cannot_assume_clock_geometry_or_identity(field, value, reason):
+    prepared = association()
+    prepared["sources"][0][field] = value
+    activity = intent(
+        "vision.stationary", kind="physical_area", multiple=True, association=prepared
+    )
+    result = plan_observation(intent=activity, configuration=configuration())
+    assert result["reason"] == reason and "graph" not in result
+
+
+def test_preparation_requires_connections_and_targets_never_invent_calibration():
+    from toposync_ext_cameras.automatic import observation_targets
+
+    prepared = association()
+    prepared["transitions"] = []
+    activity = intent(
+        "vision.stationary", kind="physical_area", multiple=True, association=prepared
+    )
+    assert (
+        plan_observation(intent=activity, configuration=configuration())["reason"]
+        == "association_transitions_required"
+    )
+    area = next(
+        target
+        for target in observation_targets(configuration=configuration())
+        if target["scope"]["kind"] == "physical_area"
+    )
+    for profile in area["preparations"]["vision.associate_entities"]["sources"]:
+        assert profile["clock_uncertainty_seconds"] is None
+        assert profile["position_error_metres"] is None
+        assert profile["identity_policy"] == "no_identification"

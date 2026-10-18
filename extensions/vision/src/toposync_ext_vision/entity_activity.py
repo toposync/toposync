@@ -73,7 +73,7 @@ class EntityActivityRuntime(TransformOperatorRuntime):
         for entity, state in list(self.entities.items()):
             for key, value in list(state["members"].items()):
                 if now - value["seen"] >= self.config.evidence_timeout_seconds:
-                    self.closed.close(key, value["subject"])
+                    self.closed.close(value["closed_key"], value["subject"])
                     state["members"].pop(key)
             if not state["members"]:
                 if state["opened"]:
@@ -108,6 +108,14 @@ class EntityActivityRuntime(TransformOperatorRuntime):
         member = (*origin, str(subject["id"]) + (":" + str(episode) if episode is not None else ""))
         # Track lifecycle coordinates cannot identify derived visits or distinct stop episodes.
         occurrence = {"id": member[2]}
+        closed_key = member
+        for name in ("stationary_event", "area_occurrence", "frame_occurrence", "region_occurrence"):
+            descriptor = packet.payload.get(name)
+            if isinstance(descriptor, dict) and "lifecycle_epoch" in descriptor:
+                occurrence = descriptor
+                # One producer sequence spans its cameras; keep closed intervals compact.
+                closed_key = (descriptor["lifecycle_epoch"], "occurrence", str(descriptor.get("lifecycle_sequence")))
+                break
         state = self.entities.get(entity)
         evidence = packet.payload.get("capture_evidence") or {}
         stamp = (
@@ -124,7 +132,7 @@ class EntityActivityRuntime(TransformOperatorRuntime):
             if state is None or member not in state["members"]:
                 return outputs
             state["members"].pop(member)
-            self.closed.close(member, occurrence)
+            self.closed.close(closed_key, occurrence)
             if not state["members"]:
                 if state["opened"]:
                     outputs.append(
@@ -135,7 +143,7 @@ class EntityActivityRuntime(TransformOperatorRuntime):
                 if self.config.mode != "route":
                     del self.entities[entity]
             return outputs
-        if self.closed.capacity_reached or self.closed.observe(member, occurrence):
+        if self.closed.capacity_reached or self.closed.observe(closed_key, occurrence, retain=False):
             return outputs
         if previous and stamp[2] == previous["capture"][2]:
             return outputs
@@ -148,6 +156,8 @@ class EntityActivityRuntime(TransformOperatorRuntime):
         if state is None:
             if len(self.entities) >= self.config.maximum_entities:
                 old, retired = self.entities.popitem(last=False)
+                for value in retired["members"].values():
+                    self.closed.close(value["closed_key"], value["subject"])
                 if retired["opened"]:
                     outputs.append(self._event(old, retired, Lifecycle.CLOSE, "capacity"))
             self.sequence += 1
@@ -164,12 +174,15 @@ class EntityActivityRuntime(TransformOperatorRuntime):
             self.entities[entity] = state
         if member not in state["members"] and len(state["members"]) >= 64:
             return outputs
+        if self.closed.observe(closed_key, occurrence):
+            return outputs
         self.entities.move_to_end(entity)
         state["last_seen"] = time.monotonic()
         state["members"][member] = {
             "seen": state["last_seen"] - freshness.age_seconds,
             "capture": stamp,
             "subject": occurrence,
+            "closed_key": closed_key,
         }
         state["packet"] = packet
         if origin not in state["origins"]:

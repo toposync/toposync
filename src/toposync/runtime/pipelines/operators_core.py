@@ -141,6 +141,7 @@ class StationaryEventConfig(BaseModel):
 
 @dataclass(slots=True)
 class _StationaryEventState:
+    occurrence_sequence: int = 0
     first_seen_at: float | None = None
     first_position: tuple[float, float] | None = None
     candidate_since: float | None = None
@@ -1085,6 +1086,8 @@ class StationaryEventRuntime(TransformOperatorRuntime):
         self._state_by_key: dict[tuple[str, str, str], _StationaryEventState] = {}
         self._closed_subjects = ClosedSubjectLedger(capacity=parsed.maximum_subjects)
         self._last_decision_telemetry: dict[str, float] = {}
+        self._occurrence_epoch = uuid.uuid4().hex
+        self._occurrence_sequence = 0
 
     def _end_observation(self, state, reason):
         outputs = []
@@ -1130,6 +1133,8 @@ class StationaryEventRuntime(TransformOperatorRuntime):
         payload = dict(packet.payload)
         candidate_since = state.candidate_since
         payload["stationary_event"] = {
+            "lifecycle_epoch": self._occurrence_epoch,
+            "lifecycle_sequence": state.occurrence_sequence,
             "confirmed": bool(state.confirmed),
             "candidate_since": float(candidate_since) if candidate_since is not None else None,
             "last_evidence_at": now,
@@ -1349,6 +1354,8 @@ class StationaryEventRuntime(TransformOperatorRuntime):
             return []
 
         state.decision = "confirmed"
+        self._occurrence_sequence += 1
+        state.occurrence_sequence = self._occurrence_sequence
         state.confirmed = True
         state.moving_since = None
         annotated = self._annotate(

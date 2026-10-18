@@ -10,7 +10,7 @@ export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(translations);
   host.i18n.registerTranslations(associationTranslations);
   host.i18n.registerTranslations(manualResultTranslations);
-  host.registerPipelineOperatorPanel({ id: "vision.associate_entities.panel", operatorId: "vision.associate_entities", render: context => <Association i18n={context.i18n} config={context.config} updateConfig={context.updateConfig} /> });
+  host.registerPipelineOperatorPanel({ id: "vision.associate_entities.panel", operatorId: "vision.associate_entities", render: context => <Association i18n={context.i18n} config={context.purpose === "automatic" ? { ...context.config, scope: context.stepUid } : context.config} configurationOnly={context.purpose === "automatic"} updateConfig={patch => context.updateConfig(context.purpose === "automatic" ? { ...patch, scope: context.stepUid } : patch)} /> });
   host.registerNotificationHistoryFilter?.({
     id: "com.toposync.vision.categories", endpoint: categoryHistoryEndpoint,
     renderSummary: ({ value }) => <>{host.i18n.t("ext.vision.identity.historyCategory")}: {host.i18n.t(`ext.vision.identity.${value}`)}</>,

@@ -1861,6 +1861,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         />
       ) : normalizedPathname.startsWith("/settings") ? (
         <SettingsScreen
+          operatorPanels={pipelineOperatorPanelsByOperatorId}
           backendAvailable={backendAvailable}
           api={host.api}
           wallHeightPreset={wallHeightPreset}

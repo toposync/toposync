@@ -225,6 +225,7 @@ export type PipelineOperatorPanel = {
     cameraId?: string;
     config: Record<string, unknown>;
     showAdvanced: boolean;
+    purpose?: "automatic" | "manual";
     updateConfig: (patch: Record<string, unknown>) => void;
     replaceConfig: (next: Record<string, unknown>) => void;
   }) => import("react").ReactNode;

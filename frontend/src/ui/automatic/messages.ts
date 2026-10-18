@@ -1,4 +1,5 @@
 const messages = {
+  prepareSources: ["Prepare source continuity", "Preparar continuidade entre fontes"], preparationUnavailable: ["The preparation panel is unavailable. Enable its extension to continue.", "O painel de preparação está indisponível. Habilite sua extensão para continuar."],
   title: ["Automatic", "Automático"], description: ["Activities organized by place", "Atividades organizadas por lugar"],
   loading: ["Loading activities…", "Carregando atividades…"], retry: ["Reload", "Recarregar"],
   loadError: ["Could not load Automatic. Reload to try again.", "Não foi possível carregar o Automático. Recarregue para tentar novamente."],

@@ -277,3 +277,20 @@ def test_anonymous_continuity_links_geometry_without_inheriting_identity():
     assert records[nominal.id]["entity"] != records[second.id]["entity"]
     with pytest.raises(AssociationConflict, match="identity_policy_conflict"):
         store.correct(nominal.id, records[first.id]["entity"], store.revision, "owner")
+
+
+@pytest.mark.parametrize("mode", ["overlap", "transition"])
+@pytest.mark.parametrize("cameras", [("a", "b"), ("b", "a")])
+def test_overlap_is_symmetric_but_transition_remains_directional(mode, cameras):
+    cfg = config()
+    cfg.transitions = [AssociationTransition(
+        source_camera="a", target_camera="b", mode=mode,
+        max_seconds=1, residual_metres=0.5,
+    )]
+    store = AssociationStore(cfg)
+    first = observation(cameras[0], 1, 1, 0, position=(0, 0))
+    second = observation(cameras[1], 7, 1.01, 0, position=(0, 0))
+    store.ingest([first])
+    records = store.ingest([second])
+    linked = records[second.id]["entity"] == store.observations[first.id]["entity"]
+    assert linked == (mode == "overlap" or cameras == ("a", "b"))

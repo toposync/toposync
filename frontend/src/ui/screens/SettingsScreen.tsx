@@ -1,7 +1,7 @@
 import { useCompositionPositions } from "../geographic/useCompositionPositions";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-import type { GraphicsQuality, HostApi, RenderViewDefinition, SettingsPanel, ThemeDefinition, WallHeightPreset } from "@toposync/plugin-api";
+import type { GraphicsQuality, HostApi, PipelineOperatorPanel, RenderViewDefinition, SettingsPanel, ThemeDefinition, WallHeightPreset } from "@toposync/plugin-api";
 
 import {
   disableManagedExtension,
@@ -27,6 +27,7 @@ import { AutomaticScreen } from "../automatic/AutomaticScreen";
 import { automaticText } from "../automatic/messages";
 
 type Props = {
+  operatorPanels: Record<string, PipelineOperatorPanel>;
   backendAvailable: boolean;
   api: HostApi;
   wallHeightPreset: WallHeightPreset;
@@ -140,6 +141,7 @@ export function SettingsScreen({
   onSetInstallationTimezone,
   onPatchExtensionSettings,
   extensionActivationDiagnostics,
+  operatorPanels,
   onOpenPipelines,
   onOpenProcessingServers,
   onOpenAccess,
@@ -570,7 +572,7 @@ export function SettingsScreen({
     const automaticEntry: SettingsEntry = {
       kind: "core", id: AUTOMATIC_PANEL_ID, icon: "wand-magic-sparkles",
       title: automaticText(locale, "title"), desc: automaticText(locale, "description"),
-      render: () => <AutomaticScreen onOpenFlows={() => requestExit("pipelines")} onDirtyChange={setAutomaticDirty} />,
+      render: () => <AutomaticScreen operatorPanels={operatorPanels} onOpenFlows={() => requestExit("pipelines")} onDirtyChange={setAutomaticDirty} />,
     };
     return [...primaryExtEntries, compositionsEntry, automaticEntry, coreEntry, viewEntry, ...otherExtEntries, extensionsEntry];
   }, [
@@ -603,6 +605,7 @@ export function SettingsScreen({
     onLogout,
     authUser,
     orderedPanels,
+    operatorPanels,
     onPatchRenderViewSettings,
     saving,
     installationTimezone,

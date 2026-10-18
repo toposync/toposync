@@ -1,5 +1,7 @@
 """Pure place/source resolution and graphs built from existing camera and vision operators."""
 
+import math
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from toposync.runtime.automatic import AutomaticScope
@@ -126,6 +128,39 @@ def plan_observation(*, intent, configuration):
             for source in association["sources"]
         ):
             return unavailable("anonymous_continuity_required")
+        profiles = association["sources"]
+        if any(
+            not profile.get("clock_domain") or profile.get("clock_domain") != source["clock_domain"]
+            for source in sources
+            for profile in profiles
+            if (source["camera_id"], source["source_id"])
+            == (profile["camera_id"], profile["source_id"])
+        ):
+            return unavailable("association_clock_unverified")
+        if len({profile["clock_domain"] for profile in profiles}) != 1:
+            return unavailable("association_clock_unverified")
+        for profile in profiles:
+            for field, maximum in (
+                ("clock_uncertainty_seconds", 60),
+                ("position_error_metres", 100),
+            ):
+                value = profile.get(field)
+                if (
+                    type(value) not in (int, float)
+                    or not math.isfinite(value)
+                    or not 0 <= value <= maximum
+                ):
+                    return unavailable("association_uncertainty_unverified")
+            if profile.get("coordinate_reference") != intent.scope.composition_id:
+                return unavailable("association_coordinate_mismatch")
+        connected = {sources[0]["camera_id"]}
+        for _ in sources:
+            for transition in association["transitions"]:
+                ends = {transition.get("source_camera"), transition.get("target_camera")}
+                if connected.intersection(ends):
+                    connected.update(ends)
+        if not cameras <= connected:
+            return unavailable("association_transitions_required")
     nodes, edges, endpoints = [], [], []
 
     def add(identifier, operator, config, upstream=None, port="out"):
@@ -380,6 +415,25 @@ def observation_targets(*, configuration):
                 "reason": reason,
             }
         )
+        if sources:
+            targets.append(
+                {
+                    "id": "region:" + camera.id,
+                    "name": camera.name or camera.id,
+                    "scope": {
+                        **scope.model_dump(mode="json"),
+                        "kind": "image_region",
+                        "region": {
+                            "camera_id": camera.id,
+                            "source_id": sources[0]["source_id"],
+                            "framing": "passive",
+                        },
+                    },
+                    "sources": sources,
+                    "reason": reason,
+                    "scope_operator": "camera.panorama_region",
+                }
+            )
     for composition in configuration.compositions:
         for element in composition.elements:
             area = resolve_composition_area(
@@ -395,6 +449,23 @@ def observation_targets(*, configuration):
                 {
                     "id": "area:" + composition.id + ":" + element.id,
                     "name": composition.name + " · " + area.name,
+                    "preparations": {
+                        "vision.associate_entities": {
+                            "sources": [
+                                {
+                                    "camera_id": source["camera_id"],
+                                    "source_id": source["source_id"],
+                                    "identity_policy": "no_identification",
+                                    "clock_domain": source["clock_domain"],
+                                    "clock_uncertainty_seconds": None,
+                                    "coordinate_reference": composition.id,
+                                    "position_error_metres": None,
+                                }
+                                for source in sources
+                            ],
+                            "transitions": [],
+                        }
+                    },
                     "scope": scope.model_dump(mode="json"),
                     "sources": sources,
                     "reason": reason,

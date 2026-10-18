@@ -1,3 +1,4 @@
+import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 import React, { useEffect, useRef, useState } from "react";
 import { fetchAutomatic, previewAutomatic, saveAutomatic } from "../../util/api";
 import { i18n } from "../../util/i18n";
@@ -5,7 +6,7 @@ import { replaceAutomaticIntent, sameAutomaticTarget } from "../../util/automati
 import type { AutomaticConfiguration, AutomaticField, AutomaticIntent, AutomaticPreview, AutomaticSnapshot, AutomaticTarget } from "../../util/automatic";
 import { automaticText, AutomaticMessage } from "./messages";
 
-export function AutomaticScreen({ onOpenFlows, onDirtyChange }: { onOpenFlows: () => void; onDirtyChange: (dirty: boolean) => void }) {
+export function AutomaticScreen({ onOpenFlows, onDirtyChange, operatorPanels }: { onOpenFlows: () => void; onDirtyChange: (dirty: boolean) => void; operatorPanels: Record<string, PipelineOperatorPanel> }) {
   const { locale } = i18n.useI18n();
   const t = (key: AutomaticMessage) => automaticText(locale, key);
   const title = (value: Record<string, string> | undefined, fallback: string) => value?.[locale] || value?.en || fallback;
@@ -82,13 +83,20 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange }: { onOpenFlows: (
   };
   const choosePlace = (place: AutomaticTarget) => {
     const next = capability?.scopes?.includes(place.scope.kind) ? capability : observations.find(item => item.available && item.scopes?.includes(place.scope.kind));
-    update({ scope: structuredClone(place.scope), capability: next?.id || draft!.capability });
+    update({ scope: structuredClone(place.scope), condition: { ...draft!.condition, association: null }, capability: next?.id || draft!.capability });
   };
   const renderFields = (fields: AutomaticField[] = [], values: Record<string, any>, change: (next: Record<string, any>) => void) => fields.map(field => {
     const value = values[field.name] ?? field.default;
     if (field.type === "multiple") return <fieldset key={field.name}><legend>{title(field.title, field.name)}</legend><div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>{field.choices?.map(choice => <label key={choice.value}><input type="checkbox" checked={Array.isArray(value) && value.includes(choice.value)} onChange={event => change({ ...values, [field.name]: event.target.checked ? [...(value || []), choice.value] : (value || []).filter((entry: string) => entry !== choice.value) })} /> {title(choice.title, choice.value)}</label>)}</div></fieldset>;
     return <label className="field" key={field.name}><span>{title(field.title, field.name)}</span><input className="input" type={field.type} min={field.minimum} max={field.maximum} step={field.type === "number" ? "any" : undefined} value={value ?? ""} onChange={event => change({ ...values, [field.name]: field.type === "number" ? event.target.valueAsNumber : event.target.value })} /></label>;
   });
+  const renderOperator = (operator: string, config: Record<string, unknown>, change: (value: Record<string, unknown>) => void) => {
+    const panel = operatorPanels[operator];
+    if (!panel || !draft) return <p role="status">{t("preparationUnavailable")}</p>;
+    return panel.render({ i18n, operatorId: operator, stepUid: draft.id, nodeId: draft.id,
+      processingServerId: "local", cameraId: draft.scope.camera_ids[0], purpose: "automatic",
+      config, showAdvanced: true, updateConfig: patch => change({ ...config, ...patch }), replaceConfig: change });
+  };
   const stateText = (state: string) => automaticText(locale, (['active', 'waiting', 'paused', 'blocked', 'unavailable', 'outside_schedule', 'preparing'].includes(state) ? state : 'unavailable') as AutomaticMessage);
 
   return <section aria-label={t("title")} style={{ display: "grid", gap: 16, minWidth: 0 }}>
@@ -104,13 +112,15 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange }: { onOpenFlows: (
     {editing && draft && !review && <form onSubmit={event => { event.preventDefault(); const next = replaceAutomaticIntent(editing.configuration, draft); void prepare({ ...next, enabled: editing.activate || next.enabled }); }} style={{ display: "grid", gap: 16 }}>
       <h3 ref={heading} tabIndex={-1}>{t("edit")}</h3>
       <fieldset disabled={busy} style={{ display: "grid", gap: 12, minWidth: 0 }}><legend>{t("where")}</legend>
-        <label className="field"><span>{t("where")}</span><select className="input" required value={target?.id || ""} onChange={event => { const place = targets.find(item => item.id === event.target.value); if (place) choosePlace(place); }}><option value="" disabled>—</option>{targets.map(place => <option key={place.id} value={place.id}>{place.name}</option>)}</select></label>
+        <label className="field"><span>{t("where")}</span><select className="input" required value={target?.id || ""} onChange={event => { const place = targets.find(item => item.id === event.target.value); if (place) choosePlace(place); }}><option value="" disabled>—</option>{targets.map(place => <option key={place.id} value={place.id}>{place.name} · {t(place.scope.kind === "physical_area" ? "area" : place.scope.kind === "image_region" ? "region" : "whole")}</option>)}</select></label>
         <p>{draft.scope.kind === "physical_area" ? t("area") : draft.scope.kind === "image_region" ? t("region") : t("whole")}</p>
         {target && <fieldset><legend>{t("sources")}</legend>{target.sources.map(source => <label key={source.camera_id} style={{ display: "block" }}><input type="checkbox" checked={!draft.scope.excluded_camera_ids.includes(source.camera_id)} onChange={event => update({ scope: { ...draft.scope, excluded_camera_ids: event.target.checked ? draft.scope.excluded_camera_ids.filter(id => id !== source.camera_id) : [...draft.scope.excluded_camera_ids, source.camera_id] } })} /> {source.camera_name} · {source.source_name}</label>)}</fieldset>}
         {draft.scope.kind === "physical_area" && <p>{t("coverage")}</p>}
+        {target?.scope_operator && renderOperator(target.scope_operator, draft.scope.region || {}, region => update({ scope: { ...draft.scope, region } }))}
+        {capability?.configuration_panels?.filter(panel => (target?.sources.filter(source => !draft.scope.excluded_camera_ids.includes(source.camera_id)).length || 0) >= panel.minimum_sources).map(panel => <details key={panel.operator} open><summary>{t("prepareSources")}</summary>{renderOperator(panel.operator, draft.condition[panel.field] || target?.preparations?.[panel.operator] || {}, value => update({ condition: { ...draft.condition, [panel.field]: value } }))}</details>)}
       </fieldset>
       <fieldset disabled={busy} style={{ display: "grid", gap: 12, minWidth: 0 }}><legend>{t("what")}</legend>
-        <label className="field"><span>{t("what")}</span><select className="input" value={draft.capability} onChange={event => update({ capability: event.target.value, condition: {}, customizations: {}, consents: [] })}>{observations.filter(item => item.id === draft.capability || item.scopes?.includes(draft.scope.kind)).map(item => <option key={item.id} value={item.id} disabled={!item.available}>{title(item.title, item.id)}{!item.available ? ` · ${t("unavailable")}` : ""}</option>)}</select></label>
+        <label className="field"><span>{t("what")}</span><select className="input" value={draft.capability} onChange={event => update({ capability: event.target.value, condition: { ...draft.condition, resource_parameters: {} }, customizations: {}, consents: [] })}>{observations.filter(item => item.id === draft.capability || item.scopes?.includes(draft.scope.kind)).map(item => <option key={item.id} value={item.id} disabled={!item.available}>{title(item.title, item.id)}{!item.available ? ` · ${t("unavailable")}` : ""}</option>)}</select></label>
         {renderFields(capability?.fields, draft.condition, condition => update({ condition }))}
         {Object.keys(draft.customizations).length > 0 && <p>{t("customizations")}: {Object.keys(draft.customizations).join(", ")}</p>}
       </fieldset>

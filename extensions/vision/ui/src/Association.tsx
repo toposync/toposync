@@ -19,7 +19,7 @@ const words = {
 } satisfies Record<string, [string, string]>;
 export const associationTranslations = Object.fromEntries(["en", "pt-BR"].map((locale, index) => [locale, Object.fromEntries(Object.entries(words).map(([key, values]) => [`ext.vision.association.${key}`, values[index]]))]));
 
-export function Association({ i18n, config, updateConfig }: { i18n: HostI18n; config: Record<string, unknown>; updateConfig: (patch: Record<string, unknown>) => void }) {
+export function Association({ i18n, config, updateConfig, configurationOnly = false }: { configurationOnly?: boolean; i18n: HostI18n; config: Record<string, unknown>; updateConfig: (patch: Record<string, unknown>) => void }) {
   const { t: translate } = i18n.useI18n(); const t = (key: keyof typeof words) => translate(`ext.vision.association.${key}`);
   const sources = (config.sources ?? []) as Source[]; const transitions = (config.transitions ?? []) as Transition[];
   const scope = String(config.scope ?? ""); const [review, setReview] = useState<Review | null>(null); const [failure, setFailure] = useState(false); const [busy, setBusy] = useState(false);
@@ -43,18 +43,18 @@ export function Association({ i18n, config, updateConfig }: { i18n: HostI18n; co
   };
   const sourceChange = (index: number, patch: Partial<Source>) => updateConfig({ sources: sources.map((source, at) => at === index ? { ...source, ...patch } : source) });
   return <div className="formGrid">
-    <h3>{t("title")}</h3><ManualAssociationResult key={scope} i18n={i18n} /><p>{t("help")}</p>
-    <label>{t("scope")}<input value={scope} onChange={event => updateConfig({ scope: event.target.value })} pattern="(?:[a-zA-Z0-9_]|-)+" /></label>
+    <h3>{t("title")}</h3>{!configurationOnly && <ManualAssociationResult key={scope} i18n={i18n} />}<p>{t("help")}</p>
+    {!configurationOnly && <label>{t("scope")}<input value={scope} onChange={event => updateConfig({ scope: event.target.value })} pattern="(?:[a-zA-Z0-9_]|-)+" /></label>}
     <label>{t("horizon")}<input type="number" min="1" max="3600" value={Number(config.horizon_seconds ?? 120)} onChange={event => updateConfig({ horizon_seconds: event.target.valueAsNumber })} /></label>
-    <label>{t("group")}<input type="number" min="0.01" max="20" step="any" value={config.group_distance_metres == null ? "" : Number(config.group_distance_metres)} onChange={event => updateConfig({ group_distance_metres: event.target.value === "" ? null : event.target.valueAsNumber })} /></label>
+    {!configurationOnly && <label>{t("group")}<input type="number" min="0.01" max="20" step="any" value={config.group_distance_metres == null ? "" : Number(config.group_distance_metres)} onChange={event => updateConfig({ group_distance_metres: event.target.value === "" ? null : event.target.valueAsNumber })} /></label>}
     <h4>{t("sources")}</h4>
     {sources.map((source, index) => <fieldset key={index}><legend>{t("source")} {index + 1}</legend>
-      {([['camera_id','camera'],['source_id','source'],['clock_domain','clock'],['coordinate_reference','coordinates']] as const).map(([key,label]) => <label key={key}>{t(label)}<input value={source[key]} onChange={event => sourceChange(index, { [key]: event.target.value })} /></label>)}
-      <label>{t("policy")}<select value={source.identity_policy} onChange={event => sourceChange(index, { identity_policy: event.target.value })}>{(["no_identification", "anonymous_continuity", "keep_confirmed_identity", "recognize_here"] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>
+      {([['camera_id','camera'],['source_id','source'],['clock_domain','clock'],['coordinate_reference','coordinates']] as const).map(([key,label]) => <label key={key}>{t(label)}<input readOnly={configurationOnly && key !== 'clock_domain'} value={source[key]} onChange={event => sourceChange(index, { [key]: event.target.value })} /></label>)}
+      <label>{t("policy")}<select value={source.identity_policy} onChange={event => sourceChange(index, { identity_policy: event.target.value })}>{(configurationOnly ? ["no_identification", "anonymous_continuity"] as const : ["no_identification", "anonymous_continuity", "keep_confirmed_identity", "recognize_here"] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>
       {([['clock_uncertainty_seconds','uncertainty'],['position_error_metres','error']] as const).map(([key,label]) => <label key={key}>{t(label)}<input type="number" min="0" step="0.01" value={source[key] ?? ""} onChange={event => sourceChange(index, { [key]: event.target.value === "" ? null : event.target.valueAsNumber })} /></label>)}
-      <button type="button" onClick={() => updateConfig({ sources: sources.filter((_, at) => at !== index) })}>{t("remove")}</button>
+      {!configurationOnly && <button type="button" onClick={() => updateConfig({ sources: sources.filter((_, at) => at !== index) })}>{t("remove")}</button>}
     </fieldset>)}
-    <button type="button" disabled={sources.length >= 16} onClick={() => updateConfig({ sources: [...sources, { camera_id: "", source_id: "", identity_policy: "no_identification", clock_domain: "", clock_uncertainty_seconds: null, coordinate_reference: "", position_error_metres: null }] })}>{t("add")} · {t("source")}</button>
+    {!configurationOnly && <button type="button" disabled={sources.length >= 16} onClick={() => updateConfig({ sources: [...sources, { camera_id: "", source_id: "", identity_policy: "no_identification", clock_domain: "", clock_uncertainty_seconds: null, coordinate_reference: "", position_error_metres: null }] })}>{t("add")} · {t("source")}</button>}
     <h4>{t("transitions")}</h4>
     {transitions.map((transition, index) => { const change = (patch: Partial<Transition>) => updateConfig({ transitions: transitions.map((item, at) => at === index ? { ...item, ...patch } : item) }); return <fieldset key={index}><legend>{t("transition")} {index + 1}</legend>
       {([['source_camera','from'],['target_camera','to']] as const).map(([key,label]) => <label key={key}>{t(label)}<select value={transition[key]} onChange={event => change({ [key]: event.target.value })}><option value="">—</option>{[...new Set(sources.map(source => source.camera_id))].filter(Boolean).map(camera => <option key={camera} value={camera}>{camera}</option>)}</select></label>)}
@@ -63,7 +63,7 @@ export function Association({ i18n, config, updateConfig }: { i18n: HostI18n; co
       <button type="button" onClick={() => updateConfig({ transitions: transitions.filter((_, at) => at !== index) })}>{t("remove")}</button>
     </fieldset>; })}
     <button type="button" disabled={transitions.length >= 128} onClick={() => updateConfig({ transitions: [...transitions, { source_camera: "", target_camera: "", mode: "transition", max_seconds: 3, residual_metres: 0.5 }] })}>{t("add")} · {t("transition")}</button>
-    <button type="button" disabled={!scope || busy} onClick={() => void load()}>{t("refresh")}</button>
+    {!configurationOnly && <button type="button" disabled={!scope || busy} onClick={() => void load()}>{t("refresh")}</button>}
     {failure && <p role="alert">{t("failed")}</p>}
     {review && <><p>{t("status")}: {review.revision}</p>{review.restart_gap && <p>{t("restart")}</p>}
       {!Object.keys(review.observations).length ? <p>{t("empty")}</p> : <><div style={{ overflowX: "auto" }}><table><thead><tr><th>{t("observation")}</th><th>{t("entity")}</th><th>{t("status")}</th><th>{t("reason")}</th></tr></thead><tbody>{Object.entries(review.observations).map(([id, record]) => <tr key={id}><td>{record.observation.camera} · {record.observation.track} · {record.observation.observed_at}</td><td>{entityLabel(record.entity)}</td><td>{translated(review.entities[record.entity]?.recognition_status ?? "unknown")}</td><td>{translated(record.reason)}{record.gap ? ` · ${t("gap")}` : ""}</td></tr>)}</tbody></table></div>

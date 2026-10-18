@@ -75,6 +75,13 @@ def register_automatic_capabilities(services):
                 "required_features": ["tracking"],
                 "required_consents": ["recognition"] if name == "recognition" else [],
                 "advanced": name in {"pose", "gestures", "segmentation"},
+                "configuration_panels": [
+                    {
+                        "operator": "vision.associate_entities",
+                        "field": "association",
+                        "minimum_sources": 2,
+                    }
+                ],
                 "fields": [
                     {
                         "name": "categories",

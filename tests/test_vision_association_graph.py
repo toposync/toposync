@@ -1,11 +1,13 @@
 import asyncio
 import json
+import pytest
 
 from pydantic import BaseModel
 
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines import (
     OperatorRegistry,
+    Packet,
     PipelineGraphCompiler,
     PipelineRuntimeDependencies,
     SourceOperatorRuntime,
@@ -24,7 +26,7 @@ from test_vision_association import config
 from test_vision_association_runtime import packet
 
 
-def fixture_graph(registry, received, inputs=None, cfg=None):
+def fixture_graph(registry, received, inputs=None, cfg=None, interval=0.001):
     cfg = cfg or config()
     if inputs is None:
         inputs = {
@@ -48,9 +50,15 @@ def fixture_graph(registry, received, inputs=None, cfg=None):
             self.camera = camera
 
         async def run(self, context):
+            previous_stamp = 0
             for value in inputs[self.camera]:
-                await context.emit(value)
-                await context.sleep(0.001)
+                stamp = value.payload["media"]["ts"]
+                await context.sleep((stamp - previous_stamp) * interval)
+                previous_stamp = stamp
+                await context.emit(Packet.create(
+                    stream_id=value.stream_id, lifecycle=value.lifecycle,
+                    payload=value.payload, artifacts=value.artifacts, metadata=value.metadata,
+                ))
             await context.cancel_event.wait()
 
     class Sink(SinkRuntime):
@@ -148,13 +156,14 @@ def fixture_graph(registry, received, inputs=None, cfg=None):
     return producer, consumers
 
 
-def test_named_output_two_manual_consumers_share_one_associator_and_inspection(tmp_path):
+@pytest.mark.parametrize("interval", [0.001, 0.25])
+def test_named_output_two_manual_consumers_share_one_associator_and_inspection(tmp_path, interval):
     async def scenario():
         registry = OperatorRegistry()
         register_builtin_operators(registry)
         register_association_operator(registry)
         received = {}
-        producer, consumers = fixture_graph(registry, received)
+        producer, consumers = fixture_graph(registry, received, interval=interval)
         compiler = PipelineGraphCompiler(registry)
         demands = ResourceDemandRegistry(lambda *_: True, compiler=compiler)
         demands.bind([producer])
@@ -206,7 +215,7 @@ def test_named_output_two_manual_consumers_share_one_associator_and_inspection(t
         )
         await runtime.start()
         try:
-            for _ in range(200):
+            for _ in range(400):
                 if all(lease.delivered == 18 and lease.latest is not None for lease in leases):
                     break
                 await asyncio.sleep(0.005)

@@ -131,20 +131,20 @@ class AssociationRuntime(BaseOperatorRuntime):
                 ready, _ = await asyncio.wait({reader}, timeout=timeout)
                 if ready:
                     packet = reader.result()
-                    if packet is None:
-                        if pending and not context.cancel_event.is_set():
-                            await self._flush(pending, context)
+                    if context.cancel_event.is_set():
                         break
-                    try:
-                        observation = observation_from_packet(packet, self.config)
-                    except (TypeError, ValueError):
-                        context.inspect(
-                            "filtered", packet, reason="association_invalid_observation"
-                        )
-                    else:
-                        pending.append((packet, observation))
-                        if deadline is None:
-                            deadline = time.monotonic() + self.config.batch_seconds
+                    # A read timeout is idle input, not end of the stream.
+                    if packet is not None:
+                        try:
+                            observation = observation_from_packet(packet, self.config)
+                        except (TypeError, ValueError):
+                            context.inspect(
+                                "filtered", packet, reason="association_invalid_observation"
+                            )
+                        else:
+                            pending.append((packet, observation))
+                            if deadline is None:
+                                deadline = time.monotonic() + self.config.batch_seconds
                     reader = asyncio.create_task(context.read())
                 if pending and (
                     len(pending) >= self.config.max_batch or time.monotonic() >= deadline

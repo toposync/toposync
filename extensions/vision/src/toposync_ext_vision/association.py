@@ -233,8 +233,11 @@ class AssociationStore:
             rules = [
                 rule
                 for rule in self.config.transitions
-                if rule.source_camera == previous.camera
-                and rule.target_camera == observation.camera
+                if (rule.source_camera == previous.camera
+                    and rule.target_camera == observation.camera)
+                or (rule.mode == "overlap"
+                    and rule.target_camera == previous.camera
+                    and rule.source_camera == observation.camera)
             ]
             delta = observation.observed_at - previous.observed_at
             uncertainty = observation.uncertainty + previous.uncertainty

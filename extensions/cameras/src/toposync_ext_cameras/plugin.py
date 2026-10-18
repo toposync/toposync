@@ -1519,7 +1519,10 @@ class CamerasExtension(BaseExtension):
         from .audio_pipeline import register_audio_operator
         from .pipelines.visual_region import register_visual_region_operator
         from .pipelines.region_occurrence import register_region_occurrence_operator
+        from .pipelines.frame_occurrence import register_frame_occurrence_operator
+        from .automatic import register_automatic_planner
 
+        register_automatic_planner(services)
         install_audio_routes(app)
         install_audio_clip_routes(app)
         registry = getattr(app.state, "pipeline_operator_registry", None)
@@ -1527,6 +1530,7 @@ class CamerasExtension(BaseExtension):
             register_camera_pipeline_operators(registry)
             register_visual_region_operator(registry)
             register_region_occurrence_operator(registry)
+            register_frame_occurrence_operator(registry)
             register_audio_operator(registry)
             register_area_occurrence_operator(registry)
             register_recent_onvif_event_operator(registry)

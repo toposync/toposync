@@ -33,7 +33,7 @@ class OccurrenceConfig(BaseModel):
 class AreaOccurrenceConfig(OccurrenceConfig):
     area: AreaRestrictionPolygon | None = None
     composition_id: str = ""
-    categories: list[Literal["person", "dog", "cat"]] = Field(default_factory=lambda: ["person", "dog", "cat"])
+    categories: list[Literal["person", "dog", "cat", "car", "truck", "bus", "motorcycle"]] = Field(default_factory=lambda: ["person", "dog", "cat"])
 
     @field_validator("area")
     @classmethod

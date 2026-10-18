@@ -20,6 +20,15 @@ def register_automatic_capabilities(services):
                 "planner": "automatic.plan.home_assistant.notify",
                 "required_consents": ["external"],
                 "parameters_schema": HomeAssistantNotifyConfig.model_json_schema(),
+                "fields": [
+                    {"name": key, "type": "text", "title": {"en": en, "pt-BR": pt}}
+                    for key, en, pt in [
+                        ("server_id", "Configured server", "Servidor configurado"),
+                        ("notify_service", "Notification destination", "Destino do aviso"),
+                        ("title", "Title", "Título"),
+                        ("message", "Message", "Mensagem"),
+                    ]
+                ],
             }
         ],
     )

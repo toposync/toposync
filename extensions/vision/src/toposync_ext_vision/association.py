@@ -22,9 +22,9 @@ class Values(BaseModel):
 class AssociationSource(Values):
     camera_id: str = Field(min_length=1, max_length=128)
     source_id: str = Field(min_length=1, max_length=128)
-    identity_policy: Literal["no_identification", "keep_confirmed_identity", "recognize_here"] = (
-        "no_identification"
-    )
+    identity_policy: Literal[
+        "no_identification", "anonymous_continuity", "keep_confirmed_identity", "recognize_here"
+    ] = "no_identification"
     clock_domain: str = Field(default="", max_length=128)
     clock_uncertainty_seconds: float | None = Field(default=None, ge=0, le=60)
     coordinate_reference: str = Field(default="", max_length=128)
@@ -83,7 +83,9 @@ class Observation(Values):
     coordinate_reference: str = Field(default="", max_length=128)
     geometry: str = Field(default="", max_length=256)
     position_error: float | None = Field(default=None, ge=0, le=100)
-    policy: Literal["no_identification", "keep_confirmed_identity", "recognize_here"]
+    policy: Literal[
+        "no_identification", "anonymous_continuity", "keep_confirmed_identity", "recognize_here"
+    ]
     occurrence: str | None = Field(default=None, max_length=128)
     closed: bool = False
 
@@ -206,6 +208,11 @@ class AssociationStore:
             or observation.position is None
             or not observation.geometry
             or observation.position_error is None
+        ):
+            return None
+        if any(
+            (o.policy == "anonymous_continuity") != (observation.policy == "anonymous_continuity")
+            for o, _ in members
         ):
             return None
         compatible = []
@@ -503,8 +510,9 @@ class AssociationStore:
             for other, _ in target:
                 if other.category != observation.category:
                     raise AssociationConflict("category_conflict")
-                if (other.policy == "no_identification") != (
-                    observation.policy == "no_identification"
+                if any(
+                    (other.policy == policy) != (observation.policy == policy)
+                    for policy in ("no_identification", "anonymous_continuity")
                 ):
                     raise AssociationConflict("identity_policy_conflict")
                 if any(

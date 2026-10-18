@@ -2863,3 +2863,13 @@ export async function getNotificationDataOptions(field: string, labelField: stri
   if (!response.ok) throw new Error(`History options: ${response.status}`);
   return (await response.json()).options;
 }
+
+export async function fetchAutomatic(signal?: AbortSignal): Promise<import("./automatic").AutomaticSnapshot> {
+  return requestJson(resolveToposyncUrl("/api/automatic"), { signal }, "Automatic unavailable");
+}
+export async function previewAutomatic(configuration: import("./automatic").AutomaticConfiguration, expectedRevision: number): Promise<import("./automatic").AutomaticPreview> {
+  return requestJson(resolveToposyncUrl("/api/automatic/preview"), jsonRequest("POST", { configuration, expected_revision: expectedRevision }), "Could not prepare activity");
+}
+export async function saveAutomatic(configuration: import("./automatic").AutomaticConfiguration, expectedRevision: number): Promise<import("./automatic").AutomaticSnapshot> {
+  return requestJson(resolveToposyncUrl("/api/automatic"), jsonRequest("PUT", { configuration, expected_revision: expectedRevision }), "Could not save activity");
+}

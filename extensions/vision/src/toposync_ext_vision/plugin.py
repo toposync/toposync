@@ -44,6 +44,12 @@ class VisionExtension(BaseExtension):
         registry = getattr(app.state, "pipeline_operator_registry", None)
         if isinstance(registry, OperatorRegistry):
             register_vision_pipeline_operators(registry)
+            from .entity_activity import register_entity_activity_operator
+
+            register_entity_activity_operator(registry)
+        from .automatic import register_automatic_capabilities
+
+        register_automatic_capabilities(services)
 
         config_store = getattr(app.state, "config_store", None)
         configured_data_dir = getattr(getattr(config_store, "paths", None), "data_dir", None)

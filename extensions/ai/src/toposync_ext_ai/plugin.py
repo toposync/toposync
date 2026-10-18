@@ -68,6 +68,17 @@ class AiExtension(BaseExtension):
         registry = getattr(app.state, "pipeline_operator_registry", None)
         if isinstance(registry, OperatorRegistry):
             register_ai_pipeline_operators(registry)
+        from .pipelines.schemas import AiConditionFilterConfig
+
+        services.register("automatic.catalog.ai", lambda: [{
+            "id": "ai.context", "kind": "observation", "extension_id": EXTENSION_ID,
+            "title": {"en": "Contextual condition", "pt-BR": "Condição contextual"},
+            "scopes": ["camera", "image_region", "physical_area"],
+            "operators": ["camera.source", "vision.detect", "vision.track", "ai.condition_filter"],
+            "planner": "automatic.plan.camera_observation", "advanced": True,
+            "required_features": ["tracking"], "required_consents": ["external"],
+            "resource_parameters_schema": AiConditionFilterConfig.model_json_schema(),
+        }])
 
         config_store = getattr(app.state, "config_store", None)
         register_filter = getattr(config_store, "register_extension_settings_patch_filter", None)

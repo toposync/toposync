@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import time
+import hashlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .automatic import AutomaticState
 from .config_store import Pipeline, PipelineAlreadyExistsError
 from .pipelines.demands import DemandRequest
+from .pipelines.runtime import Lifecycle
 from .pipelines.operators_gates import (
     ScheduleGateConfig,
     _normalize_weekdays,
@@ -29,6 +31,7 @@ class AutomaticController:
         self._privacy_barrier = None
         self.revoke = None
         self.failed_demands = {}
+        self.provider_failures = {}
         self.demands.pipeline_allowed = self.pipeline_allowed
 
     async def catalog(self, config=None):
@@ -45,7 +48,7 @@ class AutomaticController:
             }
         ]
         for identifier in self.services.list_ids("automatic.catalog."):
-            entries.extend(await self.services.call(identifier))
+            entries.extend(await self._provider(identifier, config))
         disabled = (
             set(
                 config.settings.core.get("extension_management", {}).get(
@@ -58,7 +61,8 @@ class AutomaticController:
         found = {}
         for entry in entries:
             if entry["id"] in found:
-                raise ValueError("Duplicate automatic capability")
+                found[entry["id"]].update(available=False, reason="duplicate_capability")
+                continue
             missing = [
                 operator
                 for operator in entry.get("operators", [])
@@ -72,6 +76,38 @@ class AutomaticController:
             }
         self.capabilities = found
         return list(found.values())
+
+    async def _provider(self, identifier, config, **kwargs):
+        fingerprint = (
+            hashlib.sha256(config.model_dump_json().encode()).hexdigest() if config else ""
+        )
+        if self.provider_failures.get(identifier) == fingerprint:
+            return []
+        try:
+            entries = await self.services.call(identifier, **kwargs)
+            if not isinstance(entries, list) or any(
+                not isinstance(entry, dict) or not entry.get("id") for entry in entries
+            ):
+                raise ValueError("Invalid automatic provider entries")
+            if identifier.startswith("automatic.catalog.") and any(
+                entry.get("kind") not in {"observation", "consequence"}
+                or not isinstance(entry.get("extension_id"), str)
+                or not isinstance(entry.get("operators", []), list)
+                for entry in entries
+            ):
+                raise ValueError("Invalid automatic capability metadata")
+        except Exception:
+            # A broken optional provider cannot stop unrelated manual pipelines or retry every poll.
+            self.provider_failures[identifier] = fingerprint
+            return []
+        self.provider_failures.pop(identifier, None)
+        return entries
+
+    async def targets(self, config):
+        targets = []
+        for identifier in self.services.list_ids("automatic.targets."):
+            targets.extend(await self._provider(identifier, config, configuration=config))
+        return targets
 
     def prepare_config(self, config):
         self.config = config
@@ -146,6 +182,10 @@ class AutomaticController:
                     "sources": [],
                 }
                 continue
+            if capability.get("kind") != "observation" or consequence.get("kind") != "consequence":
+                raise ValueError("Select an observation and a consequence")
+            if capability.get("scopes") and original.scope.kind not in capability["scopes"]:
+                raise ValueError("This observation requires another scope")
             required = set(capability.get("required_consents", [])) | set(
                 consequence.get("required_consents", [])
             )
@@ -412,9 +452,13 @@ class AutomaticController:
                                 self.demands.revision += 1
                                 self.demands.changed()
                             active.add(intent.id)
+                            observed = (
+                                demand.latest is not None
+                                and demand.latest.lifecycle != Lifecycle.CLOSE
+                            )
                             status.update(
-                                state="active" if demand.received else "waiting",
-                                reason=None if demand.received else "observation_pending",
+                                state="active" if observed else "waiting",
+                                reason=None if observed else "observation_pending",
                             )
                             if demand.latest is not None:
                                 self.last_results[intent.id] = {
@@ -450,4 +494,5 @@ class AutomaticController:
             "activities": activities,
             "pending_privacy_restriction": self._privacy_barrier is not None,
             "captured_at": time.time(),
+            "provider_errors": sorted(self.provider_failures),
         }

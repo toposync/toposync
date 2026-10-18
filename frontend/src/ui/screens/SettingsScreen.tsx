@@ -23,6 +23,8 @@ import { i18n, resolveLocalizedString } from "../../util/i18n";
 import type { Viewport3DBackground } from "../../util/theme";
 
 import { Icon } from "../Icon";
+import { AutomaticScreen } from "../automatic/AutomaticScreen";
+import { automaticText } from "../automatic/messages";
 
 type Props = {
   backendAvailable: boolean;
@@ -65,10 +67,11 @@ type Props = {
 const VIEW_PANEL_ID = "__view__";
 const COMPOSITIONS_PANEL_ID = "__compositions__";
 const CORE_PANEL_ID = "__core__";
+const AUTOMATIC_PANEL_ID = "__automatic__";
 const EXTENSIONS_PANEL_ID = "__extensions__";
 const CAMERAS_PANEL_ID = "com.toposync.cameras";
 const ACTIVE_PANEL_STORAGE_KEY = "toposync.settings.active_panel.v5";
-const PRIMARY_SETTINGS_PANEL_IDS = new Set([CORE_PANEL_ID, COMPOSITIONS_PANEL_ID, CAMERAS_PANEL_ID]);
+const PRIMARY_SETTINGS_PANEL_IDS = new Set([CORE_PANEL_ID, COMPOSITIONS_PANEL_ID, CAMERAS_PANEL_ID, AUTOMATIC_PANEL_ID]);
 
 type ExitAction = "close" | "pipelines" | "processing_servers" | "access" | "logout" | "composition_editor";
 
@@ -153,6 +156,7 @@ export function SettingsScreen({
   onClose,
 }: Props): React.ReactElement {
   const { t, locale, setLocale } = i18n.useI18n();
+  const [automaticDirty, setAutomaticDirty] = useState(false);
   const [activePanelId, setActivePanelId] = useState<string>(() => loadActivePanelId(CORE_PANEL_ID));
   const compositionPositions = useCompositionPositions(activePanelId === COMPOSITIONS_PANEL_ID);
   const [draftExtensions, setDraftExtensions] = useState<Record<string, Record<string, unknown>>>(() => settings.extensions ?? {});
@@ -459,7 +463,7 @@ export function SettingsScreen({
       kind: "core",
       id: COMPOSITIONS_PANEL_ID,
       icon: "layer-group",
-      title: t("core.ui.settings.sections.compositions"),
+      title: locale === "pt-BR" ? "Espaços" : "Spaces",
       desc: t("core.ui.settings.sections.compositions_desc"),
       render: () => renderCompositionsPanel(),
     };
@@ -563,9 +567,15 @@ export function SettingsScreen({
     }));
     const primaryExtEntries = extEntries.filter((entry) => entry.id === CAMERAS_PANEL_ID);
     const otherExtEntries = extEntries.filter((entry) => entry.id !== CAMERAS_PANEL_ID);
-    return [coreEntry, compositionsEntry, ...primaryExtEntries, viewEntry, ...otherExtEntries, extensionsEntry];
+    const automaticEntry: SettingsEntry = {
+      kind: "core", id: AUTOMATIC_PANEL_ID, icon: "wand-magic-sparkles",
+      title: automaticText(locale, "title"), desc: automaticText(locale, "description"),
+      render: () => <AutomaticScreen onOpenFlows={() => requestExit("pipelines")} onDirtyChange={setAutomaticDirty} />,
+    };
+    return [...primaryExtEntries, compositionsEntry, automaticEntry, coreEntry, viewEntry, ...otherExtEntries, extensionsEntry];
   }, [
     activeCompositionId,
+    automaticDirty,
     backendAvailable,
     canDeleteComposition,
     compositionActionId,
@@ -583,6 +593,7 @@ export function SettingsScreen({
     onCreateComposition,
     onDeleteComposition,
     onOpenCompositionEditor,
+    onOpenPipelines,
     onRenameComposition,
     onSetGhostWalls,
     onSetGraphicsQuality,
@@ -846,7 +857,7 @@ export function SettingsScreen({
   }
 
   function requestExit(action: ExitAction): void {
-    if (saving) return;
+    if (saving || (automaticDirty && !window.confirm(automaticText(locale, "discard")))) return;
     if (action !== "composition_editor") setPendingCompositionEditorId(null);
     if (hasUnsavedChanges) {
       setPendingExitAction(action);
@@ -1410,7 +1421,7 @@ export function SettingsScreen({
         key={entry.id}
         type="button"
         className={["settingsNavItem", selected ? "isSelected" : ""].filter(Boolean).join(" ")}
-        onClick={() => setActivePanelId(entry.id)}
+        onClick={() => { if (entry.id === activePanelId || !automaticDirty || window.confirm(automaticText(locale, "discard"))) setActivePanelId(entry.id); }}
       >
         <span className="settingsNavIcon">
           <Icon name={entry.icon} />
@@ -1474,7 +1485,7 @@ export function SettingsScreen({
             if (value === "__action_pipelines") requestExit("pipelines");
             else if (value === "__action_processing_servers") requestExit("processing_servers");
             else if (value === "__action_access") requestExit("access");
-            else setActivePanelId(value);
+            else if (!automaticDirty || window.confirm(automaticText(locale, "discard"))) setActivePanelId(value);
           }}>
             <optgroup label={t("core.ui.settings.sidebar.main")}>
               {primarySidebarEntries.map(renderMobileOption)}
@@ -1555,6 +1566,8 @@ export function SettingsScreen({
                 <span className="settingsStatusMuted">{t("core.ui.settings.backend_offline_title")}</span>
               ) : saving ? (
                 <span className="settingsStatusMuted">{t("core.ui.settings.saving")}</span>
+              ) : automaticDirty ? (
+                <span className="settingsStatusMuted">{t("core.ui.settings.unsaved_changes")}</span>
               ) : hasUnsavedChanges ? (
                 <span className="settingsStatusMuted">
                   {unsavedSectionsLabel

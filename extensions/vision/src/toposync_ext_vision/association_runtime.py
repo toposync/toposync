@@ -185,7 +185,7 @@ class AssociationRuntime(BaseOperatorRuntime):
             # Identity remains exclusively in the authorized gallery/review API.
             payload = {**packet.payload, "association": projection}
             artifacts = packet.artifacts
-            if observation.policy == "no_identification":
+            if observation.policy in {"no_identification", "anonymous_continuity"}:
                 payload.pop("recognition", None)
                 artifacts = {
                     key: value

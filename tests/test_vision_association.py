@@ -262,3 +262,18 @@ def test_conflicting_duplicate_is_rejected_before_partial_ingest():
     with pytest.raises(AssociationConflict, match="identifier_conflict"):
         store.ingest([observation("a", 2, 0, 1), original.model_copy(update={"position": (8, 8)})])
     assert store.snapshot() == before
+
+
+def test_anonymous_continuity_links_geometry_without_inheriting_identity():
+    cfg = config()
+    for source in cfg.sources:
+        source.identity_policy = "anonymous_continuity"
+    store = AssociationStore(cfg)
+    first = observation("a", 1, 1, 0, policy="anonymous_continuity", position=(0, 0))
+    second = observation("b", 9, 2, 0, policy="anonymous_continuity", position=(0, 0))
+    nominal = observation("c", 2, 3, 0, policy="keep_confirmed_identity", position=(0, 0))
+    records = store.ingest([nominal, second, first])
+    assert records[first.id]["entity"] == records[second.id]["entity"]
+    assert records[nominal.id]["entity"] != records[second.id]["entity"]
+    with pytest.raises(AssociationConflict, match="identity_policy_conflict"):
+        store.correct(nominal.id, records[first.id]["entity"], store.revision, "owner")

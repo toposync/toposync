@@ -162,13 +162,14 @@ def test_maintenance_releases_expired_inactive_scope_capacity(tmp_path, monkeypa
     assert not store.path.exists()
 
 
-def test_no_identification_output_removes_upstream_gallery_handles(tmp_path):
+@pytest.mark.parametrize("policy", ["no_identification", "anonymous_continuity"])
+def test_no_identification_output_removes_upstream_gallery_handles(tmp_path, policy):
     from toposync.runtime.pipelines import Artifact
     from toposync_ext_vision.association import AssociationStore
 
     async def scenario():
         cfg = config()
-        cfg.sources[0].identity_policy = "no_identification"
+        cfg.sources[0].identity_policy = policy
         runtime = AssociationRuntime(cfg.model_dump(), PipelineRuntimeDependencies())
         runtime.store = AssociationStore(cfg)
         original = packet(recognition={"occurrence_id": "private-gallery-link"}).with_artifact(

@@ -235,3 +235,24 @@ def test_failed_save_keeps_privacy_barrier_and_does_not_retry_analysis(tmp_path,
         assert not accepted.json()["pending_privacy_restriction"]
         assert accepted.json()["configuration"]["blocked_camera_ids"] == ["fixture"]
         assert calls.count("started") == 1
+
+
+def test_failed_provider_does_not_loop_or_hide_healthy_catalog(tmp_path, monkeypatch):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        calls = []
+
+        def broken():
+            calls.append("attempt")
+            raise RuntimeError("private provider configuration must not reach the response")
+
+        services = client.app.state.automatic.services
+        services.register("automatic.catalog.broken", broken)
+        for _ in range(3):
+            response = client.get("/api/automatic")
+            assert response.status_code == 200
+            result = response.json()
+            assert any(item["id"] == "core.record" for item in result["catalog"])
+            assert result["provider_errors"] == ["automatic.catalog.broken"]
+            assert "private provider" not in response.text
+        assert calls == ["attempt"]

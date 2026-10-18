@@ -17,6 +17,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator
 
+from .automatic import AutomaticState
+
 
 PIPELINE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PIPELINE_GRAPH_SCHEMA_VERSION_KEY = "schema_version"
@@ -564,6 +566,46 @@ class ConfigStore:
             await self._persist_locked(cfg)
             return cfg
 
+    async def commit_automatic(
+        self, state: AutomaticState, *, expected_config: AppConfig,
+        derived_pipelines: list[Pipeline],
+    ) -> AutomaticState:
+        """Commit intent and its derived graphs together, preserving unrelated work."""
+        previous = AutomaticState.model_validate(expected_config.settings.core.get("automatic", {}))
+        if state.revision != previous.revision + 1:
+            raise PipelineAlreadyExistsError("Automatic revision changed; review it again")
+        previous_intents = {item.id: item for item in previous.intents}
+        for intent in state.intents:
+            old = previous_intents.get(intent.id)
+            if old is None and intent.revision != 1:
+                raise PipelineValidationError("New activities start at revision one")
+            if old is not None:
+                changed = intent.model_dump(exclude={"revision"}) != old.model_dump(exclude={"revision"})
+                if intent.revision != old.revision + int(changed):
+                    raise PipelineAlreadyExistsError("Activity revision changed; review it again")
+        manual = [p for p in expected_config.pipelines
+                  if p.graph.get("meta", {}).get("automatic", {}).get("intent_id") not in previous_intents]
+        intent_revisions = {item.id: item.revision for item in state.intents}
+        names = {p.name for p in manual}
+        for pipeline in derived_pipelines:
+            origin = pipeline.graph.get("meta", {}).get("automatic", {})
+            if origin.get("intent_id") not in intent_revisions or origin.get("revision") != intent_revisions[origin["intent_id"]]:
+                raise PipelineValidationError("Generated graph must reference its current activity")
+            if pipeline.name in names:
+                raise PipelineAlreadyExistsError("Generated graph conflicts with another pipeline")
+            names.add(pipeline.name)
+        settings = expected_config.settings.model_copy(update={
+            "core": {**expected_config.settings.core, "automatic": state.model_dump(mode="json")}
+        })
+        candidate = _build_config(expected_config, settings=settings, pipelines=[*manual, *derived_pipelines])
+        for pipeline in derived_pipelines:
+            await self.validate_pipeline_activation(pipeline, config=candidate)
+        await self.load()
+        async with self._lock:
+            self._check_validated_revision(expected_config)
+            await self._persist_locked(candidate)
+        return state
+
     async def get_active_composition(self) -> Composition:
         cfg = await self.get_config()
         for c in cfg.compositions:
@@ -585,7 +627,10 @@ class ConfigStore:
                 )
                 for extension_id, proposed in settings.extensions.items()
             }
-            settings = AppSettings(core=dict(settings.core), extensions=extensions)
+            core = {key: value for key, value in settings.core.items() if key != "automatic"}
+            if "automatic" in cfg.settings.core:
+                core["automatic"] = cfg.settings.core["automatic"]
+            settings = AppSettings(core=core, extensions=extensions)
             cfg2 = _build_config(cfg, settings=settings)
             cfg2 = _normalize_config(cfg2)
             await self._persist_locked(cfg2)
@@ -815,6 +860,7 @@ class ConfigStore:
 
     async def create_pipeline(self, pipeline: Pipeline) -> Pipeline:
         snapshot = await self.load()
+        self._require_manual_pipeline(pipeline, snapshot)
         await self.validate_pipeline_activation(pipeline, config=snapshot)
         await self.load()
         async with self._lock:
@@ -837,6 +883,10 @@ class ConfigStore:
     ) -> Pipeline:
         name = _normalize_pipeline_name(pipeline_name)
         snapshot = await self.load()
+        self._require_manual_pipeline(pipeline, snapshot)
+        for existing in snapshot.pipelines:
+            if existing.name == name:
+                self._require_manual_pipeline(existing, snapshot)
         await self.validate_pipeline_activation(pipeline, config=snapshot)
         await self.load()
         async with self._lock:
@@ -897,6 +947,7 @@ class ConfigStore:
                 pipelines.append(existing)
             if removed is None:
                 raise KeyError(name)
+            self._require_manual_pipeline(removed, cfg)
             if expected_pipeline is not None and removed != expected_pipeline:
                 raise PipelineAlreadyExistsError("Pipeline changed since preview; review it again")
 
@@ -904,6 +955,14 @@ class ConfigStore:
             cfg2 = _normalize_config(cfg2)
             await self._persist_locked(cfg2)
             return removed
+
+    @staticmethod
+    def _require_manual_pipeline(pipeline: Pipeline, config: AppConfig) -> None:
+        intent_id = pipeline.graph.get("meta", {}).get("automatic", {}).get("intent_id")
+        if intent_id in {
+            item.id for item in AutomaticState.model_validate(config.settings.core.get("automatic", {})).intents
+        }:
+            raise PipelineValidationError("Edit the Automatic activity instead of its generated graph")
 
     async def list_processing_servers(self) -> list[ProcessingServer]:
         settings = await self.get_settings()

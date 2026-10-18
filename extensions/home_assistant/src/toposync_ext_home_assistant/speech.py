@@ -206,7 +206,7 @@ def register_speech_operator(registry) -> None:
     registry.register_operator(
         operator_id="home_assistant.speak", description="Reads selected events on a configured Home Assistant speaker; service acceptance does not confirm playback.",
         config_model=HomeAssistantSpeakConfig, inputs=[{"name": "in", "required": True}], outputs=[{"name": "out"}],
-        capabilities=["home_assistant", "origin_only"], defaults=HomeAssistantSpeakConfig().model_dump(),
+        capabilities=["home_assistant", "origin_only", "external", "actuation"], defaults=HomeAssistantSpeakConfig().model_dump(),
         share_strategy="never", owner="com.toposync.home_assistant",
         ui={"pipeline_group": "output", "pipeline_level": "basic", "pipeline_order": 36,
             "aliases": ["Home Assistant", "speech", "speaker", "audio"]},

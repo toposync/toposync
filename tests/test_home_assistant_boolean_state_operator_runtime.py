@@ -8,6 +8,7 @@ from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines import Lifecycle, OperatorRegistry, PipelineGraphCompiler
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.runtime import Packet
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines.operators import register_camera_pipeline_operators
 from toposync_ext_home_assistant.pipelines import (
@@ -212,9 +213,9 @@ def test_home_assistant_boolean_state_compiles_after_onvif_event_source() -> Non
     register_home_assistant_pipeline_operators(registry)
     pipeline = Pipeline(
         name="onvif_to_ha",
-        graph={
-            "schema_version": 1,
-            "nodes": [
+        graph=build_pipeline_graph_v2(
+            graph_uid="onvif_to_ha",
+            nodes=[
                 {
                     "id": "onvif",
                     "operator": "camera.onvif_event_source",
@@ -230,8 +231,8 @@ def test_home_assistant_boolean_state_compiles_after_onvif_event_source() -> Non
                     },
                 },
             ],
-            "edges": [{"from": {"node": "onvif", "port": "out"}, "to": {"node": "ha", "port": "in"}}],
-        },
+            edges=[{"from": {"node": "onvif", "port": "out"}, "to": {"node": "ha", "port": "in"}}],
+        ),
     )
 
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)

@@ -53,6 +53,7 @@ class ResourceDemand:
     timer: asyncio.TimerHandle | None = None
     result_timer: asyncio.TimerHandle | None = None
     last_packet_id: str = ""
+    consequence: dict | None = None
     resources: list[weakref.ReferenceType] = field(default_factory=list)
 
 
@@ -90,6 +91,7 @@ class ResourceDemandRegistry:
                 self.blocked.add(tuple(item))
         self.revision = 0
         self.events = deque(maxlen=128)
+        self.pipeline_allowed: Callable[[Pipeline], bool] = lambda _pipeline: True
         self.changed: Callable[[], None] = lambda: None
         self.invalidated: Callable[[ResourceDemand], None] = lambda _demand: None
 
@@ -97,6 +99,8 @@ class ResourceDemandRegistry:
         outputs = {}
         dependencies = {}
         for pipeline in catalog:
+            if not self.pipeline_allowed(pipeline):
+                continue
             for raw in pipeline.graph.get("meta", {}).get("outputs", []):
                 output = ResultOutput.model_validate(raw)
                 if output.key in outputs:
@@ -179,6 +183,10 @@ class ResourceDemandRegistry:
         if demand.expires_at <= self.clock():
             self.release(identifier, "lease_expired")
             return False
+        producer = self.outputs.get(demand.request.result_key)
+        if producer is not None and not self.pipeline_allowed(producer[0]):
+            self.release(identifier, "analysis_blocked")
+            return False
         try:
             authorized = self.authorized(
                 demand.owner, demand.request.result_key, demand.request.purpose
@@ -247,6 +255,9 @@ class ResourceDemandRegistry:
         return False
 
     def authorized(self, owner: str, result_key: str, purpose: str) -> bool:
+        producer = self.outputs.get(result_key)
+        if producer is not None and not self.pipeline_allowed(producer[0]):
+            return False
         if purpose == "catalog":
             return any(
                 self.authorized(owner, result_key, selected)
@@ -277,6 +288,8 @@ class ResourceDemandRegistry:
             )
 
     def pipeline_blocked(self, pipeline: Pipeline) -> bool:
+        if not self.pipeline_allowed(pipeline):
+            return True
         keys = [item["key"] for item in pipeline.graph.get("meta", {}).get("outputs", [])]
         keys.extend(
             node["config"]["key"]
@@ -322,6 +335,16 @@ class ResourceDemandRegistry:
                     }
                 ],
             )
+            if demand.consequence is not None:
+                graph = build_pipeline_graph_v2(
+                    graph_uid=f"demand_{demand.id}",
+                    nodes=[*graph["nodes"], {"id": "consequence", **demand.consequence}],
+                    edges=[*graph["edges"], {
+                        "from": {"node": "result", "port": "out"},
+                        "to": {"node": "consequence", "port": "in"},
+                        "maxsize": 16, "drop_policy": "drop_oldest",
+                    }],
+                )
             pipelines.append(Pipeline(name=f"demand_{demand.id}", graph=graph))
         return pipelines
 

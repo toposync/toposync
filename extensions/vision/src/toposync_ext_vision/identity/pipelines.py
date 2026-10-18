@@ -464,14 +464,14 @@ def register_identity_operators(registry: OperatorRegistry) -> None:
             "vision.identity_evidence",
             IdentityEvidenceConfig,
             IdentityEvidenceRuntime,
-            ["vision", "heavy_compute", "private_data"],
+            ["vision", "heavy_compute", "private_data", "recognition"],
             "vision_model",
         ),
         (
             "vision.recognize_identity",
             RecognizeIdentityConfig,
             RecognizeIdentityRuntime,
-            ["vision", "origin_only", "private_data"],
+            ["vision", "origin_only", "private_data", "recognition"],
             "storage",
         ),
     ]:

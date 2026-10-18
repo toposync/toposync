@@ -76,6 +76,7 @@ def _processing_settings_payload(settings: AppSettings) -> dict[str, Any]:
     core = dict(settings.core)
     core.pop(PROCESSING_SERVERS_KEY, None)
     core.pop(EXTENSION_MANAGEMENT_KEY, None)
+    core.pop("automatic", None)
     return AppSettings(core=core, extensions=dict(settings.extensions)).model_dump(mode="json")
 
 
@@ -105,8 +106,10 @@ class PipelinesOrchestrator:
         files_dir,
         poll_interval_s: float = 1.0,
         runtime_dependencies: PipelineRuntimeDependencies | None = None,
+        automatic_controller=None,
     ) -> None:
         self._config_store = config_store
+        self._automatic = automatic_controller
         self._registry = operator_registry
         self._compiler = compiler
         self._notifications = notifications
@@ -268,6 +271,8 @@ class PipelinesOrchestrator:
 
     async def _reconcile_plan(self) -> None:
         config = await self._config_store.get_config()
+        if self._automatic is not None:
+            self._automatic.prepare_config(config)
         pipelines = config.pipelines
         servers = await self._config_store.list_processing_servers()
         settings = config.settings
@@ -279,6 +284,8 @@ class PipelinesOrchestrator:
         if demands is not None:
             await self._prune_revoked_local_demands()
             demands.bind(pipelines)
+            if self._automatic is not None:
+                await self._automatic.synchronize(config)
             await self._prune_revoked_local_demands()
             desired = [pipeline for pipeline in desired if not demands.pipeline_blocked(pipeline)]
             desired.extend(demands.pipelines())

@@ -23,6 +23,8 @@ from toposync.runtime.pipelines.inspection import PipelineInspectionStore
 from toposync.runtime.pipelines.inspection_api import install_inspection_routes
 from toposync.runtime.pipelines.demands import ResourceDemandRegistry
 from toposync.runtime.pipelines.demand_api import install_demand_routes
+from toposync.runtime.automatic_api import install_automatic_routes
+from toposync.runtime.automatic_runtime import AutomaticController
 from starlette.staticfiles import StaticFiles
 from starlette.types import Receive, Scope, Send
 from pydantic import BaseModel, Field
@@ -1566,6 +1568,12 @@ async def _lifespan(app: FastAPI):
 
     config_store.register_pipeline_activation_validator(validate_pipeline_activation)
 
+    automatic = AutomaticController(
+        store=config_store, services=services, operators=operator_registry,
+        demands=app.state.pipeline_demands, compiler=pipeline_compiler,
+    )
+    automatic.prepare_config(await config_store.get_config())
+    app.state.automatic = automatic
     orchestrator = PipelinesOrchestrator(
         config_store=config_store,
         operator_registry=operator_registry,
@@ -1573,6 +1581,7 @@ async def _lifespan(app: FastAPI):
         notifications=notifications,
         files_dir=config_store.paths.files_dir,
         poll_interval_s=1.0,
+        automatic_controller=automatic,
         runtime_dependencies=PipelineRuntimeDependencies(
             inspection_store=app.state.pipeline_inspection,
             demand_registry=app.state.pipeline_demands,
@@ -1589,6 +1598,7 @@ async def _lifespan(app: FastAPI):
             artifact_global_counter=artifact_global_counter,
         ),
     )
+    automatic.revoke = orchestrator._prune_revoked_local_demands
     orchestrator.start()
     app.state.pipelines_orchestrator = orchestrator
 
@@ -1709,6 +1719,13 @@ def create_app() -> FastAPI:
         return request.app.state.auth.require_authenticated(_auth_context(request)).user_id
 
     install_demand_routes(app, _result_principal, lambda request: _require(request, action="core:access:manage"))
+    def _automatic_owner(request: Request) -> str:
+        actor = _inspection_owner(request)
+        if request.method != "GET":
+            _require(request, action="core:pipelines:write")
+        return actor
+
+    install_automatic_routes(app, _automatic_owner)
 
     async def _refresh_result_access(request: Request, user_id: str) -> None:
         registry = request.app.state.pipeline_demands

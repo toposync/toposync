@@ -21,6 +21,9 @@ class ServiceRegistry:
     def register(self, service_id: str, service: Service) -> None:
         self._services[service_id] = service
 
+    def list_ids(self, prefix: str = "") -> list[str]:
+        return sorted(identifier for identifier in self._services if identifier.startswith(prefix))
+
     async def call(self, service_id: str, **kwargs: Any) -> Any:
         service = self._services.get(service_id)
         if service is None:

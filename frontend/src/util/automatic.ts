@@ -33,6 +33,7 @@ export type AutomaticActivity = { state: string; reason: string | null; requeste
 export type AutomaticSnapshot = {
   configuration: AutomaticConfiguration; catalog: AutomaticCapability[]; targets: AutomaticTarget[];
   activities: Record<string, AutomaticActivity>; provider_errors: string[];
+  manual_flows?: Record<string, { state: string; reason: string | null; received?: number; production_revision?: string }>;
 };
 export type AutomaticPreview = { activities: Record<string, AutomaticActivity>; pipelines: Array<{ name: string; display_name: string }> };
 

@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from toposync.runtime.config_store import Pipeline, _atomic_write_json
 
 from .result_references import ResultContract, ResultFieldName, ResultOutput, _ancestors
-from .runtime import ChannelGetResult, ChannelPutResult, Packet, QueueOperationStatus
+from .runtime import ChannelGetResult, ChannelPutResult, Lifecycle, Packet, QueueOperationStatus
 from .runtime import _estimate_packet_artifact_bytes
 from .inspection import frame_reference
 from .templates import build_pipeline_graph_v2
@@ -55,6 +55,13 @@ class ResourceDemand:
     last_packet_id: str = ""
     consequence: dict | None = None
     resources: list[weakref.ReferenceType] = field(default_factory=list)
+
+
+class FlowResultBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(min_length=1, max_length=128)
+    node_uid: str = Field(min_length=1, max_length=256)
+    request: DemandRequest
 
 
 class ResourceDemandRegistry:
@@ -94,6 +101,108 @@ class ResourceDemandRegistry:
         self.pipeline_allowed: Callable[[Pipeline], bool] = lambda _pipeline: True
         self.changed: Callable[[], None] = lambda: None
         self.invalidated: Callable[[ResourceDemand], None] = lambda _demand: None
+        self.flow_leases: dict[str, str] = {}
+        self.flow_status: dict[str, dict] = {}
+        self._failed_flows: dict[str, str] = {}
+
+    def synchronize_flows(self, pipelines: list[Pipeline]) -> list[Pipeline]:
+        """Bind saved manual inputs to their own leases without persisting lease identifiers."""
+        desired, retained = [], set()
+        for pipeline in pipelines:
+            raw = pipeline.graph.get("meta", {}).get("result_consumer")
+            if raw is None:
+                if pipeline.enabled:
+                    desired.append(pipeline)
+                continue
+            name = pipeline.name
+            retained.add(name)
+            identifier = self.flow_leases.get(name)
+            if not pipeline.enabled:
+                if identifier:
+                    self.release(identifier, "manual_flow_paused")
+                    self.flow_leases.pop(name, None)
+                self._failed_flows.pop(name, None)
+                self.flow_status[name] = {"state": "paused", "reason": "manual_flow_paused"}
+                try:
+                    binding = FlowResultBinding.model_validate(raw)
+                    current = self.outputs.get(binding.request.result_key)
+                    if current and current[2] != binding.request.production_revision:
+                        self.flow_status[name]["production_revision"] = current[2]
+                except ValueError:
+                    pass
+                continue
+            signature = hashlib.sha256(json.dumps(pipeline.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
+            try:
+                binding, _ = self.validate_flow(pipeline)
+                if self._failed_flows.get(name) == signature:
+                    continue
+                if identifier not in self.demands:
+                    demand = self.open(binding.owner, binding.request)
+                    identifier = demand.id
+                    self.flow_leases[name] = identifier
+                else:
+                    self.renew(identifier)
+                bound = pipeline.model_copy(deep=True)
+                for item in bound.graph["nodes"]:
+                    if item["uid"] == binding.node_uid:
+                        item["config"]["demand_id"] = identifier
+                desired.append(bound)
+                demand = self.demands[identifier]
+                self.flow_status[name] = {
+                    "state": "active" if demand.latest is not None and demand.latest.lifecycle != Lifecycle.CLOSE else "waiting",
+                    "reason": None, "demand_id": identifier, "received": demand.received,
+                }
+            except (ValueError, PermissionError, StopIteration, KeyError, TypeError):
+                self.reject_flow(pipeline, "result_binding_unavailable")
+                # Authorization/revision checks are safe to repeat; activation failures are not.
+                self._failed_flows.pop(name, None)
+                try:
+                    binding = FlowResultBinding.model_validate(raw)
+                except ValueError:
+                    continue
+                key = binding.request.result_key
+                current = self.outputs.get(key)
+                if not self.pipeline_allowed(pipeline):
+                    self.flow_status[name].update(state="blocked", reason="privacy_or_extension")
+                elif self.is_blocked(binding.owner, key, "manual") or not self.authorized(binding.owner, key, "manual"):
+                    self.flow_status[name].update(state="blocked", reason="result_access_denied")
+                elif current and current[2] != binding.request.production_revision:
+                    self.flow_status[name].update(reason="result_changed_review_required", production_revision=current[2])
+        for name in set(self.flow_leases) - retained:
+            self.release(self.flow_leases.pop(name), "manual_flow_removed")
+        self._failed_flows = {k: v for k, v in self._failed_flows.items() if k in retained}
+        self.flow_status = {k: v for k, v in self.flow_status.items() if k in retained}
+        return desired
+
+    def reject_flow(self, pipeline: Pipeline, reason: str) -> None:
+        identifier = self.flow_leases.pop(pipeline.name, None)
+        if identifier:
+            self.release(identifier, "manual_flow_unavailable")
+        self._failed_flows[pipeline.name] = hashlib.sha256(
+            json.dumps(pipeline.model_dump(mode="json"), sort_keys=True).encode()
+        ).hexdigest()
+        self.flow_status[pipeline.name] = {"state": "unavailable", "reason": reason}
+
+    def validate_flow(self, pipeline: Pipeline) -> tuple[FlowResultBinding, str]:
+        binding = FlowResultBinding.model_validate(pipeline.graph["meta"]["result_consumer"])
+        if binding.request.purpose != "manual" or pipeline.processing_server_id != "local":
+            raise ValueError("Manual result flows require a local manual consumer")
+        node = next((n for n in pipeline.graph["nodes"] if n["uid"] == binding.node_uid), None)
+        if node is None or node["operator"] != "core.result_input" or {
+            key: value for key, value in node["config"].items() if key != "demand_id"
+        } != {
+            "key": binding.request.result_key, "contract": binding.request.contract.model_dump(),
+        }:
+            raise ValueError("Result input changed; review its binding")
+        self.validate_request(binding.owner, binding.request)
+        identifier = node["config"].get("demand_id")
+        if identifier is not None:
+            demand = self.demands.get(identifier)
+            if (identifier != self.flow_leases.get(pipeline.name) or demand is None
+                or demand.owner != binding.owner or demand.request != binding.request
+                or not self.allowed(identifier)):
+                raise PermissionError("Manual result lease does not belong to this flow")
+        return binding, node["id"]
 
     def bind(self, catalog: list[Pipeline]) -> None:
         outputs = {}
@@ -131,8 +240,7 @@ class ResourceDemandRegistry:
             if current is None or current[2] != demand.request.production_revision:
                 self.release(demand.id, "incompatible_result_revision")
 
-    def open(self, owner: str, request: DemandRequest) -> ResourceDemand:
-        self.expire()
+    def validate_request(self, owner: str, request: DemandRequest) -> None:
         current = self.outputs.get(request.result_key)
         if (
             current is None
@@ -148,6 +256,10 @@ class ResourceDemandRegistry:
             owner, request.result_key, request.purpose
         ):
             raise PermissionError("Result access denied")
+
+    def open(self, owner: str, request: DemandRequest) -> ResourceDemand:
+        self.expire()
+        self.validate_request(owner, request)
         if len(self.demands) >= self.maximum_demands:
             raise ValueError("Demand capacity")
         demand = ResourceDemand(
@@ -485,6 +597,19 @@ class ConsumerChannel:
 
 def register_demand_operators(registry) -> None:
     from .execution import PassThroughRuntime, SinkRuntime
+    from .result_references import ResultReference
+
+    class ResultInputDraft(ResultReference):
+        # The compiler validates ResultReference before expanding an editor draft.
+        key: str = ""
+        contract: ResultContract = Field(default_factory=lambda: ResultContract(version=1))
+
+    registry.register_operator(
+        operator_id="core.result_input", config_model=ResultInputDraft,
+        description="A named result consumed through an independently authorized demand.",
+        inputs=[], outputs=[{"name": "out"}], owner="core",
+        share_strategy="never",
+    )
 
     class DemandConfig(BaseModel):
         model_config = ConfigDict(extra="forbid")

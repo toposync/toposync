@@ -3,6 +3,178 @@ import copy
 from test_auth_local import _create_client, _setup_owner
 from toposync.runtime.pipelines import SourceOperatorRuntime
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+from toposync.runtime.config_store import PipelineValidationError
+
+
+def test_saved_manual_flow_owns_lease_survives_pause_and_rejects_forged_binding(tmp_path, monkeypatch):
+    calls = []
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        register_capability(client, calls)
+        response = client.put('/api/automatic', json={
+            'expected_revision': 0, 'configuration': {'enabled': True, 'intents': [{
+                'id': 'garage', 'name': 'Garage', 'capability': 'test.presence',
+                'scope': {'kind': 'camera', 'camera_ids': ['fixture']},
+            }]},
+        })
+        assert response.status_code == 200, response.text
+        state = response.json()['configuration']
+        response = client.post('/api/automatic/garage/flow', json={'expected_revision': state['revision']})
+        assert response.status_code == 200, response.text
+        pipeline = response.json()['pipeline']
+        registry = client.app.state.pipeline_demands
+        identifier = registry.flow_leases[pipeline['name']]
+        orchestrator = client.app.state.pipelines_orchestrator
+        assert pipeline['name'] in {p.name for p in orchestrator._local_bundle.pipelines}
+        assert not orchestrator._activation_errors
+        compiled = client.post('/api/pipelines/compile', json={'pipeline': pipeline})
+        assert compiled.status_code == 200, compiled.text
+        assert registry.demands[identifier].request.purpose == 'manual'
+        assert all('demand_id' not in n['config'] for n in pipeline['graph']['nodes'])
+        again = client.post('/api/automatic/garage/flow', json={'expected_revision': state['revision']})
+        assert again.status_code == 200 and registry.flow_leases[pipeline['name']] == identifier
+        assert calls.count('started') == 1
+        forged = copy.deepcopy(pipeline)
+        forged['graph']['meta']['result_consumer']['owner'] = 'someone-else'
+        assert client.put('/api/pipelines/' + pipeline['name'], json=forged).status_code in (400, 422)
+        forged['name'] = 'forged_copy'
+        assert client.post('/api/pipelines', json=forged).status_code in (400, 422)
+        state['enabled'] = False
+        paused = client.put('/api/automatic', json={'expected_revision': state['revision'], 'configuration': state})
+        assert paused.status_code == 200, paused.text
+        assert not client.app.state.automatic.leases
+        assert registry.allowed(identifier)
+        assert calls.count('started') == 1 and calls.count('stopped') == 0
+        pipeline['enabled'] = False
+        disabled = client.put('/api/pipelines/' + pipeline['name'], json=pipeline)
+        assert disabled.status_code == 200, disabled.text
+        client.portal.call(orchestrator._reconcile)
+        assert not registry.allowed(identifier)
+        assert calls.count('stopped') == 1
+        pipeline['enabled'] = True
+        resumed = client.put('/api/pipelines/' + pipeline['name'], json=pipeline)
+        assert resumed.status_code == 200, resumed.text
+        client.portal.call(orchestrator._reconcile)
+        identifier = registry.flow_leases[pipeline['name']]
+        assert registry.allowed(identifier) and calls.count('started') == 2
+        state = paused.json()['configuration']
+        state['blocked_camera_ids'] = ['fixture']
+        blocked = client.put('/api/automatic', json={'expected_revision': state['revision'], 'configuration': state})
+        assert blocked.status_code == 200, blocked.text
+        assert not registry.allowed(identifier)
+        assert calls.count('stopped') == 2
+        assert client.get('/api/automatic').json()['manual_flows'][pipeline['name']]['state'] == 'blocked'
+        state = blocked.json()['configuration']
+        state['blocked_camera_ids'] = []
+        allowed = client.put('/api/automatic', json={'expected_revision': state['revision'], 'configuration': state})
+        assert allowed.status_code == 200, allowed.text
+        assert registry.allowed(registry.flow_leases[pipeline['name']])
+        assert calls.count('started') == 3
+
+
+def test_manual_flow_requires_explicit_current_review_and_preserves_custom_steps(tmp_path, monkeypatch):
+    calls = []
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        register_capability(client, calls)
+        services = client.app.state.automatic.services
+        original = services._services['automatic.plan.fixture']
+
+        def plan(**kwargs):
+            result = original(**kwargs)
+            result['graph']['meta']['outputs'][0]['production_scope'] = str(kwargs['intent'].condition.get('duration', 1))
+            return result
+
+        services.register('automatic.plan.fixture', plan)
+        state = {'enabled': False, 'intents': [{'id': 'garage', 'name': 'Garage',
+                 'capability': 'test.presence', 'scope': {'camera_ids': ['fixture']}}]}
+        saved = client.put('/api/automatic', json={'expected_revision': 0, 'configuration': state})
+        assert saved.status_code == 200, saved.text
+        state = saved.json()['configuration']
+        created = client.post('/api/automatic/garage/flow', json={'expected_revision': state['revision']})
+        assert created.status_code == 200, created.text
+        pipeline = created.json()['pipeline']
+        pipeline['display_name'] = 'My custom flow'
+        pipeline['graph']['nodes'][-1]['id'] = 'custom_activity'
+        pipeline['graph']['edges'][-1]['to']['node'] = 'custom_activity'
+        changed = client.put('/api/pipelines/' + pipeline['name'], json=pipeline)
+        assert changed.status_code == 200, changed.text
+        registry = client.app.state.pipeline_demands
+        old_revision = pipeline['graph']['meta']['result_consumer']['request']['production_revision']
+        state['intents'][0]['condition'] = {'duration': 2}
+        changed = client.put('/api/automatic', json={'expected_revision': state['revision'], 'configuration': state})
+        assert changed.status_code == 200, changed.text
+        state = changed.json()['configuration']
+        status = client.get('/api/automatic').json()['manual_flows'][pipeline['name']]
+        assert status['reason'] == 'result_changed_review_required'
+        assert not registry.flow_leases and calls.count('started') == calls.count('stopped') == 1
+        revision = status['production_revision']
+        assert revision != old_revision
+        for _ in range(3):
+            client.portal.call(client.app.state.pipelines_orchestrator._reconcile)
+        assert calls.count('started') == 1
+        stale = client.post('/api/automatic/garage/flow', json={
+            'expected_revision': state['revision'], 'production_revision': old_revision})
+        assert stale.status_code == 409
+        accepted = client.post('/api/automatic/garage/flow', json={
+            'expected_revision': state['revision'], 'production_revision': revision})
+        assert accepted.status_code == 200, accepted.text
+        updated = accepted.json()['pipeline']
+        assert updated['display_name'] == 'My custom flow'
+        assert updated['graph']['nodes'][-1]['id'] == 'custom_activity'
+        assert updated['graph']['edges'][-1]['to']['node'] == 'custom_activity'
+        assert registry.demands[registry.flow_leases[pipeline['name']]].request.production_revision == revision
+        assert calls.count('started') == 2
+        updated['enabled'] = False
+        paused = client.put('/api/pipelines/' + pipeline['name'], json=updated)
+        assert paused.status_code == 200, paused.text
+        client.portal.call(client.app.state.pipelines_orchestrator._reconcile)
+        state['intents'][0]['condition'] = {'duration': 3}
+        changed = client.put('/api/automatic', json={'expected_revision': state['revision'], 'configuration': state})
+        assert changed.status_code == 200, changed.text
+        status = client.get('/api/automatic').json()['manual_flows'][pipeline['name']]
+        assert status['state'] == 'paused' and status['production_revision'] != revision
+        reviewed = client.post('/api/automatic/garage/flow', json={
+            'expected_revision': changed.json()['configuration']['revision'],
+            'production_revision': status['production_revision']})
+        assert reviewed.status_code == 200, reviewed.text
+        assert not reviewed.json()['pipeline']['enabled']
+        assert not registry.demands and calls.count('started') == 2
+
+
+def test_manual_activation_failure_releases_demand_without_retry_loop(tmp_path, monkeypatch):
+    calls = []
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        register_capability(client, calls)
+        saved = client.put('/api/automatic', json={
+            'expected_revision': 0, 'configuration': {'enabled': False, 'intents': [{
+                'id': 'garage', 'name': 'Garage', 'capability': 'test.presence',
+                'scope': {'kind': 'camera', 'camera_ids': ['fixture']},
+            }]},
+        })
+        assert saved.status_code == 200
+        store = client.app.state.config_store
+        validator = store._pipeline_activation_validator
+        validations = []
+
+        async def changed_prerequisite(pipeline, config):
+            if pipeline.graph.get('meta', {}).get('result_consumer'):
+                validations.append(pipeline.name)
+                if len(validations) > 1:
+                    raise PipelineValidationError('fixture prerequisite became unavailable')
+            await validator(pipeline, config)
+
+        store.register_pipeline_activation_validator(changed_prerequisite)
+        response = client.post('/api/automatic/garage/flow', json={'expected_revision': 1})
+        assert response.status_code == 200, response.text
+        assert response.json()['status']['state'] == 'unavailable'
+        registry = client.app.state.pipeline_demands
+        assert not registry.demands and not registry.flow_leases
+        assert calls.count('started') == 0
+        for _ in range(3):
+            client.portal.call(client.app.state.pipelines_orchestrator._reconcile)
+        assert len(validations) == 2 and not registry.demands
 
 
 def register_capability(client, calls):

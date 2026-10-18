@@ -18,7 +18,7 @@ from toposync.runtime.pipelines import (
     SourceOperatorRuntime,
     register_builtin_operators,
 )
-from toposync.runtime.pipelines.demands import DemandRequest, ResourceDemandRegistry
+from toposync.runtime.pipelines.demands import DemandRequest, FlowResultBinding, ResourceDemandRegistry
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
 from toposync.runtime.pipelines.runtime import Lifecycle
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
@@ -215,9 +215,7 @@ def test_automatic_uses_real_consequence_and_pause_preserves_manual_and_video(tm
                 if node.operator_id == "test.analysis"
             ]
             output = demands.outputs["automatic." + intent.id]
-            manual = demands.open(
-                "owner",
-                DemandRequest(
+            manual_request = DemandRequest(
                     consumer_id="manual",
                     purpose="manual",
                     result_key=output[1].key,
@@ -225,9 +223,18 @@ def test_automatic_uses_real_consequence_and_pause_preserves_manual_and_video(tm
                     production_revision=output[2],
                     payload_keys=["subject", "camera_id"],
                     lease_seconds=30,
-                ),
+                )
+            manual_graph = build_pipeline_graph_v2(
+                graph_uid="manual", nodes=[{"id": "result", "operator": "core.result_input", "config": {
+                    "key": manual_request.result_key, "contract": manual_request.contract.model_dump(),
+                }}], edges=[],
             )
+            manual_graph.setdefault("meta", {})["result_consumer"] = FlowResultBinding(
+                owner="owner", node_uid=manual_graph["nodes"][0]["uid"], request=manual_request,
+            ).model_dump(mode="json")
+            await store.create_pipeline(Pipeline(name="manual", graph=manual_graph), result_binding=True)
             await orchestrator._reconcile()
+            manual = demands.demands[demands.flow_leases["manual"]]
             await until(lambda: manual.received > 0)
             assert counters["analysis_starts"] == 1, {
                 "before": initial_sources,

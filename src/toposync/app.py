@@ -1547,7 +1547,15 @@ async def _lifespan(app: FastAPI):
         try:
             catalog = [item for item in config.pipelines if item.name != pipeline.name] + [pipeline]
             compiled = pipeline_compiler.compile_many([pipeline], catalog=catalog).pipelines[0]
-            if any(operator_registry.get(node.operator_id).runtime_factory is None for node in compiled.nodes):
+            bound_node = None
+            if pipeline.graph.get("meta", {}).get("result_consumer"):
+                try:
+                    _, bound_node = app.state.pipeline_demands.validate_flow(pipeline)
+                except (ValueError, PermissionError) as error:
+                    raise PipelineValidationError("Manual result binding is unavailable") from error
+            if any(operator_registry.get(node.operator_id).runtime_factory is None
+                   and not (node.operator_id == "core.demand_required" and node.node_id == bound_node)
+                   for node in compiled.nodes):
                 raise PipelineValidationError("Reusable results require an explicit consumer demand")
             context = await _build_pipeline_diagnostics_context(
                 config_store, processing_server_id=pipeline.processing_server_id, config=config
@@ -3564,6 +3572,14 @@ def create_app() -> FastAPI:
             marker=None,
         )
 
+    async def _pipeline_compile_catalog(request: Request, pipeline: Pipeline) -> list[Pipeline]:
+        if not any(node.get("operator") == "core.result_input" for node in pipeline.graph.get("nodes", [])):
+            return [pipeline]
+        # Expanded compilation exposes producer configuration, not just its public result.
+        _inspection_owner(request)
+        stored = await request.app.state.config_store.list_pipelines()
+        return [item for item in stored if item.name != pipeline.name] + [pipeline]
+
     @app.post("/api/pipelines/compile", response_model=PipelineCompileResponse)
     async def compile_pipeline_graph(
         request: Request, body: PipelineCompileRequest
@@ -3599,6 +3615,7 @@ def create_app() -> FastAPI:
                 compiled = await asyncio.to_thread(
                     compiler.compile_many,
                     [pipeline],
+                    catalog=await _pipeline_compile_catalog(request, pipeline),
                     cancel_check=check_cancelled,
                 )
             except GraphCompileError as exc:
@@ -3676,6 +3693,7 @@ def create_app() -> FastAPI:
                 compiled = await asyncio.to_thread(
                     compiler.compile_many,
                     [pipeline.model_copy(update={"graph": graph})],
+                    catalog=await _pipeline_compile_catalog(request, pipeline.model_copy(update={"graph": graph})),
                     cancel_check=check_cancelled,
                 )
             except GraphCompileError as exc:

@@ -362,6 +362,7 @@ export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "core.debug": "Inspect flow",
   "core.stream_state_snapshot": "Capture stream state",
   "core.passthrough": "Pass through flow",
+  "core.result_input": "Use shared result",
   "core.sink": "End flow",
   "dist.remote_source": "Receive remote packets",
   "dist.target_filter": "Route remote packets",

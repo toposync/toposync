@@ -1,4 +1,9 @@
 const messages = {
+  reviewFlow: ["Review changed result", "Revisar resultado alterado"],
+  reviewFlowHint: ["The activity changed. Review its place and observation above before reconnecting this manual flow. Its other steps and pause state are preserved.", "A atividade mudou. Revise o lugar e a observação acima antes de reconectar este fluxo manual. Suas outras etapas e seu estado de pausa serão preservados."],
+  acceptFlow: ["Accept current result", "Aceitar resultado atual"],
+  useInFlow: ["Use in a flow", "Usar em um fluxo"], manualFlow: ["Manual flow", "Fluxo manual"],
+  manualFlowHint: ["Creates a separate local consumer without notifications. Pause it in Flows; pausing Automatic keeps it running.", "Cria um consumidor local separado, sem avisos. Pause-o em Fluxos; pausar Automático mantém esse uso."],
   prepareSources: ["Prepare source continuity", "Preparar continuidade entre fontes"], preparationUnavailable: ["The preparation panel is unavailable. Enable its extension to continue.", "O painel de preparação está indisponível. Habilite sua extensão para continuar."],
   title: ["Automatic", "Automático"], description: ["Activities organized by place", "Atividades organizadas por lugar"],
   loading: ["Loading activities…", "Carregando atividades…"], retry: ["Reload", "Recarregar"],

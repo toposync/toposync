@@ -227,13 +227,16 @@ def expand_result_references(
                 if reference.demand_id and node["id"] not in reference_scopes
                 else {},
             )
-            graph["edges"].append(
-                {
-                    "uid": f"result:{node['uid']}",
-                    "from": {"node": prefix + root, "port": output.port},
-                    "to": {"node": node["id"], "port": "in"},
-                }
-            )
+            incoming = {
+                "uid": f"result:{node['uid']}",
+                "from": {"node": prefix + root, "port": output.port},
+                "to": {"node": node["id"], "port": "in"},
+            }
+            if graph.get("meta", {}).get("result_consumer", {}).get("node_uid") == node["uid"]:
+                # Saved event flows must retain distinct subjects and terminal events.
+                incoming.update(queue={"max_items": 64, "drop_policy": "block"},
+                                backpressure={"mode": "block"}, lifecycle={"compact_updates": False})
+            graph["edges"].append(incoming)
         return graph
 
     return [pipeline.model_copy(update={"graph": expand(pipeline)}) for pipeline in pipelines]

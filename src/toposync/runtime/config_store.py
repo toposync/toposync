@@ -858,9 +858,11 @@ class ConfigStore:
         cfg = await self.get_config()
         return next((p for p in cfg.pipelines if p.name == name), None)
 
-    async def create_pipeline(self, pipeline: Pipeline) -> Pipeline:
+    async def create_pipeline(self, pipeline: Pipeline, *, result_binding: bool = False) -> Pipeline:
         snapshot = await self.load()
         self._require_manual_pipeline(pipeline, snapshot)
+        if pipeline.graph.get("meta", {}).get("result_consumer") and not result_binding:
+            raise PipelineValidationError("Result consumer ownership is managed by the result API")
         await self.validate_pipeline_activation(pipeline, config=snapshot)
         await self.load()
         async with self._lock:
@@ -879,7 +881,8 @@ class ConfigStore:
             return pipeline
 
     async def replace_pipeline(
-        self, pipeline_name: str, pipeline: Pipeline, *, expected_pipeline: Pipeline | None = None
+        self, pipeline_name: str, pipeline: Pipeline, *, expected_pipeline: Pipeline | None = None,
+        result_binding: bool = False,
     ) -> Pipeline:
         name = _normalize_pipeline_name(pipeline_name)
         snapshot = await self.load()
@@ -887,6 +890,8 @@ class ConfigStore:
         for existing in snapshot.pipelines:
             if existing.name == name:
                 self._require_manual_pipeline(existing, snapshot)
+                if not result_binding and existing.graph.get("meta", {}).get("result_consumer") != pipeline.graph.get("meta", {}).get("result_consumer"):
+                    raise PipelineValidationError("Result consumer binding requires a new review")
         await self.validate_pipeline_activation(pipeline, config=snapshot)
         await self.load()
         async with self._lock:

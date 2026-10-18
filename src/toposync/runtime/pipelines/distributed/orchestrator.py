@@ -154,6 +154,11 @@ class PipelinesOrchestrator:
                 pass
             self._task = None
         await self._stop_all()
+        demands = self._runtime_deps_base.demand_registry
+        if demands is not None:
+            for identifier in list(demands.flow_leases.values()):
+                demands.release(identifier, "manual_flow_host_stopped")
+            demands.flow_leases.clear()
         await self._runtime_deps_base.execution_scheduler.shutdown()
 
     def trigger_reload(self) -> None:
@@ -286,6 +291,7 @@ class PipelinesOrchestrator:
             demands.bind(pipelines)
             if self._automatic is not None:
                 await self._automatic.synchronize(config)
+            desired = demands.synchronize_flows(pipelines)
             await self._prune_revoked_local_demands()
             desired = [pipeline for pipeline in desired if not demands.pipeline_blocked(pipeline)]
             desired.extend(demands.pipelines())
@@ -320,6 +326,10 @@ class PipelinesOrchestrator:
                     activation_errors[pipeline.name] = message
                     logger.warning("pipeline activation blocked name=%s: %s", pipeline.name, message)
             self._activation_errors = activation_errors
+            if demands is not None:
+                for pipeline in pipelines:
+                    if pipeline.name in activation_errors and pipeline.graph.get("meta", {}).get("result_consumer"):
+                        demands.reject_flow(pipeline, activation_errors[pipeline.name])
             if await self._config_store.get_config() != config:
                 # A user may disable or edit a pipeline while remote preflight waits.
                 # Reconcile the new snapshot before starting any of its predecessors.
@@ -329,6 +339,11 @@ class PipelinesOrchestrator:
         # Keep rejected configurations out of both origins and remote config sync.
         # Failed preflight is retried only after a relevant edit or explicit reload.
         desired = [pipeline for pipeline in desired if pipeline.name not in self._activation_errors]
+        if demands is not None:
+            desired = [pipeline for pipeline in desired if all(
+                demands.allowed(node["config"]["demand_id"])
+                for node in pipeline.graph.get("nodes", []) if node.get("config", {}).get("demand_id")
+            )]
 
         servers_by_id = {s.id: s for s in servers}
         local: list[Pipeline] = []
@@ -530,7 +545,7 @@ class PipelinesOrchestrator:
         configured = {pipeline.name: pipeline for pipeline in handle.pipelines}
         survivors = tuple(pipeline for pipeline in handle.runtime.report.pipelines
             if all(demands.allowed(node.normalized_config["demand_id"])
-                   for node in pipeline.nodes if node.operator_id == "core.demand_sink")
+                   for node in pipeline.nodes if node.operator_id in {"core.demand_sink", "core.demand_consumer"})
             and not demands.pipeline_blocked(configured[pipeline.name]))
         if len(survivors) == len(handle.runtime.report.pipelines):
             return

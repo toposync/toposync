@@ -19,6 +19,8 @@ from typing import Any, Awaitable, Callable, Literal, TypeVar
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.responses import StreamingResponse
+from toposync.runtime.pipelines.inspection import PipelineInspectionStore
+from toposync.runtime.pipelines.inspection_api import install_inspection_routes
 from starlette.staticfiles import StaticFiles
 from starlette.types import Receive, Scope, Send
 from pydantic import BaseModel, Field
@@ -1439,6 +1441,7 @@ async def _lifespan(app: FastAPI):
     app.state.pipeline_graph_compiler = pipeline_compiler
     pipeline_stats_store = PipelineStatsStore()
     app.state.pipeline_stats_store = pipeline_stats_store
+    app.state.pipeline_inspection = PipelineInspectionStore()
     pipeline_telemetry_store = create_default_pipeline_telemetry_store()
     app.state.pipeline_telemetry_store = pipeline_telemetry_store
     pipeline_telemetry_checkpoint = create_default_pipeline_telemetry_disk_checkpoint(
@@ -1536,6 +1539,7 @@ async def _lifespan(app: FastAPI):
         files_dir=config_store.paths.files_dir,
         poll_interval_s=1.0,
         runtime_dependencies=PipelineRuntimeDependencies(
+            inspection_store=app.state.pipeline_inspection,
             services=services,
             pipeline_stats_store=pipeline_stats_store,
             pipeline_telemetry_store=pipeline_telemetry_store,
@@ -1565,6 +1569,8 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
+        for token in list(app.state.pipeline_inspection.sessions):
+            app.state.pipeline_inspection.close(token)
         try:
             await orchestrator.stop()
         except Exception:
@@ -1650,6 +1656,16 @@ def create_app() -> FastAPI:
             resource_type=resource_type,
             resource_selector=resource_selector,
         )
+
+    def _inspection_owner(request: Request) -> str:
+        _require(request, action="core:pipelines:read")
+        principal = _auth_context(request).principal
+        # Inspection may contain pixels; narrower source policies need their own projection.
+        if principal is None or principal.role != "owner":
+            raise HTTPException(status_code=403, detail="inspection_owner_required")
+        return principal.user_id
+
+    install_inspection_routes(app, _inspection_owner)
 
     def _require_extension_settings_authorization(
         request: Request,

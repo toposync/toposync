@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type Hls from "hls.js";
 import type { LiveViewFrame } from "@toposync/plugin-api";
 import { usePresentedFrame } from "./usePresentedFrame";
+import { PipelineInspectionPanel } from "./PipelineInspectionPanel";
 
 import {
   isAbortError,
@@ -3750,6 +3751,7 @@ export function StreamTilePlayer({
         </div>
 
 	        {controls && <div className="streamsTileOverlayActions">
+          <PipelineInspectionPanel />
           {variantOptions.length > 0 ? (
             <div className="streamsTileVariantControl" title={currentVariantLabel}>
               <select

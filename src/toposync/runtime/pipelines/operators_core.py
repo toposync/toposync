@@ -6,6 +6,7 @@ import math
 import re
 import tempfile
 import time
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -762,6 +763,7 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
         self._height = int(parsed.height)
         self._index = 0
         self._next_tick = time.monotonic()
+        self._capture_instance = uuid.uuid4().hex
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         if self._index >= self._frames:
@@ -786,6 +788,10 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
         frame = np.full((self._height, self._width, 3), value, dtype=np.uint8)
         current_ts = time.time()
         payload = {
+            "capture_evidence": {"capture_instance": self._capture_instance, "generation": 0,
+                "sequence": self._index + 1, "published_at": current_ts,
+                "received_monotonic": time.monotonic(), "physical_timestamp_verified": False,
+                "captured_monotonic": None},
             "source": build_source_descriptor(
                 device_id=self._camera_id,
                 source_id="demo",

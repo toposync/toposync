@@ -168,6 +168,18 @@ export type Pipeline = {
   graph: unknown;
 };
 
+export async function openPipelineInspection(name: string): Promise<import("@toposync/plugin-api").InspectionSnapshot> {
+  return requestJson(resolveToposyncUrl(`/api/pipelines/${encodeURIComponent(name)}/inspection`), { method: "POST" }, "Inspection unavailable");
+}
+
+export async function getPipelineInspection(session: string): Promise<import("@toposync/plugin-api").InspectionSnapshot> {
+  return requestJson(resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(session)}`), undefined, "Inspection unavailable");
+}
+
+export async function closePipelineInspection(session: string): Promise<void> {
+  await fetch(resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(session)}`), { method: "DELETE", credentials: "same-origin" });
+}
+
 export type PipelineAlert = {
   severity: "info" | "warning" | "error";
   code: string;

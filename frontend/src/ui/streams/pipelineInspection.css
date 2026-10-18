@@ -1,0 +1,15 @@
+.pipelineInspectionModal { width: min(960px, 94vw); }
+.pipelineInspectionLimit { color: var(--muted); line-height: 1.5; }
+.pipelineInspectionSelect { display: grid; gap: 6px; margin-block: 16px; }
+.pipelineInspectionSelect select { width: 100%; padding: 10px; }
+.pipelineInspectionGrid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; }
+.pipelineInspectionGrid section { min-width: 0; }
+.pipelineInspectionGrid h3 { margin-top: 0; }
+.pipelineInspectionImage { position: relative; background: #10151e; overflow: hidden; }
+.pipelineInspectionImage img, .pipelineInspectionImage svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.pipelineInspectionImage rect { fill: none; stroke: #075e4b; stroke-width: .006; }
+.pipelineInspectionImage p { position: relative; padding: 12px; }
+.pipelineInspectionNode { display: grid; gap: 5px; border-bottom: 1px solid var(--border, #3b4554); padding-block: 12px; overflow-wrap: anywhere; }
+.pipelineInspectionNode span, .pipelineInspectionNode small { font-size: .85rem; }
+.pipelineInspectionGrid pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .75rem; }
+@media (max-width: 640px) { .pipelineInspectionGrid { grid-template-columns: minmax(0, 1fr); } }

@@ -486,6 +486,41 @@ export type LiveViewPlayerProps = {
   style?: import("react").CSSProperties;
 };
 
+/** Allowlisted passive inspection. A complete snapshot replaces previous state. */
+export type InspectionNode = {
+  node_id: string;
+  physical_node_id: string;
+  operator: string;
+  state: "waiting" | "received" | "started" | "analyzed" | "passed" | "filtered" | "emitted" | "delivered" | "dropped" | "error" | "expired" | "closed" | "completed";
+  reason: string | null;
+  sequence: number;
+  producer_epoch: string;
+  frame: Record<string, unknown> | null;
+  detections: Array<{ box: number[]; label: string; score: number; score_kind: string }>;
+  geometry: Record<string, unknown> | null;
+  motion: Record<string, number> | null;
+  expires_at: number | null;
+  image_available: boolean;
+  image_sequence: number | null;
+  received_count: number;
+  produced_count: number;
+  filtered_count: number;
+  model_id: string | null;
+};
+
+export type InspectionSnapshot = {
+  session: string;
+  pipeline: string;
+  revision: string;
+  sequence: number;
+  nodes: InspectionNode[];
+  dropped: number;
+  alignment: "analyzed_frame_only";
+  data_class: "diagnostic_private";
+  access_scope: "owner";
+  policy_revision: string | null;
+};
+
 export type NavigableViewportPoint = { x: number; y: number };
 export type NavigableViewportBounds = NavigableViewportPoint & { width: number; height: number };
 export type NavigableViewportState = { center: NavigableViewportPoint; scale: number; zoom: number };

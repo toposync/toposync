@@ -4,6 +4,7 @@ import asyncio
 import logging
 import math
 import time
+import uuid
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -32,7 +33,8 @@ from .runtime import (
 )
 from .runtime_info import build_graph_runtime_info
 from .stats import PipelineStatsStore
-from .telemetry import PipelineTelemetryStore
+from .telemetry import PipelineTelemetryStore, METRIC_MOTION_SCORE
+from .inspection import PipelineInspectionStore
 
 
 class PipelineExecutionError(RuntimeError):
@@ -62,6 +64,8 @@ class PipelineRuntimeDependencies:
     pipeline_storage_manager: Any | None = None
     pipeline_graph_limits_by_pipeline: dict[str, dict[str, Any]] | None = None
     preview_packet_collector: Callable[[Packet, str, str], Awaitable[None] | None] | None = None
+    inspection_store: PipelineInspectionStore | None = None
+    inspection_revisions: dict[str, str] = field(default_factory=dict)
     execution_scheduler: ExecutionScheduler | None = None
     artifact_max_bytes_per_packet: int | None = 128 * 1024 * 1024
     artifact_max_total_bytes_per_pipeline: int | None = 512 * 1024 * 1024
@@ -156,6 +160,36 @@ class NodeExecutionContext:
     stats_count_outputs_on_read: bool = False
     stats_count_terminal_outputs_on_emit: bool = False
     flow_limiter: FlowLimiter | None = None
+    inspection_store: PipelineInspectionStore | None = None
+    inspection_epoch: str = field(default_factory=lambda: uuid.uuid4().hex)
+    inspection_filter_reason: str | None = None
+    inspection_revisions: dict[str, str] = field(default_factory=dict)
+
+    def inspection_active(self) -> bool:
+        if self.inspection_store is None or self.cancel_event.is_set():
+            return False
+        self.inspection_store.expire()
+        occurrences = self.stats_node_occurrences or ((self.pipeline_name, self.node_id),)
+        return any(session.pipeline == pipeline and node in session.nodes and session.revision == self.inspection_revisions.get(pipeline)
+                   for session in self.inspection_store.sessions.values() for pipeline, node in occurrences)
+
+    def inspect(self, state: str, packet: Packet | None = None, *, reason: str | None = None,
+                frame: Any = None, detections: Any = None, model_id: str | None = None) -> None:
+        if self.cancel_event.is_set() and state != "closed":
+            return
+        if state == "filtered":
+            self.inspection_filter_reason = reason
+        if self.inspection_store is None:
+            return
+        try:
+            for pipeline, node in self.stats_node_occurrences or ((self.pipeline_name, self.node_id),):
+                self.inspection_store.observe(pipeline=pipeline, node=node, physical=self.node_id,
+                    operator=self.operator_id, producer_epoch=self.inspection_epoch, state=state,
+                    packet=packet, reason=reason, frame=frame, detections=detections, model_id=model_id,
+                    revision=self.inspection_revisions.get(pipeline))
+        except Exception:
+            # A diagnostic failure must never change functional processing.
+            pass
 
     async def run_blocking(
         self,
@@ -187,6 +221,8 @@ class NodeExecutionContext:
 
         result = await channel.get(timeout_s=timeout_s, cancel_event=self.cancel_event)
         if result.status == QueueOperationStatus.ACCEPTED:
+            self.inspection_filter_reason = None
+            self.inspect("received", result.item)
             self.metrics.processed_packets += 1
             self.metrics.last_received_at = time.time()
             if self.stats_count_outputs_on_read and self.stats_node_occurrences:
@@ -225,6 +261,8 @@ class NodeExecutionContext:
             elif result.status == QueueOperationStatus.CANCELED:
                 self.metrics.canceled_count += 1
         should_count_outputs = accepted > 0 or (not channels and self.stats_count_terminal_outputs_on_emit)
+        self.inspect("closed" if packet.lifecycle.value == "close" else "emitted" if accepted or not channels else "dropped", packet,
+                     reason=None if accepted or not channels else "delivery_not_accepted")
         if should_count_outputs and self.stats_node_occurrences:
             now_s = time.time()
             for pipeline_name, node_id in self.stats_node_occurrences:
@@ -278,7 +316,13 @@ class NodeExecutionContext:
     def _normalize_telemetry_pipeline_name(self, pipeline_name: str) -> str:
         return normalize_pipeline_name(pipeline_name)
 
-    def observe_telemetry_numeric(self, metric_id: str, value: float, *, now_s: float | None = None) -> None:
+    def observe_telemetry_numeric(self, metric_id: str, value: float, *, now_s: float | None = None, packet: Packet | None = None) -> None:
+        if self.inspection_store is not None and metric_id == METRIC_MOTION_SCORE:
+            try:
+                for pipeline, node in self.stats_node_occurrences or ((self.pipeline_name, self.node_id),):
+                    self.inspection_store.observe_motion(pipeline, node, value, packet, self.inspection_revisions.get(pipeline))
+            except Exception:
+                pass
         timestamp = time.time() if now_s is None else now_s
         store = self.telemetry_store
         for pipeline_name, node_id in self._telemetry_occurrences():
@@ -428,13 +472,19 @@ class TransformOperatorRuntime(BaseOperatorRuntime):
                 decision = limiter.acquire(packet)
                 if not decision.accepted:
                     context.metrics.dropped_packets += 1
+                    context.inspect("dropped", packet, reason="flow_limit")
                     continue
                 permit = decision.permit
             started_ns = time.monotonic_ns()
             try:
+                context.inspect("started", packet)
                 out_packets = await self.process_packet(packet, context)
                 context.metrics.record_latency(_elapsed_ms(started_ns))
                 context.metrics.record_completion()
+                if not out_packets and context.inspection_filter_reason is None:
+                    context.inspect("completed", packet, reason="reason_uninstrumented")
+                elif out_packets:
+                    context.inspect("passed", packet)
                 for out_packet in out_packets:
                     await context.emit(out_packet, port=self.output_port)
             except asyncio.CancelledError:
@@ -445,6 +495,7 @@ class TransformOperatorRuntime(BaseOperatorRuntime):
                 if permit is not None:
                     permit.finish(error=True)
                 context.metrics.record_error(exc)
+                context.inspect("error", packet, reason="operator_error")
                 context.logger.exception("Node '%s' failed to process packet", context.node_id)
                 continue
             if permit is not None:
@@ -499,6 +550,8 @@ class PipelineRuntime:
 
     async def stop(self) -> None:
         self._cancel_event.set()
+        for context in self._context_by_node.values():
+            context.inspect("closed", reason="execution_stopped")
         for runtime in self._runtimes:
             try:
                 await runtime.shutdown()
@@ -567,6 +620,7 @@ class PipelineRuntime:
             raise
         except Exception as exc:
             context.metrics.record_error(exc)
+            context.inspect("error", reason="operator_error")
             self.logger.exception("Node '%s' runtime crashed", context.node_id)
             raise
 
@@ -681,6 +735,8 @@ class PipelineRuntime:
                     else {self.compiled.name: dict(self.compiled.limits)}
                 ),
                 flow_limiter=flow_limiter,
+                inspection_store=self.dependencies.inspection_store,
+                inspection_revisions=self.dependencies.inspection_revisions,
             )
             occurrences_map = self.dependencies.pipeline_stats_node_occurrences
             if occurrences_map is not None:

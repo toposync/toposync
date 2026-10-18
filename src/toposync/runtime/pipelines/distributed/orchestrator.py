@@ -28,6 +28,7 @@ from ..compiler import (
 )
 from ..execution_scheduler import ExecutionScheduler
 from ..execution import PipelineRuntime, PipelineRuntimeDependencies
+from ..inspection import pipeline_inspection_revision
 from ..operator_registry import OperatorRegistry
 from ..observability import (
     OBSERVABILITY_BATCH_EVENT_TYPE,
@@ -453,6 +454,7 @@ class PipelinesOrchestrator:
         self,
         *,
         origin_inbox: BoundedChannel[dict[str, Any]] | None,
+        pipelines: list[Pipeline],
     ) -> PipelineRuntimeDependencies:
         base = self._runtime_deps_base
         return PipelineRuntimeDependencies(
@@ -472,6 +474,8 @@ class PipelinesOrchestrator:
             pipeline_stats_store=base.pipeline_stats_store,
             pipeline_telemetry_store=base.pipeline_telemetry_store,
             pipeline_observability_sink=base.pipeline_observability_sink,
+            inspection_store=base.inspection_store,
+            inspection_revisions={pipeline.name: pipeline_inspection_revision(pipeline) for pipeline in pipelines},
             pipeline_storage_manager=base.pipeline_storage_manager,
             pipeline_graph_limits_by_pipeline=base.pipeline_graph_limits_by_pipeline,
             execution_scheduler=base.execution_scheduler,
@@ -518,7 +522,7 @@ class PipelinesOrchestrator:
             shared_signatures=shared,
         )
 
-        deps = self._build_runtime_dependencies(origin_inbox=None)
+        deps = self._build_runtime_dependencies(origin_inbox=None, pipelines=pipelines)
         try:
             runtime = PipelineBundleRuntime(
                 report=report,
@@ -551,7 +555,7 @@ class PipelinesOrchestrator:
             logger.warning("pipeline compile failed name=%s: %s", pipeline.name, exc)
             return
 
-        deps = self._build_runtime_dependencies(origin_inbox=None)
+        deps = self._build_runtime_dependencies(origin_inbox=None, pipelines=[pipeline])
         runtime = PipelineRuntime(compiled=compiled, registry=self._registry, dependencies=deps)
         await runtime.start()
         self._pipelines[pipeline.name] = _PipelineHandle(
@@ -578,7 +582,7 @@ class PipelinesOrchestrator:
             logger.warning("origin pipeline compile failed name=%s: %s", pipeline.name, exc)
             return
 
-        deps = self._build_runtime_dependencies(origin_inbox=inbox)
+        deps = self._build_runtime_dependencies(origin_inbox=inbox, pipelines=[pipeline])
         runtime = PipelineRuntime(compiled=compiled, registry=self._registry, dependencies=deps)
         await runtime.start()
         self._pipelines[pipeline.name] = _PipelineHandle(

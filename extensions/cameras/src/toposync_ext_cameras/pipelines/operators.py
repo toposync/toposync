@@ -2324,6 +2324,7 @@ def _observe_motion_score(*, packet: Packet, context: Any, score: float) -> None
                 METRIC_MOTION_SCORE,
                 float(score),
                 now_s=_packet_ts_seconds(packet),
+                packet=packet,
             )
         except Exception:
             pass

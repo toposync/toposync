@@ -1,6 +1,10 @@
 """Pure place/source resolution and graphs built from existing camera and vision operators."""
 
 import math
+import hashlib
+import json
+from dataclasses import asdict
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -74,6 +78,39 @@ def resolve_sources(scope, configuration):
                 }
             )
     return selected, area, None if selected else "source_unavailable"
+
+
+def observation_preparation(*, intent, configuration):
+    sources, area, reason = resolve_sources(intent.scope, configuration)
+    selected = {source["camera_id"] for source in sources}
+    settings = CamerasExtensionSettings.model_validate(configuration.settings.extensions.get("com.toposync.cameras", {}))
+    locators = []
+    for camera in settings.devices:
+        for source in camera.sources:
+            if not any(item["camera_id"] == camera.id and item["source_id"] == source.id for item in sources):
+                continue
+            urls = [source.origin.rtsp_url]
+            if camera.onvif:
+                urls.extend([camera.onvif.xaddr, camera.onvif.media_xaddr or ""])
+            # Credential rotation does not change the selected physical view.
+            locations = [urlsplit(url)._replace(netloc=urlsplit(url).netloc.rsplit("@", 1)[-1]).geturl() for url in urls]
+            locators.append([camera.id, source.id, source.view_id, source.role,
+                             source.origin.type, source.origin.profile_token, locations])
+    mapping = [
+        [element.id, [asdict(item) for item in _parse_mapping_control_point_sets_from_props(element.props)]]
+        for composition in configuration.compositions if composition.id == intent.scope.composition_id
+        for element in composition.elements if element.props.get("camera_id") in selected
+    ]
+    value = {
+        "sources": [{key: source[key] for key in ("camera_id", "source_id", "clock_domain", "coverage")} for source in sources],
+        "area": area.model_dump(mode="json") if area else None,
+        "mapping": mapping, "reason": reason, "locators": locators,
+    }
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def validate_observation_preparation(*, intent, configuration, preparation):
+    return preparation == observation_preparation(intent=intent, configuration=configuration)
 
 
 def plan_observation(*, intent, configuration):
@@ -407,6 +444,7 @@ def plan_observation(*, intent, configuration):
             edge["queue"] = {"max_items": 64, "drop_policy": "block"}
             edge["backpressure"] = {"mode": "block"}
             edge["lifecycle"] = {"compact_updates": False}
+    preparation = observation_preparation(intent=intent, configuration=configuration)
     graph = build_pipeline_graph_v2(
         graph_uid=intent.id,
         nodes=nodes,
@@ -418,14 +456,15 @@ def plan_observation(*, intent, configuration):
                     "name": intent.name,
                     "node_uid": tail,
                     "contract": contract,
-                    "production_scope": "automatic-observation",
+                    "production_scope": "automatic-observation:" + preparation,
                     "state_owner": "automatic-observation",
                     "state_partition": "source-or-place",
                 }
             ]
         },
     )
-    return {"sources": sources, "graph": graph, "limitations": limitations}
+    return {"sources": sources, "graph": graph, "limitations": limitations,
+            "preparation": preparation}
 
 
 def observation_targets(*, configuration):
@@ -506,4 +545,5 @@ def observation_targets(*, configuration):
 
 def register_automatic_planner(services):
     services.register("automatic.plan.camera_observation", plan_observation)
+    services.register("automatic.validate.camera_observation", validate_observation_preparation)
     services.register("automatic.targets.cameras", observation_targets)

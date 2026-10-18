@@ -32,6 +32,8 @@ class AutomaticController:
         self.revoke = None
         self.failed_demands = {}
         self.provider_failures = {}
+        self.stale_preparations = set()
+        self._preparation_fingerprint = None
         self.demands.pipeline_allowed = self.pipeline_allowed
 
     async def catalog(self, config=None):
@@ -109,9 +111,31 @@ class AutomaticController:
             targets.extend(await self._provider(identifier, config, configuration=config))
         return targets
 
-    def prepare_config(self, config):
+    async def prepare_config(self, config):
         self.config = config
         self.state = AutomaticState.model_validate(config.settings.core.get("automatic", {}))
+        await self.catalog(config)
+        validators = {key: value.get("preparation_validator") for key, value in self.capabilities.items()}
+        fingerprint = (hashlib.sha256(config.model_dump_json().encode()).hexdigest(), tuple(validators.items()))
+        if fingerprint == self._preparation_fingerprint:
+            return
+        stale = set()
+        intents = {item.id: item for item in self.state.intents}
+        for pipeline in config.pipelines:
+            info = pipeline.graph.get("meta", {}).get("automatic", {})
+            intent = intents.get(info.get("intent_id"))
+            validator = validators.get(intent.capability) if intent else None
+            if not validator:
+                continue
+            try:
+                valid = await self.services.call(validator, intent=intent, configuration=config,
+                                                 preparation=info.get("preparation"))
+            except Exception:
+                valid = False
+            if valid is not True:
+                stale.add(intent.id)
+        self.stale_preparations = stale
+        self._preparation_fingerprint = fingerprint
 
     def pipeline_allowed(self, pipeline):
         if self.config is None:
@@ -127,6 +151,8 @@ class AutomaticController:
             if current.name in seen:
                 continue
             seen.add(current.name)
+            if current.graph.get("meta", {}).get("automatic", {}).get("intent_id") in self.stale_preparations:
+                return False
             nodes.extend(current.graph.get("nodes", []))
             for node in current.graph.get("nodes", []):
                 if node["operator"] == "core.result_input":
@@ -259,6 +285,7 @@ class AutomaticController:
                 "consequence": effect,
                 "capability": original.capability,
                 "status": statuses[original.id],
+                "preparation": plan.get("preparation"),
             }
             pipeline = Pipeline(
                 name="automatic_" + original.id,
@@ -304,7 +331,7 @@ class AutomaticController:
                 raise ValueError("Activity conflicts with the privacy policy")
         return plans, statuses
 
-    async def apply(self, state, *, expected_revision, owner):
+    async def apply(self, state, *, expected_revision, owner, reviewed_preparations=None):
         config = await self.store.load()
         previous = AutomaticState.model_validate(config.settings.core.get("automatic", {}))
         if previous.revision != expected_revision:
@@ -353,6 +380,27 @@ class AutomaticController:
             if self.revoke is not None:
                 await self.revoke()
         plans, statuses = await self.preview(state, config)
+        reviewed_preparations = reviewed_preparations or {}
+        previous_plans = {p.graph["meta"]["automatic"]["intent_id"]: p for p in config.pipelines
+                          if p.graph.get("meta", {}).get("automatic")}
+        retained_plans = []
+        for pipeline in plans:
+            info = pipeline.graph["meta"]["automatic"]
+            identifier, preparation = info["intent_id"], info.get("preparation")
+            reviewed = reviewed_preparations.get(identifier)
+            if reviewed is not None and reviewed != preparation:
+                raise PipelineAlreadyExistsError("Source preparation changed; review the activity again")
+            old = previous_plans.get(identifier)
+            old_preparation = old.graph["meta"]["automatic"].get("preparation") if old else None
+            if preparation and identifier in previous_by_id and old_preparation != preparation and reviewed != preparation:
+                # Pause/privacy buttons must not silently approve another activity's changed sources.
+                statuses[identifier].update(state="unavailable", reason="source_preparation_changed")
+                if old is None:
+                    continue
+                pipeline = old.model_copy(deep=True)
+                pipeline.graph["meta"]["automatic"].update(revision=info["revision"], status=statuses[identifier])
+            retained_plans.append(pipeline)
+        plans = retained_plans
         await self.store.commit_automatic(state, expected_config=config, derived_pipelines=plans)
         self.config = await self.store.load()
         self.state, self.statuses = state, statuses
@@ -383,8 +431,7 @@ class AutomaticController:
         ).is_open
 
     async def synchronize(self, config):
-        self.prepare_config(config)
-        await self.catalog()
+        await self.prepare_config(config)
         active = set()
         by_intent = {
             p.graph["meta"]["automatic"]["intent_id"]: p
@@ -409,6 +456,8 @@ class AutomaticController:
                 for identifier in (intent.capability, intent.consequence.capability)
             ):
                 status.update(state="unavailable", reason="extension_unavailable")
+            elif intent.id in self.stale_preparations:
+                status.update(state="unavailable", reason="source_preparation_changed")
             elif pipeline is not None and not self.pipeline_allowed(pipeline):
                 status.update(state="blocked", reason="privacy_or_extension")
             elif pipeline is not None:

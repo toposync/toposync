@@ -623,6 +623,46 @@ def test_targets_expose_places_and_source_references_without_capture_credentials
     assert "private-secret" not in str(targets)
 
 
+def test_source_preparation_detects_default_removal_clock_and_mapping_changes_without_names_or_credentials():
+    from copy import deepcopy
+    from toposync_ext_cameras.automatic import observation_preparation, validate_observation_preparation
+
+    config = configuration()
+    activity = intent("vision.presence", kind="physical_area", multiple=True, association=association())
+    preparation = observation_preparation(intent=activity, configuration=config)
+    assert validate_observation_preparation(intent=activity, configuration=config, preparation=preparation)
+    renamed = deepcopy(config)
+    camera = renamed.settings.extensions["com.toposync.cameras"]["devices"][0]
+    camera["name"] = "Renamed"
+    camera["sources"][0]["name"] = "Renamed source"
+    camera["sources"][0]["origin"] = {"stream_password": "private-secret"}
+    assert observation_preparation(intent=activity, configuration=renamed) == preparation
+    for change in ("default", "remove", "clock", "mapping", "area", "profile", "endpoint"):
+        changed = deepcopy(config)
+        camera = changed.settings.extensions["com.toposync.cameras"]["devices"][0]
+        if change == "default":
+            camera["sources"][0]["is_default"] = False
+            camera["sources"].append({"id": "alternate", "is_default": True})
+        elif change == "remove":
+            camera["enabled"] = False
+        elif change == "clock":
+            camera["clock_domain"] = "another-clock"
+        elif change == "mapping":
+            changed.compositions[0].elements[1].props["control_point_sets"][0]["control_points"][0]["world"]["x"] = 0.1
+        elif change == "area":
+            changed.compositions[0].elements[0].props["vertices"][0]["x"] = 0.1
+        elif change == "profile":
+            camera["sources"][0]["origin"] = {"profile_token": "another-view"}
+        else:
+            camera["sources"][0]["origin"] = {"rtsp_url": "rtsp://fixture.invalid/another-view"}
+        assert not validate_observation_preparation(intent=activity, configuration=changed, preparation=preparation), change
+    original_scope = plan_observation(intent=activity, configuration=config)["graph"]["meta"]["outputs"][0]["production_scope"]
+    changed_scope = plan_observation(intent=activity, configuration=changed)["graph"]["meta"]["outputs"][0]["production_scope"]
+    assert changed_scope != original_scope
+    camera["sources"][0]["origin"]["rtsp_url"] = "rtsp://owner:rotated-password@fixture.invalid/another-view"
+    assert observation_preparation(intent=activity, configuration=changed) in changed_scope
+
+
 @pytest.mark.parametrize(
     "field,value,reason",
     [

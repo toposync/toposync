@@ -2870,8 +2870,8 @@ export async function fetchAutomatic(signal?: AbortSignal): Promise<import("./au
 export async function previewAutomatic(configuration: import("./automatic").AutomaticConfiguration, expectedRevision: number): Promise<import("./automatic").AutomaticPreview> {
   return requestJson(resolveToposyncUrl("/api/automatic/preview"), jsonRequest("POST", { configuration, expected_revision: expectedRevision }), "Could not prepare activity");
 }
-export async function saveAutomatic(configuration: import("./automatic").AutomaticConfiguration, expectedRevision: number): Promise<import("./automatic").AutomaticSnapshot> {
-  return requestJson(resolveToposyncUrl("/api/automatic"), jsonRequest("PUT", { configuration, expected_revision: expectedRevision }), "Could not save activity");
+export async function saveAutomatic(configuration: import("./automatic").AutomaticConfiguration, expectedRevision: number, reviewedPreparations: Record<string, string> = {}): Promise<import("./automatic").AutomaticSnapshot> {
+  return requestJson(resolveToposyncUrl("/api/automatic"), jsonRequest("PUT", { configuration, expected_revision: expectedRevision, reviewed_preparations: reviewedPreparations }), "Could not save activity");
 }
 export async function useAutomaticInFlow(intentId: string, expectedRevision: number, productionRevision?: string): Promise<void> {
   await requestJson(resolveToposyncUrl(`/api/automatic/${encodeURIComponent(intentId)}/flow`), jsonRequest("POST", { expected_revision: expectedRevision, production_revision: productionRevision }), "Could not create manual flow");

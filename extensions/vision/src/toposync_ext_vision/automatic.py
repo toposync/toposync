@@ -74,6 +74,7 @@ def register_automatic_capabilities(services):
                 "scopes": scopes,
                 "operators": ["camera.source", "vision.detect", "vision.track", *extra],
                 "planner": "automatic.plan.camera_observation",
+                "preparation_validator": "automatic.validate.camera_observation",
                 "required_features": ["tracking"],
                 "required_consents": ["recognition"] if name == "recognition" else [],
                 "advanced": name in {"pose", "gestures", "segmentation"},

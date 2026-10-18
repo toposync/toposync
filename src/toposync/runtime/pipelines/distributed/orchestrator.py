@@ -277,7 +277,7 @@ class PipelinesOrchestrator:
     async def _reconcile_plan(self) -> None:
         config = await self._config_store.get_config()
         if self._automatic is not None:
-            self._automatic.prepare_config(config)
+            await self._automatic.prepare_config(config)
         pipelines = config.pipelines
         servers = await self._config_store.list_processing_servers()
         settings = config.settings

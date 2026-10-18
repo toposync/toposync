@@ -76,6 +76,7 @@ class AiExtension(BaseExtension):
             "scopes": ["camera", "image_region", "physical_area"],
             "operators": ["camera.source", "vision.detect", "vision.track", "vision.crop_objects", "ai.condition_filter"],
             "planner": "automatic.plan.camera_observation", "advanced": True,
+            "preparation_validator": "automatic.validate.camera_observation",
             "required_features": ["tracking"], "required_consents": ["external"],
             "resource_parameters_schema": AiConditionFilterConfig.model_json_schema(),
             "resource_operator": "ai.condition_filter",

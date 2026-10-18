@@ -428,3 +428,81 @@ def test_failed_provider_does_not_loop_or_hide_healthy_catalog(tmp_path, monkeyp
             assert result["provider_errors"] == ["automatic.catalog.broken"]
             assert "private provider" not in response.text
         assert calls == ["attempt"]
+
+
+def test_changed_source_preparation_revokes_automatic_and_manual_until_review_without_retry_loop(tmp_path, monkeypatch):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        calls, checks = [], []
+        register_capability(client, calls)
+        controller = client.app.state.automatic
+        services = controller.services
+        original_catalog = services._services["automatic.catalog.fixture"]
+        original_plan = services._services["automatic.plan.fixture"]
+        services.register("automatic.catalog.fixture", lambda: [
+            {**item, "preparation_validator": "automatic.validate.fixture"} for item in original_catalog()
+        ])
+        def version(configuration):
+            return configuration.settings.core.get("fixture_source", "first")
+        def plan(**kwargs):
+            result = original_plan(**kwargs)
+            result["preparation"] = version(kwargs["configuration"])
+            result["graph"]["meta"]["outputs"][0]["production_scope"] = result["preparation"]
+            return result
+        def validate(*, intent, configuration, preparation):
+            checks.append(version(configuration))
+            if version(configuration) == "broken":
+                raise RuntimeError("private validation failure")
+            return preparation == version(configuration)
+        services.register("automatic.plan.fixture", plan)
+        services.register("automatic.validate.fixture", validate)
+        saved = client.put("/api/automatic", json={"expected_revision": 0, "configuration": {
+            "enabled": True, "intents": [{"id": "garage", "name": "Garage", "capability": "test.presence", "scope": {"camera_ids": ["fixture"]}}],
+        }})
+        assert saved.status_code == 200, saved.text
+        state = saved.json()["configuration"]
+        manual = client.post("/api/automatic/garage/flow", json={"expected_revision": state["revision"]})
+        assert manual.status_code == 200, manual.text
+        registry = controller.demands
+        manual_id = registry.flow_leases[manual.json()["pipeline"]["name"]]
+        assert calls.count("started") == 1
+        orchestrator = client.app.state.pipelines_orchestrator
+        settings = client.get("/api/settings").json()
+        for value in ("second", "broken"):
+            settings["core"]["fixture_source"] = value
+            assert client.put("/api/settings", json=settings).status_code == 200
+            client.portal.call(orchestrator._reconcile)
+            assert not controller.leases and not registry.allowed(manual_id)
+            for _ in range(3):
+                client.portal.call(orchestrator._reconcile)
+                snapshot = client.get("/api/automatic").json()
+                assert snapshot["activities"]["garage"]["reason"] == "source_preparation_changed"
+            assert checks.count(value) == 1
+            assert calls.count("started") == 1 and calls.count("stopped") == 1
+            assert snapshot["configuration"]["intents"][0]["id"] == "garage"
+        settings["core"]["fixture_source"] = "second"
+        assert client.put("/api/settings", json=settings).status_code == 200
+        # An incidental save cannot regenerate/restart changed sources without the review result.
+        incidental = client.put("/api/automatic", json={"expected_revision": state["revision"], "configuration": state})
+        assert incidental.status_code == 200, incidental.text
+        state = incidental.json()["configuration"]
+        assert incidental.json()["activities"]["garage"]["reason"] == "source_preparation_changed"
+        assert calls.count("started") == 1
+        body = {"expected_revision": state["revision"], "configuration": state}
+        preview = client.post("/api/automatic/preview", json=body)
+        assert preview.status_code == 200, preview.text
+        body["reviewed_preparations"] = preview.json()["preparations"]
+        assert body["reviewed_preparations"] == {"garage": "second"}
+        settings["core"]["fixture_source"] = "third"
+        assert client.put("/api/settings", json=settings).status_code == 200
+        assert client.put("/api/automatic", json=body).status_code == 409
+        assert calls.count("started") == 1
+        preview = client.post("/api/automatic/preview", json=body)
+        assert preview.status_code == 200, preview.text
+        body["reviewed_preparations"] = preview.json()["preparations"]
+        reviewed = client.put("/api/automatic", json=body)
+        assert reviewed.status_code == 200, reviewed.text
+        assert reviewed.json()["activities"]["garage"]["state"] == "waiting"
+        assert calls.count("started") == 2
+        assert not registry.allowed(manual_id)
+        assert client.get("/api/automatic").json()["manual_flows"]["manual_garage"]["reason"] == "result_changed_review_required"

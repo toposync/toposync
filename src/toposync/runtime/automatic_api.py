@@ -1,5 +1,7 @@
 """Owner-managed intentions; runtime mutations share the existing reconciliation lock."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
@@ -14,6 +16,8 @@ from .pipelines.templates import build_pipeline_graph_v2
 class AutomaticUpdate(AutomaticValue):
     expected_revision: int = Field(ge=0)
     configuration: AutomaticState
+    reviewed_preparations: dict[Annotated[str, Field(min_length=1, max_length=64)],
+                                Annotated[str, Field(min_length=1, max_length=128)]] = Field(default_factory=dict, max_length=128)
 
 
 class AutomaticFlowRequest(AutomaticValue):
@@ -49,7 +53,7 @@ def install_automatic_routes(app: FastAPI, owner) -> None:
         orchestrator = request.app.state.pipelines_orchestrator
         async with orchestrator._reconcile_lock:
             config = await controller.store.get_config()
-            controller.prepare_config(config)
+            await controller.prepare_config(config)
             snapshot = controller.snapshot(
                 orchestrator._activation_errors, orchestrator._last_error
             )
@@ -68,7 +72,7 @@ def install_automatic_routes(app: FastAPI, owner) -> None:
         orchestrator = request.app.state.pipelines_orchestrator
         async with orchestrator._reconcile_lock:
             config = await controller.store.get_config()
-            controller.prepare_config(config)
+            await controller.prepare_config(config)
             state = controller.state
             if state.revision != body.expected_revision:
                 raise HTTPException(409, "Automatic revision changed; review before creating the flow")
@@ -159,6 +163,8 @@ def install_automatic_routes(app: FastAPI, owner) -> None:
                 raise HTTPException(422, str(error)) from error
             return {
                 "activities": activities,
+                "preparations": {pipeline.graph["meta"]["automatic"]["intent_id"]: pipeline.graph["meta"]["automatic"]["preparation"]
+                                 for pipeline in pipelines if pipeline.graph["meta"]["automatic"].get("preparation")},
                 "pipelines": [pipeline.model_dump(mode="json") for pipeline in pipelines],
             }
 
@@ -171,7 +177,8 @@ def install_automatic_routes(app: FastAPI, owner) -> None:
         async with orchestrator._reconcile_lock:
             try:
                 await controller.apply(
-                    body.configuration, expected_revision=body.expected_revision, owner=actor
+                    body.configuration, expected_revision=body.expected_revision, owner=actor,
+                    reviewed_preparations=body.reviewed_preparations,
                 )
             except PipelineAlreadyExistsError as error:
                 raise HTTPException(409, str(error)) from error

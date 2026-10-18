@@ -1,4 +1,5 @@
 const messages = {
+  sourcePreparationChanged: ["The selected sources or spatial preparation changed. Edit and review this activity before using it again.", "As fontes selecionadas ou a preparação espacial mudaram. Edite e revise esta atividade antes de usá-la novamente."],
   refinements: ["Refinements", "Refinamentos"],
   shortcutUnavailable: ["This saved camera or area is unavailable for Automatic. Save its configuration or enable the required extension before trying again.", "Esta câmera ou área salva está indisponível para Automático. Salve sua configuração ou habilite a extensão necessária antes de tentar novamente."],
   reviewFlow: ["Review changed result", "Revisar resultado alterado"],

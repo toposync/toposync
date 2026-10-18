@@ -1580,7 +1580,7 @@ async def _lifespan(app: FastAPI):
         store=config_store, services=services, operators=operator_registry,
         demands=app.state.pipeline_demands, compiler=pipeline_compiler,
     )
-    automatic.prepare_config(await config_store.get_config())
+    await automatic.prepare_config(await config_store.get_config())
     app.state.automatic = automatic
     orchestrator = PipelinesOrchestrator(
         config_store=config_store,

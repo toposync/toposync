@@ -37,7 +37,7 @@ export type AutomaticSnapshot = {
   activities: Record<string, AutomaticActivity>; provider_errors: string[];
   manual_flows?: Record<string, { state: string; reason: string | null; received?: number; production_revision?: string }>;
 };
-export type AutomaticPreview = { activities: Record<string, AutomaticActivity>; pipelines: Array<{ name: string; display_name: string }> };
+export type AutomaticPreview = { activities: Record<string, AutomaticActivity>; pipelines: Array<{ name: string; display_name: string }>; preparations: Record<string, string> };
 
 export function replaceAutomaticIntent(configuration: AutomaticConfiguration, intent: AutomaticIntent): AutomaticConfiguration {
   const exists = configuration.intents.some(item => item.id === intent.id);

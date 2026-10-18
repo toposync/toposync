@@ -408,6 +408,7 @@ class BoundedChannel(Generic[T]):
         self._global_artifact_counter = global_artifact_counter
         self._queue: asyncio.Queue[_Envelope[T]] = asyncio.Queue(maxsize=self.maxsize)
         self._item_available = asyncio.Event()
+        self._revoked = False
         self._metrics = _ChannelMetrics()
 
     @property
@@ -450,6 +451,12 @@ class BoundedChannel(Generic[T]):
         if self._metrics.pressure_cause != "none" or self.depth >= self.maxsize:
             return "pressured"
         return "healthy"
+
+    def revoke(self) -> int:
+        self._revoked = True
+        dropped = self.clear()
+        self._item_available.set()
+        return dropped
 
     def clear(self) -> int:
         dropped = 0
@@ -549,7 +556,7 @@ class BoundedChannel(Generic[T]):
         self._metrics.record_event()
 
         while True:
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 self._metrics.canceled += 1
                 self._metrics.record_pressure("put_canceled")
                 return ChannelPutResult(status=QueueOperationStatus.CANCELED)
@@ -639,7 +646,7 @@ class BoundedChannel(Generic[T]):
         deadline = time.monotonic() + timeout if timeout is not None else None
 
         while True:
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 self._metrics.canceled += 1
                 self._metrics.record_event()
                 return ChannelGetResult(status=QueueOperationStatus.CANCELED)
@@ -661,7 +668,7 @@ class BoundedChannel(Generic[T]):
             envelope = await self._wait_for_item(timeout_s=remaining, cancel_event=cancel_event)
             self._metrics.record_waiting_get_ms(_elapsed_monotonic_ms(wait_started_ns))
             if envelope is None:
-                if _is_canceled(cancel_event):
+                if self._revoked or _is_canceled(cancel_event):
                     self._metrics.canceled += 1
                     self._metrics.record_event()
                     return ChannelGetResult(status=QueueOperationStatus.CANCELED)
@@ -746,7 +753,7 @@ class BoundedChannel(Generic[T]):
         cancel_event: asyncio.Event | None,
     ) -> QueueOperationStatus:
         while True:
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 return QueueOperationStatus.CANCELED
             if self.depth < self.maxsize:
                 return QueueOperationStatus.ACCEPTED
@@ -770,11 +777,13 @@ class BoundedChannel(Generic[T]):
         while True:
             # Auxiliary tasks only signal availability. They must never take ownership
             # of an envelope that a canceled consumer can no longer deliver.
+            if self._revoked:
+                return None
             try:
                 return self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 pass
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 return None
             remaining = _remaining_timeout(deadline)
             if remaining is not None and remaining <= 0:
@@ -829,6 +838,7 @@ class KeyedBoundedChannel(Generic[T]):
         self._ready_set: set[str] = set()
         self._depth = 0
         self._condition = asyncio.Condition()
+        self._revoked = False
 
     @property
     def depth(self) -> int:
@@ -871,6 +881,10 @@ class KeyedBoundedChannel(Generic[T]):
         if self._metrics.pressure_cause != "none" or self.depth >= self.maxsize:
             return "pressured"
         return "healthy"
+
+    def revoke(self) -> int:
+        self._revoked = True
+        return self.clear()
 
     def clear(self) -> int:
         dropped = int(self._depth)
@@ -939,12 +953,15 @@ class KeyedBoundedChannel(Generic[T]):
         self._metrics.record_event()
 
         while True:
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 self._metrics.canceled += 1
                 self._metrics.record_pressure("put_canceled")
                 return ChannelPutResult(status=QueueOperationStatus.CANCELED)
 
             async with self._condition:
+                if self._revoked or _is_canceled(cancel_event):
+                    self._metrics.canceled += 1
+                    return ChannelPutResult(status=QueueOperationStatus.CANCELED)
                 if self.drop_policy == DropPolicy.KEYED_LATEST_ONLY and not structural:
                     dropped, _dropped_bytes = self._drop_droppable_for_key_locked(key, clear_all=True)
                     if dropped > 0:
@@ -1046,12 +1063,15 @@ class KeyedBoundedChannel(Generic[T]):
         deadline = time.monotonic() + timeout if timeout is not None else None
 
         while True:
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 self._metrics.canceled += 1
                 self._metrics.record_event()
                 return ChannelGetResult(status=QueueOperationStatus.CANCELED)
 
             async with self._condition:
+                if self._revoked or _is_canceled(cancel_event):
+                    self._metrics.canceled += 1
+                    return ChannelGetResult(status=QueueOperationStatus.CANCELED)
                 if self._depth > 0:
                     envelope = self._dequeue_locked()
                     self._condition.notify_all()
@@ -1222,7 +1242,7 @@ class KeyedBoundedChannel(Generic[T]):
         deadline = time.monotonic() + timeout_s if timeout_s is not None else None
         async with self._condition:
             while True:
-                if _is_canceled(cancel_event):
+                if self._revoked or _is_canceled(cancel_event):
                     return QueueOperationStatus.CANCELED
                 if self._depth < self.maxsize:
                     return QueueOperationStatus.ACCEPTED
@@ -1247,7 +1267,7 @@ class KeyedBoundedChannel(Generic[T]):
         deadline = time.monotonic() + timeout_s if timeout_s is not None else None
         async with self._condition:
             while True:
-                if _is_canceled(cancel_event):
+                if self._revoked or _is_canceled(cancel_event):
                     return QueueOperationStatus.CANCELED
                 if self._depth > 0:
                     return QueueOperationStatus.ACCEPTED

@@ -66,6 +66,8 @@ class PipelineRuntimeDependencies:
     preview_packet_collector: Callable[[Packet, str, str], Awaitable[None] | None] | None = None
     inspection_store: PipelineInspectionStore | None = None
     inspection_revisions: dict[str, str] = field(default_factory=dict)
+    demand_registry: Any | None = None
+    inspection_node_occurrences: dict[str, tuple[tuple[str, str], ...]] | None = None
     execution_scheduler: ExecutionScheduler | None = None
     artifact_max_bytes_per_packet: int | None = 128 * 1024 * 1024
     artifact_max_total_bytes_per_pipeline: int | None = 512 * 1024 * 1024
@@ -77,6 +79,7 @@ class NodeRuntimeMetrics:
     processed_packets: int = 0
     completed_packets: int = 0
     emitted_packets: int = 0
+    physical_emissions: int = 0
     last_received_at: float | None = None
     last_completed_at: float | None = None
     last_emitted_at: float | None = None
@@ -112,6 +115,7 @@ class NodeRuntimeMetrics:
             "processed_packets": self.processed_packets,
             "completed_packets": self.completed_packets,
             "emitted_packets": self.emitted_packets,
+            "physical_emissions": self.physical_emissions,
             "last_received_at": self.last_received_at,
             "last_completed_at": self.last_completed_at,
             "last_emitted_at": self.last_emitted_at,
@@ -164,12 +168,13 @@ class NodeExecutionContext:
     inspection_epoch: str = field(default_factory=lambda: uuid.uuid4().hex)
     inspection_filter_reason: str | None = None
     inspection_revisions: dict[str, str] = field(default_factory=dict)
+    inspection_occurrences: tuple[tuple[str, str], ...] = ()
 
     def inspection_active(self) -> bool:
         if self.inspection_store is None or self.cancel_event.is_set():
             return False
         self.inspection_store.expire()
-        occurrences = self.stats_node_occurrences or ((self.pipeline_name, self.node_id),)
+        occurrences = self.inspection_occurrences or self.stats_node_occurrences or ((self.pipeline_name, self.node_id),)
         return any(session.pipeline == pipeline and node in session.nodes and session.revision == self.inspection_revisions.get(pipeline)
                    for session in self.inspection_store.sessions.values() for pipeline, node in occurrences)
 
@@ -182,7 +187,7 @@ class NodeExecutionContext:
         if self.inspection_store is None:
             return
         try:
-            for pipeline, node in self.stats_node_occurrences or ((self.pipeline_name, self.node_id),):
+            for pipeline, node in self.inspection_occurrences or self.stats_node_occurrences or ((self.pipeline_name, self.node_id),):
                 self.inspection_store.observe(pipeline=pipeline, node=node, physical=self.node_id,
                     operator=self.operator_id, producer_epoch=self.inspection_epoch, state=state,
                     packet=packet, reason=reason, frame=frame, detections=detections, model_id=model_id,
@@ -235,6 +240,7 @@ class NodeExecutionContext:
             return None
         if result.status == QueueOperationStatus.CANCELED:
             self.metrics.canceled_count += 1
+            self.cancel_event.set()
             return None
         self.metrics.dropped_packets += 1
         return None
@@ -246,6 +252,9 @@ class NodeExecutionContext:
         port: str = "out",
         timeout_s: float = 0.1,
     ) -> int:
+        if self.cancel_event.is_set():
+            return 0
+        self.metrics.physical_emissions += 1
         channels = self.outputs.get(port, [])
         accepted = 0
         for channel in channels:
@@ -415,6 +424,10 @@ class NodeExecutionContext:
 
 
 class BaseOperatorRuntime:
+    async def prepare(self, context: NodeExecutionContext) -> None:
+        """Prepare resources without consuming packets or running effects."""
+        return None
+
     async def run(self, context: NodeExecutionContext) -> None:  # pragma: no cover - interface default
         raise NotImplementedError
 
@@ -520,6 +533,10 @@ class PipelineRuntime:
     registry: OperatorRegistry
     dependencies: PipelineRuntimeDependencies = field(default_factory=PipelineRuntimeDependencies)
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("toposync.pipelines.runtime"))
+    _reuse_from: PipelineRuntime | None = field(default=None, repr=False)
+    _defer_build: bool = field(default=False, repr=False)
+    _retained_nodes: set[str] = field(init=False, default_factory=set)
+    last_reconciliation: dict[str, Any] = field(init=False, default_factory=dict)
     channel_map: dict[str, BoundedChannel[Packet] | KeyedBoundedChannel[Packet]] = field(init=False, default_factory=dict)
     node_metrics: dict[str, NodeRuntimeMetrics] = field(init=False, default_factory=dict)
     _runtime_by_node: dict[str, BaseOperatorRuntime] = field(init=False, default_factory=dict)
@@ -533,14 +550,99 @@ class PipelineRuntime:
     def __post_init__(self) -> None:
         if self.dependencies.execution_scheduler is None:
             self.dependencies.execution_scheduler = ExecutionScheduler()
-        self._artifact_pipeline_counter = ArtifactMemoryCounter(
+        self._artifact_pipeline_counter = self._reuse_from._artifact_pipeline_counter if self._reuse_from else ArtifactMemoryCounter(
             limit_bytes=self.dependencies.artifact_max_total_bytes_per_pipeline,
         )
-        self._build_runtime()
+        if self._reuse_from:
+            old_nodes = {node.node_id: node for node in self._reuse_from.compiled.nodes}
+            for node in self.compiled.nodes:
+                old = old_nodes.get(node.node_id)
+                incoming = tuple(edge for edge in self.compiled.edges if edge.target_node_id == node.node_id)
+                previous = tuple(edge for edge in self._reuse_from.compiled.edges if edge.target_node_id == node.node_id)
+                if old is not None and old.signature == node.signature and old.operator_id == node.operator_id and incoming == previous:
+                    self._retained_nodes.add(node.node_id)
+        if not self._defer_build:
+            self._build_runtime()
+
+    async def reconcile(self, compiled: CompiledPipeline, dependencies: PipelineRuntimeDependencies | None = None) -> None:
+        candidate = PipelineRuntime(compiled, self.registry, dependencies or self.dependencies,
+                                    self.logger, _reuse_from=self, _defer_build=True)
+        try:
+            candidate._build_runtime()
+            for node, runtime in candidate._runtime_by_node.items():
+                if node not in candidate._retained_nodes:
+                    await runtime.prepare(candidate._context_by_node[node])
+        except BaseException:
+            for node, runtime in candidate._runtime_by_node.items():
+                if node not in candidate._retained_nodes:
+                    try:
+                        await runtime.shutdown()
+                    except Exception:
+                        self.logger.exception("Failed to dispose candidate runtime")
+            raise
+        commit = asyncio.create_task(self._commit_reconciliation(candidate))
+        try:
+            await asyncio.shield(commit)
+        except asyncio.CancelledError:
+            await commit
+            raise
+
+    async def _commit_reconciliation(self, candidate: PipelineRuntime) -> None:
+        compiled = candidate.compiled
+        retained = candidate._retained_nodes
+        removed = set(self._runtime_by_node) - retained
+        added = set(candidate._runtime_by_node) - retained
+        running = bool(self._tasks) and not self._cancel_event.is_set()
+        for node in removed:
+            context = self._context_by_node[node]
+            context.cancel_event.set()
+            context.inspect("closed", reason="execution_stopped")
+            if node in self._task_by_node:
+                self._task_by_node[node].cancel()
+        for channel in self.channel_map.values():
+            if channel not in candidate.channel_map.values():
+                channel.revoke()
+        await asyncio.gather(*(self._task_by_node[node] for node in removed if node in self._task_by_node), return_exceptions=True)
+        for node in removed:
+            try:
+                await self._runtime_by_node[node].shutdown()
+            except Exception:
+                self.logger.exception("Failed to shutdown removed runtime")
+        for node in retained:
+            context = self._context_by_node[node]
+            prepared = candidate._context_by_node[node]
+            context.inputs, context.outputs = prepared.inputs, prepared.outputs
+            context.stats_node_occurrences = prepared.stats_node_occurrences
+            context.stats_count_outputs_on_read = prepared.stats_count_outputs_on_read
+            context.stats_count_terminal_outputs_on_emit = prepared.stats_count_terminal_outputs_on_emit
+            context.inspection_revisions = prepared.inspection_revisions
+            context.inspection_occurrences = prepared.inspection_occurrences
+            context.pipeline_graph_limits_by_pipeline = prepared.pipeline_graph_limits_by_pipeline
+            candidate._context_by_node[node] = context
+        self.compiled, self.dependencies = compiled, candidate.dependencies
+        self.channel_map, self.node_metrics = candidate.channel_map, candidate.node_metrics
+        self._runtime_by_node, self._context_by_node = candidate._runtime_by_node, candidate._context_by_node
+        self._runtimes = candidate._runtimes
+        self._task_by_node = {node: task for node, task in self._task_by_node.items() if node in retained}
+        if running:
+            for node in compiled.topological_order:
+                if node in added:
+                    self._task_by_node[node] = asyncio.create_task(self._run_node(self._runtime_by_node[node], self._context_by_node[node]), name=f"pipeline[{compiled.name}].{node}")
+        self._tasks = list(self._task_by_node.values())
+        self.last_reconciliation = {
+            "retained": sorted(retained), "started": sorted(added), "stopped": sorted(removed),
+            "discontinuities": sorted(removed) if removed and added else [],
+        }
 
     async def start(self) -> None:
         if self._tasks:
             return
+        try:
+            for node_id in self.compiled.topological_order:
+                await self._runtime_by_node[node_id].prepare(self._context_by_node[node_id])
+        except BaseException:
+            await self.stop()
+            raise
         for node_id in self.compiled.topological_order:
             runtime = self._runtime_by_node[node_id]
             context = self._context_by_node[node_id]
@@ -551,6 +653,7 @@ class PipelineRuntime:
     async def stop(self) -> None:
         self._cancel_event.set()
         for context in self._context_by_node.values():
+            context.cancel_event.set()
             context.inspect("closed", reason="execution_stopped")
         for runtime in self._runtimes:
             try:
@@ -625,6 +728,10 @@ class PipelineRuntime:
             raise
 
     def _build_runtime(self) -> None:
+        for node in self.compiled.nodes:
+            registered = self.registry.get(node.operator_id)
+            if registered is None or registered.runtime_factory is None:
+                raise PipelineExecutionError(f"Operator '{node.operator_id}' requires an executable consumer binding")
         self._runtime_by_node = {}
         self._context_by_node = {}
 
@@ -678,6 +785,14 @@ class PipelineRuntime:
                     pipeline_artifact_counter=self._artifact_pipeline_counter,
                     global_artifact_counter=self.dependencies.artifact_global_counter,
                 )
+            if self._reuse_from and edge.source_node_id in self._retained_nodes and edge.target_node_id in self._retained_nodes:
+                channel = self._reuse_from.channel_map[channel_name]
+            elif node_by_id[edge.target_node_id].operator_id == "core.demand_consumer":
+                from .demands import ConsumerChannel
+                identifier = node_by_id[edge.target_node_id].normalized_config["demand_id"]
+                if self.dependencies.demand_registry is None:
+                    raise PipelineExecutionError("Demand registry unavailable")
+                channel = ConsumerChannel(channel, self.dependencies.demand_registry, identifier)
             self.channel_map[channel_name] = channel
             outputs_by_node_port.setdefault((edge.source_node_id, edge.source_port), []).append(channel)
             inputs_by_node_port[(edge.target_node_id, edge.target_port)] = channel
@@ -691,7 +806,9 @@ class PipelineRuntime:
             if runtime_factory is None:
                 raise PipelineExecutionError(f"Operator has no runtime factory: {node.operator_id}")
 
-            runtime = runtime_factory(node.normalized_config, self.dependencies)
+            runtime = (self._reuse_from._runtime_by_node[node_id]
+                       if node_id in self._retained_nodes
+                       else runtime_factory(node.normalized_config, self.dependencies))
             if not isinstance(runtime, BaseOperatorRuntime):
                 raise PipelineExecutionError(
                     f"Runtime factory for '{node.operator_id}' must return BaseOperatorRuntime",
@@ -708,8 +825,10 @@ class PipelineRuntime:
                 if source_node_id == node_id:
                     node_outputs[source_port] = channels
 
-            metrics = NodeRuntimeMetrics()
-            flow_limiter = FlowLimiter.for_operator(registered.definition, node.normalized_config)
+            metrics = self._reuse_from.node_metrics[node_id] if node_id in self._retained_nodes else NodeRuntimeMetrics()
+            flow_limiter = (self._reuse_from._context_by_node[node_id].flow_limiter
+                            if node_id in self._retained_nodes
+                            else FlowLimiter.for_operator(registered.definition, node.normalized_config))
             if flow_limiter is not None:
                 metrics.flow_limiter = flow_limiter.metrics
             self.node_metrics[node_id] = metrics
@@ -722,7 +841,7 @@ class PipelineRuntime:
                 pipeline_name=self.compiled.name,
                 inputs=node_inputs,
                 outputs=node_outputs,
-                cancel_event=self._cancel_event,
+                cancel_event=asyncio.Event(),
                 metrics=metrics,
                 logger=self.logger,
                 stats_store=self.dependencies.pipeline_stats_store,
@@ -737,6 +856,7 @@ class PipelineRuntime:
                 flow_limiter=flow_limiter,
                 inspection_store=self.dependencies.inspection_store,
                 inspection_revisions=self.dependencies.inspection_revisions,
+                inspection_occurrences=(self.dependencies.inspection_node_occurrences or {}).get(node_id, ()),
             )
             occurrences_map = self.dependencies.pipeline_stats_node_occurrences
             if occurrences_map is not None:

@@ -21,10 +21,8 @@ from toposync.runtime.notifications import NotificationsRuntime
 
 from ..compiler import (
     CompilationReport,
-    CompiledPipeline,
     GraphCompileError,
     PipelineGraphCompiler,
-    SharedNodeOccurrence,
 )
 from ..execution_scheduler import ExecutionScheduler
 from ..execution import PipelineRuntime, PipelineRuntimeDependencies
@@ -128,10 +126,14 @@ class PipelinesOrchestrator:
         self._servers: dict[str, _ServerHandle] = {}
         self._last_sig: str = ""
         self._last_settings_sig: str = ""
+        self._last_remote_sig: str = ""
         self._last_error: str | None = None
         self._activation_errors: dict[str, str] = {}
         self._activation_retry_requested = False
         self._last_activation_compositions: list[Composition] = []
+        self._reconcile_lock = asyncio.Lock()
+        if self._runtime_deps_base.demand_registry is not None:
+            self._runtime_deps_base.demand_registry.changed = self.trigger_reload
 
     def start(self) -> None:
         if self._task is not None:
@@ -169,6 +171,7 @@ class PipelinesOrchestrator:
                     {
                         "name": pipeline.name,
                         "mode": "bundle",
+                        "reason": "consumer_demand" if pipeline.name.startswith("demand_") else "pipeline_enabled",
                         "processing_server_id": "local",
                         "started_at": self._local_bundle.started_at,
                         "bundle_name": getattr(
@@ -258,6 +261,10 @@ class PipelinesOrchestrator:
                 raise
 
     async def _reconcile(self) -> None:
+        async with self._reconcile_lock:
+            await self._reconcile_plan()
+
+    async def _reconcile_plan(self) -> None:
         config = await self._config_store.get_config()
         pipelines = config.pipelines
         servers = await self._config_store.list_processing_servers()
@@ -266,6 +273,13 @@ class PipelinesOrchestrator:
         settings_sig = json.dumps(settings_payload, sort_keys=True, separators=(",", ":"))
 
         desired = [p for p in pipelines if getattr(p, "enabled", True) is not False]
+        demands = self._runtime_deps_base.demand_registry
+        if demands is not None:
+            await self._prune_revoked_local_demands()
+            demands.bind(pipelines)
+            await self._prune_revoked_local_demands()
+            desired = [pipeline for pipeline in desired if not demands.pipeline_blocked(pipeline)]
+            desired.extend(demands.pipelines())
         desired_sig = json.dumps(
             {
                 "pipelines": [p.model_dump(mode="json") for p in desired],
@@ -332,15 +346,20 @@ class PipelinesOrchestrator:
         self._last_sig = desired_sig
         self._last_settings_sig = settings_sig
 
-        await self._stop_all()
+        if local:
+            await self._start_local_bundle(local, catalog=[*pipelines, *[p for p in desired if p.name not in {item.name for item in pipelines}]])
+        elif self._local_bundle is not None:
+            await self._local_bundle.runtime.stop()
+            self._local_bundle = None
 
-        if len(local) > 1:
-            started = await self._start_local_bundle(local)
-            if not started:
-                for p in local:
-                    await self._start_local_pipeline(p)
-        elif local:
-            await self._start_local_pipeline(local[0])
+        remote_sig = json.dumps({
+            "groups": {sid: [pipeline.model_dump(mode="json") for pipeline in group] for sid, group in remote_groups.items()},
+            "servers": [server.model_dump(mode="json") for server in servers],
+        }, sort_keys=True)
+        if remote_sig == self._last_remote_sig:
+            return
+        await self._stop_remote()
+        self._last_remote_sig = remote_sig
 
         for sid, group in remote_groups.items():
             server = servers_by_id.get(sid)
@@ -415,6 +434,14 @@ class PipelinesOrchestrator:
                 logger.warning("processing config re-sync failed server=%s: %s", sid, exc)
 
     async def _stop_all(self) -> None:
+        await self._stop_remote()
+        if self._local_bundle is not None:
+            try:
+                await self._local_bundle.runtime.stop()
+            finally:
+                self._local_bundle = None
+
+    async def _stop_remote(self) -> None:
         # Stop producers before consumers: a reconnect must not recreate an
         # origin runtime while reconciliation is tearing that runtime down.
         for handle in list(self._servers.values()):
@@ -428,13 +455,6 @@ class PipelinesOrchestrator:
             except Exception:
                 pass
         self._servers.clear()
-
-        if self._local_bundle is not None:
-            try:
-                await self._local_bundle.runtime.stop()
-            except Exception:
-                pass
-            self._local_bundle = None
 
         for handle in list(self._pipelines.values()):
             try:
@@ -475,6 +495,8 @@ class PipelinesOrchestrator:
             pipeline_telemetry_store=base.pipeline_telemetry_store,
             pipeline_observability_sink=base.pipeline_observability_sink,
             inspection_store=base.inspection_store,
+            inspection_node_occurrences=base.inspection_node_occurrences,
+            demand_registry=base.demand_registry,
             inspection_revisions={pipeline.name: pipeline_inspection_revision(pipeline) for pipeline in pipelines},
             pipeline_storage_manager=base.pipeline_storage_manager,
             pipeline_graph_limits_by_pipeline=base.pipeline_graph_limits_by_pipeline,
@@ -485,44 +507,46 @@ class PipelinesOrchestrator:
             logger=logger,
         )
 
-    async def _start_local_bundle(self, pipelines: list[Pipeline]) -> bool:
-        compiled: list[CompiledPipeline] = []
-        valid_pipelines: list[Pipeline] = []
-        for pipeline in pipelines:
-            try:
-                compiled_pipeline = self._compiler.compile_pipeline(pipeline)
-            except GraphCompileError as exc:
-                logger.warning("pipeline compile failed name=%s: %s", pipeline.name, exc)
-                continue
-            compiled.append(compiled_pipeline)
-            valid_pipelines.append(pipeline)
+    async def _prune_revoked_local_demands(self) -> None:
+        handle = self._local_bundle
+        demands = self._runtime_deps_base.demand_registry
+        if handle is None or demands is None:
+            return
+        configured = {pipeline.name: pipeline for pipeline in handle.pipelines}
+        survivors = tuple(pipeline for pipeline in handle.runtime.report.pipelines
+            if all(demands.allowed(node.normalized_config["demand_id"])
+                   for node in pipeline.nodes if node.operator_id == "core.demand_sink")
+            and not demands.pipeline_blocked(configured[pipeline.name]))
+        if len(survivors) == len(handle.runtime.report.pipelines):
+            return
+        if not survivors:
+            await handle.runtime.stop()
+            self._local_bundle = None
+            return
+        await handle.runtime.reconcile(CompilationReport(survivors, {}))
+        names = {pipeline.name for pipeline in survivors}
+        handle.pipelines = [pipeline for pipeline in handle.pipelines if pipeline.name in names]
 
-        if not compiled:
+    async def _start_local_bundle(self, pipelines: list[Pipeline], *, catalog: list[Pipeline]) -> bool:
+        try:
+            report = self._compiler.compile_many(pipelines, catalog=catalog)
+        except GraphCompileError as exc:
+            self._last_error = "Local plan rejected"
+            logger.warning("local plan rejected (%s)", type(exc).__name__)
             return False
 
-        grouped: dict[str, list[SharedNodeOccurrence]] = {}
-        for compiled_pipeline in compiled:
-            for node in compiled_pipeline.nodes:
-                if not node.shareable:
-                    continue
-                grouped.setdefault(node.signature, []).append(
-                    SharedNodeOccurrence(
-                        pipeline_name=compiled_pipeline.name,
-                        node_id=node.node_id,
-                        signature=node.signature,
-                    ),
-                )
-        shared = {
-            signature: tuple(occurrences)
-            for signature, occurrences in grouped.items()
-            if len(occurrences) > 1
-        }
-        report = CompilationReport(
-            pipelines=tuple(compiled),
-            shared_signatures=shared,
-        )
-
-        deps = self._build_runtime_dependencies(origin_inbox=None, pipelines=pipelines)
+        deps = self._build_runtime_dependencies(origin_inbox=None, pipelines=[*catalog, *pipelines])
+        if self._local_bundle is not None:
+            try:
+                await self._local_bundle.runtime.reconcile(report, deps)
+            except Exception as exc:
+                self._last_error = "Local plan preparation failed"
+                logger.warning("local plan preparation failed (%s)", type(exc).__name__)
+                return False
+            self._local_bundle.pipelines = list(pipelines)
+            if self._last_error and self._last_error.startswith("Local plan"):
+                self._last_error = None
+            return True
         try:
             runtime = PipelineBundleRuntime(
                 report=report,
@@ -544,7 +568,7 @@ class PipelinesOrchestrator:
             return False
 
         self._local_bundle = _BundleHandle(
-            pipelines=valid_pipelines, runtime=runtime, started_at=time.time()
+            pipelines=list(pipelines), runtime=runtime, started_at=time.time()
         )
         return True
 

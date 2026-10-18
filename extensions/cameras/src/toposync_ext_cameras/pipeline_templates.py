@@ -53,7 +53,7 @@ CAT_ACTIVITY_RECIPES = {
 def build_shared_camera_detection_nodes(
     *, camera_id: str, source_id: str, detection_model_id: str
 ) -> list[dict[str, Any]]:
-    return [
+    nodes = [
         {"id": "source", "operator": "camera.source",
          "config": {"camera_id": camera_id, "source_id": source_id, "fps": 4.0}},
         {"id": "motion", "operator": "camera.motion_gate",
@@ -71,6 +71,14 @@ def build_shared_camera_detection_nodes(
                     "confidence_threshold": 0.25, "emit_mode": "annotate",
                     "use_image_region": True}},
     ]
+    owner = f"camera-analysis:{camera_id}/{source_id}"
+    for node in nodes:
+        if node["id"] in {"motion", "cadence", "motion_region"}:
+            node["state"] = {
+                "resource_owner": owner,
+                "resource_partition": "camera/source/stream",
+            }
+    return nodes
 
 
 class CameraObservationRegion(BaseModel):

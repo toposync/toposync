@@ -1301,6 +1301,12 @@ class AuthRuntime:
 
     # Registry used by UX to configure include/exclude quickly.
     configurable_actions: dict[str, list[str]] = {
+        "core:pipeline_result": [
+            "core:pipeline_results:read", "core:pipeline_results:manual",
+            "core:pipeline_results:automatic", "core:pipeline_results:player",
+            "core:pipeline_results:publication",
+            "core:pipeline_results:inspection",
+        ],
         "core:global": [
             "core:settings:read",
             "core:extensions:list",

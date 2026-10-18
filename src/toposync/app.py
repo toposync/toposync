@@ -21,6 +21,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from starlette.responses import StreamingResponse
 from toposync.runtime.pipelines.inspection import PipelineInspectionStore
 from toposync.runtime.pipelines.inspection_api import install_inspection_routes
+from toposync.runtime.pipelines.demands import ResourceDemandRegistry
+from toposync.runtime.pipelines.demand_api import install_demand_routes
 from starlette.staticfiles import StaticFiles
 from starlette.types import Receive, Scope, Send
 from pydantic import BaseModel, Field
@@ -1442,6 +1444,36 @@ async def _lifespan(app: FastAPI):
     pipeline_stats_store = PipelineStatsStore()
     app.state.pipeline_stats_store = pipeline_stats_store
     app.state.pipeline_inspection = PipelineInspectionStore()
+    def authorize_result(user_id: str, key: str, purpose: str) -> bool:
+        if user_id == "bypass" and auth.mode == "bypass":
+            return True
+        user = auth.store.get_user_by_id(user_id)
+        if user is None or user.is_disabled:
+            return False
+        principal = auth._principal_from_user(user)
+        if purpose == "inspection" and principal.role != "owner":
+            return False
+        purposes = ("read", "manual", "automatic", "player", "publication", "inspection") if purpose == "catalog" else (purpose,)
+        for selected in purposes:
+            try:
+                auth.authorize(context=AuthContext(principal=principal, mode=auth.mode, requires_setup=False),
+                               action=f"core:pipeline_results:{selected}", resource_type="core:pipeline_result", resource_selector=key)
+                return True
+            except HTTPException as error:
+                if error.status_code not in (401, 403):
+                    raise
+        return False
+
+    app.state.pipeline_demands = ResourceDemandRegistry(authorize_result, compiler=pipeline_compiler,
+        revocations_path=config_store.paths.data_dir / "pipeline-result-revocations.json")
+    app.state.pipeline_inspection.demand_registry = app.state.pipeline_demands
+    def invalidate_inspection(demand) -> None:
+        for token, session in list(app.state.pipeline_inspection.sessions.items()):
+            producer = app.state.pipeline_demands.outputs.get(demand.request.result_key)
+            if demand.id in session.demand_ids or (demand.reason == "incompatible_result_revision"
+                    and session.owner == demand.owner and producer is not None and session.pipeline == producer[0].name):
+                app.state.pipeline_inspection.close(token)
+    app.state.pipeline_demands.invalidated = invalidate_inspection
     pipeline_telemetry_store = create_default_pipeline_telemetry_store()
     app.state.pipeline_telemetry_store = pipeline_telemetry_store
     pipeline_telemetry_checkpoint = create_default_pipeline_telemetry_disk_checkpoint(
@@ -1511,7 +1543,10 @@ async def _lifespan(app: FastAPI):
 
     async def validate_pipeline_activation(pipeline: Pipeline, config: AppConfig) -> None:
         try:
-            compiled = pipeline_compiler.compile_pipeline(pipeline)
+            catalog = [item for item in config.pipelines if item.name != pipeline.name] + [pipeline]
+            compiled = pipeline_compiler.compile_many([pipeline], catalog=catalog).pipelines[0]
+            if any(operator_registry.get(node.operator_id).runtime_factory is None for node in compiled.nodes):
+                raise PipelineValidationError("Reusable results require an explicit consumer demand")
             context = await _build_pipeline_diagnostics_context(
                 config_store, processing_server_id=pipeline.processing_server_id, config=config
             )
@@ -1540,6 +1575,7 @@ async def _lifespan(app: FastAPI):
         poll_interval_s=1.0,
         runtime_dependencies=PipelineRuntimeDependencies(
             inspection_store=app.state.pipeline_inspection,
+            demand_registry=app.state.pipeline_demands,
             services=services,
             pipeline_stats_store=pipeline_stats_store,
             pipeline_telemetry_store=pipeline_telemetry_store,
@@ -1571,6 +1607,8 @@ async def _lifespan(app: FastAPI):
     finally:
         for token in list(app.state.pipeline_inspection.sessions):
             app.state.pipeline_inspection.close(token)
+        for identifier in list(app.state.pipeline_demands.demands):
+            app.state.pipeline_demands.release(identifier, "application_stopped")
         try:
             await orchestrator.stop()
         except Exception:
@@ -1666,6 +1704,30 @@ def create_app() -> FastAPI:
         return principal.user_id
 
     install_inspection_routes(app, _inspection_owner)
+
+    def _result_principal(request: Request) -> str:
+        return request.app.state.auth.require_authenticated(_auth_context(request)).user_id
+
+    install_demand_routes(app, _result_principal, lambda request: _require(request, action="core:access:manage"))
+
+    async def _refresh_result_access(request: Request, user_id: str) -> None:
+        registry = request.app.state.pipeline_demands
+        registry.expire()
+        for token, session in list(request.app.state.pipeline_inspection.sessions.items()):
+            if session.owner == user_id:
+                request.app.state.pipeline_inspection.close(token)
+        await request.app.state.pipelines_orchestrator._reconcile()
+
+    def _validate_client_pipeline(request: Request, pipeline: Pipeline) -> None:
+        if pipeline.name.startswith("demand_") or any(
+            str(node.get("operator", "")).startswith("core.demand_")
+            or "result_origin" in node.get("state", {})
+            or (node.get("operator") == "core.result_input" and node.get("config", {}).get("demand_id") is not None)
+            for node in pipeline.graph.get("nodes", [])
+        ):
+            raise HTTPException(400, "Consumer bindings are managed by the result demand API")
+        if pipeline.graph.get("meta", {}).get("outputs"):
+            _inspection_owner(request)
 
     def _require_extension_settings_authorization(
         request: Request,
@@ -2260,6 +2322,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await _refresh_result_access(request, user.id)
         return AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
 
     @app.delete("/api/access/users/{user_id}")
@@ -2285,6 +2348,7 @@ def create_app() -> FastAPI:
             auth.store.delete_user(user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        await _refresh_result_access(request, user_id)
         return {"ok": True}
 
     @app.post("/api/access/users/{user_id}/grants", response_model=AuthUserPublic)
@@ -2312,6 +2376,7 @@ def create_app() -> FastAPI:
         user = auth.store.get_user_by_id(user_id)
         if user is None:
             raise HTTPException(status_code=404, detail="Unknown user")
+        await _refresh_result_access(request, user.id)
         return AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
 
     @app.delete("/api/access/users/{user_id}/grants", response_model=AuthUserPublic)
@@ -2327,6 +2392,7 @@ def create_app() -> FastAPI:
         user = auth.store.get_user_by_id(user_id)
         if user is None:
             raise HTTPException(status_code=404, detail="Unknown user")
+        await _refresh_result_access(request, user.id)
         return AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
 
     @app.get("/api/system/paths")
@@ -4062,7 +4128,9 @@ def create_app() -> FastAPI:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 body = body.model_copy(update={"graph": graph})
             await _validate_publish_video_host_affinity(config_store, body)
-            compiler.compile_pipeline(body)
+            _validate_client_pipeline(request, body)
+            catalog = [item for item in await config_store.list_pipelines() if item.name != body.name] + [body]
+            compiler.compile_many([body], catalog=catalog)
             saved = await config_store.create_pipeline(body)
             await _emit_pipeline_lifecycle_event(
                 request,
@@ -4542,7 +4610,9 @@ def create_app() -> FastAPI:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 body = body.model_copy(update={"graph": graph})
             await _validate_publish_video_host_affinity(config_store, body)
-            compiler.compile_pipeline(body)
+            _validate_client_pipeline(request, body)
+            catalog = [item for item in await config_store.list_pipelines() if item.name not in {body.name, pipeline_name}] + [body]
+            compiler.compile_many([body], catalog=catalog)
             saved = await config_store.replace_pipeline(pipeline_name, body)
             await _emit_pipeline_lifecycle_event(
                 request,

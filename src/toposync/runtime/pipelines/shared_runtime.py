@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .compiler import CompilationReport, CompiledEdge, CompiledNode, CompiledPipeline
@@ -69,6 +69,7 @@ def build_merged_pipeline_plan(
     node_id_by_key: dict[tuple[Any, ...], str] = {}
     occurrence_to_merged: dict[tuple[str, str], str] = {}
     occurrences_by_merged_id: dict[str, list[MergedNodeOccurrence]] = defaultdict(list)
+    origins_by_merged_id: dict[str, set[tuple[str, str]]] = defaultdict(set)
     edge_by_key: dict[tuple[str, str, str, str], CompiledEdge] = {}
 
     for pipeline in pipelines:
@@ -110,6 +111,7 @@ def build_merged_pipeline_plan(
             occurrence = MergedNodeOccurrence(pipeline_name=pipeline.name, node_id=node.node_id)
             occurrence_to_merged[(pipeline.name, node.node_id)] = merged_node_id
             occurrences_by_merged_id[merged_node_id].append(occurrence)
+            origins_by_merged_id[merged_node_id].update(node.origins)
 
     for pipeline in pipelines:
         for edge in pipeline.edges:
@@ -158,7 +160,7 @@ def build_merged_pipeline_plan(
                     f"{source_merged}.{edge.source_port}->{target_merged}.{edge.target_port}",
                 )
 
-    merged_nodes = list(merged_node_by_key.values())
+    merged_nodes = [replace(node, origins=tuple(sorted(origins_by_merged_id[node.node_id]))) for node in merged_node_by_key.values()]
     merged_edges = list(edge_by_key.values())
     topological_order = _topological_order(merged_nodes=merged_nodes, merged_edges=merged_edges)
     node_by_id = {node.node_id: node for node in merged_nodes}
@@ -210,6 +212,7 @@ class PipelineBundleRuntime:
         self.dependencies.pipeline_stats_node_occurrences = _build_bundle_stats_node_occurrences(
             plan=self.plan
         )
+        self.dependencies.inspection_node_occurrences = _inspection_occurrences(self.plan)
         self.dependencies.pipeline_graph_limits_by_pipeline = {
             pipeline.name: dict(pipeline.limits) for pipeline in self.report.pipelines
         }
@@ -224,6 +227,15 @@ class PipelineBundleRuntime:
 
     async def stop(self) -> None:
         await self._runtime.stop()
+
+    async def reconcile(self, report: CompilationReport, dependencies: PipelineRuntimeDependencies | None = None) -> None:
+        plan = build_merged_pipeline_plan(report, bundle_name=self.bundle_name)
+        dependencies = replace(dependencies or self.dependencies,
+            pipeline_stats_node_occurrences=_build_bundle_stats_node_occurrences(plan=plan),
+            inspection_node_occurrences=_inspection_occurrences(plan),
+            pipeline_graph_limits_by_pipeline={pipeline.name: dict(pipeline.limits) for pipeline in report.pipelines})
+        await self._runtime.reconcile(plan.merged_pipeline, dependencies)
+        self.report, self.plan, self.dependencies = report, plan, dependencies
 
     async def run_for(self, duration_s: float) -> dict[str, Any]:
         await self._runtime.run_for(duration_s)
@@ -252,6 +264,12 @@ class PipelineBundleRuntime:
         }
 
 
+def _inspection_occurrences(plan: MergedPipelinePlan) -> dict[str, tuple[tuple[str, str], ...]]:
+    occurrences = _build_bundle_stats_node_occurrences(plan=plan)
+    return {node.node_id: tuple(sorted(set(occurrences.get(node.node_id, ())) | set(node.origins)))
+            for node in plan.merged_pipeline.nodes}
+
+
 def _occurrences_payload(
     occurrences_by_node: dict[str, tuple[MergedNodeOccurrence, ...]],
 ) -> dict[str, list[dict[str, str]]]:
@@ -276,7 +294,7 @@ def _merged_node_id_for_key(*, node: CompiledNode, merge_key: tuple[Any, ...]) -
         )
         incoming_digest = hashlib.sha256(incoming_encoded.encode("utf-8")).hexdigest()[:8]
         return f"shared_{base}_{node.signature[:12]}_{incoming_digest}"
-    isolated_suffix = str(merge_key[1]).replace(":", "__").replace(".", "_").replace("-", "_")
+    isolated_suffix = hashlib.sha256(str(merge_key[1]).encode("utf-8")).hexdigest()[:24]
     return f"isolated_{isolated_suffix}"
 
 

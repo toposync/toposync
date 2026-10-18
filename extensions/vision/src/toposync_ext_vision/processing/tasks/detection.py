@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import uuid
@@ -59,6 +60,15 @@ class VisionDetectRuntime(TransformOperatorRuntime):
         if isinstance(registry, ModelRegistry):
             return registry
         return build_default_model_registry()
+
+    async def prepare(self, context) -> None:
+        work = asyncio.create_task(context.run_blocking(self._ensure_backend))
+        try:
+            await asyncio.shield(work)
+        except asyncio.CancelledError:
+            # Native model loading must finish before candidate cleanup.
+            await work
+            raise
 
     def _ensure_manifest(self) -> ModelManifest:
         if self._manifest is not None:

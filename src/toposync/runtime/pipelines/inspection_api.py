@@ -11,8 +11,14 @@ from .inspection import InspectionSnapshot, PipelineInspectionStore, pipeline_in
 from .operators_sinks import _encode_image_bytes
 
 
+def pipeline_image_encoders(app: FastAPI) -> asyncio.Semaphore:
+    if not hasattr(app.state, "pipeline_image_encoders"):
+        app.state.pipeline_image_encoders = asyncio.Semaphore(2)
+    return app.state.pipeline_image_encoders
+
+
 def install_inspection_routes(app: FastAPI, authorize: Callable[[Request], str]) -> None:
-    image_encoders = asyncio.Semaphore(2)
+    image_encoders = pipeline_image_encoders(app)
 
     async def checked(request: Request, token: str | None = None, pipeline_name: str | None = None):
         store: PipelineInspectionStore = request.app.state.pipeline_inspection
@@ -25,6 +31,12 @@ def install_inspection_routes(app: FastAPI, authorize: Callable[[Request], str])
             pipeline = await request.app.state.config_store.get_pipeline(name)
             if pipeline is None:
                 raise HTTPException(404, "Unknown pipeline")
+            demands = getattr(request.app.state, "pipeline_demands", None)
+            if demands is not None:
+                for output in pipeline.graph.get("meta", {}).get("outputs", []):
+                    key = output.get("key", "")
+                    if demands.is_blocked(owner, key, "inspection") or not demands.authorized(owner, key, "inspection"):
+                        raise HTTPException(403, "inspection_result_access_revoked")
             revision = pipeline_inspection_revision(pipeline)
             if session and session.revision != revision:
                 raise HTTPException(409, "inspection_revision_changed")
@@ -40,9 +52,27 @@ def install_inspection_routes(app: FastAPI, authorize: Callable[[Request], str])
         if pipeline.processing_server_id not in ("", "local", None):
             raise HTTPException(409, "inspection_remote_runtime_unavailable")
         nodes = {str(node["id"]): str(node["operator"]) for node in pipeline.graph.get("nodes", [])}
+        registry = getattr(request.app.state, "pipeline_demands", None)
+        demand_ids = []
         try:
-            token = store.open(pipeline.name, revision, nodes, owner=owner)
-        except ValueError as error:
+            if registry is not None:
+                from .demands import DemandRequest
+                registry.bind(await request.app.state.config_store.list_pipelines())
+                for output in pipeline.graph.get("meta", {}).get("outputs", []):
+                    _, definition, production_revision = registry.outputs[output["key"]]
+                    demand = registry.open(owner, DemandRequest(consumer_id=f"inspection:{pipeline.name}", purpose="inspection",
+                        result_key=definition.key, contract=definition.contract, production_revision=production_revision,
+                        lease_seconds=store.lease_seconds))
+                    demand_ids.append(demand.id)
+            token = store.open(pipeline.name, revision, nodes, owner=owner, demand_ids=tuple(demand_ids))
+        except (ValueError, PermissionError, KeyError) as error:
+            if registry is not None:
+                for identifier in demand_ids:
+                    registry.release(identifier)
+            if isinstance(error, PermissionError):
+                raise HTTPException(403, "inspection_result_access_revoked") from error
+            if isinstance(error, KeyError):
+                raise HTTPException(409, "inspection_revision_changed") from error
             raise HTTPException(429, "inspection_capacity") from error
         response.headers["Cache-Control"] = "no-store"
         return store.snapshot(token)

@@ -473,7 +473,18 @@ def test_real_runtime_detector_gate_inspection_is_passive(observing, reject):
                 ]
             ],
         )
-        store = PipelineInspectionStore()
+        image_ready = asyncio.Event()
+        first_image_snapshot = None
+
+        class ObservedStore(PipelineInspectionStore):
+            def observe(self, **kwargs):
+                nonlocal first_image_snapshot
+                super().observe(**kwargs)
+                if token and kwargs.get("state") == "analyzed" and not image_ready.is_set():
+                    first_image_snapshot = self.snapshot(token)
+                    image_ready.set()
+
+        store = ObservedStore()
         token = (
             store.open("demo", "revision", {node["id"]: node["operator"] for node in nodes})
             if observing
@@ -511,12 +522,14 @@ def test_real_runtime_detector_gate_inspection_is_passive(observing, reject):
             dependencies,
         )
         await runtime.start()
-        await asyncio.sleep(0.04)
         if token:
-            snapshot = store.snapshot(token)
+            await asyncio.wait_for(image_ready.wait(), 1)
+            snapshot = first_image_snapshot
             assert any(node.image_available for node in snapshot.nodes)
             if reject:
                 assert snapshot.nodes[-1].state == "waiting"  # T11: downstream gets no execution.
+        else:
+            await asyncio.sleep(0.04)
         await asyncio.sleep(0.16)
         await runtime.stop()
         assert all(metrics.error_count == 0 for metrics in runtime.node_metrics.values())

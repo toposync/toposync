@@ -94,6 +94,7 @@ class _Session:
     motion_windows: dict[str, dict[str, float]] = field(default_factory=dict)
     motion_captures: dict[str, tuple[str, int] | None] = field(default_factory=dict)
     timer: asyncio.TimerHandle | None = None
+    demand_ids: tuple[str, ...] = ()
 
 
 def _number(value: Any) -> float | None:
@@ -151,8 +152,9 @@ class PipelineInspectionStore:
     def __init__(self, *, clock=time.time) -> None:
         self.clock = clock
         self.sessions: dict[str, _Session] = {}
+        self.demand_registry = None
 
-    def open(self, pipeline: str, revision: str, nodes: dict[str, str], *, owner: str = "") -> str:
+    def open(self, pipeline: str, revision: str, nodes: dict[str, str], *, owner: str = "", demand_ids: tuple[str, ...] = ()) -> str:
         self.expire()
         if len(self.sessions) >= self.maximum_sessions or len(nodes) > self.maximum_items:
             raise ValueError("inspection_capacity")
@@ -173,6 +175,7 @@ class PipelineInspectionStore:
             },
             self.clock() + self.lease_seconds,
             owner=owner,
+            demand_ids=demand_ids,
         )
         session = self.sessions[token]
         session.node_sizes = {
@@ -187,6 +190,12 @@ class PipelineInspectionStore:
 
     def _renew(self, token: str) -> None:
         session = self.sessions[token]
+        if self.demand_registry is not None:
+            for identifier in session.demand_ids:
+                if not self.demand_registry.allowed(identifier):
+                    self.close(token)
+                    raise KeyError("inspection_demand_expired")
+                self.demand_registry.renew(identifier)
         session.expires = self.clock() + self.lease_seconds
         if session.timer:
             session.timer.cancel()
@@ -208,6 +217,9 @@ class PipelineInspectionStore:
             session.motion_windows.clear()
             session.motion_captures.clear()
             session.last_frames.clear()
+            if self.demand_registry is not None:
+                for identifier in session.demand_ids:
+                    self.demand_registry.release(identifier)
 
     def expire(self) -> None:
         now = self.clock()

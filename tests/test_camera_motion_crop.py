@@ -278,6 +278,9 @@ def test_equivalent_motion_graphs_share_detection_but_distinct_sources_do_not():
                 for a, b in [("source", "motion"), ("motion", "framing"), ("framing", "detect")]
             ],
         )
+        for node in graph["nodes"]:
+            if node["id"] in {"motion", "framing"}:
+                node["state"] = {"resource_owner": f"camera-analysis:{camera}", "resource_partition": "camera/source/stream"}
         return Pipeline(name=name, graph=graph)
 
     report = PipelineGraphCompiler(registry).compile_many(

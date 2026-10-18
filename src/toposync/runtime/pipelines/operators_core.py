@@ -29,6 +29,8 @@ from .runtime import Artifact, Lifecycle, Packet
 from .operators_control import register_control_operators
 from .operators_distributed import register_distributed_operators
 from .operators_gates import register_gate_operators
+from .operators_merge import register_merge_operators
+from .demands import register_demand_operators
 from .operators_sinks import _encode_image_bytes, _write_bytes, register_sink_operators
 
 
@@ -1647,6 +1649,8 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         runtime_factory=lambda _config, _deps: SinkRuntime(),
     )
     register_gate_operators(registry)
+    register_merge_operators(registry)
+    register_demand_operators(registry)
     register_sink_operators(registry)
     register_control_operators(registry)
     register_distributed_operators(registry)

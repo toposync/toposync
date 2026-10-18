@@ -11,7 +11,8 @@ from toposync.runtime.pipelines import Artifact, Packet, SourceOperatorRuntime
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 
 
-def register_source(client, counters, paused):
+def register_source(client, counters, paused, progress=None):
+    progress = progress if progress is not None else {}
     class Source(SourceOperatorRuntime):
         def __init__(self):
             self.instance = uuid.uuid4().hex
@@ -24,8 +25,11 @@ def register_source(client, counters, paused):
         async def produce(self, context):
             await context.sleep(0.01)
             if paused[0]:
+                progress["pause_acknowledged"] = True
                 return None
+            progress["pause_acknowledged"] = False
             self.sequence += 1
+            progress["last_sequence"] = self.sequence
             return Packet.create(
                 stream_id="synthetic",
                 payload={
@@ -66,7 +70,8 @@ def test_real_api_projects_artifacts_renames_and_revokes_all_uses_before_acknowl
     with _create_client(tmp_path, monkeypatch) as client:
         _setup_owner(client)
         owner_cookies = dict(client.cookies)
-        register_source(client, counters, paused)
+        progress = {}
+        register_source(client, counters, paused, progress)
         contract = {
             "type": "packet",
             "version": 1,
@@ -196,7 +201,14 @@ def test_real_api_projects_artifacts_renames_and_revokes_all_uses_before_acknowl
         assert client.delete("/api/pipeline-inspection/" + passive_token).status_code == 204
         assert identifier in client.app.state.pipeline_demands.demands and counters["started"] == 1
         paused[0] = True
-        value = client.get("/api/result-demands/" + identifier).json()["result"]
+        # Pausing production does not drain the already emitted final frame.
+        for _ in range(50):
+            value = client.get("/api/result-demands/" + identifier).json()["result"]
+            if progress.get("pause_acknowledged") and value["payload"]["sample"] == progress["last_sequence"]:
+                break
+            time.sleep(0.01)
+        assert progress.get("pause_acknowledged")
+        assert value["payload"]["sample"] == progress["last_sequence"]
         artifact_id = value["artifacts"][0]["id"]
         artifact = client.get(f"/api/result-demands/{identifier}/artifacts/{artifact_id}")
         assert artifact.status_code == 200 and artifact.headers["content-type"] == "image/jpeg"

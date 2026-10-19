@@ -26,21 +26,36 @@ def pipeline_inspection_revision(pipeline: Any) -> str:
     ).hexdigest()
 
 
+class InspectionRaster(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    index: int = Field(ge=0, le=3)
+    width: int = Field(ge=1, le=160)
+    height: int = Field(ge=1, le=90)
+    sampling: Literal["nearest_pixel_centres"] = "nearest_pixel_centres"
+
+
 class InspectionVisual(BaseModel):
     """Bounded drawing primitives supplied explicitly by an operator, never payload dumps."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
     layer: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")
-    kind: Literal["points", "polyline", "polygon"]
+    kind: Literal["points", "polyline", "polygon", "raster"]
     points: list[Annotated[list[float], Field(min_length=2, max_length=2)] | None] = Field(max_length=128)
     connections: list[Annotated[list[int], Field(min_length=2, max_length=2)]] = Field(default_factory=list, max_length=128)
     label: str | None = Field(default=None, max_length=64)
     subject_id: str | None = Field(default=None, max_length=128)
+    local_id: str | None = Field(default=None, max_length=128)
+    segment_id: str | None = Field(default=None, max_length=128)
+    state: str | None = Field(default=None, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    sample_sequences: list[int] = Field(default_factory=list, max_length=128)
     score: float | None = None
     score_kind: str | None = Field(default=None, max_length=64)
+    raster: InspectionRaster | None = None
 
     @model_validator(mode="after")
     def drawing_contract(self) -> InspectionVisual:
+        if (self.kind == "raster") != (self.raster is not None) or (self.raster and (self.points or self.connections)):
+            raise ValueError("invalid_inspection_raster")
         if any(point is not None and any(v < 0 or v > 1 for v in point)
                for point in self.points):
             raise ValueError("invalid_inspection_point")
@@ -51,6 +66,10 @@ class InspectionVisual(BaseModel):
             raise ValueError("invalid_inspection_path")
         if self.score is not None and not self.score_kind:
             raise ValueError("inspection_score_kind_required")
+        if self.sample_sequences and (len(self.sample_sequences) != len(self.points)
+                or any(sequence < 1 for sequence in self.sample_sequences)
+                or any(a >= b for a, b in zip(self.sample_sequences, self.sample_sequences[1:]))):
+            raise ValueError("invalid_inspection_sample_sequence")
         return self
 
 
@@ -116,6 +135,7 @@ class _Session:
     sequence: int = 0
     dropped: int = 0
     images: dict[str, tuple[int, Any]] = field(default_factory=dict)
+    masks: dict[str, tuple[int, dict[int, Any]]] = field(default_factory=dict)
     occurrence_ids: dict[str, str] = field(default_factory=dict)
     image_bytes: int = 0
     captures: dict[str, tuple[str, int]] = field(default_factory=dict)
@@ -128,6 +148,7 @@ class _Session:
     demand_ids: tuple[str, ...] = ()
     preview_active: bool = False
     preview_not_before: float = 0.0
+    masks_not_before: float = 0.0
 
 
 def _number(value: Any) -> float | None:
@@ -245,6 +266,7 @@ class PipelineInspectionStore:
             if session.timer:
                 session.timer.cancel()
             session.images.clear()
+            session.masks.clear()
             session.occurrence_ids.clear()
             session.image_bytes = 0
             session.nodes.clear()
@@ -291,6 +313,9 @@ class PipelineInspectionStore:
         old = session.images.pop(node, None)
         if old:
             session.image_bytes -= int(old[1].nbytes)
+        masks = session.masks.pop(node, None)
+        if masks:
+            session.image_bytes -= sum(int(mask.nbytes) for mask in masks[1].values())
 
     def observe(
         self,
@@ -309,6 +334,7 @@ class PipelineInspectionStore:
         revision: str | None = None,
         geometry: Any = None,
         visuals: Any = None,
+        masks: Any = None,
     ) -> None:
         # The producer never awaits a subscriber, serializes pixels or reads disk.
         self.expire()
@@ -477,9 +503,23 @@ class PipelineInspectionStore:
                             session.dropped += max(0, len(visuals) - 32)
                             for visual in visuals[:32]:
                                 try:
-                                    drawings.append(InspectionVisual.model_validate(visual))
+                                    drawing = InspectionVisual.model_validate(visual)
                                 except ValidationError:
                                     session.dropped += 1
+                                    continue
+                                if drawing.raster is not None:
+                                    raster = drawing.raster
+                                    mask = masks[raster.index] if isinstance(masks, (list, tuple)) and raster.index < len(masks) else None
+                                    if (getattr(mask, "shape", ()) != (raster.height, raster.width)
+                                            or str(getattr(mask, "dtype", "")) != "uint8"
+                                            or sum(active.image_bytes for active in self.sessions.values()) + mask.nbytes > self.maximum_image_bytes):
+                                        session.dropped += 1
+                                        continue
+                                    saved = session.masks.setdefault(node, (session.sequence, {}))[1]
+                                    if raster.index not in saved:
+                                        saved[raster.index] = mask
+                                        session.image_bytes += int(mask.nbytes)
+                                drawings.append(drawing)
                         values["visuals"] = drawings
             previous = session.nodes[node]
             same_producer = previous.producer_epoch == producer_epoch
@@ -606,3 +646,10 @@ class PipelineInspectionStore:
         if saved_sequence != sequence:
             raise KeyError("image_expired")
         return frame
+
+    def mask(self, token: str, node: str, sequence: int, index: int) -> Any:
+        self.expire()
+        saved_sequence, masks = self.sessions[token].masks[node]
+        if saved_sequence != sequence:
+            raise KeyError("mask_expired")
+        return masks[index]

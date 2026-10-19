@@ -23,6 +23,7 @@ from toposync.runtime.pipelines.inspection import (
     InspectionNode,
     InspectionSnapshot,
     InspectionVisual,
+    InspectionRaster,
     PipelineInspectionStore,
 )
 from toposync.runtime.pipelines.runtime import Packet
@@ -570,12 +571,13 @@ def test_real_runtime_detector_gate_inspection_is_passive(observing, reject):
 
 def test_typescript_snapshot_fields_and_states_match_backend_schema():
     types = (Path(__file__).parents[1] / "frontend/packages/plugin-api/index.d.ts").read_text()
-    for model in (InspectionNode, InspectionSnapshot, InspectionVisual):
+    for model in (InspectionNode, InspectionSnapshot, InspectionVisual, InspectionRaster):
         body = re.search(r"export type " + model.__name__ + r" = \{(.*?)\n\};", types, re.S)[1]
         fields = set(re.findall(r"^  (\w+):", body, re.M))
         assert fields == set(model.model_fields)
     states = InspectionNode.model_json_schema()["properties"]["state"]["enum"]
-    line = re.search(r"  state: (.*?);", types)[1]
+    node_body = re.search(r"export type InspectionNode = \{(.*?)\n\};", types, re.S)[1]
+    line = re.search(r"  state: (.*?);", node_body)[1]
     assert json.loads("[" + line.replace(" | ", ",") + "]") == states
 
 

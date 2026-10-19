@@ -367,6 +367,7 @@ class ByteWorldTrackerBackend:
         metadata = {
             **dict(state.metadata or {}),
             "hits": int(state.hits),
+            "observation_state": "detection_associated",
             "confidence_band": state.last_confidence_band,
         }
         if state.last_match_cost is not None:

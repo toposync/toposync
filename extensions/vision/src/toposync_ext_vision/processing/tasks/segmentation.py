@@ -12,6 +12,7 @@ from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 from ...pipelines.schemas import VisionSegmentInstancesConfig
 from ...registry.manifests import ModelManifest, ModelRegistry, build_default_model_registry
 from ..artifact_helpers import project_detection_bbox_to_stream_space, project_mask_to_stream_space
+from ..inspection import copy_inspection_frame, mask_visuals
 from ..contracts import DetectionObject, SegmentationBackend, SegmentationInstance, normalize_bbox01
 from ..runtime_backends import build_segmenter_backend
 
@@ -454,6 +455,7 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
         backend = self._ensure_backend()
         hints = self._collect_hint_objects(packet)
         hint_detections = self._hint_detections(hints)
+        inspection_frame = await copy_inspection_frame(context, frame)
         concurrency_key = f"vision.segment_instances:{manifest.runtime}:{manifest.model_id}"
         raw_instances = await context.run_blocking(
             backend.segment,
@@ -469,6 +471,15 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
             selected_artifact_name=selected_artifact_name,
         )
         selected = self._select_instances(packet, hints=hints, instances=instances)
+        if inspection_frame is not None:
+            try:
+                masks, visuals = await context.run_blocking(mask_visuals, frame.shape[:2], selected)
+                context.inspect("analyzed", packet, frame=inspection_frame, model_id=manifest.model_id,
+                    geometry=packet.artifacts[selected_artifact_name].metadata.get("image_geometry"),
+                    visuals=visuals, masks=masks, reason="inspection_capacity" if len(selected) > 4 else
+                    "mask_geometry_unavailable" if len(selected) != len(masks) else None)
+            except Exception:
+                pass  # Visual masks cannot change functional segmentation or retained artifacts.
         packet_with_masks, materialized = self._materialize_instances(
             packet,
             selected_artifact_name=selected_artifact_name,

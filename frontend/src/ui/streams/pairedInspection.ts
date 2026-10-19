@@ -8,7 +8,8 @@ export type PixelGeometry = {
   valid_domains: Array<{ size: [number, number]; matrix: number[][] }>;
 };
 export type PairedInspectionMetadata = {
-  schema_version: 1; transport: "paired_jpeg"; expires_at: number;
+  schema_version: 2; transport: "paired_jpeg"; expires_at: number; jpeg_length: number;
+  masks: Array<{ node_id: string; image_sequence: number; index: number; width: number; height: number; length: number }>;
   presentation: { frame: FrameReference; image_size: [number, number]; geometry: PixelGeometry | null };
   snapshot: InspectionSnapshot;
 };
@@ -56,19 +57,31 @@ export async function readPairedResponse(response: Response): Promise<Uint8Array
   return bytes;
 }
 
-export function decodePairedFrame(bytes: Uint8Array): { metadata: PairedInspectionMetadata; jpeg: Uint8Array } {
+export function decodePairedFrame(bytes: Uint8Array): { metadata: PairedInspectionMetadata; jpeg: Uint8Array; masks: Uint8Array[] } {
   if (bytes.length < 8 || bytes.length > maximumPairedBytes) throw new Error("inspection_frame_capacity");
   const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
   if (length < 2 || length > 262144 || length + 4 >= bytes.length) throw new Error("inspection_frame_invalid");
   const metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(4, length + 4))) as PairedInspectionMetadata;
   const p = metadata.presentation, s = metadata.snapshot;
-  if (metadata.schema_version !== 1 || metadata.transport !== "paired_jpeg" || !finite(metadata.expires_at)
+  if (metadata.schema_version !== 2 || metadata.transport !== "paired_jpeg" || !finite(metadata.expires_at)
       || !p || !reference(p.frame) || !size(p.image_size) || p.image_size[0] * p.image_size[1] * 4 > 16_777_216
       || p.geometry !== null && !geometry(p.geometry)
       || !s || typeof s.session !== "string" || !Array.isArray(s.nodes) || s.nodes.length > 128
-      || !Number.isSafeInteger(s.sequence) || s.sequence < 0)
+      || !Number.isSafeInteger(s.sequence) || s.sequence < 0
+      || !Number.isSafeInteger(metadata.jpeg_length) || metadata.jpeg_length < 4
+      || !Array.isArray(metadata.masks) || metadata.masks.length > 4
+      || metadata.masks.some(mask => !mask || typeof mask.node_id !== "string" || mask.node_id.length > 128
+        || !Number.isSafeInteger(mask.image_sequence) || mask.image_sequence < 0
+        || !Number.isInteger(mask.index) || mask.index < 0 || mask.index > 3
+        || !Number.isInteger(mask.width) || mask.width < 1 || mask.width > 160
+        || !Number.isInteger(mask.height) || mask.height < 1 || mask.height > 90
+        || !Number.isSafeInteger(mask.length) || mask.length < 8))
     throw new Error("inspection_frame_invalid");
-  return { metadata, jpeg: bytes.subarray(length + 4) };
+  if (length + 4 + metadata.jpeg_length + metadata.masks.reduce((sum, mask) => sum + mask.length, 0) !== bytes.length)
+    throw new Error("inspection_frame_invalid");
+  let offset = length + 4 + metadata.jpeg_length;
+  const masks = metadata.masks.map(mask => { const bytesForMask = bytes.subarray(offset, offset + mask.length); offset += mask.length; return bytesForMask; });
+  return { metadata, jpeg: bytes.subarray(length + 4, length + 4 + metadata.jpeg_length), masks };
 }
 
 export function sameCaptureFrame(a: unknown, b: unknown): boolean {
@@ -113,7 +126,7 @@ function* inspectionProjections(metadata: PairedInspectionMetadata, now: number,
     const key = JSON.stringify([node.physical_node_id, node.producer_epoch, node.model_id, node.frame]);
     if (seen.has(key)) continue;
     seen.add(key);
-    yield { node, project: (point: number[]): number[] | null => {
+    yield { node, origin, target, backwards, project: (point: number[]): number[] | null => {
       if (point.length !== 2 || !point.every(n => finite(n) && n >= 0 && n <= 1)) return null;
       const local = [point[0] * origin.image_size[0], point[1] * origin.image_size[1]];
       if (!supported(local, origin)) return null;
@@ -153,6 +166,53 @@ export function projectInspectionVisuals(metadata: PairedInspectionMetadata, now
       const connections = visual.connections.filter(edge => Array.isArray(edge) && edge.length === 2
         && edge.every(index => Number.isSafeInteger(index) && index >= 0 && index < points.length && points[index] !== null));
       result.push({ ...visual, points, connections, node });
+    }
+  }
+  return result;
+}
+
+function multiply(a: number[][], b: number[][]): number[][] {
+  return a.map(row => [0,1,2].map(column => row.reduce((sum, value, index) => sum + value * b[index][column], 0)));
+}
+
+export function projectInspectionMasks(metadata: PairedInspectionMetadata, now: number, selectedNodes?: ReadonlySet<string>) {
+  const result: Array<{ attachment: number; matrix: [number, number, number, number, number, number]; clips: number[][][] }> = [];
+  for (const { node, origin, target, backwards } of inspectionProjections(metadata, now, selectedNodes)) {
+    const combined = multiply(backwards, origin.to_source);
+    // shortcut: Canvas supports affine masks; add a projective renderer before accepting other warps.
+    if (Math.abs(combined[2][0]) > 1e-12 || Math.abs(combined[2][1]) > 1e-12 || Math.abs(combined[2][2]) < 1e-12) continue;
+    const [[a,c,e],[b,d,f]] = combined.map(row => row.map(n => n / combined[2][2]));
+    const clipDomains = [
+      { size: origin.image_size, matrix: combined },
+      ...origin.valid_domains.map(domain => {
+        const reversed = inverse(domain.matrix);
+        return { size: domain.size, matrix: reversed && multiply(combined, reversed) };
+      }),
+      ...target.valid_domains.map(domain => ({ size: domain.size, matrix: inverse(domain.matrix) })),
+    ];
+    const clips: number[][][] = [];
+    for (const domain of clipDomains) {
+      if (!domain.matrix) break;
+      const corners = [[-0.5,-0.5],[domain.size[0]-0.5,-0.5],[domain.size[0]-0.5,domain.size[1]-0.5],[-0.5,domain.size[1]-0.5]];
+      const divisors = corners.map(([x,y]) => domain.matrix![2][0]*x+domain.matrix![2][1]*y+domain.matrix![2][2]);
+      if (!divisors.every(value => value > 1e-8) && !divisors.every(value => value < -1e-8)) break;
+      const points = corners.map(point => transform(point, domain.matrix!));
+      if (!points.every((point): point is number[] => point !== null)) break;
+      clips.push(points.map(([x,y]) => [x+0.5,y+0.5]));
+    }
+    if (clips.length !== clipDomains.length) continue;
+    for (const visual of node.visuals) {
+      const raster = visual.raster;
+      if (visual.kind !== "raster" || !raster || raster.sampling !== "nearest_pixel_centres") continue;
+      const attachment = metadata.masks.findIndex(mask => {
+        const producer = metadata.snapshot.nodes.find(value => value.node_id === mask.node_id);
+        return producer && producer.image_sequence === mask.image_sequence && sameCaptureFrame(producer.frame, node.frame)
+          && producer.physical_node_id === node.physical_node_id && producer.producer_epoch === node.producer_epoch
+          && producer.model_id === node.model_id && mask.index === raster.index && mask.width === raster.width && mask.height === raster.height;
+      });
+      if (attachment < 0) continue;
+      const sx = origin.image_size[0] / raster.width, sy = origin.image_size[1] / raster.height;
+      result.push({ attachment, clips, matrix: [a*sx,b*sx,c*sy,d*sy,e-(a+c)/2+0.5,f-(b+d)/2+0.5] });
     }
   }
   return result;

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { resolveToposyncUrl, type InspectionSnapshot } from "@toposync/plugin-api";
 import { i18n } from "../../util/i18n";
-import { decodePairedFrame, projectInspectionBoxes, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata } from "./pairedInspection";
+import { decodePairedFrame, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata } from "./pairedInspection";
 
 export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, selectedNodes, onSnapshot, onClosed }: {
   session: string; nodeId: string; frozen: boolean; boxes: boolean; layers: ReadonlySet<string>; selectedNodes?: ReadonlySet<string>;
@@ -18,13 +18,15 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
     let disposed = false, timer = 0, expiry = 0, emptyReads = 0;
     let presented: PairedInspectionMetadata | null = null;
     let retained: ImageBitmap | null = null, presentedAt = 0;
+    let retainedMasks: ImageBitmap[] = [];
     const controller = new AbortController();
     const clear = () => {
       presented = null; setStamp(null);
       retained?.close(); retained = null;
+      retainedMasks.forEach(mask => mask.close()); retainedMasks = [];
       if (canvas.current) {
         canvas.current.width = 1; canvas.current.height = 1;
-        for (const key of ["capture", "boxes", "visuals", "paintMilliseconds", "snapshotSequence"]) delete canvas.current.dataset[key];
+        for (const key of ["capture", "boxes", "visuals", "masks", "paintMilliseconds", "snapshotSequence"]) delete canvas.current.dataset[key];
       }
     };
     function paint() {
@@ -36,6 +38,20 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
       const started = performance.now();
       context.clearRect(0, 0, element.width, element.height);
       context.drawImage(retained, 0, 0);
+      const maskDrawings = options.current.layers.has("masks") ? projectInspectionMasks(presented, presentedAt, options.current.selectedNodes) : [];
+      for (const drawing of maskDrawings) {
+        const mask = retainedMasks[drawing.attachment];
+        if (!mask) continue;
+        context.save();
+        for (const polygon of drawing.clips) {
+          context.beginPath();
+          polygon.forEach(([x,y], index) => index ? context.lineTo(x,y) : context.moveTo(x,y));
+          context.closePath(); context.clip();
+        }
+        context.setTransform(...drawing.matrix);
+        context.imageSmoothingEnabled = false;
+        context.drawImage(mask, 0, 0); context.restore();
+      }
       // A frozen view reuses its exact authorized pixels and geometry, never the next snapshot.
       const drawings = options.current.boxes ? projectInspectionBoxes(presented, presentedAt, options.current.selectedNodes) : [];
       const visuals = projectInspectionVisuals(presented, presentedAt, options.current.layers, options.current.selectedNodes);
@@ -62,11 +78,16 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
           visual.points.forEach((point, index) => index ? context.lineTo(point![0], point![1]) : context.moveTo(point![0], point![1]));
           if (visual.kind === "polygon") context.closePath();
           context.stroke();
+          if (visual.layer === "tracks" && visual.subject_id) {
+            const point = visual.points[0]!;
+            context.fillText(visual.subject_id, point[0], Math.max(12, point[1] - 4));
+          }
         }
       }
       const reference = presented.presentation.frame;
       element.dataset.capture = `${reference.device_id}/${reference.source_id}/${reference.capture_instance}/${reference.generation}/${reference.sequence}`;
       element.dataset.boxes = String(drawings.length); element.dataset.visuals = String(visuals.length);
+      element.dataset.masks = String(maskDrawings.length);
       element.dataset.paintMilliseconds = String(performance.now() - started);
       element.dataset.snapshotSequence = String(presented.snapshot.sequence);
     }
@@ -78,9 +99,9 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
     }
     async function poll() {
       const timeout = window.setTimeout(() => controller.abort(), 2500);
-      let delay = 200;
+      let delay = options.current.layers.has("masks") ? 500 : 200;
       try {
-        const response = await fetch(resolveToposyncUrl(`/api/streams/inspection/${encodeURIComponent(session)}/${encodeURIComponent(nodeId)}/frame`),
+        const response = await fetch(resolveToposyncUrl(`/api/streams/inspection/${encodeURIComponent(session)}/${encodeURIComponent(nodeId)}/frame${options.current.layers.has("masks") ? "?masks=true" : ""}`),
           { credentials: "same-origin", cache: "no-store", signal: controller.signal });
         if (disposed) return;
         if (response.status === 409 || response.status === 429) {
@@ -90,7 +111,7 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
           return;
         }
         if (!response.ok) throw new Error("inspection_unavailable");
-        const { metadata, jpeg } = decodePairedFrame(await readPairedResponse(response));
+        const { metadata, jpeg, masks } = decodePairedFrame(await readPairedResponse(response));
         if (disposed) return;
         if (metadata.snapshot.session !== session || Date.now() / 1000 >= metadata.expires_at)
           throw new Error("inspection_expired");
@@ -99,7 +120,15 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
         if (changedCapture(metadata)) clear();
         if (options.current.frozen && presented) return;
         let bitmap: ImageBitmap | null = await createImageBitmap(new Blob([new Uint8Array(jpeg).buffer], { type: "image/jpeg" }));
+        let decodedMasks: ImageBitmap[] = [];
         try {
+          for (let index = 0; index < masks.length; index++) {
+            if (disposed || controller.signal.aborted) return;
+            const mask = await createImageBitmap(new Blob([new Uint8Array(masks[index]).buffer], { type: "image/png" }));
+            decodedMasks.push(mask);
+            if (mask.width !== metadata.masks[index].width || mask.height !== metadata.masks[index].height)
+              throw new Error("inspection_mask_geometry_mismatch");
+          }
           if (disposed || controller.signal.aborted || !canvas.current) return;
           if (Date.now() / 1000 >= metadata.expires_at) { clear(); setState("waiting"); return; }
           if (bitmap.width !== metadata.presentation.image_size[0] || bitmap.height !== metadata.presentation.image_size[1])
@@ -108,10 +137,11 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
           const element = canvas.current;
           element.width = bitmap.width; element.height = bitmap.height;
           retained?.close(); retained = bitmap; bitmap = null;
+          retainedMasks.forEach(mask => mask.close()); retainedMasks = decodedMasks; decodedMasks = [];
           presented = metadata;
           presentedAt = Date.now() / 1000;
           paint(); setStamp(presentedAt); setState("paired");
-        } finally { bitmap?.close(); }
+        } finally { bitmap?.close(); decodedMasks.forEach(mask => mask.close()); }
       } catch {
         if (!disposed) { clear(); setState("failed"); options.current.onClosed(); }
         disposed = true; controller.abort();

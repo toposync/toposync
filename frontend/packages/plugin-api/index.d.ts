@@ -494,15 +494,27 @@ export type LiveViewPlayerProps = {
 };
 
 /** Allowlisted passive inspection. A complete snapshot replaces previous state. */
+export type InspectionRaster = {
+  index: number;
+  width: number;
+  height: number;
+  sampling: "nearest_pixel_centres";
+};
+
 export type InspectionVisual = {
   layer: string;
-  kind: "points" | "polyline" | "polygon";
+  kind: "points" | "polyline" | "polygon" | "raster";
   points: Array<number[] | null>;
   connections: number[][];
   label: string | null;
   subject_id: string | null;
+  local_id: string | null;
+  segment_id: string | null;
+  state: string | null;
+  sample_sequences: number[];
   score: number | null;
   score_kind: string | null;
+  raster: InspectionRaster | null;
 };
 
 export type InspectionNode = {

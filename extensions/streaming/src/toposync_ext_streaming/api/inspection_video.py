@@ -18,6 +18,7 @@ from ..streaming.runtime_state import TransmissionRuntimeState
 
 MAXIMUM_PACKET_BYTES = 400_000
 PREVIEW_INTERVAL_SECONDS = 0.2
+MASK_INTERVAL_SECONDS = 0.5
 
 
 def _encode_preview(frame, presentation):
@@ -40,9 +41,22 @@ def _encode_preview(frame, presentation):
     return body, {**presentation, "image_size": [target_width, target_height], "geometry": geometry}
 
 
+def _encode_packet(frame, presentation, masks):
+    import numpy as np
+
+    body, presentation = _encode_preview(frame, presentation)
+    encoded = []
+    for descriptor, mask in masks:
+        colour = np.zeros((*mask.shape, 4), dtype=np.uint8)
+        colour[mask > 0] = (225, 120, 255, 95)
+        image, _, _ = _encode_image_bytes(colour, fmt="png", jpeg_quality=80)
+        encoded.append(({**descriptor, "length": len(image)}, image))
+    return body, presentation, encoded
+
+
 def install_inspection_video_routes(router: APIRouter) -> None:
     @router.get("/inspection/{token}/{node_id}/frame")
-    async def inspection_video_frame(request: Request, token: str, node_id: str) -> Response:
+    async def inspection_video_frame(request: Request, token: str, node_id: str, masks: bool = False) -> Response:
         store, pipeline, _, _ = await checked_inspection(request, token)
         definition = next((item for item in pipeline.graph.get("nodes", []) if item["id"] == node_id), None)
         if definition is None or definition.get("operator") != "stream.publish_video":
@@ -75,13 +89,34 @@ def install_inspection_video_routes(router: APIRouter) -> None:
             if (frame.nbytes > store.maximum_image_bytes
                 or presentation["image_size"] != [frame.shape[1], frame.shape[0]]):
                 raise HTTPException(413, "inspection_frame_capacity")
+            mask_images = []
+            if masks and now >= session.masks_not_before:
+                session.masks_not_before = now + MASK_INTERVAL_SECONDS
+                seen_masks = set()
+                for node in snapshot.nodes:
+                    if node.frame != presentation["frame"] or node.geometry is None or node.expires_at is None or node.expires_at <= now:
+                        continue
+                    for visual in node.visuals:
+                        raster = visual.raster
+                        if raster is None or len(mask_images) >= 4:
+                            continue
+                        identity = (node.physical_node_id, node.producer_epoch, node.model_id, raster.index)
+                        if identity in seen_masks:
+                            continue
+                        try:
+                            mask = store.mask(token, node.node_id, node.image_sequence, raster.index)
+                        except KeyError:
+                            continue
+                        seen_masks.add(identity)
+                        mask_images.append(({"node_id": node.node_id, "image_sequence": node.image_sequence,
+                            "index": raster.index, "width": raster.width, "height": raster.height}, mask))
             encoders = pipeline_image_encoders(request.app)
             if encoders.locked():
                 raise HTTPException(429, "inspection_encoder_busy")
             async with encoders:
-                encoding = asyncio.create_task(asyncio.to_thread(_encode_preview, frame, presentation))
+                encoding = asyncio.create_task(asyncio.to_thread(_encode_packet, frame, presentation, mask_images))
                 try:
-                    body, presentation = await asyncio.shield(encoding)
+                    body, presentation, encoded_masks = await asyncio.shield(encoding)
                 except asyncio.CancelledError:
                     await encoding
                     raise
@@ -96,14 +131,23 @@ def install_inspection_video_routes(router: APIRouter) -> None:
                 for key in ("source_id", "device_id", "capture_instance", "generation")
             ):
                 raise HTTPException(409, "inspection_capture_changed")
+            deliverable_masks = []
+            for descriptor, image in encoded_masks:
+                prior = next(node for node in snapshot.nodes if node.node_id == descriptor["node_id"])
+                latest = session.nodes.get(prior.node_id)
+                if (latest is not None and latest.frame is not None and latest.producer_epoch == prior.producer_epoch
+                        and prior.expires_at > store.clock() and all(latest.frame[key] == prior.frame[key]
+                            for key in ("source_id", "device_id", "capture_instance", "generation"))):
+                    deliverable_masks.append((descriptor, image))
             # The next frame may already exist. This response retains its own sequence and expiry.
             metadata = json.dumps({
-                "schema_version": 1, "transport": "paired_jpeg", "presentation": presentation,
+                "schema_version": 2, "transport": "paired_jpeg", "presentation": presentation,
+                "jpeg_length": len(body), "masks": [descriptor for descriptor, _ in deliverable_masks],
                 "snapshot": snapshot.model_dump(mode="json"), "expires_at": published.expires_at,
             }, separators=(",", ":"), allow_nan=False).encode()
             if len(metadata) > store.maximum_bytes:
                 raise HTTPException(413, "inspection_frame_capacity")
-            payload = len(metadata).to_bytes(4, "big") + metadata + body
+            payload = len(metadata).to_bytes(4, "big") + metadata + body + b"".join(image for _, image in deliverable_masks)
             if len(payload) > MAXIMUM_PACKET_BYTES:
                 raise HTTPException(413, "inspection_frame_capacity")
             return Response(payload, media_type="application/vnd.toposync.paired-frame",

@@ -25,7 +25,7 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
   const [loadedImage, setLoadedImage] = useState("");
   const [frozen, setFrozen] = useState(false);
   const [boxes, setBoxes] = useState(true);
-  const [layers, setLayers] = useState<ReadonlySet<string>>(() => new Set(["pose"]));
+  const [layers, setLayers] = useState<ReadonlySet<string>>(() => new Set(["pose", "tracks", "trails"]));
   const [selectedNodes, setSelectedNodes] = useState<ReadonlySet<string>>();
   const selectedPipeline = pipelines.find(pipeline => pipeline.name === selected);
   const graph = selectedPipeline?.graph as { nodes?: Array<{ id: string; operator: string; config?: { transmission_id?: string } }> } | undefined;
@@ -102,7 +102,9 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
       {error ? <p role="alert">{t("inspection.failed")}</p> : loading || loadingPipelines ? <p role="status">{t("inspection.loading")}</p> : !pipelines.length ? <p>{t("inspection.empty")}</p> : !snapshot ? <p>{t("inspection.waiting")}</p> : null}
       {paired && <div className="pipelineInspectionControls">
         <label><input type="checkbox" checked={boxes} onChange={event => setBoxes(event.target.checked)} />{t("inspection.boxes")}</label>
-        <label><input type="checkbox" checked={layers.has("pose")} onChange={event => setLayers(new Set(event.target.checked ? ["pose"] : []))} />{t("inspection.pose")}</label>
+        {["pose", "tracks", "trails", "masks"].map(layer => <label key={layer}><input type="checkbox" checked={layers.has(layer)} onChange={event => {
+          const next = new Set(layers); if (event.target.checked) next.add(layer); else next.delete(layer); setLayers(next);
+        }} />{t(`inspection.${layer}`)}</label>)}
         <button type="button" aria-pressed={frozen} onClick={() => setFrozen(!frozen)}>{t(frozen ? "inspection.resume" : "inspection.freeze")}</button>
       </div>}
       <div className="pipelineInspectionGrid">
@@ -132,12 +134,18 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
               <span>{t(state === "waiting" ? "inspection.waiting_state" : state === "expired" ? "inspection.expired" : `inspection.${state}`)}</span>
               <small>{t("inspection.counts")}: {node.received_count} / {node.produced_count} / {node.filtered_count}</small>
               {state === "waiting" ? <small>{t("inspection.waiting")}</small> : null}
-              {node.reason ? <small>{t(["category_rejected", "image_unavailable", "inference_interval", "sample_expired", "operator_error", "flow_limit", "inspection_capacity", "delivery_not_accepted", "execution_stopped"].includes(node.reason) ? `inspection.${node.reason}` : "inspection.reason")}</small> : null}
+              {node.reason ? <small>{t(["category_rejected", "image_unavailable", "inference_interval", "sample_expired", "operator_error", "flow_limit", "inspection_capacity", "delivery_not_accepted", "execution_stopped", "mask_geometry_unavailable"].includes(node.reason) ? `inspection.${node.reason}` : "inspection.reason")}</small> : null}
               {!expired && node.motion ? <small>{t("inspection.motion")}: {node.motion.current} / {node.motion.maximum} ({t("inspection.window", {seconds:node.motion.window_seconds,samples:node.motion.samples})})</small> : null}
-              {!expired && node.visuals.map((visual, index) => <small key={index}>
+              {!expired && node.visuals.map((visual, index) => <div className="pipelineInspectionVisual" key={index}>
                 {t(`inspection.${visual.layer}`, {}, visual.layer)}{visual.subject_id ? ` · ${visual.subject_id}` : ""}
                 {visual.score !== null ? ` · ${t(`inspection.${visual.score_kind}`, {}, visual.score_kind || "")} ${visual.score.toFixed(3)}` : ""}
-              </small>)}
+                {visual.state ? ` · ${t(`inspection.${visual.state}`, {}, visual.state)}` : ""}
+                {visual.local_id ? ` · ${t("inspection.local_id")}: ${visual.local_id}` : ""}
+                {visual.raster ? ` · ${visual.raster.width} × ${visual.raster.height} · ${t("inspection.mask_limit")}` : ""}
+                {visual.segment_id ? <details><summary>{t("inspection.segment")}</summary>{visual.segment_id}
+                  {visual.sample_sequences.length > 0 ? <span> · {t("inspection.samples")}: {visual.sample_sequences.join(", ")}</span> : null}
+                </details> : null}
+              </div>)}
             </article>;
           })}
         </section>

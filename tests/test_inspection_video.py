@@ -49,7 +49,7 @@ def preview(monkeypatch):
         token = client.post("/api/pipelines/demo/inspection").json()["session"]
         publisher = operators.PublishVideoRuntime({"transmission_id": "test"})
 
-        async def publish(sequence=1, generation=0, source="main"):
+        async def publish(sequence=1, generation=0, source="main", with_mask=False):
             packet = sample(sequence, source, generation)
             packet.payload["capture_evidence"]["published_at"] = now[0]
             for node in ("publish", "detect"):
@@ -59,11 +59,14 @@ def preview(monkeypatch):
                     state="emitted" if node == "publish" else "analyzed", packet=packet,
                     frame=packet.artifacts["main"].data if node == "detect" else None,
                     geometry=packet.artifacts["main"].metadata["image_geometry"],
+                    masks=[np.array([[255, 0], [0, 255]], np.uint8)] if with_mask else None,
+                    visuals=[{"layer": "masks", "kind": "raster", "points": [],
+                        "raster": {"index": 0, "width": 2, "height": 2}}] if with_mask else None,
                     detections=[{"bbox01": [0.1, 0.2, 0.8, 0.9], "score": 0.8, "label": "square"}])
             await publisher.process_packet(packet, SimpleNamespace(pipeline_name="demo", node_id="publish"))
 
         yield SimpleNamespace(client=client, now=now, allowed=allowed, store=store, runtime=runtime,
-            token=token, publish=lambda **kwargs: client.portal.call(publish, **kwargs),
+            token=token, publish=lambda **kwargs: client.portal.call(lambda: publish(**kwargs)),
             url=f"/api/streams/inspection/{token}/publish/frame", publish_async=publish)
 
 
@@ -72,8 +75,69 @@ def decode(response):
     assert response.headers["cache-control"] == "no-store"
     length = int.from_bytes(response.content[:4], "big")
     metadata = json.loads(response.content[4:4 + length])
-    pixels = cv2.imdecode(np.frombuffer(response.content[4 + length:], dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert metadata["schema_version"] == 2
+    pixels = cv2.imdecode(np.frombuffer(response.content[4 + length:4 + length + metadata["jpeg_length"]], dtype=np.uint8), cv2.IMREAD_COLOR)
     return metadata, pixels
+
+
+def test_masks_are_binary_attachments_on_demand_with_a_lower_rate(preview):
+    preview.publish(with_mask=True)
+    assert decode(preview.client.get(preview.url))[0]["masks"] == []
+    preview.now[0] += 0.21
+    response = preview.client.get(preview.url + "?masks=true")
+    metadata, _ = decode(response)
+    assert len(metadata["masks"]) == 1
+    descriptor = metadata["masks"][0]
+    offset = 4 + int.from_bytes(response.content[:4], "big") + metadata["jpeg_length"]
+    assert len(response.content) == offset + descriptor["length"]
+    mask = cv2.imdecode(np.frombuffer(response.content[offset:], np.uint8), cv2.IMREAD_UNCHANGED)
+    assert mask.shape == (2, 2, 4)
+    assert mask[0, 0, 3] == 95 and mask[0, 1, 3] == 0
+    assert descriptor["node_id"] == "detect"
+    preview.now[0] += 0.21
+    assert decode(preview.client.get(preview.url + "?masks=true"))[0]["masks"] == []
+    preview.now[0] += 0.3
+    preview.publish(sequence=2, with_mask=True)
+    assert len(decode(preview.client.get(preview.url + "?masks=true"))[0]["masks"]) == 1
+
+
+def test_logical_consumers_do_not_encode_the_same_physical_mask_twice(preview, monkeypatch):
+    preview.publish(with_mask=True)
+    session = preview.store.sessions[preview.token]
+    node = session.nodes["detect"]
+    session.nodes["consumer"] = node.model_copy(update={"node_id": "consumer"})
+    session.node_sizes["consumer"] = len(session.nodes["consumer"].model_dump_json().encode())
+    session.state_bytes += session.node_sizes["consumer"]
+    session.masks["consumer"] = session.masks["detect"]
+    session.image_bytes += sum(mask.nbytes for mask in session.masks["consumer"][1].values())
+    encoded = []
+    original = inspection_video._encode_image_bytes
+    def encode(frame, **kwargs):
+        encoded.append(kwargs["fmt"])
+        return original(frame, **kwargs)
+    monkeypatch.setattr(inspection_video, "_encode_image_bytes", encode)
+    metadata, _ = decode(preview.client.get(preview.url + "?masks=true"))
+    assert len(metadata["masks"]) == 1
+    assert encoded == ["jpg", "png"]
+
+
+@pytest.mark.parametrize("change", ["permission", "close", "generation", "expiry"])
+def test_pending_mask_encoding_is_revoked_before_delivery(preview, monkeypatch, change):
+    preview.publish(with_mask=True)
+    original = inspection_video._encode_image_bytes
+    def encode(frame, **kwargs):
+        if kwargs.get("fmt") == "png":
+            if change == "permission":
+                preview.allowed[0] = False
+            elif change == "close":
+                preview.client.portal.call(preview.store.close, preview.token)
+            elif change == "generation":
+                preview.client.portal.call(lambda: preview.publish_async(generation=1))
+            else:
+                preview.now[0] += 2
+        return original(frame, **kwargs)
+    monkeypatch.setattr(inspection_video, "_encode_image_bytes", encode)
+    assert preview.client.get(preview.url + "?masks=true").status_code in {403, 404, 409, 410}
 
 
 def test_transport_atomically_pairs_published_pixels_and_metadata_without_starting_a_producer(preview):

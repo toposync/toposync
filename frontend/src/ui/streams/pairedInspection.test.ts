@@ -1,12 +1,12 @@
 declare const require: any;
-import { decodePairedFrame, projectInspectionBoxes, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata, type PixelGeometry } from "./pairedInspection";
+import { decodePairedFrame, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata, type PixelGeometry } from "./pairedInspection";
 const test: (name: string, fn: () => void | Promise<void>) => void = require("node:test").test;
 const assert: any = require("node:assert/strict");
 
 function fixture(): PairedInspectionMetadata {
   const frame = { source_id: "main", device_id: "camera", capture_instance: "capture", generation: 1, sequence: 7 };
   const geometry: PixelGeometry = { image_size: [100, 100], source_size: [100, 100], to_source: [[1,0,0],[0,1,0],[0,0,1]], valid_domains: [] };
-  return { schema_version: 1, transport: "paired_jpeg", expires_at: 101,
+  return { schema_version: 2, transport: "paired_jpeg", expires_at: 101, jpeg_length: 4, masks: [],
     presentation: { frame, image_size: [100,100], geometry },
     snapshot: { session: "session", sequence: 1, pipeline: "test", revision: "revision", dropped: 0,
       alignment: "analyzed_frame_only", data_class: "diagnostic_private", access_scope: "owner", policy_revision: null,
@@ -56,11 +56,12 @@ test("missing lens transform, unsupported domain and singular matrix never inven
   assert.equal(projectInspectionBoxes(value, 100).length, 0);
 });
 
-function encode(metadata: PairedInspectionMetadata): Uint8Array {
+function encode(metadata: PairedInspectionMetadata, attachments: number[] = []): Uint8Array {
   const json = new TextEncoder().encode(JSON.stringify(metadata));
-  const bytes = new Uint8Array(json.length + 8);
+  const bytes = new Uint8Array(json.length + 8 + attachments.length);
   new DataView(bytes.buffer).setUint32(0, json.length);
   bytes.set(json, 4); bytes.set([255,216,255,217], json.length + 4);
+  bytes.set(attachments, json.length + 8);
   return bytes;
 }
 test("binary envelope keeps metadata and jpeg paired and rejects malformed dimensions", () => {
@@ -71,6 +72,60 @@ test("binary envelope keeps metadata and jpeg paired and rejects malformed dimen
   assert.throws(() => decodePairedFrame(encode(value)), /invalid/);
   assert.throws(() => decodePairedFrame(new Uint8Array(400001)), /capacity/);
   assert.throws(() => decodePairedFrame(new Uint8Array(8)), /invalid/);
+});
+
+function maskedFixture(): PairedInspectionMetadata {
+  const value = fixture();
+  value.snapshot.nodes[0].visuals = [{ layer: "masks", kind: "raster", points: [], connections: [],
+    label: "square", score: 0.9, score_kind: "segmentation_model_score", subject_id: null,
+    local_id: null, segment_id: null, state: "sampled_mask", sample_sequences: [],
+    raster: { index: 0, width: 25, height: 25, sampling: "nearest_pixel_centres" } }];
+  value.masks = [{ node_id: "detect", image_sequence: 1, index: 0, width: 25, height: 25, length: 8 }];
+  return value;
+}
+
+test("binary mask attachments have explicit lengths and bounded dimensions", () => {
+  const value = maskedFixture(), pixels = [1,2,3,4,5,6,7,8];
+  const decoded = decodePairedFrame(encode(value, pixels));
+  assert.deepEqual([...decoded.jpeg], [255,216,255,217]);
+  assert.deepEqual([...decoded.masks[0]], pixels);
+  assert.throws(() => decodePairedFrame(encode(value, pixels.slice(1))), /invalid/);
+  value.masks[0].width = 161;
+  assert.throws(() => decodePairedFrame(encode(value, pixels)), /invalid/);
+  value.masks[0].width = 25; value.masks[0].length = -1;
+  assert.throws(() => decodePairedFrame(encode(value, pixels)), /invalid/);
+});
+
+test("mask pixel edges preserve resize rotation and clipping, without cross-frame reuse", () => {
+  const value = maskedFixture();
+  assert.deepEqual(projectInspectionMasks(value, 100)[0].matrix, [4,0,0,4,0,0]);
+  assert.deepEqual(projectInspectionMasks(value, 100)[0].clips, [[[0,0],[100,0],[100,100],[0,100]]]);
+  value.snapshot.nodes[0].geometry!.to_source = [[0,-0.5,80],[0.5,0,10],[0,0,1]];
+  assert.deepEqual(projectInspectionMasks(value, 100)[0].matrix, [0,2,-2,0,80.75,10.25]);
+  value.presentation.geometry!.valid_domains = [{ size: [60,60], matrix: [[1,0,0],[0,1,0],[0,0,1]] }];
+  assert.deepEqual(projectInspectionMasks(value, 100)[0].clips[1], [[0,0],[60,0],[60,60],[0,60]]);
+  assert.deepEqual(projectInspectionMasks(value, 100, new Set()), []);
+  assert.deepEqual(projectInspectionMasks(value, 101), []);
+  value.masks[0].image_sequence = 0;
+  assert.deepEqual(projectInspectionMasks(value, 100), []);
+  value.masks[0].image_sequence = 1;
+  value.snapshot.nodes[0].frame!.generation = 2;
+  assert.deepEqual(projectInspectionMasks(value, 100), []);
+  value.snapshot.nodes[0].frame!.generation = 1;
+  (value.snapshot.nodes[0].geometry as PixelGeometry).to_source[2][0] = 0.001;
+  assert.deepEqual(projectInspectionMasks(value, 100), []);
+});
+
+test("logical consumers share a mask only from the same physical producer and model", () => {
+  const value = maskedFixture();
+  value.snapshot.nodes.push({ ...value.snapshot.nodes[0], node_id: "consumer", image_sequence: 2 });
+  assert.equal(projectInspectionMasks(value, 100).length, 1);
+  assert.equal(projectInspectionMasks(value, 100, new Set(["consumer"])).length, 1);
+  value.snapshot.nodes[1].model_id = "different-model";
+  assert.equal(projectInspectionMasks(value, 100, new Set(["consumer"])).length, 0);
+  value.snapshot.nodes[1].model_id = value.snapshot.nodes[0].model_id;
+  value.snapshot.nodes[1].producer_epoch = "new-runtime";
+  assert.equal(projectInspectionMasks(value, 100, new Set(["consumer"])).length, 0);
 });
 
 test("reader cancels an oversized stream even without Content-Length", async () => {
@@ -85,7 +140,8 @@ test("reader cancels an oversized stream even without Content-Length", async () 
 test("pose joints preserve missing slots and require the exact capture and selected operator", () => {
   const value = fixture();
   value.snapshot.nodes[0].visuals = [{ layer: "pose", kind: "points", points: [[0.2,0.3], null, [0.8,0.9]],
-    connections: [[0,1],[1,2],[0,2]], subject_id: "track:1", label: "person", score: 0.7, score_kind: "pose_model_score" }];
+    connections: [[0,1],[1,2],[0,2]], subject_id: "track:1", label: "person", score: 0.7, score_kind: "pose_model_score",
+    local_id: null, segment_id: null, state: null, sample_sequences: [], raster: null }];
   const layers = new Set(["pose"]);
   const [visual] = projectInspectionVisuals(value, 100, layers);
   assert.deepEqual(visual.points, [[20,30], null, [80,90]]);
@@ -102,7 +158,8 @@ test("pose crop and rotation, unsupported joints and shared execution stay bound
   const value = fixture();
   const node = value.snapshot.nodes[0];
   node.visuals = [{ layer: "pose", kind: "points", points: [[0.2,0.3], [0.8,0.9]],
-    connections: [[0,1]], subject_id: "track:1", label: null, score: null, score_kind: null }];
+    connections: [[0,1]], subject_id: "track:1", label: null, score: null, score_kind: null,
+    local_id: null, segment_id: null, state: null, sample_sequences: [], raster: null }];
   node.geometry!.to_source = [[0, -0.5, 80], [0.5, 0, 10], [0, 0, 1]];
   value.snapshot.nodes.push({ ...node, node_id: "logical-consumer" });
   const layers = new Set(["pose"]);
